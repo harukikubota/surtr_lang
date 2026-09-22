@@ -387,7 +387,7 @@ Option::Some(saved) =? Option::Some(1)
 - 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
 - `do` 外では、enclosing callableがcanonical `Result`または有効なResult-effect carrierを返す必要がある
 - `do` 内では、do-local carrierのResult effectを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
-- Extractorの`Option::None`と一般の不一致は共通`PatternMismatch` Errorになり、list/string等の構造pattern固有Errorは維持する
+- Extractor の `MatchResult::Err` は元 Error を保持する。一般の不一致は `PatternMismatch`、list/string 等の構造 pattern 固有 Error は維持する
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### `do` と failure matcher
@@ -476,7 +476,7 @@ result: Option<Int> = do::<Option> {
 - 入れ子になった constructor pattern
 - OR Pattern `p1 | p2`（`match` arm、`if_let`、`if_let_then`、binding-free な `is_match`。子 Pattern 内でも使用可能）
 
-`match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・順序が一致する必要があります。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
+`match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・順序が一致する必要があります。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding、`apply_pattern` の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
 
 構造体の constructor pattern は attached extractor `Type::deconstruct(...)` を通ります。  
 詳細は `./structs.md` と `./extractors.md` を参照してください。
@@ -707,7 +707,24 @@ defmod Bootstrap {
 
 これらは `Bootstrap::import` / `Bootstrap::include` の canonical source です。`import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書け、`include` は引き続き file top-level だけで使えます。
 
-## 11. 現在のスコープ外
+## 11. Pattern の結果を扱う
+
+### apply_pattern
+
+- canonical surface は `Kernel::apply_pattern(value, pattern) -> Result<$Return>`。input が Result でも自動 unwrap しない
+- projection `_1`〜`_16` を番号順に返す。0個は Unit、1個は値、複数は tuple。番号は1から連続・重複なしとし、`_01` は1と同じ
+- 通常位置・alias・list tail の型注釈を許可する。通常 binding は内部限定で、全照合成功後にだけ投影結果を公開する
+- Extractor の元 Error と通常 Pattern の Error を `Err` に保持し、外側 callable から早期 return しない
+- OR、Pattern への pipe 注入、Pattern 引数の部分適用補完は拒否する。`value |> apply_pattern(pattern)` は第1 Expr 引数へ注入する
+- `if_let` / `if_let_then` / `is_match` / `apply_pattern` は予約 consumer 名。`Regex::is_match` は canonical identity により通常 call / capture として扱う
+
+### Result callable の Extractor 変換
+
+`Extractor::from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)>` は通常SRTの標準APIです。単項callableをcaptureし、各Pattern occurrenceで1回実行します。外側Resultだけをunwrapし、成功payloadと元Errorを保持します。Option/raw/入力0個/複数入力の暗黙変換はありません。
+
+詳しい使い方は [Pattern Matching](./pattern-matching.md) と [Extractors](./extractors.md)、実装契約は [Pattern / Extractor 実装契約](../dev/Pattern_spec.md) を参照してください。
+
+## 12. 現在のスコープ外
 
 このリファレンスでは扱わないもの:
 

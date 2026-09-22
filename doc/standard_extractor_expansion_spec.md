@@ -4,8 +4,8 @@
 
 - 状態: 未実装の仕様草案と追加候補一覧。標準定義を調査した結果と、追加する API の提案を区別する。
 - 対象: 事前引数を持つ標準 Extractor の拡充、および SRT で表現できる照合・判定処理の標準ソースへの配置。
-- 前提機能: 事前引数、二状態 MatchResult、UnitOnly 子 Pattern 省略、as-pattern、型注釈付き projection が利用可能であること。前提の実装タスクは [Pattern 拡張統合仕様](pattern_extension_spec.md) に記載する。本書はそれとは独立した標準定義の修正タスクであり、compiler 構文・型規則の再設計を含めない。
-- 今回は仕様作成だけを行う。標準ソース、Rust、実行可能なテストは変更しない。
+- 前提機能: 事前引数、二状態 MatchResult、UnitOnly 子 Pattern 省略、as-pattern、型注釈付き projection は実装済みである。現行契約は [Pattern / Extractor 実装契約](../docs/dev/Pattern_spec.md) に記載する。本書は独立した標準定義の拡充案であり、compiler 構文・型規則の再設計を含めない。
+- 本書は未実装の標準 API 草案であり、標準ソース、Rust、実行可能なテストへの変更を記録するものではない。
 - 基本は level 1: 標準 SRT に閉じる追加。既存 builtin の SRT 置換を採用する部分は Sindr / Eldr / loader まで影響するため、別の成果単位として影響範囲と検証 level を実装前に確定する。前提機能の level 4 検証を、この標準定義タスクに無条件で重ねない。
 
 必須の拡充領域は次のとおり。
@@ -20,17 +20,17 @@ Record / struct、Enum、Tuple、List の構造分解 Extractor は追加しな�
 
 本書の候補名は提案名であり、既存 API 名ではない。「必須」は機能領域の採用を意味し、「追加候補」は一覧化しただけで実装採用を意味しない。
 
-## 2. 現行標準定義の調査結果
+## 2. 草案作成時の標準定義調査
 
 調査対象は `lib/` のテストを除く全63 SRT ファイル。public な通常関数・Trait / impl surface と、既存 Extractor を確認した。
 
-既存 Extractor は次の3件で、現行は Option 返却である。
+草案作成時に既存だった Extractor は次の3件である。現在はいずれも MatchResult を返す。
 
-| 配置 | Extractor | 現行 payload | 本タスクでの扱い |
+| 配置 | Extractor | 成功 payload | 本タスクでの扱い |
 |---|---|---|---|
-| `lib/kernel.srt` | Kernel::uncons | head / tail の tuple | 構造分解拡充の対象外。MatchResult 移行は前提タスク |
-| `lib/types/duration.srt` | Duration::deconstruct | Int | 既存機能。移行は前提タスク |
-| `lib/types/range.srt` | Range::deconstruct | 境界値の tuple | 構造分解拡充の対象外。移行は前提タスク |
+| `lib/kernel.srt` | Kernel::uncons | head / tail の tuple | 構造分解拡充の対象外 |
+| `lib/types/duration.srt` | Duration::deconstruct | Int | 既存機能 |
+| `lib/types/range.srt` | Range::deconstruct | 境界値の tuple | 構造分解拡充の対象外 |
 
 主な合成元は以下。
 
@@ -119,7 +119,7 @@ impl String {
 }
 ```
 
-これは前提機能実装後の仕様例である。通常関数の入力順を変更せず、Extractor では事前引数を先、照合対象 self を最後に置く。
+これは現行 Pattern 契約を使った拡充案の仕様例である。通常関数の入力順を変更せず、Extractor では事前引数を先、照合対象 self を最後に置く。
 
 ## 4. 必須候補 — scalar 一致・比較・Int guard
 

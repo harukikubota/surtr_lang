@@ -16,13 +16,16 @@ pub fn resolve_error_spec(
     labels: &[(SourceId, Span, String)],
 ) -> DiagnosticSpec {
     let message = message.into();
-    let mut spec = simple_error("ResolveError", message.clone(), span.clone(), None);
-    spec.structured = Some(StructuredDiagnostic {
+    let diagnostic = StructuredDiagnostic {
         reason: DiagnosticReason::Resolve(reason),
         origin: DiagnosticOrigin::Resolve,
         data: DiagnosticData::Resolve(ResolveDiagnosticData {
             detail: message,
             subject,
+            related_labels: labels
+                .iter()
+                .map(|(_, _, message)| message.clone())
+                .collect(),
         }),
         primary: SourceFact::untyped(SourceRole::Other, source_id, span),
         related: labels
@@ -32,15 +35,40 @@ pub fn resolve_error_spec(
             })
             .collect(),
         remediation: None,
-    });
-    spec.labels.extend(labels.iter().enumerate().map(
-        |(index, (label_source_id, span, message))| DiagnosticLabel {
-            source_id: (*label_source_id != source_id).then_some(*label_source_id),
-            span: span.clone(),
-            message: message.clone(),
-            color: Some(resolve_related_label_color(index)),
-        },
-    ));
+    };
+    structured_resolve_error_spec(&diagnostic)
+}
+
+pub(crate) fn structured_resolve_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpec {
+    let DiagnosticData::Resolve(data) = &input.data else {
+        panic!("resolve renderer requires resolver diagnostic data");
+    };
+    assert_eq!(
+        input.related.len(),
+        data.related_labels.len(),
+        "resolver label metadata must be complete"
+    );
+    let source_id = input.primary.source_id;
+    let mut spec = simple_error(
+        "ResolveError",
+        data.detail.clone(),
+        input.primary.span.clone(),
+        None,
+    );
+    spec.structured = Some(input.clone());
+    spec.labels.extend(
+        input
+            .related
+            .iter()
+            .zip(&data.related_labels)
+            .enumerate()
+            .map(|(index, (fact, message))| DiagnosticLabel {
+                source_id: (fact.source_id != source_id).then_some(fact.source_id),
+                span: fact.span.clone(),
+                message: message.clone(),
+                color: Some(resolve_related_label_color(index)),
+            }),
+    );
     spec
 }
 

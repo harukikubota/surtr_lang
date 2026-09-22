@@ -2331,6 +2331,29 @@ defenum Result<$T> {
 }
 
 #[test]
+fn test_unit_payload_extractor_pattern_preserves_empty_arguments() {
+    for head in ["check", "Checked::unit"] {
+        let source = format!("match value {{ {head}() => 1, _ => 0 }}");
+        let ast = parse(&source).expect("an Extractor head permits zero payload patterns");
+        let Ast::Match(_, _, arms) = &ast[0] else {
+            panic!("expected match expression");
+        };
+        assert!(matches!(&arms[0].pattern, AstPattern::Call(_, name, args)
+            if name == head && args.is_empty()));
+    }
+    parse("match value { check(()) => 1, _ => 0 }")
+        .expect("Unit remains an Expr candidate until the signature fixes its role");
+}
+
+#[test]
+fn extractor_payload_pattern_preserves_binding_and_wildcard_annotations() {
+    for child in ["value: Unit", "_: Unit"] {
+        let source = format!("match input {{ Checked::unit({child}) => 1, _ => 0 }}");
+        parse(&source).expect("payload pattern permits a type-correct annotation");
+    }
+}
+
+#[test]
 fn test_std_module_builtin_defenum_boolean_is_accepted() {
     let ast = parse_with_context(
         r#"@builtin
@@ -3333,7 +3356,7 @@ fn test_constructor_pattern_safebind() {
                 pattern,
                 AstPattern::Call(_, ctor, inner)
                     if ctor == "Ok"
-                    && matches!(inner.as_slice(), [AstPattern::Var(_, name)] if name == "num")
+                    && inner.len() == 1 && matches!(inner[0].pattern.as_deref(), Some(AstPattern::Var(_, name)) if name == "num")
             ));
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
         }
@@ -3415,7 +3438,7 @@ fn test_list_pattern_with_nested_constructor_literals_safebind() {
                 AstPattern::ListCons(_, first, rest)
                     if matches!(first.as_ref(),
                         AstPattern::Call(_, ctor, inner)
-                        if ctor == "Ok" && matches!(inner.as_slice(), [AstPattern::IntLit(_, n)] if n == &int(1))
+                        if ctor == "Ok" && inner.len() == 1 && matches!(inner[0].pattern.as_deref(), Some(AstPattern::IntLit(_, n)) if n == &int(1))
                     )
                     && matches!(rhs.as_ref(), Ast::Var(_, name) if name == "lr")
                     && matches!(rest.as_ref(), AstPattern::ListCons(_, _, _))
@@ -5096,7 +5119,7 @@ fn test_match_constructor_pattern_is_accepted() {
                     &arms[0].pattern,
                     AstPattern::Call(_, name, inner)
                         if name == "Some"
-                            && matches!(inner.as_slice(), [AstPattern::Var(_, bound)] if bound == "y")
+                            && inner.len() == 1 && matches!(inner[0].pattern.as_deref(), Some(AstPattern::Var(_, bound)) if bound == "y")
                 ));
             }
             _ => panic!("Expected Match"),
@@ -5262,24 +5285,16 @@ fn test_is_match_accepts_root_and_nested_or_without_bindings() {
         ] {
             let source = format!("{consumer}(input, {pattern})");
             let ast = parse(&source).expect(&source);
-            let Ast::Match(_, _, arms) = &ast[0] else {
-                panic!("Expected predicate match lowering: {source}");
+            let Ast::PatternConsumerCall(_, _, args) = &ast[0] else {
+                panic!("Expected predicate consumer call: {source}");
             };
-            assert_eq!(arms.len(), 2, "{source}");
-            assert!(
-                matches!(arms[0].body, Ast::Lit(_, Lit::Bool(true))),
-                "{source}"
-            );
-            assert!(
-                matches!(arms[1].body, Ast::Lit(_, Lit::Bool(false))),
-                "{source}"
-            );
+            assert!(args[1].pattern.is_some(), "{source}");
         }
     }
 }
 
 #[test]
-fn test_is_match_or_still_rejects_all_binding_positions() {
+fn test_is_match_preserves_binding_candidates_for_identity_resolution() {
     for consumer in ["is_match", "Kernel::is_match"] {
         for pattern in [
             "value | _",
@@ -5289,10 +5304,9 @@ fn test_is_match_or_still_rejects_all_binding_positions() {
             "(1 | 2) @ whole",
         ] {
             let source = format!("{consumer}(input, {pattern})");
-            let error = parse(&source).expect_err(&source);
+            let ast = parse(&source).expect(&source);
             assert!(
-                error.message().contains("does not allow binding variables"),
-                "{source}: {error:?}"
+                matches!(&ast[0], Ast::PatternConsumerCall(_, _, args) if args[1].pattern.is_some())
             );
         }
     }
@@ -5303,9 +5317,13 @@ fn test_match_nested_or_patterns_are_preserved() {
     fn contains_or(pattern: &AstPattern) -> bool {
         match pattern {
             AstPattern::Or(_, _) => true,
-            AstPattern::Tuple(_, items)
-            | AstPattern::Constructor(_, _, items)
-            | AstPattern::Call(_, _, items) => items.iter().any(contains_or),
+            AstPattern::Tuple(_, items) | AstPattern::Constructor(_, _, items) => {
+                items.iter().any(contains_or)
+            }
+            AstPattern::Call(_, _, args) => args
+                .iter()
+                .filter_map(|arg| arg.pattern.as_deref())
+                .any(contains_or),
             AstPattern::ListCons(_, head, tail) => contains_or(head) || contains_or(tail),
             AstPattern::As(_, inner, _, _, _) => contains_or(inner),
             _ => false,
@@ -5352,9 +5370,13 @@ fn test_if_let_or_patterns_use_pattern_grammar() {
     fn contains_or(pattern: &AstPattern) -> bool {
         match pattern {
             AstPattern::Or(..) => true,
-            AstPattern::Constructor(_, _, children)
-            | AstPattern::Call(_, _, children)
-            | AstPattern::Tuple(_, children) => children.iter().any(contains_or),
+            AstPattern::Constructor(_, _, children) | AstPattern::Tuple(_, children) => {
+                children.iter().any(contains_or)
+            }
+            AstPattern::Call(_, _, args) => args
+                .iter()
+                .filter_map(|arg| arg.pattern.as_deref())
+                .any(contains_or),
             AstPattern::ListCons(_, head, tail) => contains_or(head) || contains_or(tail),
             AstPattern::As(_, inner, _, _, _) => contains_or(inner),
             _ => false,
@@ -5383,14 +5405,13 @@ fn test_if_let_or_patterns_use_pattern_grammar() {
             let source = format!("{consumer}(input, {pattern}{branches})");
             let ast = parse(&source).expect(&source);
             let call = &ast[0];
-            let Ast::App(_, _, args) = call else {
+            let Ast::PatternConsumerCall(_, _, args) = call else {
                 panic!("expected call: {source}");
             };
-            let RecordLitArg::Positional(Ast::Match(_, _, arms)) = &args[1] else {
-                panic!("expected pattern carrier: {source}");
-            };
-            assert_eq!(arms.len(), 1, "{source}");
-            assert!(contains_or(&arms[0].pattern), "{source}");
+            assert!(
+                contains_or(args[1].pattern.as_deref().expect("Pattern candidate")),
+                "{source}"
+            );
         }
     }
 }
@@ -5597,7 +5618,7 @@ fn test_module_compile_unit_rejects_top_level_def() {
 #[test]
 fn test_module_compile_unit_rejects_top_level_defextractor() {
     let err = parse_with_context(
-        "defextractor never(self: Int) -> Option<Int> { Option::None }",
+        "defextractor never(self: Int) -> MatchResult<Int> { MatchResult::Err(NoneError()) }",
         ParserContext::module(1, None),
     )
     .expect_err("module compile unit should require defmod wrappers for extractors");
@@ -5747,8 +5768,8 @@ fn test_impl_accepts_qualified_type_target() {
 fn test_defmod_body_accepts_defextractor() {
     let ast = parse_with_context(
         r#"defmod Matchers {
-  defextractor never(self: Int) -> Option<Int> {
-    Option::None
+  defextractor never(self: Int) -> MatchResult<Int> {
+    MatchResult::Err(NoneError())
   }
 }"#,
         ParserContext::module(1, None),
@@ -6097,7 +6118,7 @@ fn test_project_compile_unit_accepts_top_level_expression() {
 #[test]
 fn test_project_compile_unit_rejects_top_level_defextractor() {
     let err = parse_with_context(
-        "defextractor never(self: Int) -> Option<Int> { Option::None }",
+        "defextractor never(self: Int) -> MatchResult<Int> { MatchResult::Err(NoneError()) }",
         ParserContext::project(1),
     )
     .expect_err("project compile unit should reject top-level extractor declarations");
@@ -7549,4 +7570,54 @@ fn left_arrow_remains_owned_by_enclosing_syntax() {
     )
     .expect_err("a nested operation call inside do must still be rejected by bulk_update");
     parse("value <- source").expect_err("left arrow outside an owner must be rejected");
+}
+
+#[test]
+fn extractor_accepts_multiple_inputs_and_expression_prearguments() {
+    parse_with_context("defmod Bounds { defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) } }", ParserContext::project(0)).expect("multiple Extractor inputs");
+    parse("match value { Bounds::between(1 + 2, limit(), item) => item, _ => 0 }")
+        .expect("expression candidates in Pattern application");
+}
+
+#[test]
+fn extractor_inputs_require_unique_names_and_a_final_self() {
+    parse("impl Int { defextractor deconstruct(offset: Int, self: Int) -> MatchResult<Int> { MatchResult::OK(self) } }")
+        .expect("self is the final target input");
+    for (source, message) in [
+        ("defextractor read(self: Int, offset: Int) -> MatchResult<Int> { MatchResult::OK(self) }", "self parameter must be the final input"),
+        ("defextractor read(value: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }", "Duplicate Extractor parameter"),
+    ] {
+        let error = parse(source).expect_err(source);
+        assert!(error.message().contains(message), "{error:?}");
+    }
+    parse("defextractor read() -> MatchResult<Int> { MatchResult::OK(1) }")
+        .expect_err("an Extractor must have a target input");
+}
+
+#[test]
+fn extractor_closure_literal_requires_explicit_nonempty_parameters() {
+    parse("extract = *{|value: Int| MatchResult::OK(value)}").expect("ExtractorClosure literal");
+    for source in ["*{1}", "*{|| MatchResult::OK(1)}"] {
+        parse(source).expect_err("ExtractorClosure needs at least one explicit parameter");
+    }
+    for source in [
+        "*{|value| MatchResult::OK(value)}(1)",
+        "match 1 { *{|value| MatchResult::OK(value)}(_) => 1, _ => 0 }",
+        "match 1 { (make())(_) => 1, _ => 0 }",
+    ] {
+        parse(source)
+            .expect_err("anonymous expressions cannot be immediate callable or Pattern heads");
+    }
+}
+
+#[test]
+fn pattern_consumers_reserve_names_and_accept_projection_syntax() {
+    parse("apply_pattern([1, 2], [_1: Int, .._2: List<Int>])").expect("projection syntax");
+    for source in [
+        "is_match = 1",
+        "def apply_pattern(value: Int) -> Int { value }",
+        "f = {|if_let| if_let}",
+    ] {
+        parse(source).expect_err("Pattern consumer names are reserved");
+    }
 }

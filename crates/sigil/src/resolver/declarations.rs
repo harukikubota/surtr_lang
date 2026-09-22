@@ -933,6 +933,23 @@ pub struct DeclarationEntry {
     pub visibility: Visibility,
     pub user_importable: bool,
     pub user_callable: bool,
+    /// Declared input count, including the final Extractor target input.
+    /// Required to classify named Extractor application arguments before binding.
+    pub value_parameter_count: Option<usize>,
+}
+
+impl DeclarationEntry {
+    fn with_callable_parameters(mut self, declaration: &Ast) -> Self {
+        self.value_parameter_count = match declaration {
+            Ast::ExtractorDef(_, _, _, params, _, _, _)
+            | Ast::BuiltinExtractorDecl(_, _, params, _, _) => Some(params.len()),
+            Ast::Def(_, _, _, params, _, _, _, _) | Ast::BuiltinDecl(_, _, _, params, _, _, _) => {
+                Some(params.len())
+            }
+            _ => None,
+        };
+        self
+    }
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
@@ -1252,6 +1269,7 @@ fn declaration_entry(
         visibility,
         user_importable,
         user_callable,
+        value_parameter_count: None,
     }
 }
 
@@ -1681,8 +1699,22 @@ fn rewrite_self_where_clause(
 
 fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
     match pat {
+        AstPattern::Projection {
+            span,
+            index,
+            inner,
+            annotation,
+        } => AstPattern::Projection {
+            span,
+            index,
+            inner: Box::new(rewrite_self_pattern(*inner, target)),
+            annotation: annotation.map(|ty| rewrite_self_type(ty, target)),
+        },
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(span, name, rewrite_self_type(ty, target))
+        }
+        AstPattern::AnnotatedWildcard(span, ty) => {
+            AstPattern::AnnotatedWildcard(span, rewrite_self_type(ty, target))
         }
         AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
             span,
@@ -1697,12 +1729,21 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
                 .map(|inner| rewrite_self_pattern(inner, target))
                 .collect(),
         ),
-        AstPattern::Call(span, name, inners) => AstPattern::Call(
+        AstPattern::Call(span, name, args) => AstPattern::Call(
             span,
             name,
-            inners
-                .into_iter()
-                .map(|inner| rewrite_self_pattern(inner, target))
+            args.into_iter()
+                .map(|arg| spire::ast::AstPatternArgument {
+                    span: arg.span,
+                    expression_error: arg.expression_error,
+                    pattern_error: arg.pattern_error,
+                    expression: arg
+                        .expression
+                        .map(|expr| Box::new(rewrite_self_ast(*expr, target))),
+                    pattern: arg
+                        .pattern
+                        .map(|pattern| Box::new(rewrite_self_pattern(*pattern, target))),
+                })
                 .collect(),
         ),
         AstPattern::Tuple(span, items) => AstPattern::Tuple(
@@ -1725,6 +1766,21 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
 
 fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
     match node {
+        Ast::PatternConsumerCall(span, callee, args) => Ast::PatternConsumerCall(
+            span,
+            Box::new(rewrite_self_ast(*callee, target)),
+            args.into_iter()
+                .map(|mut arg| {
+                    arg.expression = arg
+                        .expression
+                        .map(|expr| Box::new(rewrite_self_ast(*expr, target)));
+                    arg.pattern = arg
+                        .pattern
+                        .map(|pat| Box::new(rewrite_self_pattern(*pat, target)));
+                    arg
+                })
+                .collect(),
+        ),
         Ast::Block(span, stmts) => Ast::Block(
             span,
             stmts
@@ -1951,11 +2007,14 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 span,
                 name,
                 type_params,
-                ExtractorParam {
-                    name: param.name,
-                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
-                    span: param.span,
-                },
+                param
+                    .into_iter()
+                    .map(|param| ExtractorParam {
+                        name: param.name,
+                        ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                        span: param.span,
+                    })
+                    .collect(),
                 rewrite_self_type(ret_ty, target),
                 Box::new(rewrite_self_ast(*body, target)),
                 attrs,
@@ -1995,11 +2054,14 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
             span,
             name,
-            ExtractorParam {
-                name: param.name,
-                ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
-                span: param.span,
-            },
+            param
+                .into_iter()
+                .map(|param| ExtractorParam {
+                    name: param.name,
+                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                    span: param.span,
+                })
+                .collect(),
             rewrite_self_type(ret_ty, target),
             attrs,
         ),
@@ -2020,6 +2082,18 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             attrs,
         ),
         Ast::Closure(span, params, body) => Ast::Closure(
+            span,
+            params
+                .into_iter()
+                .map(|param| ClosureParam {
+                    name: param.name,
+                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                    span: param.span,
+                })
+                .collect(),
+            Box::new(rewrite_self_ast(*body, target)),
+        ),
+        Ast::ExtractorClosure(span, params, body) => Ast::ExtractorClosure(
             span,
             params
                 .into_iter()
@@ -2584,7 +2658,8 @@ pub fn precollect_declarations(
                                 entry_visibility(attrs),
                                 entry_user_importable(attrs),
                                 entry_user_callable(attrs),
-                            ),
+                            )
+                            .with_callable_parameters(method),
                             method_span,
                         )?;
                     }
@@ -2944,7 +3019,8 @@ pub fn precollect_declarations(
                         visibility,
                         user_importable,
                         user_callable,
-                    ),
+                    )
+                    .with_callable_parameters(stmt),
                     span,
                 )?;
             }
@@ -3205,11 +3281,14 @@ impl Resolver {
                                     &target,
                                     &method_name,
                                 );
-                                let lowered_param = ExtractorParam {
-                                    name: param.name,
-                                    ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
-                                    span: param.span,
-                                };
+                                let lowered_param = param
+                                    .into_iter()
+                                    .map(|param| ExtractorParam {
+                                        name: param.name,
+                                        ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
+                                        span: param.span,
+                                    })
+                                    .collect();
                                 let lowered_ret_ty = rewrite_self_type(ret_ty, &target);
                                 let lowered_body = rewrite_self_ast(*body, &target);
 
@@ -3276,11 +3355,14 @@ impl Resolver {
                                     &target,
                                     &method_name,
                                 );
-                                let lowered_param = ExtractorParam {
-                                    name: param.name,
-                                    ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
-                                    span: param.span,
-                                };
+                                let lowered_param = param
+                                    .into_iter()
+                                    .map(|param| ExtractorParam {
+                                        name: param.name,
+                                        ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
+                                        span: param.span,
+                                    })
+                                    .collect();
                                 let lowered_ret_ty = rewrite_self_type(ret_ty, &target);
 
                                 lowered.push(Ast::BuiltinExtractorDecl(
@@ -3368,6 +3450,29 @@ impl Resolver {
                     )?;
                     let qualified_name = self.qualify_current_declaration_name(name);
                     let uid = self.reserve_declaration_uid(&qualified_name);
+                    let qualified_name = self.qualify_current_declaration_name(name);
+                    self.declaration_uids.insert(qualified_name.clone(), uid);
+                    let mut entry = self
+                        .declaration_entries
+                        .get(&qualified_name)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            declaration_entry(
+                                self.current_module_path.clone().unwrap_or_default(),
+                                name.clone(),
+                                qualified_name.clone(),
+                                DeclarationKind::Extractor,
+                                0,
+                                false,
+                                false,
+                                Visibility::Public,
+                                true,
+                                false,
+                            )
+                        });
+                    entry = entry.with_callable_parameters(stmt);
+                    self.declaration_entries
+                        .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
@@ -3470,6 +3575,29 @@ impl Resolver {
                         ));
                     }
                     let uid = self.reserve_scope_uid(name);
+                    let qualified_name = self.qualify_current_declaration_name(name);
+                    self.declaration_uids.insert(qualified_name.clone(), uid);
+                    let mut entry = self
+                        .declaration_entries
+                        .get(&qualified_name)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            declaration_entry(
+                                self.current_module_path.clone().unwrap_or_default(),
+                                name.clone(),
+                                qualified_name.clone(),
+                                DeclarationKind::Extractor,
+                                0,
+                                false,
+                                false,
+                                Visibility::Public,
+                                true,
+                                false,
+                            )
+                        });
+                    entry = entry.with_callable_parameters(stmt);
+                    self.declaration_entries
+                        .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
                     self.predeclare_scope_binding(name, uid, None);
                 }

@@ -70,7 +70,7 @@ pub(super) fn compile_sources_with_mode(
         compile_prefix.declaration_index().clone()
     } else {
         sigil::precollect_declaration_index(&module_asts)
-            .map_err(|e| format!("phase=resolve; message={}", e))?
+            .map_err(super::phase::format_resolve_failure)?
     };
     let docs = xldr::collect_doc_entries(
         &module_asts,
@@ -90,7 +90,7 @@ pub(super) fn compile_sources_with_mode(
         compile_prefix.module_asts.len(),
         compile_prefix.resolve_state(),
     )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    .map_err(super::phase::format_resolve_failure)?;
     let mut scar_session = scar::ScarSession::new();
     scar_session.rollback(compile_prefix.scar_checkpoint().clone());
     let next_fun_idx = compile_prefix

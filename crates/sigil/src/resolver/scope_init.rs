@@ -69,22 +69,20 @@ pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
 }
 
 pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
-    matches!(
-        name,
-        "if" | "if_then"
-            | "if_let"
-            | "if_let_then"
-            | "is_match"
-            | "assert"
-            | "ensure"
-            | "map_err"
-            | "cause"
-            | "recover"
-            | "recover_kind"
-            | "and"
-            | "or"
-            | "(,)"
-    )
+    sindr::pattern::PatternConsumer::from_name(name).is_some()
+        || matches!(
+            name,
+            "if" | "if_then"
+                | "assert"
+                | "ensure"
+                | "map_err"
+                | "cause"
+                | "recover"
+                | "recover_kind"
+                | "and"
+                | "or"
+                | "(,)"
+        )
 }
 
 pub(super) fn is_doc_only_builtin_decl(name: &str) -> bool {

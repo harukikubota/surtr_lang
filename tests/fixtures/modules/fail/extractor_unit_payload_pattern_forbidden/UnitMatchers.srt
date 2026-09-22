@@ -1,0 +1,5 @@
+defmod UnitMatchers {
+  defextractor check(value: Int) -> MatchResult<Unit, Error> {
+    MatchResult::OK(())
+  }
+}

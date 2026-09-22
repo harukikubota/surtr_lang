@@ -1,0 +1,2 @@
+phase: parse
+contains: ExtractorClosure requires at least one input

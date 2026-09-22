@@ -8,7 +8,6 @@ use spire::error::{ParseError, ParseErrorGuidance, ParseErrorReason};
 
 pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -> DiagnosticSpec {
     let span = error.span().clone();
-    let mut spec = simple_error("ParseError", error.message(), span.clone(), None);
     let data = ParseDiagnosticData {
         detail: error.detail().to_string(),
         expected_tokens: error.expected_tokens().to_vec(),
@@ -17,31 +16,50 @@ pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -
         token_kind: error.token_kind().map(str::to_owned),
     };
     let reason = map_reason(error.reason());
-    spec.structured = Some(StructuredDiagnostic {
+    let diagnostic = StructuredDiagnostic {
         reason: DiagnosticReason::Parse(reason),
         origin: DiagnosticOrigin::Parse,
         data: DiagnosticData::Parse(data),
         primary: SourceFact::untyped(SourceRole::Other, source_id, span.clone()),
         related: Vec::new(),
         remediation: None,
-    });
+    };
+    structured_parse_error_spec(source, &diagnostic)
+}
 
-    match error.guidance() {
-        Some(ParseErrorGuidance::UnexpectedToken) => {
+pub(crate) fn structured_parse_error_spec(
+    source: &str,
+    input: &StructuredDiagnostic,
+) -> DiagnosticSpec {
+    let DiagnosticData::Parse(data) = &input.data else {
+        panic!("parse renderer requires parser diagnostic data");
+    };
+    let source_id = input.primary.source_id;
+    let span = input.primary.span.clone();
+    let headline =
+        if input.reason == DiagnosticReason::Parse(ParseDiagnosticReason::IncompleteInput) {
+            format!("Incomplete input: expected {}", data.detail)
+        } else {
+            data.detail.clone()
+        };
+    let mut spec = simple_error("ParseError", headline, span.clone(), None);
+    spec.structured = Some(input.clone());
+    match data.guidance.as_ref() {
+        Some(ParseDiagnosticGuidance::UnexpectedToken) => {
             spec.help = Some(
                 "The parser stopped at this token. Check the expression immediately before it."
                     .into(),
             );
-            if let Some(message) = error.token_kind().and_then(unexpected_token_label) {
+            if let Some(message) = data.token_kind.as_deref().and_then(unexpected_token_label) {
                 spec.labels.push(crate::DiagnosticLabel {
                     source_id: Some(source_id),
-                    span: error.span().clone(),
+                    span: span.clone(),
                     message: message.into(),
                     color: Some(Color::Red),
                 });
             }
         }
-        Some(ParseErrorGuidance::TopLevelDeclaration) => {
+        Some(ParseDiagnosticGuidance::TopLevelDeclaration) => {
             spec.help = Some(
                 "Move this declaration into a module compile unit, or replace it with an expression that is allowed in this source kind."
                     .into(),
@@ -54,7 +72,7 @@ pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -
                 &mut spec,
             );
         }
-        Some(ParseErrorGuidance::TopLevelExpression) => {
+        Some(ParseDiagnosticGuidance::TopLevelExpression) => {
             spec.help = Some(
                 "This source kind only accepts declarations at the top level. Move the expression into a function or another executable context."
                     .into(),
@@ -67,25 +85,25 @@ pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -
                 &mut spec,
             );
         }
-        Some(ParseErrorGuidance::UnitPattern) => {
+        Some(ParseDiagnosticGuidance::UnitPattern) => {
             spec.help = Some("Variable bindings and the `_` wildcard pattern are allowed.".into());
         }
-        Some(ParseErrorGuidance::AsPatternAlias) => {
+        Some(ParseDiagnosticGuidance::AsPatternAlias) => {
             spec.help = Some(
                 "Replace the wildcard alias with a name, for example `pattern @ value`.".into(),
             );
         }
-        Some(ParseErrorGuidance::RangeLiteral) => {
+        Some(ParseDiagnosticGuidance::RangeLiteral) => {
             spec.help = Some("Write `[start..stop]`.".into());
         }
-        Some(ParseErrorGuidance::OperatorCapture(operator)) => {
+        Some(ParseDiagnosticGuidance::OperatorCapture(operator)) => {
             spec.help = Some(format!("Write &`{operator}`."));
         }
-        Some(ParseErrorGuidance::PairConstructorCapture) => {
+        Some(ParseDiagnosticGuidance::PairConstructorCapture) => {
             spec.help =
                 Some("Write &`(,)` for a capture, or use `(,)`(right) as a pipeline RHS.".into());
         }
-        Some(ParseErrorGuidance::ReturnPositionImplTrait) => {
+        Some(ParseDiagnosticGuidance::ReturnPositionImplTrait) => {
             spec.help =
                 Some("Name the return type parameter explicitly in the function signature.".into());
             add_line_label(
@@ -96,7 +114,7 @@ pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -
                 &mut spec,
             );
         }
-        Some(ParseErrorGuidance::WhereClause) => {
+        Some(ParseDiagnosticGuidance::WhereClause) => {
             spec.help = Some(
                 "Rewrite the constraint as explicit type parameters or defer this API shape until `where` clauses are available."
                     .into(),
@@ -109,34 +127,34 @@ pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -
                 &mut spec,
             );
         }
-        Some(ParseErrorGuidance::MissingMetaState) => {
+        Some(ParseDiagnosticGuidance::MissingMetaState) => {
             spec.help = Some(
                 "Add a state declaration inside `meta { ... }`. For example:\n\n  state: Int"
                     .into(),
             );
             add_previous_line_label(source_id, source, &span, &mut spec);
         }
-        Some(ParseErrorGuidance::MissingMetaInstance) => {
+        Some(ParseDiagnosticGuidance::MissingMetaInstance) => {
             spec.help = Some(
                 "Add an instance declaration inside `meta { ... }`. For example:\n\n  instance: Singleton".into(),
             );
             add_previous_line_label(source_id, source, &span, &mut spec);
         }
-        Some(ParseErrorGuidance::AnonymousCaptureIdentity) => {
+        Some(ParseDiagnosticGuidance::AnonymousCaptureIdentity) => {
             if let Some(rewrite) = rewrite_line_at_span(source, &span, "&id") {
                 spec.help = Some(format!(
                     "Replace this anonymous capture with:\n\n  {rewrite}"
                 ));
             }
         }
-        Some(ParseErrorGuidance::AnonymousCaptureRequiresHelper) => {
+        Some(ParseDiagnosticGuidance::AnonymousCaptureRequiresHelper) => {
             if let Some(rewrite) = rewrite_line_at_span(source, &span, "&fun_name(&1, &2)") {
                 spec.help = Some(format!(
                     "Extract the body into a named helper and replace this capture with:\n\n  {rewrite}"
                 ));
             }
         }
-        Some(ParseErrorGuidance::ImmediateAnonymousCall) => {
+        Some(ParseDiagnosticGuidance::ImmediateAnonymousCall) => {
             spec.help = Some(
                 "Bind the callable to a name before calling it. For example:\n\n  f = &add(&1, 10)\n  f(4)\n\n  f = {|x| x + 1}\n  f(4)\n\n  tmp = make()\n  tmp(4)"
                     .into(),
@@ -149,7 +167,7 @@ pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -
                 &mut spec,
             );
         }
-        Some(ParseErrorGuidance::DoCarrierReturnTypeArgument) => {
+        Some(ParseDiagnosticGuidance::DoCarrierReturnTypeArgument) => {
             let written = crate::source::slice_chars(source, span.start, span.end);
             let written = (!written.is_empty()).then_some(written);
             let outer_constructor_variable = written

@@ -1,2 +1,2 @@
 phase: resolve
-contains: Extractor 'never' can only be used in MatchBlock/LHS positions
+contains: Extractor 'never' can only be used in Pattern positions

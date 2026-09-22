@@ -324,6 +324,9 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     ),
     repl_core_case!(core_sig_typed_call_queries_specialize_polymorphic_returns),
     repl_core_case!(core_sig_supports_closure_bindings_recapture_and_application),
+    repl_core_case!(core_extractor_closure_keeps_capture_signature_and_identity_across_chunks),
+    repl_core_case!(core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries),
+    repl_core_case!(core_extractor_module_queries_and_from_result_work_across_chunks),
     repl_core_case!(core_completion_shows_signature_for_callable_binding_calls),
     repl_core_case!(core_callable_refs_and_signature_errors_are_ui_independent),
     repl_core_case!(
@@ -1400,6 +1403,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
 
     let excluded = [
         "MatchArms",
+        "MatchResult",
         "CondClauses",
         "BulkUpdateEntries",
         "Hole",
@@ -4251,18 +4255,20 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_doc = engine.handle_line(":doc Duration!()");
     let extractor_doc = doc_text(&extractor_doc);
     assert!(
-        extractor_doc.contains("Duration::deconstruct(self: Duration) -> Option<Int>"),
+        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
         "{extractor_doc}"
     );
 
     let extractor_sig = engine.handle_line(":sig Duration!()");
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
-        extractor_sig.contains("defined:\n  Duration::deconstruct(self: Duration) -> Option<Int>"),
+        extractor_sig.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Duration!() -> Option<Int>"),
+        extractor_sig.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
         "{extractor_sig}"
     );
 
@@ -4273,12 +4279,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
-        extractor_sig_explicit_self
-            .contains("defined:\n  Duration::deconstruct(self: Duration) -> Option<Int>"),
+        extractor_sig_explicit_self.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig_explicit_self}"
     );
     assert!(
-        extractor_sig_explicit_self.contains("specialized:\n  Duration!(Duration) -> Option<Int>"),
+        extractor_sig_explicit_self
+            .contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
         "{extractor_sig_explicit_self}"
     );
 
@@ -4834,18 +4842,19 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
         "{extractor_doc}"
     );
     assert!(
-        extractor_doc.contains("Option<($A, $A)>"),
+        extractor_doc.contains("MatchResult<($A, $A), Error>"),
         "{extractor_doc}"
     );
 
     let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
     assert!(
-        extractor_sig
-            .contains("defined:\n  Range::deconstruct(self: Range<$A>) -> Option<($A, $A)>"),
+        extractor_sig.contains(
+            "defined:\n  Range::deconstruct(self: Range<$A>) -> MatchResult<($A, $A), Error>"
+        ),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Range!() -> Option<($A, $A)>"),
+        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
         "{extractor_sig}"
     );
 
@@ -5894,4 +5903,153 @@ fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
     ));
     fs::create_dir_all(&dir).expect("temp dir should be created");
     dir
+}
+
+fn core_extractor_closure_keeps_capture_signature_and_identity_across_chunks() {
+    let mut engine = engine();
+    for source in [
+        "limit = 10",
+        "ext = *{|value: Int| MatchResult::OK(value + limit)}",
+        "limit = 20",
+        "other = *{|value: Int| MatchResult::OK(value + limit)}",
+        "unrelated = {|value: Int| value * 2}",
+        "selected = if(True, ext, other)",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            !matches!(
+                result.output,
+                ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. }
+            ),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    let signature = signature_text(&engine.handle_line(":sig ext"));
+    assert!(
+        signature.contains("ExtractorClosure<(Int -> MatchResult<Int, Error>)>"),
+        "{signature}"
+    );
+    for (source, expected) in [
+        ("if_let(3, selected(value), value, 0)", "13"),
+        ("if_let(3, other(value), value, 0)", "23"),
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(&result.output, ReplOutput::EvalSuccess { .. }),
+            "{}",
+            rendered_text(&result)
+        );
+        let actual = rendered_text(&result);
+        assert!(actual.contains(expected), "{actual}");
+    }
+    let invalid = rendered_text(&engine.handle_line("ext(3)"));
+    assert!(invalid.contains("ExtractorClosure"), "{invalid}");
+    let after = rendered_text(&engine.handle_line("if_let(4, ext(value), value, 0)"));
+    assert!(after.contains("14"), "{after}");
+    let doc = engine.handle_line(":doc ExtractorClosure");
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "ExtractorClosure");
+    assert_eq!(signature, Some("type ExtractorClosure<$Signature>"));
+}
+
+fn core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries() {
+    let mut engine = engine();
+    for source in [
+        "temporary = 99",
+        "offset = 10",
+        "ext = *{|value: Int| MatchResult::OK(value + offset)}",
+        "offset = 20",
+        "projected = apply_pattern((2, 3), (temporary, ext(_1)))",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    for (source, expected) in [
+        ("projected", "Ok(13)"),
+        ("temporary", "99"),
+        ("3 |> apply_pattern(ext(_1))", "Ok(13)"),
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+        assert!(
+            rendered_text(&result).contains(expected),
+            "{}",
+            rendered_text(&result)
+        );
+    }
+    let bad = engine.handle_line("apply_pattern((1, 2), (_1, _1))");
+    assert!(
+        matches!(
+            bad.output,
+            ReplOutput::Diagnostic { .. } | ReplOutput::EvalError { .. }
+        ),
+        "{}",
+        rendered_text(&bad)
+    );
+    let after = engine.handle_line("apply_pattern(4, ext(_1))");
+    assert!(
+        rendered_text(&after).contains("Ok(14)"),
+        "{}",
+        rendered_text(&after)
+    );
+    let signature = signature_text(&engine.handle_line(":sig apply_pattern"));
+    assert!(
+        signature.contains("$Pattern") && signature.contains("Result<$Return"),
+        "{signature}"
+    );
+    let doc = engine.handle_line(":doc apply_pattern");
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "Kernel::apply_pattern");
+    let signature = signature.expect("canonical consumer signature");
+    assert!(
+        signature.contains("$Pattern") && signature.contains("Result<$Return"),
+        "{signature}"
+    );
+}
+
+fn core_extractor_module_queries_and_from_result_work_across_chunks() {
+    let mut engine = engine();
+    let module = engine.handle_line(":doc Extractor");
+    assert_eq!(doc_target(&module).0, "Extractor");
+    let doc = engine.handle_line(":doc Extractor::from_result");
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "Extractor::from_result");
+    let signature = signature.expect("standard function signature");
+    assert!(
+        signature.contains("Result<$B") && signature.contains("ExtractorClosure<"),
+        "{signature}"
+    );
+    let query = signature_text(&engine.handle_line(":sig Extractor::from_result"));
+    assert!(query.contains(signature), "{query}: {signature}");
+    let created = engine.handle_line("converted = Extractor::from_result(&Int::parse)");
+    assert!(
+        matches!(created.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&created)
+    );
+    let signature = signature_text(&engine.handle_line(":sig converted"));
+    assert!(
+        signature.contains("ExtractorClosure<(String -> MatchResult<Int, Error>)>"),
+        "{signature}"
+    );
+    let result = engine.handle_line("apply_pattern(\"42\", converted(_1: Int))");
+    assert!(
+        matches!(result.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&result)
+    );
+    assert!(
+        rendered_text(&result).contains("Ok(42)"),
+        "{}",
+        rendered_text(&result)
+    );
 }

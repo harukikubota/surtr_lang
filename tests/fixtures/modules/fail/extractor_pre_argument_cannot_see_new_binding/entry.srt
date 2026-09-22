@@ -1,0 +1,3 @@
+import PreArgMatchers::{offset, guard}
+
+print(match (2, 3) { (fresh, offset(fresh, result)) => to_string(result), _ => "fallback" })

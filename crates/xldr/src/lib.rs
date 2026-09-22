@@ -443,8 +443,8 @@ impl CompilationPrefixSnapshot {
     }
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 17;
-const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 10;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 21;
+const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 14;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticEnvelope {
@@ -2015,8 +2015,8 @@ impl User {
   }
 
   @doc """Deconstruct a user value for pattern matching."""
-  defextractor deconstruct(self: Self) -> Option<String> {
-    Option::Some(self.name)
+  defextractor deconstruct(self: Self) -> MatchResult<String, Error> {
+    MatchResult::OK(self.name)
   }
 }
 
@@ -2057,7 +2057,7 @@ impl Show for Int {
             entry.qualified_name == "User::deconstruct"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref()
-                    == Some("User::deconstruct(self: User) -> Option<String>")
+                    == Some("User::deconstruct(self: User) -> MatchResult<String, Error>")
                 && entry.doc == "Deconstruct a user value for pattern matching."
         }));
         assert!(docs.iter().any(|entry| {

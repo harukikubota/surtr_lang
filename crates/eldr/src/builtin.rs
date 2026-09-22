@@ -3,7 +3,9 @@ use crate::value::Value;
 use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
-use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
+use sindr::builtin::{
+    builtin_meta_by_id, BUILTIN_METAS, MATCH_RESULT_ERR_VARIANT, MATCH_RESULT_OK_VARIANT,
+};
 use sindr::names::surface_path_name;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
@@ -838,6 +840,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "curry",
         func: builtin_curry_unreachable,
+    },
+    BuiltinImpl {
+        name: "uncons",
+        func: builtin_uncons,
     },
 ];
 
@@ -4283,6 +4289,50 @@ fn enum_variant_by_name(
     tagged_by_name(vm, name, fields)
 }
 
+/// The Extractor owns its failure Error; consumers decide whether to keep it.
+fn builtin_uncons(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let payload = match args.as_slice() {
+        [Value::List(list)] => match list.head_value() {
+            Some(head) => {
+                let tail = list
+                    .tail_handle()
+                    .ok_or_else(|| RuntimeError::new("non-empty list has no tail"))?;
+                Some(Value::Tuple(vec![head, Value::List(tail)]))
+            }
+            None => None,
+        },
+        [Value::Str(value)] => {
+            let mut chars = value.chars();
+            chars.next().map(|head| {
+                Value::Tuple(vec![
+                    Value::Str(head.to_string()),
+                    Value::Str(chars.collect()),
+                ])
+            })
+        }
+        [_] => return Err(RuntimeError::new("uncons expects List or String")),
+        _ => return Err(RuntimeError::new("uncons expects exactly one argument")),
+    };
+    match payload {
+        Some(payload) => enum_variant_by_name(
+            vm,
+            MATCH_RESULT_OK_VARIANT.qualified_name,
+            MATCH_RESULT_OK_VARIANT.discriminant,
+            vec![payload],
+        ),
+        None => enum_variant_by_name(
+            vm,
+            MATCH_RESULT_ERR_VARIANT.qualified_name,
+            MATCH_RESULT_ERR_VARIANT.discriminant,
+            vec![err_value(builtin_rich_error(
+                vm,
+                "PatternMismatch",
+                "Pattern did not match.",
+            ))],
+        ),
+    }
+}
+
 fn option_none(vm: &VM) -> Result<Value, RuntimeError> {
     enum_variant_by_name(vm, "Option::None", 0, Vec::new())
 }
@@ -4612,6 +4662,10 @@ fn file_handle_error_result(vm: &VM, path: Option<&str>, err: VmFileError) -> Va
 }
 
 fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
+    err_result_from_rich_error(builtin_rich_error(vm, kind, message))
+}
+
+fn builtin_rich_error(vm: &VM, kind: &str, message: &str) -> RichError {
     let location = vm.runtime_error_location().unwrap_or_else(|| Location {
         file: vm.source_file().unwrap_or("<runtime>").to_string(),
         func: "<builtin>".into(),
@@ -4621,14 +4675,14 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
         span_end: 0,
     });
 
-    err_result_from_rich_error(RichError {
+    RichError {
         kind: kind.into(),
         message: message.into(),
         location,
         diagnostic: None,
         cause: None,
         stack_trace: vm.current_stack_trace_snapshot(),
-    })
+    }
 }
 
 fn none_result(vm: &VM) -> Value {
@@ -4680,6 +4734,95 @@ mod tests {
             ..Bytecode::default()
         })
         .with_error_capture()
+    }
+
+    fn extractor_vm() -> VM {
+        test_vm_with_types(vec![
+            TypeEntry {
+                tag: 41,
+                name: "MatchResult::OK".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["discriminant".into(), "value".into()],
+                private_flags: vec![false, false],
+            },
+            TypeEntry {
+                tag: 73,
+                name: "MatchResult::Err".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["discriminant".into(), "error".into()],
+                private_flags: vec![false, false],
+            },
+        ])
+    }
+
+    #[test]
+    fn uncons_builtin_preserves_list_and_unicode_payloads() {
+        let mut vm = extractor_vm();
+        let cases = [
+            (
+                Value::List(ListHandle::from_items(vec![
+                    Value::Int(int(7)),
+                    Value::Int(int(8)),
+                ])),
+                Value::Tuple(vec![
+                    Value::Int(int(7)),
+                    Value::List(ListHandle::from_items(vec![Value::Int(int(8))])),
+                ]),
+            ),
+            (
+                Value::Str("猫é".into()),
+                Value::Tuple(vec![Value::Str("猫".into()), Value::Str("é".into())]),
+            ),
+        ];
+        for (input, expected) in cases {
+            let value = call_builtin(&mut vm, builtin_id("uncons"), vec![input]).unwrap();
+            assert_eq!(
+                value,
+                Value::Tagged {
+                    tag: 41,
+                    fields: vec![Value::Int(int(0)), expected]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn uncons_builtin_empty_inputs_return_error_payload() {
+        let mut vm = extractor_vm();
+        for input in [
+            Value::List(ListHandle::from_items(vec![])),
+            Value::Str(String::new()),
+        ] {
+            let value = call_builtin(&mut vm, builtin_id("uncons"), vec![input]).unwrap();
+            let Value::Tagged { tag, fields } = value else {
+                panic!("expected MatchResult::Err")
+            };
+            assert_eq!(tag, 73);
+            assert_eq!(fields[0], Value::Int(int(1)));
+            let Value::Error(error) = &fields[1] else {
+                panic!("expected rich Error")
+            };
+            assert_eq!(error.kind, "PatternMismatch");
+            assert_eq!(error.message, "Pattern did not match.");
+            assert_eq!(error.location.func, "<builtin>");
+            assert!(error.cause.is_none());
+        }
+    }
+
+    #[test]
+    fn uncons_builtin_rejects_invalid_runtime_type_and_missing_metadata() {
+        let mut vm = extractor_vm();
+        let error = call_builtin(&mut vm, builtin_id("uncons"), vec![Value::Unit]).unwrap_err();
+        assert!(error.message.contains("uncons expects List or String"));
+        let error = call_builtin(
+            &mut test_vm(),
+            builtin_id("uncons"),
+            vec![Value::Str("x".into())],
+        )
+        .unwrap_err();
+        assert!(error
+            .message
+            .contains("missing runtime type MatchResult::OK"));
     }
 
     fn sample_error(kind: &str, message: &str) -> RichError {

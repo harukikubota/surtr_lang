@@ -151,6 +151,7 @@ pub struct ResolvedHashMapLiteralEntry {
 /// Resolved AST — every identifier carries a unique_id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Resolved {
+    ApplyPattern(Span, Box<Resolved>, ResolvedPattern),
     /// Literal value
     Lit(Span, Lit),
 
@@ -327,7 +328,7 @@ pub enum Resolved {
         Span,
         ResolvedId,
         Vec<ResolvedTypeParam>,
-        ResolvedExtractorParam,
+        Vec<ResolvedExtractorParam>,
         AstTy,
         Box<Resolved>,
         ResolvedDeclAttrs,
@@ -368,7 +369,7 @@ pub enum Resolved {
     BuiltinExtractorDecl(
         Span,
         ResolvedId,
-        ResolvedExtractorParam,
+        Vec<ResolvedExtractorParam>,
         AstTy,
         ResolvedDeclAttrs,
     ),
@@ -395,6 +396,14 @@ pub enum Resolved {
 
     /// Closure literal
     Closure(
+        Span,
+        Vec<ResolvedClosureParam>,
+        Vec<ResolvedId>,
+        Box<Resolved>,
+    ),
+
+    /// First-class Extractor literal with ordinary lexical capture identities.
+    ExtractorClosure(
         Span,
         Vec<ResolvedClosureParam>,
         Vec<ResolvedId>,
@@ -456,10 +465,29 @@ pub enum ResolvedInterpolatedPart {
 /// Pattern in a binding (resolved).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedPattern {
+    Projection {
+        index: u8,
+        id: ResolvedId,
+        inner: Box<ResolvedPattern>,
+        annotation: Option<AstTy>,
+    },
+    /// Signature-dependent bindings, selected by Scar before checking the continuation.
+    Deferred {
+        pattern: Box<ResolvedPattern>,
+        bindings: Vec<ResolvedPatternBinding>,
+        /// False for is_match, whose selected payloads must not introduce names.
+        allow_bindings: bool,
+    },
+    /// A lexical head whose signature determines the argument roles.
+    ExtractorApplication {
+        head: ResolvedId,
+        args: Vec<ResolvedPatternArgument>,
+    },
     Var(ResolvedId),
     Annotated(ResolvedId, AstTy),
     Pin(ResolvedId),
     Wildcard(Span),
+    AnnotatedWildcard(Span, AstTy),
     ListNil(Span),
     ListCons(Box<ResolvedPattern>, Box<ResolvedPattern>),
     IntLit(Span, SurtrInt),
@@ -467,10 +495,28 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     DurationLit(Span, SurtrInt),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
-    Extractor(ResolvedId, Vec<ResolvedPattern>),
+    Extractor(ResolvedId, Vec<Resolved>, Vec<ResolvedPattern>),
     Tuple(Vec<ResolvedPattern>),
     Or(Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
+}
+
+/// A lexical name provisionally introduced by an unclassified Pattern argument.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedPatternBinding {
+    pub proxy: ResolvedId,
+    /// Identity to retain when the candidate does not become a payload binding.
+    /// Absence is diagnosed only if a continuation actually references the proxy.
+    pub outer: Option<ResolvedId>,
+}
+
+/// Both legal roles keep their independently resolved identity or original error.
+/// Selecting one role never consults or evaluates the other candidate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedPatternArgument {
+    pub span: Span,
+    pub expr: Result<Box<Resolved>, crate::error::ResolveError>,
+    pub pattern: Result<Box<ResolvedPattern>, crate::error::ResolveError>,
 }
 
 /// Record literal argument (resolved).

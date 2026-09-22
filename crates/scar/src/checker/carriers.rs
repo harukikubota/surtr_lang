@@ -438,6 +438,8 @@ impl Checker {
 
         match self.resolve_ty(ty) {
             Ty::Var(variable) => Ty::Var(variable),
+            Ty::ExtractorClosure(inner) => Ty::ExtractorClosure(Box::new(normalize(&inner))),
+            Ty::MatchResult(inner) => Ty::MatchResult(Box::new(normalize(&inner))),
             Ty::List(inner) => Ty::List(Box::new(normalize(&inner))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(normalize(&inner))),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(normalize).collect()),

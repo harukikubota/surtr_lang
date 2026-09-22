@@ -22,6 +22,7 @@ mod declarations;
 mod derive;
 mod expr;
 mod imports;
+mod pattern_consumers;
 mod patterns;
 mod scope_init;
 mod session;
@@ -81,7 +82,10 @@ fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32
 }
 
 pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentityInfo> {
-    if owner.kind == OwnerKind::BuiltinType {
+    if owner.kind == OwnerKind::BuiltinType
+        || sindr::names::builtin_type_name(global_surface_name(&owner.canonical_key))
+            == Some(sindr::names::TypeName::MatchResult)
+    {
         let capabilities = builtin_symbol_identity_info(&owner.canonical_key)
             .map(|builtin| builtin.capabilities)
             .unwrap_or_else(SymbolCapabilities::type_owner);
@@ -667,6 +671,10 @@ fn rebase_where_clause(clause: &mut ResolvedWhereClause, base: u32, offset: u32)
 
 fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
     match node {
+        Resolved::ApplyPattern(_, value, pattern) => {
+            rebase_resolved_node(value, base, offset);
+            rebase_pattern(pattern, base, offset);
+        }
         Resolved::Lit(..) | Resolved::ListNil(_) => {}
         Resolved::Var(_, id) => rebase_resolved_id(id, base, offset),
         Resolved::App(_, func, args) => {
@@ -831,7 +839,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::ExtractorDef(_, id, type_params, param, _, body, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_type_params(type_params, base, offset);
-            rebase_extractor_param(param, base, offset);
+            for param in param {
+                rebase_extractor_param(param, base, offset);
+            }
             rebase_resolved_node(body, base, offset);
         }
         Resolved::TraitDef(_, id, type_params, where_clause, methods, _) => {
@@ -879,12 +889,15 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::BuiltinExtractorDecl(_, id, param, _, _) => {
             rebase_resolved_id(id, base, offset);
-            rebase_extractor_param(param, base, offset);
+            for param in param {
+                rebase_extractor_param(param, base, offset);
+            }
         }
         Resolved::BuiltinTypeDecl(_, id, _, _) => rebase_resolved_id(id, base, offset),
         Resolved::TypeAlias(_, _, _, _, _) => {}
         Resolved::ResultCtorDecl(_, id, _, _, _) => rebase_resolved_id(id, base, offset),
         Resolved::Closure(_, params, captures, body)
+        | Resolved::ExtractorClosure(_, params, captures, body)
         | Resolved::CaptureClosure(_, params, captures, body) => {
             for param in params {
                 rebase_resolved_id(&mut param.id, base, offset);
@@ -911,10 +924,37 @@ fn rebase_record_arg(arg: &mut ResolvedRecordLitArg, base: u32, offset: u32) {
 
 fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
     match pattern {
+        ResolvedPattern::Projection { id, inner, .. } => {
+            rebase_resolved_id(id, base, offset);
+            rebase_pattern(inner, base, offset);
+        }
+        ResolvedPattern::Deferred {
+            pattern, bindings, ..
+        } => {
+            rebase_pattern(pattern, base, offset);
+            for binding in bindings {
+                rebase_resolved_id(&mut binding.proxy, base, offset);
+                if let Some(outer) = &mut binding.outer {
+                    rebase_resolved_id(outer, base, offset);
+                }
+            }
+        }
+        ResolvedPattern::ExtractorApplication { head, args } => {
+            rebase_resolved_id(head, base, offset);
+            for arg in args {
+                if let Ok(expr) = &mut arg.expr {
+                    rebase_resolved_node(expr, base, offset);
+                }
+                if let Ok(pattern) = &mut arg.pattern {
+                    rebase_pattern(pattern, base, offset);
+                }
+            }
+        }
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) | ResolvedPattern::Pin(id) => {
             rebase_resolved_id(id, base, offset);
         }
         ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::AnnotatedWildcard(_, _)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(..)
         | ResolvedPattern::StrLit(..)
@@ -924,7 +964,16 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
             rebase_pattern(head, base, offset);
             rebase_pattern(tail, base, offset);
         }
-        ResolvedPattern::Constructor(id, inners) | ResolvedPattern::Extractor(id, inners) => {
+        ResolvedPattern::Extractor(id, pre_args, inners) => {
+            rebase_resolved_id(id, base, offset);
+            for arg in pre_args {
+                rebase_resolved_node(arg, base, offset);
+            }
+            for inner in inners {
+                rebase_pattern(inner, base, offset);
+            }
+        }
+        ResolvedPattern::Constructor(id, inners) => {
             rebase_resolved_id(id, base, offset);
             for inner in inners {
                 rebase_pattern(inner, base, offset);
@@ -1112,6 +1161,9 @@ pub fn effective_visible_entries(
 
 struct Resolver {
     scope: Scope,
+    /// Shared provisional identities while resolving one whole Pattern. Their
+    /// binding/outer choice is carried explicitly to Scar, never inferred here.
+    pattern_proxies: Option<HashMap<String, ResolvedId>>,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
     declaration_entries: HashMap<String, DeclarationEntry>,

@@ -1,6 +1,7 @@
 use crate::ast::Span;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParseErrorReason {
     IncompleteInput,
     UnexpectedToken,
@@ -18,7 +19,7 @@ pub enum ParseErrorReason {
     CompilerInvariant,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParseErrorGuidance {
     UnexpectedToken,
     TopLevelDeclaration,
@@ -38,7 +39,7 @@ pub enum ParseErrorGuidance {
     DoCarrierReturnTypeArgument,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParseError {
     Incomplete {
         expected: String,
@@ -121,6 +122,22 @@ impl ParseError {
                     *stored = expected_tokens;
                 }
                 *cursor = cursor_span;
+            }
+        }
+        self
+    }
+
+    /// Relocates all source positions without collapsing the diagnostic cursor.
+    pub fn map_spans(mut self, mut map: impl FnMut(&Span) -> Span) -> Self {
+        match &mut self {
+            Self::Incomplete {
+                span, cursor_span, ..
+            }
+            | Self::SyntaxError {
+                span, cursor_span, ..
+            } => {
+                *span = map(span);
+                *cursor_span = map(cursor_span);
             }
         }
         self

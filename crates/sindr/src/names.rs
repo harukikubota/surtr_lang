@@ -245,6 +245,8 @@ pub enum BuiltinTypeUsage {
     ClauseBlockSurfaceOnly,
     LazySignatureSurfaceOnly,
     IntrinsicSignatureOnly(IntrinsicId),
+    /// MatchResult is confined to an Extractor's result and return paths.
+    ExtractorResultOnly,
 }
 
 /// Compile-space usage policy for builtin type heads.
@@ -359,6 +361,19 @@ impl BuiltinTypeUsagePolicy {
             false,
         )
     }
+
+    pub const fn extractor_result_only() -> Self {
+        Self::new_with_usage(
+            BuiltinTypeUsage::ExtractorResultOnly,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+        )
+    }
 }
 
 /// Canonical builtin type heads reserved by the compiler.
@@ -395,6 +410,8 @@ pub enum TypeName {
     // Keep new variants appended so bincode discriminants of existing canonical
     // type identities remain stable across semantic snapshot revisions.
     DoBlock,
+    MatchResult,
+    ExtractorClosure,
 }
 
 impl TypeName {
@@ -409,6 +426,8 @@ impl TypeName {
             Self::MatchArms => "MatchArms",
             Self::CondClauses => "CondClauses",
             Self::DoBlock => "DoBlock",
+            Self::MatchResult => "MatchResult",
+            Self::ExtractorClosure => "ExtractorClosure",
             Self::BulkUpdateEntries => "BulkUpdateEntries",
             Self::Error => "Error",
             Self::Regex => "Regex",
@@ -440,6 +459,8 @@ impl TypeName {
                 | Self::MatchArms
                 | Self::CondClauses
                 | Self::DoBlock
+                | Self::MatchResult
+                | Self::ExtractorClosure
                 | Self::BulkUpdateEntries
                 | Self::StandbyInit
                 | Self::Lazy
@@ -459,6 +480,7 @@ impl TypeName {
                 BuiltinTypeUsagePolicy::clause_block_surface_only()
             }
             Self::DoBlock => BuiltinTypeUsagePolicy::intrinsic_signature_only(IntrinsicId::Do),
+            Self::MatchResult => BuiltinTypeUsagePolicy::extractor_result_only(),
             Self::Facet => BuiltinTypeUsagePolicy::new(true, true, true, true, true, false, false),
             Self::Pid | Self::Workers | Self::WorkerLease | Self::TaskHandle => {
                 BuiltinTypeUsagePolicy::new(true, true, true, true, false, false, false)
@@ -479,6 +501,8 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "MatchArms" => Some(TypeName::MatchArms),
         "CondClauses" => Some(TypeName::CondClauses),
         "DoBlock" => Some(TypeName::DoBlock),
+        "MatchResult" => Some(TypeName::MatchResult),
+        "ExtractorClosure" => Some(TypeName::ExtractorClosure),
         "BulkUpdateEntries" => Some(TypeName::BulkUpdateEntries),
         "Error" => Some(TypeName::Error),
         "Regex" => Some(TypeName::Regex),
@@ -515,6 +539,8 @@ pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName)
             | TypeName::MatchArms
             | TypeName::CondClauses
             | TypeName::DoBlock
+            | TypeName::MatchResult
+            | TypeName::ExtractorClosure
             | TypeName::BulkUpdateEntries
             | TypeName::Error
             | TypeName::Regex
@@ -632,7 +658,12 @@ pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMet
     Some(BuiltinSymbolSurfaceMeta {
         name: type_name.as_str(),
         identity,
-        capabilities: SymbolCapabilities::new(true, impl_target, impl_target, facet_root_path),
+        capabilities: SymbolCapabilities::new(
+            type_name != TypeName::MatchResult,
+            impl_target,
+            impl_target,
+            facet_root_path,
+        ),
     })
 }
 
@@ -645,6 +676,20 @@ pub fn builtin_symbol_identity_info(name: &str) -> Option<SymbolIdentityInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_result_is_reserved_without_general_value_capabilities() {
+        let ty = builtin_type_name("MatchResult").expect("MatchResult has canonical identity");
+        assert!(canonical_builtin_type_has_surface_declaration(ty));
+        assert!(!ty.supports_inherent_impl());
+        assert!(!ty.usage_policy().type_annotation_allowed);
+        assert!(!ty.usage_policy().runtime_value_allowed);
+        assert!(!ty.usage_policy().process_boundary_allowed);
+        assert!(reserved_owner_surface_name_constraint("MatchResult").is_some());
+        let info = builtin_symbol_identity_info("MatchResult").unwrap();
+        assert!(!info.capabilities.type_annotation);
+        assert!(!info.capabilities.impl_target);
+    }
 
     #[test]
     fn surface_name_rendering_hides_implicit_global_namespace() {

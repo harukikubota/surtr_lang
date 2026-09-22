@@ -1,0 +1,2 @@
+phase: typecheck
+contains: got (Int -> Option<Int>)

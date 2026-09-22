@@ -138,13 +138,17 @@ pub(super) struct CandidateProbeCheckpoint {
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     constructor_witness_traits: HashMap<u32, String>,
     warnings: WarningBuffer,
+    pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
 }
 
 impl Checker {
     fn type_contains_constructor_application(ty: &Ty) -> bool {
         match ty {
             Ty::SelfApp(items) => Self::constructor_application_parts(items).is_some(),
-            Ty::List(inner) | Ty::Lazy(inner) => Self::type_contains_constructor_application(inner),
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => Self::type_contains_constructor_application(inner),
             Ty::Tuple(items) => items
                 .iter()
                 .any(Self::type_contains_constructor_application),
@@ -224,9 +228,10 @@ impl Checker {
                     outcome => Some(outcome),
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
-                self.unresolved_constructor_application_in_type(inner)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.unresolved_constructor_application_in_type(inner),
             Ty::Tuple(items) => items
                 .iter()
                 .find_map(|item| self.unresolved_constructor_application_in_type(item)),
@@ -277,6 +282,12 @@ impl Checker {
         &self,
         node: &TypedNode,
     ) -> Option<(ConstructorApplicationOutcome, Span)> {
+        if let Some(pending) = Self::pattern_expression_nodes(node)
+            .into_iter()
+            .find_map(|expr| self.unresolved_executable_constructor_application(expr))
+        {
+            return Some(pending);
+        }
         let declaration_scheme_has_constructor_application =
             match &node.node {
                 TypedInner::TraitDef(..)
@@ -326,6 +337,7 @@ impl Checker {
                 .iter()
                 .find_map(|(key, value)| recurse(key).or_else(|| recurse(value))),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
@@ -371,6 +383,7 @@ impl Checker {
             | TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => recurse(body),
             TypedInner::SupervisorSpawn { init, .. } => recurse(init),
             TypedInner::SupervisorAdopt { pid, .. } => recurse(pid),
@@ -415,6 +428,7 @@ impl Checker {
             constructor_capabilities: self.constructor_capabilities.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             warnings: self.warnings.clone(),
+            pattern_binding_aliases: self.pattern_binding_aliases.clone(),
         }
     }
 
@@ -427,6 +441,7 @@ impl Checker {
         self.constructor_capabilities = checkpoint.constructor_capabilities;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
         self.warnings = checkpoint.warnings;
+        self.pattern_binding_aliases = checkpoint.pattern_binding_aliases;
     }
 
     fn generalize_local_callable_binding(&mut self, pattern: &TypedPattern) {
@@ -457,11 +472,15 @@ impl Checker {
     /// polymorphic scheme of a callable.  In particular, an alias must not
     /// turn a polymorphic closure back into a monomorphic local binding.
     fn is_non_expansive_callable_value(&self, node: &TypedNode) -> bool {
-        if !matches!(self.resolve_ty(&node.ty), Ty::Func(..)) {
+        if !matches!(
+            self.resolve_ty(&node.ty),
+            Ty::Func(..) | Ty::ExtractorClosure(_)
+        ) {
             return false;
         }
         match &node.node {
             TypedInner::Closure(..)
+            | TypedInner::ExtractorClosure(..)
             | TypedInner::CaptureClosure(..)
             | TypedInner::Capture(..)
             | TypedInner::Var(_) => true,
@@ -711,6 +730,12 @@ impl Checker {
         &self,
         node: &'a TypedNode,
     ) -> Option<(&'a str, &'a str, &'a Ty, &'a Span)> {
+        if let Some(pending) = Self::pattern_expression_nodes(node)
+            .into_iter()
+            .find_map(|expr| self.first_pending_trait_helper(expr))
+        {
+            return Some(pending);
+        }
         match &node.node {
             TypedInner::TraitCall {
                 trait_name,
@@ -752,6 +777,7 @@ impl Checker {
                     .or_else(|| self.first_pending_trait_helper(value))
             }),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => self.first_pending_trait_helper(rhs),
@@ -817,6 +843,7 @@ impl Checker {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => self.first_pending_trait_helper(body),
             TypedInner::SupervisorSpawn { init, .. } => self.first_pending_trait_helper(init),
             TypedInner::SupervisorAdopt { pid, .. } => self.first_pending_trait_helper(pid),
@@ -853,6 +880,9 @@ impl Checker {
 
     pub(super) fn full_trait_obligations(node: &TypedNode) -> Vec<TraitObligation> {
         fn collect(node: &TypedNode, obligations: &mut Vec<TraitObligation>) {
+            for expr in Checker::pattern_expression_nodes(node) {
+                collect(expr, obligations);
+            }
             match &node.node {
                 TypedInner::TraitCall {
                     obligation, args, ..
@@ -894,6 +924,7 @@ impl Checker {
                     collect(&control.continuation, obligations);
                 }
                 TypedInner::Bind(_, rhs)
+                | TypedInner::ApplyPattern { value: rhs, .. }
                 | TypedInner::SafeBind(_, rhs, _, _)
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _)
@@ -950,6 +981,7 @@ impl Checker {
                 | TypedInner::Def(_, _, _, _, _, _, body, _)
                 | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
                 | TypedInner::Closure(_, _, body)
+                | TypedInner::ExtractorClosure(_, _, body)
                 | TypedInner::CaptureClosure(_, _, body) => collect(body, obligations),
                 TypedInner::SupervisorSpawn { init, .. } => collect(init, obligations),
                 TypedInner::SupervisorAdopt { pid, .. } => collect(pid, obligations),
@@ -979,8 +1011,11 @@ impl Checker {
 
     pub(super) fn concretize_pending_trait_calls(
         &mut self,
-        node: TypedNode,
+        mut node: TypedNode,
     ) -> Result<TypedNode, TypeError> {
+        for expr in Self::pattern_expression_nodes_mut(&mut node) {
+            *expr = self.concretize_pending_trait_calls(expr.clone())?;
+        }
         let span = node.span.clone();
         let ty = self.resolve_ty(&node.ty);
         let node = match node.node {
@@ -1104,6 +1139,15 @@ impl Checker {
                 pattern,
                 Box::new(self.concretize_pending_trait_calls(*rhs)?),
             ),
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => TypedInner::ApplyPattern {
+                value: Box::new(self.concretize_pending_trait_calls(*value)?),
+                pattern,
+                projections,
+            },
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 pattern,
                 Box::new(self.concretize_pending_trait_calls(*rhs)?),
@@ -1349,6 +1393,11 @@ impl Checker {
                 captures,
                 Box::new(self.concretize_pending_trait_calls(*body)?),
             ),
+            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
+                params,
+                captures,
+                Box::new(self.concretize_pending_trait_calls(*body)?),
+            ),
             TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params,
                 captures,
@@ -1408,6 +1457,8 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
+                let canonical = self.canonical_pattern_id(id)?;
+                if canonical.unique_id != id.unique_id { return self.check_node(&Resolved::Var(span.clone(), canonical)); }
                 if self.trait_method_ref(node).is_some() {
                     return Err(TypeError {
                         structured: None,
@@ -1672,6 +1723,7 @@ impl Checker {
                     }
                     }
                 }
+                self.ensure_no_match_result_value(&typed_rhs.ty, &typed_rhs.span)?;
                 let facet_path = if matches!(typed_rhs.ty, Ty::Facet(..)) {
                     Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
                 } else {
@@ -1726,6 +1778,7 @@ impl Checker {
                 })
             }
 
+            Resolved::ApplyPattern(span, value, pattern) => self.check_apply_pattern(span, value, pattern, None),
             Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs),
             Resolved::Do(span, intrinsic, contract, return_type_arguments, statements) => self.check_do(
                 span,
@@ -2010,6 +2063,9 @@ impl Checker {
             }),
             Resolved::ResultCtorDecl(span, id, param_ty, ret_ty, attrs) => {
                 self.check_result_ctor_decl(span, id, param_ty, ret_ty, attrs)
+            }
+            Resolved::ExtractorClosure(span, params, captures, body) => {
+                self.check_extractor_closure(span, params, captures, body, None, None)
             }
             Resolved::Closure(span, params, captures, body) => {
                 self.check_closure(span, params, captures, body, None, None)
@@ -2400,7 +2456,10 @@ impl Checker {
             match ty {
                 Ty::Func(..) | Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => true,
                 Ty::SelfApp(items) => Checker::constructor_application_parts(items).is_some(),
-                Ty::List(inner) | Ty::Lazy(inner) => needs_context(inner),
+                Ty::List(inner)
+                | Ty::MatchResult(inner)
+                | Ty::ExtractorClosure(inner)
+                | Ty::Lazy(inner) => needs_context(inner),
                 Ty::Result(ok, error) => needs_context(ok) || needs_context(error),
                 Ty::Tuple(items) => items.iter().any(needs_context),
                 Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
@@ -2820,7 +2879,10 @@ impl Checker {
                 }
             }
             match (actual, expected) {
-                (Ty::List(left), Ty::List(right)) | (Ty::Lazy(left), Ty::Lazy(right)) => {
+                (Ty::MatchResult(left), Ty::MatchResult(right))
+                | (Ty::ExtractorClosure(left), Ty::ExtractorClosure(right))
+                | (Ty::List(left), Ty::List(right))
+                | (Ty::Lazy(left), Ty::Lazy(right)) => {
                     find(checker, left, right, explicit_slot_for_var)
                 }
                 (Ty::Result(left_ok, left_err), Ty::Result(right_ok, right_err)) => {
@@ -2889,6 +2951,18 @@ impl Checker {
             (Resolved::Block(span, stmts), expected) => {
                 self.check_block(span, stmts, expected, expected_relation)
             }
+            (Resolved::ApplyPattern(span, value, pattern), Some(expected_ty)) => {
+                self.check_apply_pattern(span, value, pattern, Some(expected_ty))
+            }
+            (Resolved::ExtractorClosure(span, params, captures, body), Some(expected_ty)) => self
+                .check_extractor_closure(
+                    span,
+                    params,
+                    captures,
+                    body,
+                    Some(expected_ty),
+                    expected_relation,
+                ),
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
                 let expected_ty = self.resolve_ty(expected_ty);
                 if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
@@ -3471,7 +3545,13 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let mut checked = self.check_safebind_input(span, pat, rhs)?;
-        let failure_target = if let Some(ret_ty) = self.function_return_ty.clone() {
+        let failure_target = if matches!(
+            self.callable_context,
+            CallableContext::Extractor | CallableContext::ExtractorClosure
+        ) {
+            let (_, err_tag) = self.match_result_variant_tags(span)?;
+            SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
+        } else if let Some(ret_ty) = self.function_return_ty.clone() {
             let target = match self.resolve_result_effect(&ret_ty) {
                 ResultEffectResolution::Preserve(target) => target,
                 ResultEffectResolution::Unavailable | ResultEffectResolution::Deferred => {
@@ -3553,7 +3633,7 @@ impl Checker {
         match node {
             Resolved::Capture(_, _, _)
             | Resolved::Closure(_, _, _, _)
-            | Resolved::CaptureClosure(_, _, _, _)
+            | Resolved::ExtractorClosure(_, _, _, _) | Resolved::CaptureClosure(_, _, _, _)
             | Resolved::Compose(_, _, _)
             | Resolved::LiftedCompose(_, _, _)
             | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
@@ -3590,7 +3670,7 @@ impl Checker {
         match node {
             Resolved::Capture(_, _, _)
             | Resolved::Closure(_, _, _, _)
-            | Resolved::CaptureClosure(_, _, _, _) => self.check_node(node),
+            | Resolved::ExtractorClosure(_, _, _, _) | Resolved::CaptureClosure(_, _, _, _) => self.check_node(node),
             Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::ReturnTypeArgumentApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
@@ -3625,6 +3705,7 @@ impl Checker {
             Resolved::InferredFacetCapture(_, _)
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
+                | Resolved::ExtractorClosure(_, _, _, _)
                 | Resolved::CaptureClosure(_, _, _, _)
                 | Resolved::Grouped(_, _)
                 | Resolved::ReturnTypeArgumentApply(_, _, _)
@@ -3885,9 +3966,9 @@ impl Checker {
         match &node.node {
             TypedInner::Var(id) => add(id),
             TypedInner::Capture(target, _) => Self::curry_source_captures(target, out),
-            TypedInner::Closure(_, captures, _) | TypedInner::CaptureClosure(_, captures, _) => {
-                captures.iter().for_each(&mut add)
-            }
+            TypedInner::Closure(_, captures, _)
+            | TypedInner::ExtractorClosure(_, captures, _)
+            | TypedInner::CaptureClosure(_, captures, _) => captures.iter().for_each(&mut add),
             _ => {}
         }
     }
@@ -4182,6 +4263,7 @@ impl Checker {
             | Resolved::ReturnTypeArgumentApply(span, _, _)
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
+            | Resolved::ApplyPattern(span, _, _)
             | Resolved::SafeBind(span, _, _)
             | Resolved::Do(span, _, _, _, _)
             | Resolved::BinOp(span, _, _, _)
@@ -4233,6 +4315,7 @@ impl Checker {
             | Resolved::TraitDef(span, _, _, _, _, _)
             | Resolved::TraitImplDef(span, _, _, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
+            | Resolved::ExtractorClosure(span, _, _, _)
             | Resolved::CaptureClosure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
@@ -5412,9 +5495,10 @@ impl Checker {
                         .iter()
                         .any(|item| contains_trait_constructor_input(item, trait_args))
                 }
-                Ty::List(inner) | Ty::Lazy(inner) => {
-                    contains_trait_constructor_input(inner, trait_args)
-                }
+                Ty::List(inner)
+                | Ty::MatchResult(inner)
+                | Ty::ExtractorClosure(inner)
+                | Ty::Lazy(inner) => contains_trait_constructor_input(inner, trait_args),
                 Ty::Result(ok, error) => {
                     contains_trait_constructor_input(ok, trait_args)
                         || contains_trait_constructor_input(error, trait_args)
@@ -6550,6 +6634,7 @@ impl Checker {
                 Resolved::InferredFacetCapture(_, _)
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
+                | Resolved::ExtractorClosure(_, _, _, _)
                 | Resolved::CaptureClosure(_, _, _, _)
                 | Resolved::Grouped(_, _) => {
                     let contract = self.callable_contract(
@@ -7297,52 +7382,49 @@ impl Checker {
         )
     }
 
-    pub(super) fn option_variant_tags(&self, span: &Span) -> Result<(u32, u32, u32), TypeError> {
+    pub(super) fn match_result_variant_tags(&self, span: &Span) -> Result<(u32, u32), TypeError> {
         let variants = self
-            .lookup_enum_variants_of("Option")
+            .lookup_enum_variants_of("MatchResult")
             .ok_or_else(|| TypeError {
                 structured: None,
-                message: "Option enum is not available in the current environment".into(),
+                message: "MatchResult enum is not available in the current environment".into(),
                 span: span.clone(),
                 hint: None,
             })?;
-        let mut some_tag = None;
-        let mut none_tag = None;
+        let mut ok_tag = None;
+        let mut err_tag = None;
         for variant in variants {
             match variant.short_name.as_str() {
-                "Some" => some_tag = Some(variant.tag),
-                "None" => none_tag = Some(variant.tag),
+                "OK" => ok_tag = Some(variant.tag),
+                "Err" => err_tag = Some(variant.tag),
                 _ => {}
             }
         }
-        match (some_tag, none_tag) {
-            (Some(some), Some(none)) => Ok((some, none, 0)),
+        match (ok_tag, err_tag) {
+            (Some(ok), Some(err)) => Ok((ok, err)),
             _ => Err(TypeError {
                 structured: None,
-                message: "Option enum must define Some and None variants".into(),
+                message: "MatchResult enum must define OK and Err variants".into(),
                 span: span.clone(),
                 hint: None,
             }),
         }
     }
 
+    pub(super) fn extractor_signature_ty(ty: &Ty) -> &Ty {
+        match ty {
+            Ty::ExtractorClosure(signature) => signature,
+            other => other,
+        }
+    }
+
     pub(super) fn extractor_contract(
         &mut self,
         extractor_id: &ResolvedId,
+        extractor_ty: &Ty,
         span: &Span,
-    ) -> Result<(Ty, Vec<Ty>, u32, u32, u32), TypeError> {
-        let extractor_ty = self
-            .env
-            .lookup_var(extractor_id.unique_id)
-            .cloned()
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Undefined extractor: {}", extractor_id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let extractor_ty = self.instantiate_callable_ty(&extractor_ty);
-        let (params, ret) = match &extractor_ty {
+    ) -> Result<(Ty, Vec<Ty>, u32, u32), TypeError> {
+        let (params, ret) = match Self::extractor_signature_ty(extractor_ty) {
             Ty::BuiltinFunc { params, ret, .. }
             | Ty::UserFunc { params, ret, .. }
             | Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
@@ -7359,11 +7441,11 @@ impl Checker {
                 });
             }
         };
-        if params.len() != 1 {
+        if params.is_empty() {
             return Err(TypeError {
                 structured: None,
                 message: format!(
-                    "Extractor {} must accept exactly one input value, got {} parameter(s)",
+                    "Extractor {} must accept at least one input value, got {} parameter(s)",
                     extractor_id.name,
                     params.len()
                 ),
@@ -7371,14 +7453,14 @@ impl Checker {
                 hint: None,
             });
         }
-        let input_ty = params[0].clone();
-        let seq_tys = self.require_extractor_option_payload_ty(
+        let input_ty = params.last().expect("nonempty parameters checked").clone();
+        let seq_tys = self.require_extractor_match_result_payload_ty(
             &self.resolve_ty(&ret),
             span,
             &extractor_id.name,
         )?;
-        let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
-        Ok((input_ty, seq_tys, success_tag, no_match_tag, err_tag))
+        let (success_tag, err_tag) = self.match_result_variant_tags(span)?;
+        Ok((input_ty, seq_tys, success_tag, err_tag))
     }
 
     pub(super) fn extractor_callable_ty(
@@ -7396,14 +7478,19 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        Ok(self.instantiate_callable_ty(&extractor_ty))
+        if let Some(scheme) = self.env.lookup_scheme(extractor_id.unique_id).cloned() {
+            Ok(self.instantiate_local_callable_scheme(&scheme))
+        } else if matches!(extractor_ty, Ty::ExtractorClosure(_)) {
+            Ok(self.resolve_ty(&extractor_ty))
+        } else {
+            Ok(self.instantiate_callable_ty(&extractor_ty))
+        }
     }
 
     pub(super) fn kernel_uncons_id(&self, span: &Span) -> Result<ResolvedId, TypeError> {
         let id = self
             .function_ids_by_name
             .get("Kernel::uncons")
-            .or_else(|| self.function_ids_by_name.get("uncons"))
             .cloned()
             .ok_or_else(|| TypeError {
                 structured: None,
@@ -7445,44 +7532,98 @@ impl Checker {
         &mut self,
         extractor_id: &ResolvedId,
         observed_ty: &Ty,
+        pre_args: &[Resolved],
         span: &Span,
-    ) -> Result<(Ty, Ty, Vec<Ty>, u32, u32, u32), TypeError> {
-        let extractor_ty = self.extractor_callable_ty(extractor_id, span)?;
-        let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) = if matches!(&extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
+    ) -> Result<(Ty, Ty, Vec<TypedNode>, Vec<Ty>, u32, u32), TypeError> {
+        let mut extractor_ty = self.extractor_callable_ty(extractor_id, span)?;
+        let params = match Self::extractor_signature_ty(&extractor_ty) {
+            Ty::UserFunc { params, .. } | Ty::BuiltinFunc { params, .. } | Ty::Func(params, _) => {
+                params.clone()
+            }
+            _ => {
+                return Err(TypeError::new(
+                    "Extractor head is not callable",
+                    span.clone(),
+                ))
+            }
+        };
+        let Some((input, expected_pre_args)) = params.split_last() else {
+            return Err(TypeError::new(
+                "Extractor requires at least one input",
+                span.clone(),
+            ));
+        };
+        if pre_args.len() != expected_pre_args.len() {
+            return Err(TypeError::new(
+                format!(
+                    "Extractor {} requires {} pre-argument(s), got {}",
+                    extractor_id.name,
+                    expected_pre_args.len(),
+                    pre_args.len()
+                ),
+                span.clone(),
+            ));
+        }
+        self.types_compatible(input, observed_ty);
+        let pre_args = pre_args
+            .iter()
+            .cloned()
+            .map(ResolvedRecordLitArg::Positional)
+            .collect::<Vec<_>>();
+        let typed_pre_args = self.typecheck_positional_call_args(
+            span,
+            &extractor_id.name,
+            expected_pre_args,
+            &pre_args,
+            None,
+            "Extractor pre-arguments must be positional".into(),
+        )?;
+        self.ensure_no_runtime_facet_args(&typed_pre_args, span, "Extractor pre-arguments")?;
+
+        let (input_ty, seq_tys, success_tag, err_tag) = if self
+            .function_ids_by_name
+            .get("Kernel::uncons")
+            .is_some_and(|id| id.unique_id == extractor_id.unique_id)
+            && matches!(&extractor_ty, Ty::BuiltinFunc { .. })
         {
             let (input_ty, seq_tys) = self.uncons_contract_for_input(observed_ty, span)?;
-            let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
-            (input_ty, seq_tys, success_tag, no_match_tag, err_tag)
+            let Ty::BuiltinFunc { params, ret, .. } = &mut extractor_ty else {
+                unreachable!()
+            };
+            *params = vec![input_ty.clone()];
+            *ret = Box::new(Ty::MatchResult(Box::new(Ty::Tuple(seq_tys.clone()))));
+            let (success_tag, err_tag) = self.match_result_variant_tags(span)?;
+            (input_ty, seq_tys, success_tag, err_tag)
         } else {
-            self.extractor_contract(extractor_id, span)?
+            // Input and prearguments share one instantiation. Resolve their
+            // constraints before choosing UnitOnly, tuple, or single-value shape.
+            self.extractor_contract(extractor_id, &extractor_ty, span)?
         };
         Ok((
-            input_ty,
+            self.resolve_ty(&input_ty),
             self.resolve_ty(&extractor_ty),
+            typed_pre_args,
             seq_tys,
             success_tag,
-            no_match_tag,
             err_tag,
         ))
     }
 
-    pub(super) fn require_extractor_option_payload_ty(
+    pub(super) fn require_extractor_match_result_payload_ty(
         &self,
         ty: &Ty,
         span: &Span,
         context: &str,
     ) -> Result<Vec<Ty>, TypeError> {
         match self.resolve_ty(ty) {
-            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                match &args[0] {
-                    Ty::Tuple(items) => Ok(items.clone()),
-                    other => Ok(vec![other.clone()]),
-                }
-            }
+            Ty::MatchResult(payload) => match payload.as_ref() {
+                Ty::Tuple(items) => Ok(items.clone()),
+                other => Ok(vec![other.clone()]),
+            },
             other => Err(TypeError {
                 structured: None,
                 message: format!(
-                    "{} must return Option<T> or Option<(...)>, got {}",
+                    "{} must return MatchResult<T, Error>, got {}",
                     context,
                     self.ty_name(&other)
                 ),
@@ -8758,7 +8899,10 @@ impl Checker {
     fn count_tyvar_occurrences(&self, ty: &Ty, needle: u32) -> usize {
         match ty {
             Ty::Var(var) => usize::from(*var == needle),
-            Ty::List(inner) | Ty::Lazy(inner) => self.count_tyvar_occurrences(inner, needle),
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.count_tyvar_occurrences(inner, needle),
             Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .map(|item| self.count_tyvar_occurrences(item, needle))
@@ -8833,7 +8977,9 @@ impl Checker {
                 }
                 Ok(())
             }
-            (Ty::List(template), Ty::List(replacement))
+            (Ty::MatchResult(template), Ty::MatchResult(replacement))
+            | (Ty::ExtractorClosure(template), Ty::ExtractorClosure(replacement))
+            | (Ty::List(template), Ty::List(replacement))
             | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
                 .collect_facet_rebuild_tyvar_replacements(
                     template,
@@ -9112,6 +9258,12 @@ impl Checker {
                 .get(var)
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
+            Ty::ExtractorClosure(inner) => Ty::ExtractorClosure(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::MatchResult(inner) => Ty::MatchResult(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
             Ty::List(inner) => Ty::List(Box::new(
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
@@ -10027,6 +10179,9 @@ impl Checker {
         span: &Span,
         callee: &str,
     ) -> Result<(), TypeError> {
+        for arg in args {
+            self.ensure_no_match_result_value(&arg.ty, &arg.span)?;
+        }
         if let Some(arg) = args.iter().find(|arg| self.ty_contains_facet(&arg.ty)) {
             return Err(self.policy_error(
                 TypeDiagnosticReason::FacetCompileTimeOnly,
@@ -10051,6 +10206,7 @@ impl Checker {
         value: &TypedNode,
         context: &str,
     ) -> Result<(), TypeError> {
+        self.ensure_no_match_result_value(&value.ty, &value.span)?;
         if self.ty_contains_facet(&value.ty) {
             return Err(self.policy_error(
                 TypeDiagnosticReason::FacetCompileTimeOnly,
@@ -11436,6 +11592,7 @@ impl Checker {
     ) -> Result<(String, TypedNode), TypeError> {
         let span = self.resolved_span(worker_init).clone();
         if let Resolved::Closure(_, params, _, body)
+        | Resolved::ExtractorClosure(_, params, _, body)
         | Resolved::CaptureClosure(_, params, _, body) = worker_init
         {
             if params.is_empty() {
@@ -11555,6 +11712,65 @@ impl Checker {
         })
     }
 
+    fn check_extractor_closure(
+        &mut self,
+        span: &Span,
+        params: &[ResolvedClosureParam],
+        captures: &[ResolvedId],
+        body: &Resolved,
+        expected: Option<&Ty>,
+        expected_relation: Option<&ExpectedTypeRelation>,
+    ) -> Result<TypedNode, TypeError> {
+        if params.is_empty() {
+            return Err(TypeError::new(
+                "ExtractorClosure requires at least one input",
+                span.clone(),
+            ));
+        }
+        let signature = match expected.map(|ty| self.resolve_ty(ty)) {
+            Some(Ty::ExtractorClosure(signature)) => *signature,
+            Some(Ty::Var(_)) | None => Ty::Func(
+                params
+                    .iter()
+                    .map(|param| match &param.ty {
+                        Some(ty) => {
+                            self.resolve_ast_ty_in_context(ty, self.local_type_syntax_context())
+                        }
+                        None => Ok(self.env.fresh_tyvar()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                Box::new(Ty::MatchResult(Box::new(self.env.fresh_tyvar()))),
+            ),
+            Some(other) => {
+                return Err(TypeError::new(
+                    format!("Expected {}, got ExtractorClosure", self.ty_name(&other)),
+                    span.clone(),
+                ))
+            }
+        };
+        let Ty::Func(_, ret) = &signature else {
+            return Err(TypeError::new(
+                "ExtractorClosure requires a function signature",
+                span.clone(),
+            ));
+        };
+        if !matches!(ret.as_ref(), Ty::MatchResult(_)) {
+            return Err(TypeError::new(
+                "ExtractorClosure must return MatchResult",
+                span.clone(),
+            ));
+        }
+        self.check_closure_with_kind(
+            span,
+            params,
+            captures,
+            body,
+            Some(&signature),
+            expected_relation,
+            CallableContext::ExtractorClosure,
+        )
+    }
+
     fn check_closure(
         &mut self,
         span: &Span,
@@ -11564,13 +11780,48 @@ impl Checker {
         expected: Option<&Ty>,
         expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
+        self.check_closure_with_kind(
+            span,
+            params,
+            captures,
+            body,
+            expected,
+            expected_relation,
+            CallableContext::Closure,
+        )
+    }
+
+    fn check_closure_with_kind(
+        &mut self,
+        span: &Span,
+        params: &[ResolvedClosureParam],
+        captures: &[ResolvedId],
+        body: &Resolved,
+        expected: Option<&Ty>,
+        expected_relation: Option<&ExpectedTypeRelation>,
+        kind: CallableContext,
+    ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
-        let saved_in_extractor_body = self.in_extractor_body;
+        let saved_callable_context = self.callable_context;
+        self.callable_context = kind;
+        if matches!(self.function_return_ty, Some(Ty::MatchResult(_))) {
+            self.function_return_ty = Some(self.env.fresh_tyvar());
+        }
         let saved_closure_depth = self.closure_depth;
         let saved_facet_bindings = self.facet_bindings.clone();
 
+        let outer_ids = self
+            .env
+            .vars
+            .iter()
+            .filter_map(|(id, ty)| {
+                (!matches!(ty, Ty::UserFunc { .. } | Ty::BuiltinFunc { .. })
+                    && !self.env.type_constructor_ids.contains(id))
+                .then_some(*id)
+            })
+            .collect::<HashSet<_>>();
         self.env.push_var_scope();
         self.closure_depth = self.closure_depth.saturating_add(1);
         let result = (|| -> Result<TypedNode, TypeError> {
@@ -11652,6 +11903,12 @@ impl Checker {
             }
 
             for capture in captures {
+                if self
+                    .pattern_binding_aliases
+                    .contains_key(&capture.unique_id)
+                {
+                    continue;
+                }
                 if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
                     let resolved_ty = self.resolve_ty(&ty);
                     self.env.bind_var(capture.unique_id, resolved_ty);
@@ -11671,7 +11928,8 @@ impl Checker {
                 }
                 _ => false,
             };
-            let typed_body = if body_is_result_constructor
+            let typed_body = if kind == CallableContext::ExtractorClosure
+                || body_is_result_constructor
                 || self.body_tail_is_return_type_argument_call(body)
             {
                 if let Some(Ty::Func(_, expected_ret)) = expected {
@@ -11724,7 +11982,7 @@ impl Checker {
             let body_ty = self.resolve_ty(&typed_body.ty);
             if let Some(Ty::Func(_, expected_ret)) = expected {
                 let expected_ret = self.resolve_ty(expected_ret);
-                if matches!(expected_ret, Ty::Unit) {
+                if kind == CallableContext::ExtractorClosure || matches!(expected_ret, Ty::Unit) {
                     self.assert_type_relation(
                         &expected_ret,
                         &body_ty,
@@ -11743,9 +12001,17 @@ impl Checker {
                 .map(|p| self.resolve_ty(&p.ty))
                 .collect::<Vec<_>>();
             Ok(TypedNode {
-                ty: Ty::Func(param_tys, Box::new(body_ty)),
+                ty: if kind == CallableContext::ExtractorClosure {
+                    Ty::ExtractorClosure(Box::new(Ty::Func(param_tys, Box::new(body_ty))))
+                } else {
+                    Ty::Func(param_tys, Box::new(body_ty))
+                },
                 span: span.clone(),
-                node: TypedInner::Closure(
+                node: (if kind == CallableContext::ExtractorClosure {
+                    TypedInner::ExtractorClosure
+                } else {
+                    TypedInner::Closure
+                })(
                     typed_params
                         .into_iter()
                         .map(|param| TypedClosureParam {
@@ -11753,7 +12019,7 @@ impl Checker {
                             ty: self.resolve_ty(&param.ty),
                         })
                         .collect(),
-                    captures.to_vec(),
+                    Self::finalized_closure_captures(&typed_body, &outer_ids),
                     Box::new(typed_body),
                 ),
             })
@@ -11763,7 +12029,7 @@ impl Checker {
         self.function_return_ty = saved_function_return_ty;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
-        self.in_extractor_body = saved_in_extractor_body;
+        self.callable_context = saved_callable_context;
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
         result
@@ -11966,6 +12232,7 @@ impl Checker {
         } else {
             (self.check_node(target)?, None)
         };
+        self.ensure_no_match_result_value(&typed_target.ty, span)?;
         let mut target_ty = self.resolve_ty(&typed_target.ty);
         if let Some(expected_ty) = expected {
             let checkpoint = self.candidate_probe_checkpoint();
@@ -12850,6 +13117,7 @@ impl Checker {
         }
         match arg {
             Resolved::Closure(span, params, captures, body)
+            | Resolved::ExtractorClosure(span, params, captures, body)
             | Resolved::CaptureClosure(span, params, captures, body)
                 if params.is_empty() =>
             {
@@ -12900,7 +13168,9 @@ impl Checker {
 
     fn branch_tail_is_return_type_argument_call(&self, node: &Resolved) -> bool {
         match node {
-            Resolved::Closure(_, _, _, body) | Resolved::CaptureClosure(_, _, _, body) => {
+            Resolved::Closure(_, _, _, body)
+            | Resolved::ExtractorClosure(_, _, _, body)
+            | Resolved::CaptureClosure(_, _, _, body) => {
                 self.body_tail_is_return_type_argument_call(body)
             }
             _ => self.body_tail_is_return_type_argument_call(node),

@@ -282,6 +282,10 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 
 ---
 
+標準 `Extractor` module は `lib/extractor.srt` をロードする。`:doc Extractor` はmodule、`:doc Extractor::from_result` / `:sig Extractor::from_result` は同じcanonical関数を解決する。from_resultで生成した値のsignatureは通常Closureではなく専用ExtractorClosure型として表示する。
+
+`apply_pattern` は通常の式と同様に chunk 間で評価できる。projection と照合内 binding を REPL の変数一覧へ公開せず、返却 Result を通常 binding へ代入した場合だけその変数を公開する。`:sig apply_pattern` / `:doc apply_pattern` は canonical Kernel consumer の公開 signature を示す。
+
 ## 7. 診断表示
 
 - 対話モードでは ariadne ベースの人間向け診断を標準とする

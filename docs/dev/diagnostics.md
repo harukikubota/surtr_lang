@@ -44,7 +44,9 @@ source span を必要としない説明や修正案を `labels` に置かない�
 - JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
 - constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。familyはcapability継承を表し、別direct parameterのcarrier同一性を暗黙に作らない。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
 - structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。SafeBind、pattern / Extractor / exhaustiveness、policy、runtime、parser、resolver、REPL command/query の各 family は producer-owned reason/data から表示する。
-- OR Pattern は `match` arm、`if_let`、`if_let_then` と binding-free な `is_match` で root / nested ともに許可する。Sigil は alternative 間の束縛名・順序不一致を Pattern resolve error、Scar は同名束縛の解決済み型不一致を `PatternTypeMismatch` で拒否する。`is_match` の全 alternative で binding を禁止する既存診断は維持する。Spire は `=` / `=?`、do `<-` / `=?` の root / nested OR を `PatternSyntax` で拒否し、禁止された `|` token を primary span にする。consumer input / RHS にある通常 `match` の OR はこの禁止対象ではない。
+- OR Pattern は `match` arm、`if_let`、`if_let_then` と binding-free な `is_match` で root / nested ともに許可する。Sigil は alternative 間の束縛名・順序不一致を Pattern resolve error、Scar は同名束縛の解決済み型不一致を `PatternTypeMismatch` で拒否する。`is_match` の全 alternative で binding を禁止する既存診断は維持する。Spire は `=` / `=?`、do `<-` / `=?`、`apply_pattern` の root / nested OR を `PatternSyntax` で拒否し、禁止された `|` token を primary span にする。consumer input / RHS にある通常 `match` の OR はこの禁止対象ではない。
+
+- `apply_pattern` の projection は選択済み Pattern 引数だけで検査する。index の範囲・重複・欠番・許可位置と注釈型の不一致は静的エラーとし、runtime `Err` に変換しない。通常 Pattern 不一致には既存の literal / list / constructor 診断を使い、Extractor の `Err` は kind・message・cause・source を保持する。consumer 自体は外側 callable / do へ早期 return しない。
 
 ## stable reason と typed data
 
@@ -204,3 +206,22 @@ cargo nextest run --workspace
 ```
 
 変更範囲に応じて focused test を先に実行し、最後に workspace 全体を実行する。失敗が既存か変更起因かを分けて記録する。
+
+### MatchResult の Extractor 境界
+
+Extractor の戻り型は `MatchResult<P, Error>`（短縮 `MatchResult<P>`）だけを受理する。
+旧 Option / 通常 Result、第二型引数の非 abstract Error、一般の値位置、通常 Closure の
+返却・構築、abstract Error の手書き Err 再投入を静的拒否する。
+Unit payload の子 Pattern は0または1であり、arity / annotation 不一致は型エラーとする。
+入力の末尾を照合対象、それ以前を事前引数として検査する。signature から引数領域を
+確定し、総 arity の不足・余剰を拒否してから、事前引数の型と payload の子 Pattern を
+検査する。同じ Pattern で新しく束縛する名前は事前引数・pin・head の解決に使わず、
+Pattern 開始時の外側 scope に名前がない場合は名前解決エラーとする。
+SafeBind は元 Error の source facts を保持し、consumer や Extractor 名から message を作り直さない。
+未知 tag / 不正 field 数 / discriminant / Err payload は内部契約違反として停止し、
+Result の利用者エラー、通常不一致、Alternative empty に変換しない。
+
+ExtractorClosure は専用 signature 型を持ち、通常 call と通常 Closure との暗黙変換を拒否する。
+local head は選ばれた lexical identity の型を検査し、named Extractor へ探し直さない。
+引数の Expr / Pattern 候補は signature で選択し、未選択候補の診断を発行しない。
+選択された候補の Parse / Resolve 診断は元の phase、reason、span、cursor、関連ラベルを保持する。

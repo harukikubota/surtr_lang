@@ -1,0 +1,2 @@
+phase: typecheck
+contains: ExtractorClosure requires exactly one function signature

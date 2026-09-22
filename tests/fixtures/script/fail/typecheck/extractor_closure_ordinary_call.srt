@@ -1,0 +1,2 @@
+ext = *{|value: Int| MatchResult::OK(value)}
+ext(1)

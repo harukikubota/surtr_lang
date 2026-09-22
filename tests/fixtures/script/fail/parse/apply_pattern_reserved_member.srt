@@ -1,0 +1,4 @@
+defrecord ProjectionHolder(value: Int)
+impl ProjectionHolder {
+  def apply_pattern(self: Self) -> Int { self.value }
+}

@@ -413,6 +413,7 @@ pub enum ParseDiagnosticGuidance {
 pub struct ResolveDiagnosticData {
     pub detail: String,
     pub subject: Option<String>,
+    pub related_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -971,6 +972,9 @@ impl StructuredDiagnostic {
             fact.source_id = source_id;
             fact.span = span;
         });
+        if let DiagnosticData::Parse(data) = &mut self.data {
+            data.cursor_span = map(&data.cursor_span).1;
+        }
         self
     }
 

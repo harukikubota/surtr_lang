@@ -1255,6 +1255,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     ),
     surface_case!(trait_impl_return_type_arguments_must_match_the_trait_slots),
     surface_case!(explicit_function_type_arguments_follow_signature_order),
+    surface_case!(match_result_extractor_contract_boundaries),
+    surface_case!(match_result_extractor_rejects_ordinary_value_uses),
+    surface_case!(match_result_extractor_uses_own_safebind_target),
+    surface_case!(match_result_unitonly_rejects_wrong_child_shapes),
+    surface_case!(match_result_payload_shape_must_be_resolved_before_execution),
+    surface_case!(extractor_prearguments_follow_signature_and_infer_payload_shape),
+    surface_case!(extractor_closure_inference_and_callable_boundaries),
+    surface_case!(apply_pattern_projection_types_and_boundaries),
 ];
 
 #[test]
@@ -2345,6 +2353,17 @@ map_score = Facet::view(map_path, score_map)"#,
 }
 
 fn facet_dynamic_container_segments_accept_runtime_expressions() {
+    let captured = typecheck_with_builtin_prelude(
+        r#"index = 0
+view = {|values: List<Int>| Facet::view(List.[index + 1], values)}"#,
+    );
+    let TypedInner::Closure(_, captures, _) = &typed_bind_rhs(&captured, "view").node else {
+        panic!("closure");
+    };
+    assert!(
+        captures.iter().any(|id| id.name == "index"),
+        "dynamic Facet segment must retain its lexical capture"
+    );
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>)
 def find_index(values: List<Int>) -> Int { 1 }
@@ -3107,12 +3126,13 @@ impl Profile {
 }
 
 fn facet_standalone_tuple_root_is_rejected() {
-    let err = resolve_with_builtin_prelude_result(
+    let err = spire::parse_with_context(
         r#"pair = (1, "one")
 Facet::view(_0, pair)"#,
+        spire::ParserContext::project(0),
     )
-    .expect_err("standalone tuple root should fail during resolve");
-    assert!(err.message.contains("Undefined variable: _0"));
+    .expect_err("standalone _0 is outside the numbered-placeholder range");
+    assert!(err.message().contains("between _1 and _16"));
 }
 
 fn facet_bindings_can_be_reused_by_facet_intrinsics() {
@@ -3490,8 +3510,8 @@ impl Single {
 Single { value: value }
   }
 
-  defextractor deconstruct(self: Self) -> Option<Int> {
-Option::Some(self.value)
+  defextractor deconstruct(self: Self) -> MatchResult<Int> {
+MatchResult::OK(self.value)
   }
 }
 
@@ -3515,8 +3535,8 @@ impl User {
   def new(name: String, age: Int) -> Self {
 User { name: name, age: age }
   }
-  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
-Option::None
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int)> {
+MatchResult::Err(NoneError)
   }
 }
 user = User("alice", 30)
@@ -3558,10 +3578,10 @@ fn enum_impl_extractor_can_be_used_in_matchblock() {
   Green,
 }
 impl Light {
-  defextractor stop_code(self: Self) -> Option<Int> {
+  defextractor stop_code(self: Self) -> MatchResult<Int> {
 match self {
-  Light::Red => Option::Some(1),
-  _ => Option::None,
+  Light::Red => MatchResult::OK(1),
+  _ => MatchResult::Err(NoneError),
 }
   }
 }
@@ -4875,7 +4895,7 @@ defenum Option<$T> {
     let cases = [
         (
             "builtin extractor parameter",
-            r#"@builtin defextractor invalid(term: Context<Int>) -> Option<Int>"#,
+            r#"@builtin defextractor invalid(term: Context<Int>) -> MatchResult<Int>"#,
         ),
         (
             "ordinary extractor return",
@@ -4883,7 +4903,7 @@ defenum Option<$T> {
 
 impl Owner {
   def new() -> Self { Owner {} }
-  defextractor invalid(self: Self) -> Option<Context<Int>> { Option::None }
+  defextractor invalid(self: Self) -> MatchResult<Context<Int>> { () }
 }"#,
         ),
     ];
@@ -8773,6 +8793,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             }
             TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
@@ -8847,6 +8868,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
@@ -8896,6 +8918,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             }
             TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
@@ -8970,6 +8993,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
@@ -9501,7 +9525,9 @@ fn collect_decode_trait_calls(node: &TypedNode, calls: &mut Vec<(String, Option<
                 collect_decode_trait_calls(stmt, calls);
             }
         }
-        TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs, _, _) => {
+        TypedInner::Bind(_, rhs)
+        | TypedInner::ApplyPattern { value: rhs, .. }
+        | TypedInner::SafeBind(_, rhs, _, _) => {
             collect_decode_trait_calls(rhs, calls);
         }
         TypedInner::Def(_, _, _, _, _, _, body, _)
@@ -10922,4 +10948,246 @@ value: (String, Int) = reversed("ok", 1)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("declared generic slots should follow their declaration order");
+}
+
+fn match_result_extractor_contract_boundaries() {
+    let source = r#"impl Int {
+  defextractor value(value: Int) -> MatchResult<Int, Error> { MatchResult::OK(value) }
+  defextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }
+  defextractor identity(value: $A) -> MatchResult<$A> { MatchResult::OK(value) }
+}
+match 1 { Int::value(value) => value, _ => 0 }
+match 1 { Int::unit(value: Unit) => value, _ => () }
+match 1 { Int::unit(_: Unit) => 1, _ => 0 }
+match 1 { Int::unit() => 1, _ => 0 }
+match () { Int::identity() => 1, _ => 0 }
+match (1, "x") { Int::identity(first: Int, second: String) => second, _ => "" }
+"#;
+    typecheck(resolve_with_builtin_prelude(source)).expect("MatchResult and UnitOnly contract");
+}
+
+fn match_result_extractor_rejects_ordinary_value_uses() {
+    for source in [
+        "impl Int { defextractor invalid(v: Int) -> Option<Int> { Option::Some(v) } }",
+        "def invalid(v: Int) -> MatchResult<Int> { MatchResult::OK(v) }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { saved = MatchResult::OK(v)\n saved } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::OK(MatchResult::OK(v)) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match MatchResult::OK(v) { _ => MatchResult::OK(v) } } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { f = {|x| MatchResult::OK(x)}\n MatchResult::OK(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int, Int> { MatchResult::OK(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::Err(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::OK(v) } } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::OK(v))\n MatchResult::OK(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::OK(v), _), MatchResult::OK(v), MatchResult::OK(v)) } }",
+        "captured = &MatchResult::OK",
+    ] {
+        let result = typecheck(resolve_with_builtin_prelude(source));
+        assert!(result.is_err(), "must reject: {source}");
+    }
+}
+
+fn match_result_extractor_uses_own_safebind_target() {
+    let source = r#"impl Int {
+  defextractor checked(v: Int) -> MatchResult<Int> {
+    accepted =? Ok(v)
+    MatchResult::OK(accepted)
+  }
+}
+match 1 { Int::checked(value) => value, _ => 0 }
+"#;
+    let typed = typecheck(resolve_with_builtin_prelude(source)).expect("Extractor SafeBind target");
+    let TypedInner::ExtractorDef(_, _, _, _, _, body, _) = &typed[0].node else {
+        panic!("expected Extractor definition: {:?}", typed[0]);
+    };
+    let TypedInner::Block(items) = &body.node else {
+        panic!("expected block")
+    };
+    assert!(matches!(
+        &items[0].node,
+        TypedInner::SafeBind(
+            _,
+            _,
+            _,
+            SafeBindFailureTarget::EnclosingMatchResultContext { .. }
+        )
+    ));
+}
+
+fn match_result_unitonly_rejects_wrong_child_shapes() {
+    let prefix =
+        "impl Int { defextractor unit(v: Int) -> MatchResult<Unit> { MatchResult::OK(()) } }\n";
+    for pattern in ["Int::unit(x: Int)", "Int::unit(_: Int)", "Int::unit(x, y)"] {
+        let source = format!("{prefix}match 1 {{ {pattern} => 1, _ => 0 }}");
+        typecheck(resolve_with_builtin_prelude(&source))
+            .expect_err("wrong Unit child must be rejected");
+    }
+    let source = "impl Int { defextractor pair(v: Int) -> MatchResult<(Int, Unit)> { MatchResult::OK((v, ())) } }\nmatch 1 { Int::pair(x) => x, _ => 0 }";
+    typecheck(resolve_with_builtin_prelude(source)).expect_err("tuple Unit slot cannot be omitted");
+}
+
+fn match_result_payload_shape_must_be_resolved_before_execution() {
+    let prefix = "impl Int { defextractor trial(v: Int) -> MatchResult<$T> { MatchResult::Err(NoneError) } }\n";
+    let source = format!("{prefix}is_match(1, Int::trial(_))");
+    let error = typecheck(resolve_with_builtin_prelude(&source))
+        .expect_err("unresolved payload shape must be rejected");
+    assert!(error.message.contains("payload"), "{error:?}");
+    let source = format!("{prefix}is_match(1, Int::trial(_: Int))");
+    typecheck(resolve_with_builtin_prelude(&source))
+        .expect("payload annotation connects normal inference");
+    for source in [
+        "def wrapping(v: List<$A>) -> Boolean { is_match(v, uncons(_, _)) }",
+        "impl Int { defextractor pair(v: $A) -> MatchResult<($A, Int)> { MatchResult::OK((v, 1)) } }\ndef wrapping_pair(v: $A) -> Boolean { is_match(v, Int::pair(_, _)) }",
+        "impl Int { defextractor list(v: $A) -> MatchResult<List<$A>> { MatchResult::OK([v]) } }\ndef wrapping_list(v: $A) -> Boolean { is_match(v, Int::list(_)) }",
+    ] {
+        typecheck(resolve_with_builtin_prelude(source)).expect("fixed payload shape permits generic children");
+    }
+}
+
+fn extractor_prearguments_follow_signature_and_infer_payload_shape() {
+    let source = r#"impl Int {
+  defextractor choose(left: $A, right: Int, value: Int) -> MatchResult<$A> { MatchResult::OK(left) }
+  defextractor check(limit: Int, value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }
+}
+limit = 10
+match 5 { Int::choose((1, "one"), limit + 1, number: Int, text: String) => text, _ => "miss" }
+match 5 { Int::check(limit) => 1, _ => 0 }
+match 5 { Int::check(limit, _: Unit) => 1, _ => 0 }
+"#;
+    typecheck(resolve_with_builtin_prelude(source))
+        .expect("preargument types determine payload shape");
+
+    let source = r#"impl Int {
+  defextractor accept(pre: $A, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }
+}
+def doubled(value: $N) -> Boolean where $N: Add {
+  is_match(1, Int::accept(value + value, _))
+}
+doubled(21)
+doubled(1.5)
+"#;
+    let typed = typecheck(resolve_with_builtin_prelude(source))
+        .expect("generic trait calls in prearguments specialize with their enclosing function");
+    let specialized = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, _, _, body, _) if id.name == "doubled" => Some(body),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(specialized.len(), 2);
+}
+
+fn extractor_closure_inference_and_callable_boundaries() {
+    let source = r#"limit = 2
+pick = *{|value: Int| True =? value > limit; MatchResult::OK(value) }
+match 5 { pick(value: Int) => value, _ => 0 }
+"#;
+    typecheck(resolve_with_builtin_prelude(source))
+        .expect("ExtractorClosure literal and local head");
+    for source in [
+        r#"identity = *{|value| MatchResult::OK(value)}
+match 1 { identity(n: Int) => n, _ => 0 }
+match "text" { identity(s: String) => s, _ => "" }
+match () { identity() => 1, _ => 0 }"#,
+        r#"typed: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = *{|value| MatchResult::OK(value)}
+match 1 { typed(n) => n, _ => 0 }"#,
+        r#"def make(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
+  *{|value| True =? value > limit; MatchResult::OK(value)}
+}
+def use(ext: ExtractorClosure<(Int -> MatchResult<Int>)>, value: Int) -> Int {
+  match value { ext(n) => n, _ => 0 }
+}
+use(make(2), 3)"#,
+        r#"value = 9
+ext = *{|pre: Int, input: Int| MatchResult::OK(input)}
+match 5 { ext(value, n) => value + n, _ => 0 }
+is_match(5, ext(value, _))"#,
+        r#"ext = *{|input: Int| MatchResult::OK(input)}
+match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
+    ] {
+        typecheck(resolve_with_builtin_prelude(source))
+            .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
+    }
+    for source in [
+        r#"ext = *{|value: Int| MatchResult::OK(value)}; ext(1)"#,
+        r#"ext = *{|value: Int| MatchResult::OK(value)}; is_match(1, ext(bound))"#,
+        r#"ext = *{|value: Int| MatchResult::OK(value)}; match 1 { ext(a) | ext(b) => 0, _ => 1 }"#,
+        r#"ext = *{|value: (Int, Int)| MatchResult::OK(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
+        r#"ext = *{|value: Int| f = {|nested: Int| MatchResult::OK(nested)}; MatchResult::OK(value)}"#,
+        r#"ext = *{|value: Int| f = {|nested: Int| True =? nested > 0; nested}; MatchResult::OK(value)}"#,
+        r#"ext = *{|value: Int| Ok(value)}"#,
+        r#"ext = {|value: Int| value}; match 1 { ext(bound) => bound, _ => 0 }"#,
+    ] {
+        assert!(
+            typecheck(resolve_with_builtin_prelude(source)).is_err(),
+            "{source}"
+        );
+    }
+}
+
+fn apply_pattern_projection_types_and_boundaries() {
+    let source =
+        r#"result: Result<(String, Int)> = apply_pattern((7, "value"), (_2: Int, _1: String))"#;
+    let typed = typecheck(resolve_with_builtin_prelude(source))
+        .expect("projection output follows number order");
+    let TypedInner::ApplyPattern { projections, .. } = &typed_bind_rhs(&typed, "result").node
+    else {
+        panic!("apply_pattern typed contract");
+    };
+    assert_eq!(
+        projections
+            .iter()
+            .map(|(_, ty)| ty.clone())
+            .collect::<Vec<_>>(),
+        vec![Ty::Str, Ty::Int]
+    );
+    for source in [
+        r#"result: Result<Unit> = apply_pattern(3, 3)"#,
+        r#"result: Result<Int> = apply_pattern(3, _1)"#,
+        r#"result: Result<(Int, List<(Int, Int)>, (Int, Int))> = apply_pattern([(1, 3)], [(_1: Int, 3) @ _3] @ _2)"#,
+        r#"result: Result<(Int, List<Int>)> = apply_pattern([1, 2, 3], [_1: Int, .._2: List<Int>])"#,
+        r#"whole: Result<Result<Int>> = apply_pattern(Ok(1), _1)
+payload: Result<Int> = apply_pattern(Ok(1), Ok(_1))
+failed: Result<Result<Int>> = apply_pattern(Err(NoneError), _1)
+constrained: Result<Int> = apply_pattern(Err(NoneError), Ok(_1: Int))"#,
+        r#"ext = *{|value| MatchResult::OK(value)}
+result: Result<(String, Int)> = apply_pattern((3, "text"), ext(_2, _1))"#,
+        r#"unknown = *{|value: Int| MatchResult::Err(NoneError)}
+result: Result<Int> = apply_pattern(1, unknown(_1))"#,
+        r#"def ordinary() -> Int { result = apply_pattern(3, _1); 7 }
+ordinary()"#,
+    ] {
+        typecheck(resolve_with_builtin_prelude(source))
+            .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
+    }
+    for source in [
+        r#"apply_pattern((1, 2), (_1, _1))"#,
+        r#"apply_pattern((1, 2), (_01, _1))"#,
+        r#"apply_pattern(1, _2)"#,
+        r#"match 1 { _1 => 1 }"#,
+    ] {
+        let error = typecheck(resolve_with_builtin_prelude(source)).expect_err(source);
+        let diagnostic = error.structured.expect("Pattern producer diagnostic");
+        assert_eq!(
+            diagnostic.reason,
+            diagnostics::TypeDiagnosticReason::PatternShapeMismatch
+        );
+        assert_eq!(diagnostic.origin, diagnostics::DiagnosticOrigin::Pattern);
+        assert!(matches!(
+            diagnostic.data,
+            diagnostics::DiagnosticData::Pattern(_)
+        ));
+    }
+    for source in [
+        r#"apply_pattern((1, 2), (_1, _1))"#,
+        r#"apply_pattern((1, 2), (_01, _1))"#,
+        r#"apply_pattern(1, _2)"#,
+        r#"apply_pattern(1, _1: String)"#,
+        r#"result: Result<String> = apply_pattern(1, _1)"#,
+    ] {
+        assert!(
+            typecheck(resolve_with_builtin_prelude(source)).is_err(),
+            "{source}"
+        );
+    }
 }

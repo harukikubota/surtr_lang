@@ -588,7 +588,7 @@ print(inspect(OptionT::run(blocked)))"#,
     );
 }
 
-fn do_extractor_none_uses_common_pattern_mismatch_in_result_effect() {
+fn do_extractor_error_is_preserved_in_result_effect() {
     assert_output(
         r#"result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
   uncons(head, tail) <- OptionT::some::<Result>([])
@@ -1053,8 +1053,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             do_guard_keeps_option_t_result_alternative_semantics as fn(),
         ),
         (
-            "do_extractor_none_uses_common_pattern_mismatch_in_result_effect",
-            do_extractor_none_uses_common_pattern_mismatch_in_result_effect as fn(),
+            "do_extractor_error_is_preserved_in_result_effect",
+            do_extractor_error_is_preserved_in_result_effect as fn(),
         ),
         (
             "safebind_rejects_total_plain_rhs",

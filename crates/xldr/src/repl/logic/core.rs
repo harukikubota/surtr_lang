@@ -41,6 +41,7 @@ use super::query::{
 use super::{eval, render, session};
 
 fn type_error_spec_from_scar(
+    sources: &SourceRegistry,
     source_id: SourceId,
     error: &scar::error::TypeError,
     span: Span,
@@ -49,12 +50,13 @@ fn type_error_spec_from_scar(
         .structured
         .as_ref()
         .map(|diagnostic| {
-            diagnostics::structured_type_error_spec(&diagnostic.clone().map_source_locations(
-                |span| {
-                    crate::decode_rebased_module_span(span)
-                        .unwrap_or_else(|| (source_id, span.clone()))
-                },
-            ))
+            let diagnostic = diagnostic.clone().map_source_locations(|span| {
+                crate::decode_rebased_module_span(span).unwrap_or_else(|| (source_id, span.clone()))
+            });
+            let source = sources
+                .source(diagnostic.primary.source_id)
+                .expect("compile diagnostic source");
+            diagnostics::structured_compile_error_spec(source, &diagnostic)
         })
         .unwrap_or_else(|| {
             diagnostics::typecheck_invariant_spec_with_display(
@@ -1388,6 +1390,22 @@ impl ReplEngine {
                 .unwrap_or((fallback_source_id, span.clone()))
         };
         let (source_id, primary_span) = diagnostic_location(&error.span);
+        let reason = match resolve_diagnostic_reason(&error.diagnostic.reason) {
+            Ok(reason) => reason,
+            Err(parse_error) => {
+                let source = self
+                    .sources
+                    .source(source_id)
+                    .expect("resolved diagnostic source");
+                let local_error = parse_error
+                    .clone()
+                    .map_spans(|span| diagnostic_location(span).1);
+                return (
+                    source_id,
+                    diagnostics::parse_error_spec(source_id, source, &local_error),
+                );
+            }
+        };
         let labels = error
             .related_labels
             .iter()
@@ -1400,7 +1418,7 @@ impl ReplEngine {
             source_id,
             &error.message,
             primary_span,
-            resolve_diagnostic_reason(error.diagnostic.reason),
+            reason,
             error.diagnostic.subject.clone(),
             &labels,
         );
@@ -2871,7 +2889,11 @@ impl ReplEngine {
     }
 
     fn callable_binding_signature_from_type(binding_name: &str, ty: &str) -> Option<String> {
-        let AstTy::Func(_, params, ret) = parse_signature_type(ty)? else {
+        let parsed = parse_signature_type(ty)?;
+        if Self::is_extractor_closure_query_type(&parsed) {
+            return Some(format!("{binding_name}: {}", format_query_ty(&parsed)));
+        }
+        let AstTy::Func(_, params, ret) = parsed else {
             return None;
         };
         let params = params
@@ -3603,6 +3625,7 @@ impl ReplEngine {
                 | "Lazy"
                 | "StandbyInit"
                 | "Closure"
+                | "MatchResult"
         )
     }
 
@@ -4168,9 +4191,22 @@ impl ReplEngine {
         let kind = self.binding_callable_kind(binding)?;
         let value = self.vm.get_local(binding.slot_id)?;
 
-        let entry = match kind {
-            forge::ReplCallableKind::Capture => self.capture_doc_entry(&value)?,
-            forge::ReplCallableKind::Closure => self.closure_doc_entry()?,
+        let entry = if self
+            .binding_callable_ty(binding)
+            .as_ref()
+            .is_some_and(Self::is_extractor_closure_query_type)
+        {
+            self.matching_doc_entries(
+                sindr::names::TypeName::ExtractorClosure.as_str(),
+                Some(DocKind::Type),
+            )
+            .into_iter()
+            .next()?
+        } else {
+            match kind {
+                forge::ReplCallableKind::Capture => self.capture_doc_entry(&value)?,
+                forge::ReplCallableKind::Closure => self.closure_doc_entry()?,
+            }
         };
 
         Some(ReplResult::ok(Self::doc_resolved_output_with_details(
@@ -5319,7 +5355,12 @@ impl ReplEngine {
         let typed = match self.scar_session.typecheck_with_context(resolved, context) {
             Ok(t) => t,
             Err(e) => {
-                let spec = type_error_spec_from_scar(self.repl_source_id, &e, e.span.clone());
+                let spec = type_error_spec_from_scar(
+                    &self.sources,
+                    self.repl_source_id,
+                    &e,
+                    e.span.clone(),
+                );
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -5714,6 +5755,12 @@ impl ReplEngine {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Ty::ExtractorClosure(signature) => {
+                format!("ExtractorClosure<{}>", Self::ty_to_string(signature))
+            }
+            Ty::MatchResult(payload) => {
+                format!("MatchResult<{}, Error>", Self::ty_to_string(payload))
+            }
             Ty::Result(ok, err) => {
                 format!(
                     "Result<{}, {}>",
@@ -6414,9 +6461,16 @@ impl ReplEngine {
         }
     }
 
+    fn is_extractor_closure_query_type(ty: &AstTy) -> bool {
+        matches!(ty, AstTy::Generic(_, name, args)
+            if sindr::names::builtin_type_name(name) == Some(sindr::names::TypeName::ExtractorClosure)
+                && args.len() == 1 && matches!(args[0], AstTy::Func(_, _, _)))
+    }
+
     fn binding_callable_ty(&self, binding: &forge::BindingInfo) -> Option<AstTy> {
         let ty = parse_binding_query_type(&binding.ty)?;
-        matches!(ty, AstTy::Func(_, _, _)).then_some(ty)
+        (matches!(ty, AstTy::Func(_, _, _)) || Self::is_extractor_closure_query_type(&ty))
+            .then_some(ty)
     }
 
     fn sig_callable_arity_error(
@@ -7831,7 +7885,12 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let spec = type_error_spec_from_scar(self.repl_source_id, &e, e.span.clone());
+                let spec = type_error_spec_from_scar(
+                    &self.sources,
+                    self.repl_source_id,
+                    &e,
+                    e.span.clone(),
+                );
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -8417,10 +8476,16 @@ fn compile_repl_preload_from_module_stages(
         .map_err(|e| ReplLoadError::Diagnostic {
             // Keep the structured checker envelope intact when this error
             // crosses the REPL loader boundary.
-            phase: "typecheck".to_string(),
+            phase: e
+                .structured
+                .as_ref()
+                .map(diagnostics::compile_error_phase)
+                .unwrap_or("typecheck")
+                .to_string(),
             sources: compile_sources.sources.clone(),
             source_id: diagnostic_source_id(&compile_sources, &e.span),
             spec: type_error_spec_from_scar(
+                &compile_sources.sources,
                 diagnostic_source_id(&compile_sources, &e.span),
                 &e,
                 local_diagnostic_span(&compile_sources, &e.span),
@@ -8717,7 +8782,9 @@ fn is_preload_declaration(stmt: &Ast) -> bool {
 
 fn ast_span(stmt: &Ast) -> Option<&Span> {
     match stmt {
-        Ast::Lit(span, _)
+        Ast::PatternConsumerCall(span, _, _)
+        | Ast::NumberedPlaceholder(span, _)
+        | Ast::Lit(span, _)
         | Ast::Var(span, _)
         | Ast::InternalVar(span, _)
         | Ast::Path(span, _)
@@ -8781,6 +8848,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::Import(span, _, _)
         | Ast::Include(span, _)
         | Ast::Closure(span, _, _)
+        | Ast::ExtractorClosure(span, _, _)
         | Ast::Capture(span, _, _)
         | Ast::CapturePlaceholder(span, _)
         | Ast::Semi(span, _) => Some(span),
@@ -8887,11 +8955,11 @@ fn preload_script_diagnostic(
 }
 
 fn resolve_diagnostic_reason(
-    reason: sigil::error::ResolveErrorReason,
-) -> diagnostics::ResolveDiagnosticReason {
+    reason: &sigil::error::ResolveErrorReason,
+) -> Result<diagnostics::ResolveDiagnosticReason, &spire::error::ParseError> {
     use diagnostics::ResolveDiagnosticReason as D;
     use sigil::error::ResolveErrorReason as R;
-    match reason {
+    Ok(match reason {
         R::NameResolution => D::NameResolution,
         R::Namespace => D::Namespace,
         R::Visibility => D::Visibility,
@@ -8905,7 +8973,8 @@ fn resolve_diagnostic_reason(
         R::ReservedIntrinsicMarkerDeclaration => D::ReservedIntrinsicMarkerDeclaration,
         R::ReservedIntrinsicMarkerImpl => D::ReservedIntrinsicMarkerImpl,
         R::CompilerInvariant => D::CompilerInvariant,
-    }
+        R::DeferredParse(error) => return Err(error),
+    })
 }
 
 fn preload_resolve_error(
@@ -8913,6 +8982,24 @@ fn preload_resolve_error(
     error: &sigil::error::ResolveError,
 ) -> ReplLoadError {
     let source_id = diagnostic_source_id(compile_sources, &error.span);
+    let reason = match resolve_diagnostic_reason(&error.diagnostic.reason) {
+        Ok(reason) => reason,
+        Err(parse_error) => {
+            let source = compile_sources
+                .sources
+                .source(source_id)
+                .expect("resolved diagnostic source");
+            let local_error = parse_error
+                .clone()
+                .map_spans(|span| local_diagnostic_span(compile_sources, span));
+            return ReplLoadError::Diagnostic {
+                phase: "parse".to_string(),
+                sources: compile_sources.sources.clone(),
+                source_id,
+                spec: diagnostics::parse_error_spec(source_id, source, &local_error),
+            };
+        }
+    };
     let labels = error
         .related_labels
         .iter()
@@ -8928,7 +9015,7 @@ fn preload_resolve_error(
         source_id,
         &error.message,
         local_diagnostic_span(compile_sources, &error.span),
-        resolve_diagnostic_reason(error.diagnostic.reason),
+        reason,
         error.diagnostic.subject.clone(),
         &labels,
     );
@@ -10353,6 +10440,10 @@ supervisor_init {
             diagnostics::DiagnosticData::Resolve(diagnostics::ResolveDiagnosticData {
                 detail: "Duplicate top-level owner: Hoge".into(),
                 subject: Some("Hoge".into()),
+                related_labels: vec![
+                    "first Record declaration".into(),
+                    "conflicting Mod declaration".into()
+                ],
             })
         );
     }

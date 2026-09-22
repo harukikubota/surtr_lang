@@ -133,8 +133,8 @@ impl User {
     User { name, age }
   }
 
-  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
-    Option::Some((self.name, self.age))
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
+    MatchResult::OK((self.name, self.age))
   }
 }
 
@@ -265,8 +265,8 @@ match user {
 
 よくある読み方は次の通りです。
 
-- 1値だけ取り出したいなら `Option<Int>` のように 1値を返す
-- 複数値を取り出したいなら tuple にして `Option<(A, B)>` を返す
+- 1値だけ取り出したいなら `MatchResult<Int, Error>` の成功 payload にその値を返す
+- 複数値を取り出したいなら tuple にして `MatchResult<(A, B), Error>` を返す
 - pattern 側はその shape に合わせて `User(x)` または `User(x, y)` のように書く
 
 ## 関連ページ

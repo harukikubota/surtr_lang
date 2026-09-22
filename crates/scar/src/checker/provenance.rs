@@ -130,6 +130,7 @@ impl Checker {
                 source.0
             }
             TypedInner::Closure(parameters, _, body)
+            | TypedInner::ExtractorClosure(parameters, _, body)
             | TypedInner::CaptureClosure(parameters, _, body) => {
                 let mut local = bindings.clone();
                 for parameter in parameters {
@@ -332,6 +333,36 @@ impl Checker {
                     self.source_provenance(then_branch, bindings),
                     self.source_provenance(else_branch, bindings),
                 ]),
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => {
+                let mut local = bindings.clone();
+                let source = self.source_provenance(value, bindings);
+                self.pattern_provenance_bindings(pattern, &source, &mut local);
+                let slots = projections
+                    .iter()
+                    .map(|(id, ty)| {
+                        local
+                            .get(&id.unique_id)
+                            .cloned()
+                            .unwrap_or_else(|| (Provenance::RequiresProof, ty.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                let payload = match slots.as_slice() {
+                    [] => (Provenance::Fields(Vec::new()), Ty::Unit),
+                    [slot] => slot.clone(),
+                    _ => (
+                        Provenance::Fields(slots.clone()),
+                        Ty::Tuple(slots.iter().map(|(_, ty)| ty.clone()).collect()),
+                    ),
+                };
+                Provenance::Variants(vec![
+                    (0, vec![payload]),
+                    (1, vec![(Provenance::RequiresProof, Ty::Error)]),
+                ])
+            }
             TypedInner::Match(scrutinee, arms) => {
                 let source = self.source_provenance(scrutinee, bindings);
                 self.common_constructor_provenance(
@@ -401,6 +432,8 @@ impl Checker {
                 parameters.iter().map(recurse).collect::<Result<_, _>>()?,
                 Box::new(recurse(result)?),
             )),
+            Ty::ExtractorClosure(element) => Ok(Ty::ExtractorClosure(Box::new(recurse(element)?))),
+            Ty::MatchResult(element) => Ok(Ty::MatchResult(Box::new(recurse(element)?))),
             Ty::List(element) => Ok(Ty::List(Box::new(recurse(element)?))),
             Ty::Tuple(items) => Ok(Ty::Tuple(
                 items.iter().map(recurse).collect::<Result<_, _>>()?,

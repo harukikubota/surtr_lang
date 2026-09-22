@@ -158,11 +158,11 @@ fn diagnostic_location_for_span(
 }
 
 fn map_resolve_reason(
-    reason: sigil::error::ResolveErrorReason,
-) -> diagnostics::ResolveDiagnosticReason {
+    reason: &sigil::error::ResolveErrorReason,
+) -> Result<diagnostics::ResolveDiagnosticReason, &spire::error::ParseError> {
     use diagnostics::ResolveDiagnosticReason as D;
     use sigil::error::ResolveErrorReason as R;
-    match reason {
+    Ok(match reason {
         R::NameResolution => D::NameResolution,
         R::Namespace => D::Namespace,
         R::Visibility => D::Visibility,
@@ -176,14 +176,32 @@ fn map_resolve_reason(
         R::ReservedIntrinsicMarkerDeclaration => D::ReservedIntrinsicMarkerDeclaration,
         R::ReservedIntrinsicMarkerImpl => D::ReservedIntrinsicMarkerImpl,
         R::CompilerInvariant => D::CompilerInvariant,
-    }
+        R::DeferredParse(error) => return Err(error),
+    })
 }
 
 fn resolve_spec_for_error(
     compile_sources: &xldr::CompileSources,
     error: &sigil::error::ResolveError,
-) -> (SourceId, diagnostics::DiagnosticSpec) {
+) -> (SourceId, &'static str, diagnostics::DiagnosticSpec) {
     let (source_id, span) = diagnostic_location_for_span(compile_sources, &error.span);
+    let reason = match map_resolve_reason(&error.diagnostic.reason) {
+        Ok(reason) => reason,
+        Err(parse_error) => {
+            let source = compile_sources
+                .sources
+                .source(source_id)
+                .expect("resolved diagnostic source");
+            let local_error = parse_error
+                .clone()
+                .map_spans(|span| diagnostic_location_for_span(compile_sources, span).1);
+            return (
+                source_id,
+                "parse",
+                diagnostics::parse_error_spec(source_id, source, &local_error),
+            );
+        }
+    };
     let labels = error
         .related_labels
         .iter()
@@ -197,11 +215,11 @@ fn resolve_spec_for_error(
         source_id,
         &error.message,
         span,
-        map_resolve_reason(error.diagnostic.reason),
+        reason,
         error.diagnostic.subject.clone(),
         &labels,
     );
-    (source_id, spec)
+    (source_id, "resolve", spec)
 }
 
 pub(crate) fn collect_default_script_compile_sources(
@@ -299,8 +317,8 @@ fn build_cached_script_compile_prefix(
 ) -> RuneResult<SharedScriptCompilePrefix> {
     let rebuilt_declaration_index =
         sigil::precollect_declaration_index(module_stages).map_err(|e| {
-            let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
-            RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+            RuneError::diagnostic(1, sources, source_id, phase, spec)
         })?;
 
     let cache_key = xldr::test_semantic_prefix_cache_key(env.compile_unit_kind(), compile_sources)
@@ -353,8 +371,8 @@ fn build_cached_script_compile_prefix(
             std_snapshot.resolve_state(),
         )
         .map_err(|e| {
-            let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
-            RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+            RuneError::diagnostic(1, sources, source_id, phase, spec)
         })?;
         let resume_state = resolved.resume_state;
         let mut scar_session = std_snapshot.compile_prefix().restored_scar_session();
@@ -369,11 +387,13 @@ fn build_cached_script_compile_prefix(
                     .structured
                     .as_ref()
                     .map(|diagnostic| {
-                        diagnostics::structured_type_error_spec(
-                            &diagnostic.clone().map_source_locations(|span| {
-                                diagnostic_location_for_span(compile_sources, span)
-                            }),
-                        )
+                        let diagnostic = diagnostic.clone().map_source_locations(|span| {
+                            diagnostic_location_for_span(compile_sources, span)
+                        });
+                        let source = sources
+                            .source(diagnostic.primary.source_id)
+                            .expect("compile diagnostic source");
+                        diagnostics::structured_compile_error_spec(source, &diagnostic)
                     })
                     .unwrap_or_else(|| {
                         diagnostics::typecheck_invariant_spec_with_display(
@@ -383,7 +403,16 @@ fn build_cached_script_compile_prefix(
                             e.hint.clone(),
                         )
                     });
-                RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
+                RuneError::diagnostic(
+                    1,
+                    sources,
+                    source_id,
+                    e.structured
+                        .as_ref()
+                        .map(diagnostics::compile_error_phase)
+                        .unwrap_or("typecheck"),
+                    spec,
+                )
             })?;
         let mut forge_session = std_snapshot.compile_prefix().forge_session();
         let (chunk, _) = forge_session
@@ -594,8 +623,8 @@ pub(crate) fn compile_source_with_measurement(
     } else {
         rebuilt_declaration_index =
             sigil::precollect_declaration_index(&module_stages).map_err(|e| {
-                let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
-                RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+                let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+                RuneError::diagnostic(1, sources, source_id, phase, spec)
             })?;
         &rebuilt_declaration_index
     };
@@ -619,8 +648,8 @@ pub(crate) fn compile_source_with_measurement(
         resume_state,
     )
     .map_err(|e| {
-        let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
-        RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+        let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+        RuneError::diagnostic(1, sources, source_id, phase, spec)
     })?;
     if let Some(measurement) = measurement.as_deref_mut() {
         measurement.resolve = elapsed(resolve_start);
@@ -650,11 +679,13 @@ pub(crate) fn compile_source_with_measurement(
                 .structured
                 .as_ref()
                 .map(|diagnostic| {
-                    diagnostics::structured_type_error_spec(
-                        &diagnostic.clone().map_source_locations(|span| {
-                            diagnostic_location_for_span(compile_sources, span)
-                        }),
-                    )
+                    let diagnostic = diagnostic.clone().map_source_locations(|span| {
+                        diagnostic_location_for_span(compile_sources, span)
+                    });
+                    let source = sources
+                        .source(diagnostic.primary.source_id)
+                        .expect("compile diagnostic source");
+                    diagnostics::structured_compile_error_spec(source, &diagnostic)
                 })
                 .unwrap_or_else(|| {
                     diagnostics::typecheck_invariant_spec_with_display(
@@ -664,7 +695,16 @@ pub(crate) fn compile_source_with_measurement(
                         e.hint.clone(),
                     )
                 });
-            RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                e.structured
+                    .as_ref()
+                    .map(diagnostics::compile_error_phase)
+                    .unwrap_or("typecheck"),
+                spec,
+            )
         })?;
     if let Some(measurement) = measurement.as_deref_mut() {
         measurement.typecheck = elapsed(typecheck_start);

@@ -321,6 +321,12 @@ impl ProjectRunnerExtractor {
         }
 
         match node {
+            Ast::PatternConsumerCall(_, callee, args) => {
+                self.visit(callee);
+                for expr in args.iter().filter_map(|arg| arg.expression.as_deref()) {
+                    self.visit(expr);
+                }
+            }
             Ast::App(_, callee, args) => {
                 self.visit(callee);
                 for arg in positional_args(args) {
@@ -349,6 +355,7 @@ impl ProjectRunnerExtractor {
             }
             Ast::Grouped(_, inner)
             | Ast::Closure(_, _, inner)
+            | Ast::ExtractorClosure(_, _, inner)
             | Ast::Capture(_, inner, _)
             | Ast::Semi(_, inner)
             | Ast::FieldAccess(_, inner, _)
@@ -564,6 +571,12 @@ fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut Con
     }
 
     match node {
+        Ast::PatternConsumerCall(_, callee, args) => {
+            collect_config_builder_facts(callee, project_file, facts);
+            for expr in args.iter().filter_map(|arg| arg.expression.as_deref()) {
+                collect_config_builder_facts(expr, project_file, facts);
+            }
+        }
         Ast::App(_, callee, args) => {
             collect_config_builder_facts(callee, project_file, facts);
             for arg in positional_args(args) {
@@ -599,6 +612,7 @@ fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut Con
         }
         Ast::Grouped(_, inner)
         | Ast::Closure(_, _, inner)
+        | Ast::ExtractorClosure(_, _, inner)
         | Ast::Capture(_, inner, _)
         | Ast::Semi(_, inner)
         | Ast::FieldAccess(_, inner, _)

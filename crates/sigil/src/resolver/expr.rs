@@ -12,6 +12,76 @@ use spire::ast::{
     HashMapLiteralEntry, InterpolatedPart,
 };
 
+// Pattern candidates may contain Expr pre-arguments even when their enclosing
+// syntax has no Expr interpretation (for example an annotated projection).
+fn visit_pattern_expressions(
+    pattern: &AstPattern,
+    visit: &mut impl FnMut(&Ast) -> Result<(), ResolveError>,
+) -> Result<(), ResolveError> {
+    match pattern {
+        AstPattern::Call(_, _, args) => {
+            for arg in args {
+                if let Some(expr) = &arg.expression {
+                    visit(expr)?;
+                }
+                if let Some(pattern) = &arg.pattern {
+                    visit_pattern_expressions(pattern, visit)?;
+                }
+            }
+        }
+        AstPattern::Projection { inner, .. } | AstPattern::As(_, inner, ..) => {
+            visit_pattern_expressions(inner, visit)?
+        }
+        AstPattern::Constructor(_, _, children)
+        | AstPattern::Tuple(_, children)
+        | AstPattern::Or(_, children) => {
+            for child in children {
+                visit_pattern_expressions(child, visit)?;
+            }
+        }
+        AstPattern::ListCons(_, head, tail) => {
+            visit_pattern_expressions(head, visit)?;
+            visit_pattern_expressions(tail, visit)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn rewrite_pattern_expressions(
+    pattern: &mut AstPattern,
+    rewrite: &mut impl FnMut(Ast) -> Result<Ast, ResolveError>,
+) -> Result<(), ResolveError> {
+    match pattern {
+        AstPattern::Call(_, _, args) => {
+            for arg in args {
+                if let Some(expr) = arg.expression.take() {
+                    arg.expression = Some(Box::new(rewrite(*expr)?));
+                }
+                if let Some(pattern) = &mut arg.pattern {
+                    rewrite_pattern_expressions(pattern, rewrite)?;
+                }
+            }
+        }
+        AstPattern::Projection { inner, .. } | AstPattern::As(_, inner, ..) => {
+            rewrite_pattern_expressions(inner, rewrite)?
+        }
+        AstPattern::Constructor(_, _, children)
+        | AstPattern::Tuple(_, children)
+        | AstPattern::Or(_, children) => {
+            for child in children {
+                rewrite_pattern_expressions(child, rewrite)?;
+            }
+        }
+        AstPattern::ListCons(_, head, tail) => {
+            rewrite_pattern_expressions(head, rewrite)?;
+            rewrite_pattern_expressions(tail, rewrite)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 const LIST_TYPE_ROOT_UID: u32 = u32::MAX - 8;
 const HASH_MAP_TYPE_ROOT_UID: u32 = u32::MAX - 9;
@@ -32,7 +102,8 @@ fn ast_ty_owner_head(ty: &AstTy) -> Option<&str> {
 
 fn do_pattern_span(pattern: &AstPattern) -> Span {
     match pattern {
-        AstPattern::Annotated(span, _, ty) => Span {
+        AstPattern::Projection { span, .. } => span.clone(),
+        AstPattern::Annotated(span, _, ty) | AstPattern::AnnotatedWildcard(span, ty) => Span {
             start: span.start,
             end: match ty {
                 AstTy::Named(ty_span, _)
@@ -107,9 +178,6 @@ fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanonicalSpecialForm {
     If(IfKind),
-    IfLet,
-    IfLetThen,
-    IsMatch,
     Assert,
     Ensure,
     MapErr,
@@ -123,9 +191,6 @@ impl Resolver {
         match global_surface_name(qualified_name) {
             "Kernel::if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
             "Kernel::if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-            "Kernel::if_let" => Some(CanonicalSpecialForm::IfLet),
-            "Kernel::if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
-            "Kernel::is_match" => Some(CanonicalSpecialForm::IsMatch),
             "Kernel::assert" => Some(CanonicalSpecialForm::Assert),
             "Kernel::ensure" => Some(CanonicalSpecialForm::Ensure),
             "Kernel::and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
@@ -165,9 +230,6 @@ impl Resolver {
         ) {
             ("Kernel", "if") => Some(CanonicalSpecialForm::If(IfKind::If3)),
             ("Kernel", "if_then") => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-            ("Kernel", "if_let") => Some(CanonicalSpecialForm::IfLet),
-            ("Kernel", "if_let_then") => Some(CanonicalSpecialForm::IfLetThen),
-            ("Kernel", "is_match") => Some(CanonicalSpecialForm::IsMatch),
             ("Kernel", "assert") => Some(CanonicalSpecialForm::Assert),
             ("Kernel", "ensure") => Some(CanonicalSpecialForm::Ensure),
             ("Kernel", "and") => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
@@ -184,9 +246,6 @@ impl Resolver {
             Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
                 "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
                 "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-                "if_let" => Some(CanonicalSpecialForm::IfLet),
-                "if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
-                "is_match" => Some(CanonicalSpecialForm::IsMatch),
                 "assert" => Some(CanonicalSpecialForm::Assert),
                 "ensure" => Some(CanonicalSpecialForm::Ensure),
                 "map_err" => Some(CanonicalSpecialForm::MapErr),
@@ -228,9 +287,6 @@ impl Resolver {
             Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
                 "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
                 "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-                "if_let" => Some(CanonicalSpecialForm::IfLet),
-                "if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
-                "is_match" => Some(CanonicalSpecialForm::IsMatch),
                 "assert" => Some(CanonicalSpecialForm::Assert),
                 "ensure" => Some(CanonicalSpecialForm::Ensure),
                 "map_err" => Some(CanonicalSpecialForm::MapErr),
@@ -247,9 +303,6 @@ impl Resolver {
         match kind {
             CanonicalSpecialForm::If(IfKind::If3) => 3,
             CanonicalSpecialForm::If(IfKind::IfThen2) => 2,
-            CanonicalSpecialForm::IfLet => 4,
-            CanonicalSpecialForm::IfLetThen => 3,
-            CanonicalSpecialForm::IsMatch => 2,
             CanonicalSpecialForm::Assert => 2,
             CanonicalSpecialForm::Ensure => 3,
             CanonicalSpecialForm::MapErr => 2,
@@ -264,9 +317,6 @@ impl Resolver {
         match kind {
             CanonicalSpecialForm::If(IfKind::If3)
             | CanonicalSpecialForm::If(IfKind::IfThen2)
-            | CanonicalSpecialForm::IfLet
-            | CanonicalSpecialForm::IfLetThen
-            | CanonicalSpecialForm::IsMatch
             | CanonicalSpecialForm::Assert
             | CanonicalSpecialForm::Ensure
             | CanonicalSpecialForm::MapErr
@@ -284,9 +334,6 @@ impl Resolver {
     ) -> Result<Resolved, ResolveError> {
         match kind {
             CanonicalSpecialForm::If(if_kind) => self.resolve_if(span, args, if_kind),
-            CanonicalSpecialForm::IfLet => self.resolve_if_let(span, args),
-            CanonicalSpecialForm::IfLetThen => self.resolve_if_let_then(span, args),
-            CanonicalSpecialForm::IsMatch => self.resolve_is_match(span, args),
             CanonicalSpecialForm::Assert => self.resolve_assert(span, args),
             CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
@@ -535,6 +582,32 @@ impl Resolver {
         }
 
         match expr {
+            Ast::NumberedPlaceholder(..) => Ok(()),
+            Ast::PatternConsumerCall(_, callee, args) => {
+                self.collect_capture_placeholders(
+                    callee,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                for arg in args {
+                    let mut visit = |expr: &Ast| {
+                        self.collect_capture_placeholders(
+                            expr,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                            used,
+                        )
+                    };
+                    if let Some(expr) = &arg.expression {
+                        visit(expr)?;
+                    }
+                    if let Some(pattern) = &arg.pattern {
+                        visit_pattern_expressions(pattern, &mut visit)?;
+                    }
+                }
+                Ok(())
+            }
             Ast::CapturePlaceholder(span, index) => {
                 if !allow_placeholders {
                     return Err(ResolveError {
@@ -797,7 +870,9 @@ impl Resolver {
                 }
                 Ok(())
             }
-            Ast::Closure(_, _, body) => self.collect_capture_placeholders(body, false, true, used),
+            Ast::Closure(_, _, body) | Ast::ExtractorClosure(_, _, body) => {
+                self.collect_capture_placeholders(body, false, true, used)
+            }
             Ast::Capture(span, target, args) => {
                 if inside_placeholder_capture && !args.is_empty() {
                     return Err(ResolveError {
@@ -865,6 +940,26 @@ impl Resolver {
         inside_placeholder_capture: bool,
     ) -> Result<Ast, ResolveError> {
         match expr {
+            Ast::PatternConsumerCall(span, callee, mut args) => {
+                let mut rewrite = |expr| {
+                    self.rewrite_capture_placeholders(
+                        expr,
+                        capture_span,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                    )
+                };
+                let callee = Box::new(rewrite(*callee)?);
+                for arg in &mut args {
+                    if let Some(expr) = arg.expression.take() {
+                        arg.expression = Some(Box::new(rewrite(*expr)?));
+                    }
+                    if let Some(pattern) = &mut arg.pattern {
+                        rewrite_pattern_expressions(pattern, &mut rewrite)?;
+                    }
+                }
+                Ok(Ast::PatternConsumerCall(span, callee, args))
+            }
             Ast::CapturePlaceholder(span, index) => {
                 if !allow_placeholders {
                     return Err(ResolveError {
@@ -1387,6 +1482,11 @@ impl Resolver {
                 params,
                 Box::new(self.rewrite_capture_placeholders(*body, capture_span, false, true)?),
             )),
+            Ast::ExtractorClosure(span, params, body) => Ok(Ast::ExtractorClosure(
+                span,
+                params,
+                Box::new(self.rewrite_capture_placeholders(*body, capture_span, false, true)?),
+            )),
             Ast::Capture(span, target, args) => {
                 if inside_placeholder_capture && !args.is_empty() {
                     return Err(ResolveError {
@@ -1571,7 +1671,7 @@ impl Resolver {
 
     fn pipe_slot_span(expr: &Ast) -> Option<Span> {
         match expr {
-            Ast::Var(span, name) if name == "_1" => Some(span.clone()),
+            Ast::NumberedPlaceholder(span, _) => Some(span.clone()),
             Ast::App(_, func, args) => Self::pipe_slot_span(func).or_else(|| {
                 args.iter().find_map(|arg| match arg {
                     RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
@@ -1638,7 +1738,9 @@ impl Resolver {
                     }
                 })
             }
-            Ast::Closure(_, _, body) => Self::pipe_slot_span(body),
+            Ast::Closure(_, _, body) | Ast::ExtractorClosure(_, _, body) => {
+                Self::pipe_slot_span(body)
+            }
             Ast::Capture(_, target, args) => {
                 Self::pipe_slot_span(target).or_else(|| args.iter().find_map(Self::pipe_slot_span))
             }
@@ -1665,7 +1767,7 @@ impl Resolver {
         let mut positional_only = Vec::with_capacity(args.len());
         for arg in args {
             match arg {
-                RecordLitArg::Positional(Ast::Var(arg_span, name)) if name == "_1" => {
+                RecordLitArg::Positional(Ast::NumberedPlaceholder(arg_span, 1)) => {
                     slot_count += 1;
                     let lowered = Ast::Var(arg_span.clone(), Self::pipe_slot_param_name(&span));
                     lowered_args.push(lowered.clone());
@@ -1742,7 +1844,10 @@ impl Resolver {
         ))
     }
 
-    fn prepare_pipe_rhs(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
+    pub(super) fn prepare_pipe_rhs(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
+        if let Ast::PatternConsumerCall(span, callee, args) = rhs {
+            return self.prepare_pattern_consumer_pipe(span, callee, args);
+        }
         let rhs = self.lower_pipe_rhs_slots(rhs)?;
         self.desugar_pipeline_rhs_special_form_partial(rhs)
     }
@@ -1791,7 +1896,7 @@ impl Resolver {
         })
     }
 
-    fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
+    pub(super) fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
         self.declaration_uids
             .iter()
             .find_map(|(fq_name, entry_uid)| (*entry_uid == uid).then_some(fq_name))
@@ -1921,6 +2026,7 @@ impl Resolver {
     pub(super) fn new() -> Self {
         Self {
             scope: initialize_scope(),
+            pattern_proxies: None,
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
@@ -1943,6 +2049,7 @@ impl Resolver {
     pub(super) fn with_scope(scope: Scope) -> Self {
         Self {
             scope,
+            pattern_proxies: None,
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
@@ -2033,6 +2140,7 @@ impl Resolver {
         f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
     ) -> Result<T, ResolveError> {
         let mut child = Resolver::with_scope(self.scope.clone());
+        child.pattern_proxies = self.pattern_proxies.clone();
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         child.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
@@ -2179,7 +2287,34 @@ impl Resolver {
         }
     }
 
-    fn resolve_var_like(
+    fn resolve_value_var_like(
+        &self,
+        span: Span,
+        name: String,
+        compiler_generated: bool,
+    ) -> Result<Resolved, ResolveError> {
+        let resolved = self.resolve_var_like(span.clone(), name, compiler_generated)?;
+        if let Resolved::Var(_, id) = &resolved {
+            let qualified = id.qualified_name.as_deref().or_else(|| {
+                self.declaration_entry_for_uid(id.unique_id)
+                    .map(|entry| entry.fq_name.as_str())
+            });
+            if let Some(kind) =
+                qualified.and_then(sindr::pattern::PatternConsumer::from_canonical_name)
+            {
+                return Err(ResolveError {
+                    message: format!("Pattern consumer `{}::{}` cannot be used as a value or capture; use its complete call syntax", sindr::pattern::PatternConsumer::OWNER, kind.name()),
+                    span, related_labels: Vec::new(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::SpecialForm, subject: Some(id.name.clone()),
+                    },
+                });
+            }
+        }
+        Ok(resolved)
+    }
+
+    pub(super) fn resolve_var_like(
         &self,
         span: Span,
         name: String,
@@ -2219,7 +2354,7 @@ impl Resolver {
         {
             return Err(ResolveError {
                 message: format!(
-                    "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
+                    "Extractor '{}' can only be used in Pattern positions. Use it as a Pattern head in match, apply_pattern, or on the left side of =?. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
                     name
                 ),
                 span,
@@ -2655,15 +2790,69 @@ impl Resolver {
         self.resolve_node(expr)
     }
 
+    fn resolve_literal_closure(
+        &mut self,
+        span: Span,
+        params: Vec<ClosureParam>,
+        body: Box<Ast>,
+        extractor: bool,
+    ) -> Result<Resolved, ResolveError> {
+        let mut closure_scope = self.scope.clone();
+        let mut resolved_params = Vec::new();
+        for param in params {
+            let uid = closure_scope.define(&param.name, param.span.clone());
+            resolved_params.push(ResolvedClosureParam {
+                id: ResolvedId {
+                    name: param.name,
+                    qualified_name: None,
+                    unique_id: uid,
+                    compiler_generated: false,
+                    symbol_info: None,
+                    span: param.span,
+                },
+                ty: param.ty,
+            });
+        }
+
+        let mut body_resolver = Resolver::with_scope(closure_scope);
+        body_resolver.declaration_uids = self.declaration_uids.clone();
+        body_resolver.declaration_entries = self
+            .declaration_entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+            .map(|(key, entry)| (key.clone(), entry.clone()))
+            .collect();
+        body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+        body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+        body_resolver.owner_registry = self.owner_registry.clone();
+        body_resolver.current_module_path = self.current_module_path.clone();
+        body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+        let resolved_body = body_resolver.resolve_node(*body)?;
+        self.scope.advance_next_id_to(body_resolver.scope.next_id());
+
+        let captures = collect_captures(&resolved_body, &resolved_params);
+
+        Ok(if extractor {
+            Resolved::ExtractorClosure(span, resolved_params, captures, Box::new(resolved_body))
+        } else {
+            Resolved::Closure(span, resolved_params, captures, Box::new(resolved_body))
+        })
+    }
+
     pub(super) fn resolve_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
         match node {
+            Ast::PatternConsumerCall(span, callee, args) => self.resolve_pattern_consumer_call(span, callee, args),
+            Ast::NumberedPlaceholder(span, _) => Err(ResolveError {
+                message: "numbered placeholders are only valid as Pattern projections in apply_pattern or a direct pipe argument".into(), span,
+                diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None }, related_labels: Vec::new(),
+            }),
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
 
-            Ast::Var(span, name) => self.resolve_var_like(span, name, false),
-            Ast::InternalVar(span, name) => self.resolve_var_like(span, name, true),
+            Ast::Var(span, name) => self.resolve_value_var_like(span, name, false),
+            Ast::InternalVar(span, name) => self.resolve_value_var_like(span, name, true),
             Ast::Path(span, path) => {
                 let name = path.segments.join("::");
-                self.resolve_var_like(span, name, false)
+                self.resolve_value_var_like(span, name, false)
             }
             Ast::FuncLiteralRef(span, func) => Err(ResolveError {
                 message: format!(
@@ -3128,6 +3317,12 @@ impl Resolver {
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
                 show_resolver.declaration_uids = self.declaration_uids.clone();
+                show_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 show_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 show_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 show_resolver.owner_registry = self.owner_registry.clone();
@@ -3229,6 +3424,12 @@ impl Resolver {
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -3327,13 +3528,22 @@ impl Resolver {
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.owner_registry = self.owner_registry.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_type_params = self.resolve_type_params(type_params)?;
-                let resolved_param = body_resolver.resolve_extractor_param(param)?;
+                let resolved_param = param
+                    .into_iter()
+                    .map(|param| body_resolver.resolve_extractor_param(param))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let resolved_body = body_resolver.resolve_node(*body)?;
 
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
@@ -3417,6 +3627,12 @@ impl Resolver {
                     } = method;
                     let mut method_resolver = Resolver::with_scope(trait_method_scope.clone());
                     method_resolver.declaration_uids = self.declaration_uids.clone();
+                    method_resolver.declaration_entries = self
+                        .declaration_entries
+                        .iter()
+                        .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                        .map(|(key, entry)| (key.clone(), entry.clone()))
+                        .collect();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -3629,6 +3845,12 @@ impl Resolver {
                     // Only declared trait members introduce a self-name alias.
                     let mut method_resolver = Resolver::with_scope(method_scope);
                     method_resolver.declaration_uids = self.declaration_uids.clone();
+                    method_resolver.declaration_entries = self
+                        .declaration_entries
+                        .iter()
+                        .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                        .map(|(key, entry)| (key.clone(), entry.clone()))
+                        .collect();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -3752,6 +3974,12 @@ impl Resolver {
                     .unwrap_or_else(|| self.scope.reserve_id());
                 let mut decl_resolver = Resolver::with_scope(self.scope.clone());
                 decl_resolver.declaration_uids = self.declaration_uids.clone();
+                decl_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 decl_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 decl_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -3826,7 +4054,10 @@ impl Resolver {
                     symbol_info,
                     span: span.clone(),
                 };
-                let resolved_param = self.resolve_extractor_param(param)?;
+                let resolved_param = param
+                    .into_iter()
+                    .map(|param| self.resolve_extractor_param(param))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::BuiltinExtractorDecl(
                     span,
                     rid,
@@ -3966,41 +4197,10 @@ impl Resolver {
             }),
 
             Ast::Closure(span, params, body) => {
-                let mut closure_scope = self.scope.clone();
-                let mut resolved_params = Vec::new();
-                for param in params {
-                    let uid = closure_scope.define(&param.name, param.span.clone());
-                    resolved_params.push(ResolvedClosureParam {
-                        id: ResolvedId {
-                            name: param.name,
-                            qualified_name: None,
-                            unique_id: uid,
-                            compiler_generated: false,
-                            symbol_info: None,
-                            span: param.span,
-                        },
-                        ty: param.ty,
-                    });
-                }
-
-                let mut body_resolver = Resolver::with_scope(closure_scope);
-                body_resolver.declaration_uids = self.declaration_uids.clone();
-                body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
-                body_resolver.owner_registry = self.owner_registry.clone();
-                body_resolver.current_module_path = self.current_module_path.clone();
-                body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
-                let resolved_body = body_resolver.resolve_node(*body)?;
-                self.scope.advance_next_id_to(body_resolver.scope.next_id());
-
-                let captures = collect_captures(&resolved_body, &resolved_params);
-
-                Ok(Resolved::Closure(
-                    span,
-                    resolved_params,
-                    captures,
-                    Box::new(resolved_body),
-                ))
+                self.resolve_literal_closure(span, params, body, false)
+            }
+            Ast::ExtractorClosure(span, params, body) => {
+                self.resolve_literal_closure(span, params, body, true)
             }
 
             Ast::Capture(span, target, args) => {

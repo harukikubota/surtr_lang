@@ -267,6 +267,18 @@ impl Checker {
         allowed_vars: &HashSet<u32>,
         allowed_enum_constructor_vars: &HashSet<u32>,
     ) -> Option<UnresolvedExecutableTypeArgument> {
+        if let Some(pending) = Self::pattern_expression_nodes(node)
+            .into_iter()
+            .find_map(|expr| {
+                self.first_unresolved_executable_type_argument(
+                    expr,
+                    allowed_vars,
+                    allowed_enum_constructor_vars,
+                )
+            })
+        {
+            return Some(pending);
+        }
         if let TypedInner::ConstructorCall(tag, _) = &node.node {
             let enum_application = match self.resolve_ty(&node.ty) {
                 Ty::Enum(enum_name, arguments) => Some((enum_name, arguments)),
@@ -376,6 +388,7 @@ impl Checker {
             | TypedInner::ConstructorCall(_, args) => args.iter().find_map(visit),
             TypedInner::Block(stmts) => stmts.iter().find_map(visit),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::EagerBoundary(rhs)
@@ -452,8 +465,10 @@ impl Checker {
                     allowed.insert(type_param.ty_var);
                     allowed_enum_constructors.insert(type_param.ty_var);
                 }
-                self.extend_allowed_vars(&param.ty, &mut allowed);
-                self.extend_allowed_vars(&param.ty, &mut allowed_enum_constructors);
+                for param in param {
+                    self.extend_allowed_vars(&param.ty, &mut allowed);
+                    self.extend_allowed_vars(&param.ty, &mut allowed_enum_constructors);
+                }
                 self.extend_allowed_vars(ret_ty, &mut allowed);
                 self.first_unresolved_executable_type_argument(
                     body,
@@ -474,7 +489,9 @@ impl Checker {
                     &allowed_enum_constructors,
                 )
             }
-            TypedInner::Closure(params, _, body) | TypedInner::CaptureClosure(params, _, body) => {
+            TypedInner::Closure(params, _, body)
+            | TypedInner::ExtractorClosure(params, _, body)
+            | TypedInner::CaptureClosure(params, _, body) => {
                 let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
                 for parameter in params {
                     self.extend_allowed_vars(&parameter.ty, &mut allowed_enum_constructors);
@@ -607,6 +624,56 @@ impl Checker {
             failure_target,
             continuation,
             origins,
+        }))
+    }
+
+    fn rewrite_bind_specializations(
+        &mut self,
+        pattern: TypedPattern,
+        rhs: Box<TypedNode>,
+        span: &Span,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<Box<TypedInner>, Box<TypeError>> {
+        let rhs = self.rewrite_specializations_in_node(
+            *rhs,
+            context.defs_by_fun_idx,
+            context.bound_tyvars_by_fun_idx,
+            context.needs_specialization,
+            context.specialization_fun_idxs,
+            context.generated_defs,
+        )?;
+        let pattern =
+            self.concretize_specialized_typed_pattern(pattern, Some(&rhs.ty), span, context)?;
+        Ok(Box::new(TypedInner::Bind(pattern, rhs)))
+    }
+
+    // Keep the large Pattern result and error temporaries out of every recursive
+    // specialization frame, including trees which never contain apply_pattern.
+    fn rewrite_apply_pattern_specializations(
+        &mut self,
+        value: Box<TypedNode>,
+        pattern: TypedPattern,
+        projections: Vec<(ResolvedId, Ty)>,
+        span: &Span,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<Box<TypedInner>, Box<TypeError>> {
+        let value = self.rewrite_specializations_in_node(
+            *value,
+            context.defs_by_fun_idx,
+            context.bound_tyvars_by_fun_idx,
+            context.needs_specialization,
+            context.specialization_fun_idxs,
+            context.generated_defs,
+        )?;
+        let pattern =
+            self.concretize_specialized_typed_pattern(pattern, Some(&value.ty), span, context)?;
+        Ok(Box::new(TypedInner::ApplyPattern {
+            value,
+            pattern,
+            projections: projections
+                .into_iter()
+                .map(|(id, ty)| (id, self.resolve_ty(&ty)))
+                .collect(),
         }))
     }
 
@@ -832,10 +899,15 @@ impl Checker {
                                                 declared_ret,
                                                 ..,
                                             ) => (
-                                                vec![self.substitute_ty_with_mapping(
-                                                    &declared_param.ty,
-                                                    &call_site_mapping,
-                                                )],
+                                                declared_param
+                                                    .iter()
+                                                    .map(|param| {
+                                                        self.substitute_ty_with_mapping(
+                                                            &param.ty,
+                                                            &call_site_mapping,
+                                                        )
+                                                    })
+                                                    .collect(),
                                                 Box::new(self.substitute_ty_with_mapping(
                                                     declared_ret,
                                                     &call_site_mapping,
@@ -1050,29 +1122,35 @@ impl Checker {
                 }
                 TypedInner::Block(stmts)
             }
-            TypedInner::Bind(pattern, rhs) => {
-                let rhs = self.rewrite_specializations_in_node(
-                    *rhs,
+            TypedInner::Bind(pattern, rhs) => *self.rewrite_bind_specializations(
+                pattern,
+                rhs,
+                &span,
+                &mut SpecializationContext {
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?;
-                let pattern = self.concretize_specialized_typed_pattern(
-                    pattern,
-                    Some(&rhs.ty),
-                    &span,
-                    &mut SpecializationContext {
-                        defs_by_fun_idx,
-                        bound_tyvars_by_fun_idx,
-                        needs_specialization,
-                        specialization_fun_idxs,
-                        generated_defs,
-                    },
-                )?;
-                TypedInner::Bind(pattern, rhs)
-            }
+                },
+            )?,
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => *self.rewrite_apply_pattern_specializations(
+                value,
+                pattern,
+                projections,
+                &span,
+                &mut SpecializationContext {
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                },
+            )?,
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => {
                 let rhs = self.rewrite_specializations_in_node(
                     *rhs,
@@ -1082,9 +1160,15 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?;
+                let pattern_input_ty = match &projection {
+                    SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } => payload_ty,
+                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                        pattern_input_ty
+                    }
+                };
                 let pattern = self.concretize_specialized_typed_pattern(
                     pattern,
-                    Some(&rhs.ty),
+                    Some(pattern_input_ty),
                     &span,
                     &mut SpecializationContext {
                         defs_by_fun_idx,
@@ -1704,6 +1788,18 @@ impl Checker {
                     generated_defs,
                 )?,
             ),
+            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
+                params,
+                captures,
+                self.rewrite_specializations_in_node(
+                    *body,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ),
             TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params,
                 captures,
@@ -2166,6 +2262,12 @@ impl Checker {
             Ty::SelfApp(args) => {
                 CanonicalTyKey::SelfApp(args.iter().map(|arg| self.canonical_ty_key(arg)).collect())
             }
+            Ty::ExtractorClosure(inner) => {
+                CanonicalTyKey::ExtractorClosure(Box::new(self.canonical_ty_key(&inner)))
+            }
+            Ty::MatchResult(inner) => {
+                CanonicalTyKey::MatchResult(Box::new(self.canonical_ty_key(&inner)))
+            }
             Ty::List(inner) => CanonicalTyKey::List(Box::new(self.canonical_ty_key(&inner))),
             Ty::Tuple(items) => CanonicalTyKey::Tuple(
                 items
@@ -2297,12 +2399,15 @@ impl Checker {
                     specialized_fun_idx,
                     id,
                     Vec::new(),
-                    TypedValueParameter {
-                        id: param.id,
-                        mode: param.mode,
-                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
-                        span: param.span,
-                    },
+                    param
+                        .into_iter()
+                        .map(|param| TypedValueParameter {
+                            id: param.id,
+                            mode: param.mode,
+                            ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                            span: param.span,
+                        })
+                        .collect(),
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
                     visibility,
@@ -2350,7 +2455,9 @@ impl Checker {
                 .iter()
                 .map(|param| param.ty.clone())
                 .collect::<Vec<_>>(),
-            TypedInner::ExtractorDef(_, _, _, param, _, _, _) => vec![param.ty.clone()],
+            TypedInner::ExtractorDef(_, _, _, param, _, _, _) => {
+                param.iter().map(|param| param.ty.clone()).collect()
+            }
             other => {
                 return Err(TypeError {
                     structured: None,
@@ -2483,13 +2590,17 @@ impl Checker {
                         ordered.push(type_param.ty_var);
                     }
                 }
-                self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
+                for param in param {
+                    self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
+                }
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
                 let mut signature_vars = type_params
                     .iter()
                     .map(|type_param| type_param.ty_var)
                     .collect::<Vec<_>>();
-                Self::collect_ty_vars(&param.ty, &mut signature_vars);
+                for param in param {
+                    Self::collect_ty_vars(&param.ty, &mut signature_vars);
+                }
                 Self::collect_ty_vars(ret_ty, &mut signature_vars);
                 let signature_vars = signature_vars.into_iter().collect::<HashSet<_>>();
                 let already_bound = seen.clone();
@@ -2513,6 +2624,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        for expr in Self::pattern_expression_nodes(node) {
+            self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+        }
         match &node.node {
             TypedInner::TraitCall {
                 dispatch,
@@ -2596,6 +2710,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(rhs, ordered, seen)
@@ -2717,6 +2832,7 @@ impl Checker {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
             }
@@ -2773,6 +2889,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        for expr in Self::pattern_expression_nodes(node) {
+            self.collect_bound_tyvars_in_node(expr, ordered, seen);
+        }
         self.collect_bound_tyvars_in_ty(&node.ty, ordered, seen);
         match &node.node {
             TypedInner::App(func, args)
@@ -2794,6 +2913,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs) => self.collect_bound_tyvars_in_node(rhs, ordered, seen),
             TypedInner::DoSafeBind(control) => {
@@ -2941,6 +3061,7 @@ impl Checker {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
                 self.collect_bound_tyvars_in_node(body, ordered, seen);
             }
@@ -2964,9 +3085,10 @@ impl Checker {
                     ordered.push(var);
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
-                self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
@@ -3141,6 +3263,18 @@ impl Checker {
                 self.substitute_typed_pattern_with_mapping(pattern, mapping),
                 Box::new(self.substitute_typed_node_with_mapping(*rhs, mapping)),
             ),
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => TypedInner::ApplyPattern {
+                value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                pattern: self.substitute_typed_pattern_with_mapping(pattern, mapping),
+                projections: projections
+                    .into_iter()
+                    .map(|(id, ty)| (id, self.substitute_ty_with_mapping(&ty, mapping)))
+                    .collect(),
+            },
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 self.substitute_typed_pattern_with_mapping(pattern, mapping),
                 Box::new(self.substitute_typed_node_with_mapping(*rhs, mapping)),
@@ -3166,6 +3300,9 @@ impl Checker {
                         target.error_ty =
                             self.substitute_ty_with_mapping(&target.error_ty, mapping);
                         SafeBindFailureTarget::EnclosingResultContext(target)
+                    }
+                    SafeBindFailureTarget::EnclosingMatchResultContext { err_tag } => {
+                        SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
                     SafeBindFailureTarget::DoResultContext(mut target) => {
@@ -3484,12 +3621,15 @@ impl Checker {
                             bound: typed_param.bound,
                         })
                         .collect(),
-                    TypedValueParameter {
-                        id: param.id,
-                        mode: param.mode,
-                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
-                        span: param.span,
-                    },
+                    param
+                        .into_iter()
+                        .map(|param| TypedValueParameter {
+                            id: param.id,
+                            mode: param.mode,
+                            ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                            span: param.span,
+                        })
+                        .collect(),
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
                     visibility,
@@ -3498,11 +3638,25 @@ impl Checker {
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(
                     id,
-                    self.substitute_ty_with_mapping(&param_ty, mapping),
+                    param_ty
+                        .iter()
+                        .map(|ty| self.substitute_ty_with_mapping(ty, mapping))
+                        .collect(),
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                 )
             }
             TypedInner::Closure(params, captures, body) => TypedInner::Closure(
+                params
+                    .into_iter()
+                    .map(|param| TypedClosureParam {
+                        id: param.id,
+                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                    })
+                    .collect(),
+                captures,
+                Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+            ),
+            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
                 params
                     .into_iter()
                     .map(|param| TypedClosureParam {
@@ -3744,8 +3898,8 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
@@ -3753,8 +3907,11 @@ impl Checker {
                 input_ty: self.substitute_ty_with_mapping(&input_ty, mapping),
                 extractor,
                 extractor_ty: self.substitute_ty_with_mapping(&extractor_ty, mapping),
+                pre_args: pre_args
+                    .into_iter()
+                    .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
+                    .collect(),
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys: seq_tys
                     .into_iter()
@@ -3823,8 +3980,8 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
@@ -3832,8 +3989,11 @@ impl Checker {
                 input_ty: self.substitute_ty_with_mapping(&input_ty, mapping),
                 extractor,
                 extractor_ty: self.substitute_ty_with_mapping(&extractor_ty, mapping),
+                pre_args: pre_args
+                    .into_iter()
+                    .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
+                    .collect(),
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys: seq_tys
                     .into_iter()
@@ -3860,6 +4020,12 @@ impl Checker {
                         self.substitute_ty_with_mapping(&resolved, mapping)
                     }
                 }
+            }
+            Ty::ExtractorClosure(inner) => {
+                Ty::ExtractorClosure(Box::new(self.substitute_ty_with_mapping(inner, mapping)))
+            }
+            Ty::MatchResult(inner) => {
+                Ty::MatchResult(Box::new(self.substitute_ty_with_mapping(inner, mapping)))
             }
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
@@ -4161,6 +4327,78 @@ impl Checker {
         }
     }
 
+    fn specialize_extractor_pre_args(
+        &mut self,
+        args: Vec<TypedNode>,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        args.into_iter()
+            .map(|arg| {
+                self.rewrite_specializations_in_node(
+                    arg,
+                    context.defs_by_fun_idx,
+                    context.bound_tyvars_by_fun_idx,
+                    context.needs_specialization,
+                    context.specialization_fun_idxs,
+                    context.generated_defs,
+                )
+                .map(|node| *node)
+                .map_err(|error| *error)
+            })
+            .collect()
+    }
+
+    fn validate_extractor_payload_shape(
+        &self,
+        extractor_ty: &Ty,
+        seq_tys: &[Ty],
+        children: usize,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let resolved = self.resolve_ty(extractor_ty);
+        let ret = match Self::extractor_signature_ty(&resolved) {
+            Ty::UserFunc { ret, .. } | Ty::BuiltinFunc { ret, .. } | Ty::Func(_, ret) => ret,
+            _ => {
+                return Err(TypeError::new(
+                    "Extractor callable contract is unresolved",
+                    span.clone(),
+                ))
+            }
+        };
+        let Ty::MatchResult(payload) = ret.as_ref() else {
+            return Err(TypeError::new(
+                "Extractor payload requires canonical MatchResult",
+                span.clone(),
+            ));
+        };
+        // Only the outer payload constructor determines child arity. Generic
+        // types inside a known tuple or single-value container do not change
+        // the runtime layout and remain valid under ordinary type erasure.
+        if matches!(payload.as_ref(), Ty::Var(_) | Ty::SelfApp(_)) {
+            return Err(TypeError::new(
+                "Extractor payload shape must be resolved before execution",
+                span.clone(),
+            ));
+        }
+        let shape = match payload.as_ref() {
+            Ty::Tuple(items) => items.clone(),
+            other => vec![other.clone()],
+        };
+        let resolved_seq = seq_tys
+            .iter()
+            .map(|ty| self.resolve_ty(ty))
+            .collect::<Vec<_>>();
+        if shape != resolved_seq
+            || (children != shape.len() && !(children == 0 && shape == [Ty::Unit]))
+        {
+            return Err(TypeError::new(
+                "Extractor payload shape does not match its child patterns",
+                span.clone(),
+            ));
+        }
+        Ok(())
+    }
+
     fn concretize_specialized_typed_pattern(
         &mut self,
         pattern: TypedPattern,
@@ -4282,26 +4520,34 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
-            } => TypedPattern::Extractor {
-                input_ty: normalized_ty(self, &input_ty, expected_ty),
-                extractor,
-                extractor_ty: self.resolve_ty(&extractor_ty),
-                success_tag,
-                no_match_tag,
-                err_tag,
-                seq_tys: seq_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
-                items: items
-                    .into_iter()
-                    .map(|item| {
-                        self.concretize_specialized_typed_pattern(item, None, span, context)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
+            } => {
+                self.validate_extractor_payload_shape(
+                    &extractor_ty,
+                    &seq_tys,
+                    items.len(),
+                    &extractor.span,
+                )?;
+                TypedPattern::Extractor {
+                    input_ty: self.resolve_ty(&input_ty),
+                    extractor,
+                    extractor_ty: self.resolve_ty(&extractor_ty),
+                    pre_args: self.specialize_extractor_pre_args(pre_args, context)?,
+                    success_tag,
+                    err_tag,
+                    seq_tys: seq_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
+                    items: items
+                        .into_iter()
+                        .map(|item| {
+                            self.concretize_specialized_typed_pattern(item, None, span, context)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+            }
         })
     }
 
@@ -4353,24 +4599,32 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
-            } => TypedMatchPattern::Extractor {
-                input_ty,
-                extractor,
-                extractor_ty,
-                success_tag,
-                no_match_tag,
-                err_tag,
-                seq_tys,
-                items: items
-                    .into_iter()
-                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
+            } => {
+                self.validate_extractor_payload_shape(
+                    &extractor_ty,
+                    &seq_tys,
+                    items.len(),
+                    &extractor.span,
+                )?;
+                TypedMatchPattern::Extractor {
+                    input_ty,
+                    extractor,
+                    extractor_ty,
+                    pre_args: self.specialize_extractor_pre_args(pre_args, context)?,
+                    success_tag,
+                    err_tag,
+                    seq_tys,
+                    items: items
+                        .into_iter()
+                        .map(|item| self.concretize_specialized_match_pattern(item, span, context))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+            }
             other => other,
         })
     }
@@ -4463,6 +4717,12 @@ impl Checker {
     }
 
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
+        if Self::pattern_expression_nodes(node)
+            .into_iter()
+            .any(Self::typed_node_has_pending_trait_call)
+        {
+            return true;
+        }
         match &node.node {
             TypedInner::TraitCall {
                 dispatch,
@@ -4483,7 +4743,13 @@ impl Checker {
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::Block(stmts) => stmts.iter().any(Self::typed_node_has_pending_trait_call),
-            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs, _, _) => {
+            TypedInner::Bind(pattern, rhs)
+            | TypedInner::SafeBind(pattern, rhs, _, _)
+            | TypedInner::ApplyPattern {
+                pattern,
+                value: rhs,
+                ..
+            } => {
                 Self::typed_pattern_has_pending_dispatch(pattern)
                     || Self::typed_node_has_pending_trait_call(rhs)
             }
@@ -4609,6 +4875,7 @@ impl Checker {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
                 Self::typed_node_has_pending_trait_call(body)
             }

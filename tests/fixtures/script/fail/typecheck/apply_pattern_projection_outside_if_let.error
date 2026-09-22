@@ -1,0 +1,2 @@
+phase: typecheck
+contains: projection outside apply_pattern

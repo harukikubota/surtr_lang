@@ -697,6 +697,12 @@ pub(super) fn coalesce_direct_constructor_inputs(
                     .collect(),
             )
         }
+        Ty::ExtractorClosure(inner) => Ty::ExtractorClosure(Box::new(
+            coalesce_direct_constructor_inputs(checker, *inner, inputs),
+        )),
+        Ty::MatchResult(inner) => Ty::MatchResult(Box::new(coalesce_direct_constructor_inputs(
+            checker, *inner, inputs,
+        ))),
         Ty::List(inner) => Ty::List(Box::new(coalesce_direct_constructor_inputs(
             checker, *inner, inputs,
         ))),
@@ -1341,7 +1347,10 @@ fn builtin_runtime_type_matches(
         | (Ty::Unit, Ty::Unit)
         | (Ty::Error, Ty::Error)
         | (Ty::Hole, Ty::Hole) => true,
-        (Ty::List(expected), Ty::List(actual)) | (Ty::Lazy(expected), Ty::Lazy(actual)) => {
+        (Ty::MatchResult(expected), Ty::MatchResult(actual))
+        | (Ty::ExtractorClosure(expected), Ty::ExtractorClosure(actual))
+        | (Ty::List(expected), Ty::List(actual))
+        | (Ty::Lazy(expected), Ty::Lazy(actual)) => {
             builtin_runtime_type_matches(checker, &expected, &actual, expected_variables)
         }
         (Ty::Tuple(expected), Ty::Tuple(actual)) => {

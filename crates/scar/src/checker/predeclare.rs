@@ -521,12 +521,25 @@ impl Checker {
                                 syntax: self.rewrite_inherent_signature_ast_ty(id, ty.syntax()),
                                 direct_constructor_trait: ty.direct_constructor_trait.clone(),
                             });
-                    super::signatures::validate_return_type_argument_definition(
-                        id.qualified_name.as_deref().unwrap_or(&id.name),
-                        &rewritten_return_type_arguments,
-                        &rewritten_value_parameters,
-                        rewritten_return_type.as_ref(),
-                    )?;
+                    // The canonical Pattern consumer derives its result from selected
+                    // projection slots; $Return is not a caller-supplied type argument.
+                    let pattern_result_slot = matches!(stmt, Resolved::BuiltinDecl(..))
+                        && Self::surface_qualified_name(id.qualified_name.as_deref())
+                            == Some("Kernel::apply_pattern")
+                        && return_type_arguments.is_empty()
+                        && clause.is_none()
+                        && super::definitions::special_form_shape_apply_pattern(
+                            value_parameters,
+                            &return_type.as_ref().map(|ty| ty.syntax.clone()),
+                        );
+                    if !pattern_result_slot {
+                        super::signatures::validate_return_type_argument_definition(
+                            id.qualified_name.as_deref().unwrap_or(&id.name),
+                            &rewritten_return_type_arguments,
+                            &rewritten_value_parameters,
+                            rewritten_return_type.as_ref(),
+                        )?;
+                    }
                     super::signatures::validate_constructor_variable_constraints(
                         &id.name,
                         &rewritten_return_type_arguments,
@@ -1303,6 +1316,8 @@ impl Checker {
 
                     let enum_surface_name = Self::surface_name(&id.name);
                     let builtin_result_enum = attrs.builtin && enum_surface_name == "Result";
+                    let builtin_match_result_enum =
+                        attrs.builtin && enum_surface_name == "MatchResult";
                     let builtin_boolean_enum = attrs.builtin && enum_surface_name == "Boolean";
                     let enum_ty = if builtin_result_enum {
                         let ok_ty = enum_ty_args
@@ -1310,6 +1325,8 @@ impl Checker {
                             .cloned()
                             .unwrap_or_else(|| self.env.fresh_tyvar());
                         Ty::Result(Box::new(ok_ty), Box::new(Ty::Error))
+                    } else if builtin_match_result_enum {
+                        Ty::MatchResult(Box::new(enum_ty_args[0].clone()))
                     } else if builtin_boolean_enum {
                         Ty::Bool
                     } else {
@@ -1980,7 +1997,10 @@ impl Checker {
                     out.push(*var);
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
             Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
@@ -2775,6 +2795,14 @@ impl Checker {
                     .collect::<HashMap<_, _>>();
                 self.substitute_ty_with_mapping(target_ty, &mapping)
             }
+            Ty::ExtractorClosure(inner) => Ty::ExtractorClosure(Box::new(
+                self.expand_trait_self_apps(*inner, target_ty, constructor_slot_vars)?,
+            )),
+            Ty::MatchResult(inner) => Ty::MatchResult(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
             Ty::List(inner) => Ty::List(Box::new(self.expand_trait_self_apps(
                 *inner,
                 target_ty,
@@ -3187,10 +3215,12 @@ impl Checker {
                     )?;
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => self
-                .validate_nominal_declaration_constructor_applications(
-                    inner, parameters, owner, span,
-                )?,
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.validate_nominal_declaration_constructor_applications(
+                inner, parameters, owner, span,
+            )?,
             Ty::Tuple(items) => {
                 for item in items {
                     self.validate_nominal_declaration_constructor_applications(
@@ -4336,14 +4366,17 @@ impl Checker {
                 Resolved::BuiltinExtractorDecl(_, id, param, ret_ty, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
-                    let param_ty = match &param.ty {
-                        Some(ty) => self.resolve_builtin_ast_ty_in_context(
-                            ty,
-                            TypeSyntaxContext::General,
-                            &mut tyvars,
-                        )?,
-                        None => self.env.fresh_tyvar(),
-                    };
+                    let param_tys = param
+                        .iter()
+                        .map(|param| match &param.ty {
+                            Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                                ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            ),
+                            None => Ok(self.env.fresh_tyvar()),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let ret = self.resolve_builtin_ast_ty_in_context(
                         ret_ty,
                         TypeSyntaxContext::ExtractorReturn,
@@ -4353,7 +4386,7 @@ impl Checker {
                         id.unique_id,
                         Ty::BuiltinFunc {
                             name: id.name.clone(),
-                            params: vec![param_ty],
+                            params: param_tys,
                             ret: Box::new(ret),
                         },
                     );
@@ -4530,34 +4563,35 @@ impl Checker {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);
-                    let param_ty = match &param.ty {
-                        Some(ty) => self.resolve_signature_ast_ty_in_context(
-                            ty,
-                            TypeSyntaxContext::General,
-                            &mut tyvars,
-                        )?,
-                        None => self.env.fresh_tyvar(),
-                    };
+                    let param_tys = param
+                        .iter()
+                        .map(|param| match &param.ty {
+                            Some(ty) => self.resolve_signature_ast_ty_in_context(
+                                ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            ),
+                            None => Ok(self.env.fresh_tyvar()),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let ret = self.resolve_signature_ast_ty_in_context(
                         ret_ty,
                         TypeSyntaxContext::ExtractorReturn,
                         &mut tyvars,
                     )?;
-                    self.validate_nominal_type_well_formed(&param_ty, span, false)?;
+                    for param_ty in &param_tys {
+                        self.validate_nominal_type_well_formed(param_ty, span, false)?;
+                    }
                     self.validate_nominal_type_well_formed(&ret, span, false)?;
-                    let type_params = Self::signature_type_param_vars(
-                        type_params,
-                        &tyvars,
-                        std::slice::from_ref(&param_ty),
-                        &ret,
-                    );
+                    let type_params =
+                        Self::signature_type_param_vars(type_params, &tyvars, &param_tys, &ret);
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
                             fun_idx,
                             type_params,
                             call_substitution: Vec::new(),
-                            params: vec![param_ty],
+                            params: param_tys,
                             ret: Box::new(ret),
                         },
                     );

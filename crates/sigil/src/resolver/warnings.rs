@@ -114,6 +114,10 @@ fn warning_span(span: &Span) -> WarningSpan {
 
 fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
     match node {
+        Resolved::ApplyPattern(_, value, pattern) => {
+            collect_node_usage(value, usage);
+            collect_pattern_usage(pattern, usage);
+        }
         Resolved::Lit(..)
         | Resolved::ListNil(_)
         | Resolved::InferredFacetCapture(_, _)
@@ -267,7 +271,9 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         }
         Resolved::ConstDef(_, _, _, value, _) => collect_node_usage(value, usage),
         Resolved::ExtractorDef(_, _, _, param, _, body, _) => {
-            usage.bind_id(&param.id);
+            for param in param {
+                usage.bind_id(&param.id);
+            }
             collect_node_usage(body, usage);
         }
         Resolved::TraitDef(_, _, _, _, methods, _) => {
@@ -290,6 +296,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         }
         Resolved::BuiltinDecl(..) | Resolved::BuiltinExtractorDecl(_, _, _, _, _) => {}
         Resolved::Closure(_, params, captures, body)
+        | Resolved::ExtractorClosure(_, params, captures, body)
         | Resolved::CaptureClosure(_, params, captures, body) => {
             for param in params {
                 usage.bind_id(&param.id);
@@ -312,9 +319,37 @@ fn collect_record_arg_usage(arg: &ResolvedRecordLitArg, usage: &mut WarningUsage
 
 fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
     match pattern {
+        ResolvedPattern::Projection { inner, .. } => collect_pattern_usage(inner, usage),
+        ResolvedPattern::Deferred {
+            pattern, bindings, ..
+        } => {
+            // Role selection happens in Scar. Retain possible uses to avoid false
+            // unused warnings, but never publish candidate-only bindings.
+            let mut candidates = WarningUsage::default();
+            collect_pattern_usage(pattern, &mut candidates);
+            usage.used_uids.extend(candidates.used_uids);
+            usage.short_import_uses.extend(candidates.short_import_uses);
+            for binding in bindings {
+                if let Some(outer) = &binding.outer {
+                    usage.use_id(outer);
+                }
+            }
+        }
+        ResolvedPattern::ExtractorApplication { head, args } => {
+            usage.use_id(head);
+            for arg in args {
+                if let Ok(expr) = &arg.expr {
+                    collect_node_usage(expr, usage);
+                }
+                if let Ok(pattern) = &arg.pattern {
+                    collect_pattern_usage(pattern, usage);
+                }
+            }
+        }
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => usage.bind_id(id),
         ResolvedPattern::Pin(id) => usage.use_id(id),
         ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::AnnotatedWildcard(_, _)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(..)
         | ResolvedPattern::StrLit(..)
@@ -324,7 +359,15 @@ fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
             collect_pattern_usage(head, usage);
             collect_pattern_usage(tail, usage);
         }
-        ResolvedPattern::Constructor(_, inners) | ResolvedPattern::Extractor(_, inners) => {
+        ResolvedPattern::Extractor(_, pre_args, inners) => {
+            for arg in pre_args {
+                collect_node_usage(arg, usage);
+            }
+            for inner in inners {
+                collect_pattern_usage(inner, usage);
+            }
+        }
+        ResolvedPattern::Constructor(_, inners) => {
             for inner in inners {
                 collect_pattern_usage(inner, usage);
             }

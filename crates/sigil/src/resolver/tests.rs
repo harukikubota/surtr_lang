@@ -36,6 +36,19 @@ fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     resolve(ast)
 }
 
+fn kernel_pattern_test_module() -> StagedModuleAst {
+    staged_auto_import_module("Kernel", parse_module_ast(
+        "@builtin def if_let(value: $A, pattern: $Pattern, yes: Lazy<$B>, no: Lazy<$B>) -> $B\n@builtin def if_let_then(value: $A, pattern: $Pattern, yes: Lazy<Unit>) -> Unit\n@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean\n@builtin def apply_pattern(value: $A, pattern: $Pattern) -> Result<$B>", "Kernel"))
+}
+
+fn parse_and_resolve_pattern_consumers(src: &str) -> Result<Vec<Resolved>, ResolveError> {
+    let user_len = spire::parse_with_context(src, spire::ParserContext::project(0))
+        .unwrap()
+        .len();
+    let mut resolved = resolve_user_with_modules(src, &[vec![kernel_pattern_test_module()]])?;
+    Ok(resolved.split_off(resolved.len() - user_len))
+}
+
 fn parse_and_resolve_with_warnings(
     src: &str,
 ) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
@@ -932,6 +945,7 @@ const FLAG: Int = 1
 deftrait Show {
   def show(self: Self) -> String
 }
+
 deftrait Applicative
 where
   Self: Functor
@@ -952,6 +966,7 @@ where
 @builtin type List<$A>
 @builtin defenum Option<$T> { Some($T), None }
 @builtin defenum Result<$T> { Ok($T), Err(Error) }
+@builtin defenum MatchResult<$T> { OK($T), Err(Error) }
 @builtin defenum Boolean { True, False }"#,
         spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
     )
@@ -995,6 +1010,7 @@ where
         ("List", TypeIdentity::TypeConstructor),
         ("Option", TypeIdentity::TypeConstructor),
         ("Result", TypeIdentity::TypeConstructor),
+        ("MatchResult", TypeIdentity::TypeConstructor),
         ("Boolean", TypeIdentity::Enum),
         ("User", TypeIdentity::Struct),
         ("Pair", TypeIdentity::Record),
@@ -1014,6 +1030,11 @@ where
         assert_eq!(owners.identity_for_owner(name), Some(identity), "{name}");
     }
     assert_eq!(owners.get("Functor").unwrap().kind, OwnerKind::Trait);
+    let match_result = user_type_symbol_identity_info(&owners.owner_ref("MatchResult").unwrap())
+        .expect("canonical MatchResult owner metadata");
+    assert!(!match_result.capabilities.type_annotation);
+    assert!(!match_result.capabilities.impl_target);
+    assert_eq!(match_result.capabilities.facet_root_path, None);
     assert_eq!(owners.owner_ref("Option").unwrap().canonical_key, "Option");
     let mut resolver = Resolver::new();
     resolver.owner_registry = owners.clone();
@@ -1287,8 +1308,8 @@ impl User {
     self
   }
 
-  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
-    Option::None
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int)> {
+    MatchResult::Err(NoneError())
   }
 }"#,
             "",
@@ -1329,8 +1350,8 @@ fn test_precollect_impl_extractors_for_enum_types() {
 }
 
 impl Light {
-  defextractor stop_code(self: Self) -> Option<Int> {
-    Option::None
+  defextractor stop_code(self: Self) -> MatchResult<Int> {
+    MatchResult::Err(NoneError())
   }
 }"#,
             "",
@@ -3503,7 +3524,7 @@ fn test_if_then_conversion() {
 
 #[test]
 fn test_if_let_conversion() {
-    let resolved = parse_and_resolve("x = if_let(Ok(1), Ok(v), v, 0)").unwrap();
+    let resolved = parse_and_resolve_pattern_consumers("x = if_let(Ok(1), Ok(v), v, 0)").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::IfLet(_, _, arms) => {
@@ -3522,15 +3543,17 @@ fn test_if_let_conversion() {
 
 #[test]
 fn test_if_let_then_conversion() {
-    let resolved = parse_and_resolve("x = if_let_then(Ok(1), Ok(v), print(\"ok\"))").unwrap();
+    let resolved =
+        parse_and_resolve_pattern_consumers("x = if_let_then(Ok(1), Ok(v), print(\"ok\"))")
+            .unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Match(_, _, arms) => {
+            Resolved::IfLet(_, _, arms) => {
                 assert_eq!(arms.len(), 2);
                 assert!(matches!(&arms[0].body, Resolved::Block(_, _)));
                 assert!(matches!(&arms[1].body, Resolved::Lit(_, Lit::Unit)));
             }
-            other => panic!("Expected Match for if_let_then(...), got {:?}", other),
+            other => panic!("Expected IfLet for if_let_then(...), got {:?}", other),
         },
         _ => panic!("Expected Bind with Match"),
     }
@@ -3538,8 +3561,10 @@ fn test_if_let_then_conversion() {
 
 #[test]
 fn test_if_let_or_alternatives_share_one_binding_identity() {
-    let resolved = parse_and_resolve("result = if_let((1, 2), (1, value) | (value, 2), value, 0)")
-        .expect("both alternatives bind the same name");
+    let resolved = parse_and_resolve_pattern_consumers(
+        "result = if_let((1, 2), (1, value) | (value, 2), value, 0)",
+    )
+    .expect("both alternatives bind the same name");
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
@@ -3568,9 +3593,10 @@ fn test_if_let_or_alternatives_share_one_binding_identity() {
 
 #[test]
 fn test_if_let_nested_or_alternatives_share_one_binding_identity() {
-    let resolved =
-        parse_and_resolve("result = if_let((1, (2, 3)), (1, (value, 3) | (2, value)), value, 0)")
-            .expect("nested alternatives bind the same name");
+    let resolved = parse_and_resolve_pattern_consumers(
+        "result = if_let((1, (2, 3)), (1, (value, 3) | (2, value)), value, 0)",
+    )
+    .expect("nested alternatives bind the same name");
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
@@ -3602,14 +3628,15 @@ fn test_if_let_nested_or_alternatives_share_one_binding_identity() {
 
 #[test]
 fn test_if_let_then_or_binding_is_visible_in_success_block() {
-    let resolved =
-        parse_and_resolve("result = if_let_then((1, 2), (1, value) | (value, 2), print(value))")
-            .expect("if_let_then should resolve the common binding");
+    let resolved = parse_and_resolve_pattern_consumers(
+        "result = if_let_then((1, 2), (1, value) | (value, 2), print(value))",
+    )
+    .expect("if_let_then should resolve the common binding");
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
-    let Resolved::Match(_, _, arms) = rhs.as_ref() else {
-        panic!("expected lowered match");
+    let Resolved::IfLet(_, _, arms) = rhs.as_ref() else {
+        panic!("expected lowered if_let");
     };
     let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
         panic!("expected OR in the success arm");
@@ -3636,7 +3663,7 @@ fn test_if_let_then_or_binding_is_visible_in_success_block() {
 fn test_if_let_or_alternatives_require_same_ordered_binding_names() {
     for pattern in ["(1, left) | (right, 2)", "(left, right) | (right, left)"] {
         let source = format!("result = if_let((1, 2), {pattern}, 1, 0)");
-        let error = parse_and_resolve(&source).expect_err(&source);
+        let error = parse_and_resolve_pattern_consumers(&source).expect_err(&source);
         assert!(
             error
                 .message
@@ -3673,7 +3700,7 @@ fn test_or_duplicate_binding_in_one_alternative_keeps_related_labels() {
 
 #[test]
 fn test_is_match_conversion() {
-    let resolved = parse_and_resolve("x = is_match(Ok(1), Ok(_))").unwrap();
+    let resolved = parse_and_resolve_pattern_consumers("x = is_match(Ok(1), Ok(_))").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Match(_, _, arms) => {
@@ -3689,12 +3716,18 @@ fn test_is_match_conversion() {
 
 #[test]
 fn test_is_match_rejects_binding_variable_pattern() {
-    let err = spire::parse_with_context(
+    for source in [
         "x = is_match(Ok(1), Ok(v))",
-        spire::ParserContext::project(0),
-    )
-    .expect_err("must fail");
-    assert!(err.message().contains("does not allow binding variables"));
+        "x = is_match(Ok(1), Ok(v) | Ok(v))",
+        "x = is_match(Ok(1), Ok(_) @ value)",
+    ] {
+        let err = parse_and_resolve_pattern_consumers(source)
+            .expect_err("must fail after argument roles are known");
+        assert!(
+            err.message.contains("does not allow binding variables"),
+            "{source}: {err:?}"
+        );
+    }
 }
 
 #[test]
@@ -4501,6 +4534,61 @@ g = &print"#,
             _ => panic!("Expected Capture"),
         },
         _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn canonical_pattern_consumers_cannot_be_values_or_captures() {
+    for consumer in sindr::pattern::PatternConsumer::ALL {
+        for source in [
+            format!("f = Kernel::{}", consumer.name()),
+            format!("f = &Kernel::{}", consumer.name()),
+            format!("f = &Kernel::{}(&1, 1)", consumer.name()),
+        ] {
+            let error = parse_and_resolve_pattern_consumers(&source)
+                .expect_err("canonical Pattern consumers are syntax, not callable values");
+            assert!(
+                error
+                    .message
+                    .contains("cannot be used as a value or capture"),
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn capture_placeholders_inside_pattern_consumers_are_rewritten() {
+    for source in [
+        "g = &inspect(apply_pattern(&1, _1))",
+        "g = &inspect(apply_pattern(1, Bounds::offset(&1, _1: Int)))",
+    ] {
+        let resolved = resolve_user_with_modules(source, &preargument_test_modules())
+            .expect("outer capture placeholders must traverse consumer arguments");
+        assert!(matches!(resolved.last(), Some(Resolved::Bind(_, _, rhs))
+            if matches!(rhs.as_ref(), Resolved::CaptureClosure(_, params, _, _) if params.len() == 1)));
+    }
+}
+
+#[test]
+fn regex_is_match_keeps_expression_calls_and_captures() {
+    let modules = vec![vec![
+        kernel_pattern_test_module(),
+        staged_module(
+            "Regex",
+            parse_module_ast(
+                "@builtin def is_match(re: Regex, text: String) -> Boolean",
+                "Regex",
+            ),
+        ),
+    ]];
+    for source in [
+        "f = &Regex::is_match",
+        "f = &Regex::is_match(&1, \"text\")",
+        "f = &inspect(Regex::is_match(&1, \"text\"))",
+    ] {
+        resolve_user_with_modules(source, &modules)
+            .expect("Regex builtin remains a normal callable");
     }
 }
 
@@ -6043,6 +6131,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
     declaration_index.insert(
         "Global::Helper::helper".to_string(),
         DeclarationEntry {
+            value_parameter_count: None,
             module_path: "Global::Helper".to_string(),
             name: "helper".to_string(),
             fq_name: "Global::Helper::helper".to_string(),
@@ -6058,6 +6147,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
     declaration_index.insert(
         "Global::Kernel::hidden_pid".to_string(),
         DeclarationEntry {
+            value_parameter_count: None,
             module_path: "Global::Kernel".to_string(),
             name: "hidden_pid".to_string(),
             fq_name: "Global::Kernel::hidden_pid".to_string(),
@@ -8324,7 +8414,7 @@ result = do::<Result> {
         pattern: ResolvedPattern::As(constructor, whole, None),
         ..
     }, ResolvedDoStatement::Extract {
-        pattern: ResolvedPattern::Extractor(extractor, extracted_items),
+        pattern: ResolvedPattern::Extractor(extractor, _, extracted_items),
         ..
     }, ResolvedDoStatement::SafeBind {
         pattern: ResolvedPattern::Pin(pinned),
@@ -8348,4 +8438,208 @@ result = do::<Result> {
     assert_eq!(pinned.unique_id, whole.unique_id);
     assert_eq!(final_id.unique_id, extracted.unique_id);
     assert_ne!(value.unique_id, extracted.unique_id);
+}
+
+#[test]
+fn match_result_owner_is_reserved_for_the_standard_definition() {
+    let error = parse_and_resolve("defenum MatchResult<$T> { OK($T), Err(String) }")
+        .expect_err("a user enum must not replace canonical MatchResult");
+    assert!(error.message.contains("reserved"));
+    assert!(error.message.contains("MatchResult"));
+}
+
+#[test]
+fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
+    let ast = spire::parse_with_context(
+        "@builtin defenum MatchResult<$T> { OK($T), Err(Error) }",
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .unwrap();
+    let mut resolver = Resolver::new();
+    resolver
+        .resolve_program(ast)
+        .expect("standard enum should resolve");
+    let ok = resolver
+        .scope
+        .lookup("MatchResult::OK")
+        .expect("qualified OK");
+    let err = resolver
+        .scope
+        .lookup("MatchResult::Err")
+        .expect("qualified Err");
+    assert_eq!(
+        resolver.declaration_uid_kinds.get(&ok),
+        Some(&DeclarationKind::EnumVariant)
+    );
+    assert_eq!(
+        resolver.declaration_uid_kinds.get(&err),
+        Some(&DeclarationKind::EnumVariant)
+    );
+    assert!(resolver.scope.lookup("OK").is_none());
+    assert_ne!(resolver.scope.lookup("Err"), Some(err));
+}
+
+fn preargument_test_modules() -> Vec<Vec<StagedModuleAst>> {
+    vec![vec![
+        kernel_pattern_test_module(),
+        staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { OK($T), Err(Error) }", "")),
+        staged_module("Bounds", parse_module_ast("defextractor offset(amount: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }\ndefextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }", "Bounds")),
+    ]]
+}
+
+#[test]
+fn extractor_prearguments_and_pins_keep_outer_binding_identity() {
+    let resolved = resolve_user_with_modules(
+        "amount = 10\nresult = match (2, 3, 10) { (amount, Bounds::offset(amount, adjusted), ^amount) => (amount, adjusted), _ => (0, 0) }",
+        &preargument_test_modules()).unwrap();
+    let outer = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "amount" => {
+                Some(id.unique_id)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let Resolved::Bind(_, _, rhs) = resolved.last().unwrap() else {
+        panic!("result binding");
+    };
+    let Resolved::Match(_, _, arms) = rhs.as_ref() else {
+        panic!("match");
+    };
+    let ResolvedPattern::Tuple(items) = &arms[0].pattern else {
+        panic!("tuple");
+    };
+    let [ResolvedPattern::Var(shadow), ResolvedPattern::Extractor(_, args, children), ResolvedPattern::Pin(pin)] =
+        items.as_slice()
+    else {
+        panic!("pattern contract");
+    };
+    assert_ne!(shadow.unique_id, outer);
+    assert_eq!(pin.unique_id, outer);
+    assert!(matches!(args.as_slice(), [Resolved::Var(_, id)] if id.unique_id == outer));
+    assert!(matches!(children.as_slice(), [ResolvedPattern::Var(id)] if id.name == "adjusted"));
+}
+
+#[test]
+fn extractor_prearguments_do_not_count_as_predicate_or_or_bindings() {
+    for source in [
+        "amount = 10\nis_match(1, Bounds::offset(amount, _))",
+        "amount = 10\nmatch 1 { Bounds::offset(amount, value) | Bounds::offset(0, value) => value, _ => 0 }",
+    ] {
+        resolve_user_with_modules(source, &preargument_test_modules()).expect(source);
+    }
+}
+
+#[test]
+fn extractor_preargument_and_pin_cannot_read_new_pattern_bindings() {
+    for source in [
+        "match (1, 2) { (fresh, Bounds::offset(fresh, _)) => 1, _ => 0 }",
+        "match (1, 2) { (fresh, ^fresh) => 1, _ => 0 }",
+    ] {
+        let error =
+            resolve_user_with_modules(source, &preargument_test_modules()).expect_err(source);
+        assert!(error.message.contains("fresh"), "{error:?}");
+    }
+}
+
+#[test]
+fn extractor_payload_unit_keeps_deferred_parser_error() {
+    let error = resolve_user_with_modules(
+        "match 1 { Bounds::unit(()) => 1, _ => 0 }",
+        &preargument_test_modules(),
+    )
+    .expect_err("Unit is not a Pattern");
+    let crate::error::ResolveErrorReason::DeferredParse(parser_error) = error.diagnostic.reason
+    else {
+        panic!("expected deferred parser error: {error:?}");
+    };
+    assert_eq!(
+        parser_error.reason(),
+        spire::error::ParseErrorReason::PatternSyntax
+    );
+    assert!(parser_error.message().contains("Unit type has no pattern"));
+}
+
+#[test]
+fn extractor_prearguments_capture_outer_values_in_closures() {
+    for body in [
+        "Bounds::offset(amount, out) =? Ok(value)\n Ok(out)",
+        "match value { Bounds::offset(amount, out) => out, _ => 0 }",
+        "if_let(value, Bounds::offset(amount, out), out, 0)",
+    ] {
+        let source = format!("amount = 10\nf = {{|value: Int| {body}}}");
+        let resolved = resolve_user_with_modules(&source, &preargument_test_modules()).expect(body);
+        let Resolved::Bind(_, _, rhs) = resolved.last().unwrap() else {
+            panic!("closure binding");
+        };
+        let Resolved::Closure(_, _, captures, _) = rhs.as_ref() else {
+            panic!("closure");
+        };
+        assert!(
+            matches!(captures.as_slice(), [id] if id.name == "amount"),
+            "{body}: {captures:?}"
+        );
+    }
+}
+
+#[test]
+fn local_extractor_argument_candidates_preserve_outer_and_provisional_identities() {
+    let resolved = parse_and_resolve("amount = 10\ne = *{|limit: Int, value: Int| value}\nmatch 1 { e(amount, out) => (amount, out), _ => (0, 0) }").unwrap();
+    let Resolved::Bind(_, ResolvedPattern::Var(outer), _) = &resolved[0] else {
+        panic!("outer binding");
+    };
+    let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+        panic!("match");
+    };
+    let ResolvedPattern::Deferred {
+        pattern,
+        bindings,
+        allow_bindings,
+    } = &arms[0].pattern
+    else {
+        panic!("deferred Pattern");
+    };
+    assert!(*allow_bindings);
+    let ResolvedPattern::ExtractorApplication { args, .. } = pattern.as_ref() else {
+        panic!("local application");
+    };
+    let amount = bindings
+        .iter()
+        .find(|binding| binding.proxy.name == "amount")
+        .unwrap();
+    assert_eq!(amount.outer.as_ref().unwrap().unique_id, outer.unique_id);
+    assert_ne!(amount.proxy.unique_id, outer.unique_id);
+    assert!(
+        matches!(args[0].expr.as_deref(), Ok(Resolved::Var(_, id)) if id.unique_id == outer.unique_id)
+    );
+    assert!(
+        matches!(args[0].pattern.as_deref(), Ok(ResolvedPattern::Var(id)) if id.unique_id == amount.proxy.unique_id)
+    );
+    assert!(
+        args[1].expr.is_err(),
+        "undefined Expr is retained until role selection"
+    );
+    assert!(args[1].pattern.is_ok());
+    let Resolved::TupleLiteral(_, values) = &arms[0].body else {
+        panic!("tuple body");
+    };
+    assert!(matches!(&values[0], Resolved::Var(_, id) if id.unique_id == amount.proxy.unique_id));
+}
+
+#[test]
+fn local_extractor_predicate_defers_its_binding_prohibition() {
+    let resolved =
+        parse_and_resolve_pattern_consumers("e = {|value| value}\nis_match(1, e(candidate))")
+            .unwrap();
+    let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+        panic!("predicate match");
+    };
+    assert!(matches!(
+        &arms[0].pattern,
+        ResolvedPattern::Deferred {
+            allow_bindings: false,
+            ..
+        }
+    ));
 }

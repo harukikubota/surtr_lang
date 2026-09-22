@@ -1,0 +1,118 @@
+deferror ExtractorSourceError { "source rejected" }
+deferror ExtractorContextError { "extractor context" }
+
+defmod ExtractorSchema {
+  def source(value: Int) -> Result<Int> {
+    if(value > 0, Ok(value), Result::cause(Err(ExtractorSourceError), ExtractorContextError))
+  }
+
+  defextractor result_checked(value: Int) -> MatchResult<Int, Error> {
+    accepted =? source(value)
+    print("after-result")
+    MatchResult::OK(accepted)
+  }
+
+  defextractor nested_checked(value: Int) -> MatchResult<Int, Error> {
+    result_checked(accepted) =? Ok(value)
+    print("after-extractor")
+    MatchResult::OK(accepted)
+  }
+
+  defextractor positive(value: Int) -> MatchResult<Unit, Error> {
+    if(value > 0, MatchResult::OK(()), MatchResult::Err(ExtractorSourceError))
+  }
+
+  def run_result(value: Int) -> Result<Int> {
+    result_checked(accepted) =? Ok(value)
+    Ok(accepted)
+  }
+
+  def run_nested(value: Int) -> Result<Int> {
+    nested_checked(accepted) =? Ok(value)
+    Ok(accepted)
+  }
+
+  defextractor converted(f: (Int -> Int), value: Int) -> MatchResult<Int, Error> {
+    MatchResult::OK(f(value))
+  }
+
+  defextractor with_duration(duration: Duration, value: Int) -> MatchResult<Int, Error> {
+    MatchResult::OK(value)
+  }
+
+  defextractor offset(amount: Int, value: Int) -> MatchResult<Int, Error> {
+    MatchResult::OK(value + amount)
+  }
+
+  defextractor supply(payload: $A, value: Int) -> MatchResult<$A, Error> {
+    if(value > 0, MatchResult::OK(payload), MatchResult::Err(ExtractorSourceError))
+  }
+
+  defextractor with_unit(unit: Unit, value: Int) -> MatchResult<Int, Error> {
+    MatchResult::OK(value)
+  }
+
+  def make_offset_bind(amount: Int) -> (Int -> Result<Int>) {
+    {|value: Int|
+      offset(amount, accepted) =? Ok(value)
+      Ok(accepted)
+    }
+  }
+
+  def make_offset_match(amount: Int) -> (Int -> Int) {
+    {|value: Int|
+      match value {
+        offset(amount, accepted) => accepted,
+        _ => 0,
+      }
+    }
+  }
+
+  def note(label: String, value: Int) -> Int {
+    print(label)
+    value
+  }
+
+  defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
+    if(and(value >= min, value <= max), MatchResult::OK(value), MatchResult::Err(ExtractorSourceError))
+  }
+
+  defextractor observed_between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
+    print("body:" ++ to_string(value))
+    between(min, max, accepted) =? Ok(value)
+    MatchResult::OK(accepted)
+  }
+
+  defextractor at_least(min: Int, value: Int) -> MatchResult<Unit, Error> {
+    if(value >= min, MatchResult::OK(()), MatchResult::Err(ExtractorSourceError))
+  }
+
+  def adapt_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)> {
+    Extractor::from_result(f)
+  }
+
+  def observed_result(amount: Int) -> (Int -> Result<Int>) {
+    print("capture")
+    {|value: Int|
+      print("converted:" ++ to_string(value))
+      Ok(value + amount)
+    }
+  }
+
+  def add_result(amount: Int, value: Int) -> Result<Int> {
+    Ok(value + amount)
+  }
+
+}
+
+defstruct ExtractorBox { value: Int }
+
+impl ExtractorBox {
+  def new(value: Int) -> Self {
+    ExtractorBox { value }
+  }
+
+  defextractor deconstruct(amount: Int, self: Self) -> MatchResult<Int, Error> {
+    MatchResult::OK(self.value + amount)
+  }
+}

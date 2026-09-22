@@ -1,0 +1,4 @@
+ext = *{|value: Int|
+  inner = {|input: Int| MatchResult::OK(input)}
+  MatchResult::OK(value)
+}

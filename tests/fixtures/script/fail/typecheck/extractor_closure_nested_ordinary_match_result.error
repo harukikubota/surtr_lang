@@ -1,0 +1,2 @@
+phase: typecheck
+contains: MatchResult constructors are only allowed in an Extractor body

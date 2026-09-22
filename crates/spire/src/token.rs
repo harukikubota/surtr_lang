@@ -20,6 +20,8 @@ pub enum Token {
 
     // ── Identifier ──
     Ident(String),
+    PatternConsumer(sindr::pattern::PatternConsumer),
+    NumberedPlaceholder(String),
     FuncLiteral(String),
 
     // ── Arithmetic operators ──

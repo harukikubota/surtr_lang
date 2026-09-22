@@ -1,0 +1,2 @@
+phase: typecheck
+contains: got (-> Result<Int, Error>)

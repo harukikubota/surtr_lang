@@ -763,6 +763,11 @@ impl Parser<'_> {
         &mut self,
     ) -> Result<(FacetPathSegment, Span), ParseError> {
         match self.peek() {
+            Token::NumberedPlaceholder(digits) => {
+                let name = format!("_{digits}");
+                let span = self.advance().span;
+                Ok((FacetPathSegment::field(name), span))
+            }
             Token::Ident(_) => {
                 let (name, name_span) = self.expect_ident()?;
                 if matches!(self.peek(), Token::Question) {
@@ -1004,6 +1009,23 @@ impl Parser<'_> {
                 }
             }),
 
+            Token::Star => self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.expect(&Token::LBrace)?;
+                parser.skip_newlines();
+                let Ast::Closure(span, params, body) = parser.parse_closure_literal(sp)? else {
+                    unreachable!()
+                };
+                if params.is_empty() {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
+                        "ExtractorClosure requires at least one input",
+                        span,
+                    ));
+                }
+                Ok(Ast::ExtractorClosure(span, params, body))
+            }),
+
             // Zero-argument closure expression: { stmt; stmt; expr }
             Token::LBrace => self.parse_trailing_block_expr_from_lbrace(sp),
 
@@ -1031,6 +1053,17 @@ impl Parser<'_> {
             Token::Ident(name) => {
                 self.advance();
                 self.parse_ident_continuation(name, sp)
+            }
+            Token::PatternConsumer(kind) => {
+                self.advance();
+                self.parse_ident_continuation(kind.name().to_string(), sp)
+            }
+            Token::NumberedPlaceholder(digits) => {
+                self.advance();
+                Ok(Ast::NumberedPlaceholder(
+                    sp.clone(),
+                    Self::numbered_placeholder_index(&digits, sp)?,
+                ))
             }
 
             Token::Eof => Err(ParseError::incomplete("expression", sp)),
@@ -1490,6 +1523,15 @@ impl Parser<'_> {
         name: Symbol,
         name_span: Span,
     ) -> Result<Ast, ParseError> {
+        if sindr::pattern::PatternConsumer::from_name(&name).is_some()
+            && matches!(self.peek(), Token::Bind | Token::SafeBind | Token::Colon)
+        {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "Pattern consumer names cannot be bound or shadowed",
+                name_span,
+            ));
+        }
         if name == "dbg" && matches!(self.peek(), Token::Bang) {
             return self.parse_dbg_special_form(name_span);
         }
@@ -1507,9 +1549,14 @@ impl Parser<'_> {
 
         let mut path_segments = vec![name.clone()];
         let mut path_end = name_span.end;
-        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+        while self.has_path_separator()
+            && matches!(
+                self.peek_n(2),
+                Some(Token::Ident(_) | Token::PatternConsumer(_))
+            )
+        {
             self.consume_path_separator()?;
-            let (seg, seg_span) = self.expect_ident()?;
+            let (seg, seg_span) = self.expect_member_ident()?;
             path_end = seg_span.end;
             path_segments.push(seg);
         }
@@ -1531,6 +1578,60 @@ impl Parser<'_> {
         } else {
             None
         };
+
+        if path_segments
+            .last()
+            .and_then(|name| sindr::pattern::PatternConsumer::from_name(name))
+            .is_some()
+            && matches!(self.peek(), Token::LParen | Token::Unit)
+        {
+            let callee = path_ast.unwrap_or_else(|| Ast::Var(name_span.clone(), name.clone()));
+            if matches!(self.peek(), Token::Unit) {
+                let end = self.advance().span.end;
+                return Ok(Ast::PatternConsumerCall(
+                    Span {
+                        start: name_span.start,
+                        end,
+                    },
+                    Box::new(callee),
+                    Vec::new(),
+                ));
+            }
+            self.advance();
+            self.skip_newlines();
+            let mut args = Vec::new();
+            while !matches!(self.peek(), Token::RParen) {
+                let mut arg = self.parse_pattern_argument()?;
+                if path_segments
+                    .last()
+                    .and_then(|name| sindr::pattern::PatternConsumer::from_name(name))
+                    .is_some_and(|kind| !kind.allows_or())
+                {
+                    if let Some(pattern) = &arg.pattern {
+                        if let Err(error) = self.reject_binding_or(pattern) {
+                            arg.pattern = None;
+                            arg.pattern_error = Some(error);
+                        }
+                    }
+                }
+                args.push(arg);
+                self.skip_newlines();
+                if !matches!(self.peek(), Token::Comma) {
+                    break;
+                }
+                self.advance();
+                self.skip_newlines();
+            }
+            let end = self.expect(&Token::RParen)?.end;
+            return Ok(Ast::PatternConsumerCall(
+                Span {
+                    start: name_span.start,
+                    end,
+                },
+                Box::new(callee),
+                args,
+            ));
+        }
 
         let path_last_is_uppercase = path_segments
             .last()
@@ -1554,23 +1655,9 @@ impl Parser<'_> {
             }
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
-                let args = if path_name == "Kernel::is_match" {
-                    self.parse_is_match_args()?
-                } else if matches!(path_name.as_str(), "Kernel::if_let" | "Kernel::if_let_then") {
-                    self.parse_if_let_args()?
-                } else {
-                    self.parse_call_args()?
-                };
+                let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                if path_name == "Kernel::is_match" {
-                    return self.finish_is_match_special_form(
-                        name_span.start,
-                        end_span.end,
-                        args,
-                        "Kernel::is_match",
-                    );
-                }
                 if path_name == "Facet::bulk_update" {
                     if args.len() != 1
                         || args
@@ -1772,23 +1859,9 @@ impl Parser<'_> {
         // Function call or constructor call: name(args)
         if matches!(self.peek(), Token::LParen) && !self.pair_constructor_at() {
             self.advance();
-            let args = if name == "is_match" {
-                self.parse_is_match_args()?
-            } else if matches!(name.as_str(), "if_let" | "if_let_then") {
-                self.parse_if_let_args()?
-            } else {
-                self.parse_call_args()?
-            };
+            let args = self.parse_call_args()?;
             self.skip_newlines();
             let end_span = self.expect(&Token::RParen)?;
-            if name == "is_match" {
-                return self.finish_is_match_special_form(
-                    name_span.start,
-                    end_span.end,
-                    args,
-                    "is_match",
-                );
-            }
             let func = self.std_hidden_ref(name_span.clone(), name.clone());
 
             if is_uppercase {
@@ -1997,153 +2070,6 @@ impl Parser<'_> {
         }
 
         Ok(args)
-    }
-
-    fn parse_is_match_args(&mut self) -> Result<Vec<RecordLitArg>, ParseError> {
-        self.skip_newlines();
-        if matches!(self.peek(), Token::RParen) {
-            return Ok(Vec::new());
-        }
-        let term = self.parse_record_lit_arg()?;
-        self.skip_newlines();
-        if !matches!(self.peek(), Token::Comma) {
-            return Ok(vec![term]);
-        }
-        self.advance();
-        self.skip_newlines();
-        let pattern_arg = self.parse_pattern_arg()?;
-        self.skip_newlines();
-        if matches!(self.peek(), Token::Comma) {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::ExpressionSyntax,
-                "is_match expects exactly 2 positional arguments",
-                self.peek_span(),
-            ));
-        }
-        Ok(vec![term, pattern_arg])
-    }
-
-    fn parse_if_let_args(&mut self) -> Result<Vec<RecordLitArg>, ParseError> {
-        self.skip_newlines();
-        if matches!(self.peek(), Token::RParen) {
-            return Ok(Vec::new());
-        }
-        let mut args = vec![self.parse_record_lit_arg()?];
-        self.skip_newlines();
-        if !matches!(self.peek(), Token::Comma) {
-            return Ok(args);
-        }
-        self.advance();
-        self.skip_newlines();
-        args.push(self.parse_pattern_arg()?);
-        while matches!(self.peek(), Token::Comma) {
-            self.advance();
-            self.skip_newlines();
-            if matches!(self.peek(), Token::RParen) {
-                break;
-            }
-            args.push(self.parse_record_lit_arg()?);
-        }
-        Ok(args)
-    }
-
-    fn parse_pattern_arg(&mut self) -> Result<RecordLitArg, ParseError> {
-        let pattern = self.parse_pattern()?;
-        let span = super::pattern_span(&pattern).clone();
-        Ok(RecordLitArg::Positional(Ast::Match(
-            span.clone(),
-            Box::new(Ast::Lit(span.clone(), Lit::Unit)),
-            vec![AstMatchArm {
-                pattern,
-                guard: None,
-                body: Ast::Lit(span, Lit::Unit),
-            }],
-        )))
-    }
-
-    fn finish_is_match_special_form(
-        &self,
-        start: usize,
-        end: usize,
-        args: Vec<RecordLitArg>,
-        name: &str,
-    ) -> Result<Ast, ParseError> {
-        if args.len() != 2
-            || args
-                .iter()
-                .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
-        {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::ExpressionSyntax,
-                format!("{name} expects exactly 2 positional arguments"),
-                Span { start, end },
-            ));
-        }
-        let [term_arg, pattern_arg] = <[RecordLitArg; 2]>::try_from(args).map_err(|args| {
-            ParseError::syntax(
-                crate::error::ParseErrorReason::ExpressionSyntax,
-                format!(
-                    "{name} expects exactly 2 positional arguments, got {}",
-                    args.len()
-                ),
-                Span { start, end },
-            )
-        })?;
-        let term = match term_arg {
-            RecordLitArg::Positional(expr) => expr,
-            RecordLitArg::Named(_, _) => {
-                return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::ExpressionSyntax,
-                    format!("{name} expects positional arguments"),
-                    Span { start, end },
-                ));
-            }
-        };
-        let pattern_expr = match pattern_arg {
-            RecordLitArg::Positional(expr) => expr,
-            RecordLitArg::Named(_, _) => {
-                return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::ExpressionSyntax,
-                    format!("{name} expects positional arguments"),
-                    Span { start, end },
-                ));
-            }
-        };
-        let Ast::Match(_, _, mut arms) = pattern_expr else {
-            return Ok(Ast::App(
-                Span { start, end },
-                Box::new(Ast::Var(Span { start, end: start }, name.into())),
-                vec![
-                    RecordLitArg::Positional(term),
-                    RecordLitArg::Positional(pattern_expr),
-                ],
-            ));
-        };
-        let pattern = arms.remove(0).pattern;
-        if super::pattern::pattern_contains_binding_var(&pattern) {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::ExpressionSyntax,
-                "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.",
-                super::pattern_span(&pattern).clone(),
-            ));
-        }
-        let span = Span { start, end };
-        Ok(Ast::Match(
-            span.clone(),
-            Box::new(term),
-            vec![
-                AstMatchArm {
-                    pattern,
-                    guard: None,
-                    body: Ast::Lit(span.clone(), Lit::Bool(true)),
-                },
-                AstMatchArm {
-                    pattern: AstPattern::Wildcard(span.clone()),
-                    guard: None,
-                    body: Ast::Lit(span, Lit::Bool(false)),
-                },
-            ],
-        ))
     }
 
     pub(super) fn parse_trailing_block_expr_from_lbrace(
@@ -2566,9 +2492,14 @@ impl Parser<'_> {
                 let (name, name_span) = self.expect_ident()?;
                 let mut path_segments = vec![name.clone()];
                 let mut path_end = name_span.end;
-                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+                while self.has_path_separator()
+                    && matches!(
+                        self.peek_n(2),
+                        Some(Token::Ident(_) | Token::PatternConsumer(_))
+                    )
+                {
                     self.consume_path_separator()?;
-                    let (seg, seg_span) = self.expect_ident()?;
+                    let (seg, seg_span) = self.expect_member_ident()?;
                     path_end = seg_span.end;
                     path_segments.push(seg);
                 }
@@ -3134,6 +3065,14 @@ impl Parser<'_> {
 
 fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
     match expr {
+        Ast::NumberedPlaceholder(..) => false,
+        Ast::PatternConsumerCall(_, callee, args) => {
+            bulk_update_proc_contains_operation_call(callee)
+                || args
+                    .iter()
+                    .filter_map(|arg| arg.expression.as_deref())
+                    .any(bulk_update_proc_contains_operation_call)
+        }
         Ast::Cond(_, clauses) => clauses.iter().any(|(condition, body)| {
             bulk_update_proc_contains_operation_call(condition)
                 || bulk_update_proc_contains_operation_call(body)
@@ -3223,7 +3162,9 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
             bulk_update_proc_contains_operation_call(target)
                 || args.iter().any(bulk_update_proc_contains_operation_call)
         }
-        Ast::Closure(_, _, body) => bulk_update_proc_contains_operation_call(body),
+        Ast::Closure(_, _, body) | Ast::ExtractorClosure(_, _, body) => {
+            bulk_update_proc_contains_operation_call(body)
+        }
         Ast::Dbg(_, args) => args
             .iter()
             .any(|arg| bulk_update_proc_contains_operation_call(&arg.expr)),

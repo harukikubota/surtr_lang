@@ -446,6 +446,12 @@ pub enum TypedInner {
     Cause(Box<TypedNode>, Box<TypedNode>),
     RecoverKind(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
+    /// Expression-local Pattern execution with projection results in slot order.
+    ApplyPattern {
+        value: Box<TypedNode>,
+        pattern: TypedPattern,
+        projections: Vec<(ResolvedId, Ty)>,
+    },
 
     /// Field access — field name resolved to index by Scar
     FieldAccess(Box<TypedNode>, u32),
@@ -544,12 +550,12 @@ pub enum TypedInner {
         Visibility,
     ),
 
-    /// Extractor definition — function-shaped runtime entry with Option return type.
+    /// Extractor definition — function-shaped runtime entry with MatchResult return type.
     ExtractorDef(
         u32,
         ResolvedId,
         Vec<TypedTypeParam>,
-        TypedValueParameter,
+        Vec<TypedValueParameter>,
         Ty,
         Box<TypedNode>,
         Visibility,
@@ -562,10 +568,13 @@ pub enum TypedInner {
     TraitImplDef(String, String, Option<TypedWhereClause>),
 
     /// Builtin extractor declaration.
-    BuiltinExtractorDecl(ResolvedId, Ty, Ty),
+    BuiltinExtractorDecl(ResolvedId, Vec<Ty>, Ty),
 
     /// Closure literal — params + captures + body
     Closure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
+
+    /// Lexically captured extractor whose body returns MatchResult.
+    ExtractorClosure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
 
     /// Callable synthesized from a named capture expression. The runtime body
     /// is closure-shaped, but display metadata must preserve its Capture origin.
@@ -619,9 +628,8 @@ pub enum TypedPattern {
         input_ty: Ty,
         extractor: ResolvedId,
         extractor_ty: Ty,
+        pre_args: Vec<TypedNode>,
         success_tag: u32,
-        no_match_tag: u32,
-        /// Retained for typed-IR compatibility; Option lowering ignores it.
         err_tag: u32,
         seq_tys: Vec<Ty>,
         items: Vec<TypedPattern>,
@@ -659,6 +667,7 @@ pub struct DeferredDoFailureTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SafeBindFailureTarget {
     EnclosingResultContext(Box<ResultPreserveTarget>),
+    EnclosingMatchResultContext { err_tag: u32 },
     TopLevel,
     DoResultContext(Box<ResultPreserveTarget>),
     DoAlternative { empty: Box<TypedNode> },
@@ -724,9 +733,8 @@ pub enum TypedMatchPattern {
         input_ty: Ty,
         extractor: ResolvedId,
         extractor_ty: Ty,
+        pre_args: Vec<TypedNode>,
         success_tag: u32,
-        no_match_tag: u32,
-        /// Retained for typed-IR compatibility; Option lowering ignores it.
         err_tag: u32,
         seq_tys: Vec<Ty>,
         items: Vec<TypedMatchPattern>,

@@ -1,0 +1,2 @@
+phase: resolve
+contains: pipe injection into a Pattern is not allowed

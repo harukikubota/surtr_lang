@@ -153,7 +153,7 @@ RHS の自動分解と failure target の選択は別の規則です。`OptionT<
 ません。SafeBind が外側一段を自動分解するのは canonical `Result` だけです。
 
 Result-effect carrier の SafeBind では、RHS の `Err(error)`、pattern failure、
-Extractor の `Option::None` から作られた共通 `PatternMismatch` error を
+Extractor の `MatchResult::Err(error)` が保持する元 Error を
 `inner: Err(error)` として保持します。
 
 `do` 内では、Result effect がない carrier の同じ failure を

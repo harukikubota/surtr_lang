@@ -23,6 +23,7 @@ use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::{NominalType, Ty};
 
+mod captures;
 mod carriers;
 mod definitions;
 mod expr;
@@ -409,6 +410,14 @@ impl TypecheckProfiler {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallableContext {
+    Function,
+    Closure,
+    Extractor,
+    ExtractorClosure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeSyntaxContext {
     General,
     BindingAnnotation,
@@ -726,7 +735,10 @@ pub fn typecheck_with_context_with_warnings(
 pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
-        Ty::List(inner) | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
+        Ty::List(inner)
+        | Ty::MatchResult(inner)
+        | Ty::ExtractorClosure(inner)
+        | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
         Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
             items.iter().any(type_contains_unresolved_vars)
         }
@@ -1204,6 +1216,8 @@ enum CanonicalTyKey {
     Var(u32),
     SelfApp(Vec<CanonicalTyKey>),
     List(Box<CanonicalTyKey>),
+    MatchResult(Box<CanonicalTyKey>),
+    ExtractorClosure(Box<CanonicalTyKey>),
     Tuple(Vec<CanonicalTyKey>),
     Func {
         params: Vec<CanonicalTyKey>,
@@ -1279,6 +1293,7 @@ struct PersistentCheckerState {
     constructor_witness_traits: HashMap<u32, String>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
+    pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
 }
 
 impl PersistentCheckerState {
@@ -1302,6 +1317,7 @@ impl PersistentCheckerState {
             constructor_witness_traits: HashMap::new(),
             constructor_capabilities: HashMap::new(),
             signature_aliases: HashMap::new(),
+            pattern_binding_aliases: HashMap::new(),
         }
     }
 
@@ -1325,6 +1341,7 @@ impl PersistentCheckerState {
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
+            pattern_binding_aliases: self.pattern_binding_aliases.clone(),
             process_specs,
         }
     }
@@ -1351,6 +1368,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             constructor_witness_traits: checkpoint.constructor_witness_traits,
             constructor_capabilities: checkpoint.constructor_capabilities,
             signature_aliases: checkpoint.signature_aliases,
+            pattern_binding_aliases: checkpoint.pattern_binding_aliases,
         }
     }
 }
@@ -1379,6 +1397,7 @@ pub struct ScarCheckpoint {
     constructor_witness_traits: HashMap<u32, String>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
+    pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
     process_specs: Vec<TypedProcessSpec>,
 }
 
@@ -1738,7 +1757,10 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_ty(ty: &mut Ty, rewrites: &HashMap<u32, u32>) {
         match ty {
-            Ty::List(inner) | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
@@ -1884,6 +1906,11 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_node(node: &mut TypedNode, rewrites: &HashMap<u32, u32>) {
         Self::rewrite_fun_indices_in_ty(&mut node.ty, rewrites);
+        if let TypedInner::ApplyPattern { projections, .. } = &mut node.node {
+            for (_, ty) in projections {
+                Self::rewrite_fun_indices_in_ty(ty, rewrites);
+            }
+        }
         match &mut node.node {
             TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
             TypedInner::ResultEffectFailure(target) => {
@@ -1958,7 +1985,13 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(value, rewrites);
                 }
             }
-            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs, _, _) => {
+            TypedInner::Bind(pattern, rhs)
+            | TypedInner::SafeBind(pattern, rhs, _, _)
+            | TypedInner::ApplyPattern {
+                pattern,
+                value: rhs,
+                ..
+            } => {
                 Self::rewrite_fun_indices_in_pattern(pattern, rewrites);
                 Self::rewrite_fun_indices_in_node(rhs, rewrites);
             }
@@ -1995,7 +2028,8 @@ impl ScarSession {
                         Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
                         Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
                     }
-                    SafeBindFailureTarget::TopLevel => {}
+                    SafeBindFailureTarget::TopLevel
+                    | SafeBindFailureTarget::EnclosingMatchResultContext { .. } => {}
                 }
                 Self::rewrite_fun_indices_in_node(&mut control.continuation, rewrites);
             }
@@ -2115,11 +2149,15 @@ impl ScarSession {
                 for type_param in type_params {
                     let _ = type_param;
                 }
-                Self::rewrite_fun_indices_in_value_parameter(param, rewrites);
+                for param in param {
+                    Self::rewrite_fun_indices_in_value_parameter(param, rewrites);
+                }
                 Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
-            TypedInner::Closure(params, _, body) | TypedInner::CaptureClosure(params, _, body) => {
+            TypedInner::Closure(params, _, body)
+            | TypedInner::ExtractorClosure(params, _, body)
+            | TypedInner::CaptureClosure(params, _, body) => {
                 for param in params {
                     Self::rewrite_fun_indices_in_closure_param(param, rewrites);
                 }
@@ -2182,7 +2220,12 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_pattern(item, rewrites);
                 }
             }
-            TypedPattern::Extractor { items, .. } => {
+            TypedPattern::Extractor {
+                pre_args, items, ..
+            } => {
+                for arg in pre_args {
+                    Self::rewrite_fun_indices_in_node(arg, rewrites);
+                }
                 for item in items {
                     Self::rewrite_fun_indices_in_pattern(item, rewrites);
                 }
@@ -2211,8 +2254,27 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
                 }
             }
-            TypedMatchPattern::Constructor { fields, .. }
-            | TypedMatchPattern::Extractor { items: fields, .. } => {
+            TypedMatchPattern::Extractor {
+                input_ty,
+                extractor_ty,
+                pre_args,
+                seq_tys,
+                items,
+                ..
+            } => {
+                Self::rewrite_fun_indices_in_ty(input_ty, rewrites);
+                Self::rewrite_fun_indices_in_ty(extractor_ty, rewrites);
+                for ty in seq_tys {
+                    Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                }
+                for arg in pre_args {
+                    Self::rewrite_fun_indices_in_node(arg, rewrites);
+                }
+                for item in items {
+                    Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
+                }
+            }
+            TypedMatchPattern::Constructor { fields, .. } => {
                 for field in fields {
                     Self::rewrite_fun_indices_in_match_pattern(field, rewrites);
                 }
@@ -2557,7 +2619,7 @@ struct Checker {
     rigid_tyvars: HashSet<u32>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
-    in_extractor_body: bool,
+    callable_context: CallableContext,
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     error_observer_bindings: HashSet<u32>,
@@ -2587,6 +2649,7 @@ struct Checker {
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
+    pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
@@ -2707,7 +2770,7 @@ impl Checker {
             rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
-            in_extractor_body: false,
+            callable_context: CallableContext::Function,
             closure_depth: 0,
             facet_bindings: state.facet_bindings,
             error_observer_bindings: state.error_observer_bindings,
@@ -2725,6 +2788,7 @@ impl Checker {
             constructor_capabilities: state.constructor_capabilities,
             constructor_witness_traits: state.constructor_witness_traits,
             signature_aliases: state.signature_aliases,
+            pattern_binding_aliases: state.pattern_binding_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
@@ -2765,7 +2829,7 @@ impl Checker {
         checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
-        checker.in_extractor_body = self.in_extractor_body;
+        checker.callable_context = self.callable_context;
         checker.closure_depth = self.closure_depth;
         checker.facet_bindings = self.facet_bindings.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
@@ -2855,8 +2919,10 @@ impl Checker {
                 }
                 Resolved::ExtractorDef(_, id, type_params, param, ret_ty, _, _) => {
                     let mut used = HashSet::new();
-                    if let Some(param_ty) = &param.ty {
-                        Self::collect_ast_ty_type_params(param_ty, &mut used);
+                    for param in param {
+                        if let Some(param_ty) = &param.ty {
+                            Self::collect_ast_ty_type_params(param_ty, &mut used);
+                        }
                     }
                     Self::collect_ast_ty_type_params(ret_ty, &mut used);
                     self.warn_unused_type_params(type_params, &used, &id.name);
@@ -3161,6 +3227,9 @@ impl Checker {
     }
 
     fn collect_unused_value_warnings_in_node(&mut self, node: &TypedNode) {
+        for expr in Self::pattern_expression_nodes(node) {
+            self.collect_unused_value_warnings_in_node(expr);
+        }
         match &node.node {
             TypedInner::Block(stmts) => self.collect_unused_value_warnings_in_sequence(stmts),
             TypedInner::App(func, args)
@@ -3181,6 +3250,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::Semi(rhs) => self.collect_unused_value_warnings_in_node(rhs),
@@ -3262,6 +3332,7 @@ impl Checker {
             | TypedInner::Def(_, _, _, _, _, _, show, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, show, _)
             | TypedInner::Closure(_, _, show)
+            | TypedInner::ExtractorClosure(_, _, show)
             | TypedInner::CaptureClosure(_, _, show) => {
                 self.collect_unused_value_warnings_in_node(show);
             }
@@ -3312,7 +3383,10 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_process_init(&ok) || self.ty_contains_process_init(&err)
             }
-            Ty::List(inner) | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_process_init(item))
             }
@@ -3736,9 +3810,10 @@ impl Checker {
                 self.ty_contains_handler_capability_pid(&ok, slots)
                     || self.ty_contains_handler_capability_pid(&err, slots)
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
-                self.ty_contains_handler_capability_pid(&inner, slots)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.ty_contains_handler_capability_pid(&inner, slots),
             Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .any(|item| self.ty_contains_handler_capability_pid(item, slots)),
@@ -3879,6 +3954,7 @@ impl Checker {
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
+            pattern_binding_aliases: self.pattern_binding_aliases.clone(),
         }
     }
 
@@ -3902,6 +3978,7 @@ impl Checker {
             constructor_witness_traits: self.constructor_witness_traits,
             constructor_capabilities: self.constructor_capabilities,
             signature_aliases: self.signature_aliases,
+            pattern_binding_aliases: self.pattern_binding_aliases,
         }
     }
 
@@ -4147,15 +4224,36 @@ impl Checker {
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match pattern {
-            ResolvedPattern::Annotated(_, ty) | ResolvedPattern::As(_, _, Some(ty)) => {
+            ResolvedPattern::Projection {
+                inner, annotation, ..
+            } => {
+                if let Some(ty) = annotation {
+                    self.validate_constructor_ast_ty(ty, false, constructor_traits)?;
+                }
+                self.validate_constructor_pattern(inner, constructor_traits)?;
+            }
+            ResolvedPattern::Deferred { pattern, .. } => {
+                self.validate_constructor_pattern(pattern, constructor_traits)?
+            }
+            ResolvedPattern::ExtractorApplication { .. } => {}
+            ResolvedPattern::Annotated(_, ty)
+            | ResolvedPattern::AnnotatedWildcard(_, ty)
+            | ResolvedPattern::As(_, _, Some(ty)) => {
                 self.validate_constructor_ast_ty(ty, false, constructor_traits)?;
             }
             ResolvedPattern::ListCons(head, tail) => {
                 self.validate_constructor_pattern(head, constructor_traits)?;
                 self.validate_constructor_pattern(tail, constructor_traits)?;
             }
+            ResolvedPattern::Extractor(_, pre_args, items) => {
+                for arg in pre_args {
+                    self.validate_constructor_body_positions(arg, constructor_traits)?;
+                }
+                for item in items {
+                    self.validate_constructor_pattern(item, constructor_traits)?;
+                }
+            }
             ResolvedPattern::Constructor(_, items)
-            | ResolvedPattern::Extractor(_, items)
             | ResolvedPattern::Tuple(items)
             | ResolvedPattern::Or(items) => {
                 for item in items {
@@ -4183,7 +4281,9 @@ impl Checker {
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match node {
-            Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
+            Resolved::Bind(_, pattern, rhs)
+            | Resolved::SafeBind(_, pattern, rhs)
+            | Resolved::ApplyPattern(_, rhs, pattern) => {
                 self.validate_constructor_pattern(pattern, constructor_traits)?;
                 self.validate_constructor_body_positions(rhs, constructor_traits)?;
             }
@@ -4205,6 +4305,7 @@ impl Checker {
                 }
             }
             Resolved::Closure(_, params, _, body)
+            | Resolved::ExtractorClosure(_, params, _, body)
             | Resolved::CaptureClosure(_, params, _, body) => {
                 for param in params {
                     if let Some(ty) = &param.ty {
@@ -4394,15 +4495,19 @@ impl Checker {
                     }
                 }
                 Resolved::ExtractorDef(_, _, _, param, ret, body, _) => {
-                    if let Some(param) = &param.ty {
-                        self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                    for param in param {
+                        if let Some(param) = &param.ty {
+                            self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                        }
                     }
                     self.validate_constructor_ast_ty(ret, false, &constructor_traits)?;
                     self.validate_constructor_body_positions(body, &constructor_traits)?;
                 }
                 Resolved::BuiltinExtractorDecl(_, _, param, ret, _) => {
-                    if let Some(param) = &param.ty {
-                        self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                    for param in param {
+                        if let Some(param) = &param.ty {
+                            self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                        }
                     }
                     self.validate_constructor_ast_ty(ret, false, &constructor_traits)?;
                 }

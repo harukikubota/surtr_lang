@@ -164,126 +164,6 @@ impl Resolver {
         }
     }
 
-    pub(super) fn resolve_if_let(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [term, pattern_expr, then_expr, else_expr] =
-            collect_fixed_positional_args(span.clone(), args, "if_let", 4)?;
-
-        let pattern = Self::pattern_from_parser_carrier(pattern_expr, "if_let")?;
-        let fallback = AstPattern::Wildcard(span.clone());
-
-        self.resolve_node(Ast::Match(
-            span.clone(),
-            Box::new(term),
-            vec![
-                AstMatchArm {
-                    pattern,
-                    guard: None,
-                    body: then_expr,
-                },
-                AstMatchArm {
-                    pattern: fallback,
-                    guard: None,
-                    body: else_expr,
-                },
-            ],
-        ))
-        .map(|resolved| match resolved {
-            Resolved::Match(span, scrutinee, arms) => Resolved::IfLet(span, scrutinee, arms),
-            _ => unreachable!("match resolver retains its form"),
-        })
-    }
-
-    pub(super) fn resolve_if_let_then(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [term, pattern_expr, then_expr] =
-            collect_fixed_positional_args(span.clone(), args, "if_let_then", 3)?;
-
-        let pattern = Self::pattern_from_parser_carrier(pattern_expr, "if_let_then")?;
-        let unit_lit = Ast::Lit(span.clone(), Lit::Unit);
-        let then_block = Ast::Block(
-            span.clone(),
-            vec![then_expr, Ast::Lit(span.clone(), Lit::Unit)],
-        );
-
-        self.resolve_node(Ast::Match(
-            span.clone(),
-            Box::new(term),
-            vec![
-                AstMatchArm {
-                    pattern,
-                    guard: None,
-                    body: then_block,
-                },
-                AstMatchArm {
-                    pattern: AstPattern::Wildcard(span.clone()),
-                    guard: None,
-                    body: unit_lit,
-                },
-            ],
-        ))
-    }
-
-    pub(super) fn resolve_is_match(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [term, pattern_expr] =
-            collect_fixed_positional_args(span.clone(), args, "is_match", 2)?;
-        let pattern = Self::pattern_from_parser_carrier(pattern_expr, "is_match")?;
-
-        if pattern_has_binding_vars(&pattern) {
-            return Err(ResolveError {
-                message: "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.".into(),
-                span: ast_pattern_span(&pattern).clone(),
-            diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None },
-            related_labels: Vec::new(),
-            });
-        }
-
-        self.resolve_node(Ast::Match(
-            span.clone(),
-            Box::new(term),
-            vec![
-                AstMatchArm {
-                    pattern,
-                    guard: None,
-                    body: Ast::Lit(span.clone(), Lit::Bool(true)),
-                },
-                AstMatchArm {
-                    pattern: AstPattern::Wildcard(span.clone()),
-                    guard: None,
-                    body: Ast::Lit(span, Lit::Bool(false)),
-                },
-            ],
-        ))
-    }
-
-    fn pattern_from_parser_carrier(
-        expr: Ast,
-        callee_name: &str,
-    ) -> Result<AstPattern, ResolveError> {
-        let span = expr.span().clone();
-        let Ast::Match(_, scrutinee, arms) = expr else {
-            return Err(pattern_argument_invariant_error(callee_name, span));
-        };
-        if !matches!(scrutinee.as_ref(), Ast::Lit(_, Lit::Unit)) || arms.len() != 1 {
-            return Err(pattern_argument_invariant_error(callee_name, span));
-        }
-        let arm = arms.into_iter().next().expect("one pattern carrier arm");
-        if arm.guard.is_some() || !matches!(arm.body, Ast::Lit(_, Lit::Unit)) {
-            return Err(pattern_argument_invariant_error(callee_name, span));
-        }
-        Ok(arm.pattern)
-    }
-
     pub(super) fn resolve_logic_call(
         &mut self,
         span: Span,
@@ -379,22 +259,9 @@ fn collect_fixed_positional_args<const N: usize>(
     })
 }
 
-fn pattern_argument_invariant_error(callee_name: &str, span: Span) -> ResolveError {
-    ResolveError {
-        message: format!(
-            "Internal invariant broken: `{callee_name}` Pattern argument lacks its parser carrier"
-        ),
-        span,
-        diagnostic: crate::error::ResolveErrorDiagnostic {
-            reason: crate::error::ResolveErrorReason::SpecialForm,
-            subject: None,
-        },
-        related_labels: Vec::new(),
-    }
-}
-
-fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
+pub(super) fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
     match pattern {
+        AstPattern::Projection { inner, .. } => pattern_has_binding_vars(inner),
         AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _, _) => {
             true
         }
@@ -402,10 +269,14 @@ fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
             pattern_has_binding_vars(head) || pattern_has_binding_vars(tail)
         }
         AstPattern::Constructor(_, _, inners)
-        | AstPattern::Call(_, _, inners)
         | AstPattern::Tuple(_, inners)
         | AstPattern::Or(_, inners) => inners.iter().any(pattern_has_binding_vars),
+        AstPattern::Call(_, _, args) => args
+            .iter()
+            .filter_map(|arg| arg.pattern.as_deref())
+            .any(pattern_has_binding_vars),
         AstPattern::Wildcard(_)
+        | AstPattern::AnnotatedWildcard(_, _)
         | AstPattern::Pin(_, _)
         | AstPattern::ListNil(_)
         | AstPattern::IntLit(_, _)
@@ -415,12 +286,14 @@ fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
     }
 }
 
-fn ast_pattern_span(pattern: &AstPattern) -> &Span {
+pub(super) fn ast_pattern_span(pattern: &AstPattern) -> &Span {
     match pattern {
+        AstPattern::Projection { span, .. } => span,
         AstPattern::Var(span, _)
         | AstPattern::Annotated(span, _, _)
         | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
+        | AstPattern::AnnotatedWildcard(span, _)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
         | AstPattern::IntLit(span, _)

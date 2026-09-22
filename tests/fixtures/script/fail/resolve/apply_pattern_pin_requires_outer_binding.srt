@@ -1,0 +1,1 @@
+print(apply_pattern((1, 1), (fresh, ^fresh)))

@@ -29,7 +29,14 @@ impl From<String> for CompilePhaseFailure {
 impl From<scar::error::TypeError> for CompilePhaseFailure {
     fn from(error: scar::error::TypeError) -> Self {
         Self {
-            message: format!("phase=typecheck; message={error}"),
+            message: format!(
+                "phase={}; message={error}",
+                error
+                    .structured
+                    .as_ref()
+                    .map(diagnostics::compile_error_phase)
+                    .unwrap_or("typecheck")
+            ),
             type_error: Some(error),
             source_context: None,
         }
@@ -49,6 +56,15 @@ impl std::fmt::Display for CompilePhaseFailure {
     }
 }
 
+pub(super) fn format_resolve_failure(error: sigil::error::ResolveError) -> String {
+    match &error.diagnostic.reason {
+        sigil::error::ResolveErrorReason::DeferredParse(parse_error) => {
+            format!("phase=parse; message={parse_error}")
+        }
+        _ => format!("phase=resolve; message={error}"),
+    }
+}
+
 fn resolve_sources_in_compile_order(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
@@ -63,8 +79,7 @@ fn resolve_sources_in_compile_order(
     let declaration_index = if module_asts.len() == cached_modules.module_asts.len() {
         cached_modules.declaration_index.clone()
     } else {
-        sigil::precollect_declaration_index(&module_asts)
-            .map_err(|e| format!("phase=resolve; message={}", e))?
+        sigil::precollect_declaration_index(&module_asts).map_err(format_resolve_failure)?
     };
     let (start_stage_index, resume_state) = if matches!(mode, TestCompileMode::Script) {
         let std_snapshot = default_stdlib_snapshot()?;
@@ -79,7 +94,7 @@ fn resolve_sources_in_compile_order(
             &declaration_index,
             None,
         )
-        .map_err(|e| format!("phase=resolve; message={}", e))?;
+        .map_err(format_resolve_failure)?;
         (cached_modules.module_asts.len(), std_resolved.resume_state)
     };
     sigil::resolve_staged_program_from_state(
@@ -90,8 +105,12 @@ fn resolve_sources_in_compile_order(
         start_stage_index,
         resume_state,
     )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
-    Ok(())
+    .map_err(format_resolve_failure)?;
+    // Preserve the requested earlier-phase diagnostic before typechecking
+    // module prefixes. Local callable argument roles can defer a syntax/name
+    // failure until their signature is known, so successful resolution alone
+    // is not enough to conclude that a fixture has no such diagnostic.
+    typecheck_sources_in_compile_order(compile_sources, mode)
 }
 
 fn typecheck_sources_in_compile_order(
@@ -109,8 +128,7 @@ fn typecheck_sources_in_compile_order(
     let declaration_index = if module_asts.len() == compile_prefix.module_asts.len() {
         compile_prefix.declaration_index().clone()
     } else {
-        sigil::precollect_declaration_index(&module_asts)
-            .map_err(|e| format!("phase=resolve; message={}", e))?
+        sigil::precollect_declaration_index(&module_asts).map_err(format_resolve_failure)?
     };
     let resolved = sigil::resolve_staged_program_from_state(
         &module_asts,
@@ -120,7 +138,7 @@ fn typecheck_sources_in_compile_order(
         compile_prefix.module_asts.len(),
         compile_prefix.resolve_state(),
     )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    .map_err(format_resolve_failure)?;
     let mut scar_session = scar::ScarSession::new();
     scar_session.rollback(compile_prefix.scar_checkpoint().clone());
     scar_session
@@ -168,7 +186,9 @@ fn check_source_phase(
     match phase {
         CompileFailurePhase::Parse => {
             parse_user_source(source_name, source, mode)?;
-            Ok(())
+            let compile_sources =
+                super::sources::collect_script_compile_sources(source_name, source)?;
+            resolve_sources_in_compile_order(&compile_sources, mode)
         }
         CompileFailurePhase::Resolve => {
             let compile_sources =
@@ -209,7 +229,9 @@ fn check_sources_phase(
                 parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?;
             }
             parse_user_program(compile_sources, mode)?;
-            Ok(())
+            // Local callable argument roles are selected during typechecking.
+            // Deferred syntax/name errors keep their original producer phase.
+            resolve_sources_in_compile_order(compile_sources, mode)
         }
         CompileFailurePhase::Resolve => resolve_sources_in_compile_order(compile_sources, mode),
         CompileFailurePhase::Typecheck => typecheck_sources_in_compile_order(compile_sources, mode),

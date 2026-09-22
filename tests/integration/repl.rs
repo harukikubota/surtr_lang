@@ -861,17 +861,17 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
         stdout
-            .matches("Duration::deconstruct(self: Duration) -> Option<Int>")
+            .matches("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>")
             .count()
             >= 3,
         "{stdout}"
     );
     assert!(
-        stdout.contains("specialized:\n  Duration!() -> Option<Int>"),
+        stdout.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("specialized:\n  Duration!(Duration) -> Option<Int>"),
+        stdout.contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
         "{stdout}"
     );
 }
@@ -892,9 +892,9 @@ fn repl_range_constructor_and_extractor_queries_render_through_cli() {
     assert!(stdout.contains("max: $A"), "{stdout}");
     assert!(stdout.contains("-> Range<$A>"), "{stdout}");
     assert!(stdout.contains("Range::deconstruct"), "{stdout}");
-    assert!(stdout.contains("Option<($A, $A)>"), "{stdout}");
+    assert!(stdout.contains("MatchResult<($A, $A), Error>"), "{stdout}");
     assert!(
-        stdout.contains("specialized:\n  Range!() -> Option<($A, $A)>"),
+        stdout.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
         "{stdout}"
     );
 }

@@ -65,7 +65,7 @@ static pattern errorを先に報告し、型関係が成立するtotal non-Resul
 Result-effect return targetでもTransformer RHSを自動unwrapしない。
 
 Result-preserving routeはRHS Err、既存pattern Errorのkind/message/location/causeを保存する。
-Extractorは現行のOption返却で、Noneは共通PatternMismatchとなる。独自Err返却契約は追加しない。
+Extractor / ExtractorClosure は MatchResult を返し、Err の元 Error を Result-effect route で保持する。Alternative route は破棄する。Extractor / ExtractorClosure 本文内でも do の failure は do-local target に接続し、外側 MatchResult へ直接 return しない。
 partial `<-`のno-matchは共通pattern ErrorをResult effectで保持し、Alternative routeではemptyにする。
 各binding/continuationの実行ごとにRHSを一度評価し、failureとなった経路の後続continuationを実行しない。
 List等の分岐carrierでは、後続continuationを各payloadについて実行する。
