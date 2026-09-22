@@ -707,18 +707,7 @@ defmod Bootstrap {
 
 これらは `Bootstrap::import` / `Bootstrap::include` の canonical source です。`import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書け、`include` は引き続き file top-level だけで使えます。
 
-## 11. 現在のスコープ外
-
-このリファレンスでは扱わないもの:
-
-- associated types / associated consts
-- 匿名 `impl Trait` 型（parameter / return / generic argument / impl target component）
-- 型エイリアス / NewType
-- マクロシステム拡張
-- 並列コンパイル
-- 高度なモジュールシステム拡張
-
-Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を正本とします。その他の全体要件は [要件定義v9](../../doc/要件定義v9.md) を参照してください。
+## 11. Pattern の結果を扱う
 
 ### apply_pattern
 
@@ -732,3 +721,18 @@ Trait system の利用規則は [Trait システム](./trait-system.md) と [Tra
 ### Result callable の Extractor 変換
 
 `Extractor::from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)>` は通常SRTの標準APIです。単項callableをcaptureし、各Pattern occurrenceで1回実行します。外側Resultだけをunwrapし、成功payloadと元Errorを保持します。Option/raw/入力0個/複数入力の暗黙変換はありません。
+
+詳しい使い方は [Pattern Matching](./pattern-matching.md) と [Extractors](./extractors.md)、実装契約は [Pattern / Extractor 実装契約](../dev/Pattern_spec.md) を参照してください。
+
+## 12. 現在のスコープ外
+
+このリファレンスでは扱わないもの:
+
+- associated types / associated consts
+- 匿名 `impl Trait` 型（parameter / return / generic argument / impl target component）
+- 型エイリアス / NewType
+- マクロシステム拡張
+- 並列コンパイル
+- 高度なモジュールシステム拡張
+
+Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を正本とします。その他の全体要件は [要件定義v9](../../doc/要件定義v9.md) を参照してください。

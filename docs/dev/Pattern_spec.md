@@ -1,66 +1,27 @@
-# Pattern 拡張統合仕様 — Extractor / ExtractorClosure / apply_pattern
+# Pattern / Extractor 実装契約
 
-## 1. 状態・目的・範囲
+この文書は、現行の Pattern、named Extractor、ExtractorClosure、MatchResult、`Kernel::apply_pattern` の構文・型・評価・フェーズ間契約を定める。全体要件は [要件定義v9](../../doc/要件定義v9.md)、利用者向けの説明は [Pattern Matching](../site/pattern-matching.md) と [Extractors](../site/extractors.md)、標準 API の一次情報は [`lib/extractor.srt`](../../lib/extractor.srt) の `@doc` を参照する。SafeBind と do の詳細は [do intrinsic](./Do_intrinsic_spec.md)、診断の構造化契約は [diagnostics](./diagnostics.md) に従う。
 
-- 状態: 実装完了（2026-09-22、§11.1 の全17項目を検証済み）。旧 Extractor 返却更改案、Matcher / projection 案、事前引数差分案を本書へ統合した。本書だけで変更後の契約を読めるものとし、削除する原案や添付には依存しない。実施済みの範囲は 1.1 に記録する。
-- level: 4。構文、型規則、評価規則、SafeBind の失敗返却先、フェーズ間契約を変更する。
-- 現行動作の正本: [要件定義v9.md](要件定義v9.md)、[do intrinsic](../docs/dev/Do_intrinsic_spec.md)、[診断](../docs/dev/diagnostics.md)。本書と異なる現行契約は、実装に先立つ仕様反映で本書へ整合させる。文書作成だけで実装済みと扱わない。
-- 残実装は依存順の5機能単位で完了した。実施記録は 1.1、計画・検証・受入証拠は [実装計画](pattern_extension_implementation_plan.md) を参照する。
+named Extractor と ExtractorClosure は入力を1個以上取り、最後の入力を照合対象とする。戻り値は `MatchResult<Payload, Error>` であり、`MatchResult::OK` と `MatchResult::Err` の二状態だけを持つ。`Option` 返却、旧 `Matcher` / `apply_matcher` 経路、暗黙変換は受理しない。Pattern AST は第一級の値ではなく、ExtractorClosure の値化と Pattern consumer は別の境界である。
 
-1つの修正タスクとして次を実施する。
+## named Extractor
 
-1. named Extractor と first-class な ExtractorClosure の共通契約を定める。
-2. 両者に事前引数を追加し、最後の入力を照合対象値とする。
-3. Extractor の返却型を `Option` から二状態の `MatchResult` へ置換する。
-4. 旧設計名 `Matcher` を `ExtractorClosure`、`apply_matcher` を `apply_pattern` に統一する。
-5. ExtractorClosure の literal とソース上の型注釈構文を確定する。
-6. MatchResult を返す Extractor / ExtractorClosure 本文内で SafeBind を許可する。
-7. projection、型注釈、UnitOnly の子 Pattern 省略、consumer / OR / pipe の制約を同じ契約へ統合する。
-8. 通常の Result-returning callable から ExtractorClosure を生成する明示的な標準 API `Extractor::from_result` を追加する。
+`defextractor` / `@builtin defextractor` は module または impl の下で宣言する。入力は1個以上で、最後の入力を consumer が渡す照合対象値とし、それ以前は事前引数にする。`impl` に付属する Extractor の `self` も最後に置く。named Extractor の実装一意性を維持し、事前引数数による overload は設けない。
 
-Pattern AST は第一級の値にしない。一般関数の partial application、通常 Closure との暗黙変換、独自の capture / lifetime 規則、MatchResult の Monad 化、専用 Opcode の追加は本タスクの機能要件に含めない。一般の Option / Result API は維持する。
-
-本書のコードは実装済み契約の仕様例である。module / impl 配下の宣言はソースファイルに置き、REPLではロードして利用する。標準の利用例は `:doc Extractor` / `:doc Extractor::from_result` にも掲載する。
-
-### 1.1 実施済み項目
-
-- 2026-09-19: capture placeholder の index を `1..=16` に制限した。Spire が `&16` を受理し、`&0`、`&17` 以上、整数表現範囲を超える巨大 index を `ExpressionSyntax` で拒否する。`doc/要件定義v9.md`、`docs/dev/diagnostics.md`、`docs/site/capture-operator.md`、`docs/site/language-reference.md` と parser 回帰テストを同じ境界へ整合した。projection `_N` は未実装であり、この完了項目には含めない。
-- 2026-09-19: 既存 Pattern surface の OR 文脈を明確化した。`match` と、変数テーブルへ書き込まない `is_match` は root / nested OR を許可する。`is_match` の全 alternative に通常 bind / as alias を禁止する既存規則は維持する。`=` / `=?`、do `<-` / `=?` の root / nested OR を Spire が `PatternSyntax` と `|` の span で拒否する。`if_let` / `if_let_then` は既存 Expr 文法による構文拒否を維持する。match の root OR 展開・guard 共有・nested OR と、input / RHS の通常 match 内 OR は維持した。MatchResult / ExtractorClosure / apply_pattern は未実装であり、本項目に含めない。
-- 2026-09-21: branch consumer の OR を拡張した。`match` の root / nested OR は同一 arm 内に保持し、`if_let` / `if_let_then` の第2引数も共通 Pattern 文法で解析する。OR alternative の bind 名・順序と canonical 型を一致させ、共通 scope / slot へ合流する。`match` の guard は OR 全体の照合成功後に一度だけ評価し、`if_let` 系は全候補失敗時だけ fallback へ進む。`is_match` の bind 禁止、binding operator の OR 拒否、未実装の `apply_pattern` は変更していない。
-
-- 2026-09-21: named / builtin Extractor を二状態の `MatchResult<P, Error>` へ移行した（短縮 `MatchResult<P>` も受理）。通常値位置・通常 callable・constructor capture / Pattern 分解と旧 Option 返却を拒否し、具象 deferror の明示 Err と compiler-owned な SafeBind の元 Error 保持を分離した。UnitOnly の子0/1、bind / wildcard 注釈、generic payload shape、nested callable / do 境界を接続した。runtime uncons と標準 Duration / Range を移行し、Option 専用 lowering、no-match tag、Extractor 再実行 fallback を削除した。canonical tag / payload metadata と VM の不正 carrier 検査を追加し、最適化 tag opcode でも維持する。独立レビュー指摘を解消後、CI workspace 1954件と標準 SRT 全件が成功。事前引数、ExtractorClosure、apply_pattern / projection、Extractor::from_result は本項目に含めない。
-
-
-- 2026-09-21: named / builtin Extractor の複数入力・事前引数を実装した。最後の入力を照合対象とし、signature で Expr / 子 Pattern 領域を確定する。入力と事前引数の通常型統一後に payload shape と総 arity を検査し、不足・余剰を切り捨てない。事前引数・pin・head は Pattern 開始時の外側 scope で解決し、到達時に左から一度だけ評価する。Unit 事前引数、UnitOnly 省略、attached deconstruct の末尾 self、generic payload、通常 Closure の capture、OR と短絡を検証した。役割選択まで保存した構文エラーは元の ParseError と source facts を保持して返す。独立レビュー指摘を解消後、CI workspace 1962件と標準 SRT 全件が成功。ExtractorClosure、apply_pattern / projection、Extractor::from_result は本項目に含めない。
-
-
-- 2026-09-21: ExtractorClosure literal `*{|params...| body}` と専用 signature 型を実装した。通常推論、lexical capture、helper の引数・戻り値、同 signature の if / match 選択、generic trait API の受け渡しを接続した。local head は lexical identity で確定し、signature で選んだ引数候補だけを検査する。通常 call、即時 head、通常 Closure との暗黙変換を拒否し、nested callable / do の failure target を分離した。REPL の入力間 capture・型署名・doc target と、元 Parse / Resolve 診断の保持を検証した。独立レビューで検出した OR binding 順序と canonical 型の逆変換を修正し、Facet 動的パスの capture 回帰も解消した。最終 CI workspace 1968件、標準 SRT 全件が成功。apply_pattern / projection、Extractor::from_result は本項目に含めない。
-
-- 2026-09-22: `Kernel::apply_pattern` と projection を実装。入力全体を一度だけ照合し、番号順の0 / 1 / 複数slotを Result に返す。通常 Error 規則・Extractor 元 Error・scope / pin / 注釈・OR / pipe 制限を共通 Pattern engine へ接続した。4 consumer の予約名・canonical identity と Regex 通常 call / capture を分離し、Kernel consumer の値化・captureを拒否する。旧 fake Match carrier / surface-name consumer fallback を削除。独立レビュー完了、最終 CI 1972件と標準 SRT 全件が成功。`Extractor::from_result` と Extractor module の source @doc は次単位に残る。
-
-- 2026-09-22: `lib/extractor.srt` に通常 SRT の `Extractor::from_result` と module / function `@doc` を追加し、標準 loader に登録した。単項 callable、payload shape、外側 Result の一段 unwrap、元 Error・cause・source、capture / 評価回数、既存 Monad 接続を検証。module @doc は named 定義・uncons・Closure・事前引数・Unit・projection・SafeBind・変換を一通り説明し、7組25出力と named module 宣言例を実REPLで確認した。追加7件を含む Extractor SRT20件、4拒否fixture、canonical doc / signature のREPL契約が成功。独立レビューと全17項目の監査完了、最終CI1972件と標準SRT全件成功。残実装なし。
-
-## 2. 現状と変更後
-
-本仕様の移行前の Extractor は一入力で `Option<Payload>` を返す。`Some(payload)` は子 Pattern の照合へ進み、`None` は不一致になる。SafeBind の `None` failure は共通 PatternMismatch Error となる。
-
-変更後は、named Extractor と ExtractorClosure の両方を次の契約へ統一する。
-
-```text
-(pre_arg1, ..., pre_argN, value) -> MatchResult<Payload, Error>
+```surtr
+deferror OutOfRange(value: Int) { "outside range" }
+defmod Bounds {
+    defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
+        if(min <= value && value <= max, MatchResult::OK(value), MatchResult::Err(OutOfRange(value)))
+    }
+}
 ```
 
-- 入力数は1以上。最後の1引数が照合対象値、それ以前が0個以上の事前引数である。
-- named Extractor の実装一意性を維持する。事前引数数による overload は追加しない。
-- 成功と失敗は `MatchResult::OK(payload)` / `MatchResult::Err(error)` の二状態である。
-- Extractor / ExtractorClosure は常に partial Pattern として扱う。本体が常に OK を返すことを解析して total とみなさない。
-- 通常 Bind `=` は total Pattern だけを許可し、Extractor / ExtractorClosure Pattern を拒否する。束縛数0と totality は独立である。
+named Extractor の本体は Pattern 位置でのみ実行する。通常 call、capture、値化は拒否する。Extractor は常に partial Pattern であり、本体が常に `OK` を返しても通常 Bind `=` には使えない。qualified head、型 head に付属する `deconstruct` の解決規則は既存の Pattern 規則に従う。
 
-`defextractor` / `@builtin defextractor` の module / impl 配下という宣言位置、qualified head、型 head に付随する `deconstruct` の解決規則は維持する。複数引数の定義でも最後の入力を照合対象にする。たとえば `self` を照合対象とする attached Extractor に事前引数を追加する場合、`self` は最後に置く。
+## MatchResult
 
-## 3. MatchResult
-
-### 3.1 型・variant・Error
+### 型・variant・Error
 
 正本定義の配置は `lib/types/special_types.srt` とする。
 
@@ -85,7 +46,7 @@ defenum MatchResult<$Value> {
 
 Error の kind / message / location / cause は既存 Error / RichError 契約に従う。定義側が返した Error を compiler が共通 PatternMismatch で上書きしたり、Extractor 名や型名から message を再構成したりしない。builtin Extractor も同じ契約を持つ。空の list / string に対する `uncons` の Error は標準定義 / builtin の契約が選び、Forge の名前判定に置かない。
 
-### 3.2 利用位置
+### 利用位置
 
 MatchResult は一般のユーザ値ではない。許可する型位置は次に限る。
 
@@ -99,9 +60,9 @@ MatchResult は一般のユーザ値ではない。許可する型位置は次�
 
 Extractor の本文内にあるというだけで、内側の通常 Closure へ MatchResult 利用権限を継承しない。各 callable が通常関数 / 通常 Closure / Extractor / ExtractorClosure のどれかを明示的に管理する。一般値の型候補・completion には MatchResult を提示せず、許可された signature の表示は維持する。
 
-## 4. ExtractorClosure
+## ExtractorClosure
 
-### 4.1 literal・型構文
+### literal・型構文
 
 literal は `*{|params...| body}` とし、入力は1個以上必要である。各引数の型注釈は任意で、通常推論が成立すれば省略できる。
 
@@ -134,7 +95,7 @@ ExtractorClosure<((Int, Int) -> MatchResult<Int, Error>)>
 
 `Matcher(...)`、`ExtractorClosure(...)`、`*{expr}`、`*{|| expr}` は採用しない。入力なしの ExtractorClosure、非 signature 型引数、Option / Result を返す signature は静的拒否とする。
 
-### 4.2 推論・capture・受け渡し
+### 推論・capture・受け渡し
 
 ExtractorClosure は通常 Closure と同じ lexical capture 規則に従う第一級の値である。通常の変数、関数引数、戻り値として受け渡し、同じ signature の値を通常の `if` / `match` で選択できる。capture 内容の違いを専用型の不一致理由にしない。通常 Closure に適用される既存の escape / Facet 制約は維持する。
 
@@ -142,7 +103,7 @@ ExtractorClosure は通常 Closure と同じ lexical capture 規則に従う第�
 
 通常推論後も境界や必要な型が未確定なら compile error とする。定義の実装候補数や consumer 名から推測しない。
 
-### 4.3 適用位置・名前解決
+### 適用位置・名前解決
 
 named Extractor と ExtractorClosure の本体実行は Pattern 位置に限る。ExtractorClosure 値の生成・選択・受け渡しは通常 Expr で行えるが、`closure(value)` で MatchResult を取得する通常 call は許可しない。
 
@@ -169,9 +130,9 @@ Pattern の `name(...)` は既存 lexical scope の名前解決に従う。local
 
 Sigil は symbol / lexical binding の identity を解決し、Scar は local の ExtractorClosure 型を検査する。Sigil が Scar の内部型推論に依存する名前解決を追加しない。named Extractor の通常 capture / 値化は禁止のままとする。
 
-### 4.4 明示的な生成 API: Extractor::from_result
+### 明示的な生成 API: Extractor::from_result
 
-`Extractor::from_result` を採用する。単一入力の通常 callable `($A -> Result<$B>)` を受け取り、`ExtractorClosure<($A -> MatchResult<$B, Error>)>` を返す通常の標準関数とする。新しい builtin、special form、暗黙変換は追加しない。
+`Extractor::from_result` は、単一入力の通常 callable `($A -> Result<$B>)` を受け取り、`ExtractorClosure<($A -> MatchResult<$B, Error>)>` を返す通常の標準関数である。専用 builtin、special form、暗黙変換は使わない。
 
 ```surtr
 defmod Extractor {
@@ -195,11 +156,11 @@ apply_pattern("123", decimal(_1: Int))
 - 複数入力の通常関数を使う場合、必要な値を capture した単一入力の通常 Closure を利用者が明示的に渡す。from_result に可変 arity や暗黙の partial application を追加しない。
 - Option や raw payload を返す callable は受理しない。`Extractor::from_function` は採用対象に含めない。
 
-本 API の実装と @doc は標準 SRT に置く。前提となる ExtractorClosure / MatchResult 本文の SafeBind 契約を利用し、MatchResult 自体を通常関数の戻り値として公開しない。
+本 API の実装と `@doc` は `lib/extractor.srt` に置く。ExtractorClosure / MatchResult 本文の SafeBind 契約を利用し、MatchResult 自体を通常関数の戻り値として公開しない。
 
-## 5. 事前引数・payload shape・UnitOnly
+## 事前引数・payload shape・UnitOnly
 
-### 5.1 引数領域
+### 引数領域
 
 ```text
 head(pre_args..., payload_patterns...)
@@ -217,7 +178,7 @@ caller.args[pre_arity ..] = payload Pattern
 
 構文上の区切りや別の PreArgs 型 / metadata は追加しない。Spire は signature を知らない段階で Expr / Pattern 境界を決め打ちしない。解決後に signature から分類して各領域を検査できる表現と source span を保持する。通常 Expr に見える表記を理由に Pattern と推測したり、arity 不一致を暗黙補正したりしない。
 
-### 5.2 payload の子 Pattern 数
+### payload の子 Pattern 数
 
 成功 payload 型と shape は適用先 Extractor の戻り型に依存し、各適用箇所で signature の型が確定する際に決まる。入力型に応じて出力型が定まる Function::curry / Applicative::ap と同様に、型に依存する契約として扱う。PayloadShape を利用者が渡す引数や共通の値型にせず、異なる Extractor の payload を一つの Union へ閉じ込める規則も追加しない。内部の typed contract が確定した shape を保持することとは区別する。
 
@@ -245,7 +206,7 @@ apply_pattern(value, check(_1: Unit))
 
 tuple の Unit 要素も bind / projection できるが、tuple 自体を UnitOnly とみなして要素を省略しない。Unit 値の保持・射影と、Unit 値の検査 Pattern は別の規則である。`check(())`、`() = ()`、`() =? Ok(())` は引き続き ParseError とする。
 
-### 5.3 単一評価・短絡
+### 単一評価・短絡
 
 - consumer input / RHS は一回だけ評価する。
 - 各 occurrence へ到達した時点で事前引数を通常関数引数の評価順に各一回だけ評価し、consumer の値を最後の入力として本体を一回だけ実行する。
@@ -254,9 +215,9 @@ tuple の Unit 要素も bind / projection できるが、tuple 自体を UnitOn
 - 不一致 / Err 後は後続の子 Pattern を評価しない。到達しなかった occurrence の事前引数も評価しない。
 - `match` が次の arm へ進む場合、その arm の occurrence は独立した照合として扱う。
 
-## 6. apply_pattern・projection
+## apply_pattern・projection
 
-### 6.1 consumer の外部契約
+### consumer の外部契約
 
 ```surtr
 @builtin
@@ -273,9 +234,9 @@ def apply_pattern(value: $Value, pattern: $Pattern) -> Result<$Return>
 
 apply_pattern は通常の Expr ブロックへ Pattern / Extractor の実行を組み込み、結果を既存の Result / Monad 操作へ接続する境界である。適用後の変換・逐次合成・失敗処理はそれらの既存 API を使う。ExtractorClosure 側に対応する map / then / both 等の合成 API を重複して設けず、別 consumer の apply_extractor も追加しない。
 
-異なる payload を扱う場合は、match の各 branch で Extractor の結果を使った式を実行し、branch の最終結果を同じ型へ揃えられる。各 Extractor の payload 型を揃える必要はない。異なる signature の ExtractorClosure 値を直接一つの値として選択する規則や、Extractor 同士の並列合成のための Union / 新しい型制約は本仕様に追加しない。
+異なる payload を扱う場合は、match の各 branch で Extractor の結果を使った式を実行し、branch の最終結果を同じ型へ揃えられる。各 Extractor の payload 型を揃える必要はない。異なる signature の ExtractorClosure 値を直接一つの値として選択する規則や、Extractor 同士の並列合成のための Union / 新しい型制約は現行契約に含めない。
 
-### 6.2 slot と出力型
+### slot と出力型
 
 projection は `_1`, `_2`, ... とし、lexical variable を導入しない。出力順は traversal 順ではなく番号順とする。
 
@@ -303,9 +264,9 @@ projection の許可範囲は canonical apply_pattern の Pattern 領域だけ�
 
 数字だけの `_N` は通常の変数名として宣言・bind・shadow できず、通常 Expr の値参照にも使えない。Spire は Expr 内の `_N` を文脈検査が必要な placeholder 候補として保持し、後段で許可位置を確定する。canonical apply_pattern の Pattern projection、または既存 pipe の最外 call の direct Expr argument slot 以外に候補が残れば compile error とする。通常 Pattern 文法全体に projection の許可を広げず、事前引数内の候補も wildcard / 通常変数へ fallback しない。
 
-capture placeholder の番号解釈と範囲も1〜16へ揃える。現行 capture parser の上限なしという経路は置換し、数値変換の切り捨て / wraparound は許可しない。
+capture placeholder も1〜16を許可し、範囲外や巨大な整数を parse error とする。数値変換の切り捨て / wraparound は許可しない。
 
-### 6.3 bind・pin・scope
+### bind・pin・scope
 
 `=` / `=?` は全照合成功後に既存の binding 順で変数へ代入する。apply_pattern の通常 bind は照合内部で完結し、projection だけを外部結果へ公開する。失敗時は部分的な bind / projection を公開しない。
 
@@ -316,7 +277,7 @@ result = apply_pattern([10, 20], [temporary, _1: Int])
 
 事前引数と pin が参照できるのは、同じ Pattern の外側で事前に束縛された値だけである。同じ Pattern 内で導入した名前を後続の事前引数や pin から参照しない。外側に同名値があればそれを参照し、存在しなければ ResolveError にする。
 
-## 7. consumer の成功・失敗 policy
+## consumer の成功・失敗 policy
 
 | consumer | OK 後に子 Pattern も成功 | Extractor の Err / 子 Pattern の不一致 |
 |---|---|---|
@@ -332,9 +293,9 @@ result = apply_pattern([10, 20], [temporary, _1: Int])
 
 Error を返す consumer policy と Extractor の返却 carrier 解釈は共通 Pattern engine の責務として接続する。apply_pattern や do が独自の Extractor tag / 名前判定を再実装しない。
 
-## 8. MatchResult 本文内の SafeBind
+## MatchResult 本文内の SafeBind
 
-### 8.1 failure target の追加
+### failure target
 
 do 外の Extractor / ExtractorClosure 本文では、その本文の MatchResult 戻り値を compiler-owned な SafeBind failure target として許可する。
 
@@ -380,7 +341,7 @@ direct = *{|value: Int|
 
 成功終端は引き続き明示的な `MatchResult::OK(payload)`、明示失敗は `MatchResult::Err(error)` が基本である。raw payload、Option、Result を暗黙包装しない。MatchResult を SafeBind RHS の自動 unwrap 対象にする変更でもない。
 
-### 8.2 callable / do の境界
+### callable / do の境界
 
 失敗返却先は最も近い callable または現在の do-local target とする。
 
@@ -391,13 +352,13 @@ direct = *{|value: Int|
 - `do::<MatchResult>`、MatchResult への Monad / Alternative / @result_effect の導入は対象外である。
 - REPL top-level SafeBind は既存の Error 表示とセッション継続境界を使う。MatchResult を通常 REPL 値として公開しない。
 
-## 9. 予約語・OR・pipe
+## 予約語・OR・pipe
 
 `if_let`、`if_let_then`、`is_match`、`apply_pattern` を Pattern 引数を持つ予約 consumer surface とする。通常の宣言名、引数名、local bind、user member 名への利用・shadowing は Spire で拒否する。標準 @builtin 宣言と正規の Kernel::name call は明示的に許可し、canonical consumer identity へ確定する。
 
 予約語 token は qualified member / capture 構文でも解析できるようにする。既存の canonical 標準 builtin の qualified 通常 call / capture は維持する。たとえば `Regex::is_match(re, input)` とその capture は通常の Regex builtin であり、第2引数は Expr のままである。Pattern consumer と判定するのは canonical な Kernel consumer identity だけとし、member の綴りが `is_match` であることでは判定しない。この許可を新規 user member 宣言や予約 consumer の shadowing に広げず、Regex API の改名や表示名による fallback は追加しない。
 
-旧名 apply_matcher は consumer 名 / 予約語 / alias として残さない。旧 builtin entry や名前による特殊処理があれば削除する。同名の通常 user function があっても、その引数を Pattern と解釈する compatibility route は設けない。
+旧名 `apply_matcher` は consumer 名 / 予約語 / alias として存在しない。同名の通常 user function があっても、その引数を Pattern と解釈する互換経路はない。
 
 OR Pattern `p1 | p2` は target のホワイトリストで許可する。対象は `match` arm、`if_let`、`if_let_then`、`is_match` のみで、いずれも root / nested OR を許可する。`=` / `=?`、do `<-` / `=?`、`apply_pattern` は binding 数が 0 でも OR を拒否する。`apply_pattern` に OR の projection slot 統一規則や複数の失敗 Error の選択規則を追加しない。
 
@@ -433,11 +394,10 @@ get_extractor_closure() |> run_pattern(value)
 # 通常 Expr 引数への pipe は許可
 ```
 
-is_match の通常 bind 禁止、通常 Bind の totality、consumer ごとの continuation は、明示した変更以外維持する。
+`is_match` の通常 bind 禁止、通常 Bind の totality、consumer ごとの continuation は上記の規則に従う。
 
-## 10. フェーズ間契約・移行・実装順序
+## フェーズ間の責務
 
-### 10.1 責務
 
 | 対象 | 主な責務 |
 |---|---|
@@ -455,55 +415,8 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 
 未知 tag / variant、不正 field 数、壊れた callable metadata、payload representation 不一致は内部契約違反として即時 failure にする。利用者の Err、PatternMismatch、次の match arm、Alternative::empty へ fallback しない。
 
-### 10.2 実装順序
+## 検証境界
 
-#### 独立した先行単位: 既存 Pattern surface の OR 文脈制限
-
-§9 の OR 制限は返却 carrier 更改に依存しないため、capture index と同様に独立して実装する。level 4。対象は Spire の Pattern 文脈と正本・診断・利用者説明であり、Extractor の Option 契約や match の既存 OR engine は変更しない。
-
-1. parser 直接テストで `=` / `=?`、do `<-` / `=?` の root / nested OR が `PatternSyntax` と `|` の span で拒否されることを Red にする。既存 Expr 文法で拒否される `if_let` / `if_let_then` も固定する。
-2. 共通 Pattern 文法で LHS 全体を解析し、binding operator を確認した境界で root / nested OR を拒否する。OR / alias / 型注釈 / operator 間の改行を独自の token 走査で再解釈しない。statement の Expr 再解析で確定済み binding の拒否診断を失わないようにする。
-3. bare / qualified `is_match` の root / nested OR を許可し、全 alternative の binding 禁止を維持する。match の root OR 展開・guard 共有・nested OR と、RHS / consumer input の通常 match 内 OR を維持する。`rtk cargo nextest run -p spire` で確認し、独立レビュー後に §11.2 の CI / 標準テスト全件を実行する。
-
-未実装の `apply_pattern` と ExtractorClosure への接続は本単位に含めず、各機能実装時に同じ制限を適用する。
-
-#### 独立した後続単位: branch consumer の binding OR
-
-前項の実施済み範囲を履歴として維持し、`match` / `if_let` / `if_let_then` の root / nested OR を共通 binding 契約へ統一する。level 4。`is_match` の binding 禁止、binding operator と `apply_pattern` の OR 拒否は変更しない。旧 root OR arm 展開と `if_let` 系の Expr 引数からの Pattern 再構築を、新しい OR 経路と並存させない。
-
-1. Spire / Sigil の直接テストを先に Red にする。`if_let` 系の第2引数を共通 Pattern 文法で解析し、canonical consumer identity に接続する。match root OR を単一 arm 内の OR として保持し、alternative ごとの binding 名・順序と共有 scope を解決する。
-2. Scar のテストで同名異型・異名・個数不一致を拒否し、同一の canonical 型 list を受理する。match root OR の網羅性を alternative ごとに集計し、guard は arm 単位で判定する。`if_let` 系の暗黙 fallback は維持し、網羅性要求を増やさない。
-3. Forge のテストで各 alternative の分解・bind を共通 slot に合流させ、guard / 成功 branch の一回評価、左から右への短絡、失敗後の binding 非公開を検証する。outer Extractor の再実行を招く全 Pattern の直積展開はしない。
-4. script 成功・拒否 fixture と利用者説明・診断を更新し、独立レビュー後に §11.2 の CI / 標準テスト全件を実行する。
-
-各段階は同じ修正タスクの依存順序であり、旧 Option 契約と新 MatchResult 契約を並存させる公開段階を設けない。
-
-1. 正本の仕様を本書へ整合させ、canonical type / variant / consumer metadata と旧経路の削除対象を確定する。
-2. named Extractor の複数入力、MatchResult 制約、ExtractorClosure の構文・名前解決・通常推論・capture を共通 typed contract へ接続する。
-3. payload shape / UnitOnly、事前引数 Expr と子 Pattern、単一評価・短絡を共通 engine へ接続し、標準 / builtin Extractor を移行する。
-4. apply_pattern、型注釈付き projection、scope / pin、予約語・OR・pipe の制約を接続する。
-5. MatchResult 本文の SafeBind target、既存 Result-effect / Alternative / REPL の境界、診断 producer の source facts を整合させ、標準 SRT の Extractor::from_result と @doc を追加する。
-6. 旧 Option Extractor 専用 lowering、三状態 MatchResult の NoMatch 経路、旧 consumer 名 / 互換経路、未使用 metadata を削除する。
-7. 成功・拒否境界を検証し、最終差分の独立レビューと level 4 の全体検証を行う。
-
-現行にない MatchResult の過去実装は必要なら Git 履歴を比較資料にできるが、現行基盤へ機械的に復元する仕様ではない。
-
-### 10.3 正本への反映
-
-実装着手時に、少なくとも次を同じ契約へ整合させる。
-
-- `doc/要件定義v9.md`: builtin / special type、Error、Extractor、Closure、Bind / SafeBind、Pattern consumer、pipe。
-- `docs/dev/Do_intrinsic_spec.md`: Extractor の Option 前提、partial <- / SafeBind failure、do-local target。
-- `docs/dev/diagnostics.md`: MatchResult / ExtractorClosure 利用位置、arity / 型注釈、予約語、projection、SafeBind target、内部契約違反の producer-owned reason / data。
-- `docs/dev/Xldr_spec.md`、`docs/dev/テスト方針.md`: signature / completion と受入境界。
-- `docs/site/extractors.md`、`pattern-matching.md`、`language-reference.md`、`language-guide.md`、do / SafeBind / Closure / consumer の利用者説明。
-- 標準 Extractor / consumer / special type の @doc と REPL サンプル。
-
-正本・標準 @doc・利用者向け説明は本書の実装済み契約へ整合した。以後の仕様追加でも、現行動作の説明だけを先に将来契約へ書き換えず、実装状態を明示する。
-
-## 11. 受入条件と検証
-
-### 11.1 必須の成功・拒否境界
 
 1. named / builtin Extractor と ExtractorClosure が MatchResult の OK / Err だけを返す。手書き Err の具象 deferror 引数を受理し、観測済み abstract Error の手書き再投入を拒否する。旧 Option、一般 Result、NoMatch、非 Error payload も拒否する。
 2. 両者の事前引数0 / 1 / 複数が成立し、総 arity、事前引数型、末尾の consumer input 型、子 Pattern 型・arity の不一致を静的拒否する。
@@ -522,16 +435,3 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 15. 旧専用経路と互換 fallback が残らず、正本・標準 @doc・実装・テストが同じ契約を示す。
 16. Extractor::from_result が単一入力の Result-returning callable を受理し、単値 / tuple / Unit payload を維持する。生成時は本体未評価、各 occurrence 到達時は一回評価とし、元 Error の保持、Result payload の追加 unwrap なし、通常 Closure の capture、Option / raw payload / 入力 arity 不一致の静的拒否を確認する。
 17. 異なる payload 型の Extractor を match の別 branch で使い、各 branch の式が同じ型を返す場合に成立する。apply_pattern の結果が既存 Result / Monad 操作へ接続でき、Pattern 内の bind が外へ漏れない。
-
-### 11.2 検証方法
-
-構文・型・内部契約は直接責務を持つ crate-local テスト、PureSurtr の成功例は lib/tests、静的拒否は script fixture、scope / import は module fixture、REPL 継続・signature / completion は Xldr の既存 test inventory に置く。diagnostics の human / JSON は元の reason / span / source facts を比較する。同じ契約を各層で重複検証しない。
-
-実装時は各段階の最小境界で TDD を行い、関連フェーズへ必要な範囲だけ広げる。局所コマンドと fixture 配置の詳細は [テスト方針](../docs/dev/テスト方針.md) に従う。level 4 の実装完了には、最終 revision の次の全件 Green と独立レビューを必要とする。
-
-```sh
-rtk cargo nextest run --profile ci --workspace
-cargo run -- test --quiet --all
-```
-
-仕様文書の統合だけを行うターンでは compiler テストを実行せず、原案・ユーザ決定の網羅性、削除文書への依存なし、ローカルリンク、Markdown / whitespace、現行契約との区別を検証する。実装用テストの成功を本書の作成完了条件と混同しない。
