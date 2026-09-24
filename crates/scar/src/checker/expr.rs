@@ -1,5 +1,4 @@
 use super::*;
-use crate::env::TypeScheme;
 use diagnostics::{
     CandidateFailureData, CandidateSelectionData, DiagnosticData, DiagnosticOrigin, SourceFact,
     SourceId, SourceRole, StructuredDiagnostic, TypeConstructorCarrierData, TypeDiagnosticReason,
@@ -444,64 +443,64 @@ impl Checker {
         self.pattern_binding_aliases = checkpoint.pattern_binding_aliases;
     }
 
-    fn generalize_local_callable_binding(&mut self, pattern: &TypedPattern) {
-        let (TypedPattern::Var(_, id) | TypedPattern::As(_, _, id)) = pattern else {
-            return;
-        };
-        let Some(ty) = self.env.lookup_var(id.unique_id).cloned() else {
-            return;
-        };
-        let ty = self.resolve_ty(&ty);
-        let quantified = (0..self.env.next_tyvar)
-            .filter(|var| {
-                !self.rigid_tyvars.contains(var)
-                    && !self.pending_trait_obligations.contains_key(var)
-                    && self.ty_contains_var(&ty, *var)
-                    && !self.env.vars.iter().any(|(other_id, other_ty)| {
-                        *other_id != id.unique_id && self.ty_contains_var(other_ty, *var)
-                    })
-            })
-            .collect::<Vec<_>>();
-        if !quantified.is_empty() {
-            self.env
-                .bind_var_scheme(id.unique_id, TypeScheme { ty, quantified });
-        }
-    }
-
-    /// Values which do not evaluate an arbitrary call can safely retain the
-    /// polymorphic scheme of a callable.  In particular, an alias must not
-    /// turn a polymorphic closure back into a monomorphic local binding.
-    fn is_non_expansive_callable_value(&self, node: &TypedNode) -> bool {
-        if !matches!(
-            self.resolve_ty(&node.ty),
-            Ty::Func(..) | Ty::ExtractorClosure(_)
-        ) {
-            return false;
-        }
-        match &node.node {
-            TypedInner::Closure(..)
-            | TypedInner::ExtractorClosure(..)
-            | TypedInner::CaptureClosure(..)
-            | TypedInner::Capture(..)
-            | TypedInner::Var(_) => true,
-            TypedInner::If(_, then_branch, Some(else_branch)) => {
-                self.is_non_expansive_callable_value(then_branch)
-                    && self.is_non_expansive_callable_value(else_branch)
+    fn collect_callable_value_tyvars(ty: &Ty, variables: &mut Vec<u32>) {
+        match ty {
+            Ty::Func(..) | Ty::ExtractorClosure(_) => Self::collect_ty_vars(ty, variables),
+            Ty::List(inner) | Ty::Lazy(inner) | Ty::MatchResult(inner) => {
+                Self::collect_callable_value_tyvars(inner, variables);
             }
-            TypedInner::Match(_, arms) => arms
-                .iter()
-                .all(|arm| self.is_non_expansive_callable_value(&arm.body)),
-            _ => false,
+            Ty::Tuple(items) | Ty::Enum(_, items) | Ty::SelfApp(items) => {
+                for item in items {
+                    Self::collect_callable_value_tyvars(item, variables);
+                }
+            }
+            Ty::Result(ok, err) => {
+                Self::collect_callable_value_tyvars(ok, variables);
+                Self::collect_callable_value_tyvars(err, variables);
+            }
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                for argument in &nominal.arguments {
+                    Self::collect_callable_value_tyvars(argument, variables);
+                }
+            }
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                for item in [source, focus, update_source, update_focus] {
+                    Self::collect_callable_value_tyvars(item, variables);
+                }
+            }
+            Ty::BuiltinFunc { .. }
+            | Ty::UserFunc { .. }
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Pid(_)
+            | Ty::Hole
+            | Ty::Var(_)
+            | Ty::Error => {}
         }
     }
 
-    fn instantiate_local_callable_scheme(&mut self, scheme: &TypeScheme) -> Ty {
-        let mapping = scheme
-            .quantified
+    fn require_concrete_callable_binding(&self, ty: &Ty, span: &Span) -> Result<(), TypeError> {
+        let ty = self.resolve_ty(ty);
+        let mut variables = Vec::new();
+        Self::collect_callable_value_tyvars(&ty, &mut variables);
+        if variables
             .iter()
-            .map(|var| (*var, self.env.fresh_tyvar()))
-            .collect::<HashMap<_, _>>();
-        self.substitute_ty_with_mapping(&scheme.ty, &mapping)
+            .all(|variable| self.rigid_tyvars.contains(variable))
+        {
+            return Ok(());
+        }
+        Err(TypeError {
+            structured: None,
+            message: "Callable binding requires a concrete signature".into(),
+            span: span.clone(),
+            hint: Some(
+                "Add a concrete callable annotation, annotate the literal parameters, or pass the callable directly to a higher-order argument with a known expected type."
+                    .into(),
+            ),
+        })
     }
 
     fn parse_tuple_index_name(name: &str) -> Option<usize> {
@@ -1490,15 +1489,11 @@ impl Checker {
                 }
 
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
-                    let ty = if let Some(scheme) = self.env.lookup_scheme(id.unique_id).cloned() {
-                        self.instantiate_local_callable_scheme(&scheme)
-                    } else {
-                        match &stored_ty {
-                            Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                                self.instantiate_callable_ty(&stored_ty)
-                            }
-                            _ => self.resolve_ty(&stored_ty),
+                    let ty = match &stored_ty {
+                        Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
+                            self.instantiate_callable_ty(&stored_ty)
                         }
+                        _ => self.resolve_ty(&stored_ty),
                     };
                     if self.error_observer_bindings.contains(&id.unique_id)
                         && self.allow_error_observer_value_use == 0
@@ -1723,6 +1718,7 @@ impl Checker {
                     }
                     }
                 }
+                self.require_concrete_callable_binding(&typed_rhs.ty, &typed_rhs.span)?;
                 self.ensure_no_match_result_value(&typed_rhs.ty, &typed_rhs.span)?;
                 let facet_path = if matches!(typed_rhs.ty, Ty::Facet(..)) {
                     Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
@@ -1759,11 +1755,6 @@ impl Checker {
                     &typed_pat,
                     (binding_constructor_provenance, typed_rhs.ty.clone()),
                 );
-                if !matches!(pat, ResolvedPattern::Annotated(..))
-                    && self.is_non_expansive_callable_value(&typed_rhs)
-                {
-                    self.generalize_local_callable_binding(&typed_pat);
-                }
                 if let Some(path) = &facet_path {
                     self.bind_facet_pattern_bindings(&typed_pat, path, span)?;
                 } else {
@@ -7478,9 +7469,7 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        if let Some(scheme) = self.env.lookup_scheme(extractor_id.unique_id).cloned() {
-            Ok(self.instantiate_local_callable_scheme(&scheme))
-        } else if matches!(extractor_ty, Ty::ExtractorClosure(_)) {
+        if matches!(extractor_ty, Ty::ExtractorClosure(_)) {
             Ok(self.resolve_ty(&extractor_ty))
         } else {
             Ok(self.instantiate_callable_ty(&extractor_ty))

@@ -1188,9 +1188,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(overlapping_trait_impl_patterns_are_rejected_before_codegen),
     surface_case!(disjoint_specializations_with_the_same_nominal_target_typecheck),
     surface_case!(conversion_impl_exclusivity_ignores_generic_parameter_names),
-    surface_case!(local_callable_is_instantiated_at_each_call_site),
+    surface_case!(local_callable_binding_requires_concrete_signature),
+    surface_case!(local_callable_binding_accepts_outer_rigid_generic),
     surface_case!(annotated_local_callable_remains_monomorphic),
     surface_case!(unbound_generic_argument_synthesizes_closure_shape),
+    surface_case!(direct_generic_capture_uses_higher_order_expected_type),
+    surface_case!(generic_capture_binding_requires_concrete_signature),
     surface_case!(expected_type_flows_to_if_and_match_branches),
     surface_case!(trait_dispatch_rejects_impl_with_unsatisfied_where_obligation),
     surface_case!(direct_trait_call_on_rigid_generic_requires_declared_bound),
@@ -1262,7 +1265,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(match_result_unitonly_rejects_wrong_child_shapes),
     surface_case!(match_result_payload_shape_must_be_resolved_before_execution),
     surface_case!(extractor_prearguments_follow_signature_and_infer_payload_shape),
+    surface_case!(extractor_target_requires_concrete_type_head),
+    surface_case!(extractor_target_accepts_generic_arguments_under_concrete_head),
     surface_case!(extractor_closure_inference_and_callable_boundaries),
+    surface_case!(extractor_closure_direct_argument_uses_expected_type),
     surface_case!(apply_pattern_projection_types_and_boundaries),
 ];
 
@@ -1971,7 +1977,7 @@ second = pair._1"#,
 
 fn pair_constructor_lowered_tuple_values_typecheck_without_operator_traits() {
     let resolved = resolve_with_builtin_prelude(
-        "pair: (Int, String) = 1 (,) \"two\"\nnested: (Int, (Int, Int)) = 1 (,) 2 (,) 3\npair_fn = &`(,)`\nfrom_capture: (Int, String) = pair_fn(1, \"two\")\nfrom_pipeline: (Int, String) = 1 |> `(,)`(\"two\")",
+        "pair: (Int, String) = 1 (,) \"two\"\nnested: (Int, (Int, Int)) = 1 (,) 2 (,) 3\npair_fn: (Int, String -> (Int, String)) = &`(,)`\nfrom_capture: (Int, String) = pair_fn(1, \"two\")\nfrom_pipeline: (Int, String) = 1 |> `(,)`(\"two\")",
     );
     let typed = typecheck(resolved).expect("pair constructor forms should typecheck as tuples");
 
@@ -3918,17 +3924,28 @@ impl TryFrom<$T> for LocalBox<$T> {
     );
 }
 
-fn local_callable_is_instantiated_at_each_call_site() {
-    let typed = typecheck_with_builtin_prelude(
-        r#"id = {|x| x}
-pair: (Int, String) = (id(1), id("s"))
-first: Int = id(2)
-second: String = id("t")"#,
+fn local_callable_binding_requires_concrete_signature() {
+    let resolved = resolve_with_builtin_prelude(r#"id = {|x| x}"#);
+    let error =
+        typecheck(resolved).expect_err("an untyped closure binding must not become polymorphic");
+    assert!(
+        error
+            .message
+            .contains("Callable binding requires a concrete signature"),
+        "{error:?}"
     );
+}
 
-    assert!(matches!(typed_bind_rhs(&typed, "pair").ty, Ty::Tuple(_)));
-    assert!(matches!(typed_bind_rhs(&typed, "first").ty, Ty::Int));
-    assert!(matches!(typed_bind_rhs(&typed, "second").ty, Ty::Str));
+fn local_callable_binding_accepts_outer_rigid_generic() {
+    typecheck(resolve_with_builtin_prelude(
+        r#"def apply_identity(value: $A) -> $A {
+  identity: ($A -> $A) = {|item| item}
+  identity(value)
+}
+int_value: Int = apply_identity(1)
+string_value: String = apply_identity("text")"#,
+    ))
+    .expect("an enclosing declaration's rigid generic may appear in a concrete local signature");
 }
 
 fn annotated_local_callable_remains_monomorphic() {
@@ -3951,6 +3968,30 @@ result: Int = increment(1)"#,
     );
 
     assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
+}
+
+fn direct_generic_capture_uses_higher_order_expected_type() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def identity(value: $A) -> $A { value }
+def apply(value: $A, f: ($A -> $A)) -> $A { f(value) }
+result: Int = apply(1, &identity)"#,
+    );
+    assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
+}
+
+fn generic_capture_binding_requires_concrete_signature() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def identity(value: $A) -> $A { value }
+captured = &identity"#,
+    );
+    let error = typecheck(resolved)
+        .expect_err("a generic capture must be concrete before it is bound to a variable");
+    assert!(
+        error
+            .message
+            .contains("Callable binding requires a concrete signature"),
+        "{error:?}"
+    );
 }
 
 fn expected_type_flows_to_if_and_match_branches() {
@@ -4043,26 +4084,25 @@ where
   def use(self: ObligationBox<$A>) -> String { Marker::mark(self.value) }
 }
 
-call = {|value| Use::use(ObligationBox(value))}
-result = call(1)"#;
-    let argument_start = source.rfind("call(1)").expect("call site") + "call(".len();
+def invoke(value: $A, call: ($A -> String)) -> String { call(value) }
+result = invoke(1, {|value| Use::use(ObligationBox(value))})"#;
     let resolved = resolve_with_builtin_prelude(source);
 
     let err = typecheck(resolved)
-        .expect_err("binding the deferred receiver to Int must re-check its Marker obligation");
-    assert_eq!(err.span.start, argument_start, "{err:?}");
-    assert_eq!(err.span.end, argument_start + 1, "{err:?}");
+        .expect_err("the direct higher-order boundary must check Int's Marker obligation");
     assert!(
-        err.message.contains("Argument type mismatch") && err.message.contains("got Int"),
+        err.message.contains("Argument type mismatch")
+            || err.message.contains("Marker")
+            || err.message.contains("No implementation satisfies Use"),
         "unexpected phase-boundary diagnostic: {err:?}"
     );
 
     let satisfied = source.replace(
-        "call = {|value|",
-        "impl Marker for Int { def mark(self: Int) -> String { \"marked\" } }\n\ncall = {|value|",
+        "def invoke(value: $A",
+        "impl Marker for Int { def mark(self: Int) -> String { \"marked\" } }\n\ndef invoke(value: $A",
     );
     typecheck(resolve_with_builtin_prelude(&satisfied))
-        .expect("the same deferred obligation must succeed when Int implements Marker");
+        .expect("the direct higher-order obligation must succeed when Int implements Marker");
 }
 
 fn child_impl_where_assumptions_cover_parent_impl_requirements() {
@@ -10966,14 +11006,11 @@ fn match_result_extractor_contract_boundaries() {
     let source = r#"impl Int {
   defextractor value(value: Int) -> MatchResult<Int, Error> { MatchResult::OK(value) }
   defextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }
-  defextractor identity(value: $A) -> MatchResult<$A> { MatchResult::OK(value) }
 }
 match 1 { Int::value(value) => value, _ => 0 }
 match 1 { Int::unit(value: Unit) => value, _ => () }
 match 1 { Int::unit(_: Unit) => 1, _ => 0 }
 match 1 { Int::unit() => 1, _ => 0 }
-match () { Int::identity() => 1, _ => 0 }
-match (1, "x") { Int::identity(first: Int, second: String) => second, _ => "" }
 "#;
     typecheck(resolve_with_builtin_prelude(source)).expect("MatchResult and UnitOnly contract");
 }
@@ -11048,8 +11085,8 @@ fn match_result_payload_shape_must_be_resolved_before_execution() {
         .expect("payload annotation connects normal inference");
     for source in [
         "def wrapping(v: List<$A>) -> Boolean { is_match(v, uncons(_, _)) }",
-        "impl Int { defextractor pair(v: $A) -> MatchResult<($A, Int)> { MatchResult::OK((v, 1)) } }\ndef wrapping_pair(v: $A) -> Boolean { is_match(v, Int::pair(_, _)) }",
-        "impl Int { defextractor list(v: $A) -> MatchResult<List<$A>> { MatchResult::OK([v]) } }\ndef wrapping_list(v: $A) -> Boolean { is_match(v, Int::list(_)) }",
+        "impl Int { defextractor pair(v: List<$A>) -> MatchResult<($A, Int)> { MatchResult::Err(NoneError) } }\ndef wrapping_pair(v: List<$A>) -> Boolean { is_match(v, Int::pair(_, _)) }",
+        "impl Int { defextractor list(v: List<$A>) -> MatchResult<List<$A>> { MatchResult::OK(v) } }\ndef wrapping_list(v: List<$A>) -> Boolean { is_match(v, Int::list(_)) }",
     ] {
         typecheck(resolve_with_builtin_prelude(source)).expect("fixed payload shape permits generic children");
     }
@@ -11089,6 +11126,32 @@ doubled(1.5)
     assert_eq!(specialized.len(), 2);
 }
 
+fn extractor_target_requires_concrete_type_head() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"impl Int {
+  defextractor identity(value: $T) -> MatchResult<$T> { MatchResult::OK(value) }
+}"#,
+    );
+    let error = typecheck(resolved)
+        .expect_err("a bare generic type parameter must not be an Extractor target");
+    assert!(
+        error
+            .message
+            .contains("Extractor target type must have a concrete head"),
+        "{error:?}"
+    );
+}
+
+fn extractor_target_accepts_generic_arguments_under_concrete_head() {
+    typecheck(resolve_with_builtin_prelude(
+        r#"impl Int {
+  defextractor list(value: List<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError) }
+  defextractor result(value: Result<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError) }
+}"#,
+    ))
+    .expect("generic arguments under a concrete Extractor target head must remain valid");
+}
+
 fn extractor_closure_inference_and_callable_boundaries() {
     let source = r#"limit = 2
 pick = *{|value: Int| True =? value > limit; MatchResult::OK(value) }
@@ -11097,10 +11160,6 @@ match 5 { pick(value: Int) => value, _ => 0 }
     typecheck(resolve_with_builtin_prelude(source))
         .expect("ExtractorClosure literal and local head");
     for source in [
-        r#"identity = *{|value| MatchResult::OK(value)}
-match 1 { identity(n: Int) => n, _ => 0 }
-match "text" { identity(s: String) => s, _ => "" }
-match () { identity() => 1, _ => 0 }"#,
         r#"typed: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = *{|value| MatchResult::OK(value)}
 match 1 { typed(n) => n, _ => 0 }"#,
         r#"def make(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
@@ -11137,6 +11196,32 @@ match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
     }
 }
 
+fn extractor_closure_direct_argument_uses_expected_type() {
+    typecheck(resolve_with_builtin_prelude(
+        r#"def accepts(value: Int, ext: ExtractorClosure<(Int -> MatchResult<Int>)>) -> Boolean {
+  is_match(value, ext(_))
+}
+accepted: Boolean = accepts(1, *{|value| MatchResult::OK(value)})"#,
+    ))
+    .expect("a direct ExtractorClosure argument must use the higher-order expected type");
+
+    typecheck(resolve_with_builtin_prelude(
+        r#"def retain(value: $A, ext: ExtractorClosure<($A -> MatchResult<$A>)>) -> $A { value }
+accepted: Int = retain(1, *{|value| MatchResult::OK(value)})"#,
+    ))
+    .expect("a preceding argument may concretize a direct generic ExtractorClosure argument");
+
+    let resolved = resolve_with_builtin_prelude(r#"identity = *{|value| MatchResult::OK(value)}"#);
+    let error = typecheck(resolved)
+        .expect_err("an untyped ExtractorClosure must not become a polymorphic local value");
+    assert!(
+        error
+            .message
+            .contains("Callable binding requires a concrete signature"),
+        "{error:?}"
+    );
+}
+
 fn apply_pattern_projection_types_and_boundaries() {
     let source =
         r#"result: Result<(String, Int)> = apply_pattern((7, "value"), (_2: Int, _1: String))"#;
@@ -11162,9 +11247,9 @@ fn apply_pattern_projection_types_and_boundaries() {
 payload: Result<Int> = apply_pattern(Ok(1), Ok(_1))
 failed: Result<Result<Int>> = apply_pattern(Err(NoneError), _1)
 constrained: Result<Int> = apply_pattern(Err(NoneError), Ok(_1: Int))"#,
-        r#"ext = *{|value| MatchResult::OK(value)}
+        r#"ext: ExtractorClosure<((Int, String) -> MatchResult<(Int, String)>)> = *{|value| MatchResult::OK(value)}
 result: Result<(String, Int)> = apply_pattern((3, "text"), ext(_2, _1))"#,
-        r#"unknown = *{|value: Int| MatchResult::Err(NoneError)}
+        r#"unknown: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(NoneError)}
 result: Result<Int> = apply_pattern(1, unknown(_1))"#,
         r#"def ordinary() -> Int { result = apply_pattern(3, _1); 7 }
 ordinary()"#,

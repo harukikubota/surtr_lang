@@ -766,7 +766,7 @@ def stronger(value: Monad<Int>) -> Int { 1 }
     for body in [
         "stronger(value)",
         "thunk = { value }; stronger(thunk())",
-        "id = {|x| x}; stronger(id(value))",
+        "id: (Box<Int> -> Box<Int>) = {|x| x}; stronger(id(value))",
         "pair = (value, 1); match pair { (item, _) => stronger(item), }",
         "values = [value]; match values { [item] => stronger(item), _ => 0, }",
     ] {
@@ -863,7 +863,7 @@ impl Holder { def new(value: $T) -> Holder<$T> { Holder { value: value } } }
         "thunk = { nums =? wrap(a); [item, ..tail] =? nums; Ok(item) }; match thunk() { Ok(item) => stronger(item), Err(_) => 0, }",
         "pair = (a, 1); match pair { (item, _) => stronger(item), }",
         "values = [a]; match values { [item] => stronger(item), _ => 0, }",
-        "identity = {|value| value}; stronger(identity(a))",
+        "identity: (Box<Int> -> Box<Int>) = {|value| value}; stronger(identity(a))",
         "thunk = { a }; stronger(thunk())",
         "holder = Holder(a); stronger(holder.value)",
         "match head([a]) { Maybe::Some(item) => stronger(item), Maybe::None => 0, }",
@@ -898,7 +898,7 @@ def preserve(values: $F<$T>) -> $F<$T> where $F: Functor { Functor::fmap(values,
 "#;
     for expression in [
         "stronger(a |> id())",
-        r#"identity = &id
+        r#"identity: (Box<Int> -> Box<Int>) = &id
 stronger(identity(a))"#,
         r#"mapped: Box<Box<Int>> = Functor::fmap(Box::Box(0), {|x: Int| a})
 match mapped { Box::Box(item) => stronger(item), }"#,
@@ -950,7 +950,7 @@ match nested {
     [] => 0,
   },
 }"#,
-        r#"identity = if (True, &id, &id)
+        r#"identity: (Box<Int> -> Box<Int>) = if (True, &id, &id)
 stronger(identity(a))"#,
     ] {
         check(&format!("{declarations}\na = Box::Box(1)\n{expression}"))

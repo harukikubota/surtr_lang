@@ -98,11 +98,13 @@ test("ExtractorClosure contract") {
     assert_eq((3, 4), if_let(3, tuple_output(first, second), (first, second), (0, 0)))
   }
 
-  it("infers literal input and payload types from the consumer") {
-    ext = *{|value| MatchResult::OK(value)}
-    assert_eq(7, if_let(7, ext(fresh_binding: Int), fresh_binding, 0))
-    assert_eq("text", if_let("text", ext(text), text, ""))
-    assert_eq((2, 3), if_let((2, 3), ext(first, second), (first, second), (0, 0)))
+  it("uses concrete literal signatures from binding annotations") {
+    int_ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::OK(value)}
+    string_ext: ExtractorClosure<(String -> MatchResult<String>)> = *{|value| MatchResult::OK(value)}
+    tuple_ext: ExtractorClosure<((Int, Int) -> MatchResult<(Int, Int)>)> = *{|value| MatchResult::OK(value)}
+    assert_eq(7, if_let(7, int_ext(fresh_binding), fresh_binding, 0))
+    assert_eq("text", if_let("text", string_ext(text), text, ""))
+    assert_eq((2, 3), if_let((2, 3), tuple_ext(first, second), (first, second), (0, 0)))
   }
 
   it("passes ExtractorClosure values through generic trait calls") {

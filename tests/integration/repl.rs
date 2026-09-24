@@ -690,13 +690,11 @@ fn repl_rejects_persisting_unresolved_result_callable_binding() {
     let combined = format!("{stdout}\n{stderr}");
 
     assert!(
-        combined.contains("Cannot persist binding with unresolved type variable."),
+        combined.contains("Callable binding requires a concrete signature"),
         "{combined}"
     );
     assert!(
-        combined.contains(
-            "Add a type annotation or use the value in a context that determines the success type."
-        ),
+        combined.contains("Add a concrete callable annotation"),
         "{combined}"
     );
     assert!(
@@ -712,7 +710,7 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
     let combined = format!("{stdout}\n{stderr}");
 
     assert!(
-        combined.contains("Cannot persist binding with unresolved type variable."),
+        combined.contains("Callable binding requires a concrete signature"),
         "{combined}"
     );
     assert!(combined.contains("ret = todo()"), "{combined}");

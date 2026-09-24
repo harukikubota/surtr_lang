@@ -173,7 +173,7 @@ value: Option<Int> = if(flag, pure(1), Option::Some(2))
 
 numeric literal の種類はこの推論で変更しません。`Int` literal を `Float` として使う暗黙 coercion はありません。
 
-型注釈で単相に固定していない local callable は、binding environment から独立した型スロットを call-site ごとに fresh にします。capture した外部値の型や外側 signature の rigid generic は一般化しません。
+local callable を変数へ束縛するときは、入力・戻り値を含む signature が concrete でなければなりません。未確定型を call-site ごとに fresh にする暗黙 generalization は行いません。closure / capture / ExtractorClosure を高階関数へ直接渡す場合は、引数の expected callable type から一意に導出できれば注釈を省略できます。外側 signature の rigid generic は、その declaration がすでに導入した静的入力として扱います。
 
 ## `from(...)` / `try_from(...)`
 

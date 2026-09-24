@@ -8,6 +8,12 @@ ordinary expressions supplied before the output child Patterns. The body returns
 Named Extractors are declarations in modules or impls; they are not ordinary
 callable values. The auto-imported `uncons` is a ready-to-use named Extractor.
 
+The matched input must have a concrete static type head. A bare generic input
+such as `value: $T`, or a Trait constraint intended to accept unrelated types,
+is rejected. Generic arguments under a concrete head remain valid, for example
+`value: List<$T>`. Put type-wide generic or Trait-constrained computation in a
+normal function.
+
 ## Named Extractors
 Declare a named Extractor inside a module or impl in a source file:
 
@@ -34,6 +40,12 @@ can be passed to helpers, but its application is still a Pattern. Bind it to a
 variable before using it as a head. Ordinary calls such as `shift(3)` and direct
 literal heads are not supported.
 
+Binding an ExtractorClosure to a variable requires a concrete signature. Add a
+binding or parameter annotation when the literal does not determine every input
+and payload type. When a literal is passed directly to a higher-order function,
+the function's expected ExtractorClosure type may determine those types without
+extra annotations. Normal closures and captures use the same callable boundary.
+
 xldr(1)> base = 10
 xldr(2)> shift = *{|amount: Int, value: Int| MatchResult::OK(value + amount + base)}
 xldr(3)> apply_pattern(3, shift(2, _1: Int))
@@ -45,6 +57,11 @@ The matched value and each reached Extractor are evaluated once. Pre-arguments
 are evaluated left to right when that head is reached. Pre-arguments, pins and
 heads resolve in the scope outside the whole Pattern, so a preceding child
 binding does not change the meaning of a later pre-argument or `^name`.
+
+Extractor bodies do not restrict effects or computational cost. Process
+messaging and IO handlers remain available through their typed interfaces. The
+language guarantees the static types crossing feature boundaries and immutable
+values, not purity, execution cost, or zero-cost abstraction.
 
 ## Unit payloads and failure
 A Unit success payload permits no child Pattern or one explicit child. The

@@ -84,7 +84,9 @@ Extractor の返却は canonical `MatchResult::OK` / `MatchResult::Err` の enum
 field 0 は variant discriminant、field 1 は payload とし、Err payload は runtime Error 値である。
 `GetTag` / `GetField` は canonical MatchResult の field 数・discriminant・Err payload を検査し、
 不正な表現を VM error にする。`Kernel::uncons` は通常 builtin として List / String を分解し、
-空入力の PatternMismatch Error と元の source location を返す。consumer 側は元 Error を保持または破棄する。
+空入力の PatternMismatch Error と元の source location を返す。Scar までに List と String の
+concrete 静的契約を選択済みとし、Eldr が generic target や Union の型判定を提供するものではない。
+同じ runtime primitive を共有しても consumer 側は型検査済み contract を受け取り、元 Error を保持または破棄する。
 
 ### 3.4 関数テーブル不変条件
 

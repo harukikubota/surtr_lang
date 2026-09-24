@@ -3614,15 +3614,15 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "uncons",
         arity: 1,
-        sig_str: "($Tail) -> MatchResult<($Head, $Tail), Error>",
+        sig_str: "(List<$A>) -> MatchResult<($A, List<$A>), Error>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
                 Some("Kernel"),
                 "uncons",
                 &[],
-                &[builtin_surface_parameter("term", "$Tail")],
-                "MatchResult<($Head, $Tail), Error>",
+                &[builtin_surface_parameter("term", "List<$A>")],
+                "MatchResult<($A, List<$A>), Error>",
                 &[],
             ),
         ],

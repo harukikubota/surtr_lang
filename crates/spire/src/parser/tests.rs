@@ -7595,6 +7595,20 @@ fn extractor_inputs_require_unique_names_and_a_final_self() {
 }
 
 #[test]
+fn extractor_rejects_trait_where_generalization() {
+    let error = parse(
+        "defmod Matchers { defextractor ext(value: $T) -> MatchResult<$T> where $T: Eq { MatchResult::OK(value) } }",
+    )
+    .expect_err("Extractor must not use a Trait constraint to generalize its target");
+    assert!(
+        error
+            .message()
+            .contains("Extractor definitions do not support `where` clauses"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn extractor_closure_literal_requires_explicit_nonempty_parameters() {
     parse("extract = *{|value: Int| MatchResult::OK(value)}").expect("ExtractorClosure literal");
     for source in ["*{1}", "*{|| MatchResult::OK(1)}"] {

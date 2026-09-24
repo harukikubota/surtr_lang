@@ -8,6 +8,8 @@ named Extractor と ExtractorClosure は入力を1個以上取り、最後の入
 
 `defextractor` / `@builtin defextractor` は module または impl の下で宣言する。入力は1個以上で、最後の入力を consumer が渡す照合対象値とし、それ以前は事前引数にする。`impl` に付属する Extractor の `self` も最後に置く。named Extractor の実装一意性を維持し、事前引数数による overload は設けない。
 
+照合対象型の head は静的に concrete でなければならない。`value: $T`、未確定 constructor head、`where $T: Trait` で対象を型横断的にする宣言は拒否する。`List<$T>`、`Result<$T>`、`Range<$T>` のように concrete head の型引数へ型変数を置くことは許可する。通常関数が generic / Trait 制約による計算抽象を担当し、Extractor は特定の静的型構造の分解だけを担当する。Union、trait object、runtime type assertion を対象型の代替にしない。
+
 ```surtr
 deferror OutOfRange(value: Int) { "outside range" }
 defmod Bounds {
@@ -18,6 +20,8 @@ defmod Bounds {
 ```
 
 named Extractor の本体は Pattern 位置でのみ実行する。通常 call、capture、値化は拒否する。Extractor は常に partial Pattern であり、本体が常に `OK` を返しても通常 Bind `=` には使えない。qualified head、型 head に付属する `deconstruct` の解決規則は既存の Pattern 規則に従う。
+
+Extractor 本体の計算量、Effect、Process messaging、IO handler 呼び出しは制限しない。高コストな実装の実行コストは定義者の責任とする。言語が保証する安全性は、入力・payload・外部 API 間の値受け渡しが静的型を通ることと immutable な値／型付き Process interface に限定する。純粋性、計算量、zero-cost abstraction は安全性の保証対象ではない。
 
 ## MatchResult
 
@@ -99,7 +103,9 @@ ExtractorClosure<((Int, Int) -> MatchResult<Int, Error>)>
 
 ExtractorClosure は通常 Closure と同じ lexical capture 規則に従う第一級の値である。通常の変数、関数引数、戻り値として受け渡し、同じ signature の値を通常の `if` / `match` で選択できる。capture 内容の違いを専用型の不一致理由にしない。通常 Closure に適用される既存の escape / Facet 制約は維持する。
 
-型注釈、expected type、consumer input、projection を利用する側の型要求を通常推論へ接続する。定義位置で全型を確定しなければならないという専用制約は設けない。一方、Pattern application の引数領域は確定した callable signature の入力数と payload shape から静的に決める。generic の通常の型統一と、入力数 / 子 Pattern 数の推測は区別する。
+変数へ束縛する ExtractorClosure は、照合対象を含む全入力と payload の signature が concrete でなければならない。未注釈 literal を高階関数の引数へ直接渡す場合は、expected `ExtractorClosure<Signature>` から一意に導出できれば注釈を省略できる。通常 Closure / capture も同じ callable 境界に従い、未確定型を local polymorphic scheme として暗黙 generalize しない。外側の宣言済み rigid generic は新しい local generic の導入ではないため、その declaration の静的入力として保持できる。
+
+型注釈、expected type、consumer input、projection を利用する側の型要求を通常推論へ接続する。高階関数への直接引数では expected type を利用できるが、変数束縛境界を越えて後続 call / Pattern application から型を決め直さない。Pattern application の引数領域は確定した callable signature の入力数と payload shape から静的に決める。generic の通常の型統一と、入力数 / 子 Pattern 数の推測は区別する。
 
 通常推論後も境界や必要な型が未確定なら compile error とする。定義の実装候補数や consumer 名から推測しない。
 
@@ -403,7 +409,7 @@ get_extractor_closure() |> run_pattern(value)
 |---|---|
 | Spire | Extractor 複数入力、ExtractorClosure literal / 型注釈、projection 注釈・alias、予約語、OR / pipe 文脈、source span |
 | Sigil | signature と head identity、lexical shadowing、引数領域の保持、capture / scope、source origin |
-| Scar | canonical MatchResult / ExtractorClosure 型、通常推論、入力数・引数境界・payload shape / UnitOnly、projection 型と index、consumer policy、SafeBind target |
+| Scar | concrete Extractor target head、callable binding の concrete signature、canonical MatchResult / ExtractorClosure 型、expected type 推論、入力数・引数境界・payload shape / UnitOnly、projection 型と index、consumer policy、SafeBind target |
 | Forge | 共通 Pattern lowering、事前引数と本体の単一評価、短絡、番号順 projection、Error の保持 / 破棄と早期 return |
 | Sindr / Eldr / loader | canonical 型・variant・builtin / callable metadata、既存 Closure capture 表現、builtin Extractor の MatchResult 表現、metadata / chunk rebase |
 | Rune / Xldr | script / module / REPL の診断・継続、signature / completion、capture 付き値の受け渡しと表示 |
@@ -435,3 +441,4 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 15. 旧専用経路と互換 fallback が残らず、正本・標準 @doc・実装・テストが同じ契約を示す。
 16. Extractor::from_result が単一入力の Result-returning callable を受理し、単値 / tuple / Unit payload を維持する。生成時は本体未評価、各 occurrence 到達時は一回評価とし、元 Error の保持、Result payload の追加 unwrap なし、通常 Closure の capture、Option / raw payload / 入力 arity 不一致の静的拒否を確認する。
 17. 異なる payload 型の Extractor を match の別 branch で使い、各 branch の式が同じ型を返す場合に成立する。apply_pattern の結果が既存 Result / Monad 操作へ接続でき、Pattern 内の bind が外へ漏れない。
+18. named / builtin Extractor の裸 generic target と Trait `where` 一般化を拒否し、concrete head 内の generic argument は受理する。未具体化 Closure / capture / ExtractorClosure の変数束縛を拒否し、高階関数へ直接渡す場合は expected type から導出する。List / String の uncons は別々の concrete 静的契約として検査する。

@@ -93,9 +93,12 @@ fn enum_finalization_does_not_relax_callable_return_type_argument_rules() {
 def make::<$T>() -> Option<$T> {{ Option::None }}
 factory = {{|value| [Option::Some(value), make()]}}"#
     );
-    let error = typecheck(&source).expect_err("closure input must not resolve a callable RTA");
-    assert_eq!(
-        error.structured.expect("structured RTA diagnostic").reason,
-        diagnostics::TypeDiagnosticReason::AmbiguousReturnTypeArgument
+    let error = typecheck(&source)
+        .expect_err("an unresolved closure and callable RTA must not cross a binding boundary");
+    assert!(
+        error
+            .message
+            .contains("Callable binding requires a concrete signature"),
+        "{error:?}"
     );
 }

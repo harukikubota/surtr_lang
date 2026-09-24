@@ -4377,6 +4377,21 @@ impl Checker {
                             None => Ok(self.env.fresh_tyvar()),
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    let target_param = param.last().ok_or_else(|| {
+                        TypeError::new("Extractor requires at least one input", id.span.clone())
+                    })?;
+                    let target_span = target_param
+                        .ty
+                        .as_ref()
+                        .map(Self::ast_ty_span)
+                        .unwrap_or(&target_param.id.span);
+                    self.require_concrete_extractor_target_head(
+                        param_tys
+                            .last()
+                            .expect("non-empty Extractor parameter types"),
+                        target_span,
+                        &id.name,
+                    )?;
                     let ret = self.resolve_builtin_ast_ty_in_context(
                         ret_ty,
                         TypeSyntaxContext::ExtractorReturn,
@@ -4574,6 +4589,21 @@ impl Checker {
                             None => Ok(self.env.fresh_tyvar()),
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    let target_param = param.last().ok_or_else(|| {
+                        TypeError::new("Extractor requires at least one input", span.clone())
+                    })?;
+                    let target_span = target_param
+                        .ty
+                        .as_ref()
+                        .map(Self::ast_ty_span)
+                        .unwrap_or(&target_param.id.span);
+                    self.require_concrete_extractor_target_head(
+                        param_tys
+                            .last()
+                            .expect("non-empty Extractor parameter types"),
+                        target_span,
+                        &id.name,
+                    )?;
                     let ret = self.resolve_signature_ast_ty_in_context(
                         ret_ty,
                         TypeSyntaxContext::ExtractorReturn,

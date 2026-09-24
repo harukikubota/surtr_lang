@@ -18,7 +18,8 @@ Surtr では、見た目が似ていても次の 4 つは役割が違います�
 - compose 系演算子 `>>`, `>*`, `>=>` は call ではなく関数値を要求します
 - unqualified infix `` `on` `` は常に `Function::on` を呼びます
 - closure / capture 内の trait helper は、期待 callable 型がある場所まで解決を遅延できます
-- 型注釈で単相に固定していない local callable は、呼び出しごとに fresh な型で利用できます
+- local callable を変数へ束縛するときは concrete な signature が必要です
+- closure / capture を高階関数へ直接渡すときは、その expected callable type から導出できれば注釈を省略できます
 
 ## 関数コール
 
@@ -38,14 +39,22 @@ sum = add(1, 2)              # Int
 name = User::get_name(user)  # String
 ```
 
-local callable の型スロットは call-site ごとに fresh になるため、同じ callable を異なる型で呼べます。1 式にまとめるか行を分けるかは結果に影響しません。
+local callable は変数へ束縛する境界で signature を確定します。後続の call-site ごとに別の型へ generalize しません。
 
 ```surtr
-id = {|x| x}
-pair: (Int, String) = (id(1), id("surtr"))
+int_id: (Int -> Int) = {|x| x}
+value = int_id(1)
 ```
 
-外側から capture した値の型や、明示注釈で固定した型まで call ごとに変わるわけではありません。
+高階関数へ直接渡す場合は、引数の expected type がその場で型を決められます。
+
+```surtr
+def apply(value: $A, f: ($A -> $A)) -> $A { f(value) }
+number = apply(1, {|x| x})
+text = apply("surtr", {|x| x})
+```
+
+generic 関数の capture も同じです。`&identity` を変数へ置くなら concrete な callable 注釈が必要ですが、`apply(1, &identity)` のような直接引数では expected type から具体化できます。
 
 一方で、compose 系が欲しいのは「実行結果」ではなく「あとで呼べる値」です。
 

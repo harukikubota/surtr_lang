@@ -4687,7 +4687,7 @@ fn core_standard_monad_transformer_persists_explicit_rta() {
         rendered_text(&base)
     );
     let stacked = engine
-        .handle_line("stacked = MonadT::lift::<ReaderT<String, OptionT<Result, _>, _>>(base)");
+        .handle_line("stacked = MonadT::lift::<ReaderT<String, OptionT<Result, _>, Int>>(base)");
     assert!(
         !matches!(stacked.output, ReplOutput::EvalError { .. }),
         "{}",

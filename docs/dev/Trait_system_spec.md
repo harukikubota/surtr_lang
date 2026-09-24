@@ -656,7 +656,7 @@ user-defined `Struct` はフィールド数に関係なく inherent `new` を持
 pending obligation、substitution、declared bound、source generic name は次のすべてで整合して移動する。
 
 - inference variable の unify / concrete bind（失敗時 rollback を含む）
-- local callable scheme の generalize / instantiate
+- local callable binding の concrete signature 検査と、直接引数への expected type 伝播
 - callable instantiation clone
 - checker checkpoint / rollback と REPL state clone / restore
 - definition boundary と program boundary
@@ -696,9 +696,10 @@ compile-fail contract は phase、error kind/message、primary/related span を�
 
 ## 7. Call-site inference の境界
 
-local non-expansive callable value は、environment に自由出現しない inference variable だけを scheme として
-generalize し、call-site ごとに fresh instantiate する。capture、outer rigid generic、明示注釈、effectful expression
-の value を一般化してはならない。
+local callable value は変数束縛境界で concrete signature を必要とし、未確定 inference variable を scheme として
+generalize しない。外側 declaration の rigid generic は新しい local generic の導入ではないため保持できる。
+closure / capture / ExtractorClosure を高階関数へ直接渡す場合は、引数の expected callable type を内側へ伝播し、
+その場で一意に concrete 化できれば明示注釈を要求しない。
 
 call、constructor、Trait helper、Apply/PipeApply、Compose/KleisliCompose は共通の argument inference route を使う。
 expected type が unbound variable なら actual を synthesize して unify し、既知なら closure を check して shape を
@@ -727,7 +728,7 @@ arity不一致やmetadata不整合をpartial `zip`で隠さない。Forgeへ渡�
 [`テスト方針.md`](./テスト方針.md) の 3.6.1 を正本とする。coherence の正逆順、nested pattern、parameterized
 impl-head / expression obligation の argument mismatch、deferred rehome/rollback、finite recursion、bare capability
 consumption、ReturnTypeArgumentの導入規則、同じdirect Trait名と同じ`$F`/`Self`のcarrier一致、異なるdirect Trait名のcarrier独立性、non-capturing slot、
-parent `Self` assumption、qualified diamond、call-site scheme と expected propagation を unit と Rune fixture の両方で保持する。
+parent `Self` assumption、qualified diamond、callable binding の concrete 境界と direct expected propagation を unit と Rune fixture の両方で保持する。
 
 workspace は既定 nextest profile で 2 回連続成功させる。timeout 引上げで性能問題を隠さず、新しい prelude-heavy
 fixture は既存 bucket に集約する。

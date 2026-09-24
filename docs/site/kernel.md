@@ -45,6 +45,7 @@ xldr(2)>
 - `String` では `(head, tail)`
 
 pattern position の `[head, ..tail]` はこの extractor alias です。
+List と String は適用時に別々の concrete 静的契約として検査されます。runtime primitive は共有しますが、裸の generic target、Union、runtime assertion を surface 型として公開しません。
 
 ## `inspect`
 

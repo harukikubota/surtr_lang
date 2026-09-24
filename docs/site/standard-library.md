@@ -268,7 +268,7 @@ List::len([1, 2, 3])  # => 3
 - `List::len` は O(1) 契約を保つ core helper
 - `[]` は Nil 側の単位元として扱う
 - `List` は先頭からの逐次処理と pattern 分解を主用途にする
-- MatchBlock では `Kernel::uncons(head, tail)` または `[head, ..tail]` で `List` / `String` を分解する
+- MatchBlock では `Kernel::uncons(head, tail)` または `[head, ..tail]` で `List` / `String` を分解する。両者は適用時に別々の concrete 静的契約として選ばれ、runtime 実装の共有を Union / generic target として surface へ公開しない
 - Expr 位置の `["t", ..source]` は list 構築であり、String constructor ではない
 
 ### `List::map`

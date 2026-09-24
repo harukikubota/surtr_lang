@@ -1,7 +1,7 @@
 def make::<$A>() -> (Int -> $A) { make() }
 
 def prepare() -> Unit {
-  callable = make()
+  callable: (Int -> String) = make()
   value = callable(1)
   ()
 }

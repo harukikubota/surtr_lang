@@ -269,13 +269,26 @@ value: Int = outer()"#
 }
 
 #[test]
-fn accepts_return_only_input_deferred_into_a_callable_result() {
-    typecheck_without_std_prelude(
+fn callable_result_binding_requires_a_concrete_return_type_argument() {
+    let error = typecheck_without_std_prelude(
         r#"def identity::<$A>() -> ($A -> $A) { {|value| value} }
 callable = identity()
 result: Int = callable(42)"#,
     )
-    .expect("a returned callable should receive its witness from a later application");
+    .expect_err("a later call must not choose an unresolved callable binding's witness");
+    assert!(
+        error
+            .message
+            .contains("Callable binding requires a concrete signature"),
+        "{error:?}"
+    );
+
+    typecheck_without_std_prelude(
+        r#"def identity::<$A>() -> ($A -> $A) { {|value| value} }
+callable: (Int -> Int) = identity()
+result: Int = callable(42)"#,
+    )
+    .expect("a concrete callable annotation may choose the return type argument");
 }
 
 #[test]

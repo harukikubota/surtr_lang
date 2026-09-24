@@ -456,15 +456,15 @@ def make() -> (_ -> Int) {
   always(2)
 }
 
-next = make()
+next: (_ -> Int) = make()
 print(to_string(next(False)))
 
-ten = {|_| 10}
+ten: (_ -> Int) = {|_| 10}
 print(to_string(ten([1, 2, 3])))
 
 idle: (-> Unit) = noop()
 print(inspect(idle()))
-idle2 = noop()
+idle2: (-> Unit) = noop()
 print(inspect(idle2()))"#,
         &["1", "ok", "2", "10", "()", "()"],
     );
@@ -474,14 +474,14 @@ fn function_module_helpers_work_end_to_end() {
     assert_output(
         r#"add = {|left: Int, right: Int| left + right}
 sub = {|left: Int, right: Int| left - right}
-flipped_sub = flip(sub)
-by_len = {|left, right| compare(left, right)} `Function::on` &String::len
+flipped_sub: (Int, Int -> Int) = flip(sub)
+by_len: (String, String -> Ordering) = {|left, right| compare(left, right)} `Function::on` &String::len
 
 print(to_string(apply(&id, 42)))
 print(to_string(flipped_sub(2, 10)))
 print(to_string(by_len("ab", "c")))
 
-name_score = Tuple::both(&String::len, {|text: String| text ++ "!"})
+name_score: (String -> (Int, String)) = Tuple::both(&String::len, {|text: String| text ++ "!"})
 print(inspect(name_score("abc")))
 
 users = [
@@ -490,22 +490,22 @@ users = [
   (1, 5, 20),
   (1, 5, 10),
 ]
-by_user = &compare `Function::on` Tuple::both3(
+by_user: ((Int, Int, Int), (Int, Int, Int) -> Ordering) = &compare `Function::on` Tuple::both3(
 {|user: (Int, Int, Int)| user._0},
 {|user: (Int, Int, Int)| user._1},
 {|user: (Int, Int, Int)| user._2}
 )
 print(inspect(List::sort_by(users, by_user)))
 
-show_first = Tuple::first({|num: Int| to_string(num)})
-len_second = Tuple::second(&String::len)
+show_first: ((Int, String) -> (String, String)) = Tuple::first({|num: Int| to_string(num)})
+len_second: ((Int, String) -> (Int, Int)) = Tuple::second(&String::len)
 print(inspect(dup(7)))
 print(inspect(show_first((10, "ok"))))
 print(inspect(len_second((10, "four"))))
 
-add_curried = curry(add)
-add_two = add_curried(2)
-add_uncurried = uncurry(add_curried)
+add_curried: (Int -> (Int -> Int)) = curry(add)
+add_two: (Int -> Int) = add_curried(2)
+add_uncurried: (Int, Int -> Int) = uncurry(add_curried)
 print(to_string(add_two(5)))
 print(to_string(add_uncurried(3, 4)))"#,
         &[

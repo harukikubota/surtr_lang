@@ -3667,7 +3667,14 @@ impl Parser<'_> {
             )
             .with_guidance(crate::error::ParseErrorGuidance::ReturnPositionImplTrait));
         }
-        self.reject_where_clause()?;
+        if matches!(self.peek(), Token::Where) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "Extractor definitions do not support `where` clauses; use a normal function for Trait-constrained abstraction",
+                self.peek_span(),
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::WhereClause));
+        }
         Ok((sp, name, type_params, params, ret_ty))
     }
 

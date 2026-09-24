@@ -217,11 +217,17 @@ Unit payload の子 Pattern は0または1であり、arity / annotation 不一�
 確定し、総 arity の不足・余剰を拒否してから、事前引数の型と payload の子 Pattern を
 検査する。同じ Pattern で新しく束縛する名前は事前引数・pin・head の解決に使わず、
 Pattern 開始時の外側 scope に名前がない場合は名前解決エラーとする。
+照合対象の head が裸の型変数、未確定 constructor、Hole の場合は
+`Extractor target type must have a concrete head` として宣言位置で拒否する。Extractor の
+`where` は parser で通常関数を使う案内とともに拒否する。
 SafeBind は元 Error の source facts を保持し、consumer や Extractor 名から message を作り直さない。
 未知 tag / 不正 field 数 / discriminant / Err payload は内部契約違反として停止し、
 Result の利用者エラー、通常不一致、Alternative empty に変換しない。
 
 ExtractorClosure は専用 signature 型を持ち、通常 call と通常 Closure との暗黙変換を拒否する。
+Closure / capture / ExtractorClosure を変数へ束縛するときに非 rigid の未確定型が残れば
+`Callable binding requires a concrete signature` とし、型注釈または expected type のある
+高階関数への直接引数を案内する。後続 call-site ごとの暗黙 generalize へ fallback しない。
 local head は選ばれた lexical identity の型を検査し、named Extractor へ探し直さない。
 引数の Expr / Pattern 候補は signature で選択し、未選択候補の診断を発行しない。
 選択された候補の Parse / Resolve 診断は元の phase、reason、span、cursor、関連ラベルを保持する。

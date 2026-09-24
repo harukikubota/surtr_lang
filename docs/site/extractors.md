@@ -2,12 +2,16 @@
 
 Extractor は `match` や `=?` で使う「分解の入口」です。
 
+照合対象には concrete な静的型 head が必要です。`value: $T` のような裸の型変数や、`where $T: Trait` で無関係な型を横断する定義は使えません。`List<$T>` や `Result<$T>` のように、concrete head の型引数へ型変数を置くことはできます。型一般の処理や Trait による抽象化は通常関数へ置きます。
+
 ## builtin extractor
 
 標準では `Kernel::uncons(term)` があります。
 
 - `List<$A>` を `(head, tail)` へ分解
 - `String` を `(head, tail)` へ分解
+
+これは `$Tail` や Union を対象にする1個の generic Extractor ではありません。適用する値から、`List<$T>` と `String` のどちらか一方の concrete な静的契約が選ばれます。runtime 実装は共有できますが、SRT だけで定義する場合は型ごとに別の Extractor として記述します。
 
 pattern の `[head, ..tail]` はこの alias です。
 
@@ -54,6 +58,8 @@ Extractor 本文でも SafeBind を使えます。失敗は本文自身の Match
 成功終端には明示的な MatchResult::OK が必要です。
 MatchResult は通常の変数・引数・field に保持できず、通常 Closure へ利用権限は継承されません。
 
+Extractor 本文の計算量や Effect は制限しません。Process messaging や IO handler も、通常の型付き API を通して呼び出せます。型を介した値の受け渡しと immutable な値は保証しますが、純粋性、実行コスト、zero-cost abstraction は保証対象ではありません。高コストな Extractor の実行コストは定義者の責任です。
+
 ## 事前引数
 
 最後の入力が照合対象です。それ以前の入力は Pattern head の先頭に通常の式として書きます。
@@ -94,6 +100,8 @@ is_match(3, greater(_))
 型は `ExtractorClosure<(Int -> MatchResult<Int, Error>)>` です。通常の変数・引数・戻り値として
 受け渡し、同じ signature の値を `if` や `match` で選択できます。引数の型注釈は推論できれば省略できます。
 事前引数、payload の分解、Unit 子の省略、本文の SafeBind は named Extractor と同じ契約です。
+
+変数へ束縛するときは入力と payload を含む signature 全体が concrete である必要があります。高階関数へ literal を直接渡す場合は、受け取り側の expected type から一意に導出できれば注釈は不要です。後続の Pattern 適用ごとに未確定型を別々の型へ generalize することはありません。
 
 Pattern head には bind 済みの名前を使います。`greater(12)` という通常 call、生成式を直接
 head にする形、普通の Closure との暗黙変換は許可しません。local の名前が named Extractor を
@@ -137,6 +145,7 @@ REPLで `:doc Extractor` を開くと、named Extractor、ExtractorClosure、事
 
 - extractor 名は constructor-style の大文字始まりにしない
 - extractor の入力型と pattern 期待型が合わないと type error
+- extractor の照合対象に裸の generic type parameter や Trait `where` 一般化を使わない
 - 戻り値の arity と pattern 側の束縛数が合う必要がある
 
 関連する compile error 例は `../../tests/fixtures/modules/fail/resolve_extractor_*` と `../../tests/fixtures/modules/fail/type_mismatch_extractor_*` にあります。

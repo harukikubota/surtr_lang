@@ -539,6 +539,28 @@ impl Checker {
         })
     }
 
+    pub(super) fn require_concrete_extractor_target_head(
+        &self,
+        target_ty: &Ty,
+        span: &Span,
+        extractor_name: &str,
+    ) -> Result<(), TypeError> {
+        match self.resolve_ty(target_ty) {
+            Ty::Var(_) | Ty::SelfApp(_) | Ty::Hole => Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Extractor target type must have a concrete head: {extractor_name}"
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Use a concrete target such as Int, String, List<$T>, or Result<$T>. Put type-wide or Trait-constrained computation in a normal function."
+                        .into(),
+                ),
+            }),
+            _ => Ok(()),
+        }
+    }
+
     pub(super) fn check_builtin_extractor_decl(
         &mut self,
         span: &Span,
@@ -564,6 +586,19 @@ impl Checker {
                 span.clone(),
             ));
         }
+        let target_param = params.last().expect("non-empty Extractor parameters");
+        let target_span = target_param
+            .ty
+            .as_ref()
+            .map(Self::ast_ty_span)
+            .unwrap_or(&target_param.id.span);
+        self.require_concrete_extractor_target_head(
+            param_tys
+                .last()
+                .expect("non-empty Extractor parameter types"),
+            target_span,
+            &id.name,
+        )?;
         let ret = self.resolve_builtin_ast_ty_in_context(
             ret_ty,
             TypeSyntaxContext::ExtractorReturn,
@@ -1805,6 +1840,20 @@ impl Checker {
                 span: param.id.span.clone(),
             });
         }
+        let target_param = params.last().expect("non-empty Extractor parameters");
+        let target_span = target_param
+            .ty
+            .as_ref()
+            .map(Self::ast_ty_span)
+            .unwrap_or(&target_param.id.span);
+        self.require_concrete_extractor_target_head(
+            &typed_params
+                .last()
+                .expect("non-empty Extractor parameter types")
+                .ty,
+            target_span,
+            &id.name,
+        )?;
         let local_bindings = typed_params
             .iter()
             .map(|param| (param.id.unique_id, param.ty.clone()))

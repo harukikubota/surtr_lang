@@ -1,10 +1,13 @@
 def accept(value: ($A, Option<Int>)) -> Int { 1 }
 
-id = {|x| x}
-alias = id
-pair: (Int, String) = (alias(1), alias("s"))
-selected = if(True, alias, alias)
-selected_pair: (Int, String) = (selected(3), selected("branch"))
+int_id: (Int -> Int) = {|x| x}
+string_id: (String -> String) = {|x| x}
+int_alias = int_id
+string_alias = string_id
+pair: (Int, String) = (int_alias(1), string_alias("s"))
+selected_int: (Int -> Int) = if(True, int_alias, int_alias)
+selected_string: (String -> String) = if(True, string_alias, string_alias)
+selected_pair: (Int, String) = (selected_int(3), selected_string("branch"))
 
 print(to_string(pair._0))
 print(pair._1)
