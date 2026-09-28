@@ -12,12 +12,12 @@ Surtr は Rust で実装する静的型付き関数型の Hobby 言語。
 
 ## 正本と構成
 
-着手時に `doc/要件定義v9.md` と変更対象の仕様・実装を確認する。
-仕様変更を伴う場合は正本を先に整合させる。依頼範囲を越える言語設計の変更は確認する。
+着手時に変更対象の実装・テストと、対応する `docs/dev/` / `docs/site/` / `lib/*.srt` の文書を確認する。
+現行挙動はソースコードと実行可能テストを優先し、意図的な仕様変更では対象領域の正本文書を先に整合させる。依頼範囲を越える言語設計の変更は確認する。
 
 - `docs/dev/`: `EldrVM_spec.md`、`Xldr_spec.md`、`テスト方針.md` などの開発仕様。診断変更は `diagnostics.md`、観測機能は `Rune_observability.md` を参照。
-- `doc/`: 要件定義のほか、設計案・実装計画。未確定事項は `doc/open-issues.md` に記録する。
-- `lib/*.srt`: 標準定義。利用者向け説明は `@doc` を正本にする。`@doc`にはREPLで実際に動作するサンプルを記載する。
+- `doc/`: 設計案・実装計画・調査メモなど、作業入力の置き場。未確定事項は `doc/open-issues.md` に記録する。
+- `lib/**/*.srt`: 標準定義。利用者向け説明は `@doc` を正本にする。`@doc`にはREPLで実際に動作するサンプルを記載する。
 - `crates/`: Spire（parse）→ Sigil（resolve）→ Scar（typecheck）→ Forge（codegen）→ Eldr（VM）。Rune は CLI、Xldr は REPL、Sindr は共有表現。
 
 ## 実装の境界

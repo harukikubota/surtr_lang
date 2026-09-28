@@ -15,6 +15,9 @@ xldr(3)>
 
 型注釈の書き方自体は `./type-annotations.md` にまとめています。
 
+`defp` は定義した module / impl の内部だけで参照できる private helper です。
+import 対象ではなく、外部から qualified path で呼ぶこともできません。
+
 ## `defstruct` / `defrecord` / `defenum` / `deferror`
 
 これらは file-oriented な宣言です。  
@@ -69,6 +72,7 @@ impl User {
 
 `new`、構造体リテラル、`deconstruct`、private field、property access のまとまった説明は
 `./structs.md` にあります。
+Record の定義・構築・分解・位置 path は [`record.md`](./record.md) を参照してください。
 
 ## `Result`
 

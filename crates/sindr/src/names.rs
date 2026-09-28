@@ -114,7 +114,12 @@ impl ImplicitRootNamespace {
 /// invalidates staged semantic snapshots.
 pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 2;
 
-/// Surface-level type identity defined by the language spec.
+/// Compile-space identity of a canonical declaration owner.
+///
+/// This is not a runtime value category or a runtime type tag. Identity-bearing
+/// roots are registered once in Sigil's shared `OwnerRegistry`; members and
+/// `impl` blocks refer back to their owner instead of creating another
+/// identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeIdentity {
     Type,

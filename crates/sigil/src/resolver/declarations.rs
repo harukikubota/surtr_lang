@@ -997,6 +997,11 @@ impl From<&OwnerEntry> for OwnerRef {
     }
 }
 
+/// Shared namespace for every identity-bearing declaration owner.
+///
+/// The canonical key is unique across owner kinds, so a module and a record
+/// cannot silently claim the same owner. Members and `impl` blocks are not
+/// registered as additional owners.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerRegistry {
     entries: BTreeMap<String, OwnerEntry>,
@@ -1145,6 +1150,10 @@ impl OwnerRegistry {
         self.constructor_trait_keys_with_external_parents(&BTreeSet::new())
     }
 
+    /// Compute TypeConstructor-trait promotion to a fixed point.
+    ///
+    /// Promotion follows parent-trait edges transitively and therefore cannot
+    /// depend on declaration order.
     fn constructor_trait_keys_with_external_parents(
         &self,
         external_parents: &BTreeSet<String>,
@@ -1743,6 +1752,9 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
                     pattern: arg
                         .pattern
                         .map(|pattern| Box::new(rewrite_self_pattern(*pattern, target))),
+                    named_pattern: arg.named_pattern.map(|(name, pattern)| {
+                        (name, Box::new(rewrite_self_pattern(*pattern, target)))
+                    }),
                 })
                 .collect(),
         ),

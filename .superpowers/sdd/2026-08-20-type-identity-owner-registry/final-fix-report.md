@@ -30,8 +30,8 @@ VM semantics are unchanged.
   their source id, decodes owner spans into source-aware labels, and renders
   multi-source diagnostics. Regressions cover prior-chunk/live and preload/live
   collisions and assert text from both sources.
-- **M1 — taxonomy wording:** `doc/要件定義v9.md` now states that canonical builtin
-  names use the shared metadata identity taxonomy (`Type`, `TypeConstructor`, or
+- **M1 — taxonomy wording:** the shared metadata and its focused developer docs
+  use the canonical builtin identity taxonomy (`Type`, `TypeConstructor`, or
   `Enum`) rather than describing every builtin owner as `Type`.
 
 ## TDD evidence

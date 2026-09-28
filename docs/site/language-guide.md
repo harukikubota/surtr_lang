@@ -804,11 +804,8 @@ not_fn = &`Boolean::not`
 
 ## 12. 標準定義ソースの前提
 
-現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
-
-```text
-Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, MonadT, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, OptionT, EitherT, ReaderT, StateT, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
-```
+現在の Surtr では、`Bootstrap` stage、test extension を必要に応じて含む shared standard
+stage、user source の順で読み込みます。完全なモジュール inventory と順序は compiler source が管理します。
 
 役割の分け方は次のとおりです。
 

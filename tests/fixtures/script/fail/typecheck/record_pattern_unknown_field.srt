@@ -1,0 +1,3 @@
+defrecord User(name: String, age: Int)
+user = User("Ada", 37)
+User(name: name, years: age) = user

@@ -1,0 +1,8 @@
+namespace Auth {
+  defrecord User(name: String)
+}
+namespace Admin {
+  defrecord User(name: String)
+}
+user: Auth::User = Auth::User(name: "Ada")
+Admin::User(name) = user

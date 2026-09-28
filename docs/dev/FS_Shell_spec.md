@@ -10,7 +10,7 @@ module との境界をまとめる開発者向け正本仕様。
 - builtin / VM 実装契約
 - テストで固定すべき観点
 
-language-level の正本は [../../doc/要件定義v9.md](../../doc/要件定義v9.md)、
+利用者向け surface は [FS / Shell](../site/shell.md) と標準定義 source の `@doc`、
 runtime 実行層の詳細は [EldrVM spec](./EldrVM_spec.md)、テスト配置方針は
 [テスト方針](./テスト方針.md) を併読する。
 

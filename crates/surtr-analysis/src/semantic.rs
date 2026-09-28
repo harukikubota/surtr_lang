@@ -56,6 +56,11 @@ pub struct CompletionSymbol {
     pub capabilities: Option<SymbolCapabilities>,
 }
 
+/// Canonical semantic aggregate consumed by tooling and interactive surfaces.
+///
+/// `CompletionSymbol` is a UI projection of this data. Display metadata from
+/// `.eldr` files must not be used to reconstruct identity, visibility,
+/// importability, or other compile-space capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolSemanticInfo {
     pub canonical_name: String,

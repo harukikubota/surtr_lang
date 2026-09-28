@@ -93,8 +93,8 @@ parse >> render
 - lib/traits/operator/lift_composable.srt
 - lib/traits/operator/kleisli_composable.srt
   - Composable、LiftComposable、KleisliComposable を Bootstrap builtin declaration へ移行
-- doc/要件定義v9.md
-  - composition operator declaration、dispatch、REPL query の契約
+- docs/site/function-operators.md / docs/dev/Xldr_spec.md
+  - composition operator surface、dispatch、REPL query の契約
 
 ## 実装順
 

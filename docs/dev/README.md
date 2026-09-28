@@ -7,6 +7,27 @@
 実装計画、作業チェックリスト、superpowers が生成した一時メモは正本ではないため、
 残す必要がある場合でも `doc/` に再整理し、`docs/` 配下へは置かない。
 
+## 正本の優先順位
+
+Surtr は、全仕様を一枚の集約文書へ複製しません。現行挙動は Rust / Surtr のソースコードと
+実行可能テストを優先し、文書は安定した外部契約と設計上の境界を説明します。文書と実装が
+食い違う場合は、まず実装とテストで現行挙動を確認し、文書を追随させます。意図的に仕様を
+変更する場合は、対象領域の正本文書を先に更新してから実装します。
+
+| 対象 | 正本・入口 |
+|---|---|
+| 利用者向け言語 surface | [`../site/language-reference.md`](../site/language-reference.md) と各機能ページ |
+| 標準 API | `../../lib/**/*.srt` の宣言と `@doc` |
+| parser / resolver / typecheck / codegen / VM の責務 | 各 `../../crates/*/README.md` と本ディレクトリの対象 spec |
+| builtin 名・signature・ID 順 | `../../crates/sindr/src/builtin.rs` の `BUILTIN_METAS` |
+| 標準定義の stage・ロード順 | `../../crates/xldr/src/loader.rs` の `STDLIB_MODULE_SPECS` |
+| source kind と compile policy | `../../crates/sindr/src/policy.rs` |
+| 診断構造と span | [`diagnostics.md`](./diagnostics.md) |
+| 未確定事項 | `../../doc/open-issues.md` |
+
+API 一覧、builtin 一覧、標準モジュールの完全なロード順など、ソースから機械的に分かる情報を
+手書きで複製しません。docs には責務、意味論、失敗境界、利用方法を残します。
+
 ## 仕様書
 
 - [EldrVM spec](./EldrVM_spec.md)
@@ -33,6 +54,6 @@ worker stop semantics はこのページを正本とし、`doc/` 配下の作業
 
 ## 併読するとよいもの
 
-- [../../doc/要件定義v9.md](../../doc/要件定義v9.md)
+- [利用者向け docs](../site/README.md)
 - [../../doc/open-issues.md](../../doc/open-issues.md)
 - [../../AGENTS.md](../../AGENTS.md)

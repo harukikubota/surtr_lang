@@ -1,8 +1,14 @@
 # Pattern / Extractor 実装契約
 
-この文書は、現行の Pattern、named Extractor、ExtractorClosure、MatchResult、`Kernel::apply_pattern` の構文・型・評価・フェーズ間契約を定める。全体要件は [要件定義v9](../../doc/要件定義v9.md)、利用者向けの説明は [Pattern Matching](../site/pattern-matching.md) と [Extractors](../site/extractors.md)、標準 API の一次情報は [`lib/extractor.srt`](../../lib/extractor.srt) の `@doc` を参照する。SafeBind と do の詳細は [do intrinsic](./Do_intrinsic_spec.md)、診断の構造化契約は [diagnostics](./diagnostics.md) に従う。
+この文書は、現行の Pattern、named Extractor、ExtractorClosure、MatchResult、`Kernel::apply_pattern` の構文・型・評価・フェーズ間契約を定める。利用者向けの説明は [Pattern Matching](../site/pattern-matching.md) と [Extractors](../site/extractors.md)、標準 API の一次情報は [`lib/extractor.srt`](../../lib/extractor.srt) の `@doc` を参照する。SafeBind と do の詳細は [do intrinsic](./Do_intrinsic_spec.md)、診断の構造化契約は [diagnostics](./diagnostics.md) に従う。
 
 named Extractor と ExtractorClosure は入力を1個以上取り、最後の入力を照合対象とする。戻り値は `MatchResult<Payload, Error>` であり、`MatchResult::OK` と `MatchResult::Err` の二状態だけを持つ。`Option` 返却、旧 `Matcher` / `apply_matcher` 経路、暗黙変換は受理しない。Pattern AST は第一級の値ではなく、ExtractorClosure の値化と Pattern consumer は別の境界である。
+
+## Record の構造的 Pattern
+
+`defrecord User(name: String, age: Int)` の `User(name, age)` は compiler-owned な構造的 Pattern として分解する。`User(age: selected_age, name: selected_name)` は field 名で対応付け、照合・binding は宣言順に行う。どちらも全 field が必要で、named と positional の混在、重複・未知・不足 field、field 名 shorthand は拒否する。
+
+Record の外枠は total である。子もすべて total の場合だけ通常 Bind `=` を許可する。partial な子があれば Pattern 全体も partial として `=` で拒否し、`match` / `if_let` などの consumer で使う。単一 arm が catch-all かどうかは子 Pattern まで再帰的に判定する。複数 arm の部分 Pattern を合成した構造的網羅性解析は行わない。Record Pattern は `MatchResult` を生成せず、一般 Extractor の事前引数・payload arity・失敗伝播規則を使わない。
 
 ## named Extractor
 

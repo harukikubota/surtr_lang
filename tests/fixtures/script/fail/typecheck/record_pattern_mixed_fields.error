@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Record pattern cannot mix named and positional fields

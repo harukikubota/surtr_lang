@@ -59,6 +59,11 @@ xldr(2)> print(inspect(pair))
 xldr(3)>
 ```
 
+## `set_exit_code`
+
+`set_exit_code(code)` は現在の実行に process exit code を設定します。script source では直接使えます。
+project compile では設定された entrypoint 内だけで使え、definition check と REPL chunk では拒否されます。
+
 ## `Function::always`
 
 `Function::always(value)` は ignored-input callable を返します。

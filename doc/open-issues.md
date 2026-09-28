@@ -1,7 +1,7 @@
 # Surtr Open Issues
 
-> 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
-> 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。cleanup で解消済みの項目は本ファイルに残さない。
+> 目的: 現行実装と対象領域の正本文書でまだ固定していない未解決事項だけを追跡する。
+> 本ファイルは「未解決事項の台帳」であり、確定事項はソースコード、実行可能テスト、`docs/dev/`、`docs/site/`、標準定義 source の `@doc` へ置く。`doc/` は draft / input / tmp 置き場として扱い、cleanup で解消済みの項目は残さない。
 
 最終更新日: 2026-09-13
 
@@ -54,7 +54,7 @@
 - 受け入れ条件:
   - v1 の cleanup guarantee と opaque `FileHandle` 契約を壊さずに拡張できる。
   - `FileOutHandler` の append-only runtime sink と、一般 file-system access の責務境界が docs と実装で混ざらない。
-  - binary / directory / metadata を追加する場合も、`doc/要件定義v9.md`、`docs/dev/EldrVM_spec.md`、`lib/file.srt` の三者で同じ境界を説明できる。
+  - binary / directory / metadata を追加する場合も、`docs/site/file-io.md`、`docs/dev/EldrVM_spec.md`、`lib/file.srt` の三者で同じ境界を説明できる。
 - テスト方針:
   - binary surface を導入する場合は `unit/sindr` / `unit/eldr` で runtime value と builtin contract を固定し、`lib/tests/*.srt` では `./tmp/sandbox/` 配下だけを使う。
   - directory / metadata surface を増やす場合は Rust integration で実ファイル状態を検証しつつ、spec/compile error のどこに置くかを `docs/dev/テスト方針.md` と同期する。

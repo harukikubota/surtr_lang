@@ -254,6 +254,7 @@ fn collect_match_pattern_expressions<'a>(
             collect_match_pattern_expressions(tail, expressions);
         }
         TypedMatchPattern::Tuple(items)
+        | TypedMatchPattern::Record(items)
         | TypedMatchPattern::Or(items)
         | TypedMatchPattern::Constructor { fields: items, .. } => {
             for item in items {
@@ -4920,6 +4921,10 @@ pub fn repl_facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
 
 fn facet_segment_label(segment: &TypedFacetSegment) -> String {
     match segment {
+        TypedFacetSegment::Field {
+            origin_index: Some(index),
+            ..
+        } => format!("_{index}"),
         TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
         TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
         TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
@@ -5085,11 +5090,22 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 }
                 let (kind, fallible, reason, policy) = match segment {
                     TypedFacetSegment::Field {
-                        readonly, private, ..
+                        readonly,
+                        private,
+                        origin_index,
+                        ..
                     } => (
-                        "field",
+                        if origin_index.is_some() {
+                            "record index"
+                        } else {
+                            "field"
+                        },
                         false,
-                        "field access",
+                        if origin_index.is_some() {
+                            "record position access"
+                        } else {
+                            "field access"
+                        },
                         match (*private, *readonly) {
                             (true, true) => "private readonly",
                             (true, false) => "private",
@@ -9320,6 +9336,10 @@ impl Codegen {
 
     fn facet_segment_display(segment: &TypedFacetSegment) -> String {
         match segment {
+            TypedFacetSegment::Field {
+                origin_index: Some(index),
+                ..
+            } => format!("._{index}"),
             TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
             TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
             TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
@@ -12078,6 +12098,25 @@ impl Codegen {
                 }
                 MatchPatternDecomp::Tuple(children)
             }
+            TypedMatchPattern::Record(fields) => {
+                let mut children = Vec::with_capacity(fields.len());
+                for (index, field_pat) in fields.iter().enumerate() {
+                    let inner_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(inner_slot));
+                    let field_decomp =
+                        self.emit_match_pattern_test(field_pat, inner_slot, fail_label, err_span)?;
+                    children.push(MatchPatternDecompChild {
+                        slot: inner_slot,
+                        decomp: field_decomp,
+                    });
+                }
+                MatchPatternDecomp::Constructor(children)
+            }
             TypedMatchPattern::Constructor {
                 tag,
                 fields,
@@ -12209,6 +12248,34 @@ impl Codegen {
                         (item_slot, None)
                     };
                     self.emit_match_pattern_bind(item, item_slot, item_decomp, err_span)?;
+                }
+            }
+            TypedMatchPattern::Record(fields) => {
+                let mut cached_children = match decomp {
+                    Some(MatchPatternDecomp::Constructor(children)) => Some(children.into_iter()),
+                    _ => None,
+                };
+                for (index, field_pat) in fields.iter().enumerate() {
+                    let (inner_slot, inner_decomp) =
+                        if let Some(children) = cached_children.as_mut() {
+                            let child = children.next().ok_or_else(|| CodegenError {
+                                message:
+                                    "Internal invariant broken: Record match decomp arity mismatch"
+                                        .into(),
+                                span: err_span.clone(),
+                            })?;
+                            (child.slot, Some(child.decomp))
+                        } else {
+                            let inner_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(slot));
+                            self.emit(Opcode::GetField {
+                                field_index: index as u32,
+                            });
+                            self.emit(Opcode::StoreLocal(inner_slot));
+                            (inner_slot, None)
+                        };
+                    self.emit_match_pattern_bind(field_pat, inner_slot, inner_decomp, err_span)?;
                 }
             }
             TypedMatchPattern::Constructor {

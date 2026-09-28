@@ -979,6 +979,12 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
                 rebase_pattern(inner, base, offset);
             }
         }
+        ResolvedPattern::Record(id, fields) => {
+            rebase_resolved_id(id, base, offset);
+            for (_, inner) in fields {
+                rebase_pattern(inner, base, offset);
+            }
+        }
         ResolvedPattern::Tuple(inners) | ResolvedPattern::Or(inners) => {
             for inner in inners {
                 rebase_pattern(inner, base, offset);

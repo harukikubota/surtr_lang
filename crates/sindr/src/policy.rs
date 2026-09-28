@@ -10,7 +10,11 @@ pub enum CompileUnitKind {
 /// semantic snapshots.
 pub const SOURCE_POLICY_SCHEMA_VERSION: u32 = 1;
 
-/// Logical source categories that drive parser/typechecker policy selection.
+/// Logical source categories that drive parser, typechecker, and runtime policy.
+///
+/// This classification is independent of file extensions. Consumers must
+/// derive their rules through [`SourceKind::policy`] rather than duplicating
+/// per-source switches in each compiler phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Script,

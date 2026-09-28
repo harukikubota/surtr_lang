@@ -153,6 +153,22 @@ impl Parser<'_> {
 
     pub(super) fn parse_pattern_argument(&mut self) -> Result<AstPatternArgument, ParseError> {
         let start = self.peek_span().start;
+        let mut named_parser = self.clone();
+        let named_pattern = (|| {
+            let (name, _) = named_parser.expect_ident()?;
+            named_parser.expect(&Token::Colon)?;
+            named_parser.skip_newlines();
+            let pattern = named_parser.parse_pattern()?;
+            named_parser.skip_newlines();
+            if !matches!(named_parser.peek(), Token::Comma | Token::RParen) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PatternSyntax,
+                    "Expected the end of a named Pattern argument",
+                    named_parser.peek_span(),
+                ));
+            }
+            Ok((name, Box::new(pattern)))
+        })();
         let mut expression_parser = self.clone();
         let expression = expression_parser.parse_expr().and_then(|value| {
             expression_parser.skip_newlines();
@@ -179,7 +195,7 @@ impl Parser<'_> {
                 ))
             }
         });
-        if expression.is_err() && pattern.is_err() {
+        if expression.is_err() && pattern.is_err() && named_pattern.is_err() {
             return Err(pattern.unwrap_err());
         }
         if expression.is_ok() && pattern.is_ok() && expression_parser.pos != pattern_parser.pos {
@@ -191,6 +207,8 @@ impl Parser<'_> {
         }
         let next = if pattern.is_ok() {
             pattern_parser
+        } else if named_pattern.is_ok() {
+            named_parser
         } else {
             expression_parser
         };
@@ -202,6 +220,7 @@ impl Parser<'_> {
             pattern_error: pattern.as_ref().err().cloned(),
             expression: expression.ok().map(Box::new),
             pattern: pattern.ok().map(Box::new),
+            named_pattern: named_pattern.ok(),
         })
     }
 

@@ -362,6 +362,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "facet_tuple_type_root_view_works_with_expected_context",
         facet_tuple_type_root_view_works_with_expected_context as fn(),
     ),
+    surface_case!(record_positional_facet_resolves_to_named_field),
+    surface_case!(record_positional_facet_rejects_out_of_bounds_and_tuple_root),
     (
         "deferred_tuple_facet_binding_can_be_reused_by_facet_intrinsics",
         deferred_tuple_facet_binding_can_be_reused_by_facet_intrinsics as fn(),
@@ -3173,6 +3175,56 @@ Facet::view(Tuple._0, pair)"#,
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
     assert!(matches!(last.node, TypedInner::FacetView { .. }));
+}
+
+fn record_positional_facet_resolves_to_named_field() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(name: String, age: Int)
+user = User("alice", 42)
+Facet::view(User._1, user)
+user._0"#,
+    );
+    let view = &typed[typed.len() - 2];
+    let TypedInner::FacetView { path, .. } = &view.node else {
+        panic!("expected positional record Facet view");
+    };
+    assert!(matches!(view.ty, scar::types::Ty::Int));
+    assert!(matches!(&path.segments[0], TypedFacetSegment::Field {
+        field_name, field_index: 1, origin_index: Some(1), ..
+    } if field_name == "age"));
+    assert!(matches!(typed.last().unwrap().ty, scar::types::Ty::Str));
+}
+
+fn record_positional_facet_rejects_out_of_bounds_and_tuple_root() {
+    let err = typecheck_with_rules(
+        "defrecord User(name: String, age: Int)\nUser._2",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("out-of-range Record index must fail");
+    assert!(
+        err.message.contains("Record index ._2 is out of bounds"),
+        "{err:?}"
+    );
+
+    let err = typecheck_with_rules(
+        "defrecord User(name: String, age: Int)\nUser._999999999999999999999999999999999999",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("overflowing Record index must fail as a position selector");
+    assert!(
+        err.message
+            .contains("Record index ._999999999999999999999999999999999999 is out of bounds"),
+        "{err:?}"
+    );
+
+    let err = typecheck_with_rules(
+        "defrecord User(name: String, age: Int)\nuser = User(\"alice\", 42)\nFacet::view(Tuple._1, user)",
+        RuntimeSourcePolicy::script(),
+    ).expect_err("Tuple root must require tuple source");
+    assert!(
+        err.message.contains("requires tuple source context"),
+        "{err:?}"
+    );
 }
 
 fn deferred_tuple_facet_binding_can_be_reused_by_facet_intrinsics() {

@@ -5,7 +5,7 @@
 
 正本との関係:
 
-- CLI surface の正本は `doc/要件定義v9.md`
+- CLI surface の正本は `docs/dev/Rune_cli_spec.md` と `crates/rune/` の引数 parser
 - VM 実行意味と観測の非介入原則は `docs/dev/EldrVM_spec.md`
 - 本書は `Rune` と `Eldr` の観測系オプション設計メモ兼運用ガイド
 

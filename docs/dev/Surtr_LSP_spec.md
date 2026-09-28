@@ -114,8 +114,7 @@ wasm + webview では次の形を許す。
 VM 状態を持つため、REPL binding completion だけは Xldr session state を入力として渡す。
 
 REPL command query parser は `spire` に置かない。Surtr source grammar ではなく、
-[../../doc/xldr_command_query_api_spec.md](../../doc/xldr_command_query_api_spec.md) に
-ロックインした tooling query surface であるため、`surtr-analysis::query` の小さい module
+[Xldr spec](./Xldr_spec.md) が定める tooling query surface であるため、`surtr-analysis::query` の小さい module
 として固定する。Xldr は `ReplQuery` 互換の alias でこの実装を呼ぶ。
 `surtr-query` crate へ分離するのは、query parser が `surtr-analysis` の他責務から
 独立して versioning したくなった場合だけでよい。

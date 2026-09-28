@@ -21,9 +21,9 @@ impl Checker {
             ResolvedPattern::ListCons(head, _) | ResolvedPattern::As(head, _, _) => {
                 Self::resolved_pattern_span(head)
             }
-            ResolvedPattern::Constructor(id, _) | ResolvedPattern::Extractor(id, _, _) => {
-                id.span.clone()
-            }
+            ResolvedPattern::Constructor(id, _)
+            | ResolvedPattern::Extractor(id, _, _)
+            | ResolvedPattern::Record(id, _) => id.span.clone(),
             ResolvedPattern::Tuple(items) | ResolvedPattern::Or(items) => items
                 .first()
                 .map(Self::resolved_pattern_span)
@@ -217,6 +217,12 @@ impl Checker {
                     .lookup_enum_variant_by_constructor_id(id.unique_id)
                     .map(|variant| self.instantiate_enum_variant(&variant).enum_ty),
             },
+            ResolvedPattern::Record(id, _) => self.env.lookup_type_def(&id.name).map(|def| {
+                Ty::Record(
+                    def.name.clone(),
+                    crate::types::NominalType::monomorphic(def.fields.clone()),
+                )
+            }),
             // Extractor patterns need the scrutinee type supplied by the
             // extractor contract; they remain checked by the normal path.
             ResolvedPattern::Extractor(_, _, _) => None,
@@ -702,6 +708,14 @@ impl Checker {
                     typed_items.push(self.check_match_subpattern(item, item_ty)?);
                 }
                 Ok(TypedMatchPattern::Tuple(typed_items))
+            }
+            ResolvedPattern::Record(id, fields) => {
+                let (_, ordered) = self.ordered_record_pattern_fields(id, fields, &expected_ty)?;
+                let mut typed = Vec::with_capacity(ordered.len());
+                for (item, field_ty) in ordered {
+                    typed.push(self.check_match_subpattern(item, &field_ty)?);
+                }
+                Ok(TypedMatchPattern::Record(typed))
             }
             ResolvedPattern::BoolLit(span, b) => {
                 if !self.types_compatible(&Ty::Bool, expected_ty) {
@@ -1208,6 +1222,9 @@ impl Checker {
             TypedMatchPattern::Tuple(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
+            TypedMatchPattern::Record(items) => {
+                items.iter().all(|item| self.is_match_catch_all(item))
+            }
             TypedMatchPattern::Extractor {
                 input_ty,
                 extractor,
@@ -1244,6 +1261,7 @@ impl Checker {
                 }
             }
             TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::Record(items)
             | TypedMatchPattern::Constructor { fields: items, .. }
             | TypedMatchPattern::Extractor { items, .. } => {
                 for item in items {

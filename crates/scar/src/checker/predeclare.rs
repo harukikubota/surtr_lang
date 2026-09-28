@@ -1203,6 +1203,18 @@ impl Checker {
                     );
                 }
                 Resolved::RecordDef(_, id, fields, _) => {
+                    if let Some(field) = fields.iter().find(|field| {
+                        field.visibility != spire::ast::Visibility::Public || field.readonly
+                    }) {
+                        return Err(TypeError {
+                            structured: None,
+                            message:
+                                "record fields do not support visibility or readonly modifiers"
+                                    .into(),
+                            span: field.span.clone(),
+                            hint: None,
+                        });
+                    }
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
@@ -1221,17 +1233,12 @@ impl Checker {
                             Ok((f.name.clone(), field_ty))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;
-                    let private_fields = fields
-                        .iter()
-                        .filter(|field| field.visibility == spire::ast::Visibility::Private)
-                        .map(|field| field.name.clone())
-                        .collect::<HashSet<_>>();
                     self.env
                         .resolve_type_def_signature(
                             &id.name,
                             ty_fields.clone(),
                             Vec::new(),
-                            private_fields,
+                            HashSet::new(),
                             HashSet::new(),
                             false,
                         )

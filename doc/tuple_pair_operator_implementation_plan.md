@@ -215,7 +215,7 @@ cargo nextest run -p scar
 
 **Files**
 
-- Modify: doc/要件定義v9.md
+- Modify: docs/site/language-reference.md
 - Modify: lib/bootstrap.srt
 - Modify: lib/types/tuple.srt
 - Create: tests/fixtures/script/pass/tuple/pair_operator.srt

@@ -99,14 +99,13 @@ cargo clean
   - [Trait system spec](./docs/dev/Trait_system_spec.md)
   - [Diagnostics contract](./docs/dev/diagnostics.md)
   - [Test policy entry](./docs/dev/テスト方針.md)
-- Canonical specs and internal design notes in `doc/`
-  - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
+- Drafts, implementation plans, and open issues in `doc/`
   - [Open issues](./doc/open-issues.md)
 - Internal docs index
   - [Internal docs guide](./docs/internal/README.md)
 - User-facing `Float` guide
   - [Float](./docs/site/float.md)
-- Standard-library docs live in `lib/*.srt` via `@doc`
+- Standard-library docs live in `lib/**/*.srt` via `@doc`
 - Implementation contracts live in Rust doc comments under `crates/**`
 - Install guide
   - [INSTALL.md](./INSTALL.md)
@@ -114,7 +113,7 @@ cargo clean
 
 ## Status
 
-Current work is focused on stabilizing the V9 baseline and cleanup items from the recent review pass.
+Current work is focused on stabilizing the implemented language surface and cleanup items from the recent review pass.
 
 Implemented core includes:
 

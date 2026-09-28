@@ -332,8 +332,11 @@ defmod Kernel {
   This is effectful and compile-unit aware, so it stays in the `Kernel`
   surface instead of a primitive-type module.
 
-  ## REPL
-  xldr(1)> set_exit_code(7)
+  Script source may call it directly. Project compilation permits it only in
+  the configured entrypoint; definition checks and REPL chunks reject it.
+
+  ## Source
+  `set_exit_code(7)`
   """
   @builtin def set_exit_code(code: Int) -> Unit
 

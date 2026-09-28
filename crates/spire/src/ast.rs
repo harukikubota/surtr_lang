@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 
-/// Source location — attached to every AST node for downstream error reporting.
+/// Source location attached to every AST node for downstream error reporting.
+///
+/// Offsets count Unicode scalar values (Rust `char`s), not UTF-8 bytes or LSP
+/// UTF-16 code units. Protocol adapters convert only at their external
+/// boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
@@ -357,6 +361,8 @@ pub struct AstPatternArgument {
     pub span: Span,
     pub expression: Option<Box<Ast>>,
     pub pattern: Option<Box<AstPattern>>,
+    /// Alternative `field: pattern` interpretation, selected only for Record heads.
+    pub named_pattern: Option<(Symbol, Box<AstPattern>)>,
     pub expression_error: Option<crate::error::ParseError>,
     pub pattern_error: Option<crate::error::ParseError>,
 }

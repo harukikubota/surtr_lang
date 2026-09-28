@@ -2,8 +2,8 @@
 
 `Rune` の CLI surface と dispatch 契約をまとめる開発者向け仕様。
 
-- CLI surface の正本は [../../doc/要件定義v9.md](../../doc/要件定義v9.md)
-- 本書は `Rune` の command dispatch、script 実行入口、テスト固定点を補足する
+- CLI の意味契約は本書、現行 command synopsis は [`crates/rune/README.md`](../../crates/rune/README.md) と引数 parser を正本とする
+- 本書は `Rune` の command dispatch、script 実行入口、テスト固定点を定める
 
 ---
 

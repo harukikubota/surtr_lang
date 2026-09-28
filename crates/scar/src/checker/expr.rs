@@ -7996,6 +7996,10 @@ impl Checker {
 
     fn pending_segment_from_typed(segment: &TypedFacetSegment) -> PendingFacetSegment {
         Self::pending_field_segment(match segment {
+            TypedFacetSegment::Field {
+                origin_index: Some(index),
+                ..
+            } => format!("_{index}"),
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
@@ -13759,7 +13763,43 @@ impl Checker {
                 ))
             }
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
-                let field_policy = self.env.field_policy(&name, field);
+                let origin_index = if matches!(self.resolve_ty(source_ty), Ty::Record(..)) {
+                    let numbered = field.strip_prefix('_').is_some_and(|digits| {
+                        !digits.is_empty() && digits.bytes().all(|ch| ch.is_ascii_digit())
+                    });
+                    let parsed = Self::parse_tuple_index_name(field);
+                    if numbered && parsed.is_none() {
+                        return Err(TypeError {
+                            structured: None,
+                            message: format!(
+                                "Record index .{field} is out of bounds for {}",
+                                self.ty_name(source_ty)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    parsed
+                } else {
+                    None
+                };
+                let resolved_field = if let Some(index) = origin_index {
+                    fields
+                        .get(index)
+                        .map(|(name, _)| name.as_str())
+                        .ok_or_else(|| TypeError {
+                            structured: None,
+                            message: format!(
+                                "Record index ._{index} is out of bounds for {}",
+                                self.ty_name(source_ty)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        })?
+                } else {
+                    field.as_str()
+                };
+                let field_policy = self.env.field_policy(&name, resolved_field);
                 if field_policy.is_some_and(|policy| policy.private) {
                     let display_name = Self::surface_name(&name);
                     let outside_impl =
@@ -13779,7 +13819,7 @@ impl Checker {
                 let (field_index, field_ty) = fields
                     .iter()
                     .enumerate()
-                    .find(|(_, (field_name, _))| field_name == field)
+                    .find(|(_, (field_name, _))| field_name == resolved_field)
                     .map(|(i, (_, ty))| (i as u32, ty.clone()))
                     .ok_or_else(|| TypeError {
                         structured: None,
@@ -13789,7 +13829,8 @@ impl Checker {
                     })?;
                 Ok((
                     TypedFacetSegment::Field {
-                        field_name: field.to_string(),
+                        field_name: resolved_field.to_string(),
+                        origin_index: origin_index.map(|index| index as u32),
                         field_index,
                         container_field_count: fields.len() as u32,
                         container_type_name: Self::surface_name(&name).to_string(),
@@ -14758,6 +14799,7 @@ mod tests {
     ) -> TypedFacetSegment {
         TypedFacetSegment::Field {
             field_name: field_name.into(),
+            origin_index: None,
             field_index,
             container_field_count: 1,
             container_type_name: container_type_name.into(),

@@ -51,7 +51,11 @@ impl fmt::Display for TypeRegistryError {
 
 impl std::error::Error for TypeRegistryError {}
 
-/// Registry of all user-defined types in a compiled program.
+/// Runtime registry of tagged user-defined types in a compiled program.
+///
+/// This is separate from compile-space `TypeIdentity`. Entry order and tags are
+/// validated runtime metadata used for lookup and display; user-visible `Int`
+/// values are never used as internal tags.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeRegistry {
     entries: Vec<TypeEntry>,

@@ -318,10 +318,10 @@ cache key には少なくとも次を含める。
 
 本書は次の既存仕様に従う。
 
-- `doc/要件定義v9.md`
-  - `CompileUnitKind::{Script, DefinitionCheck, Project, Repl}`
-  - `SourceKind::{Script, DefinitionSource, StdDefinitionSource, ReplChunk}`
-  - script include と definition source の parse rule 境界
+- `crates/sindr/src/policy.rs`
+  - 現行の `CompileUnitKind` / `SourceKind` と、それらから導く parse / runtime policy
+- `docs/site/language-reference.md`
+  - script include と definition source の surface 境界
 - `docs/dev/Xldr_spec.md`
   - `Bootstrap -> [standard definition sources]` の load order
   - `include` / `Project::add_path(...)` 由来 file を definition source として扱う契約

@@ -16,6 +16,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [トレイト実装](./trait-impls.md)
 - [`@derive`](./derive.md)
 - [構造体](./structs.md)
+- [Record](./record.md)
 - [Identity](./identity.md)
 - [Reader](./reader.md)
 - [State](./state.md)
@@ -50,6 +51,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 ## 正本との関係
 
 - 利用者向けの説明は `docs/site/`
-- 標準定義ソース API の一次情報は `../../lib/*.srt` の `@doc`
-- 正本仕様は `../../doc/要件定義v9.md`
+- 標準定義ソース API の一次情報は `../../lib/**/*.srt` の `@doc`
+- 現行挙動は Rust / Surtr のソースコードと実行可能テストを優先する
+- compact な言語 surface は `./language-reference.md`
 - 開発者向け仕様の導線は `../dev/README.md`

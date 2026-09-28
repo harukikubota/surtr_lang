@@ -107,6 +107,15 @@ impl Resolver {
                     ));
                 }
                 for (index, argument) in args.iter_mut().enumerate() {
+                    if matches!(kind, Some(DeclarationKind::Record)) {
+                        if let Some((_, named_child)) = argument.named_pattern.as_mut() {
+                            **named_child =
+                                self.select_pattern_argument_roles(*named_child.clone())?;
+                            argument.pattern = Some(named_child.clone());
+                            argument.expression = None;
+                            continue;
+                        }
+                    }
                     if index < pre_count {
                         if argument.expression.is_none() {
                             return Err(deferred_pattern_parse_error(
@@ -425,6 +434,29 @@ impl Resolver {
                     symbol_info: self.symbol_info_for_uid(&head_name, head_uid),
                     span: span.clone(),
                 };
+                if matches!(head_kind, DeclarationKind::Record) {
+                    let mut fields = Vec::with_capacity(inners.len());
+                    for argument in inners {
+                        let (name, pattern) = if let Some((name, pattern)) = argument.named_pattern
+                        {
+                            (Some(name), pattern)
+                        } else {
+                            (
+                                None,
+                                argument.pattern.ok_or_else(|| {
+                                    deferred_pattern_parse_error(
+                                        argument.pattern_error,
+                                        "Record field argument must be a Pattern",
+                                        argument.span,
+                                    )
+                                })?,
+                            )
+                        };
+                        let pattern = self.select_pattern_argument_roles(*pattern)?;
+                        fields.push((name, self.resolve_pattern_inner(pattern, seen, outer)?));
+                    }
+                    return Ok(ResolvedPattern::Record(resolved_id, fields));
+                }
                 let mut pre_args = Vec::new();
                 let mut resolved_inners = Vec::new();
                 for argument in inners {
@@ -522,22 +554,7 @@ impl Resolver {
                             resolved_inners,
                         ))
                     }
-                    DeclarationKind::Record => {
-                        // Records will eventually gain compiler-generated deconstructors.
-                        // For now, keep `Record(...)` MatchBlock heads explicitly unsupported.
-                        Err(ResolveError {
-                            message: format!(
-                                "Record MatchBlock heads like `{}` are not supported yet",
-                                head_name
-                            ),
-                            span,
-                            diagnostic: crate::error::ResolveErrorDiagnostic {
-                                reason: crate::error::ResolveErrorReason::Pattern,
-                                subject: None,
-                            },
-                            related_labels: Vec::new(),
-                        })
-                    }
+                    DeclarationKind::Record => unreachable!("Record heads are handled above"),
                     other => Err(ResolveError {
                         message: format!(
                             "MatchBlock head `{}` is not a constructor or extractor ({:?})",
@@ -698,6 +715,11 @@ fn remap_or_pattern_bindings(
         | ResolvedPattern::Or(items) => {
             for item in items {
                 remap_or_pattern_bindings(item, common_ids)?;
+            }
+        }
+        ResolvedPattern::Record(_, fields) => {
+            for (_, inner) in fields {
+                remap_or_pattern_bindings(inner, common_ids)?;
             }
         }
         ResolvedPattern::ListCons(head, tail) => {

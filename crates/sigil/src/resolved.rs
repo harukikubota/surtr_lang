@@ -495,6 +495,8 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     DurationLit(Span, SurtrInt),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
+    /// Compiler-owned structural Record pattern. Named fields are normalized by Scar.
+    Record(ResolvedId, Vec<(Option<Symbol>, ResolvedPattern)>),
     Extractor(ResolvedId, Vec<Resolved>, Vec<ResolvedPattern>),
     Tuple(Vec<ResolvedPattern>),
     Or(Vec<ResolvedPattern>),

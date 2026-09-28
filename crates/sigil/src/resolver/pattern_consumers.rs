@@ -188,6 +188,7 @@ impl Resolver {
                     span: span.clone(),
                     expression: Some(Box::new(param)),
                     pattern: None,
+                    named_pattern: None,
                     expression_error: None,
                     pattern_error: None,
                 },

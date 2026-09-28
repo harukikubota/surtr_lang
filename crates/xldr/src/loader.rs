@@ -69,6 +69,12 @@ pub(crate) struct StdlibModuleSpec {
     pub variant: StdlibVariant,
 }
 
+/// Canonical standard-library module inventory, stage assignment, and order.
+///
+/// `Bootstrap` forms compile stage 0. `Main` and `TestExtension` are inventory
+/// classes collected into the shared standard compile stage 1; the variant
+/// controls whether test extensions are present. Documentation must not
+/// maintain a second exhaustive ordered module list.
 const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
     StdlibModuleSpec {
         file_name: BUILTIN_PRELUDE_FILE,

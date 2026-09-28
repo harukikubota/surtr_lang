@@ -2608,6 +2608,17 @@ impl Checker {
         id: &ResolvedId,
         fields: &[ResolvedField],
     ) -> Result<TypedNode, TypeError> {
+        if let Some(field) = fields
+            .iter()
+            .find(|field| field.visibility != spire::ast::Visibility::Public || field.readonly)
+        {
+            return Err(TypeError {
+                structured: None,
+                message: "record fields do not support visibility or readonly modifiers".into(),
+                span: field.span.clone(),
+                hint: None,
+            });
+        }
         let ty_fields: Vec<(String, Ty)> = fields
             .iter()
             .map(|f| {
@@ -2617,17 +2628,6 @@ impl Checker {
                 ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
-        let private_fields = fields
-            .iter()
-            .filter(|field| field.visibility == spire::ast::Visibility::Private)
-            .map(|field| field.name.clone())
-            .collect::<HashSet<_>>();
-
-        let readonly_fields = fields
-            .iter()
-            .filter(|field| field.readonly)
-            .map(|field| field.name.clone())
-            .collect::<HashSet<_>>();
         let readonly_root = false;
 
         let tag = self
@@ -2636,8 +2636,8 @@ impl Checker {
                 &id.name,
                 ty_fields.clone(),
                 Vec::new(),
-                private_fields,
-                readonly_fields,
+                HashSet::new(),
+                HashSet::new(),
                 readonly_root,
             )
             .ok_or_else(|| TypeError {
@@ -2655,9 +2655,9 @@ impl Checker {
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
         let field_policies = fields
             .iter()
-            .map(|field| crate::typed::TypedFieldPolicy {
-                private: field.visibility == spire::ast::Visibility::Private,
-                readonly: field.readonly,
+            .map(|_| crate::typed::TypedFieldPolicy {
+                private: false,
+                readonly: false,
             })
             .collect();
 

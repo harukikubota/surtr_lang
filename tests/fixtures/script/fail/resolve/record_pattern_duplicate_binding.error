@@ -1,0 +1,2 @@
+phase: resolve
+contains: Duplicate binding in pattern: value

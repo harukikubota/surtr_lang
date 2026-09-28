@@ -2,6 +2,114 @@ use super::*;
 use diagnostics::{PatternKind, TypeDiagnosticReason};
 
 impl Checker {
+    pub(super) fn ordered_record_pattern_fields<'a>(
+        &self,
+        id: &ResolvedId,
+        fields: &'a [(Option<spire::ast::Symbol>, ResolvedPattern)],
+        expected_ty: &Ty,
+    ) -> Result<(u32, Vec<(&'a ResolvedPattern, Ty)>), TypeError> {
+        let Ty::Record(expected_name, nominal) = self.resolve_ty(expected_ty) else {
+            return Err(self.pattern_error(
+                TypeDiagnosticReason::PatternShapeMismatch,
+                PatternKind::Constructor,
+                Some(id.name.clone()),
+                Some("Record".into()),
+                Some(expected_ty),
+                None,
+                None,
+                Vec::new(),
+                &id.span,
+            ));
+        };
+        let def = self.env.lookup_type_def(&id.name).ok_or_else(|| {
+            self.typecheck_invariant_error(
+                "resolved Record pattern has no type definition",
+                &id.span,
+            )
+        })?;
+        let expected_tag = self
+            .env
+            .lookup_type_def(&expected_name)
+            .map(|definition| definition.tag);
+        if !matches!(def.kind, crate::env::TypeKind::Record) || expected_tag != Some(def.tag) {
+            return Err(TypeError::new(
+                format!(
+                    "Record pattern `{}` does not match `{expected_name}`",
+                    id.name
+                ),
+                id.span.clone(),
+            ));
+        }
+        let named = fields.iter().all(|(name, _)| name.is_some());
+        let positional = fields.iter().all(|(name, _)| name.is_none());
+        if !named && !positional {
+            return Err(TypeError::new(
+                "Record pattern cannot mix named and positional fields",
+                id.span.clone(),
+            ));
+        }
+        if named {
+            let mut seen = std::collections::HashSet::new();
+            for (name, _) in fields {
+                let name = name.as_ref().expect("named mode checked above");
+                if !seen.insert(name) {
+                    return Err(TypeError::new(
+                        format!("Duplicate Record pattern field `{name}`"),
+                        id.span.clone(),
+                    ));
+                }
+                if !nominal
+                    .fields
+                    .iter()
+                    .any(|(field_name, _)| field_name == name)
+                {
+                    return Err(TypeError::new(
+                        format!("Unknown Record pattern field `{name}`"),
+                        id.span.clone(),
+                    ));
+                }
+            }
+            if let Some((missing, _)) = nominal.fields.iter().find(|(name, _)| !seen.contains(name))
+            {
+                return Err(TypeError::new(
+                    format!("Missing Record pattern field `{missing}`"),
+                    id.span.clone(),
+                ));
+            }
+        }
+        if fields.len() != nominal.fields.len() {
+            return Err(self.pattern_error(
+                TypeDiagnosticReason::PatternArityMismatch,
+                PatternKind::Constructor,
+                Some(id.name.clone()),
+                None,
+                Some(expected_ty),
+                Some(nominal.fields.len()),
+                Some(fields.len()),
+                Vec::new(),
+                &id.span,
+            ));
+        }
+        let mut ordered = Vec::with_capacity(fields.len());
+        for (index, (field_name, field_ty)) in nominal.fields.iter().enumerate() {
+            let pattern = if named {
+                let Some((_, pattern)) = fields
+                    .iter()
+                    .find(|(name, _)| name.as_ref() == Some(field_name))
+                else {
+                    return Err(TypeError::new(
+                        format!("Missing Record pattern field `{field_name}`"),
+                        id.span.clone(),
+                    ));
+                };
+                pattern
+            } else {
+                &fields[index].1
+            };
+            ordered.push((pattern, field_ty.clone()));
+        }
+        Ok((def.tag, ordered))
+    }
     pub(super) fn projection_shape_error(
         &self,
         expected: &str,
@@ -82,6 +190,13 @@ impl Checker {
                     .iter()
                     .map(|item| self.select_application_pattern(item))
                     .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::Record(id, fields) => ResolvedPattern::Record(
+                id.clone(),
+                fields
+                    .iter()
+                    .map(|(name, item)| Ok((name.clone(), self.select_application_pattern(item)?)))
+                    .collect::<Result<_, TypeError>>()?,
             ),
             ResolvedPattern::Extractor(id, args, items) => ResolvedPattern::Extractor(
                 id.clone(),
@@ -164,6 +279,13 @@ impl Checker {
                     .into_iter()
                     .map(|item| self.lower_pattern_projections(item, slots))
                     .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::Record(id, fields) => ResolvedPattern::Record(
+                id,
+                fields
+                    .into_iter()
+                    .map(|(name, item)| Ok((name, self.lower_pattern_projections(item, slots)?)))
+                    .collect::<Result<_, TypeError>>()?,
             ),
             ResolvedPattern::Extractor(id, args, items) => ResolvedPattern::Extractor(
                 id,
@@ -783,6 +905,9 @@ impl Checker {
             | ResolvedPattern::Wildcard(_) => true,
             ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
             ResolvedPattern::Tuple(items) => items.iter().all(Self::is_total_bind_pattern),
+            ResolvedPattern::Record(_, fields) => fields
+                .iter()
+                .all(|(_, item)| Self::is_total_bind_pattern(item)),
             ResolvedPattern::Or(_) => false,
             ResolvedPattern::Pin(_)
             | ResolvedPattern::ListNil(_)
@@ -976,6 +1101,27 @@ impl Checker {
                     typed_items.push(typed_item);
                 }
                 Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
+            }
+            ResolvedPattern::Record(id, fields) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                let (tag, ordered) = self.ordered_record_pattern_fields(id, fields, &rhs_ty)?;
+                let mut typed_fields = Vec::with_capacity(ordered.len());
+                let mut field_tys = Vec::with_capacity(ordered.len());
+                for (item, field_ty) in ordered {
+                    let (typed, _) = self.check_pattern(item, &field_ty, span)?;
+                    typed_fields.push(typed);
+                    field_tys.push(field_ty);
+                }
+                Ok((
+                    TypedPattern::Constructor {
+                        ty: rhs_ty.clone(),
+                        tag,
+                        field_tys,
+                        fields: typed_fields,
+                        field_offset: 0,
+                    },
+                    rhs_ty,
+                ))
             }
             ResolvedPattern::Or(_) => Err(self.pattern_error(
                 TypeDiagnosticReason::PatternShapeMismatch,

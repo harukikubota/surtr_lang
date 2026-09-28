@@ -1,9 +1,10 @@
 @doc """
 Standard `Option` enum.
 `Option<$T>` represents an optional value in user code.
-It is not part of Surtr's failure-propagation machinery: `=?` still rejects
-`Option`, and missing values only participate in Result control flow after an
-explicit conversion.
+It is not part of Surtr's automatic failure-propagation machinery: `=?` does
+not unwrap an `Option`. A partial pattern can still inspect the whole value,
+for example `Option::Some(value) =? option`. Missing values participate in
+Result control flow only after an explicit conversion.
 The type sugar `T?` builds `Option<T>`.
 Using `Option<T>` in a struct field is therefore equivalent to using `T?`.
 Result-oriented updates still need explicit conversion in and out of `Option`.

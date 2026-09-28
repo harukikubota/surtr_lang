@@ -225,6 +225,8 @@ record でも読み方は同じです。
 - `Facet::set(Config.port, config, 8080)`
 - `Facet::over(Config.port, config, {|port| Ok(port + 1) })`
 
+Record には宣言順の位置 path もあります。`Config._0` は `Config.host` と同じ field を指し、`config._0` も `config.host` と同じ値を読みます。`Tuple._0` は tuple 専用で Record には使えません。`:facet Config._0` は field へのアクセスを正規化した後も、入力した位置 path の origin を `._0` と表示します。
+
 ## enum path
 
 enum variant selector は fallible path です。

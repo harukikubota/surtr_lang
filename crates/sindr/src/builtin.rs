@@ -436,6 +436,12 @@ pub const STANDARD_OWNER_IDENTITY_METAS: &[StandardOwnerIdentityMeta] =
 /// Builtin unique ids start after the first two scope-reserved ids.
 pub const BUILTIN_UID_BASE: u32 = 2;
 
+/// Canonical registry for runtime builtin functions and their source surfaces.
+///
+/// A builtin id is the entry's position in this slice. Eldr's `BUILTIN_IMPLS`
+/// must have the same length and order. Standard-source `@builtin`
+/// declarations validate a surface against this registry; they do not create a
+/// second builtin path or allocate an id.
 pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "print",

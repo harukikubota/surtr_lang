@@ -2249,7 +2249,9 @@ impl ScarSession {
             TypedMatchPattern::As(inner, _) => {
                 Self::rewrite_fun_indices_in_match_pattern(inner, rewrites)
             }
-            TypedMatchPattern::Or(items) | TypedMatchPattern::Tuple(items) => {
+            TypedMatchPattern::Or(items)
+            | TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::Record(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
                 }
@@ -4250,6 +4252,11 @@ impl Checker {
                     self.validate_constructor_body_positions(arg, constructor_traits)?;
                 }
                 for item in items {
+                    self.validate_constructor_pattern(item, constructor_traits)?;
+                }
+            }
+            ResolvedPattern::Record(_, fields) => {
+                for (_, item) in fields {
                     self.validate_constructor_pattern(item, constructor_traits)?;
                 }
             }

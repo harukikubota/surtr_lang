@@ -3959,6 +3959,12 @@ impl Checker {
                     .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
                     .collect(),
             ),
+            TypedMatchPattern::Record(items) => TypedMatchPattern::Record(
+                items
+                    .into_iter()
+                    .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
+                    .collect(),
+            ),
             TypedMatchPattern::Constructor {
                 tag,
                 fields,

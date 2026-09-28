@@ -4,7 +4,8 @@
 
 実装仕様。型検査完了時の未確定型変数の扱いを変更するため level 4 とする。
 
-正本は `doc/要件定義v9.md`、診断契約は `docs/dev/diagnostics.md` とし、本書と整合させる。
+利用者向け surface は `docs/site/language-reference.md`、診断契約は
+`docs/dev/diagnostics.md` とし、本書と整合させる。
 
 ## 目的と対象外
 

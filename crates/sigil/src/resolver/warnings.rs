@@ -372,6 +372,11 @@ fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
                 collect_pattern_usage(inner, usage);
             }
         }
+        ResolvedPattern::Record(_, fields) => {
+            for (_, inner) in fields {
+                collect_pattern_usage(inner, usage);
+            }
+        }
         ResolvedPattern::Tuple(inners) | ResolvedPattern::Or(inners) => {
             for inner in inners {
                 collect_pattern_usage(inner, usage);

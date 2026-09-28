@@ -8,14 +8,14 @@
 
 **Tech Stack:** Rust, Cargo nextest, Surtr script fixtures, Markdown specification.
 
-**Spec:** `doc/要件定義v9.md` and `docs/dev/Trait_system_spec.md`
+**Spec:** `docs/site/structs.md` and `docs/dev/Trait_system_spec.md`
 
 ## Global Constraints
 
 - フィールド数に関係なく user-defined `Struct` の inherent `new` は必須。
 - `@derive Default` は constructor surface を経由せず、struct literal で `Self` を生成する。
 - 0 フィールド struct literal は `StructNew { field_count: 0 }` として runtime に保持する。
-- 仕様変更時は `doc/要件定義v9.md` と該当する `docs/dev/` 正本を同期する。
+- 仕様変更時は `docs/site/structs.md` と該当する `docs/dev/` 正本を同期する。
 
 ### Task 1: Add regression coverage
 
@@ -94,7 +94,7 @@ Expected: PASS with output `True` for `empty_struct_default`.
 ### Task 3: Update normative documentation
 
 **Files:**
-- Modify: `doc/要件定義v9.md`
+- Modify: `docs/site/structs.md`
 - Modify: `docs/dev/Trait_system_spec.md`
 - Modify: `docs/dev/テスト方針.md`
 

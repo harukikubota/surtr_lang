@@ -1,0 +1,26 @@
+defrecord User(name: String, age: Int)
+namespace Auth {
+  defrecord User(name: String)
+}
+
+user = User("Ada", 37)
+User(name, age) = user
+User(age: reordered_age, name: reordered_name) = user
+User((typed_name: String), typed_age) = user
+
+print(inspect((name, age, reordered_name, reordered_age, typed_name, typed_age)))
+print(inspect(match user {
+  User(name: "Bob", age: _) => 0,
+  User(age: years, name: _) => years,
+}))
+
+auth_user: Auth::User = Auth::User(name: "Lin")
+Auth::User(auth_name) = auth_user
+print(auth_name)
+
+name_probe = *{|value: String| print("name"); MatchResult::OK(value)}
+age_probe = *{|value: Int| print("age"); MatchResult::OK(value)}
+print(inspect(match user {
+  User(age: age_probe(_), name: name_probe(_)) => 1,
+  _ => 0,
+}))

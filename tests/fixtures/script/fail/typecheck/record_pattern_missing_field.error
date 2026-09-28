@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Missing Record pattern field `age`

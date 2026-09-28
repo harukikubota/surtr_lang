@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Duplicate Record pattern field `name`

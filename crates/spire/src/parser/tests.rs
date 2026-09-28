@@ -177,6 +177,42 @@ fn test_readonly_record_field_modifier_is_rejected() {
 }
 
 #[test]
+fn test_record_field_visibility_modifiers_are_rejected() {
+    for source in [
+        "defrecord User(private name: String)",
+        "defrecord User(public name: String)",
+    ] {
+        let err = parse_with_context(source, ParserContext::project(0))
+            .expect_err("record field visibility should fail");
+        assert!(err
+            .message()
+            .contains("record fields do not support visibility modifiers"));
+    }
+}
+
+#[test]
+fn test_zero_field_record_definitions_are_rejected() {
+    for source in ["defrecord Empty()", "defrecord Empty( )"] {
+        let err = parse_with_context(source, ParserContext::project(0))
+            .expect_err("zero-field record should fail");
+        assert!(err
+            .message()
+            .contains("record must declare at least one field"));
+    }
+}
+
+#[test]
+fn test_record_positional_field_names_are_rejected() {
+    for source in ["defrecord User(_0: String)", "defrecord User(_12: String)"] {
+        let err = parse_with_context(source, ParserContext::project(0))
+            .expect_err("record positional field name should fail");
+        assert!(err
+            .message()
+            .contains("record field name cannot use positional `_N`"));
+    }
+}
+
+#[test]
 fn test_readonly_struct_metadata_and_field_modifier_are_preserved() {
     let ast = parse_with_context(
         "@readonly\ndefstruct User { private readonly password: String, readonly name: String }",

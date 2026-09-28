@@ -17,6 +17,19 @@ name =? expr
 - `=` と `=?` 自体の結果型も `Unit`
 - `Unit` を返す closure が期待される場所では、最後の式に `;` を付ければよい
 
+### `const`
+
+```surtr
+public const DEFAULT_PORT: Int = 8080
+private const PROFILE_NAME = User.profile / Profile.name
+```
+
+- file top-level にだけ宣言でき、visibility の既定は `public`
+- 名前は `[A-Z][A-Z0-9_]*`。先頭・末尾 `_` と `__` は使えない
+- public const は compile unit 全体、private const は宣言 file だけから参照できる
+- 値は primitive literal、Facet path、別の Facet const、またはそれらの `/` 合成に限定する
+- const Facet の bracket segment は literal `Int` / `String`、または両端が literal `Int` の range だけを受け付ける
+
 ### 関数
 
 ```surtr
@@ -45,7 +58,7 @@ where
   value: $M<$A>,
 }
 
-defrecord Name(field: Ty, ...)
+defrecord Name(field: Ty, ...) # 1個以上の public field。可視性指定は不可
 
 deferror Name(field: Ty, ...) { "message" }
 
@@ -209,7 +222,15 @@ False
 ```surtr
 "hello"
 "hello #{name}"
+'hello #{name}'
+"""
+multi-line #{name}
+"""
 ```
+
+`"..."` と `'...'` は escape と interpolation を扱います。`"""..."""` は raw な複数行文字列で、
+開始行のインデントを基準に本文を dedent します。`@doc` は同じ triple-quoted 形式だけを受け付け、
+doc 本文での interpolation は parse error です。
 
 ### リスト
 
@@ -453,7 +474,8 @@ result: Option<Int> = do::<Option> {
 - `Result` と `List` を `|*>`, `|*|`, `|>=`, `>*`, `>=>` で混在させない
 - `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
-- 結合優先度は `Bind < StdOn < Apply=Compose < Logical < Expr`
+- 結合優先度は `Bind < StdOn < Apply=Compose < AndOr < Compare < Pair < Expr`
+- pair constructor `(,)` は右結合で、`left (,) right` を nested pair に lower する
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
 - ``left `on` right`` は scope に見えている `on` ではなく、常に `Function::on(left, right)` として解釈される
@@ -581,11 +603,8 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 
 ### 標準定義ソース
 
-現在の標準定義ソース層は次の順序でロードされます。
-
-```text
-Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, MonadT, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, OptionT, EitherT, ReaderT, StateT, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> ユーザ拡張
-```
+標準定義は `Bootstrap` stage、test extension を必要に応じて含む shared standard stage、ユーザ拡張の順でロードされます。
+完全なモジュール inventory と順序は compiler source の `STDLIB_MODULE_SPECS` が管理します。
 
 ### auto import
 
@@ -603,6 +622,16 @@ Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat
 - `Struct` 名や `new` のように import 不可の宣言もある
 - `import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書ける
 - `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
+- 明示 import は同名の auto-import surface を shadow できる
+- 明示 import 同士、または auto-import 同士が同じ unqualified 名を導入する場合は原則 compile error
+- 現行実装では `Result::chain` / `Facet::chain` だけが例外であるため、この名前は qualified call を使う
+
+### user namespace
+
+- `namespace N { ... }` は型、trait、`impl` target、`defmod` head を1段の user namespace `N` に置く
+- `namespace N { defmod M { ... } }` と `defmod N::M { ... }` は同じ canonical module path を作る
+- 型は import せず、別 namespace の型を `N::Type` で直接参照する
+- `Global::` は compiler の暗黙 root 名であり、user source には書かない
 
 ### script / REPL の top-level ルール
 
@@ -681,7 +710,8 @@ import Kernel::print;
 `@builtin type ...` も同じく標準定義ソース専用です。  
 各標準定義ソース file の top-level に置いて、compiler が canonical head と照合します。
 
-`@doc """..."""` は `defmod` / `def` / `deferror` / `@builtin type` / `@builtin def` の直前に置けます。  
+`@doc """..."""` は public な module、type、callable、process owner などの宣言に付けられます。
+private declaration には付けられず、`impl Type` block 全体ではなく public member ごとに書きます。
 標準ライブラリではこの仕組みを使って source に API 説明を埋め込みます。
 
 `Result` には declaration-only の special constructor head もあります。
@@ -730,9 +760,9 @@ defmod Bootstrap {
 
 - associated types / associated consts
 - 匿名 `impl Trait` 型（parameter / return / generic argument / impl target component）
-- 型エイリアス / NewType
+- 任意のデータ型エイリアス / NewType（関数シグネチャ alias の `type F = (...)` は対応済み）
 - マクロシステム拡張
 - 並列コンパイル
 - 高度なモジュールシステム拡張
 
-Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を正本とします。その他の全体要件は [要件定義v9](../../doc/要件定義v9.md) を参照してください。
+Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を参照してください。開発者向けの正本一覧は [Developer Docs](../dev/README.md) にあります。

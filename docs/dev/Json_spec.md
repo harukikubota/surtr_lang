@@ -9,7 +9,8 @@
 - runtime builtin 契約
 - テストで固定すべき観点
 
-language-level の正本は `doc/要件定義v9.md`、runtime 実装の詳細は
+利用者向け surface は [`../site/json.md`](../site/json.md) と
+[`lib/types/json.srt`](../../lib/types/json.srt) の `@doc`、runtime 実装の詳細は
 `EldrVM_spec.md`、テスト配置方針は `テスト方針.md` を併読する。
 
 ---
@@ -134,9 +135,9 @@ schema-level encode は `impl Encode<JsonValue> for T` を明示実装して書�
 
 ## 4. Stdlib load order
 
-compile 側の標準定義ソースロード順は次に固定する。
-
-`Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, MonadT, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, OptionT, EitherT, ReaderT, StateT, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張`
+compile 側は `Bootstrap` stage、test extension を必要に応じて含む shared standard stage、ユーザ拡張の順で読む。
+モジュールの完全な inventory と順序は
+[`STDLIB_MODULE_SPECS`](../../crates/xldr/src/loader.rs) を正本とする。
 
 - `Encode` / `Decode` は `From` / `TryFrom` の後、`Json` の前にロードする
 - `JsonValue` は `Json` module 側で定義し、helper trait 側から参照される

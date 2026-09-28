@@ -1,4 +1,4 @@
-# Xldr 仕様書（V9）
+# Xldr 仕様書
 
 > Xldr は Surtr の対話実行層である。
 > 本書は REPL と将来のステッパー機能の外部契約を定義する。
@@ -72,8 +72,8 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 
 ### 3.2 初期化
 
-- セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, MonadT, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, OptionT, EitherT, ReaderT, StateT, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test]` の順で読み込む
-- この標準ロード順と stage 分割の実装正本は [crates/xldr/src/loader.rs](/Users/haruca/work/rust/surtr/crates/xldr/src/loader.rs:137) の `STDLIB_MODULE_SPECS` とし、本書の列挙はその要約として扱う
+- セッション開始時に標準 definition source を `Bootstrap` stage、その後の shared standard stage の順で読み込む。test extension は variant が有効な場合に shared standard stage へ追加する
+- 標準モジュールの完全な inventory、順序、stage 分割は [`STDLIB_MODULE_SPECS`](../../crates/xldr/src/loader.rs) を正本とし、本書へ重複列挙しない
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `SpecialTypes` source では `Unit`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `DoBlock<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `StandbyInit<$T>` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
@@ -181,7 +181,7 @@ REPL 実装は次の 3 層に分ける。
 | `:sig <target>` | public declaration の signature を表示する。command input は通常の REPL scope で名前解決し、local binding は関数名や trait family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。関数、trait family、operator family、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty!` / `Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。Facet API は callable signature を表示するが、`FacetPathKind` と kind alias は constructor を持たないため `:info` へ誘導する。 |
 | `:info <target>` | 定義、binding、dispatch、operator family / target、singleton process owner、PID binding の解決情報を表示する。command input は通常の REPL scope で名前解決し、local binding は callable family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。一般式 evaluation や旧 command-query 専用 surface には広げず、symbol / family / target / process / binding inspection に留める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
 | `:type <binding>` | REPL binding の型と `RuntimeTypeDisplay` を表示する。これは runtime 表示カテゴリであり compile-space `TypeIdentity` ではない。command input は通常の REPL scope で名前解決し、local binding は callable 名を shadow する。通常の値は visible binding lookup のみを対象とし、定義名、trait target query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。struct / record owner への field-oriented lookup はこの変更では追加しない。 |
-| `:facet <facet-target>` | FacetPath 定義、facet binding、または Facet API 消費の canonical path、5-slot type、derived kind、template/pending stage、API eligibility、slot 確定、result type、segment 一覧、停止点を表示する。表示 metadata は Forge が Scar の typed Facet node から生成する共通情報を用い、Xldr は再構築しない。 |
+| `:facet <facet-target>` | FacetPath 定義、facet binding、または Facet API 消費の canonical path、5-slot type、derived kind、template/pending stage、API eligibility、slot 確定、result type、segment 一覧、停止点を表示する。Record の `Type._N` は対応する名前付き field と同じアクセスへ正規化するが、表示上の origin は `._N` のまま保持する。表示 metadata は Forge が Scar の typed Facet node から生成する共通情報を用い、Xldr は再構築しない。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 | `:stacktrace [off|verbose|full]` | stack trace 表示モードを切り替える（省略時は現在値表示）。既定値は `off`。`verbose` はエラーメッセージの後に text stack trace を表示する。`full` は HTMLViewer 経由の将来モードとして予約し、現時点では未対応メッセージを返して状態を変えない。`:error` とは分離し、診断密度と stack trace 表示は独立に扱う。 |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |

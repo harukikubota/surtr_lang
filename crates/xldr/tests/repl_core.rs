@@ -276,6 +276,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_range_generic_helpers_survive_runtime_error_rollback),
     repl_core_case!(core_renders_top_level_facet_chain_expressions_without_codegen_leak),
     repl_core_case!(core_facet_command_reports_kind_apis_segments_and_stop_points),
+    repl_core_case!(core_facet_record_positional_origin_remains_visible),
     repl_core_case!(core_facet_command_inspects_operations_and_kind_queries),
     repl_core_case!(core_renders_negative_and_range_list_facets),
     repl_core_case!(core_doc_reports_match_and_cond_from_bootstrap_surface),
@@ -3413,6 +3414,41 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
         fallible.contains("variant mismatch returns Result"),
         "{fallible}"
     );
+}
+
+fn core_facet_record_positional_origin_remains_visible() {
+    let mut engine =
+        ReplEngine::from_script_source("tmp/user.srt", "defrecord User(name: String, age: Int)")
+            .expect("record preload should bootstrap");
+    let info = rendered_text(&engine.handle_line(":facet User._1"));
+    assert!(info.contains("full path: User._1"), "{info}");
+    assert!(info.contains("reason: record position access"), "{info}");
+    assert!(info.contains("hop 1: User._1"), "{info}");
+
+    let binding = rendered_text(&engine.handle_line("age_path = User._1"));
+    assert!(binding.contains("User._1"), "{binding}");
+    let bound_info = rendered_text(&engine.handle_line(":facet age_path"));
+    assert!(bound_info.contains("full path: User._1"), "{bound_info}");
+    assert!(
+        bound_info.contains("reason: record position access"),
+        "{bound_info}"
+    );
+
+    let named = rendered_text(&engine.handle_line(":facet User.age"));
+    assert!(named.contains("full path: User.age"), "{named}");
+    assert!(named.contains("reason: field access"), "{named}");
+
+    engine.handle_line("user = User(\"alice\", 42)");
+    let value_path = rendered_text(&engine.handle_line(":facet user._1"));
+    assert!(value_path.contains("full path: User._1"), "{value_path}");
+    assert!(
+        value_path.contains("reason: record position access"),
+        "{value_path}"
+    );
+    let value = rendered_text(&engine.handle_line("Facet::view(User._1, user)"));
+    assert!(value.contains("42"), "{value}");
+    let updated = rendered_text(&engine.handle_line("Facet::set(User._1, user, 43)"));
+    assert!(updated.contains("age: 43"), "{updated}");
 }
 
 fn core_facet_command_inspects_operations_and_kind_queries() {

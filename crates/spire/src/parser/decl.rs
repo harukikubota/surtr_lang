@@ -3048,44 +3048,70 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Defrecord)?;
         let (name, _) = self.expect_qualified_ident(2, "type")?;
+        if matches!(self.peek(), Token::Unit) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "record must declare at least one field",
+                self.peek_span(),
+            ));
+        }
         self.expect(&Token::LParen)?;
         self.skip_newlines();
 
+        if matches!(self.peek(), Token::RParen) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "record must declare at least one field",
+                self.peek_span(),
+            ));
+        }
+
         let mut fields = Vec::new();
-        if !matches!(self.peek(), Token::RParen) {
-            loop {
-                if matches!(self.peek(), Token::Eof) {
-                    return Err(ParseError::incomplete(")", self.peek_span()));
-                }
+        loop {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete(")", self.peek_span()));
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Private | Token::Public) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "record fields do not support visibility modifiers",
+                    self.peek_span(),
+                ));
+            }
+            if matches!(self.peek(), Token::Readonly) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "readonly field modifier is only supported on `defstruct` fields",
+                    self.peek_span(),
+                ));
+            }
+            if matches!(self.peek(), Token::NumberedPlaceholder(_)) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "record field name cannot use positional `_N`",
+                    self.peek_span(),
+                ));
+            }
+            let (fname, fspan) = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let fty = self.parse_type()?;
+            fields.push(RecordField {
+                name: fname,
+                ty: fty,
+                span: fspan,
+                visibility: Visibility::Public,
+                readonly: false,
+            });
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
                 self.skip_newlines();
-                let (visibility, readonly) = self.parse_field_modifiers()?;
-                if readonly {
-                    return Err(ParseError::syntax(
-                        crate::error::ParseErrorReason::DeclarationSyntax,
-                        "readonly field modifier is only supported on `defstruct` fields",
-                        self.peek_span(),
-                    ));
-                }
-                let (fname, fspan) = self.expect_ident()?;
-                self.expect(&Token::Colon)?;
-                let fty = self.parse_type()?;
-                fields.push(RecordField {
-                    name: fname,
-                    ty: fty,
-                    span: fspan,
-                    visibility,
-                    readonly,
-                });
-                self.skip_newlines();
-                if matches!(self.peek(), Token::Comma) {
-                    self.advance();
-                    self.skip_newlines();
-                    if matches!(self.peek(), Token::RParen) {
-                        break;
-                    }
-                } else {
+                if matches!(self.peek(), Token::RParen) {
                     break;
                 }
+            } else {
+                break;
             }
         }
         let end = self.expect(&Token::RParen)?;

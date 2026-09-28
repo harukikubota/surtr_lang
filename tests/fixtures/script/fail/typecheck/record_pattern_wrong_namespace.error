@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Record pattern `Admin::User` does not match `Auth::User`

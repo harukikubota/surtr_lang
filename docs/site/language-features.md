@@ -22,6 +22,9 @@ import Math::add
 
 - `Bootstrap` / `Kernel` の明示 import は compile error
 - 同一 file での重複 import は compile error
+- 明示 import は同名の auto-import surface を shadow できる
+- 明示 import 同士、または auto-import 同士の unqualified 名衝突は原則 compile error
+- 現行実装では `Result::chain` / `Facet::chain` だけが例外であるため、この名前は qualified call を使う
 - `Type::new` のように import 対象外の宣言がある
 - `import` は file declaration area に加えて `defmod` / `impl Type` / `impl Trait for Type` body に書ける
 - `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
@@ -97,7 +100,7 @@ print(to_string(add(3, 4)))
 
 ## どこで確認するか
 
-- surface の正本: `../../doc/要件定義v9.md`
+- compact な surface: `./language-reference.md`
 - 標準定義ソースの説明: `./standard-modules.md`
 - 実例: `../../tests/fixtures/modules/pass/`
 
@@ -106,13 +109,13 @@ print(to_string(add(3, 4)))
 - ソース
   - `../../lib/bootstrap.srt`
   - `../../lib/kernel.srt`
-  - `../../lib/trait/eq.srt`
-  - `../../lib/trait/concat.srt`
-  - `../../lib/trait/from.srt`
-  - `../../lib/trait/try_from.srt`
-  - `../../lib/trait/add.srt`
-  - `../../lib/trait/sub.srt`
-  - `../../lib/trait/mul.srt`
+  - `../../lib/traits/operator/eq.srt`
+  - `../../lib/traits/operator/concat.srt`
+  - `../../lib/traits/from.srt`
+  - `../../lib/traits/try_from.srt`
+  - `../../lib/traits/operator/add.srt`
+  - `../../lib/traits/operator/sub.srt`
+  - `../../lib/traits/operator/mul.srt`
 
 ## 躓きやすいポイント
 

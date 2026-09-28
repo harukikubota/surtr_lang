@@ -338,6 +338,11 @@ pub fn expand_snapshot_module_stages<'a>(
     })
 }
 
+/// Upper-layer snapshot for staged compilation.
+///
+/// This aggregate intentionally remains in Xldr because it combines
+/// resolver/typechecker checkpoints and bytecode. `sindr` owns only
+/// bytecode-independent policy and schema metadata.
 #[derive(Debug, Clone)]
 pub struct StagedCompilationSnapshot {
     pub module_stages: Vec<Vec<sigil::StagedModuleAst>>,

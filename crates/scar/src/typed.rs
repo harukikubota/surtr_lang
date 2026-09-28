@@ -244,6 +244,8 @@ pub enum ComparisonOperator {
 pub enum TypedFacetSegment {
     Field {
         field_name: String,
+        /// Authored positional Record selector. Access still uses field_index.
+        origin_index: Option<u32>,
         field_index: u32,
         container_field_count: u32,
         container_type_name: String,
@@ -719,6 +721,8 @@ pub enum TypedMatchPattern {
     /// Pattern alternative. Alternatives are tests only and do not bind names.
     Or(Vec<TypedMatchPattern>),
     Tuple(Vec<TypedMatchPattern>),
+    /// Total structural Record head; children may still be partial.
+    Record(Vec<TypedMatchPattern>),
     /// Constructor tag + field patterns + payload field offset.
     Constructor {
         tag: u32,

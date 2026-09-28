@@ -156,6 +156,11 @@ do専用の未採用JSON fieldを一般診断schemaへ混入させない。詳�
 
 ## 出力契約
 
+compiler 内部の source span は Unicode scalar value（Rust `char`）単位の半開区間を使う。
+UTF-8 byte offset や LSP の UTF-16 code unit ではない。human diagnostic と JSON の
+`line` / `column` / `span`、`.eldr` source map、runtime error location もこの単位を引き継ぐ。
+byte range や UTF-16 position を要求する外部 API へは、その protocol 境界でだけ変換する。
+
 ### Human-readable
 
 renderer は `message`、`labels`、`notes`、`help` をそれぞれ headline、source caption、note、help として出力する。Ariadne の色、罫線、空白、label の順序は安定契約にしない。

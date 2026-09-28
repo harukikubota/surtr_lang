@@ -17,7 +17,7 @@
 
 **Tech Stack:** Rust workspace (`spire`, `sigil`, `scar`, `forge`, `eldr`, `rune`, `surtr-analysis`, `xldr`), Pure Surtr standard definitions, `cargo nextest`.
 
-**Spec:** `doc/contextual_type_syntax_impact_analysis.md`; `doc/where_trait_parameter_separation_proposal.md`; `doc/要件定義v9.md`; `docs/dev/Trait_system_spec.md`; `docs/dev/diagnostics.md`; `docs/dev/テスト方針.md`.
+**Spec:** `doc/contextual_type_syntax_impact_analysis.md`; `doc/where_trait_parameter_separation_proposal.md`; `docs/dev/Trait_system_spec.md`; `docs/dev/diagnostics.md`; `docs/dev/テスト方針.md`; `docs/site/type-annotations.md`.
 
 ## Global Constraints
 
@@ -35,7 +35,6 @@
 ### Task 1: Reconcile the normative context matrix and test contract
 
 **Files:**
-- Modify: `doc/要件定義v9.md`
 - Modify: `docs/dev/Trait_system_spec.md`, `docs/dev/テスト方針.md`, `docs/dev/diagnostics.md`
 - Modify: `docs/site/trait-system.md`, `docs/site/trait-impls.md`, `docs/site/type-annotations.md`, `docs/site/language-reference.md`, `docs/site/language-guide.md`
 

@@ -2,7 +2,7 @@
 
 ## 既存契約と現状
 
-`doc/要件定義v9.md` は auto-import 同士の同名 unqualified 関数を compile error とし、`Result::chain` と `Facet::chain` を異なる公開 API と定めている。現状は `lib/types/result.srt` と `lib/facet.srt` の両 `impl` が `@autoimport` で、Sigil はこの2関数の bare `chain` 衝突を特例で許す。Scar は `Result::chain` の解決済み呼び出しでも引数形から `Facet::chain` を試し、`Result::chain(pair._0, Ok(()))` を Facet 型エラーにする。
+auto-import 同士の同名 unqualified 関数は原則 compile error だが、`lib/types/result.srt` と `lib/facet.srt` は `Result::chain` と `Facet::chain` を異なる公開 API として宣言し、両 `impl` に `@autoimport` を付けている。このため Sigil はこの2関数の bare `chain` 衝突だけを特例で許す。利用者向け文書も、この現行例外と qualified call の推奨を明記する。
 
 ## 衝突を解消する際の設計判断
 
@@ -14,7 +14,7 @@
 2. **Result 全体の auto-import を外す。** bare `chain` に加え、`is_ok` / `recover` など他の標準 helper も影響を受ける。標準テストと既存利用者への影響が大きい。
 3. **member 単位の auto-import opt-out を設計する。** 他の bare helper を保てるが、新しい annotation または同等の宣言規則が必要で、現行の単純な block 単位ルールを拡張する。
 
-どの候補を採るかは監査項目の「衝突を拒否する」という目標だけでは確定できない。選択後に `doc/要件定義v9.md` を先に整合させ、公開 surface の成功・拒否境界を確定する。現行の衝突特例だけを削ると、標準 `Result` と `Facet` を読み込む通常スクリプト全体が失敗する。
+どの候補を採るかは監査項目の「衝突を拒否する」という目標だけでは確定できない。選択後に標準定義 source の `@doc` と `docs/site/language-features.md` を先に整合させ、公開 surface の成功・拒否境界を確定する。現行の衝突特例だけを削ると、標準 `Result` と `Facet` を読み込む通常スクリプト全体が失敗する。
 
 ## 独立して確定している修正
 

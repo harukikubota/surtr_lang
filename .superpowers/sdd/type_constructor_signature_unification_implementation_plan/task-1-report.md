@@ -68,8 +68,8 @@ are naming-only changes.
   passed (170 skipped by the test filter), including
   `callable_alias_and_partial_tuple_expected.srt`
 - `cargo nextest run --workspace` — 1734 passed, 202 skipped
-- `rg -n 'FunParams|fun_params|fun_param|FunParam' crates docs/dev docs/site
-  doc/要件定義v9.md` — no matches
+- `rg -n 'FunParams|fun_params|fun_param|FunParam' crates docs/dev docs/site lib`
+  — no matches
 - A broader case-insensitive scan for `funparams`, `fun_param`, and `funparam`
   also returned no matches.
 - `git diff --check`

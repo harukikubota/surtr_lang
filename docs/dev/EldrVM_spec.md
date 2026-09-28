@@ -1,4 +1,4 @@
-# Eldr VM 仕様書（V9）
+# Eldr VM 仕様書
 
 > Surtr の実行層仕様。実装詳細（Rust の構造体定義や補助関数）はソースを正とし、
 > 本書は VM の意味論と外部契約のみを定義する。
@@ -203,7 +203,7 @@ capture から Capture / Closure origin を推測しない。metadata を復元�
 直接 binding と nested value は同一の runtime metadata を使い、REPL binding metadata が表示 origin を上書きしない。
 `to_string` は文字列値を引用せず、`inspect` は文字列 literal として引用する。
 
-### 4.1 RichError（V9確定）
+### 4.1 RichError
 
 `RichError` は次を保持する。
 
@@ -348,7 +348,10 @@ Opcode は以下のカテゴリを持つ。
 - malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
 - `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, MonadT, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, OptionT, EitherT, ReaderT, StateT, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+標準モジュールの inventory、順序、stage 分割は compile 側の
+[`STDLIB_MODULE_SPECS`](../../crates/xldr/src/loader.rs) を正本とする。同一 stage 内の import は
+file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。
+Eldr は解決済みの bytecode を受け取り、VM 内で追加の import 解決を行わない。
 
 ### 7.2 TypeRegistry
 

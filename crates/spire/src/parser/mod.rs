@@ -33,6 +33,7 @@ pub use tolerant::{
     SyntaxToken, SyntaxTokenKind, TolerantParseResult,
 };
 
+/// Fail-closed parser guard for nested syntax, type, and pattern structures.
 pub const MAX_PARSE_NESTING: usize = 32;
 pub const MAX_PARSE_NESTING_MESSAGE: &str = "maximum parse nesting depth exceeded";
 const IMPLICIT_ROOT_NAMESPACE: &str = "Global";
@@ -1881,6 +1882,9 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
                     pattern: arg
                         .pattern
                         .map(|pattern| Box::new(shift_pattern(*pattern, delta))),
+                    named_pattern: arg
+                        .named_pattern
+                        .map(|(name, pattern)| (name, Box::new(shift_pattern(*pattern, delta)))),
                 })
                 .collect(),
         ),
@@ -2113,6 +2117,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     pattern: arg
                         .pattern
                         .map(|pattern| Box::new(shift_pattern(*pattern, delta))),
+                    named_pattern: arg
+                        .named_pattern
+                        .map(|(name, pattern)| (name, Box::new(shift_pattern(*pattern, delta)))),
                     expression_error: arg
                         .expression_error
                         .map(|error| shift_parse_error(error, delta)),

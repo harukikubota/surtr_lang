@@ -1,7 +1,7 @@
 # Structs
 
 `defstruct` の利用者向けルールをこのページに集約します。  
-正本の surface 契約は `../../doc/要件定義v9.md`、Facet の詳細は `./facet.md` を参照してください。
+宣言と型検査の現行挙動は compiler source と fixtures、Facet の詳細は `./facet.md` を参照してください。
 
 ## 定義
 
@@ -279,7 +279,8 @@ match user {
 ## 確認したソース
 
 - ソース
-  - `../../doc/要件定義v9.md`
+  - `../../crates/spire/src/parser/decl.rs`
+  - `../../crates/scar/src/checker/definitions.rs`
   - `../../tests/integration/language_features/core_language.rs`
   - `../../tests/fixtures/modules/pass/private_visibility_*`
   - `../../tests/fixtures/modules/fail/private_field_*`

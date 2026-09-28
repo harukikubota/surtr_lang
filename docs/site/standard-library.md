@@ -14,11 +14,9 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 
 ## 1. ロード順
 
-標準定義ソースの初期ロード順は次で固定されています。
-
-```text
-Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, MonadT, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, OptionT, EitherT, ReaderT, StateT, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
-```
+標準定義ソースは `Bootstrap` stage、test extension を必要に応じて含む shared standard
+stage、user source の順で読み込まれます。完全なモジュール inventory と順序は compiler source の
+`STDLIB_MODULE_SPECS` が管理します。
 
 このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
 他の標準定義ソースは標準定義ソースとして同梱されますが、名前空間としては明示 import 前提です。

@@ -7,16 +7,15 @@ runtime 最適化を導入するための実装入力である。
 
 本書は現時点では draft とし、次を正本として優先する。
 
-- 言語全体の意味論: [`要件定義v9.md`](./要件定義v9.md)
+- List の公開 surface: [`../lib/types/list.srt`](../lib/types/list.srt) の宣言と `@doc`
 - VM と execution context: [`../docs/dev/EldrVM_spec.md`](../docs/dev/EldrVM_spec.md)
 - TypeConstructor / Monad dispatch: [`../docs/dev/Trait_system_spec.md`](../docs/dev/Trait_system_spec.md)
 - `do` intrinsic: [`Do_intrinsic_spec.md`](../docs/dev/Do_intrinsic_spec.md)
 - テスト配置: [`../docs/dev/テスト方針.md`](../docs/dev/テスト方針.md)
 - user-facing diagnostics: [`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)
 
-実装着手時は、`要件定義v9.md` の「VM 上で cons cell 表現を前提とする」という
-暫定記述を、本書の外部契約に合わせて先に更新する。本書と更新前の正本が衝突する間は、
-本書だけを根拠に実装を開始しない。
+実装着手時は、`docs/dev/EldrVM_spec.md` と `lib/types/list.srt` の外部契約が内部表現を
+固定していないことを確認する。本書と現行ソースが衝突する間は、本書だけを根拠に実装を開始しない。
 
 ## 2. 結論
 
@@ -434,7 +433,7 @@ serialization、deep copy のいずれを使うかを ProcessRuntime spec 側で
 
 ### Phase 0: 正本と baseline
 
-1. `doc/要件定義v9.md` の cons-cell 固定記述を、外部 List 契約と内部 representation 非公開へ更新する。
+1. `docs/dev/EldrVM_spec.md` と `lib/types/list.srt` が外部 List 契約だけを公開し、内部 representation を固定しないことを確認する。
 2. `docs/dev/テスト方針.md` の `ListHandle` invariant を Empty / Cons / Packed / mixed representation へ拡張する。
 3. 現行 `flat_map` の順序、callback 回数、出力、allocation / elapsed time の baseline を記録する。
 
@@ -475,7 +474,7 @@ generic do loweringは実装済みで、List改修の実装タスクには含め
 
 | 層 | 主なファイル | 変更内容 |
 |---|---|---|
-| 正本 | `doc/要件定義v9.md` | cons-cell 固定から logical List 契約へ更新 |
+| 公開契約 | `lib/types/list.srt`, `docs/dev/EldrVM_spec.md` | logical List 契約を維持し内部表現を非公開にする |
 | テスト正本 | `docs/dev/テスト方針.md` | hybrid representation invariant と性能観点 |
 | runtime type | `crates/sindr/src/runtime.rs` | ListHandle / iterator / equality |
 | builtin metadata | `crates/sindr/src/builtin.rs` | `list_flat_map` を table 末尾へ追加、surface mapping |

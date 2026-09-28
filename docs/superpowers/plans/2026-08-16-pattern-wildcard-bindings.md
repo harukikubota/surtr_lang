@@ -105,7 +105,7 @@ Expected: PASS.
 ### Task 3: Update language documentation and verify the workspace
 
 **Files:**
-- Modify: `doc/要件定義v9.md`
+- Modify: `docs/dev/Pattern_spec.md`, `docs/site/pattern-matching.md`
 
 - [ ] **Step 1: Update the pattern specification**
 

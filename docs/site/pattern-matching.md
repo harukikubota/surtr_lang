@@ -36,6 +36,19 @@ xldr(3)>
 pattern position の `[head, ..tail]` は sequence decomposition として読まれます。  
 これは expression position の list construction とは別物です。
 
+## Record の分解
+
+```surtr
+defrecord User(name: String, age: Int)
+user = User("Ada", 20)
+User(name, age) = user
+User(age: selected_age, name: selected_name) = user
+```
+
+Record は宣言された全 field を位置順、または field 名で分解できます。名前指定の順序は自由ですが、子の照合順は宣言順です。重複・未知・不足 field、位置指定との混在を拒否します。`User(name, age)` は位置指定の変数束縛であり、field 名 shorthand ではありません。Record 自体は必ず分解できますが、literal や Extractor など失敗し得る子を置いた Pattern は通常の `=` に使えません。
+
+Record head の `name: child` は名前付き field として解釈します。位置指定の子に型注釈を付けるときは `User((name: String), age)` のように括ります。
+
 ## guard と exhaustiveness
 
 OR Pattern `p1 | p2` は `match` arm、`if_let`、`if_let_then`、変数を束縛しない `is_match` で使えます。子 Pattern に入れ子にすることもできます。`match` / `if_let` / `if_let_then` では、同じ OR の全候補が同じ順序で同じ名前・型の変数を束縛する必要があります。`is_match` はすべての候補で変数束縛を禁止します。`=` / `=?`、do binding、`apply_pattern` の Pattern では、束縛数が 0 でも入れ子の OR を含めて構文エラーになります。これらの input / RHS にある通常の `match` では OR を使えます。
