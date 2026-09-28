@@ -116,9 +116,9 @@ names = users |*> _.name
 `|>=` は文脈を保ったまま次の段階へ渡します。
 
 ```surtr
-try_from::<Int>("42") |>= require_at_least(10)
+try_to::<Int>("42") |>= require_at_least(10)
 [1, 2, 3] |>= expand()
-Ok(" 42 ") |*> String::trim() |>= try_from(Int)
+Ok(" 42 ") |*> String::trim() |>= try_to::<Int>()
 ```
 
 型の読み方:
@@ -193,7 +193,7 @@ pipeline2 = &parse >* {|n| "#" ++ to_string(n)}
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from::<Int>(text)
+  try_to::<Int>(text)
 }
 
 def render_int(value: Int) -> String {
@@ -221,7 +221,7 @@ pipeline2 = &parse >=> {|n| require_at_least(n, 10)}
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from::<Int>(text)
+  try_to::<Int>(text)
 }
 
 def require_small(x: Int) -> Result<Int> {
@@ -240,7 +240,7 @@ pipeline = &parse_int >=> &require_small
 REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
 
 ```surtr
-value: Int =? try_from::<Int>("1")
+value: Int =? try_to::<Int>("1")
 [head, ..tail] =? [1, 2, 3]
 [first, ..rest] =? "source"
 Option::Some(saved) =? Option::Some(1)
@@ -281,7 +281,7 @@ SafeBind の流れは次です。
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from::<Int>(text)
+  try_to::<Int>(text)
 }
 
 def require_small(x: Int) -> Result<Int> {

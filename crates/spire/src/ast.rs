@@ -852,7 +852,7 @@ pub enum Ast {
 
     /// Trait impl definition:
     /// `impl Describable for Int { ... }`
-    /// `impl From<String> for Int { ... }`
+    /// `impl Convert<String> for Int { ... }`
     TraitImplDef(
         Span,
         Symbol,

@@ -143,7 +143,7 @@ compiler はこの head 自体を契約として扱います。
 `Result<T, E>` は builtin type declaration ではなく、戻り値位置での error contract 記法として扱います。
 `Hole` は ordinary data type ではなく、`_` の背後にある callable marker です。
 
-target-oriented trait の型入力は `from::<Target>(value)` のような明示型引数で指定します。
+target-oriented trait の型入力は `to::<Target>(value)` のような明示型引数で指定します。
 
 compiler-special type の詳しい説明は `./special-types.md` を参照してください。
 
@@ -387,8 +387,8 @@ defenum Option<$T> {
 `Option` は `|*>`、`|*|`、`|>=`、`>*`、`>=>` に標準実装があります。
 `=?`では`Option::Some(value) =? option`のようなpartial constructor patternでOption全体を検査できますが、
 `value =? option`のようなtotal patternでpayloadを暗黙に取り出すことはできません。
-Result-styleの失敗伝播へ変換したい場合は`from::<Result>(value)`、通常の分岐には`match`を使います。
-`from::<Option>(value)` は `Err(_)` を `None` に畳み込む明示変換です。
+Result-styleの失敗伝播へ変換したい場合は`to::<Result>(value)`、通常の分岐には`match`を使います。
+`to::<Option>(value)` は `Err(_)` を `None` に畳み込む明示変換です。
 
 ## Public vs Hidden
 
@@ -414,9 +414,9 @@ REPL は起動時に標準定義ソースと preload script を読み切った O
 
 ```surtr
 user.nickname
-|> from(Result)
+|> to::<Result>()
 |>= normalize_name
-|> from(Option)
+|> to::<Option>()
 ```
 
 `Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。

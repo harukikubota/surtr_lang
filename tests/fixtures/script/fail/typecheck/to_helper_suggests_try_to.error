@@ -1,0 +1,3 @@
+phase: typecheck
+contains: implements TryConvert, not Convert
+contains: Use try_to::<Int>(value).

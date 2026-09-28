@@ -62,9 +62,9 @@ users |*> &User::get_name
 `|>=` は文脈を保ったまま次の段階へ渡します。
 
 ```surtr
-try_from::<Int>("42") |>= require_at_least(10)
+try_to::<Int>("42") |>= require_at_least(10)
 [1, 2, 3] |>= expand()
-Ok(" 42 ") |*> String::trim() |>= try_from(Int)
+Ok(" 42 ") |*> String::trim() |>= try_to::<Int>()
 ```
 
 型の読み方:

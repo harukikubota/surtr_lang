@@ -43,7 +43,7 @@ where
 欠損可能 field を持たせるときは、`T?` または `Option<T>` を使います。
 `T?` は `Option<T>` に下がる sugar です。
 `Result` を返す helper 関数とつなぐときは、必要に応じて
-`from::<Result>(value)` / `from::<Option>(value)` を明示します。
+`to::<Result>(value)` / `to::<Option>(value)` を明示します。
 
 ## 構築ルール
 
@@ -217,9 +217,9 @@ defstruct User {
 
 next =
   user.nickname
-  |> from(Result)
+  |> to::<Result>()
   |>= normalize_name
-  |> from(Option)
+  |> to::<Option>()
 ```
 
 上のように `Option<T>` field は `Result` パイプへ入る前に `Option -> Result`、

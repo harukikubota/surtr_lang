@@ -4861,17 +4861,17 @@ impl Checker {
         requested_trait_args: &[Ty],
         span: &Span,
     ) -> Option<TypeError> {
-        let requested_trait = if self.trait_matches_short_name(trait_name, "From") {
-            "From"
-        } else if self.trait_matches_short_name(trait_name, "TryFrom") {
-            "TryFrom"
+        let requested_trait = if self.trait_matches_short_name(trait_name, "Convert") {
+            "Convert"
+        } else if self.trait_matches_short_name(trait_name, "TryConvert") {
+            "TryConvert"
         } else {
             return None;
         };
-        let opposite_trait = if requested_trait == "From" {
-            "TryFrom"
+        let opposite_trait = if requested_trait == "Convert" {
+            "TryConvert"
         } else {
-            "From"
+            "Convert"
         };
         let receiver_name = self.trait_target_name(receiver_ty)?;
         let target_ty = self.resolve_ty(requested_trait_args.first()?);
@@ -4887,10 +4887,10 @@ impl Checker {
         }
 
         let target_name = self.ty_name(&target_ty);
-        let opposite_method = if opposite_trait == "From" {
-            "from"
+        let opposite_method = if opposite_trait == "Convert" {
+            "to"
         } else {
-            "try_from"
+            "try_to"
         };
         Some(TypeError {
             structured: None,

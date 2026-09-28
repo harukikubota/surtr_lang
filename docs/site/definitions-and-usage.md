@@ -85,12 +85,12 @@ yes
 xldr(3)>
 ```
 
-## `from(...)`
+## `to(...)`
 
 target type を取る変換は、value ではなく型スロットとして読みます。
 
 ```text
-xldr(1)> print(from::<String>(42))
+xldr(1)> print(to::<String>(42))
 42
 xldr(2)>
 ```
@@ -103,7 +103,8 @@ xldr(2)>
 - `Result` や `match` は `./pattern-matching.md`
 - 関数コール / capture / closure / FuncLiteral は `./callables.md`
 - 型注釈は `./type-annotations.md`
-- trait 経由の変換は `./trait-impls.md`
+- 変換 Trait のAPIは [`Convert / TryConvert`](./traits/convert.md)
+- trait 実装全般は `./trait-impls.md`
 - import / include は `./language-features.md`
 
 ## 確認したソース
@@ -114,4 +115,4 @@ xldr(2)>
 ## 躓きやすいポイント
 
 - `defstruct` / `defenum` / `defextractor` のような宣言は REPL top-level にそのまま置けません。
-- `from::<TargetTy>(value)` の第2引数は ordinary value ではなく型指定スロットです。
+- `to::<TargetTy>(value)` の第2引数は ordinary value ではなく型指定スロットです。

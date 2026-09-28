@@ -322,17 +322,17 @@ where
 Infallible conversion from `Either<$L, $R>` to `Option<$R>`.
 Left values become `Option::None`; Right payloads become `Option::Some`.
 """
-impl From<Option<$R>> for Either<$L, $R> {
+impl Convert<Option<$R>> for Either<$L, $R> {
   @doc """
   Convert Either to Option using the same rules as `Either::to_option`.
 
   ## REPL
-  xldr(1)> from::<Option>(Either<String, Int>::Left("stop"))
+  xldr(1)> to::<Option>(Either<String, Int>::Left("stop"))
   Option::None
-  xldr(2)> from::<Option>(Either<String, Int>::Right(2))
+  xldr(2)> to::<Option>(Either<String, Int>::Right(2))
   Option::Some(2)
   """
-  def from::<Option<$R>>(self: Self) -> Option<$R> {
+  def to::<Option<$R>>(self: Self) -> Option<$R> {
     Either::to_option(self)
   }
 }

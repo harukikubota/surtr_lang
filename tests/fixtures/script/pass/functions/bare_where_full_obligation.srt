@@ -1,8 +1,8 @@
 def parse_int(value: $A) -> Result<Int, Error>
 where
-  $A: TryFrom
+  $A: TryConvert
 {
-  TryFrom::try_from::<Int>(value)
+  TryConvert::try_to::<Int>(value)
 }
 
 print(inspect(parse_int("42")))

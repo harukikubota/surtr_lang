@@ -223,40 +223,44 @@ test("String") {
     it("trims both sides") { assert_eq("core", trim(" \ncore\t ")) }
   }
 
-  describe("TryFrom") {
+  describe("TryConvert") {
     it("supports result pipeline assertions") {
-      try_from::<Int>("1") |>= assert_eq(1)
+      try_to::<Int>("1") |>= assert_eq(1)
     }
 
     it("parses signed integers") {
-      try_from::<Int>("-12") |>= assert_eq(-12)
+      try_to::<Int>("-12") |>= assert_eq(-12)
     }
 
     it("reports invalid integer text") {
-      assert_err_contains("invalid integer literal", try_from::<Int>("bad"))
+      assert_err_contains("invalid integer literal", try_to::<Int>("bad"))
     }
 
     it("parses booleans") {
-      try_from::<Boolean>("true") |>= assert_eq(True)
+      try_to::<Boolean>("true") |>= assert_eq(True)
     }
 
     it("parses alternate boolean casing") {
-      try_from::<Boolean>("False") |>= assert_eq(False)
+      try_to::<Boolean>("False") |>= assert_eq(False)
     }
 
     it("reports invalid boolean text") {
-      assert_err_contains("invalid boolean literal", try_from::<Boolean>("maybe"))
+      assert_err_contains("invalid boolean literal", try_to::<Boolean>("maybe"))
+    }
+
+    it("reads the destination type in a bind pipeline") {
+      Ok("42") |>= try_to::<Int>() |>= assert_eq(42)
     }
   }
 
   describe("trait integration") {
-    it("converts user wrappers through From") {
-      slug = from::<Slug>("  surtr code  ")
+    it("converts user wrappers through Convert") {
+      slug = to::<Slug>("  surtr code  ")
       assert_eq("surtr-code", to_string(slug))
     }
 
     it("reuses string helpers through wrapper methods") {
-      slug = from::<Slug>("  surtr code  ")
+      slug = to::<Slug>("  surtr code  ")
       assert_eq("[\"surtr\", \"code\"]", inspect(Slug::segments(slug)))
     }
   }

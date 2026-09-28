@@ -20,8 +20,8 @@ const DEFAULT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/default
 const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
 const COMPARE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compare.srt");
 const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/concat.srt");
-const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/from.srt");
-const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_from.srt");
+const CONVERT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/convert.srt");
+const TRY_CONVERT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_convert.srt");
 const ENCODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/encode.srt");
 const DECODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/decode.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
@@ -532,10 +532,13 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 "Tuple",
                 pick_override("Tuple", TUPLE_MODULE_SOURCE, overrides),
             ),
-            ("From", pick_override("From", FROM_MODULE_SOURCE, overrides)),
             (
-                "TryFrom",
-                pick_override("TryFrom", TRY_FROM_MODULE_SOURCE, overrides),
+                "Convert",
+                pick_override("Convert", CONVERT_MODULE_SOURCE, overrides),
+            ),
+            (
+                "TryConvert",
+                pick_override("TryConvert", TRY_CONVERT_MODULE_SOURCE, overrides),
             ),
             (
                 "Encode",

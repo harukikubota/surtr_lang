@@ -54,7 +54,7 @@ process examples でも、entry script から `include "./Agents.srt"` や `incl
 
 - `../../lib/kernel.srt` の `defmod Kernel`
 - `../../lib/types/result.srt` などの `@autoimport impl Type`
-- `../../lib/traits/operator/functor.srt`, `applicative.srt`, `monad.srt`、および `eq.srt`, `concat.srt`, `from.srt`, `try_from.srt` などの trait 宣言
+- `../../lib/traits/operator/functor.srt`, `applicative.srt`, `monad.srt`、および `eq.srt`, `concat.srt`, `convert.srt`, `try_convert.srt` などの trait 宣言
 
 module / type owner / trait では意味合いが少し違います。
 
@@ -71,8 +71,8 @@ trait 側で重要なのは、autoimport される helper が「別の関数定�
 
 ```surtr
 print(concat("a", "b"))
-print(from::<String>(42))
-print(inspect(try_from::<Int>("42")))
+print(to::<String>(42))
+print(inspect(try_to::<Int>("42")))
 pure_value: Result<Int> = pure(1)
 returned_value: Result<Int> = return(10)
 ```
@@ -95,7 +95,7 @@ print(to_string(add(3, 4)))
 
 - `print`, `if`, `inspect` のような cross-cutting API は `Kernel` 由来
 - `Result::map_err`, `Result::chain` のような標準 owner helper は `@autoimport impl Type` 由来
-- `eq`, `concat`, `from`, `try_from`, `to_string`, `fmap`, `pure`, `ap`, `return`, `bind` のような頻出 helper は autoimport trait alias
+- `eq`, `concat`, `to`, `try_to`, `to_string`, `fmap`, `pure`, `ap`, `return`, `bind` のような頻出 helper は autoimport trait alias
 - `Add::add`, `Sub::sub`, `Mul::mul` のような helper は qualified/import 前提
 
 ## どこで確認するか
@@ -111,8 +111,8 @@ print(to_string(add(3, 4)))
   - `../../lib/kernel.srt`
   - `../../lib/traits/operator/eq.srt`
   - `../../lib/traits/operator/concat.srt`
-  - `../../lib/traits/from.srt`
-  - `../../lib/traits/try_from.srt`
+  - `../../lib/traits/convert.srt`
+  - `../../lib/traits/try_convert.srt`
   - `../../lib/traits/operator/add.srt`
   - `../../lib/traits/operator/sub.srt`
   - `../../lib/traits/operator/mul.srt`
@@ -120,6 +120,6 @@ print(to_string(add(3, 4)))
 ## 躓きやすいポイント
 
 - `Kernel` は auto import 済みなので、明示 `import Kernel` はむしろ compile error です。
-- `concat(...)` や `from(...)` が裸で呼べても、実体は `Trait::method` 側です。
+- `concat(...)` や `to(...)` が裸で呼べても、実体は `Trait::method` 側です。
 - `add(...)`, `sub(...)`, `mul(...)` は最初からは見えません。必要なら `Add::add(...)` のように呼びます。
 - `include` は file composition 用で、名前空間 import の代わりではありません。

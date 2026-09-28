@@ -1511,8 +1511,8 @@ fn test_defmod_rejects_type_params() {
 #[test]
 fn test_trait_def_parses_head_type_params() {
     let ast = parse_with_context(
-        r#"deftrait From<$To> {
-  def from(self: Self) -> $To
+        r#"deftrait Convert<$To> {
+  def to::<$To>(self: Self) -> $To
 }"#,
         ParserContext::module(1, None),
     )
@@ -1520,7 +1520,7 @@ fn test_trait_def_parses_head_type_params() {
 
     match ast.as_slice() {
         [Ast::TraitDef(_, name, type_params, _, methods, _)] => {
-            assert_eq!(name, "From");
+            assert_eq!(name, "Convert");
             assert_eq!(type_params.len(), 1);
             assert_eq!(type_params[0].name, "$To");
             assert_eq!(methods.len(), 1);
@@ -1533,8 +1533,8 @@ fn test_trait_def_parses_head_type_params() {
 #[test]
 fn test_trait_impl_parses_trait_type_args() {
     let ast = parse_with_context(
-        r#"impl From<String> for Int {
-  def from(self: Self) -> String {
+        r#"impl Convert<String> for Int {
+  def to::<String>(self: Self) -> String {
     inspect(self)
   }
 }"#,
@@ -1552,7 +1552,7 @@ fn test_trait_impl_parses_trait_type_args() {
             methods,
             attrs,
         )] => {
-            assert_eq!(trait_name, "From");
+            assert_eq!(trait_name, "Convert");
             assert!(matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String"));
             assert_eq!(target, "Global::Int");
             assert_eq!(attrs, &DeclAttrs::default());
@@ -7102,8 +7102,8 @@ fn test_task_await_timeout_literal_parses_in_project_context() {
 #[test]
 fn test_explicit_type_arguments_parse_on_calls_and_captures() {
     let ast = parse(
-        r#"value = TryFrom::try_from::<Int>("1")
-fn = &TryFrom::try_from::<Int>"#,
+        r#"value = TryConvert::try_to::<Int>("1")
+fn = &TryConvert::try_to::<Int>"#,
     )
     .expect("explicit type arguments should parse");
 

@@ -62,8 +62,8 @@ test("Either") {
   it("converts the right slot to Option") {
     left: Either<String, Int> = Either::Left("stop")
     right: Either<String, Int> = Either::Right(7)
-    converted_left: Option<Int> = from::<Option>(left)
-    converted_right: Option<Int> = from::<Option<Int>>(right)
+    converted_left: Option<Int> = to::<Option>(left)
+    converted_right: Option<Int> = to::<Option<Int>>(right)
 
     assert_eq(Option::None, Either::to_option(left))
     assert_eq(Option::Some(7), Either::to_option(right))

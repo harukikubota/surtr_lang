@@ -32,25 +32,25 @@ test("Option") {
 
   describe("conversions") {
     it("converts option into result") {
-      converted: Result<Int> = from::<Result>(Option::Some(7))
+      converted: Result<Int> = to::<Result>(Option::Some(7))
       assert_eq("Ok(7)", inspect(converted))
     }
 
     it("converts none into none error") {
       source: Option<Int> = Option::None
-      converted: Result<Int> = from::<Result<Int>>(source)
+      converted: Result<Int> = to::<Result<Int>>(source)
       assert_eq("Err(NoneError(\"None Value.\"))", inspect(converted))
     }
 
     it("converts result into option") {
       source: Result<Int> = Ok(9)
-      converted: Option<Int> = from::<Option>(source)
+      converted: Option<Int> = to::<Option>(source)
       assert_eq("Option::Some(9)", inspect(converted))
     }
 
     it("drops concrete errors when converting err into option") {
       source: Result<Int> = Err(NoneError)
-      converted: Option<Int> = from::<Option<Int>>(source)
+      converted: Option<Int> = to::<Option<Int>>(source)
       assert_eq("Option::None", inspect(converted))
     }
 

@@ -66,7 +66,7 @@ MatchResult は一般のユーザ値ではない。許可する型位置は次�
 
 `MatchResult::OK(...)` / `MatchResult::Err(...)` は Extractor / ExtractorClosure 自身の本文でのみ構築できる。`if` / `match` の各返却経路は同じ MatchResult expected type へ一致させる。
 
-通常の変数、引数、field、collection 要素、通常関数 / 通常 Closure の戻り値として MatchResult を保持・受け渡しできない。MatchResult 自体を通常 Pattern で分解すること、constructor を capture すること、Trait / operator / From / TryFrom の対象にすることも禁止する。
+通常の変数、引数、field、collection 要素、通常関数 / 通常 Closure の戻り値として MatchResult を保持・受け渡しできない。MatchResult 自体を通常 Pattern で分解すること、constructor を capture すること、Trait / operator / Convert / TryConvert の対象にすることも禁止する。
 
 Extractor の本文内にあるというだけで、内側の通常 Closure へ MatchResult 利用権限を継承しない。各 callable が通常関数 / 通常 Closure / Extractor / ExtractorClosure のどれかを明示的に管理する。一般値の型候補・completion には MatchResult を提示せず、許可された signature の表示は維持する。
 

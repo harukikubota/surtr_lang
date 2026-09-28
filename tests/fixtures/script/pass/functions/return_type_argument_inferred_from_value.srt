@@ -1,2 +1,2 @@
-value = try_from::<Int>("42")
+value = try_to::<Int>("42")
 print(inspect(value))

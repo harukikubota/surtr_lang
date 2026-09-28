@@ -1,0 +1,1 @@
+value = try_to::<String>(42)

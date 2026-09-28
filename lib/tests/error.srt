@@ -32,12 +32,12 @@ test("Error") {
       assert_eq("api down", Error::message(ApiError("api down")))
     }
 
-    it("renders through Show and From<String>") {
+    it("renders through Show and Convert<String>") {
       match Err(NoneError) {
         Ok(_) => assert_true(False),
         Err(err) => assert_eq(
           ("NoneError(\"None Value.\")", "NoneError(\"None Value.\")"),
-          (to_string(err), from::<String>(err)),
+          (to_string(err), to::<String>(err)),
         ),
       }
     }

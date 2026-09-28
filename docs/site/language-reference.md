@@ -150,7 +150,7 @@ do::<Carrier> {
 - `defmod` / inherent `impl` / trait `impl` block 内の callable 名は一意であり、signature や `def` / `defp` の違いによる overload はできない
 - 通常 callable に一般的な型parameter listはなく、value parameter由来の型スロットを`id::<Int>(1)`のように任意指定できない
 - non-intrinsic callableがreturn-only入力を定義側ReturnTypeArgumentsとして宣言した場合は、通常関数・method・Trait helper・captureで対応する`::<Int>`を指定できる。省略時はexpected returnなどから推論し、最後まで決まらなければambiguityになる
-- ReturnTypeArguments は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で ReturnTypeArguments に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として ReturnTypeArguments に置く。TypeCtorTraitのcall-site RTAでは、constructor head、完全・部分型application、`_`を一項の型入力として扱う。Trait methodの通常RTAも、`from::<Result>(option)`のようにimplのsource/targetが共有する型変数から全引数を解けるgeneric targetだけはbare headで指定できる。通常関数では完全型を使う
+- ReturnTypeArguments は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で ReturnTypeArguments に重ねることはエラーであり、`TryConvert<$To>` の `$To` は変換先指定として ReturnTypeArguments に置く。TypeCtorTraitのcall-site RTAでは、constructor head、完全・部分型application、`_`を一項の型入力として扱う。Trait methodの通常RTAも、`to::<Result>(option)`のようにimplのsource/targetが共有する型変数から全引数を解けるgeneric targetだけはbare headで指定できる。通常関数では完全型を使う
 - trait は method のみを持つ
 - 通常の bound は `$A: Trait` と書く。`Trait<Arg, ...>` は where RHS ではなく trait / impl head または expression dispatch target にだけ書ける
 - generic receiver の Trait 呼び出しには、signature 上で宣言した `where` bound が必要である。呼び出しから implicit bound は追加されない
@@ -167,12 +167,13 @@ do::<Carrier> {
 - 通常型注釈の `_` は `Hole` の surface 表記だが、call-site ReturnTypeArgumentの`_`は別の推論穴である
 - `Hole` / 通常型注釈の`_`は data type wildcard ではなく、限定された callable surface にだけ現れる
 
-### `from` / `try_from`
+### `to` / `try_to`
 
-- source 上の呼び出しは `from::<TargetTy>(value)` / `try_from::<TargetTy>(value)`
+- source 上の呼び出しは `to::<TargetTy>(value)` / `try_to::<TargetTy>(value)`
 - `TargetTy` は明示型引数であり runtime の値引数ではない
-- `From<$To>` / `TryFrom<$To>` trait が impl coherence を担う
-- `From` / `TryFrom` の排他は generic 名を alpha-normalize し、target と変換元を再帰照合する
+- `Convert<$To>` / `TryConvert<$To>` trait が impl coherence を担う
+- `Convert` / `TryConvert` の排他は generic 名を alpha-normalize し、target と変換元を再帰照合する
+- 利用例とパイプラインは [`Convert / TryConvert`](./traits/convert.md) を参照する
 
 ### `Result<T>`
 

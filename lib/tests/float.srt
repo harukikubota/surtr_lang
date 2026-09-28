@@ -61,7 +61,7 @@ test("Float") {
 
   describe("show and conversion") {
     it("renders to string") {
-      assert_eq(("1.5", "1.5"), (to_string(1.5), from::<String>(1.5)))
+      assert_eq(("1.5", "1.5"), (to_string(1.5), to::<String>(1.5)))
     }
 
     it("exposes builtin constants through Float") {

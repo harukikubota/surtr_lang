@@ -108,16 +108,16 @@ where
 
 ```surtr
 def make::<$A>() -> $A
-def try_from::<$To>(value: $From) -> Result<$To, Error>
+def try_to::<$To>(value: $Source) -> Result<$To, Error>
 where
-  $From: TryFrom
+  $Source: TryConvert
 ```
 
 呼び出し側では、定義側の各ReturnTypeArgumentを同じ順序で`::<...>`へ指定できます。
 
 ```surtr
-text = from::<String>(42)
-number =? try_from::<Int>("42")
+text = to::<String>(42)
+number =? try_to::<Int>("42")
 ```
 
 明示項目の数は定義側と一致させます。推論へ残す位置は`_`で書き、list全体を省略した呼び出しは
@@ -175,12 +175,12 @@ numeric literal の種類はこの推論で変更しません。`Int` literal �
 
 local callable を変数へ束縛するときは、入力・戻り値を含む signature が concrete でなければなりません。未確定型を call-site ごとに fresh にする暗黙 generalization は行いません。closure / capture / ExtractorClosure を高階関数へ直接渡す場合は、引数の expected callable type から一意に導出できれば注釈を省略できます。外側 signature の rigid generic は、その declaration がすでに導入した静的入力として扱います。
 
-## `from(...)` / `try_from(...)`
+## `to(...)` / `try_to(...)`
 
 呼び出し surface では target type を value ではなく型スロットとして読みます。
 
 ```text
-xldr(1)> print(from::<String>(42))
+xldr(1)> print(to::<String>(42))
 42
 xldr(2)>
 ```
@@ -219,8 +219,8 @@ keep_one: (_ -> Int) = always(1)
 ## 確認したソース
 
 - ソース
-  - `../../lib/trait/from.srt`
-  - `../../lib/trait/try_from.srt`
+  - `../../lib/traits/convert.srt`
+  - `../../lib/traits/try_convert.srt`
   - `../../lib/kernel.srt`
 
 ## 躓きやすいポイント

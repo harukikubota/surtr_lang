@@ -1,2 +1,0 @@
-d: Duration =? try_from::<Duration>(5)
-print(inspect(Process::sleep(d)))

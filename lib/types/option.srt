@@ -13,7 +13,7 @@ container family.
 
 Example:
 
-`user.nickname |> from::<Result>() |>= normalize_name |> from::<Option>()`
+`user.nickname |> to::<Result>() |>= normalize_name |> to::<Option>()`
 
 The equivalent `nickname: String?` field has the same `Option<String>` surface
 and uses the same explicit bridge when you want to enter `Result` control flow.
@@ -226,14 +226,14 @@ impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
   }
 }
 
-impl From<Result<$T>> for Option<$T> {
+impl Convert<Result<$T>> for Option<$T> {
   @doc """
   Convert `Option<$T>` into `Result<$T>` using `NoneError` for missing values.
   ## REPL
-  xldr(1)> from::<Result>(Option::Some(1))
+  xldr(1)> to::<Result>(Option::Some(1))
   Ok(1)
   """
-  def from::<Result<$T>>(self: Self) -> Result<$T> {
+  def to::<Result<$T>>(self: Self) -> Result<$T> {
     match self {
       Option::Some(value) => Ok(value),
       Option::None => Err(NoneError),
@@ -241,14 +241,14 @@ impl From<Result<$T>> for Option<$T> {
   }
 }
 
-impl From<Option<$T>> for Result<$T> {
+impl Convert<Option<$T>> for Result<$T> {
   @doc """
   Convert `Result<$T>` into `Option<$T>`, dropping the concrete error value.
   ## REPL
-  xldr(1)> from::<Option>(Ok(1))
+  xldr(1)> to::<Option>(Ok(1))
   Option::Some(1)
   """
-  def from::<Option<$T>>(self: Self) -> Option<$T> {
+  def to::<Option<$T>>(self: Self) -> Option<$T> {
     match self {
       Ok(value) => Option::Some(value),
       Err(_) => Option::None,

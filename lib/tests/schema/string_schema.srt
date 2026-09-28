@@ -2,8 +2,8 @@ defstruct Slug {
   value: String,
 }
 
-impl From<Slug> for String {
-  def from::<Slug>(self: Self) -> Slug {
+impl Convert<Slug> for String {
+  def to::<Slug>(self: Self) -> Slug {
     Slug::new(String::replace(String::trim(self), " ", "-"))
   }
 }

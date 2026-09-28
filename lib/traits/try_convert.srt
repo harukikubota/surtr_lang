@@ -1,0 +1,16 @@
+@doc """
+Standard `TryConvert` trait declaration.
+`TryConvert<$To>` models fallible conversion from `Self` into `$To`.
+Choose the target with an explicit ReturnTypeArgument such as `try_to::<Int>(value)`.
+Because `try_to(...)` is part of the shared conversion surface, this trait is
+auto-imported when the standard prelude is loaded.
+
+## REPL
+xldr(1)> try_to::<Int>("42")
+Ok(42)
+"""
+@autoimport
+deftrait TryConvert<$To> {
+  # Convert the source value into the requested target type and return `Err(...)` on failure.
+  def try_to::<$To>(self: Self) -> Result<$To, Error>
+}

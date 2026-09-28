@@ -1,3 +1,0 @@
-phase: typecheck
-contains: implements From, not TryFrom
-contains: Use from::<String>(value).

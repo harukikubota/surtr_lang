@@ -42,7 +42,7 @@ source 形式の重複表示に情報量がないためである。
 型が実装する trait は、メソッドを展開せず次の 1 行だけで示す。
 
 ```text
-implements: Default, Add, Sub, Mul, Eq, Neq, Compare, Show, From, TryFrom
+implements: Default, Add, Sub, Mul, Eq, Neq, Compare, Show, Convert, TryConvert
 ```
 
 `implemented:` ではなく `implements:` を採用する。照会対象の型を主語として、
@@ -59,7 +59,7 @@ xldr(1)> :info Int
 Int
 kind: builtin type, module
 origin: stdlib
-implements: Default, Add, Sub, Mul, Eq, Neq, Compare, Show, From, TryFrom
+implements: Default, Add, Sub, Mul, Eq, Neq, Compare, Show, Convert, TryConvert
 
 xldr(2)> :info Kernel
 Kernel

@@ -59,14 +59,14 @@ deferror InvalidStringEncoding(detail: String) {
 }
 
 @doc """
-Concrete string-module error for decimal integer parsing used by `TryFrom<Int>`.
+Concrete string-module error for decimal integer parsing used by `TryConvert<Int>`.
 """
 deferror InvalidIntegerLiteral(input: String) {
   "invalid integer literal: #{input}"
 }
 
 @doc """
-Concrete string-module error for boolean parsing used by `TryFrom<Boolean>`.
+Concrete string-module error for boolean parsing used by `TryConvert<Boolean>`.
 """
 deferror InvalidBooleanLiteral(input: String) {
   "invalid boolean literal: #{input}"
@@ -531,26 +531,26 @@ impl Show for String {
   @builtin def to_string(self: Self) -> String
 }
 
-impl TryFrom<Int> for String {
+impl TryConvert<Int> for String {
   @doc """
   Parse the string as an `Int`, returning an error result on invalid input.
   ## REPL
-  xldr(1)> try_from::<Int>("42")
+  xldr(1)> try_to::<Int>("42")
   Ok(42)
   """
-  def try_from::<Int>(self: Self) -> Result<Int, Error> {
+  def try_to::<Int>(self: Self) -> Result<Int, Error> {
     String::try_to_int(self)
   }
 }
 
-impl TryFrom<Boolean> for String {
+impl TryConvert<Boolean> for String {
   @doc """
   Parse the string as a `Boolean`, returning an error result on invalid input.
   ## REPL
-  xldr(1)> try_from::<Boolean>("True")
+  xldr(1)> try_to::<Boolean>("True")
   Ok(True)
   """
-  def try_from::<Boolean>(self: Self) -> Result<Boolean, Error> {
+  def try_to::<Boolean>(self: Self) -> Result<Boolean, Error> {
     String::try_to_boolean(self)
   }
 }

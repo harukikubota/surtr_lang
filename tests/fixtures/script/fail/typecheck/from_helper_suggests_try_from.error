@@ -1,3 +1,0 @@
-phase: typecheck
-contains: implements TryFrom, not From
-contains: Use try_from::<Int>(value).

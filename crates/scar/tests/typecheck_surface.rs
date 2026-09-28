@@ -1008,12 +1008,16 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         bind_operator_missing_impl_retains_obligation as fn(),
     ),
     (
-        "from_helper_typechecks_as_generic_trait_call",
-        from_helper_typechecks_as_generic_trait_call as fn(),
+        "to_helper_typechecks_as_generic_trait_call",
+        to_helper_typechecks_as_generic_trait_call as fn(),
     ),
     (
-        "try_from_helper_typechecks_as_generic_trait_call",
-        try_from_helper_typechecks_as_generic_trait_call as fn(),
+        "try_to_helper_typechecks_as_generic_trait_call",
+        try_to_helper_typechecks_as_generic_trait_call as fn(),
+    ),
+    (
+        "conversion_helpers_support_qualified_calls_and_captures",
+        conversion_helpers_support_qualified_calls_and_captures as fn(),
     ),
     (
         "encode_helper_typechecks_as_generic_trait_call",
@@ -1044,16 +1048,16 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         encode_helper_allows_same_pattern_recursive_dispatch as fn(),
     ),
     (
-        "from_helper_suggests_try_from_when_only_fallible_impl_exists",
-        from_helper_suggests_try_from_when_only_fallible_impl_exists as fn(),
+        "to_helper_suggests_try_to_when_only_fallible_impl_exists",
+        to_helper_suggests_try_to_when_only_fallible_impl_exists as fn(),
     ),
     (
-        "try_from_helper_suggests_from_when_only_infallible_impl_exists",
-        try_from_helper_suggests_from_when_only_infallible_impl_exists as fn(),
+        "try_to_helper_suggests_to_when_only_infallible_impl_exists",
+        try_to_helper_suggests_to_when_only_infallible_impl_exists as fn(),
     ),
     (
-        "from_and_try_from_impls_are_mutually_exclusive",
-        from_and_try_from_impls_are_mutually_exclusive as fn(),
+        "to_and_try_to_impls_are_mutually_exclusive",
+        to_and_try_to_impls_are_mutually_exclusive as fn(),
     ),
     (
         "process_sleep_accepts_duration_literal",
@@ -1190,6 +1194,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(overlapping_trait_impl_patterns_are_rejected_before_codegen),
     surface_case!(disjoint_specializations_with_the_same_nominal_target_typecheck),
     surface_case!(conversion_impl_exclusivity_ignores_generic_parameter_names),
+    surface_case!(conversion_impl_exclusivity_rejects_generic_concrete_overlap),
+    surface_case!(conversion_impl_exclusivity_rejects_nested_overlap),
+    surface_case!(conversion_impl_exclusivity_is_declaration_order_independent),
+    surface_case!(conversion_impl_exclusivity_allows_disjoint_pairs),
     surface_case!(local_callable_binding_requires_concrete_signature),
     surface_case!(local_callable_binding_accepts_outer_rigid_generic),
     surface_case!(annotated_local_callable_remains_monomorphic),
@@ -3960,19 +3968,105 @@ fn conversion_impl_exclusivity_ignores_generic_parameter_names() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct LocalBox<$A> { value: $A }
 
-impl From<$A> for LocalBox<$A> {
-  def from::<$A>(self: LocalBox<$A>) -> $A { self.value }
+impl Convert<$A> for LocalBox<$A> {
+  def to::<$A>(self: LocalBox<$A>) -> $A { self.value }
 }
 
-impl TryFrom<$T> for LocalBox<$T> {
-  def try_from::<$T>(self: LocalBox<$T>) -> Result<$T, Error> { Ok(self.value) }
+impl TryConvert<$T> for LocalBox<$T> {
+  def try_to::<$T>(self: LocalBox<$T>) -> Result<$T, Error> { Ok(self.value) }
 }"#,
     );
 
-    let err = typecheck(resolved).expect_err("From and TryFrom patterns must be exclusive");
+    let err = typecheck(resolved).expect_err("Convert and TryConvert patterns must be exclusive");
     assert!(
         err.message.contains("cannot both be implemented"),
         "{err:?}"
+    );
+}
+
+fn conversion_impl_exclusivity_rejects_generic_concrete_overlap() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defenum LocalBox<$A> { Value($A) }
+
+impl Convert<Int> for LocalBox<$A> {
+  def to::<Int>(self: LocalBox<$A>) -> Int { 0 }
+}
+
+impl TryConvert<Int> for LocalBox<String> {
+  def try_to::<Int>(self: LocalBox<String>) -> Result<Int, Error> { Ok(0) }
+}"#,
+    );
+
+    let err = typecheck(resolved)
+        .expect_err("generic Convert and concrete TryConvert patterns must be exclusive");
+    assert!(
+        err.message.contains("cannot both be implemented"),
+        "{err:?}"
+    );
+}
+
+fn conversion_impl_exclusivity_rejects_nested_overlap() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defenum LocalSource { Value }
+
+impl Convert<List<$A>> for LocalSource {
+  def to::<List<$A>>(self: LocalSource) -> List<$A> { [] }
+}
+
+impl TryConvert<List<Int>> for LocalSource {
+  def try_to::<List<Int>>(self: LocalSource) -> Result<List<Int>, Error> { Ok([]) }
+}"#,
+    );
+
+    let err =
+        typecheck(resolved).expect_err("nested Convert and TryConvert patterns must be exclusive");
+    assert!(
+        err.message.contains("cannot both be implemented"),
+        "{err:?}"
+    );
+}
+
+fn conversion_impl_exclusivity_is_declaration_order_independent() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defenum LocalSource { Value }
+
+impl TryConvert<Int> for LocalSource {
+  def try_to::<Int>(self: LocalSource) -> Result<Int, Error> { Ok(0) }
+}
+
+impl Convert<Int> for LocalSource {
+  def to::<Int>(self: LocalSource) -> Int { 0 }
+}"#,
+    );
+
+    let err = typecheck(resolved)
+        .expect_err("TryConvert declared before Convert must still be exclusive");
+    assert!(
+        err.message.contains("cannot both be implemented"),
+        "{err:?}"
+    );
+}
+
+fn conversion_impl_exclusivity_allows_disjoint_pairs() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defenum LocalBox<$A> { Value($A) }
+
+impl Convert<Int> for LocalBox<Int> {
+  def to::<Int>(self: LocalBox<Int>) -> Int { 0 }
+}
+
+impl TryConvert<Int> for LocalBox<String> {
+  def try_to::<Int>(self: LocalBox<String>) -> Result<Int, Error> { Ok(0) }
+}"#,
+    );
+
+    let typed = typecheck(resolved).expect("disjoint Convert and TryConvert pairs should coexist");
+    assert_eq!(
+        typed
+            .iter()
+            .filter(|node| matches!(node.node, TypedInner::TraitImplDef(..)))
+            .count(),
+        2
     );
 }
 
@@ -9346,8 +9440,8 @@ fn bind_operator_missing_impl_retains_obligation() {
     assert_eq!(data["subject_type"], "Int");
 }
 
-fn from_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = from::<String>(42)"#);
+fn to_helper_typechecks_as_generic_trait_call() {
+    let typed = typecheck_with_builtin_prelude(r#"value = to::<String>(42)"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -9368,9 +9462,9 @@ fn from_helper_typechecks_as_generic_trait_call() {
             args,
             ..
         } => {
-            assert_eq!(trait_name, "From<String>");
-            assert_eq!(method_name, "from");
-            assert_eq!(name, "From<String>::Int::from");
+            assert_eq!(trait_name, "Convert<String>");
+            assert_eq!(method_name, "to");
+            assert_eq!(name, "Convert<String>::Int::to");
             assert_eq!(receiver_ty, &scar::types::Ty::Int);
             assert_eq!(args.len(), 1);
             assert_eq!(rhs.ty, scar::types::Ty::Str);
@@ -9379,8 +9473,8 @@ fn from_helper_typechecks_as_generic_trait_call() {
     }
 }
 
-fn try_from_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = try_from::<Int>("42")"#);
+fn try_to_helper_typechecks_as_generic_trait_call() {
+    let typed = typecheck_with_builtin_prelude(r#"value = try_to::<Int>("42")"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -9401,15 +9495,24 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
             args,
             ..
         } => {
-            assert_eq!(trait_name, "TryFrom<Int>");
-            assert_eq!(method_name, "try_from");
-            assert_eq!(name, "TryFrom<Int>::String::try_from");
+            assert_eq!(trait_name, "TryConvert<Int>");
+            assert_eq!(method_name, "try_to");
+            assert_eq!(name, "TryConvert<Int>::String::try_to");
             assert_eq!(receiver_ty, &scar::types::Ty::Str);
             assert_eq!(args.len(), 1);
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
     }
+}
+
+fn conversion_helpers_support_qualified_calls_and_captures() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"text: String = Convert::to::<String>(42)
+parse: (String -> Result<Int>) = &TryConvert::try_to::<Int>
+number: Result<Int> = parse("42")"#,
+    );
+    assert!(!typed.is_empty());
 }
 
 fn encode_helper_typechecks_as_generic_trait_call() {
@@ -9678,37 +9781,37 @@ fn trait_dispatch_name(dispatch: &scar::typed::TraitDispatch) -> Option<String> 
     }
 }
 
-fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
-    let resolved = resolve_with_builtin_prelude(r#"value = from::<Int>("42")"#);
-    let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
+fn to_helper_suggests_try_to_when_only_fallible_impl_exists() {
+    let resolved = resolve_with_builtin_prelude(r#"value = to::<Int>("42")"#);
+    let err = typecheck(resolved).expect_err("to on fallible conversion must fail");
     assert!(err
         .hint
         .as_ref()
         .expect("conversion remediation")
-        .contains("String -> Int implements TryFrom, not From"));
+        .contains("String -> Int implements TryConvert, not Convert"));
     assert!(err
         .hint
         .as_ref()
         .unwrap()
-        .contains("Use try_from::<Int>(value)."));
+        .contains("Use try_to::<Int>(value)."));
 }
 
-fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
-    let resolved = resolve_with_builtin_prelude(r#"value = try_from::<String>(42)"#);
-    let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
+fn try_to_helper_suggests_to_when_only_infallible_impl_exists() {
+    let resolved = resolve_with_builtin_prelude(r#"value = try_to::<String>(42)"#);
+    let err = typecheck(resolved).expect_err("try_to on infallible conversion must fail");
     assert!(err
         .hint
         .as_ref()
         .expect("conversion remediation")
-        .contains("Int -> String implements From, not TryFrom"));
+        .contains("Int -> String implements Convert, not TryConvert"));
     assert!(err
         .hint
         .as_ref()
         .unwrap()
-        .contains("Use from::<String>(value)."));
+        .contains("Use to::<String>(value)."));
 }
 
-fn from_and_try_from_impls_are_mutually_exclusive() {
+fn to_and_try_to_impls_are_mutually_exclusive() {
     let overrides = [
         (
             "String",
@@ -9737,20 +9840,20 @@ inspect(self)
   }
 }
 
-impl From<String> for String {
-  def from::<String>(self: Self) -> String {
+impl Convert<String> for String {
+  def to::<String>(self: Self) -> String {
 self
   }
 }
 
-impl TryFrom<Int> for String {
-  def try_from::<Int>(self: Self) -> Result<Int, Error> {
+impl TryConvert<Int> for String {
+  def try_to::<Int>(self: Self) -> Result<Int, Error> {
 Ok(0)
   }
 }
 
-impl From<Int> for String {
-  def from::<Int>(self: Self) -> Int {
+impl Convert<Int> for String {
+  def to::<Int>(self: Self) -> Int {
 0
   }
 }
@@ -9770,10 +9873,10 @@ self != rhs
     ];
 
     let err = typecheck_std_modules_with_overrides(&overrides)
-        .expect_err("conflicting From/TryFrom impls must fail");
+        .expect_err("conflicting Convert/TryConvert impls must fail");
     assert!(err
         .message
-        .contains("From and TryFrom cannot both be implemented for String -> Int"));
+        .contains("Convert and TryConvert cannot both be implemented for String -> Int"));
 }
 
 fn process_sleep_accepts_duration_literal() {
@@ -10649,16 +10752,16 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
 
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
     let typed = typecheck_with_builtin_prelude(
-        r#"deftrait Convert<$To> {
+        r#"deftrait Transform<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
-impl Convert<Int> for String {
+impl Transform<Int> for String {
   def convert::<Int>(self: String) -> Int { 1 }
 }
 
-converted: Int = Convert::convert::<Int>("")
-convert_fn: (String -> Int) = &Convert::convert::<Int>
+converted: Int = Transform::convert::<Int>("")
+convert_fn: (String -> Int) = &Transform::convert::<Int>
 again: Int = convert_fn("")"#,
     );
     assert!(!typed.is_empty());
@@ -10954,11 +11057,12 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
         "{err:?}"
     );
 
-    let resolved = resolve_with_builtin_prelude(r#"value = TryFrom::try_from::<Int, String>("1")"#);
+    let resolved =
+        resolve_with_builtin_prelude(r#"value = TryConvert::try_to::<Int, String>("1")"#);
     let err = typecheck(resolved).expect_err("trait generics must use their declared arity");
     assert!(
         err.message
-            .contains("TryFrom::try_from expects 1 return type argument(s), got 2"),
+            .contains("TryConvert::try_to expects 1 return type argument(s), got 2"),
         "{err:?}"
     );
 }
@@ -11004,22 +11108,22 @@ fn trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow
 
 fn trait_impl_return_type_arguments_must_match_the_trait_slots() {
     let matching = resolve_with_builtin_prelude(
-        r#"deftrait Convert<$To> {
+        r#"deftrait Transform<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
-impl Convert<Int> for String {
+impl Transform<Int> for String {
   def convert::<Int>(self: String) -> Int { 1 }
 }"#,
     );
     typecheck(matching).expect("the impl must repeat the trait's target slot");
 
     let omitted = resolve_with_builtin_prelude(
-        r#"deftrait Convert<$To> {
+        r#"deftrait Transform<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
-impl Convert<Int> for String {
+impl Transform<Int> for String {
   def convert(self: String) -> Int { 1 }
 }"#,
     );

@@ -86,8 +86,8 @@ mod tests {
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
     const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compare.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
-    const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
-    const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_from.srt");
+    const CONVERT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/convert.srt");
+    const TRY_CONVERT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_convert.srt");
     const ENCODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/encode.srt");
     const DECODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/decode.srt");
     const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
@@ -298,8 +298,8 @@ mod tests {
                 ("Show", SHOW_MODULE_SOURCE),
                 ("Default", DEFAULT_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
-                ("From", FROM_MODULE_SOURCE),
-                ("TryFrom", TRY_FROM_MODULE_SOURCE),
+                ("Convert", CONVERT_MODULE_SOURCE),
+                ("TryConvert", TRY_CONVERT_MODULE_SOURCE),
                 ("Encode", ENCODE_MODULE_SOURCE),
                 ("Decode", DECODE_MODULE_SOURCE),
                 ("Functor", FUNCTOR_MODULE_SOURCE),

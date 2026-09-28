@@ -454,7 +454,7 @@ ReturnTypeArguments、expected return、captured impl-target argumentsを含め�
 overlap である。V1 に specialization、most-specific dispatch、宣言順優先、negative bound、closed-world
 disjointness proof はない。
 
-`From` / `TryFrom` の排他は同じ canonical pattern unifier で、obligation subjectと変換元Trait argumentの
+`Convert` / `TryConvert` の排他は同じ canonical pattern unifier で、obligation subjectと変換元Trait argumentの
 両方を検査する。disjoint な full pattern は同じ nominal target でも共存でき、Forge key も full identity を
 保持する。
 
@@ -573,8 +573,8 @@ constructor headだけを指定した場合は不足するmapped / captured argu
 生成するが、末尾項目だけを省略するpartial listは受理しない。
 
 通常 RTA は完全型を基本とするが、Trait method の RTA に generic 型の bare headを指定した場合は、
-そのheadを型identityのconstraintとして扱える。例えば`impl From<Result<$T>> for Option<$T>`に対する
-`from::<Result>(option)`は、receiverの`Option<Int>`とimpl headで共有された`$T`から`Result<Int>`を得る。
+そのheadを型identityのconstraintとして扱える。例えば`impl Convert<Result<$T>> for Option<$T>`に対する
+`to::<Result>(option)`は、receiverの`Option<Int>`とimpl headで共有された`$T`から`Result<Int>`を得る。
 同じ規則はuser-defined generic targetにも適用し、標準型名のallowlistを作らない。candidate implの共有変数、
 value argument、expected returnで全引数が確定しなければambiguityであり、impl数や登録順を既定値にしない。
 通常関数のordinary RTAへbare headを許可する規則ではない。
@@ -584,8 +584,8 @@ deftrait Show {
   def to_string(self: Self) -> String
 }
 
-deftrait TryFrom<$To> {
-  def try_from::<$To>(self: Self) -> Result<$To, Error>
+deftrait TryConvert<$To> {
+  def try_to::<$To>(self: Self) -> Result<$To, Error>
 }
 
 def guard::<Alternative>(cond: Boolean) -> Alternative<Unit>

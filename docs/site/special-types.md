@@ -154,7 +154,7 @@ compiler-special type contract の一部だからです。
 普段の user code では、special type 名そのものを意識する場面は多くありません。
 
 - `Unit` は普通に使ってよい
-- target-oriented conversion は `from::<TargetTy>(value)` / `try_from::<TargetTy>(value)` と書く
+- target-oriented conversion は `to::<TargetTy>(value)` / `try_to::<TargetTy>(value)` と書く
 - `Hole` は `always(1)` や `{|_| ...}` が `(_ -> T)` と見える理由だと考える
 
 直接書く必要があるときは、次の感覚で十分です。

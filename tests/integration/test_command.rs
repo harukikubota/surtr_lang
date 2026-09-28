@@ -405,9 +405,9 @@ fn test_command_supports_result_pipeline_assertions() {
 import Test;
 
 test("String") {
-  describe("TryFrom") {
+  describe("TryConvert") {
     it("parses ints through the assertion pipeline") {
-      try_from::<Int>("1") |>= assert_eq(1)
+      try_to::<Int>("1") |>= assert_eq(1)
     }
   }
 }
@@ -423,7 +423,9 @@ test("String") {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("[PASS] String > TryFrom > parses ints through the assertion pipeline"));
+    assert!(
+        stdout.contains("[PASS] String > TryConvert > parses ints through the assertion pipeline")
+    );
     assert!(stdout.contains("test result: passed=1, failed=0, total=1"));
 
     let _ = fs::remove_dir_all(temp);

@@ -847,14 +847,14 @@ impl Show for Int {
   @builtin def to_string(self: Self) -> String
 }
 
-impl From<String> for Int {
+impl Convert<String> for Int {
   @doc """
   Convert `Int` into its standard string representation.
   ## REPL
-  xldr(1)> from::<String>(42)
+  xldr(1)> to::<String>(42)
   "42"
   """
-  def from::<String>(self: Self) -> String {
+  def to::<String>(self: Self) -> String {
     to_string(self)
   }
 }

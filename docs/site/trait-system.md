@@ -22,16 +22,16 @@ impl Add for Int {
 ReturnTypeArguments は、型変数が value parameter の型から導入できない場合に使い、その型変数は戻り値にも現れなければならない。`Self` が `self` などの引数位置に現れる method は ReturnTypeArguments を必要としない。trait 宣言に ReturnTypeArguments がある場合だけ、impl 側で trait head と impl target による置換形を宣言する。
 
 ```surtr
-deftrait TryFrom<$To> {
-  def try_from::<$To>(self: Self) -> Result<$To, Error>
+deftrait TryConvert<$To> {
+  def try_to::<$To>(self: Self) -> Result<$To, Error>
 }
 
-impl TryFrom<Int> for String {
-  def try_from::<Int>(self: String) -> Result<Int, Error> { # ... }
+impl TryConvert<Int> for String {
+  def try_to::<Int>(self: String) -> Result<Int, Error> { # ... }
 }
 ```
 
-引数位置ですでに導入されている型変数を同じ型で ReturnTypeArguments に重ねて指定するのはエラーである。`Eq::eq(self: Self, rhs: Self)` のような method は `::<Self>` を付けない。一方、`TryFrom` の `$To` は引数位置から導入されず、変換先を指定する ReturnTypeArguments として `::<$To>` に置く。
+引数位置ですでに導入されている型変数を同じ型で ReturnTypeArguments に重ねて指定するのはエラーである。`Eq::eq(self: Self, rhs: Self)` のような method は `::<Self>` を付けない。一方、`TryConvert` の `$To` は引数位置から導入されず、変換先を指定する ReturnTypeArguments として `::<$To>` に置く。
 
 ## 型スロット
 
@@ -60,17 +60,17 @@ def id<$A>(value: $A) -> $A
 method の引数から導入できない Trait 固有の型は、Trait head に置く。
 
 ```surtr
-deftrait TryFrom<$To> {
-  def try_from::<$To>(self: Self) -> Result<$To, Error>
+deftrait TryConvert<$To> {
+  def try_to::<$To>(self: Self) -> Result<$To, Error>
 }
 ```
 
-`try_from::<Int>(value)`の`::<Int>`は、定義側ReturnTypeArgument `$To` の具体化です。その結果は
-full obligationの`TryFrom<Int>`というTrait argumentにも使われますが、通常genericを任意指定する構文ではありません。
+`try_to::<Int>(value)`の`::<Int>`は、定義側ReturnTypeArgument `$To` の具体化です。その結果は
+full obligationの`TryConvert<Int>`というTrait argumentにも使われますが、通常genericを任意指定する構文ではありません。
 
-Trait methodの通常ReturnTypeArgumentがgeneric targetの場合、`from::<Result>(option)`のようにbare headを
+Trait methodの通常ReturnTypeArgumentがgeneric targetの場合、`to::<Result>(option)`のようにbare headを
 型identityとして指定できます。不足する型引数は、candidate implのsource/targetが共有する変数、value argument、
-expected returnからすべて解ける場合だけ確定します。`from::<Result<Int>>(option)`の完全型も有効です。
+expected returnからすべて解ける場合だけ確定します。`to::<Result<Int>>(option)`の完全型も有効です。
 user-defined generic targetにも同じ規則を使い、標準型名、唯一のimpl、登録順による補完は行いません。
 通常関数のordinary ReturnTypeArgumentではbare headを完全型の代わりに使えません。
 
@@ -228,7 +228,7 @@ impl Mark for List<String> { ... } # OK
 
 Trait 自身が型引数を持つ場合は、target と Trait 引数の両方を使って交差を判定する。`where` 制約の違いだけで impl を分岐することはできない。
 
-`From` と `TryFrom` も同じ再帰照合を使って排他的に検査する。`$A` を `$T` に改名しても別の実装にはならない。
+`Convert` と `TryConvert` も同じ再帰照合を使って排他的に検査する。`$A` を `$T` に改名しても別の実装にはならない。
 
 各 `defmod` / inherent `impl` / trait `impl` block 内では method 名を一意にする。引数型や `def` / `defp` を変えて同名 method を overload することはできない。
 
@@ -259,4 +259,4 @@ body のない method は実装必須、body のある method は default implem
 
 Trait method の override は、method 名だけでなく、引数・戻り値・型変数の対応・`where` 制約まで契約と一致しなければなりません。型変数の綴りや制約の記述順だけが違う場合は同じ契約として扱います。
 
-標準 Trait の具体的な API は、各 `lib/traits/*.srt` の `@doc` を参照する。
+標準 Trait の具体的な API は、各 `lib/traits/*.srt` の `@doc` を参照する。変換 Trait は [`Convert / TryConvert`](./traits/convert.md) にまとめている。

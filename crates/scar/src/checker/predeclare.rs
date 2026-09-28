@@ -3973,10 +3973,10 @@ impl Checker {
                 }
             }
 
-            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "From") {
-                self.trait_key_by_short_name("TryFrom")
-            } else if self.trait_matches_short_name(&trait_key, "TryFrom") {
-                self.trait_key_by_short_name("From")
+            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "Convert") {
+                self.trait_key_by_short_name("TryConvert")
+            } else if self.trait_matches_short_name(&trait_key, "TryConvert") {
+                self.trait_key_by_short_name("Convert")
             } else {
                 None
             };

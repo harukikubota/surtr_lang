@@ -115,9 +115,9 @@
 
 - 背景:
   - `defenum` 本体や `.idx` 廃止は確定済み前提で進んでいる。
-  - 一方で `Enum::from(Int)` / `Enum::try_from(Int)` 相当の変換 helper 自動生成は未実装のまま残っている。
+  - 一方で `Enum::to(Int)` / `Enum::try_to(Int)` 相当の変換 helper 自動生成は未実装のまま残っている。
 - 未確定点:
-  - 暗黙生成するのが `from` だけか、`try_from` を含めた 2 系統か
+  - 暗黙生成するのが `to` だけか、`try_to` を含めた 2 系統か
   - out-of-range を compile-time ではなく runtime `Result` として扱うか
   - 生成先を enum owner module に置くか、共通 trait helper に寄せるか
 - 受け入れ条件:

@@ -8,7 +8,7 @@ Surtr の trait system は V1 です。
 標準 trait は大きく 3 層に分けて読むと分かりやすいです。
 
 - capability trait
-  - `Show`, `Compare`, `Default`, `From`, `TryFrom`
+  - `Show`, `Compare`, `Default`, `Convert`, `TryConvert`
 - operator dispatch trait
   - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
   - `Functor`, `Applicative`, `Monad`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
@@ -115,22 +115,22 @@ value: Result<Int> = pure(1)
 mapped: Result<Int> = fmap(value, {|n| n + 1})
 ```
 
-変換系は `From` / `TryFrom` trait が裏側の coherence を担います。
+変換系は `Convert` / `TryConvert` trait が裏側の coherence を担います。
 
 impl coherence は型変数名や宣言順ではなく、Trait 引数と target 型の構造で決まります。generic は任意の型と一致し、型コンストラクタの内側も再帰照合するため、`List<$A>` と `List<Int>` は重複です。Surtr V1 は specialization の優先順位を持たず、overlap は compile error にします。`List<Int>` と `List<String>` のように同時成立しない pattern は併存できます。
 
 この判定は method body を実行・生成する前の typecheck で行われます。user code の impl conflict が runtime や codegen error になることはありません。
 
-`From` / `TryFrom` の排他も同じ照合を使うため、generic parameter を `$A` から `$T` へ改名して回避することはできません。
+`Convert` / `TryConvert` の排他も同じ照合を使うため、generic parameter を `$A` から `$T` へ改名して回避することはできません。
 
 call時もTrait argumentsとimpl targetを同じ構造照合で解き、implの`where`を満たす候補だけを選びます。
 targetだけが一致する候補や、必要な型入力がまだ決まらない候補を成功扱いにはしません。未確定入力は
 expected returnや他の引数を待ち、入力が尽きればambiguityになります。唯一のimplや宣言順を既定値として
 使うことはありません。
 
-この構造照合により、`impl From<Result<$T>> for Option<$T>`へ`Option<Int>`を渡す
-`from::<Result>(value)`は、bare target headとreceiverが共有する`$T`を`Int`へ具体化できます。
-`from::<Result<Int>>(value)`も有効です。同じ仕組みはuser-defined generic targetにも適用され、
+この構造照合により、`impl Convert<Result<$T>> for Option<$T>`へ`Option<Int>`を渡す
+`to::<Result>(value)`は、bare target headとreceiverが共有する`$T`を`Int`へ具体化できます。
+`to::<Result<Int>>(value)`も有効です。同じ仕組みはuser-defined generic targetにも適用され、
 標準変換型のallowlistとしては実装しません。共有されないcaptured引数が残るbare headはambiguityです。
 
 Trait impl methodの本体から同じmethod名を非修飾で呼ぶ場合、その呼び出しは現在の具象implへ固定されず、
@@ -147,7 +147,7 @@ TypeCtorTraitを要求するcall-site RTAでは、constructor headだけでな�
 流用しません。
 
 ```text
-xldr(1)> print(match try_from::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })
+xldr(1)> print(match try_to::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })
 42
 xldr(2)>
 ```
@@ -165,7 +165,7 @@ xldr(2)>
 
 ## 関連ページ
 
-- 変換の呼び出し surface は `./definitions-and-usage.md`
+- 変換の呼び出し surface は [`Convert / TryConvert`](./traits/convert.md)
 - 型注釈は `./type-annotations.md`
 - Trait の制約・親 Trait・coherence の契約は `./trait-system.md`
 - 標準定義ソース内での位置づけは `./standard-modules.md`
@@ -174,8 +174,8 @@ xldr(2)>
 ## 確認したソース
 
 - ソース
-  - `../../lib/traits/from.srt`
-  - `../../lib/traits/try_from.srt`
+  - `../../lib/traits/convert.srt`
+  - `../../lib/traits/try_convert.srt`
   - `../../lib/types/int.srt`
 
 ## 躓きやすいポイント
@@ -185,5 +185,5 @@ xldr(2)>
 - `+`, `-`, `*` は `Add` / `Sub` / `Mul` の dispatch です。
 - `|*>`, `|*|`, `|>=` はそれぞれ `Functor::fmap`, `Applicative::ap`, `Monad::bind` の dispatch です。
 - `|*|` は未カリー化 callable を暗黙変換しません。複数引数では `curry()` を明示します。
-- `From` / `TryFrom` の呼び出し surface は簡潔でも、coherence 自体は trait 実装側で管理されています。
+- `Convert` / `TryConvert` の呼び出し surface は簡潔でも、coherence 自体は trait 実装側で管理されています。
 - 1 つの `defmod` / `impl` block に同名 method を複数定義できません。signature や `def` / `defp` を変えても overload にはなりません。

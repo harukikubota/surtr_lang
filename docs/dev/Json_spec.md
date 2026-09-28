@@ -139,7 +139,7 @@ compile 側は `Bootstrap` stage、test extension を必要に応じて含む sh
 モジュールの完全な inventory と順序は
 [`STDLIB_MODULE_SPECS`](../../crates/xldr/src/loader.rs) を正本とする。
 
-- `Encode` / `Decode` は `From` / `TryFrom` の後、`Json` の前にロードする
+- `Encode` / `Decode` は `Convert` / `TryConvert` の後、`Json` の前にロードする
 - `JsonValue` は `Json` module 側で定義し、helper trait 側から参照される
 
 ---

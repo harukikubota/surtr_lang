@@ -1,1 +1,0 @@
-value = try_from::<String>(42)

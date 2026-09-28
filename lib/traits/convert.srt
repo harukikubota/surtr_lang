@@ -1,0 +1,16 @@
+@doc """
+Standard `Convert` trait declaration.
+`Convert<$To>` models infallible conversion from `Self` into `$To`.
+Choose the target with an explicit ReturnTypeArgument such as `to::<String>(value)`.
+Because `to(...)` is part of the shared conversion surface, this trait is
+auto-imported when the standard prelude is loaded.
+
+## REPL
+xldr(1)> to::<String>(42)
+"42"
+"""
+@autoimport
+deftrait Convert<$To> {
+  # Convert the source value into the requested target type.
+  def to::<$To>(self: Self) -> $To
+}

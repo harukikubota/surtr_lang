@@ -220,9 +220,9 @@ for Facet<$K, $S, $A, _, _> {
 fn trait_argument_is_distinct_from_dispatch_subject() {
     let nodes = check(
         r#"
-deftrait TryFrom<$Source> { def try_from::<Self>(value: $Source) -> Self }
-impl TryFrom<Int> for String { def try_from::<String>(value: Int) -> String { "converted" } }
-TryFrom::try_from::<String>(1)
+deftrait TryConvert<$Source> { def try_to::<Self>(value: $Source) -> Self }
+impl TryConvert<Int> for String { def try_to::<String>(value: Int) -> String { "converted" } }
+TryConvert::try_to::<String>(1)
 "#,
     );
     let call = nodes

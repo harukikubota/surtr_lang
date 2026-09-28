@@ -2,8 +2,8 @@ defenum Boxed<$T> {
   Box($T),
 }
 
-impl From<Option<$T>> for Boxed<$T> {
-  def from::<Option<$T>>(self: Self) -> Option<$T> {
+impl Convert<Option<$T>> for Boxed<$T> {
+  def to::<Option<$T>>(self: Self) -> Option<$T> {
     match self {
       Boxed::Box(value) => Option::Some(value),
     }

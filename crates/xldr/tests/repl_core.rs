@@ -1906,8 +1906,7 @@ fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
         "Boolean::impl Show for Boolean::to_string",
         "Boolean::impl Eq for Boolean::eq",
         "Boolean::impl Neq for Boolean::neq",
-        "Boolean::impl From<String> for Boolean::from",
-        "Boolean::impl From<Boolean> for Boolean::from",
+        "Boolean::impl Convert<String> for Boolean::to",
     ] {
         assert!(
             labels.iter().all(|label| label != hidden),
