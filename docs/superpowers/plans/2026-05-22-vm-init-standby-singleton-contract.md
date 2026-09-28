@@ -140,7 +140,7 @@ Update the normative specs after implementation direction is accepted:
 - `docs/dev/EldrVM_spec.md`
 - `docs/dev/Xldr_spec.md`
 - `docs/dev/Rune_observability.md`
-- `docs/site/process.md`
+- `doc/要件定義v9.md`
 
 Replace `Lazy` wording with `Standby` wording and state explicitly that standby singleton init completes during `VM::Init`.
 

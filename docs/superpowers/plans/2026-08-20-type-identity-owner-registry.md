@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust workspace (`spire`, `sigil`, `scar`, `sindr`, `surtr-analysis`, `rune`); `cargo nextest`; existing module/script fixture harness.
 
-**Spec:** `crates/sindr/src/names.rs` (`TypeIdentity`); `crates/sigil/src/resolver/declarations.rs` (`OwnerRegistry`); `docs/dev/Trait_system_spec.md`; `docs/dev/diagnostics.md`; `docs/dev/テスト方針.md`.
+**Spec:** `doc/要件定義v9.md` §2.2.1 `TypeIdentity` (rewritten by Task 1); `docs/dev/Trait_system_spec.md`; `docs/dev/diagnostics.md`; `docs/dev/テスト方針.md`.
 
 ## Global Constraints
 
@@ -25,7 +25,7 @@
 
 ## File Structure
 
-- Modify: `crates/sindr/src/names.rs` / `crates/sigil/src/resolver/declarations.rs` — normative taxonomy, namespace, and promotion rules.
+- Modify: `doc/要件定義v9.md` — normative taxonomy, namespace, and promotion rules.
 - Modify: `docs/dev/テスト方針.md` — resolver and warm-fixture coverage contract for owner collisions.
 - Modify: `crates/sindr/src/names.rs` — expanded enum, shared identity/capability constructors, builtin identity lookup, schema version.
 - Modify: `crates/sindr/src/builtin.rs` — declare standard builtin-owner identities in metadata instead of inferring them from arity or hard-coding names in Sigil.
@@ -44,7 +44,7 @@
 ### Task 1: Make the TypeIdentity contract normative before code changes
 
 **Files:**
-- Modify: `crates/sindr/src/names.rs` and `crates/sigil/src/resolver/declarations.rs`
+- Modify: `doc/要件定義v9.md:44-79`
 - Modify: `docs/dev/テスト方針.md:264-289, 472-478`
 - Verify: `docs/dev/Trait_system_spec.md:113-129`
 - Verify: `docs/dev/diagnostics.md:16-34, 68-90`
@@ -55,7 +55,7 @@
 
 - [ ] **Step 1: Replace the TypeIdentity subsection with the final 11-value taxonomy**
 
-  Keep the table below aligned with the `TypeIdentity` enum and `OwnerRegistry`, and remove every compile-space use of the old `ConcreteError` name.
+  Write the table below in `doc/要件定義v9.md` and remove every use of the old `ConcreteError` name from that subsection.
 
   | Source owner | Identity | Canonical owner key |
   |---|---|---|
@@ -108,7 +108,7 @@
 - [ ] **Step 6: Commit the specification change**
 
   ```bash
-  git add crates/sindr/src/names.rs crates/sigil/src/resolver/declarations.rs docs/dev/テスト方針.md
+  git add doc/要件定義v9.md docs/dev/テスト方針.md
   git commit -m "docs: define unified TypeIdentity owner namespace"
   ```
 
