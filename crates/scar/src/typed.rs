@@ -582,6 +582,16 @@ pub enum TypedInner {
     /// is closure-shaped, but display metadata must preserve its Capture origin.
     CaptureClosure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
 
+    /// Callable synthesized from a nominal constructor capture. Keep the
+    /// resolved constructor identity alongside the closure body so Forge and
+    /// Eldr do not have to recover it from the lowered constructor tag.
+    CaptureConstructorClosure(
+        ResolvedId,
+        Vec<TypedClosureParam>,
+        Vec<ResolvedId>,
+        Box<TypedNode>,
+    ),
+
     /// Captured function value
     Capture(Box<TypedNode>, Vec<TypedNode>),
 

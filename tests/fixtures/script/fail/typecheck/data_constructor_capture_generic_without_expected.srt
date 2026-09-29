@@ -1,0 +1,6 @@
+defenum Choice2<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+left = &Choice2<_, Int>::Left

@@ -1121,12 +1121,15 @@ defmod B {
         assert_eq!(duration.identity, Some(sindr::names::TypeIdentity::Struct));
         assert_eq!(
             duration.capabilities,
-            Some(sindr::names::SymbolCapabilities::new(
-                true,
-                true,
-                true,
-                Some(sindr::names::FacetRootKind::TypeRoot),
-            ))
+            Some(
+                sindr::names::SymbolCapabilities::new(
+                    true,
+                    true,
+                    true,
+                    Some(sindr::names::FacetRootKind::TypeRoot),
+                )
+                .with_constructor_capture(sindr::names::ConstructorCapturePolicy::Ordinary),
+            )
         );
 
         assert!(infos.iter().any(|info| {

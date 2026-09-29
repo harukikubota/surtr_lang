@@ -3,7 +3,7 @@
 Surtr では、見た目が似ていても次の 4 つは役割が違います。
 
 - call 式: `add(1, 2)`
-- capture: `&add`, `&User::get_name`, `&add(&1, 10)`, `&`+``, `&`Boolean::not``
+- capture: `&add`, `&User`, `&User::get_name`, `&add(&1, 10)`, `&`+``, `&`Boolean::not``
 - closure: `{|x| x + 1}`
 - backtick FuncLiteral: ``1 `add` 2``, ``1 `+` 2``
 
@@ -92,7 +92,7 @@ value |> (make_normalizer(10))
 
 ## capture 演算子 `&`
 
-`&` は関数や method、operator surface を「あとで呼べる関数値」にします。
+`&` は関数、データ型コンストラクタ、method、operator surface を「あとで呼べる関数値」にします。
 
 ```surtr
 inc = &add(&1, 1)
@@ -101,6 +101,11 @@ trim = &String::trim
 negate = &`Boolean::not`
 adder: (Int, Int -> Int) = &`+`
 ```
+
+ユーザ定義の Record、Struct、Enum variant も constructor capture の対象です。`&User` は
+宣言順の引数を受け取り、`&User(&1, 20)` は placeholder を使う callable を作ります。generic Enum は
+`&Either<_, Int>::Left` のように owner 型引数を明示できます。詳しい arity、推論、拒否規則は
+[capture 演算子の詳細](./capture-operator.md) を参照してください。
 
 読み方は次です。
 

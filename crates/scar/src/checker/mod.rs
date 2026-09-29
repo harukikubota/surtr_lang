@@ -2163,6 +2163,12 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
+            TypedInner::CaptureConstructorClosure(_, params, _, body) => {
+                for param in params {
+                    Self::rewrite_fun_indices_in_closure_param(param, rewrites);
+                }
+                Self::rewrite_fun_indices_in_node(body, rewrites);
+            }
             TypedInner::EnumDef(_, _)
             | TypedInner::TraitDef(..)
             | TypedInner::TraitImplDef(..)
@@ -3336,6 +3342,9 @@ impl Checker {
             | TypedInner::Closure(_, _, show)
             | TypedInner::ExtractorClosure(_, _, show)
             | TypedInner::CaptureClosure(_, _, show) => {
+                self.collect_unused_value_warnings_in_node(show);
+            }
+            TypedInner::CaptureConstructorClosure(_, _, _, show) => {
                 self.collect_unused_value_warnings_in_node(show);
             }
             TypedInner::HashMapLiteral(entries) => {

@@ -8,6 +8,7 @@ pub enum ResolveErrorReason {
     Visibility,
     Import,
     Capture,
+    ConstructorCaptureForbidden,
     Pattern,
     Declaration,
     SpecialForm,

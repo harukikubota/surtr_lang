@@ -168,6 +168,7 @@ fn map_resolve_reason(
         R::Visibility => D::Visibility,
         R::Import => D::Import,
         R::Capture => D::Capture,
+        R::ConstructorCaptureForbidden => D::ConstructorCaptureForbidden,
         R::Pattern => D::Pattern,
         R::Declaration => D::Declaration,
         R::SpecialForm => D::SpecialForm,

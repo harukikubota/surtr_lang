@@ -1,12 +1,14 @@
 # キャプチャ演算子 `&`
 
-Surtr の `&` は、既存の関数や method を「あとで呼べる関数値」に変える演算子です。
+Surtr の `&` は、既存の関数、method、データ型コンストラクタを
+「あとで呼べる関数値」に変える演算子です。
 このページでは bare capture と placeholder capture の両方をまとめます。
 
 ## 先に覚えるルール
 
 - `&f` は named capture です
 - `&Type::method` や `&`Type::method`` も capture できます
+- `&User` や `&Direction::Move` は constructor capture です
 - `&`+`` のような operator capture もできます
 - 引数位置を調整したいときは `&1`, `&2`, ... を使います
 - `&f(10)` のような旧 partial capture は使えません
@@ -33,6 +35,93 @@ negate = &`Boolean::not`
 ```
 
 これは「その関数そのものを値として取り出す」と読むと分かりやすいです。
+
+## データ型コンストラクタ capture
+
+ユーザ定義の Record、Struct、Enum のコンストラクタも関数値として capture できます。
+
+```surtr
+defrecord User(name: String, age: Int)
+
+make_user: (String, Int -> User) = &User
+user = make_user("Ada", 20)
+```
+
+引数なしの `&User` は、コンストラクタが宣言しているすべての引数を受け取ります。
+
+- Record は field の宣言順
+- Struct は field 順ではなく `Type::new` の引数宣言順
+- Enum variant は payload の宣言順
+
+引数の一部を固定したり、順序を変えたりするときは通常関数と同じ placeholder を使います。
+
+```surtr
+make_twenty: (String -> User) = &User(&1, 20)
+
+defenum Direction {
+  Still,
+  Move(Int, Int),
+}
+
+move_x = &Direction::Move(&1, 0)
+swap_move = &Direction::Move(&2, &1)
+```
+
+placeholder 番号は生成される callable の入力順です。constructor へ値を渡す位置は宣言順のままなので、
+`&Direction::Move(&2, &1)` は 2 個の入力を入れ替えて `Move` へ渡します。
+
+payload を持たない Enum variant は、0 引数 callable として capture します。variant 値を作るには
+capture を呼び出します。
+
+```surtr
+still: (-> Direction) = &Direction::Still
+value = still()
+```
+
+### generic Enum
+
+generic Enum では、通常の constructor call と同じ owner 型引数を指定できます。
+
+```surtr
+defenum Either<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+left: (String -> Either<String, Int>) = &Either<_, Int>::Left
+left_fixed: (String -> Either<String, Int>) = &Either<_, Int>::Left(&1)
+```
+
+`_` は位置ごとに独立して推論されます。binding annotation や高階関数が要求する callable 型から
+決定できなければ compile error になります。外側の generic 宣言ですでに導入されている `$T` も
+owner 型引数に使えます。`::<...>` は関数の ReturnTypeArgument 用なので、Enum owner 型引数には
+使いません。
+
+### constructor capture の制限
+
+constructor capture の引数は位置指定だけです。通常の Record / Struct call で named argument を
+使える場合でも、capture 内では使えません。
+
+```surtr
+&User(name: &1, age: 20) # compile error
+```
+
+引数ブロックを書く場合は、1 個以上の placeholder が必要です。
+
+```surtr
+&User("Ada", 20) # compile error
+&User(&1, 20)    # OK
+```
+
+固定した引数式は capture 作成時ではなく、生成された callable を呼ぶたびに、通常の constructor
+引数と同じ左から右の順序で評価されます。
+
+`deferror` などコンパイラが構築を管理する型は constructor capture できません。List、HashMap、
+3 要素以上の tuple は literal で構築するため、nominal constructor capture の対象外です。2-tuple は
+既存の ``&`(,)` `` を使います。
+
+この節の通常 constructor 規則はユーザ定義の Record、Struct、Enum を対象にします。標準の
+`Result` と `Boolean` はコンパイラ管理の既存 surface に従い、この規則では変更しません。
 
 ## operator capture
 
@@ -83,6 +172,7 @@ placeholder の規則は次です。
 - index の上限は `16` です
 - 最大 index が、その capture の引数個数になります
 - index は欠番なく連続していなければなりません
+- 同じ index は複数の引数位置で使えます
 
 たとえば次は OK です。
 
@@ -189,6 +279,7 @@ identity がほしいだけなら named function を使います。
 capture が向く場面:
 
 - 既存関数をそのまま渡したい
+- データ型コンストラクタを関数値として渡したい
 - 引数位置だけを placeholder で調整したい
 - module / type method を短く書きたい
 
@@ -229,14 +320,17 @@ def add(x: Int, y: Int) -> Int { x + y }
 def wrap(value: String, left: String, right: String) -> String {
   left ++ value ++ right
 }
+defrecord User(name: String, age: Int)
 
 inc = &add(&1, 1)
 bracket = &wrap(&1, "[", "]")
 adder: (Int, Int -> Int) = &`+`
+make_user: (String -> User) = &User(&1, 20)
 
 print(to_string(inc(41)))
 print(bracket("name"))
 print(to_string(adder(1, 2)))
+user = make_user("Ada")
 ```
 
 ## 関連ページ

@@ -112,7 +112,7 @@ impl ImplicitRootNamespace {
 
 /// Bump when compile-space symbol capability semantics change in a way that
 /// invalidates staged semantic snapshots.
-pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 2;
+pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 3;
 
 /// Compile-space identity of a canonical declaration owner.
 ///
@@ -144,6 +144,18 @@ pub enum FacetRootKind {
     HashMap,
 }
 
+/// Closed policy for using a nominal constructor as a capture target.
+///
+/// `None` on `SymbolCapabilities` means that the symbol is not a constructor
+/// target.  The policy is deliberately carried by canonical identity rather
+/// than inferred from a display name in later phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConstructorCapturePolicy {
+    Ordinary,
+    CompilerManaged,
+    Forbidden,
+}
+
 /// Compile-space capability flags attached to a resolved symbol identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolCapabilities {
@@ -151,6 +163,7 @@ pub struct SymbolCapabilities {
     pub module_owner: bool,
     pub impl_target: bool,
     pub facet_root_path: Option<FacetRootKind>,
+    pub constructor_capture: Option<ConstructorCapturePolicy>,
 }
 
 impl SymbolCapabilities {
@@ -165,7 +178,21 @@ impl SymbolCapabilities {
             module_owner,
             impl_target,
             facet_root_path,
+            constructor_capture: None,
         }
+    }
+
+    pub const fn with_constructor_capture(mut self, policy: ConstructorCapturePolicy) -> Self {
+        self.constructor_capture = Some(policy);
+        self
+    }
+
+    pub const fn with_constructor_capture_policy(
+        mut self,
+        policy: Option<ConstructorCapturePolicy>,
+    ) -> Self {
+        self.constructor_capture = policy;
+        self
     }
 
     pub const fn type_owner() -> Self {
@@ -660,6 +687,11 @@ pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMet
         _ => None,
     };
     let impl_target = type_name.supports_inherent_impl();
+    let constructor_capture = match type_name {
+        TypeName::Result | TypeName::Boolean => Some(ConstructorCapturePolicy::CompilerManaged),
+        TypeName::MatchResult | TypeName::Error => Some(ConstructorCapturePolicy::Forbidden),
+        _ => None,
+    };
     Some(BuiltinSymbolSurfaceMeta {
         name: type_name.as_str(),
         identity,
@@ -668,7 +700,8 @@ pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMet
             impl_target,
             impl_target,
             facet_root_path,
-        ),
+        )
+        .with_constructor_capture_policy(constructor_capture),
     })
 }
 

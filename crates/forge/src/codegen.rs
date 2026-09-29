@@ -667,6 +667,7 @@ fn collect_missing_singleton_calls(
         | TypedInner::Closure(_, _, body)
         | TypedInner::ExtractorClosure(_, _, body)
         | TypedInner::CaptureClosure(_, _, body)
+        | TypedInner::CaptureConstructorClosure(_, _, _, body)
         | TypedInner::Def(_, _, _, _, _, _, body, _)
         | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => collect_missing_singleton_calls(
             body,
@@ -5612,7 +5613,9 @@ fn flatten_typed_list_pattern<'a>(pattern: &'a TypedPattern, out: &mut Vec<&'a T
 
 fn callable_kind_for_node(node: &TypedNode) -> Option<ReplCallableKind> {
     match &node.node {
-        TypedInner::CaptureClosure(..) => Some(ReplCallableKind::Capture),
+        TypedInner::CaptureClosure(..) | TypedInner::CaptureConstructorClosure(..) => {
+            Some(ReplCallableKind::Capture)
+        }
         TypedInner::Closure(..) | TypedInner::ExtractorClosure(..) => {
             Some(ReplCallableKind::Closure)
         }
@@ -5648,6 +5651,14 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
                 sig: ty_to_string(&node.ty),
             })
         }
+        TypedInner::CaptureConstructorClosure(id, _, _, _) => {
+            let (module, name) = constructor_display_parts(id);
+            Some(ReplCallableDisplay::FnCapture {
+                module,
+                name,
+                sig: ty_to_string(&node.ty),
+            })
+        }
         TypedInner::Closure(..) | TypedInner::ExtractorClosure(..) => {
             Some(ReplCallableDisplay::Closure {
                 sig: ty_to_string(&node.ty),
@@ -5663,6 +5674,10 @@ fn callable_capture_names(node: &TypedNode) -> Vec<String> {
         TypedInner::Closure(_, captures, _)
         | TypedInner::ExtractorClosure(_, captures, _)
         | TypedInner::CaptureClosure(_, captures, _) => captures
+            .iter()
+            .map(|capture| capture.name.to_string())
+            .collect(),
+        TypedInner::CaptureConstructorClosure(_, _, captures, _) => captures
             .iter()
             .map(|capture| capture.name.to_string())
             .collect(),
@@ -5718,6 +5733,23 @@ fn callable_head_for_invocation(node: &TypedNode) -> Option<(String, String)> {
         )),
         _ => None,
     }
+}
+
+fn callable_qualified_name(module: &str, name: &str) -> String {
+    if module.is_empty() {
+        name.to_string()
+    } else {
+        format!("{module}::{name}")
+    }
+}
+
+fn constructor_display_parts(id: &ResolvedId) -> (String, String) {
+    let original = id.qualified_name.as_deref().unwrap_or(id.name.as_str());
+    let qualified = original.strip_prefix("Global::").unwrap_or(original);
+    qualified
+        .rsplit_once("::")
+        .map(|(module, name)| (module.to_string(), name.to_string()))
+        .unwrap_or_else(|| (String::new(), qualified.to_string()))
 }
 
 fn trait_short_name(trait_name: &str) -> &str {
@@ -6563,6 +6595,17 @@ impl Codegen {
                     .partial_direct_call_template_for_closure(params, &filtered_captures, body)?
                     .is_some())
             }
+            TypedInner::CaptureConstructorClosure(_, params, captures, body) => {
+                let filtered_captures: Vec<ResolvedId> = captures
+                    .iter()
+                    .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
+                    .cloned()
+                    .collect();
+                checked_u8_arity_sum(filtered_captures.len(), params.len(), &node.span)?;
+                Ok(self
+                    .partial_direct_call_template_for_closure(params, &filtered_captures, body)?
+                    .is_some())
+            }
             TypedInner::Semi(inner) => self.template_compatible_callable(inner),
             _ => Ok(false),
         }
@@ -6652,9 +6695,10 @@ impl Codegen {
         self.in_function = prev_in_function;
 
         let (qualified_name, signature) = match display {
-            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => {
-                (Some(format!("{module}::{name}")), Some(sig.clone()))
-            }
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => (
+                Some(callable_qualified_name(module, name)),
+                Some(sig.clone()),
+            ),
             Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
             None => (None, Some(signature.to_string())),
         };
@@ -6910,9 +6954,10 @@ impl Codegen {
         self.emit(Opcode::Return);
 
         let (qualified_name, signature) = match display {
-            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => {
-                (Some(format!("{module}::{name}")), Some(sig.clone()))
-            }
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => (
+                Some(callable_qualified_name(module, name)),
+                Some(sig.clone()),
+            ),
             Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
             None => (None, Some(signature.to_string())),
         };
@@ -7539,6 +7584,47 @@ impl Codegen {
                     span: node.span.clone(),
                 });
             }
+        }
+        Ok(())
+    }
+
+    fn emit_constructor_capture_closure(
+        &mut self,
+        node: &TypedNode,
+        id: &ResolvedId,
+        params: &[TypedClosureParam],
+        captures: &[ResolvedId],
+        body: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        let filtered_captures: Vec<ResolvedId> = captures
+            .iter()
+            .filter(|capture| self.state.slot_map.contains_key(&capture.unique_id))
+            .cloned()
+            .collect();
+        let capture_count = checked_u8_arity(filtered_captures.len(), &node.span)?;
+        checked_u8_arity_sum(filtered_captures.len(), params.len(), &node.span)?;
+        let (module, name) = constructor_display_parts(id);
+        let display = Some(ReplCallableDisplay::FnCapture {
+            module,
+            name,
+            sig: ty_to_string(&node.ty),
+        });
+        let fun_idx = self.reserve_fun_idx();
+        self.pending_closures.push(PendingClosure {
+            fun_idx,
+            captures: filtered_captures.clone(),
+            params: params.to_vec(),
+            body: Box::new(body.clone()),
+            display,
+            signature: ty_to_string(&node.ty),
+        });
+        self.emit(Opcode::LoadFunctionRef(fun_idx));
+        for capture in &filtered_captures {
+            let slot = self.alloc_slot(capture.unique_id);
+            self.emit(Opcode::LoadLocal(slot));
+        }
+        if !filtered_captures.is_empty() {
+            self.emit(Opcode::CaptureClosure(capture_count));
         }
         Ok(())
     }
@@ -8209,6 +8295,10 @@ impl Codegen {
                         self.emit(Opcode::SetCallableOriginSource(index));
                     }
                 }
+            }
+
+            TypedInner::CaptureConstructorClosure(id, params, captures, body) => {
+                self.emit_constructor_capture_closure(node, id, params, captures, body)?;
             }
 
             TypedInner::Capture(target, args) => {

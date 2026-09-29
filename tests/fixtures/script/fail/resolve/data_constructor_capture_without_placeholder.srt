@@ -1,0 +1,2 @@
+defrecord User(name: String, age: Int)
+user_fn = &User("Ada", 20)

@@ -3,7 +3,7 @@
 > 目的: 現行実装と対象領域の正本文書でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項はソースコード、実行可能テスト、`docs/dev/`、`docs/site/`、標準定義 source の `@doc` へ置く。`doc/` は draft / input / tmp 置き場として扱い、cleanup で解消済みの項目は残さない。
 
-最終更新日: 2026-09-13
+最終更新日: 2026-09-29
 
 ---
 
@@ -361,6 +361,31 @@
 - テスト方針:
   - identity 規約を要件定義へ確定してから、`scar` / `forge` / `eldr` に direct・optional・fallible path と partial/re-capture 境界を置く。
   - Xldr では direct binding と struct / Result 等の nested field display が同じ metadata を使うことを確認する。
+
+### OI-037 `Result` / `Boolean` constructor の通常 Enum 経路統合
+
+- 背景:
+  - Surtr は未リリースであり、`Result` / `Boolean` constructor の旧解決経路や診断を互換性契約として残す必要はない。
+  - 最終形では `Result::{Ok, Err}` と `Boolean::{True, False}` を通常の Enum owner / variant identity で解決し、必要な compiler lowering だけを canonical metadata に基づいて特別扱いする。
+  - bare `Ok` / `Err` はそれぞれ `Result::Ok` / `Result::Err` と同じ canonical variant identity を持つ alias とし、独立した constructor family や synthetic fallback にしない。
+  - データ型コンストラクタ capture の実装では、一部分だけ通常 Enum 経路へ移すと direct call、pattern、capture、診断、tag lowering の identity が分裂するため、`Result` / `Boolean` と alias をあえて変更対象外にする。この除外は旧仕様の承認や互換性維持ではなく、不完全な部分移行を避ける暫定措置である。
+- 未確定点:
+  - 現行の `ResultCtor` synthetic uid / declaration kind と通常 `EnumVariant` identity をどの順序で一本化するか。
+  - bare alias と qualified variant の import、shadowing、diagnostic subject、REPL / LSP 表示を同じ canonical identity へ正規化する方法。
+  - 通常 Enum の型引数推論を通した後、`Err` の concrete `deferror` 制約、nested Result lifting、Boolean literal loweringをどの phase の metadata-driven contractとして適用するか。
+  - Match / Pattern、constructor capture、direct call、Forge tag emission が同じ variant metadata を共有する境界。
+- 受け入れ条件:
+  - `Ok` と `Result::Ok`、`Err` と `Result::Err` が同じ owner / variant identity、型推論、診断、tag を持つ。
+  - `True` / `False` も通常 Enum variant 解決を通り、Boolean 固有 lowering は variant 解決後の compiler contract に限定する。
+  - 旧 `ResultCtor` や名前文字列 fallback を削除し、新旧二経路を併存させない。
+  - direct call、bare / placeholder capture、pattern、match exhaustiveness、REPL / LSP 表示で同じ canonical metadata を使う。
+  - 通常 user-defined Enum と共有できる規則を共有しつつ、`Error` と Boolean runtime representation の不変条件を fail closed に保つ。
+  - 完了時に正本文書へ最終契約を配備し、本項を削除する。
+- テスト方針:
+  - Sindr で canonical owner / variant / alias metadata、Sigil で単一 identity と shadowing、Scar で型引数・Error 制約、Forge / Eldr で tag / runtime representation を固定する。
+  - direct / qualified call、bare / placeholder capture、pattern、expected type、未確定 slot、nested Result、Boolean exhaustiveness を成功・拒否の対で検証する。
+  - Xldr / analysis で alias と qualified spelling の表示・補完・定義参照が同じ identity を返すことを確認する。
+  - 移行後は旧経路が存在しないことを検索と回帰テストで確認し、level 4 全体検証と独立レビューを行う。
 
 ## 更新ルール
 

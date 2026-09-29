@@ -60,6 +60,17 @@ user = User("alice", 30)
 user2 = User::new("alice", 30)
 ```
 
+Struct の constructor も capture できます。bare capture の引数順は field 順ではなく
+`Type::new` の引数宣言順です。
+
+```surtr
+make_user: (String, Int -> User) = &User
+make_fixed: (String -> User) = &User(&1, 30)
+```
+
+constructor capture の引数は位置指定だけで、named argument と placeholder のない引数付き
+capture は拒否されます。詳細は [`capture-operator.md`](./capture-operator.md) を参照してください。
+
 引数規約は関数呼び出しと同じです。
 
 - 名前付き引数は使える

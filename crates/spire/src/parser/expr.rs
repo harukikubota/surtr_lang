@@ -759,6 +759,54 @@ impl Parser<'_> {
         ))
     }
 
+    /// Parse only the target portion of a generic enum constructor capture.
+    /// The capture's own positional argument block is parsed by
+    /// `parse_capture_expr`, so `&Either<_, Int>::Left(&1)` remains a capture
+    /// rather than becoming an ordinary constructor call in the AST.
+    fn parse_enum_constructor_capture_target(
+        &mut self,
+        owner_name: Symbol,
+        start: usize,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Lt)?;
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Gt) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
+                "Enum constructor type arguments cannot be empty",
+                self.peek_span(),
+            ));
+        }
+        let mut type_args = vec![self.parse_type()?];
+        self.skip_newlines();
+        while matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Gt) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
+                    "Enum constructor type arguments cannot end with a comma",
+                    self.peek_span(),
+                ));
+            }
+            type_args.push(self.parse_type()?);
+            self.skip_newlines();
+        }
+        let end = self.expect_type_gt()?.end;
+        self.consume_path_separator()?;
+        let (variant_name, variant_span) = self.expect_ident()?;
+        Ok(Ast::EnumConstructorCall(
+            Span {
+                start,
+                end: variant_span.end.max(end),
+            },
+            owner_name,
+            type_args,
+            variant_name,
+            Vec::new(),
+        ))
+    }
+
     fn parse_facet_path_segment_after_dot(
         &mut self,
     ) -> Result<(FacetPathSegment, Span), ParseError> {
@@ -2504,24 +2552,37 @@ impl Parser<'_> {
                     path_segments.push(seg);
                 }
 
-                let target = if path_segments.len() == 1 {
-                    Ast::Var(name_span.clone(), name)
+                if path_segments
+                    .last()
+                    .and_then(|segment| segment.chars().next())
+                    .is_some_and(|ch| ch.is_uppercase())
+                    && self.enum_constructor_type_args_start()
+                {
+                    let owner_name = path_segments.join("::");
+                    let target =
+                        self.parse_enum_constructor_capture_target(owner_name, name_span.start)?;
+                    let end = target.span().end;
+                    (target, end)
                 } else {
-                    Ast::Path(
-                        Span {
-                            start: name_span.start,
-                            end: path_end,
-                        },
-                        AstPath {
-                            span: Span {
+                    let target = if path_segments.len() == 1 {
+                        Ast::Var(name_span.clone(), name)
+                    } else {
+                        Ast::Path(
+                            Span {
                                 start: name_span.start,
                                 end: path_end,
                             },
-                            segments: path_segments,
-                        },
-                    )
-                };
-                (target, path_end)
+                            AstPath {
+                                span: Span {
+                                    start: name_span.start,
+                                    end: path_end,
+                                },
+                                segments: path_segments,
+                            },
+                        )
+                    };
+                    (target, path_end)
+                }
             }
             Token::FuncLiteral(body) => {
                 let func_span = self.advance().span.clone();

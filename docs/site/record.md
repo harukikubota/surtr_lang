@@ -25,6 +25,17 @@ grace = User(age: 40, name: "Grace")
 
 位置指定と名前指定を混在させることはできません。field の省略・重複・存在しない名前の指定もエラーになります。また `name: name` のような省略記法（`name` とだけ書く書き方）もサポートしていません。
 
+constructor を関数値として使う場合は capture します。
+
+```surtr
+make_user: (String, Int -> User) = &User
+make_twenty: (String -> User) = &User(&1, 20)
+```
+
+capture の引数は位置指定だけで、固定値を含む引数ブロックには placeholder が必要です。
+named argument や `&User("Ada", 20)` は拒否されます。詳細は
+[`capture-operator.md`](./capture-operator.md) を参照してください。
+
 ## パターンマッチング
 
 `User(...)` はコンパイラが提供する構造的な Pattern としても使えます。位置指定・名前指定のどちらでも、すべての field に対応する子 Pattern を書きます。

@@ -248,6 +248,11 @@ render = {|name| "[" ++ name ++ "]"}
 pipeline = &String::trim >> render
 ```
 
+ユーザ定義の Record / Struct / Enum variant も constructor capture の対象です。
+`&User` は全引数を受け取る constructor callable、`&User(&1, 20)` は placeholder を使った
+partial capture になります。named argument や placeholder のない引数付き capture は使えません。
+詳細な構文と generic Enum の規則は [`capture-operator.md`](./capture-operator.md) を参照してください。
+
 裸の関数参照は値になりません。
 
 ```surtr

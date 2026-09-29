@@ -4,7 +4,8 @@ use std::panic;
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{builtin_function_metas, builtin_uid};
 use sindr::names::{
-    builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, SymbolIdentityInfo,
+    builtin_symbol_identity_info, ConstructorCapturePolicy, FacetRootKind, SymbolCapabilities,
+    SymbolIdentityInfo,
 };
 use sindr::warning::PhaseOutput;
 use spire::ast::{
@@ -96,8 +97,10 @@ pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentity
         OwnerKind::BuiltinType => SymbolCapabilities::type_owner(),
         OwnerKind::Struct | OwnerKind::Record | OwnerKind::Enum => {
             SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot))
+                .with_constructor_capture(ConstructorCapturePolicy::Ordinary)
         }
-        OwnerKind::Error => SymbolCapabilities::new(true, false, false, None),
+        OwnerKind::Error => SymbolCapabilities::new(true, false, false, None)
+            .with_constructor_capture(ConstructorCapturePolicy::Forbidden),
         OwnerKind::Trait => SymbolCapabilities::trait_owner(),
         OwnerKind::Sig => SymbolCapabilities::signature_owner(),
         OwnerKind::Const => SymbolCapabilities::const_owner(),
@@ -127,7 +130,24 @@ pub fn declaration_symbol_identity_info(
     .flatten();
     let owner = direct_owner
         .or_else(|| enclosing_owner.and_then(|owner_name| owner_registry.owner_ref(owner_name)))?;
-    user_type_symbol_identity_info(&owner)
+    let info = user_type_symbol_identity_info(&owner)?;
+    let constructor_capture = matches!(
+        kind,
+        DeclarationKind::BuiltinType
+            | DeclarationKind::Struct
+            | DeclarationKind::Record
+            | DeclarationKind::Deferror
+            | DeclarationKind::Enum
+            | DeclarationKind::ResultCtor
+            | DeclarationKind::EnumVariant
+    )
+    .then_some(info.capabilities.constructor_capture)
+    .flatten();
+    Some(SymbolIdentityInfo::new(
+        info.identity,
+        info.capabilities
+            .with_constructor_capture_policy(constructor_capture),
+    ))
 }
 
 fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {

@@ -9067,7 +9067,8 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
             | TypedInner::ExtractorClosure(_, _, body)
-            | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
+            | TypedInner::CaptureClosure(_, _, body)
+            | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ResultEffectFailure(_)
@@ -9192,7 +9193,8 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
             | TypedInner::ExtractorClosure(_, _, body)
-            | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
+            | TypedInner::CaptureClosure(_, _, body)
+            | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ResultEffectFailure(_)
@@ -11184,11 +11186,21 @@ fn match_result_extractor_rejects_ordinary_value_uses() {
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::OK(v) } } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::OK(v))\n MatchResult::OK(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::OK(v), _), MatchResult::OK(v), MatchResult::OK(v)) } }",
-        "captured = &MatchResult::OK",
     ] {
-        let result = typecheck(resolve_with_builtin_prelude(source));
-        assert!(result.is_err(), "must reject: {source}");
+        let result = resolve_with_builtin_prelude_result(source)
+            .map(|resolved| typecheck(resolved));
+        assert!(
+            result.is_err() || result.expect("resolved source must be typechecked").is_err(),
+            "must reject: {source}"
+        );
     }
+
+    let resolve_error = resolve_with_builtin_prelude_result("captured = &MatchResult::OK")
+        .expect_err("compiler-managed constructor capture must be rejected during resolution");
+    assert_eq!(
+        resolve_error.diagnostic.reason,
+        sigil::error::ResolveErrorReason::ConstructorCaptureForbidden
+    );
 }
 
 fn match_result_extractor_uses_own_safebind_target() {

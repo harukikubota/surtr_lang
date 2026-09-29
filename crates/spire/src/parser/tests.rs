@@ -3606,6 +3606,26 @@ fn test_capture_placeholder_and_tuple_field_access_parse() {
 }
 
 #[test]
+fn test_generic_enum_constructor_capture_target_parse() {
+    let ast = parse("captured = &Choice<_, Int>::Left(&1)").unwrap();
+    let Ast::Bind(_, _, rhs) = &ast[0] else {
+        panic!("Expected capture binding");
+    };
+    let Ast::Capture(_, target, args) = rhs.as_ref() else {
+        panic!("Expected constructor capture");
+    };
+    assert!(matches!(
+        target.as_ref(),
+        Ast::EnumConstructorCall(_, owner, type_args, variant, constructor_args)
+            if owner == "Choice"
+                && type_args.len() == 2
+                && variant == "Left"
+                && constructor_args.is_empty()
+    ));
+    assert!(matches!(args.as_slice(), [Ast::CapturePlaceholder(_, 1)]));
+}
+
+#[test]
 fn test_capture_placeholder_index_is_limited_to_sixteen() {
     let ast =
         parse("captured = &f(&16)").expect("the maximum capture placeholder index should parse");

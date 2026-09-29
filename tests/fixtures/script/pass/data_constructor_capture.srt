@@ -1,0 +1,52 @@
+defrecord User(name: String, age: Int)
+
+defstruct Account {
+  id: Int,
+  label: String,
+}
+
+impl Account {
+  def new(label: String, id: Int) -> Self {
+    Account { id: id, label: label }
+  }
+}
+
+defenum Direction {
+  Still,
+  Move(Int),
+}
+
+defenum Box<$A> {
+  Item($A),
+}
+
+defenum Choice2<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+def apply_left(f: (String -> Choice2<String, Int>), value: String) -> Choice2<String, Int> {
+  f(value)
+}
+
+user_ctor: (String, Int -> User) = &User
+user = user_ctor("Ada", 37)
+
+user_partial: (String -> User) = &User(&1, 20)
+partial_user = user_partial("Bob")
+
+account_ctor: (String, Int -> Account) = &Account
+account = account_ctor("main", 7)
+
+still_ctor: (-> Direction) = &Direction::Still
+move_ctor: (Int -> Direction) = &Direction::Move
+item_ctor: (Int -> Box<Int>) = &Box<Int>::Item
+either = apply_left(&Choice2<_, Int>::Left, "ok")
+
+print(to_string(user))
+print(to_string(partial_user))
+print(to_string(account))
+print(to_string(still_ctor()))
+print(to_string(move_ctor(3)))
+print(to_string(item_ctor(5)))
+print(to_string(either))

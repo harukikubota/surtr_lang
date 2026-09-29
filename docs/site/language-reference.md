@@ -466,6 +466,9 @@ result: Option<Int> = do::<Option> {
 - `&`name`` / `&`Type::method`` はそれぞれ通常の capture と同義
 - `&`op`` は 2 引数 callable に lower される
 - `&`op`(args...)`` は placeholder capture 規約で lower される
+- `&Type`、`&Type::Variant` は user-defined Record / Struct / Enum の constructor capture として扱う
+- constructor capture の引数は位置指定だけで、引数ブロックには少なくとも1個の placeholderが必要
+- constructor capture は `Capture` origin と canonical constructor identity を保持し、`deferror` / compiler-managed constructor は対象外
 - capture placeholder は `&1` から `&16` までとし、`&0` と `&17` 以上は parse error とする
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, sig: sig)` 形式で表示する

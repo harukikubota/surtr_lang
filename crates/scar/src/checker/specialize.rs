@@ -502,6 +502,17 @@ impl Checker {
                     &allowed_enum_constructors,
                 )
             }
+            TypedInner::CaptureConstructorClosure(_, params, _, body) => {
+                let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
+                for parameter in params {
+                    self.extend_allowed_vars(&parameter.ty, &mut allowed_enum_constructors);
+                }
+                self.first_unresolved_executable_type_argument(
+                    body,
+                    allowed_vars,
+                    &allowed_enum_constructors,
+                )
+            }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ResultEffectFailure(_)
@@ -1812,6 +1823,21 @@ impl Checker {
                     generated_defs,
                 )?,
             ),
+            TypedInner::CaptureConstructorClosure(id, params, captures, body) => {
+                TypedInner::CaptureConstructorClosure(
+                    id,
+                    params,
+                    captures,
+                    self.rewrite_specializations_in_node(
+                        *body,
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    )?,
+                )
+            }
             TypedInner::Capture(target, args) => {
                 let mut target = *self.rewrite_specializations_in_node(
                     *target,
@@ -2836,6 +2862,9 @@ impl Checker {
             | TypedInner::CaptureClosure(_, _, body) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
             }
+            TypedInner::CaptureConstructorClosure(_, _, _, body) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
+            }
             TypedInner::DeferredDoFailure(deferred) => {
                 let mut vars = Vec::new();
                 Self::collect_ty_vars(&deferred.carrier_ty, &mut vars);
@@ -3063,6 +3092,9 @@ impl Checker {
             | TypedInner::Closure(_, _, body)
             | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
+                self.collect_bound_tyvars_in_node(body, ordered, seen);
+            }
+            TypedInner::CaptureConstructorClosure(_, _, _, body) => {
                 self.collect_bound_tyvars_in_node(body, ordered, seen);
             }
             TypedInner::Lit(_)
@@ -3678,6 +3710,20 @@ impl Checker {
                 captures,
                 Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
             ),
+            TypedInner::CaptureConstructorClosure(id, params, captures, body) => {
+                TypedInner::CaptureConstructorClosure(
+                    id,
+                    params
+                        .into_iter()
+                        .map(|param| TypedClosureParam {
+                            id: param.id,
+                            ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        })
+                        .collect(),
+                    captures,
+                    Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+                )
+            }
             TypedInner::Capture(target, args) => TypedInner::Capture(
                 Box::new(self.substitute_typed_node_with_mapping(*target, mapping)),
                 args.into_iter()
@@ -4883,6 +4929,9 @@ impl Checker {
             | TypedInner::Closure(_, _, body)
             | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
+                Self::typed_node_has_pending_trait_call(body)
+            }
+            TypedInner::CaptureConstructorClosure(_, _, _, body) => {
                 Self::typed_node_has_pending_trait_call(body)
             }
             TypedInner::Lit(_)

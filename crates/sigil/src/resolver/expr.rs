@@ -6,7 +6,7 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
-use sindr::names::{surface_path_name, TypeIdentity};
+use sindr::names::{surface_path_name, ConstructorCapturePolicy, TypeIdentity};
 use spire::ast::{
     AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, BulkUpdatePath, DbgArg, FacetPathSegment,
     HashMapLiteralEntry, InterpolatedPart,
@@ -450,6 +450,93 @@ impl Resolver {
                 args.into_iter().map(RecordLitArg::Positional).collect(),
             )),
         )
+    }
+
+    fn capture_policy_for_ast_target(
+        &self,
+        target: &Ast,
+    ) -> Option<(ConstructorCapturePolicy, String)> {
+        let (name, kind) = match target {
+            Ast::Var(_, name) => {
+                let uid = self.scope.lookup(name)?;
+                (name.clone(), self.declaration_uid_kinds.get(&uid)?)
+            }
+            Ast::Path(_, path) => {
+                let name = path.segments.join("::");
+                let uid = self.scope.lookup(&name)?;
+                (name, self.declaration_uid_kinds.get(&uid)?)
+            }
+            Ast::EnumConstructorCall(_, owner, _, _, _) => {
+                let owner_ref = self.owner_registry.owner_ref(owner)?;
+                let info = super::user_type_symbol_identity_info(&owner_ref)?;
+                return info
+                    .capabilities
+                    .constructor_capture
+                    .map(|policy| (policy, owner.clone()));
+            }
+            _ => return None,
+        };
+        if !matches!(
+            kind,
+            DeclarationKind::Struct
+                | DeclarationKind::Record
+                | DeclarationKind::Deferror
+                | DeclarationKind::Enum
+                | DeclarationKind::EnumVariant
+        ) {
+            return None;
+        }
+        let uid = self.scope.lookup(&name)?;
+        let info = self.symbol_info_for_uid(&name, uid)?;
+        info.capabilities
+            .constructor_capture
+            .map(|policy| (policy, name))
+    }
+
+    fn lower_constructor_capture_expr(
+        &self,
+        span: Span,
+        target: Ast,
+        args: Vec<Ast>,
+    ) -> Result<Ast, ResolveError> {
+        let max_index = self.validate_capture_placeholders(&span, &args)?;
+        let rewritten_args = args
+            .into_iter()
+            .map(|arg| self.rewrite_capture_placeholders(arg, &span, true, true))
+            .collect::<Result<Vec<_>, _>>()?;
+        let constructor_args = rewritten_args
+            .into_iter()
+            .map(RecordLitArg::Positional)
+            .collect::<Vec<_>>();
+        let body = match target {
+            Ast::Var(_, name) => Ast::ConstructorCall(span.clone(), name, constructor_args),
+            Ast::Path(_, path) => {
+                Ast::ConstructorCall(span.clone(), path.segments.join("::"), constructor_args)
+            }
+            Ast::EnumConstructorCall(owner_span, owner, type_args, variant, _) => {
+                Ast::EnumConstructorCall(owner_span, owner, type_args, variant, constructor_args)
+            }
+            other => {
+                return Err(ResolveError {
+                    message: "constructor capture target has no nominal constructor identity"
+                        .into(),
+                    span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                        subject: Some(format!("{:?}", other)),
+                    },
+                    related_labels: Vec::new(),
+                })
+            }
+        };
+        let params = (1..=max_index)
+            .map(|index| ClosureParam {
+                name: Self::capture_placeholder_param_name(&span, index),
+                ty: None,
+                span: span.clone(),
+            })
+            .collect();
+        Ok(Ast::Closure(span, params, Box::new(body)))
     }
 
     fn make_operator_capture_body(
@@ -4206,6 +4293,45 @@ impl Resolver {
             Ast::Capture(span, target, args) => {
                 let capture_uses_named_callable =
                     !matches!(target.as_ref(), Ast::FuncLiteralRef(_, _));
+                if let Some((policy, constructor_name)) =
+                    self.capture_policy_for_ast_target(target.as_ref())
+                {
+                    match policy {
+                        ConstructorCapturePolicy::Forbidden => {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "constructor capture is forbidden for `{constructor_name}`"
+                                ),
+                                span,
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::ConstructorCaptureForbidden,
+                                    subject: Some(constructor_name),
+                                },
+                                related_labels: Vec::new(),
+                            });
+                        }
+                        ConstructorCapturePolicy::Ordinary if !args.is_empty() => {
+                            let lowered = self.lower_constructor_capture_expr(
+                                span.clone(),
+                                *target,
+                                args,
+                            )?;
+                            return match self.resolve_node(lowered)? {
+                                Resolved::Closure(closure_span, params, captures, body) => {
+                                    Ok(Resolved::CaptureClosure(
+                                        closure_span,
+                                        params,
+                                        captures,
+                                        body,
+                                    ))
+                                }
+                                other => Ok(other),
+                            };
+                        }
+                        ConstructorCapturePolicy::Ordinary
+                        | ConstructorCapturePolicy::CompilerManaged => {}
+                    }
+                }
                 match self.lower_capture_expr(span.clone(), *target, args)? {
                     Ast::Capture(_, target, args) => {
                         let resolved_target = self.resolve_node(*target)?;

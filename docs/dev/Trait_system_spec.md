@@ -87,6 +87,12 @@ ReturnTypeArgument の `::<...>` や TypeCtorTrait の constructor slot では�
 fresh inference variable となり、payload と expected type からだけ制約される。通常型および scope 内の型変数は
 明示入力として固定し、別の型へ再推論しない。
 
+この owner 型引数規則は constructor capture にも適用する。`&Enum<_, Int>::Variant` の `_` は
+owner slot ごとの fresh inference variable として capture site の expected callable type、payload、
+または同じ式の利用からだけ具体化し、外側の rigid な型変数や明示した `Int` を再推論しない。
+expected type のない generic Enum constructor capture は未確定 slot のまま受理せず、通常の Enum
+constructor と同じ unresolved type argument 診断にする。
+
 ### 0.3 宣言構文一覧
 
 | 構文 | 許可位置 | 意味と制約 |

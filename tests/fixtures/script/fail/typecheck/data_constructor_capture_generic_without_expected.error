@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Callable binding requires a concrete signature

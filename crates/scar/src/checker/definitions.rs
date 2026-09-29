@@ -3287,7 +3287,8 @@ impl Checker {
             .clone();
 
         if matches!(def.kind, crate::env::TypeKind::Struct) {
-            let new_name = format!("{}::new", id.name);
+            let owner_name = id.qualified_name.as_deref().unwrap_or(id.name.as_str());
+            let new_name = format!("{}::new", owner_name);
             let Some(new_uid) = self.impl_method_uids.get(&new_name).copied() else {
                 return Err(TypeError {
                     structured: None,
@@ -3808,6 +3809,9 @@ impl Checker {
                 TypedInner::Closure(_, _, body)
                 | TypedInner::ExtractorClosure(_, _, body)
                 | TypedInner::CaptureClosure(_, _, body) => self.is_concrete_error_value(body),
+                TypedInner::CaptureConstructorClosure(_, _, _, body) => {
+                    self.is_concrete_error_value(body)
+                }
                 _ => false,
             },
             TypedInner::App(func, _) => {

@@ -277,6 +277,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_renders_top_level_facet_chain_expressions_without_codegen_leak),
     repl_core_case!(core_facet_command_reports_kind_apis_segments_and_stop_points),
     repl_core_case!(core_facet_record_positional_origin_remains_visible),
+    repl_core_case!(core_record_constructor_capture_keeps_local_display_name),
     repl_core_case!(core_facet_command_inspects_operations_and_kind_queries),
     repl_core_case!(core_renders_negative_and_range_list_facets),
     repl_core_case!(core_doc_reports_match_and_cond_from_bootstrap_surface),
@@ -707,12 +708,15 @@ fn core_exposes_symbol_semantic_infos_before_completion_projection() {
     assert_eq!(duration.identity, Some(sindr::names::TypeIdentity::Struct));
     assert_eq!(
         duration.capabilities,
-        Some(sindr::names::SymbolCapabilities::new(
-            true,
-            true,
-            true,
-            Some(sindr::names::FacetRootKind::TypeRoot),
-        ))
+        Some(
+            sindr::names::SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(sindr::names::FacetRootKind::TypeRoot),
+            )
+            .with_constructor_capture(sindr::names::ConstructorCapturePolicy::Ordinary),
+        )
     );
 }
 
@@ -3448,6 +3452,24 @@ fn core_facet_record_positional_origin_remains_visible() {
     assert!(value.contains("42"), "{value}");
     let updated = rendered_text(&engine.handle_line("Facet::set(User._1, user, 43)"));
     assert!(updated.contains("age: 43"), "{updated}");
+}
+
+fn core_record_constructor_capture_keeps_local_display_name() {
+    let mut engine =
+        ReplEngine::from_script_source("tmp/user.srt", "defrecord User(name: String, age: Int)")
+            .expect("record preload should bootstrap");
+
+    let capture = rendered_text(&engine.handle_line("make_user = &User"));
+    assert!(
+        capture.contains("FnCapture(module: <local>, name: User"),
+        "{capture}"
+    );
+
+    let partial = rendered_text(&engine.handle_line("make_named = &User(&1, 20)"));
+    assert!(
+        partial.contains("FnCapture(module: <local>, name: User"),
+        "{partial}"
+    );
 }
 
 fn core_facet_command_inspects_operations_and_kind_queries() {

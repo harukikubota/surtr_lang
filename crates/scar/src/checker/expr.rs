@@ -3,7 +3,7 @@ use diagnostics::{
     CandidateFailureData, CandidateSelectionData, DiagnosticData, DiagnosticOrigin, SourceFact,
     SourceId, SourceRole, StructuredDiagnostic, TypeConstructorCarrierData, TypeDiagnosticReason,
 };
-use sindr::names::FacetRootKind;
+use sindr::names::{ConstructorCapturePolicy, FacetRootKind};
 use sindr::primitives::int;
 use spire::ast::Symbol;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -384,6 +384,7 @@ impl Checker {
             | TypedInner::Closure(_, _, body)
             | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => recurse(body),
+            TypedInner::CaptureConstructorClosure(_, _, _, body) => recurse(body),
             TypedInner::SupervisorSpawn { init, .. } => recurse(init),
             TypedInner::SupervisorAdopt { pid, .. } => recurse(pid),
             TypedInner::SupervisorWorkers { init, strategy, .. } => {
@@ -844,6 +845,9 @@ impl Checker {
             | TypedInner::Closure(_, _, body)
             | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => self.first_pending_trait_helper(body),
+            TypedInner::CaptureConstructorClosure(_, _, _, body) => {
+                self.first_pending_trait_helper(body)
+            }
             TypedInner::SupervisorSpawn { init, .. } => self.first_pending_trait_helper(init),
             TypedInner::SupervisorAdopt { pid, .. } => self.first_pending_trait_helper(pid),
             TypedInner::SupervisorWorkers { init, strategy, .. } => self
@@ -3960,6 +3964,9 @@ impl Checker {
             TypedInner::Closure(_, captures, _)
             | TypedInner::ExtractorClosure(_, captures, _)
             | TypedInner::CaptureClosure(_, captures, _) => captures.iter().for_each(&mut add),
+            TypedInner::CaptureConstructorClosure(_, _, captures, _) => {
+                captures.iter().for_each(&mut add)
+            }
             _ => {}
         }
     }
@@ -12039,7 +12046,7 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         let mut typed = self.check_closure(span, params, captures, body, expected, None)?;
-        let TypedInner::Closure(params, captures, body) = typed.node else {
+        let TypedInner::Closure(params, captures, typed_body) = typed.node else {
             return Err(TypeError {
                 structured: None,
                 message: "Capture closure did not produce a closure node".into(),
@@ -12047,8 +12054,192 @@ impl Checker {
                 hint: None,
             });
         };
-        typed.node = TypedInner::CaptureClosure(params, captures, body);
+        let constructor_id = match body {
+            Resolved::ConstructorCall(_, id, _) | Resolved::EnumConstructorCall(_, id, _, _)
+                if id
+                    .symbol_info
+                    .as_ref()
+                    .and_then(|info| info.capabilities.constructor_capture)
+                    == Some(ConstructorCapturePolicy::Ordinary) =>
+            {
+                Some(id.clone())
+            }
+            _ => None,
+        };
+        typed.node = match constructor_id {
+            Some(id) => TypedInner::CaptureConstructorClosure(id, params, captures, typed_body),
+            None => TypedInner::CaptureClosure(params, captures, typed_body),
+        };
         Ok(typed)
+    }
+
+    fn check_constructor_capture(
+        &mut self,
+        span: &Span,
+        target: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let policy = match target {
+            Resolved::Var(_, id) | Resolved::EnumConstructorCall(_, id, _, _) => id
+                .symbol_info
+                .as_ref()
+                .and_then(|info| info.capabilities.constructor_capture),
+            _ => None,
+        };
+        let Some(policy) = policy else {
+            return Ok(None);
+        };
+        match policy {
+            ConstructorCapturePolicy::CompilerManaged => return Ok(None),
+            ConstructorCapturePolicy::Forbidden => {
+                let name = match target {
+                    Resolved::Var(_, id) | Resolved::EnumConstructorCall(_, id, _, _) => {
+                        id.name.clone()
+                    }
+                    _ => unreachable!("constructor policy was read from a constructor target"),
+                };
+                return Err(TypeError {
+                    structured: None,
+                    message: format!("constructor capture is forbidden for `{name}`"),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            ConstructorCapturePolicy::Ordinary => {}
+        }
+
+        let (body, arity) = match target {
+            Resolved::EnumConstructorCall(_, id, type_args, _) => {
+                let variant = self
+                    .lookup_enum_variant_by_constructor_id(id.unique_id)
+                    .ok_or_else(|| TypeError {
+                        structured: None,
+                        message: format!("Unknown enum constructor: {}", id.name),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                (
+                    Resolved::EnumConstructorCall(
+                        span.clone(),
+                        id.clone(),
+                        type_args.clone(),
+                        Vec::new(),
+                    ),
+                    variant.payload.len(),
+                )
+            }
+            Resolved::Var(_, id) => {
+                if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
+                    (
+                        Resolved::ConstructorCall(span.clone(), id.clone(), Vec::new()),
+                        variant.payload.len(),
+                    )
+                } else {
+                    let def = self
+                        .env
+                        .lookup_type_def(&id.name)
+                        .ok_or_else(|| TypeError {
+                            structured: None,
+                            message: format!("Unknown constructor type: {}", id.name),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
+                    let arity = match def.kind {
+                        crate::env::TypeKind::Record => def.fields.len(),
+                        crate::env::TypeKind::Struct => {
+                            let owner_name =
+                                id.qualified_name.as_deref().unwrap_or(id.name.as_str());
+                            let new_name = format!("{}::new", owner_name);
+                            let new_uid = self.impl_method_uids.get(&new_name).copied().ok_or_else(|| {
+                                TypeError {
+                                    structured: None,
+                                    message: format!(
+                                        "Struct `{}` constructor capture requires `{}` but no such method was found",
+                                        id.name, new_name
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                }
+                            })?;
+                            self.callable_signatures
+                                .get(&new_uid)
+                                .map(|signature| signature.value_arity())
+                                .ok_or_else(|| TypeError {
+                                    structured: None,
+                                    message: format!(
+                                        "Struct `{}` constructor capture has no callable signature for `{}`",
+                                        id.name, new_name
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                })?
+                        }
+                        crate::env::TypeKind::Enum => {
+                            return Err(TypeError {
+                                structured: None,
+                                message: format!(
+                                    "Enum type `{}` is not a constructor capture target; capture a variant such as `&{}::Variant`",
+                                    id.name, id.name
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                        crate::env::TypeKind::ConcreteError => {
+                            return Err(TypeError {
+                                structured: None,
+                                message: format!(
+                                    "constructor capture is forbidden for `{}`",
+                                    id.name
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                    };
+                    (
+                        Resolved::ConstructorCall(span.clone(), id.clone(), Vec::new()),
+                        arity,
+                    )
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        let mut params = Vec::with_capacity(arity);
+        let mut body_args = Vec::with_capacity(arity);
+        for index in 0..arity {
+            let id = ResolvedId {
+                name: format!("__constructor_capture_arg_{index}"),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            };
+            body_args.push(ResolvedRecordLitArg::Positional(Resolved::Var(
+                span.clone(),
+                id.clone(),
+            )));
+            params.push(ResolvedClosureParam { id, ty: None });
+        }
+
+        let body = match body {
+            Resolved::ConstructorCall(body_span, id, _) => {
+                Resolved::ConstructorCall(body_span, id, body_args)
+            }
+            Resolved::EnumConstructorCall(body_span, id, type_args, _) => {
+                Resolved::EnumConstructorCall(body_span, id, type_args, body_args)
+            }
+            _ => unreachable!("constructor capture body must be a constructor call"),
+        };
+        Ok(Some(self.check_capture_closure(
+            span,
+            &params,
+            &[],
+            &body,
+            expected,
+        )?))
     }
 
     pub(super) fn check_capture(
@@ -12065,6 +12256,31 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             });
+        }
+
+        if let Some(mut typed) = self.check_constructor_capture(span, target, expected)? {
+            let constructor_id = match target {
+                Resolved::Var(_, id) | Resolved::EnumConstructorCall(_, id, _, _) => id.clone(),
+                _ => unreachable!("constructor capture target has no constructor identity"),
+            };
+            match typed.node {
+                TypedInner::CaptureConstructorClosure(..) => return Ok(typed),
+                TypedInner::CaptureClosure(params, captures, body) => {
+                    typed.node = TypedInner::CaptureConstructorClosure(
+                        constructor_id,
+                        params,
+                        captures,
+                        body,
+                    );
+                    return Ok(typed);
+                }
+                _ => {
+                    return Err(TypeError::new(
+                        "constructor capture did not produce a capture closure",
+                        span.clone(),
+                    ));
+                }
+            }
         }
 
         if self.trait_method_ref(target).is_some() {

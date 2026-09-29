@@ -137,6 +137,7 @@ impl Checker {
             // A nested callable's completed capture list is its lexical dependency.
             TypedInner::Closure(..)
             | TypedInner::CaptureClosure(..)
+            | TypedInner::CaptureConstructorClosure(..)
             | TypedInner::ExtractorClosure(..)
             | TypedInner::Lit(_)
             | TypedInner::Var(_)
@@ -234,6 +235,11 @@ impl Checker {
                 TypedInner::Closure(_, captures, _)
                 | TypedInner::CaptureClosure(_, captures, _)
                 | TypedInner::ExtractorClosure(_, captures, _) => {
+                    for id in captures {
+                        reference(id, outer, out);
+                    }
+                }
+                TypedInner::CaptureConstructorClosure(_, _, captures, _) => {
                     for id in captures {
                         reference(id, outer, out);
                     }
