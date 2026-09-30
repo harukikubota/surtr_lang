@@ -611,7 +611,7 @@ fn repl_explicit_config_applies_completion_candidate_limit() {
 
 fn repl_static_impl_methods_keep_declared_arity() {
     let output = run_repl_session(
-        "print(to_string(Generator::to_list(Generator::range(1, 3))))\nprint(to_string(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",
+        "print(inspect(Generator::to_list(Generator::range(1, 3))))\nprint(inspect(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -801,8 +801,7 @@ fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("PipeApply::pipe_apply(self: Self, value: $A) -> $B"));
-    assert!(stdout.contains("impl targets:"));
+    assert!(stdout.contains("Bootstrap::|>(value: $A, f: ($A -> $B)) -> $B"));
     assert!(stdout.contains("specialized:"));
     assert!(stdout.contains("id(Int) -> Int"));
 }

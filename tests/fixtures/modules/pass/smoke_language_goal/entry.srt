@@ -14,15 +14,15 @@ print(to_string("abc" == "abc"))
 print("hello" ++ " world")
 
 nums: List<Int> = [1, 2, 3]
-print(to_string(nums))
+print(inspect(nums))
 empty: List<Int> = []
-print(to_string(empty))
+print(inspect(empty))
 
 user = User("alice", 30)
-print(to_string(user))
+print(inspect(user))
 print(to_string(user.name))
 pair = Pair(1, "hello")
-print(to_string(pair))
+print(inspect(pair))
 print(to_string(pair.first))
 
 greeting = if(flag, "hello", "goodbye")

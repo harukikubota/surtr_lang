@@ -225,11 +225,11 @@ test("String") {
 
   describe("TryConvert") {
     it("supports result pipeline assertions") {
-      try_to::<Int>("1") |>= assert_eq(1)
+      try_to::<Int>("1") |>= {|value| assert_eq(1, value)}
     }
 
     it("parses signed integers") {
-      try_to::<Int>("-12") |>= assert_eq(-12)
+      try_to::<Int>("-12") |>= {|value| assert_eq(-12, value)}
     }
 
     it("reports invalid integer text") {
@@ -237,11 +237,11 @@ test("String") {
     }
 
     it("parses booleans") {
-      try_to::<Boolean>("true") |>= assert_eq(True)
+      try_to::<Boolean>("true") |>= {|value| assert_eq(True, value)}
     }
 
     it("parses alternate boolean casing") {
-      try_to::<Boolean>("False") |>= assert_eq(False)
+      try_to::<Boolean>("False") |>= {|value| assert_eq(False, value)}
     }
 
     it("reports invalid boolean text") {
@@ -249,7 +249,7 @@ test("String") {
     }
 
     it("reads the destination type in a bind pipeline") {
-      Ok("42") |>= try_to::<Int>() |>= assert_eq(42)
+      Ok("42") |>= try_to::<Int>() |>= {|value| assert_eq(42, value)}
     }
   }
 

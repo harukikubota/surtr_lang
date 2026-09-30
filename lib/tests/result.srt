@@ -358,7 +358,9 @@ test("Result") {
     it("associativity holds on success") {
       value: Result<Int> = Ok(2)
       composed = &safe_inc >=> &safe_double_under_limit
-      assert_eq((value |>= safe_inc()) |>= safe_double_under_limit(), value |>= composed)
+      sequential: Result<Int> = (value |>= safe_inc()) |>= safe_double_under_limit()
+      composed_result: Result<Int> = value |>= composed
+      assert_eq(sequential, composed_result)
     }
 
     # ghci> let f x = Right (x + 1)
@@ -368,7 +370,9 @@ test("Result") {
     it("associativity holds on propagated Err") {
       value: Result<Int> = Ok(5)
       composed = &safe_inc >=> &safe_double_under_limit
-      assert_eq((value |>= safe_inc()) |>= safe_double_under_limit(), value |>= composed)
+      sequential: Result<Int> = (value |>= safe_inc()) |>= safe_double_under_limit()
+      composed_result: Result<Int> = value |>= composed
+      assert_eq(sequential, composed_result)
     }
 
     # ghci> let pureR = Right
@@ -377,7 +381,8 @@ test("Result") {
     # ghci> f 2
     it("kleisli left identity uses pure") {
       composed = &result_pure >=> &safe_inc
-      assert_eq(composed(2), safe_inc(2))
+      result: Result<Int> = composed(2)
+      assert_eq(result, safe_inc(2))
     }
 
     # ghci> let pureR = Right
@@ -386,7 +391,8 @@ test("Result") {
     # ghci> f 2
     it("kleisli right identity uses pure") {
       composed = &safe_inc >=> &result_pure
-      assert_eq(composed(2), safe_inc(2))
+      result: Result<Int> = composed(2)
+      assert_eq(result, safe_inc(2))
     }
 
     # ghci> let f x = Right (x + 1)
@@ -396,7 +402,9 @@ test("Result") {
     it("kleisli composition is associative") {
       left = (&safe_inc >=> &safe_double_under_limit) >=> &safe_step3
       right = &safe_inc >=> (&safe_double_under_limit >=> &safe_step3)
-      assert_eq(left(2), right(2))
+      left_result: Result<Int> = left(2)
+      right_result: Result<Int> = right(2)
+      assert_eq(left_result, right_result)
     }
 
     # ghci> let f x = Right (x + 1)
@@ -405,7 +413,9 @@ test("Result") {
     # ghci> f 2 >>= g
     it("kleisli composition matches staged bind") {
       composed = &safe_inc >=> &safe_double_under_limit
-      assert_eq(composed(2), safe_inc(2) |>= safe_double_under_limit())
+      composed_result: Result<Int> = composed(2)
+      sequential: Result<Int> = safe_inc(2) |>= safe_double_under_limit()
+      assert_eq(composed_result, sequential)
     }
 
     # ghci> let pureR = Right
@@ -414,7 +424,9 @@ test("Result") {
     # ghci> ok >>= (pureR . (+ 1))
     it("fmap matches bind with pure after mapping") {
       value: Result<Int> = Ok(2)
-      assert_eq(value |*> inc(), value |>= {|x| result_pure(inc(x))})
+      mapped: Result<Int> = value |*> inc()
+      bound: Result<Int> = value |>= {|x| result_pure(inc(x))}
+      assert_eq(mapped, bound)
     }
   }
 

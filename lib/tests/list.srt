@@ -32,7 +32,8 @@ test("List") {
       assert_eq(12, List::fold_map([1, 2, 3], sum, {|value| value * 2}))
       assert_eq(Option::Some(6), List::reduce_with([1, 2, 3], sum.combine))
       values: List<Int> = []
-      assert_eq(Option::None, List::reduce_with(values, sum.combine))
+      none: Option<Int> = Option::None
+      assert_eq(none, List::reduce_with(values, sum.combine))
     }
 
     it("each runs callbacks from left to right") {
@@ -100,7 +101,9 @@ test("List") {
     it("associativity holds on populated expansions") {
       values: List<Int> = [1, 2]
       composed = &list_step1 >=> &list_step2
-      assert_eq((values |>= list_step1()) |>= list_step2(), values |>= composed)
+      sequential: List<Int> = (values |>= list_step1()) |>= list_step2()
+      composed_result: List<Int> = values |>= composed
+      assert_eq(sequential, composed_result)
     }
 
     # ghci> let f x = [x, x + 10]
@@ -110,7 +113,9 @@ test("List") {
     it("associativity holds when branches collapse to empty") {
       values: List<Int> = [10]
       composed = &list_step1 >=> &list_step2
-      assert_eq((values |>= list_step1()) |>= list_step2(), values |>= composed)
+      sequential: List<Int> = (values |>= list_step1()) |>= list_step2()
+      composed_result: List<Int> = values |>= composed
+      assert_eq(sequential, composed_result)
     }
 
     # ghci> let pureL x = [x]
@@ -119,7 +124,8 @@ test("List") {
     # ghci> f 2
     it("kleisli left identity uses pure") {
       composed = &list_pure >=> &list_step1
-      assert_eq(composed(2), list_step1(2))
+      result: List<Int> = composed(2)
+      assert_eq(result, list_step1(2))
     }
 
     # ghci> let pureL x = [x]
@@ -128,7 +134,8 @@ test("List") {
     # ghci> f 2
     it("kleisli right identity uses pure") {
       composed = &list_step1 >=> &list_pure
-      assert_eq(composed(2), list_step1(2))
+      result: List<Int> = composed(2)
+      assert_eq(result, list_step1(2))
     }
 
     # ghci> let f x = [x, x + 10]
@@ -138,7 +145,9 @@ test("List") {
     it("kleisli composition is associative") {
       left = (&list_step1 >=> &list_step2) >=> &list_step3
       right = &list_step1 >=> (&list_step2 >=> &list_step3)
-      assert_eq(left(2), right(2))
+      left_result: List<Int> = left(2)
+      right_result: List<Int> = right(2)
+      assert_eq(left_result, right_result)
     }
 
     # ghci> let f x = [x, x + 10]
@@ -147,7 +156,9 @@ test("List") {
     # ghci> f 2 >>= g
     it("kleisli composition matches staged bind") {
       composed = &list_step1 >=> &list_step2
-      assert_eq(composed(2), list_step1(2) |>= list_step2())
+      composed_result: List<Int> = composed(2)
+      sequential: List<Int> = list_step1(2) |>= list_step2()
+      assert_eq(composed_result, sequential)
     }
 
     # ghci> let pureL x = [x]
@@ -156,7 +167,9 @@ test("List") {
     # ghci> xs >>= (pureL . (+ 1))
     it("fmap matches bind with pure after mapping") {
       values: List<Int> = [1, 2]
-      assert_eq(values |*> add_one(), values |>= {|x| list_pure(add_one(x))})
+      mapped: List<Int> = values |*> add_one()
+      bound: List<Int> = values |>= {|x| list_pure(add_one(x))}
+      assert_eq(mapped, bound)
     }
   }
 }

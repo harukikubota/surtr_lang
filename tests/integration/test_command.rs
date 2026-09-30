@@ -407,7 +407,7 @@ import Test;
 test("String") {
   describe("TryConvert") {
     it("parses ints through the assertion pipeline") {
-      try_to::<Int>("1") |>= assert_eq(1)
+      try_to::<Int>("1") |>= {|value| assert_eq(1, value)}
     }
   }
 }

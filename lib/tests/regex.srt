@@ -23,8 +23,8 @@ test("Regex") {
       assert_eq(["team", "id"], Regex::group_names(re))
       assert_eq("issue-runtime-42", RegexCaptures::whole(caps))
       assert_eq(3, RegexCaptures::capture_count(caps))
-      RegexCaptures::get_name(caps, "team") |>= assert_eq("runtime")
-      RegexCaptures::get(caps, 2) |>= assert_eq("42")
+      RegexCaptures::get_name(caps, "team") |>= {|value| assert_eq("runtime", value)}
+      RegexCaptures::get(caps, 2) |>= {|value| assert_eq("42", value)}
     }
 
     it("returns the first match span") {

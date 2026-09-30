@@ -8,7 +8,8 @@ test("Extractor result contract") {
     capture_stdout()
     failure = run_result(0)
     assert_eq("Err(ExtractorContextError(\"extractor context\"))\n|_ ExtractorSourceError(\"source rejected\")", inspect(failure))
-    assert_eq([], capture_stdout())
+    empty_output: List<String> = []
+    assert_eq(empty_output, capture_stdout())
     match failure {
       Err(error) => assert_eq(("ExtractorContextError", "extractor context"), (Error::kind(error), Error::message(error))),
       Ok(_) => assert_true(False),
@@ -17,9 +18,10 @@ test("Extractor result contract") {
 
   it("preserves nested Extractor errors and only continues after success") {
     capture_stdout()
+    empty_output: List<String> = []
     failure = run_nested(0)
     assert_eq("Err(ExtractorContextError(\"extractor context\"))\n|_ ExtractorSourceError(\"source rejected\")", inspect(failure))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
     assert_eq("Ok(3)", inspect(run_nested(3)))
     assert_eq(["after-result", "after-extractor"], capture_stdout())
   }
@@ -39,7 +41,8 @@ test("Extractor result contract") {
     assert_eq("fallback", if_let(0, result_checked(value), to_string(value), "fallback"))
     if_let_then(0, result_checked(value), print(to_string(value)))
     assert_false(is_match(0, result_checked(_)))
-    assert_eq([], capture_stdout())
+    empty_output: List<String> = []
+    assert_eq(empty_output, capture_stdout())
   }
 
   it("places the matched input after one or several pre-arguments") {
@@ -68,11 +71,12 @@ test("Extractor result contract") {
 
   it("does not evaluate pre-arguments after a failed earlier child") {
     capture_stdout()
+    empty_output: List<String> = []
     assert_eq("fallback", match (0, 5) {
       (positive(), observed_between(note("unreached-min", 2), note("unreached-max", 8), _)) => "unexpected",
       _ => "fallback",
     })
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
   }
 
   it("evaluates each arm occurrence independently after child mismatch") {
@@ -187,10 +191,11 @@ test("Extractor result contract") {
 
   it("executes each reached occurrence once and skips unreached occurrences") {
     capture_stdout()
+    empty_output: List<String> = []
     observed = Extractor::from_result(ExtractorSchema::observed_result(10))
     assert_eq(["capture"], capture_stdout())
     assert_false(is_match((0, 3), (positive(), observed(_))))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
     assert_eq(13, match 3 {
       observed(99) => 0,
       observed(value) => value,
@@ -211,7 +216,8 @@ test("Extractor result contract") {
       Ok(value + 1)
     })
     assert_true(Result::is_err(rejected))
-    assert_eq([], capture_stdout())
+    empty_output: List<String> = []
+    assert_eq(empty_output, capture_stdout())
   }
 
 }

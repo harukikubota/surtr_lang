@@ -1,0 +1,4 @@
+phase: typecheck
+contains: Show
+json: /reason = "NoApplicableTraitImplementation"
+json: /data/dependency = null

@@ -1,0 +1,8 @@
+@derive Eq
+defstruct Holder { callbacks: List<(Int -> Int)> }
+
+impl Holder {
+  def new(callbacks: List<(Int -> Int)>) -> Holder {
+    Holder { callbacks: callbacks }
+  }
+}

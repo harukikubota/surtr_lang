@@ -72,9 +72,9 @@ supervisor_init {
   MyPool {}
 }
 
-print(to_string(MyPool::count()))
+print(inspect(MyPool::count()))
 _ =? MyPool::submit(7)
 _ =? MyPool::submit(9)
-print(to_string(MyPool::values()))
+print(inspect(MyPool::values()))
 _ =? MyPool::reserve_set(11)
-print(to_string(MyPool::values()))
+print(inspect(MyPool::values()))

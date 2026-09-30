@@ -6,7 +6,7 @@ import Test;
 test("Process") {
   describe("Task::call and Task::async") {
     it("returns the inner task result") {
-      call_fixture("build") |>= assert_eq("call:build")
+      call_fixture("build") |>= {|value| assert_eq("call:build", value)}
     }
 
     it("supports async work that sleeps before returning") {

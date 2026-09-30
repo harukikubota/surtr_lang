@@ -61,4 +61,4 @@ supervisor_init {
   MyPool {}
 }
 
-print(to_string(MyPool::value()))
+print(inspect(MyPool::value()))

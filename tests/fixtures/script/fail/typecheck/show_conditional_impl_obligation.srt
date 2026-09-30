@@ -1,0 +1,15 @@
+deftrait Marker {
+  def marker(self: Self) -> Int
+}
+impl Show for Result<$T>
+where
+  $T: Marker
+{
+  def to_string(self: Self) -> String {
+    match self {
+      Ok(value) => inspect(Marker::marker(value)),
+      Err(_) => "err",
+    }
+  }
+}
+Show::to_string(Ok(1))

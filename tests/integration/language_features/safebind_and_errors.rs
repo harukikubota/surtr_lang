@@ -14,7 +14,7 @@ fn safebind_list_pattern_ok() {
         r#"value: Result<List<Int>> = Ok([1, 2, 3])
 [head, ..tail] =? value
 print(to_string(head))
-print(to_string(tail))"#,
+print(inspect(tail))"#,
         &["1", "[2, 3]"],
     );
 }
@@ -24,7 +24,7 @@ fn safebind_list_pattern_plain_list_ok() {
         r#"value = [1, 2, 3]
 [head, ..tail] =? value
 print(to_string(head))
-print(to_string(tail))"#,
+print(inspect(tail))"#,
         &["1", "[2, 3]"],
     );
 }
@@ -178,7 +178,7 @@ fn safebind_list_pattern_with_nested_constructor_and_tail_ok() {
     assert_output(
         r#"lr = [Ok(1), Ok(2), Ok(3)]
 [Ok(1), ..tail] =? lr
-print(to_string(tail))"#,
+print(inspect(tail))"#,
         &["[Ok(2), Ok(3)]"],
     );
 }

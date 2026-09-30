@@ -1,0 +1,2 @@
+def identity(value: Int) -> Int { value }
+print(inspect(Eq::eq([&identity], [&identity])))

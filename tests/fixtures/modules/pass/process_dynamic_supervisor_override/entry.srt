@@ -4,4 +4,4 @@ supervisor_init {
   }
 }
 
-print(to_string(DynamicSupervisor::status()))
+print(inspect(DynamicSupervisor::status()))

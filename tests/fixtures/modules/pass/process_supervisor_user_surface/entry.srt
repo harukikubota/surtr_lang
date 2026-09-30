@@ -38,7 +38,7 @@ supervisor_init {
   }
 }
 
-print(to_string(AppSup::status()))
-print(to_string(SlowSup::status()))
-print(to_string(OverrideSup::status()))
-print(to_string(DynamicSupervisor::status()))
+print(inspect(AppSup::status()))
+print(inspect(SlowSup::status()))
+print(inspect(OverrideSup::status()))
+print(inspect(DynamicSupervisor::status()))

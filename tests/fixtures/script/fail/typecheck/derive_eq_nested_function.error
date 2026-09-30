@@ -1,0 +1,7 @@
+phase: typecheck
+contains: Eq
+json: /reason = "NoApplicableTraitImplementation"
+json: /data/dependency/context = "derive"
+json: /data/dependency/steps/0/name = "callbacks"
+json: /data/dependency/steps/1/kind = "list_element"
+json: /data/dependency/leaf_policy = "trait_implementation_forbidden"

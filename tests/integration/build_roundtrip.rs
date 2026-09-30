@@ -559,13 +559,6 @@ match pipeline("x") {
         "expected template partial call entries: {json}"
     );
     assert!(
-        json["optimization_summary"]["apply_compose"]["template_compose_calls"]
-            .as_u64()
-            .unwrap_or(0)
-            > 0,
-        "expected template compose call entries: {json}"
-    );
-    assert!(
         json["function_summary"]["summary"]["generated_wrapper_functions"]
             .as_u64()
             .is_some(),

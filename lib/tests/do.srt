@@ -101,7 +101,7 @@ test("do carrier integration") {
         value <- source
         Identity::new(value + 1)
       }
-      assert_eq(pipeline, sequenced)
+      assert_eq(Identity::run(pipeline), Identity::run(sequenced))
     }
 
     it("matches the Reader pipeline at the same environment") {
@@ -173,7 +173,8 @@ test("do carrier integration") {
         2 <- OptionT::some::<List>(1)
         OptionT::some::<List>(3)
       }
-      assert_eq([Option::None], OptionT::run(result))
+      expected: List<Option<Int>> = [Option::None]
+      assert_eq(expected, OptionT::run(result))
     }
 
     it("keeps guard on ordinary OptionT Alternative semantics") {
@@ -237,7 +238,7 @@ test("do carrier integration") {
         value <- source
         DoProbe::new(value + 1)
       }
-      assert_eq(pipeline, sequenced)
+      assert_eq(pipeline.value, sequenced.value)
     }
   }
 }

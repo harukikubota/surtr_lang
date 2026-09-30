@@ -1,0 +1,4 @@
+phase: typecheck
+contains: reserved for compiler-owned capabilities
+json: /reason = "TraitImplementationForbidden"
+json: /data/policy = "trait_implementation"

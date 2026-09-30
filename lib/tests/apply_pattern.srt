@@ -72,9 +72,10 @@ test("apply_pattern projection contract") {
     assert_eq(expected, inspect(apply_pattern(0, nested_checked(_1))))
     ext = ExtractorClosureSchema::make_checked()
     assert_eq(expected, inspect(apply_pattern(0, ext(_1))))
-    assert_eq([], capture_stdout())
+    empty_output: List<String> = []
+    assert_eq(empty_output, capture_stdout())
     assert_eq(expected, inspect(apply_pattern((3, 0), (_1, nested_checked(_)))))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
   }
 
   it("returns ordinary mismatch errors without publishing partial projections") {
@@ -102,10 +103,11 @@ test("apply_pattern projection contract") {
 
   it("skips later occurrences and pre-arguments after failure") {
     capture_stdout()
+    empty_output: List<String> = []
     assert_true(is_match(apply_pattern((0, 5), (positive(), observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
     assert_true(is_match(apply_pattern((3, 5), (4, observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
   }
 
   it("continues a non-Result callable after failure") {

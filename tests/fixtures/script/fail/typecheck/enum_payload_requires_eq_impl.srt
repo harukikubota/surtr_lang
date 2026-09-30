@@ -1,0 +1,2 @@
+defenum Token { Number(Int), End }
+print(inspect(Token::Number(1) == Token::Number(2)))

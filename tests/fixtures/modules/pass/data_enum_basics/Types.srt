@@ -1,3 +1,4 @@
+@derive Eq
 defenum Direction {
   Up,
   Down,
@@ -11,6 +12,7 @@ defenum KeyInput {
   Space,
 }
 
+@derive Eq
 defenum Code {
   A = 1,
   B,

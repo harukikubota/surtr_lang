@@ -12,16 +12,16 @@ duration_left = Range(10ms, 20ms)
 duration_right = Range(10ms, 30ms)
 duration_same = Range(10ms, 20ms)
 
-print(to_string((raw.min, raw.max)))
-print(to_string((normalized.min, normalized.max)))
-print(to_string((to_string(duration_ctor.min), to_string(duration_ctor.max))))
-print(to_string(compare(left, right)))
-print(to_string((left == same, left != different)))
-print(to_string(compare(duration_left, duration_right)))
-print(to_string((duration_left == duration_same, duration_left != duration_right)))
-print(to_string((advanced.min, advanced.max)))
-print(to_string((retreated.min, retreated.max)))
-print(to_string(match value {
+print(inspect((raw.min, raw.max)))
+print(inspect((normalized.min, normalized.max)))
+print(inspect((to_string(duration_ctor.min), to_string(duration_ctor.max))))
+print(inspect(compare(left, right)))
+print(inspect((left == same, left != different)))
+print(inspect(compare(duration_left, duration_right)))
+print(inspect((duration_left == duration_same, duration_left != duration_right)))
+print(inspect((advanced.min, advanced.max)))
+print(inspect((retreated.min, retreated.max)))
+print(inspect(match value {
   Range(min, max) => (min, max),
   _ => (0, 0),
 }))

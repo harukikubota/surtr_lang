@@ -358,10 +358,10 @@ def singleton(x: Int) -> List<Int> {
 nums: List<Int> = [1, 2, 3]
 expand = &singleton >=> &dup
 
-print(to_string(singleton(5)))
-print(to_string(nums |*> inc()))
-print(to_string(nums |>= dup()))
-print(to_string(expand(2)))"#,
+print(inspect(singleton(5)))
+print(inspect(nums |*> inc()))
+print(inspect(nums |>= dup()))
+print(inspect(expand(2)))"#,
         &["[5]", "[2, 3, 4]", "[1, 11, 2, 12, 3, 13]", "[2, 12]"],
     );
 }
@@ -687,9 +687,9 @@ nums =? parse_csv("1,2,3")
 [head, ..tail] =? nums
 
 print(to_string(head))
-print(to_string(tail |>= expand()))
-print(to_string((head |> singleton()) |*> show()))"##,
-        &["1", "[2, 12, 3, 13]", "[#1]"],
+print(inspect(tail |>= expand()))
+print(inspect((head |> singleton()) |*> show()))"##,
+        &["1", "[2, 12, 3, 13]", "[\"#1\"]"],
     );
 }
 
@@ -710,11 +710,11 @@ def singleton(word: String) -> List<String> {
 lift_and_expand = &singleton >=> &aliases
 
 words: List<String> = ["surtr", "vm"]
-print(to_string(words |>= aliases() |*> wrap_bracket()))
-print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
+print(inspect(words |>= aliases() |*> wrap_bracket()))
+print(inspect(lift_and_expand("bind") |*> wrap_bracket()))"#,
         &[
-            "[[surtr], [surtr_alt], [vm], [vm_alt]]",
-            "[[bind], [bind_alt]]",
+            "[\"[surtr]\", \"[surtr_alt]\", \"[vm]\", \"[vm_alt]\"]",
+            "[\"[bind]\", \"[bind_alt]\"]",
         ],
     );
 }
@@ -938,9 +938,9 @@ print(to_string(10 > 5))
 print(to_string("abc" == "abc"))
 print("hello" ++ " world")
 nums: List<Int> = [1, 2, 3]
-print(to_string(nums))
+print(inspect(nums))
 empty: List<Int> = []
-print(to_string(empty))
+print(inspect(empty))
 defstruct User {
   name: String,
   age: Int,
@@ -951,11 +951,11 @@ impl User {
   }
 }
 user = User("alice", 30)
-print(to_string(user))
+print(inspect(user))
 print(to_string(user.name))
 defrecord Pair(first: Int, second: String)
 pair = Pair(1, "hello")
-print(to_string(pair))
+print(inspect(pair))
 print(to_string(pair.first))
 greeting = if(flag, "hello", "goodbye")
 print(greeting)
@@ -977,9 +977,9 @@ print(msg)"#,
             "hello world",
             "[1, 2, 3]",
             "[]",
-            "User(name: alice, age: 30)",
+            "User(name: \"alice\", age: 30)",
             "alice",
-            "Pair(first: 1, second: hello)",
+            "Pair(first: 1, second: \"hello\")",
             "1",
             "hello",
             "flag is true",

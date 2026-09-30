@@ -43,10 +43,10 @@ move_ctor: (Int -> Direction) = &Direction::Move
 item_ctor: (Int -> Box<Int>) = &Box<Int>::Item
 either = apply_left(&Choice2<_, Int>::Left, "ok")
 
-print(to_string(user))
-print(to_string(partial_user))
-print(to_string(account))
-print(to_string(still_ctor()))
-print(to_string(move_ctor(3)))
-print(to_string(item_ctor(5)))
-print(to_string(either))
+print(inspect(user))
+print(inspect(partial_user))
+print(inspect(account))
+print(inspect(still_ctor()))
+print(inspect(move_ctor(3)))
+print(inspect(item_ctor(5)))
+print(inspect(either))
