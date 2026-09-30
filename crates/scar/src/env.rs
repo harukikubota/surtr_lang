@@ -64,6 +64,8 @@ pub struct TypeDefInfo {
     pub type_param_bounds: Vec<Option<Symbol>>,
     pub type_param_vars: Vec<u32>,
     pub fields: Vec<(Symbol, Ty)>,
+    #[serde(default)]
+    pub field_type_spans: Vec<spire::ast::Span>,
     pub private_fields: HashSet<Symbol>,
     pub readonly_fields: HashSet<Symbol>,
     pub readonly_root: bool,
@@ -103,6 +105,8 @@ pub struct EnumVariantInfo {
     pub enum_ty: Ty,
     pub tag: u32,
     pub payload: Vec<Ty>,
+    #[serde(default)]
+    pub payload_type_spans: Vec<spire::ast::Span>,
     pub discriminant: SurtrInt,
 }
 
@@ -250,6 +254,7 @@ impl TypeEnv {
                 type_param_bounds,
                 type_param_vars: Vec::new(),
                 fields: Vec::new(),
+                field_type_spans: Vec::new(),
                 private_fields: HashSet::new(),
                 readonly_fields: HashSet::new(),
                 readonly_root: false,

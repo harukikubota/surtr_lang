@@ -155,6 +155,16 @@ fn named(span: &Span, name: &str) -> AstTy {
     AstTy::Named(span.clone(), name.into())
 }
 
+fn type_span(ty: &AstTy) -> &Span {
+    match ty {
+        AstTy::Named(span, _)
+        | AstTy::ImplTrait(span, _)
+        | AstTy::Generic(span, _, _)
+        | AstTy::Tuple(span, _)
+        | AstTy::Func(span, _, _) => span,
+    }
+}
+
 fn path(span: &Span, segments: &[&str]) -> Ast {
     Ast::Path(
         span.clone(),
@@ -203,6 +213,81 @@ fn constructor(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
 
 fn field(span: &Span, receiver: &str, name: &str) -> Ast {
     Ast::FieldAccess(span.clone(), Box::new(var(span, receiver)), name.into())
+}
+
+fn string(span: &Span, value: impl Into<String>) -> Ast {
+    Ast::Lit(span.clone(), Lit::Str(value.into()))
+}
+
+fn concat(span: &Span, parts: Vec<Ast>) -> Ast {
+    parts
+        .into_iter()
+        .reduce(|left, right| call(span, &["Concat", "concat"], vec![left, right]))
+        .unwrap_or_else(|| string(span, ""))
+}
+
+fn derived_show_body(
+    span: &Span,
+    type_name: &str,
+    fields: &[(String, AstTy)],
+    variants: &[EnumVariant],
+) -> Ast {
+    let display_name = type_name.strip_prefix("Global::").unwrap_or(type_name);
+    if variants.is_empty() {
+        let mut parts = vec![string(span, format!("{display_name}("))];
+        for (index, (field_name, field_ty)) in fields.iter().enumerate() {
+            if index > 0 {
+                parts.push(string(span, ", "));
+            }
+            parts.push(string(span, format!("{field_name}: ")));
+            parts.push(call(
+                type_span(field_ty),
+                &["Show", "to_string"],
+                vec![field(type_span(field_ty), "self", field_name)],
+            ));
+        }
+        parts.push(string(span, ")"));
+        return concat(span, parts);
+    }
+
+    let arms = variants
+        .iter()
+        .map(|variant| {
+            let names = (0..variant.payload.len())
+                .map(|index| format!("__derive_show_{index}"))
+                .collect::<Vec<_>>();
+            let pattern = AstPattern::Constructor(
+                span.clone(),
+                format!("{type_name}::{}", variant.name),
+                names
+                    .iter()
+                    .map(|name| AstPattern::Var(span.clone(), name.clone()))
+                    .collect(),
+            );
+            let mut parts = vec![string(span, format!("{display_name}::{}", variant.name))];
+            if !names.is_empty() {
+                parts.push(string(span, "("));
+                for (index, name) in names.iter().enumerate() {
+                    if index > 0 {
+                        parts.push(string(span, ", "));
+                    }
+                    let payload_span = type_span(&variant.payload[index]);
+                    parts.push(call(
+                        payload_span,
+                        &["Show", "to_string"],
+                        vec![var(payload_span, name)],
+                    ));
+                }
+                parts.push(string(span, ")"));
+            }
+            AstMatchArm {
+                pattern,
+                guard: None,
+                body: concat(span, parts),
+            }
+        })
+        .collect();
+    Ast::Match(span.clone(), Box::new(var(span, "self")), arms)
 }
 
 fn fold_and(span: &Span, values: Vec<Ast>) -> Ast {
@@ -309,8 +394,14 @@ fn enum_body(
                         left_names
                             .iter()
                             .zip(right_names.iter())
-                            .map(|(left, right)| {
-                                call(span, &["Eq", "eq"], vec![var(span, left), var(span, right)])
+                            .enumerate()
+                            .map(|(index, (left, right))| {
+                                let payload_span = type_span(&left_variant.payload[index]);
+                                call(
+                                    payload_span,
+                                    &["Eq", "eq"],
+                                    vec![var(payload_span, left), var(payload_span, right)],
+                                )
                             })
                             .collect(),
                     ),
@@ -366,6 +457,50 @@ fn enum_body(
     )
 }
 
+fn type_uses_param(ty: &AstTy, param: &str) -> bool {
+    match ty {
+        AstTy::Named(_, name) => name == param,
+        AstTy::ImplTrait(..) => false,
+        AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
+            args.iter().any(|arg| type_uses_param(arg, param))
+        }
+        AstTy::Func(_, params, ret) => {
+            params.iter().any(|arg| type_uses_param(arg, param)) || type_uses_param(ret, param)
+        }
+    }
+}
+
+fn same_type_syntax(left: &AstTy, right: &AstTy) -> bool {
+    match (left, right) {
+        (AstTy::Named(_, left), AstTy::Named(_, right))
+        | (AstTy::ImplTrait(_, left), AstTy::ImplTrait(_, right)) => left == right,
+        (AstTy::Generic(_, left, left_args), AstTy::Generic(_, right, right_args)) => {
+            left == right
+                && left_args.len() == right_args.len()
+                && left_args
+                    .iter()
+                    .zip(right_args)
+                    .all(|(left, right)| same_type_syntax(left, right))
+        }
+        (AstTy::Tuple(_, left), AstTy::Tuple(_, right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| same_type_syntax(left, right))
+        }
+        (AstTy::Func(_, left_params, left_ret), AstTy::Func(_, right_params, right_ret)) => {
+            left_params.len() == right_params.len()
+                && left_params
+                    .iter()
+                    .zip(right_params)
+                    .all(|(left, right)| same_type_syntax(left, right))
+                && same_type_syntax(left_ret, right_ret)
+        }
+        _ => false,
+    }
+}
+
 fn make_derived_impl(
     name: &str,
     type_params: &[TypeParam],
@@ -384,11 +519,15 @@ fn make_derived_impl(
                     span,
                     fields
                         .iter()
-                        .map(|(name, _)| {
+                        .map(|(name, ty)| {
+                            let field_span = type_span(ty);
                             call(
-                                span,
+                                field_span,
                                 &["Eq", "eq"],
-                                vec![field(span, "self", name), field(span, "rhs", name)],
+                                vec![
+                                    field(field_span, "self", name),
+                                    field(field_span, "rhs", name),
+                                ],
                             )
                         })
                         .collect(),
@@ -418,10 +557,10 @@ fn make_derived_impl(
                 enum_body(span, name, variants, generator)
             },
         ),
-        DeriveGenerator::InspectShow => (
+        DeriveGenerator::StructuralShow => (
             "to_string",
             "String",
-            call(span, &["inspect"], vec![var(span, "self")]),
+            derived_show_body(span, name, fields, variants),
         ),
         DeriveGenerator::Default => {
             let body = if variants.is_empty() {
@@ -471,25 +610,44 @@ fn make_derived_impl(
     };
     let where_clause = match &meta.field_requirement {
         FieldTraitRequirement::None => None,
-        FieldTraitRequirement::RequiresTrait(trait_name) => Some(WhereClause {
-            constraints: type_params
+        FieldTraitRequirement::RequiresTrait(trait_name) => {
+            let mut required_types = Vec::new();
+            for field_ty in fields
                 .iter()
-                .map(|param| WhereConstraint {
-                    subject: named(span, &param.name),
+                .map(|(_, ty)| ty)
+                .chain(variants.iter().flat_map(|variant| variant.payload.iter()))
+            {
+                if type_params
+                    .iter()
+                    .any(|param| type_uses_param(field_ty, &param.name))
+                    && !required_types
+                        .iter()
+                        .any(|existing| same_type_syntax(existing, field_ty))
+                {
+                    required_types.push(field_ty.clone());
+                }
+            }
+            let constraints = required_types
+                .into_iter()
+                .map(|subject| WhereConstraint {
+                    span: type_span(&subject).clone(),
+                    subject,
                     bounds: vec![WhereConstraintRhs::Trait(
                         span.clone(),
                         trait_name.as_str().into(),
                     )],
-                    span: span.clone(),
                 })
-                .collect(),
-            span: span.clone(),
-        }),
+                .collect::<Vec<_>>();
+            (!constraints.is_empty()).then(|| WhereClause {
+                constraints,
+                span: span.clone(),
+            })
+        }
     };
     let mut params = Vec::new();
     if !matches!(
         generator,
-        DeriveGenerator::InspectShow | DeriveGenerator::Default
+        DeriveGenerator::StructuralShow | DeriveGenerator::Default
     ) {
         params.push(ValueParameter {
             name: "self".into(),
@@ -503,7 +661,7 @@ fn make_derived_impl(
             ty: named(span, "Self"),
             span: span.clone(),
         });
-    } else if generator == DeriveGenerator::InspectShow {
+    } else if generator == DeriveGenerator::StructuralShow {
         params.push(ValueParameter {
             name: "self".into(),
             mode: ValueParameterMode::PositionalOrNamed,

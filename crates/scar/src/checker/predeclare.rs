@@ -1,7 +1,15 @@
 use super::*;
 use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
+use sindr::names::{builtin_type_name, surface_path_name, TraitImplPolicy};
 
 const SYNTHETIC_DEFAULT_METHOD_UID_BASE: u32 = 0x6000_0000;
+
+pub(super) fn is_generated_derive_impl(methods: &[ResolvedTraitImplMethod]) -> bool {
+    !methods.is_empty()
+        && methods
+            .iter()
+            .all(|method| method.function_id.compiler_generated)
+}
 
 impl Checker {
     fn invalid_result_effect_annotation(
@@ -660,13 +668,33 @@ impl Checker {
         Ok(())
     }
 
-    fn where_constraint_subject_ty(
-        &self,
+    pub(super) fn where_constraint_subject_ty(
+        &mut self,
         subject: &AstTy,
         tyvars: &HashMap<String, Ty>,
         self_ty: Option<&Ty>,
         span: &Span,
+        generated_derive: bool,
     ) -> Result<Ty, TypeError> {
+        if generated_derive && !matches!(subject, AstTy::Named(_, _)) {
+            let self_ty = self_ty.ok_or_else(|| {
+                TypeError::new("Generated derive requires an impl target", span.clone())
+            })?;
+            let mut bindings = tyvars.clone();
+            let resolved = self.resolve_trait_signature_ast_ty_in_context(
+                subject,
+                TypeSyntaxContext::General,
+                self_ty,
+                &mut bindings,
+            )?;
+            if bindings.keys().any(|name| !tyvars.contains_key(name)) {
+                return Err(TypeError::new(
+                    "Generated derive constraint references a type variable outside its impl target",
+                    span.clone(),
+                ));
+            }
+            return Ok(resolved);
+        }
         let AstTy::Named(_, name) = subject else {
             return Err(TypeError {
                 structured: None,
@@ -749,6 +777,7 @@ impl Checker {
                 tyvars,
                 self_ty,
                 &constraint.span,
+                false,
             )?;
             for bound in &constraint.bounds {
                 if let ResolvedWhereConstraintRhs::Trait { trait_id } = bound {
@@ -764,6 +793,7 @@ impl Checker {
         where_clause: Option<&TypedWhereClause>,
         tyvars: &HashMap<String, Ty>,
         self_ty: Option<&Ty>,
+        generated_derive: bool,
     ) -> Result<(), TypeError> {
         let Some(where_clause) = where_clause else {
             return Ok(());
@@ -774,6 +804,7 @@ impl Checker {
                 tyvars,
                 self_ty,
                 &constraint.span,
+                generated_derive,
             )?;
             for bound in &constraint.bounds {
                 if let TypedWhereConstraintRhs::Trait { trait_id } = bound {
@@ -1190,6 +1221,13 @@ impl Checker {
                             span: id.span.clone(),
                             hint: None,
                         })?;
+                    self.env
+                        .lookup_type_def_mut(&id.name)
+                        .expect("resolved struct remains registered")
+                        .field_type_spans = fields
+                        .iter()
+                        .map(|field| Self::ast_ty_span(&field.ty).clone())
+                        .collect();
                     self.env.register_type_constructor_id(id.unique_id);
                     self.env.bind_var(
                         id.unique_id,
@@ -1248,6 +1286,13 @@ impl Checker {
                             span: id.span.clone(),
                             hint: None,
                         })?;
+                    self.env
+                        .lookup_type_def_mut(&id.name)
+                        .expect("resolved record remains registered")
+                        .field_type_spans = fields
+                        .iter()
+                        .map(|field| Self::ast_ty_span(&field.ty).clone())
+                        .collect();
                     self.env.register_type_constructor_id(id.unique_id);
                     self.env.bind_var(
                         id.unique_id,
@@ -1284,6 +1329,13 @@ impl Checker {
                             span: id.span.clone(),
                             hint: None,
                         })?;
+                    self.env
+                        .lookup_type_def_mut(&id.name)
+                        .expect("resolved data type remains registered")
+                        .field_type_spans = fields
+                        .iter()
+                        .map(|field| Self::ast_ty_span(&field.ty).clone())
+                        .collect();
                 }
                 Resolved::EnumDef(_, id, type_params, variants, attrs) => {
                     let mut sig_tyvars = HashMap::new();
@@ -1414,6 +1466,11 @@ impl Checker {
                             enum_ty: enum_ty.clone(),
                             tag,
                             payload: payload.clone(),
+                            payload_type_spans: variant
+                                .payload
+                                .iter()
+                                .map(|ty| Self::ast_ty_span(ty).clone())
+                                .collect(),
                             discriminant: discriminant.clone(),
                         };
                         self.env
@@ -2505,6 +2562,44 @@ impl Checker {
         }
     }
 
+    pub(super) fn trait_impl_policy_for_ty(&self, ty: &Ty) -> TraitImplPolicy {
+        match self.resolve_ty(ty) {
+            Ty::Func(..)
+            | Ty::ExtractorClosure(..)
+            | Ty::Error
+            | Ty::Facet(..)
+            | Ty::Lazy(..)
+            | Ty::MatchResult(..)
+            | Ty::Hole => TraitImplPolicy::Forbidden,
+            Ty::Pid(..) => TraitImplPolicy::CompilerOwned,
+            Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => {
+                builtin_type_name(surface_path_name(&name))
+                    .map(|builtin| builtin.trait_impl_policy())
+                    .unwrap_or(TraitImplPolicy::Open)
+            }
+            _ => TraitImplPolicy::Open,
+        }
+    }
+
+    fn pid_eq_process_spec_exists(&self, name: &str) -> bool {
+        let implicit_root = (!name.starts_with(sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX))
+            .then(|| format!("{}{}", sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX, name));
+        let mut matches = self.process_specs.iter().filter(|spec| {
+            spec.process_name == name
+                || implicit_root
+                    .as_ref()
+                    .is_some_and(|alias| spec.process_name == *alias)
+        });
+        let Some(spec) = matches.next() else {
+            return false;
+        };
+        matches.next().is_none()
+            && matches!(
+                spec.spec.instance,
+                spire::ast::ProcessInstance::Singleton | spire::ast::ProcessInstance::Worker
+            )
+    }
+
     pub(super) fn trait_impl_exists_for_args(
         &mut self,
         trait_name: &str,
@@ -2617,16 +2712,28 @@ impl Checker {
         Ok(TraitDispatchTarget::Builtin(metadata.builtin_id))
     }
 
+    fn is_standard_eq_trait(&self, trait_name: &str) -> bool {
+        self.traits.get(trait_name).is_some_and(|info| {
+            info.compiler_owned_equality && self.trait_key(&info.id) == trait_name
+        })
+    }
+
+    fn enum_has_only_payload_free_variants(&self, name: &str) -> bool {
+        self.lookup_enum_variants_of(name)
+            .is_some_and(|variants| variants.iter().all(|variant| variant.payload.is_empty()))
+    }
+
     pub(super) fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
         let ty = self.resolve_ty(ty);
-        if self.trait_matches_short_name(trait_name, "Show") {
-            return !matches!(
-                ty,
-                Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
-            );
-        }
-        if self.trait_matches_short_name(trait_name, "Eq") {
-            return matches!(ty, Ty::Enum(_, _));
+        if self.is_standard_eq_trait(trait_name) {
+            return match &ty {
+                Ty::Enum(name, _) => {
+                    self.trait_impl_policy_for_ty(&ty) == TraitImplPolicy::Open
+                        && self.enum_has_only_payload_free_variants(name)
+                }
+                Ty::Pid(name) => self.pid_eq_process_spec_exists(name),
+                _ => false,
+            };
         }
         false
     }
@@ -2638,24 +2745,26 @@ impl Checker {
         target_ty: &Ty,
     ) -> Option<TraitDispatchTarget> {
         let target_ty = self.resolve_ty(target_ty);
-        if self.trait_matches_short_name(trait_name, "Show") {
-            return (method_name == "to_string"
-                && !matches!(
-                    target_ty,
-                    Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
-                ))
-            .then(|| {
-                TraitDispatchTarget::Builtin(
-                    sindr::builtin::builtin_meta_by_name("to_string")
-                        .expect("canonical Show implementation metadata")
-                        .builtin_id(),
-                )
-            });
-        }
-        if self.trait_matches_short_name(trait_name, "Eq") {
-            return match (method_name, target_ty) {
-                ("eq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Eq)),
-                ("neq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Neq)),
+        if self.is_standard_eq_trait(trait_name) {
+            return match (method_name, &target_ty) {
+                ("eq", Ty::Enum(name, _))
+                    if self.trait_impl_policy_for_ty(&target_ty) == TraitImplPolicy::Open
+                        && self.enum_has_only_payload_free_variants(name) =>
+                {
+                    Some(TraitDispatchTarget::BinOp(BinOp::Eq))
+                }
+                ("neq", Ty::Enum(name, _))
+                    if self.trait_impl_policy_for_ty(&target_ty) == TraitImplPolicy::Open
+                        && self.enum_has_only_payload_free_variants(name) =>
+                {
+                    Some(TraitDispatchTarget::BinOp(BinOp::Neq))
+                }
+                ("eq", Ty::Pid(name)) if self.pid_eq_process_spec_exists(name) => {
+                    Some(TraitDispatchTarget::BinOp(BinOp::Eq))
+                }
+                ("neq", Ty::Pid(name)) if self.pid_eq_process_spec_exists(name) => {
+                    Some(TraitDispatchTarget::BinOp(BinOp::Neq))
+                }
                 _ => None,
             };
         }
@@ -2738,7 +2847,12 @@ impl Checker {
             ret,
             &direct_constructor_inputs,
         );
-        self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(self_ty))?;
+        self.apply_typed_where_trait_bounds(
+            method.where_clause.as_ref(),
+            &tyvars,
+            Some(self_ty),
+            false,
+        )?;
         for ty in &params {
             self.validate_nominal_type_well_formed(ty, &method.span, false)?;
         }
@@ -2960,6 +3074,7 @@ impl Checker {
         target_ast_ty: &AstTy,
         fallback_ret_ty: &sigil::resolved::ResolvedSignatureTy,
         impl_where_clause: Option<&TypedWhereClause>,
+        generated_derive: bool,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>, MethodTypeEnvironment), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
@@ -3002,7 +3117,12 @@ impl Checker {
             trait_head_bindings.insert(param.name.clone(), resolved);
         }
         self.apply_trait_head_where_bounds(trait_info.where_clause.as_ref(), &trait_head_bindings)?;
-        self.apply_typed_where_trait_bounds(impl_where_clause, &tyvars, Some(&self_ty))?;
+        self.apply_typed_where_trait_bounds(
+            impl_where_clause,
+            &tyvars,
+            Some(&self_ty),
+            generated_derive,
+        )?;
 
         let head_bindings = tyvars.clone();
         // User impl source has its own namespace. Only synthesized default
@@ -3073,8 +3193,18 @@ impl Checker {
             ret,
             &direct_constructor_inputs,
         );
-        self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(&self_ty))?;
-        self.apply_typed_where_trait_bounds(impl_where_clause, &tyvars, Some(&self_ty))?;
+        self.apply_typed_where_trait_bounds(
+            method.where_clause.as_ref(),
+            &tyvars,
+            Some(&self_ty),
+            false,
+        )?;
+        self.apply_typed_where_trait_bounds(
+            impl_where_clause,
+            &tyvars,
+            Some(&self_ty),
+            generated_derive,
+        )?;
         let target_vars = head_bindings
             .iter()
             .filter_map(|(name, ty)| match ty {
@@ -3460,6 +3590,9 @@ impl Checker {
             }
             let trait_info = TraitInfo {
                 id: id.clone(),
+                compiler_owned_equality: self.enforce_builtin_type_contracts
+                    && id.name == "Eq"
+                    && trait_key == "Eq",
                 type_params: type_params.clone(),
                 where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                 constructor_slots,
@@ -3525,6 +3658,7 @@ impl Checker {
                 continue;
             };
             declared_trait_impl = true;
+            let generated_derive = is_generated_derive_impl(methods);
 
             let trait_key = self.trait_key(trait_id);
             let trait_info = self
@@ -3552,6 +3686,40 @@ impl Checker {
             }
             let (trait_arg_tys, target_ty, type_param_vars, target_param_vars) =
                 self.resolve_trait_impl_head_tys(&trait_info, trait_args, target_ast_ty)?;
+            let policy = self.trait_impl_policy_for_ty(&target_ty);
+            if policy != TraitImplPolicy::Open {
+                let target = self.ty_name(&target_ty);
+                let reason = match policy {
+                    TraitImplPolicy::CompilerOwned => "reserved for compiler-owned capabilities",
+                    TraitImplPolicy::Forbidden => "forbidden by the type's trait policy",
+                    TraitImplPolicy::Open => unreachable!(),
+                };
+                return Err(TypeError::from_structured(diagnostics::StructuredDiagnostic {
+                    reason: diagnostics::TypeDiagnosticReason::TraitImplementationForbidden.into(),
+                    origin: diagnostics::DiagnosticOrigin::Declaration,
+                    data: diagnostics::DiagnosticData::Policy(diagnostics::PolicyData {
+                        policy: diagnostics::TypePolicy::TraitImplementation,
+                        subject: Some(target),
+                        expected_type: Some(trait_id.name.clone()),
+                        actual_type: Some(reason.into()),
+                        stage: Some("declaration".into()),
+                        entrypoint: None,
+                    }),
+                    primary: diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::Impl,
+                        diagnostics::SourceId(0),
+                        Self::ast_ty_span(target_ast_ty).clone(),
+                    ),
+                    related: vec![diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::Trait,
+                        diagnostics::SourceId(0),
+                        trait_id.span.clone(),
+                    )],
+                    remediation: Some(diagnostics::Remediation::Help {
+                        text: "Use a user-defined outer type for this trait implementation when appropriate.".into(),
+                    }),
+                }));
+            }
             let typed_impl_clause = where_clause.as_ref().map(TypedWhereClause::from);
             let impl_head_bindings = target_param_vars
                 .iter()
@@ -3561,6 +3729,7 @@ impl Checker {
                 typed_impl_clause.as_ref(),
                 &impl_head_bindings,
                 Some(&target_ty),
+                generated_derive,
             )?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
                 structured: None,
@@ -3767,6 +3936,7 @@ impl Checker {
                         target_ast_ty,
                         &trait_method.ret_ty,
                         where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
+                        generated_derive,
                     )?;
                 if impl_method.is_builtin {
                     dispatch_overrides.insert(
@@ -4032,6 +4202,7 @@ impl Checker {
                     target_ast_ty: target_ast_ty.clone(),
                     target_ty,
                     where_clause: where_clause.as_ref().map(TypedWhereClause::from),
+                    generated_derive,
                     type_param_vars,
                     type_param_vars_by_name: target_param_vars,
                     constructor_slot_vars,
@@ -4277,6 +4448,24 @@ impl Checker {
                     where_clause,
                     _,
                 ) => {
+                    if Self::is_compiler_flow_operator_decl(id) {
+                        if !super::signatures::builtin_surface_matches(
+                            id,
+                            return_type_arguments,
+                            params,
+                            ret_ty.as_ref(),
+                            where_clause.as_ref(),
+                        ) {
+                            return Err(TypeError::new(
+                                format!(
+                                    "Builtin {} does not match its canonical surface signature",
+                                    id.name
+                                ),
+                                id.span.clone(),
+                            ));
+                        }
+                        continue;
+                    }
                     let declared_name = id.name.rsplit("::").next().unwrap_or(&id.name);
                     let runtime_name = sindr::builtin::builtin_runtime_name(
                         declared_name,
@@ -4713,6 +4902,7 @@ impl Checker {
                         &trait_impl.target_ast_ty,
                         &trait_method.ret_ty,
                         trait_impl.where_clause.as_ref(),
+                        trait_impl.generated_derive,
                     )?;
                 let param_names = method
                     .value_parameters

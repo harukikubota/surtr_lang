@@ -49,6 +49,13 @@ enum DoStatementKind {
     Plain,
 }
 
+#[derive(Clone, Copy)]
+enum CompositionOperator {
+    Plain,
+    Lifted,
+    Kleisli,
+}
+
 impl ExpectedTypeRelation {
     fn contextual(span: &Span) -> Self {
         Self {
@@ -5654,65 +5661,6 @@ impl Checker {
                 if slots.contains(output.as_ref()))
             })
             .collect::<Vec<_>>();
-        // Resolve the standard operator's inference policy once. Preparation
-        // supplies value constraints; every helper and operator still reaches
-        // the same signature assertions and candidate solver below.
-        let composition = [
-            ("Composable", "compose", OperatorTraitOp::Compose),
-            (
-                "LiftComposable",
-                "lift_compose",
-                OperatorTraitOp::LiftCompose,
-            ),
-            (
-                "KleisliComposable",
-                "kleisli_compose",
-                OperatorTraitOp::KleisliCompose,
-            ),
-        ]
-        .into_iter()
-        .find_map(|(name, method, kind)| {
-            (self.trait_matches_short_name(trait_name, name) && method_name == method)
-                .then_some(kind)
-        });
-        if let Some(kind) = composition.as_ref() {
-            if positional_args.len() == 2 && param_tys.len() == 2 {
-                let (values, inferred_args) = self
-                    .prepare_composition_invocation(
-                        span,
-                        &kind,
-                        positional_args[0],
-                        positional_args[1],
-                        expected_ret_ty,
-                    )
-                    .map_err(|mut error| {
-                        if let Some(diagnostic) = &mut error.structured {
-                            diagnostic.origin = DiagnosticOrigin::TraitCall;
-                        }
-                        error
-                    })?;
-                if inferred_args.len() != trait_arg_tys.len() {
-                    return Err(TypeError::new(
-                        "Composition trait argument metadata mismatch",
-                        span.clone(),
-                    ));
-                }
-                for (declared, inferred) in trait_arg_tys.iter().zip(&inferred_args) {
-                    self.assert_type_relation(
-                        declared,
-                        inferred,
-                        self.type_fact(SourceRole::Contract, span, declared),
-                        self.type_fact(SourceRole::Value, span, inferred),
-                        TypeDiagnosticReason::ArgumentTypeMismatch,
-                        DiagnosticOrigin::TraitCall,
-                        &format!("{trait_name}::{method_name}"),
-                        0,
-                    )?;
-                }
-                prepared_args = values.into_iter().map(Some).collect();
-            }
-        }
-
         if !trait_info.constructor_slots.is_empty()
             && args.len() == param_tys.len()
             && !receiverless_head_input
@@ -6118,12 +6066,6 @@ impl Checker {
                     trait_name,
                     matches!(&declared_param_tys[idx], Ty::Func(_, output) if matches!(output.as_ref(), Ty::SelfApp(_))),
                 ))
-            } else if idx == 1 {
-                match composition {
-                    Some(OperatorTraitOp::LiftCompose) => Some(("Functor", false)),
-                    Some(OperatorTraitOp::KleisliCompose) => Some(("Monad", true)),
-                    _ => None,
-                }
             } else {
                 None
             };
@@ -6291,7 +6233,17 @@ impl Checker {
             if let Some(diagnostic) = &mut error.structured {
                 diagnostic.related.extend(rejection_facts);
             }
-            if let Some(note) = rejection_note {
+            let forbidden_dependency = error.structured.as_ref().is_some_and(|diagnostic| {
+                matches!(
+                    &diagnostic.data,
+                    diagnostics::DiagnosticData::TraitDispatch(dispatch)
+                        if dispatch.dependency.as_ref().is_some_and(|dependency| {
+                            dependency.leaf_policy
+                                == diagnostics::TraitDependencyLeafPolicy::TraitImplementationForbidden
+                        })
+                )
+            });
+            if let Some(note) = rejection_note.filter(|_| !forbidden_dependency) {
                 error = error.with_hint(note);
             }
             error
@@ -6571,25 +6523,14 @@ impl Checker {
             ));
         };
         let trait_name = self.trait_instance_key_from_tys(&trait_key, &resolved_trait_args);
-        let (lhs_ty, rhs_ty) = if op == OperatorTraitOp::PipeApply {
-            (
-                args.get(1)
-                    .map(|arg| self.resolve_ty(&arg.ty))
-                    .unwrap_or_else(|| Ty::Unit),
-                args.first()
-                    .map(|arg| self.resolve_ty(&arg.ty))
-                    .unwrap_or_else(|| self.resolve_ty(receiver_ty)),
-            )
-        } else {
-            (
-                args.first()
-                    .map(|arg| self.resolve_ty(&arg.ty))
-                    .unwrap_or_else(|| self.resolve_ty(receiver_ty)),
-                args.get(1)
-                    .map(|arg| self.resolve_ty(&arg.ty))
-                    .unwrap_or_else(|| Ty::Unit),
-            )
-        };
+        let lhs_ty = args
+            .first()
+            .map(|arg| self.resolve_ty(&arg.ty))
+            .unwrap_or_else(|| self.resolve_ty(receiver_ty));
+        let rhs_ty = args
+            .get(1)
+            .map(|arg| self.resolve_ty(&arg.ty))
+            .unwrap_or(Ty::Unit);
         Ok(TypedNode {
             ty: self.resolve_ty(&result_ty),
             span: span.clone(),
@@ -6681,24 +6622,16 @@ impl Checker {
                 &typed_left,
                 &typed_right,
                 TypeDiagnosticReason::ArgumentTypeMismatch,
-                "PipeApply::pipe_apply",
+                "|>",
                 "|>",
                 None,
                 SourceRole::RightValue,
             )?;
-            let receiver_ty = self.resolve_ty(&typed_right.ty);
-            let left_ty = self.resolve_ty(&typed_left.ty);
-            self.flow_operator_trait_call(
-                span,
-                "PipeApply",
-                "pipe_apply",
-                &receiver_ty,
-                vec![left_ty, self.resolve_ty(&ret)],
-                OperatorTraitOp::PipeApply,
-                vec![typed_right, typed_left],
-                ret,
-                "`|>`",
-            )
+            Ok(TypedNode {
+                ty: self.resolve_ty(&ret),
+                span: span.clone(),
+                node: TypedInner::Pipe(Box::new(typed_left), Box::new(typed_right)),
+            })
         })()
         .map_err(|error| {
             Self::operator_operand_error(
@@ -7180,18 +7113,15 @@ impl Checker {
     fn prepare_composition_invocation(
         &mut self,
         span: &Span,
-        kind: &OperatorTraitOp,
+        kind: &CompositionOperator,
         left: &Resolved,
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<(Vec<TypedNode>, Vec<Ty>), TypeError> {
         let (label, capability) = match kind {
-            OperatorTraitOp::Compose => ("Composable::compose", None),
-            OperatorTraitOp::LiftCompose => ("LiftComposable::lift_compose", Some("Functor")),
-            OperatorTraitOp::KleisliCompose => {
-                ("KleisliComposable::kleisli_compose", Some("Monad"))
-            }
-            _ => unreachable!("composition policy"),
+            CompositionOperator::Plain => ("Bootstrap::>>", None),
+            CompositionOperator::Lifted => ("Bootstrap::>*", Some("Functor")),
+            CompositionOperator::Kleisli => ("Bootstrap::>=>", Some("Monad")),
         };
         let expected_parts = self.expected_unary_function_parts(expected);
         let expected_output = expected_parts.as_ref().map(|(_, output)| output.clone());
@@ -7238,7 +7168,7 @@ impl Checker {
             left_output.clone()
         };
         let result_payload = self.env.fresh_tyvar();
-        let result_context = if matches!(kind, OperatorTraitOp::KleisliCompose) {
+        let result_context = if matches!(kind, CompositionOperator::Kleisli) {
             let outcome = self.constructor_context_type_for("Monad", &left_output, &result_payload);
             Some(self.require_constructor_projection_type(
                 outcome,
@@ -7251,18 +7181,17 @@ impl Checker {
             None
         };
         let output_hint = match kind {
-            OperatorTraitOp::Compose => expected_output.clone(),
-            OperatorTraitOp::LiftCompose => expected_output.as_ref().and_then(|ty| {
+            CompositionOperator::Plain => expected_output.clone(),
+            CompositionOperator::Lifted => expected_output.as_ref().and_then(|ty| {
                 match self.constructor_slot_type_for("Functor", ty) {
                     ConstructorApplicationOutcome::Applied(slot) => Some(slot),
                     ConstructorApplicationOutcome::Deferred { .. }
                     | ConstructorApplicationOutcome::Rejected { .. } => None,
                 }
             }),
-            OperatorTraitOp::KleisliCompose => {
+            CompositionOperator::Kleisli => {
                 expected_output.clone().or_else(|| result_context.clone())
             }
-            _ => unreachable!(),
         };
         let contract =
             self.callable_contract(&input, output_hint, ExpectedCallableSlot::Contextual);
@@ -7270,8 +7199,8 @@ impl Checker {
         let (_, right_output) =
             self.unary_function_parts(&typed_right.ty, label, &typed_right.span)?;
         let trait_args = match kind {
-            OperatorTraitOp::Compose => vec![left_input, left_output, right_output],
-            OperatorTraitOp::LiftCompose => {
+            CompositionOperator::Plain => vec![left_input, left_output, right_output],
+            CompositionOperator::Lifted => {
                 if expected_output.is_none() {
                     self.ensure_plain_map_output(&right_output, label, &typed_right)?;
                 }
@@ -7286,12 +7215,11 @@ impl Checker {
                 )?;
                 vec![left_input, input, right_output, mapped]
             }
-            OperatorTraitOp::KleisliCompose => vec![
+            CompositionOperator::Kleisli => vec![
                 left_input,
                 input,
                 result_context.expect("Kleisli contextual result"),
             ],
-            _ => unreachable!(),
         };
         Ok((vec![typed_left, typed_right], trait_args))
     }
@@ -7312,16 +7240,41 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        self.check_operator_invocation(
+        let (args, _) = self.prepare_composition_invocation(
             span,
-            "Composable",
-            "compose",
-            OperatorTraitOp::Compose,
-            ">>",
+            &CompositionOperator::Plain,
             left,
             right,
             expected,
-        )
+        )?;
+        let [typed_left, typed_right] =
+            <[TypedNode; 2]>::try_from(args).expect("composition preparation returns two operands");
+        let (input, middle) = self.unary_function_parts(&typed_left.ty, ">>", &typed_left.span)?;
+        let (next_input, output) =
+            self.unary_function_parts(&typed_right.ty, ">>", &typed_right.span)?;
+        self.assert_operand_relation(
+            &next_input,
+            &middle,
+            &typed_left,
+            &typed_right,
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            ">>",
+            ">>",
+            None,
+            SourceRole::RightValue,
+        )?;
+        Ok(TypedNode {
+            ty: Ty::Func(
+                vec![self.resolve_ty(&input)],
+                Box::new(self.resolve_ty(&output)),
+            ),
+            span: span.clone(),
+            node: TypedInner::Compose(
+                ComposeFlavor::Plain,
+                Box::new(typed_left),
+                Box::new(typed_right),
+            ),
+        })
     }
 
     pub(super) fn check_lifted_compose(
@@ -7340,15 +7293,12 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        self.check_operator_invocation(
+        self.check_contextual_compose_with_expected(
             span,
-            "LiftComposable",
-            "lift_compose",
-            OperatorTraitOp::LiftCompose,
-            ">*",
             left,
             right,
             expected,
+            CompositionOperator::Lifted,
         )
     }
 
@@ -7368,16 +7318,125 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        self.check_operator_invocation(
+        self.check_contextual_compose_with_expected(
             span,
-            "KleisliComposable",
-            "kleisli_compose",
-            OperatorTraitOp::KleisliCompose,
-            ">=>",
             left,
             right,
             expected,
+            CompositionOperator::Kleisli,
         )
+    }
+
+    fn check_contextual_compose_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+        kind: CompositionOperator,
+    ) -> Result<TypedNode, TypeError> {
+        let (values, trait_args) =
+            self.prepare_composition_invocation(span, &kind, left, right, expected)?;
+        let [typed_left, typed_right] = <[TypedNode; 2]>::try_from(values)
+            .expect("composition preparation returns two operands");
+        let (trait_name, method_name, op, token) = match kind {
+            CompositionOperator::Lifted => ("Functor", "fmap", OperatorTraitOp::PipeMap, ">*"),
+            CompositionOperator::Kleisli => ("Monad", "bind", OperatorTraitOp::PipeBind, ">=>"),
+            _ => unreachable!("contextual composition kind"),
+        };
+        let input_ty = self.resolve_ty(&trait_args[0]);
+        let source_ty = self.resolve_ty(&typed_left.ty);
+        let (source_input, carrier_ty) =
+            self.unary_function_parts(&source_ty, token, &typed_left.span)?;
+        self.assert_operand_relation(
+            &source_input,
+            &input_ty,
+            &typed_left,
+            &typed_right,
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            token,
+            token,
+            None,
+            SourceRole::LeftValue,
+        )?;
+        let output_ty = match kind {
+            CompositionOperator::Lifted => self.resolve_ty(&trait_args[3]),
+            CompositionOperator::Kleisli => self.resolve_ty(&trait_args[2]),
+            _ => unreachable!(),
+        };
+        let make_id = |name: &str| ResolvedId {
+            name: name.into(),
+            qualified_name: None,
+            symbol_info: None,
+            unique_id: Self::next_synthetic_range_uid(),
+            compiler_generated: true,
+            span: span.clone(),
+        };
+        let left_id = make_id("__compose_left");
+        let right_id = make_id("__compose_right");
+        let input_id = make_id("__compose_input");
+        let left_ref = TypedNode {
+            ty: source_ty.clone(),
+            span: span.clone(),
+            node: TypedInner::Var(left_id.clone()),
+        };
+        let right_ref = TypedNode {
+            ty: self.resolve_ty(&typed_right.ty),
+            span: span.clone(),
+            node: TypedInner::Var(right_id.clone()),
+        };
+        let input_ref = TypedNode {
+            ty: input_ty.clone(),
+            span: span.clone(),
+            node: TypedInner::Var(input_id.clone()),
+        };
+        let produced = TypedNode {
+            ty: carrier_ty.clone(),
+            span: span.clone(),
+            node: TypedInner::App(Box::new(left_ref), vec![input_ref]),
+        };
+        let body = self.flow_operator_trait_call(
+            span,
+            trait_name,
+            method_name,
+            &carrier_ty,
+            vec![],
+            op,
+            vec![produced, right_ref],
+            output_ty.clone(),
+            token,
+        )?;
+        let closure_ty = Ty::Func(vec![input_ty.clone()], Box::new(output_ty));
+        let closure = TypedNode {
+            ty: closure_ty.clone(),
+            span: span.clone(),
+            node: TypedInner::Closure(
+                vec![TypedClosureParam {
+                    id: input_id,
+                    ty: input_ty,
+                }],
+                vec![left_id.clone(), right_id.clone()],
+                Box::new(body),
+            ),
+        };
+        let bind_left = TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Bind(TypedPattern::Var(source_ty, left_id), Box::new(typed_left)),
+        };
+        let bind_right = TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Bind(
+                TypedPattern::Var(self.resolve_ty(&typed_right.ty), right_id),
+                Box::new(typed_right),
+            ),
+        };
+        Ok(TypedNode {
+            ty: closure_ty,
+            span: span.clone(),
+            node: TypedInner::Block(vec![bind_left, bind_right, closure]),
+        })
     }
 
     pub(super) fn match_result_variant_tags(&self, span: &Span) -> Result<(u32, u32), TypeError> {
@@ -12768,31 +12827,17 @@ impl Checker {
         span: &Span,
         left: &Resolved,
         right: &Resolved,
-        expected: Option<&Ty>,
+        _expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_node(left)?;
-        if matches!(typed_left.ty, Ty::Facet(..)) {
-            return match typed_left.node {
-                TypedInner::FacetPath(path) => self.compose_facet_paths(span, path, right, "`/`"),
-                TypedInner::PendingFacetPath(path) => {
-                    self.compose_pending_facet_paths(span, path, right)
-                }
-                _ => Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Expected Facet<...> value, got {}",
-                        self.ty_name(&typed_left.ty)
-                    ),
-                    span: typed_left.span.clone(),
-                    hint: None,
-                }),
-            };
-        }
-
-        self.check_operator_invocation(span, "Compose", "compose",
-            OperatorTraitOp::SlashCompose, "/", left, right, expected)
+        self.check_facet_compose_intrinsic(
+            span,
+            &[
+                ResolvedRecordLitArg::Positional(left.clone()),
+                ResolvedRecordLitArg::Positional(right.clone()),
+            ],
+        )
             .map_err(|error| error.with_hint(
-                "Infix `/` is reserved for compose/join. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division.",
+                "Infix `/` composes Facet paths. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division.",
             ))
     }
 

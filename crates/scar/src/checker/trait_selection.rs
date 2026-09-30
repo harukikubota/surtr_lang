@@ -3003,6 +3003,78 @@ impl Checker {
 }
 
 impl Checker {
+    /// Diagnostic traversal may follow a container only when its unique
+    /// matching implementation requires this same trait for every child that
+    /// the traversal would expose. A matching head alone says nothing about
+    /// which where-clause obligation failed.
+    pub(super) fn trait_impl_requires_children(
+        &self,
+        trait_name: &str,
+        subject: &Ty,
+        children: &[Ty],
+    ) -> bool {
+        let Ok(request) = self.canonical_request(subject) else {
+            return false;
+        };
+        let Some(requested_children) = children
+            .iter()
+            .map(|child| self.canonical_request(child).ok())
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        let mut matching_candidates = 0;
+        let mut matching_constraint_set = false;
+        for key in self.trait_impl_candidate_keys(trait_name) {
+            let info = &self.trait_impls[&key];
+            if !info.trait_arg_tys.is_empty() {
+                continue;
+            }
+            let Some(target) = info
+                .head_type_list
+                .entries
+                .iter()
+                .find(|entry| entry.role == TypeListRole::ImplTarget)
+            else {
+                continue;
+            };
+            let mut next_variable = self.env.next_tyvar;
+            let mut fresh = HashMap::new();
+            let pattern = self.fresh_canonical(&target.ty, &mut fresh, &mut next_variable);
+            let mut unifier = CanonicalUnifier {
+                rigid_variables: self.rigid_tyvars.clone(),
+                ..Default::default()
+            };
+            if !unifier.unify(&pattern, &request) {
+                continue;
+            }
+            matching_candidates += 1;
+            let mut required_children = Vec::new();
+            let only_child_requirements = !info.impl_constraints.constraints.is_empty()
+                && info.impl_constraints.constraints.iter().all(|constraint| {
+                    let CanonicalMethodBound::Trait(trait_id) = constraint.bound else {
+                        return false;
+                    };
+                    if trait_id != info.trait_id.unique_id {
+                        return false;
+                    }
+                    let fresh_subject =
+                        self.fresh_canonical(&constraint.subject, &mut fresh, &mut next_variable);
+                    let required = unifier.resolve(&fresh_subject);
+                    if !requested_children.contains(&required) {
+                        return false;
+                    }
+                    required_children.push(required);
+                    true
+                });
+            matching_constraint_set = only_child_requirements
+                && requested_children
+                    .iter()
+                    .all(|child| required_children.contains(child));
+        }
+        matching_candidates == 1 && matching_constraint_set
+    }
+
     pub(super) fn probe_trait_head(
         &self,
         trait_name: &str,

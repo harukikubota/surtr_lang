@@ -1246,6 +1246,7 @@ mod tests {
     fn constructor_trait(id: ResolvedId) -> TraitInfo {
         TraitInfo {
             id,
+            compiler_owned_equality: false,
             type_params: Vec::new(),
             where_clause: None,
             constructor_slots: vec!["$A".into()],

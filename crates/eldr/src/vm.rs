@@ -1287,64 +1287,9 @@ impl VM {
                         )))
                     }
                 };
-                match flavor {
-                    CallableTemplateComposeFlavor::Plain => {
-                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
-                        self.invoke_callable_sync(rhs, vec![lhs_value])
-                    }
-                    CallableTemplateComposeFlavor::ResultMap => {
-                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
-                        match decode_vm_result(lhs_value, "ComposeDirect", "lhs")? {
-                            Ok(ok) => {
-                                let mapped = self.invoke_callable_sync(rhs, vec![ok])?;
-                                Ok(ok_vm_result(mapped))
-                            }
-                            Err(rich) => Ok(err_vm_result(rich)),
-                        }
-                    }
-                    CallableTemplateComposeFlavor::ResultBind => {
-                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
-                        match decode_vm_result(lhs_value, "ComposeDirect", "lhs")? {
-                            Ok(ok) => self.invoke_callable_sync(rhs, vec![ok]),
-                            Err(rich) => Ok(err_vm_result(rich)),
-                        }
-                    }
-                    CallableTemplateComposeFlavor::ListMap => {
-                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
-                        let Value::List(items) = lhs_value else {
-                            return Err(RuntimeError::new(format!(
-                                "Callable template {} expected List result for list map",
-                                template_id
-                            )));
-                        };
-                        let mapped = items
-                            .iter()
-                            .map(|item| self.invoke_callable_sync(rhs.clone(), vec![item]))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        Ok(Value::List(ListHandle::from_items(mapped)))
-                    }
-                    CallableTemplateComposeFlavor::ListBind => {
-                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
-                        let Value::List(items) = lhs_value else {
-                            return Err(RuntimeError::new(format!(
-                                "Callable template {} expected List result for list bind",
-                                template_id
-                            )));
-                        };
-                        let mut flattened = Vec::new();
-                        for item in items.iter() {
-                            let value = self.invoke_callable_sync(rhs.clone(), vec![item])?;
-                            let Value::List(list) = value else {
-                                return Err(RuntimeError::new(format!(
-                                    "Callable template {} list bind expects List results",
-                                    template_id
-                                )));
-                            };
-                            flattened.extend(list.iter());
-                        }
-                        Ok(Value::List(ListHandle::from_items(flattened)))
-                    }
-                }
+                let CallableTemplateComposeFlavor::Plain = flavor;
+                let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
+                self.invoke_callable_sync(rhs, vec![lhs_value])
             }
         }
     }
@@ -5958,6 +5903,35 @@ impl VM {
                 let a = self.pop_bool()?;
                 self.stack.push(Value::Bool(a != b));
             }
+            Opcode::EqPid => {
+                let right = self.pop_stack()?;
+                let left = self.pop_stack()?;
+                let (Value::Pid(left), Value::Pid(right)) = (left, right) else {
+                    return Err(RuntimeError::new("EqPid requires two PID values"));
+                };
+                let left_spec = self
+                    .process_runtime
+                    .spec_by_process_name(&left.process_name)
+                    .ok_or_else(|| {
+                        RuntimeError::new("EqPid received an unregistered process PID")
+                    })?;
+                let right_spec = self
+                    .process_runtime
+                    .spec_by_process_name(&right.process_name)
+                    .ok_or_else(|| {
+                        RuntimeError::new("EqPid received an unregistered process PID")
+                    })?;
+                if left_spec.type_name != right_spec.type_name {
+                    return Err(RuntimeError::new(
+                        "EqPid received PIDs of different process types",
+                    ));
+                }
+                let equal = match left_spec.instance {
+                    RuntimeProcessInstance::Singleton => true,
+                    RuntimeProcessInstance::Worker => left.id == right.id,
+                };
+                self.stack.push(Value::Bool(equal));
+            }
 
             // String
             Opcode::ConcatStr => {
@@ -7836,6 +7810,79 @@ mod tests {
             )],
         };
         bytecode
+    }
+
+    #[test]
+    fn eq_pid_uses_process_instance_identity_and_rejects_invalid_handles() {
+        let mut bytecode = base_bytecode(vec![Opcode::EqPid, Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                test_runtime_process_spec(
+                    0,
+                    "Global::One",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    0,
+                    None,
+                ),
+                test_runtime_process_spec(
+                    1,
+                    "Global::Two",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    0,
+                    None,
+                ),
+                test_runtime_process_spec(
+                    2,
+                    "Global::Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    0,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = |name: &str, id| {
+            Value::Pid(PidHandle {
+                process_name: name.into(),
+                id,
+            })
+        };
+        let mut compare = |left: Value, right: Value| {
+            vm.stack.push(left);
+            vm.stack.push(right);
+            let result = vm.execute_opcode(Opcode::EqPid, &mut 0);
+            let value = vm.stack.pop();
+            (result, value)
+        };
+
+        let (result, value) = compare(pid("Global::One", 1), pid("Global::One", 99));
+        assert!(result.is_ok());
+        assert_eq!(value, Some(Value::Bool(true)));
+        let (result, value) = compare(pid("Global::Worker", 7), pid("Global::Worker", 7));
+        assert!(result.is_ok());
+        assert_eq!(value, Some(Value::Bool(true)));
+        let (result, value) = compare(pid("Global::Worker", 7), pid("Global::Worker", 8));
+        assert!(result.is_ok());
+        assert_eq!(value, Some(Value::Bool(false)));
+
+        assert!(compare(pid("Global::One", 1), pid("Global::Two", 1))
+            .0
+            .is_err());
+        assert!(compare(pid("OutHandler", 1), pid("OutHandler", 1))
+            .0
+            .is_err());
+        assert!(compare(Value::Int(int(1)), pid("Global::Worker", 1))
+            .0
+            .is_err());
     }
 
     #[test]

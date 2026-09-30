@@ -494,6 +494,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_error_kind,
     },
     BuiltinImpl {
+        name: "same_kind",
+        func: builtin_error_same_kind,
+    },
+    BuiltinImpl {
         name: "message",
         func: builtin_error_message,
     },
@@ -845,6 +849,22 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         name: "uncons",
         func: builtin_uncons,
     },
+    BuiltinImpl {
+        name: "__flow_pipe_apply",
+        func: builtin_flow_operator_unreachable,
+    },
+    BuiltinImpl {
+        name: "__flow_compose",
+        func: builtin_flow_operator_unreachable,
+    },
+    BuiltinImpl {
+        name: "__flow_lift_compose",
+        func: builtin_flow_operator_unreachable,
+    },
+    BuiltinImpl {
+        name: "__flow_kleisli_compose",
+        func: builtin_flow_operator_unreachable,
+    },
 ];
 
 const _: () = {
@@ -903,6 +923,15 @@ fn builtin_curry_unreachable(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, R
     ))
 }
 
+fn builtin_flow_operator_unreachable(
+    _vm: &mut VM,
+    _args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Function operator builtin must be lowered by the type checker",
+    ))
+}
+
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let s = match &args[0] {
         Value::Str(s) => s.clone(),
@@ -923,6 +952,12 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "kind", "err")?;
     Ok(Value::Str(surface_path_name(&rich.kind).to_string()))
+}
+
+fn builtin_error_same_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let left = decode_error_arg(&args[0], "same_kind", "left")?;
+    let right = decode_error_arg(&args[1], "same_kind", "right")?;
+    Ok(Value::Bool(left.kind == right.kind))
 }
 
 fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -4845,6 +4880,45 @@ mod tests {
 
     fn sample_error_value(kind: &str, message: &str) -> Value {
         Value::Error(Box::new(sample_error(kind, message)))
+    }
+
+    #[test]
+    fn error_same_kind_ignores_context_and_rejects_invalid_values() {
+        let mut vm = test_vm();
+        let left = sample_error("Failure", "first");
+        let mut right = sample_error("Failure", "second");
+        right.location.line = 42;
+        right.cause = Some(Box::new(sample_error("Cause", "different")));
+        assert_eq!(
+            call_builtin(
+                &mut vm,
+                builtin_id("same_kind"),
+                vec![
+                    Value::Error(Box::new(left.clone())),
+                    Value::Error(Box::new(right))
+                ],
+            )
+            .expect("same declaration kind"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call_builtin(
+                &mut vm,
+                builtin_id("same_kind"),
+                vec![
+                    Value::Error(Box::new(left)),
+                    sample_error_value("OtherFailure", "first"),
+                ],
+            )
+            .expect("different declaration kinds"),
+            Value::Bool(false)
+        );
+        assert!(call_builtin(
+            &mut vm,
+            builtin_id("same_kind"),
+            vec![Value::Unit, sample_error_value("Failure", "first")],
+        )
+        .is_err());
     }
 
     fn builtin_id(name: &str) -> u16 {

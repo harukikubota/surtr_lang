@@ -892,8 +892,6 @@ impl Monad for Box<$T> {}
 def retain(value: $F<Int>) -> $F<Int> where $F: Functor { Functor::fmap(value, {|x| x}) }
 def stronger(value: Monad<Int>) -> Int { 1 }
 def id(value: $T) -> $T { value }
-deftrait PipeApply<$A, $B> { def pipe_apply::<$B>(self: Self, value: $A) -> $B }
-impl PipeApply<$A, $B> for ($A -> $B) { def pipe_apply::<$B>(self: Self, value: $A) -> $B { self(value) } }
 def preserve(values: $F<$T>) -> $F<$T> where $F: Functor { Functor::fmap(values, {|x| x}) }
 "#;
     for expression in [

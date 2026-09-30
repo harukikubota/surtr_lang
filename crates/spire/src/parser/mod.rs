@@ -312,6 +312,22 @@ impl<'a> Parser<'a> {
     fn expect_builtin_decl_name(&mut self) -> Result<(Symbol, Span), ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
+            Token::PipeApply => {
+                self.advance();
+                Ok(("|>".to_string(), sp))
+            }
+            Token::Compose => {
+                self.advance();
+                Ok((">>".to_string(), sp))
+            }
+            Token::LiftCompose => {
+                self.advance();
+                Ok((">*".to_string(), sp))
+            }
+            Token::KleisliCompose => {
+                self.advance();
+                Ok((">=>".to_string(), sp))
+            }
             Token::PatternConsumer(kind) => {
                 self.advance();
                 Ok((kind.name().to_string(), sp))

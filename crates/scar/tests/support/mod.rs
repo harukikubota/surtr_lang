@@ -36,15 +36,6 @@ const STATE_MODULE_SOURCE: &str = include_str!("../../../../lib/types/state.srt"
 const ALTERNATIVE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/alternative.srt");
 const MONOID_MODULE_SOURCE: &str = include_str!("../../../../lib/types/monoid.srt");
-const PIPE_APPLY_MODULE_SOURCE: &str =
-    include_str!("../../../../lib/traits/operator/pipe_apply.srt");
-const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compose.srt");
-const COMPOSABLE_MODULE_SOURCE: &str =
-    include_str!("../../../../lib/traits/operator/composable.srt");
-const LIFT_COMPOSABLE_MODULE_SOURCE: &str =
-    include_str!("../../../../lib/traits/operator/lift_composable.srt");
-const KLEISLI_COMPOSABLE_MODULE_SOURCE: &str =
-    include_str!("../../../../lib/traits/operator/kleisli_composable.srt");
 const INT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/int.srt");
 const STRING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/string.srt");
 const REGEX_MODULE_SOURCE: &str = r#"@builtin type Regex
@@ -587,30 +578,6 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Monoid",
                 pick_override("Monoid", MONOID_MODULE_SOURCE, overrides),
-            ),
-            (
-                "PipeApply",
-                pick_override("PipeApply", PIPE_APPLY_MODULE_SOURCE, overrides),
-            ),
-            (
-                "Compose",
-                pick_override("Compose", COMPOSE_MODULE_SOURCE, overrides),
-            ),
-            (
-                "Composable",
-                pick_override("Composable", COMPOSABLE_MODULE_SOURCE, overrides),
-            ),
-            (
-                "LiftComposable",
-                pick_override("LiftComposable", LIFT_COMPOSABLE_MODULE_SOURCE, overrides),
-            ),
-            (
-                "KleisliComposable",
-                pick_override(
-                    "KleisliComposable",
-                    KLEISLI_COMPOSABLE_MODULE_SOURCE,
-                    overrides,
-                ),
             ),
             ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
             (

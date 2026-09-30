@@ -14,7 +14,7 @@ macro_rules! constructor_case {
 const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
     constructor_case!(constructor_invocations_propagate_expected_return),
     constructor_case!(callable_result_context_is_shared_by_helpers_and_operators),
-    constructor_case!(slash_and_helper_use_the_expected_result_to_solve_trait_arguments),
+    constructor_case!(slash_uses_fixed_facet_path_contract),
     constructor_case!(trait_result_conflict_preserves_expected_and_actual_direction),
     constructor_case!(custom_functor_returns_follow_the_shared_plain_inference_policy),
     constructor_case!(one_registered_carrier_is_not_constructor_inference_evidence),
@@ -76,22 +76,10 @@ fn callable_result_context_is_shared_by_helpers_and_operators() {
             "Applicative::ap([{|x: Int| []}], [1])",
         ),
         ("List<List<String>>", "[{|x: Int| []}] |*| [1]"),
-        (
-            "(Int -> List<String>)",
-            "Composable::compose({|x: Int| x}, {|x: Int| []})",
-        ),
         ("(Int -> List<String>)", "{|x: Int| x} >> {|x: Int| []}"),
         (
             "(Int -> List<List<String>>)",
-            "LiftComposable::lift_compose({|x: Int| [x]}, {|x: Int| []})",
-        ),
-        (
-            "(Int -> List<List<String>>)",
             "{|x: Int| [x]} >* {|x: Int| []}",
-        ),
-        (
-            "(Int -> List<String>)",
-            "KleisliComposable::kleisli_compose({|x: Int| [x]}, {|x: Int| []})",
         ),
         ("(Int -> List<String>)", "{|x: Int| [x]} >=> {|x: Int| []}"),
     ] {
@@ -101,20 +89,19 @@ fn callable_result_context_is_shared_by_helpers_and_operators() {
     }
 }
 
-fn slash_and_helper_use_the_expected_result_to_solve_trait_arguments() {
-    for expression in ["Segment(1) / 2", "Compose::compose(Segment(1), 2)"] {
-        let source = format!(
-            r#"
-defrecord Segment(value: Int)
-impl Compose<Int, String> for Segment {{
-    def compose::<String>(self: Segment, rhs: Int) -> String {{ "joined" }}
-}}
-value: String = {expression}
-"#
-        );
-        support::typecheck(support::resolve_with_builtin_prelude(&source))
-            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
-    }
+fn slash_uses_fixed_facet_path_contract() {
+    support::typecheck(support::resolve_with_builtin_prelude(
+        r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+user = User(Profile("alice"))
+Facet::view(User.profile / Profile.name, user)"#,
+    ))
+    .expect("Facet slash composition should follow Facet::chain");
+
+    let source = "value = 1 / 2";
+    let err = support::typecheck(support::resolve_with_builtin_prelude(source))
+        .expect_err("non-Facet slash must fail");
+    assert!(err.message.contains("Expected Facet<...> value"), "{err:?}");
 }
 
 fn trait_result_conflict_preserves_expected_and_actual_direction() {

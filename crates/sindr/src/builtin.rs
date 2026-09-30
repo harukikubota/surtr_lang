@@ -199,7 +199,6 @@ impl BuiltinMeta {
             "__operator_int_gte" => ("Compare", "gte", &[TypeName::Int]),
             "__operator_float_gte" => ("Compare", "gte", &[TypeName::Float]),
             "__operator_string_concat" => ("Concat", "concat", &[TypeName::String]),
-            "__facet_chain" => ("Compose", "compose", &[TypeName::Facet]),
             _ => return None,
         };
         Some(BuiltinTraitMethodMeta {
@@ -2469,6 +2468,25 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
+        name: "same_kind",
+        arity: 2,
+        sig_str: "(Error, Error) -> Boolean",
+        compiler_generated_surfaces: &[],
+        surfaces: &[
+            builtin_surface_spec(
+                Some("Error"),
+                "same_kind",
+                &[],
+                &[
+                    builtin_surface_parameter("left", "Error"),
+                    builtin_surface_parameter("right", "Error"),
+                ],
+                "Boolean",
+                &[],
+            ),
+        ],
+    },
+    BuiltinMeta {
         name: "message",
         arity: 1,
         sig_str: "(Error) -> String",
@@ -3633,6 +3651,74 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
             ),
         ],
     },
+    BuiltinMeta {
+        name: "__flow_pipe_apply",
+        arity: 2,
+        sig_str: "($A, ($A -> $B)) -> $B",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Bootstrap"),
+            "|>",
+            &[],
+            &[
+                builtin_surface_parameter("value", "$A"),
+                builtin_surface_parameter("f", "($A -> $B)"),
+            ],
+            "$B",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "__flow_compose",
+        arity: 2,
+        sig_str: "(($A -> $B), ($B -> $C)) -> ($A -> $C)",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Bootstrap"),
+            ">>",
+            &[],
+            &[
+                builtin_surface_parameter("left", "($A -> $B)"),
+                builtin_surface_parameter("right", "($B -> $C)"),
+            ],
+            "($A -> $C)",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "__flow_lift_compose",
+        arity: 2,
+        sig_str: "(($A -> Functor<$B>), ($B -> $C)) -> ($A -> Functor<$C>)",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Bootstrap"),
+            ">*",
+            &[],
+            &[
+                builtin_surface_parameter("left", "($A -> Functor<$B>)"),
+                builtin_surface_parameter("mapper", "($B -> $C)"),
+            ],
+            "($A -> Functor<$C>)",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "__flow_kleisli_compose",
+        arity: 2,
+        sig_str: "(($A -> Monad<$B>), ($B -> Monad<$C>)) -> ($A -> Monad<$C>)",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Bootstrap"),
+            ">=>",
+            &[],
+            &[
+                builtin_surface_parameter("left", "($A -> Monad<$B>)"),
+                builtin_surface_parameter("mapper", "($B -> Monad<$C>)"),
+            ],
+            "($A -> Monad<$C>)",
+            &[],
+        )],
+    },
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime
@@ -4242,6 +4328,10 @@ mod tests {
 
     #[test]
     fn qualified_put_builtins_resolve_to_distinct_runtime_names() {
+        assert!(builtin_meta_by_name("__facet_chain")
+            .expect("facet chain builtin metadata")
+            .trait_method()
+            .is_none());
         assert_eq!(
             builtin_runtime_name("chain", Some("Facet::chain")),
             "__facet_chain"

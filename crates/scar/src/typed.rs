@@ -158,18 +158,8 @@ pub struct TypedDbgArg {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ListHelperRef {
-    Builtin(u16),
-    User(u32),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComposeFlavor {
     Plain,
-    ResultMap,
-    ResultBind,
-    ListMap { helper: ListHelperRef },
-    ListBind { helper: ListHelperRef },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -222,14 +212,9 @@ pub enum TraitCallOrigin {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OperatorTraitOp {
-    PipeApply,
     PipeMap,
     ContextApply,
     PipeBind,
-    SlashCompose,
-    Compose,
-    LiftCompose,
-    KleisliCompose,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

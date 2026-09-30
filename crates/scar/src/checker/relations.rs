@@ -682,6 +682,20 @@ impl Checker {
         subject: Option<&Ty>,
         span: &Span,
     ) -> TypeError {
+        let dependency = if reason == TypeDiagnosticReason::NoApplicableTraitImplementation {
+            subject.and_then(|ty| self.trait_dependency_for_requirement(trait_name, ty))
+        } else {
+            None
+        };
+        let remediation = dependency
+            .as_ref()
+            .filter(|dependency| {
+                dependency.leaf_policy
+                    == diagnostics::TraitDependencyLeafPolicy::TraitImplementationForbidden
+            })
+            .map(|_| diagnostics::Remediation::Help {
+                text: "Compare a supported value extracted from the type.".into(),
+            });
         TypeError::from_structured(StructuredDiagnostic {
             reason: reason.into(),
             origin: DiagnosticOrigin::TraitCall,
@@ -691,13 +705,14 @@ impl Checker {
                 trait_arguments: vec![],
                 method: Some(method.into()),
                 subject_type: subject.map(|ty| self.diagnostic_ty_name(&self.resolve_ty(ty))),
+                dependency,
             }),
             primary: match subject {
                 Some(ty) => self.type_fact(SourceRole::CallTarget, span, ty),
                 None => SourceFact::untyped(SourceRole::CallTarget, SourceId(0), span.clone()),
             },
             related: vec![],
-            remediation: None,
+            remediation,
         })
     }
 }
@@ -773,6 +788,20 @@ impl Checker {
         let mut names = self.diagnostic_ty_names(&resolved.iter().collect::<Vec<_>>());
         let subject_type = names.remove(0);
         let arguments = names;
+        let dependency = if reason == TypeDiagnosticReason::NoApplicableTraitImplementation {
+            self.trait_dependency_for_requirement(trait_id, subject)
+        } else {
+            None
+        };
+        let remediation = dependency
+            .as_ref()
+            .filter(|dependency| {
+                dependency.leaf_policy
+                    == diagnostics::TraitDependencyLeafPolicy::TraitImplementationForbidden
+            })
+            .map(|_| diagnostics::Remediation::Help {
+                text: "Compare a supported value extracted from the type.".into(),
+            });
         let data = if reason == TypeDiagnosticReason::NoApplicableTraitImplementation {
             DiagnosticData::TraitDispatch(diagnostics::TraitDispatchData {
                 impl_declaration: None,
@@ -780,6 +809,7 @@ impl Checker {
                 trait_arguments: arguments,
                 method: method.map(str::to_string),
                 subject_type: Some(subject_type),
+                dependency,
             })
         } else {
             DiagnosticData::TraitObligation(diagnostics::TraitObligationData {
@@ -796,7 +826,7 @@ impl Checker {
             data,
             primary: self.type_fact(SourceRole::Value, span, subject),
             related: vec![],
-            remediation: None,
+            remediation,
         })
     }
 }

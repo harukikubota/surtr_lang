@@ -3728,6 +3728,7 @@ impl Checker {
                 .iter()
                 .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
                 .collect(),
+            payload_type_spans: variant.payload_type_spans.clone(),
             discriminant: variant.discriminant.clone(),
         };
         self.profiler
@@ -4924,6 +4925,7 @@ mod tests {
                 symbol_info: None,
                 span: Span { start: 0, end: 1 },
             },
+            compiler_owned_equality: false,
             type_params: Vec::new(),
             where_clause: None,
             constructor_slots: vec!["$A".into()],
