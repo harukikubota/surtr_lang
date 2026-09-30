@@ -108,6 +108,8 @@ cargo run -q -p rune -- run examples/process/agent_worker_multi/entry.srt
 - `alpha` と `beta` は別 PID なので、片方を更新しても state は混ざりません
 - `PID<T>` は型付きなので、別 process の PID を混ぜると compile error になります
 
+同じ process 型の PID は `==` / `!=` で比較できます。singleton の PID は同じ型なら常に等しく、worker の PID は同じ個体を指すときだけ等しくなります。handler 用の PID は比較対象外です。
+
 singleton と worker の選び方は単純です。
 
 - 同じ状態を全体で共有したいなら singleton

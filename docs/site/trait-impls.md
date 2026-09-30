@@ -11,7 +11,11 @@ Surtr の trait system は V1 です。
   - `Show`, `Compare`, `Default`, `Convert`, `TryConvert`
 - operator dispatch trait
   - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
-  - `Functor`, `Applicative`, `Monad`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
+  - `Functor`, `Applicative`, `Monad`
+
+`/` は `Facet::chain` に対応する固定構文です。`|>`、`>>`、`>*`、`>=>` は関数演算子の固定規則であり、関数型への trait impl を要求しません。
+
+`Eq` は同じ静的型の値を比較します。標準では Unit、2〜8 要素の Tuple、要素に `Eq` がある List / HashMap / Result などを比較でき、`Test::assert_eq` も `Eq` で判定します。Result の `Err` 同士は先頭の具象 error kind を比較し、message や cause は比較しません。Error と関数型は trait 実装対象外なので、比較したい情報を通常の値として取り出してください。
 
 `Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
 数値 helper は generic trait ではなく、`Int::abs` / `Float::safe_div` のような concrete type owner surface として提供します。

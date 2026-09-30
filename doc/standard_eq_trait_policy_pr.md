@@ -1,6 +1,6 @@
 # PR: 標準 Eq・トレイト実装制限・Test の等価性判定の整理
 
-状態: 会話で確定した方針と、実装前に解決する事項の記録。製品コードは未実装。
+状態: 実装入力。2026-09-30 に未確定の実装範囲を確定。
 変更レベル: 4（トレイト能力、実装権限、標準比較、derive 診断の契約変更）。
 
 ## 目的
@@ -9,7 +9,7 @@
 `Eq` によって判定する。コンパイラ管理型のトレイト実装可否は Sindr を正本として
 管理し、比較できない型は compile error として利用者へ説明する。
 
-今回の出力は仕様・PR 説明文であり、以下の実装や API 削除を実施したものではない。
+この文書を実装の契約とする。
 
 ## 1. 確定方針
 
@@ -28,8 +28,7 @@
   インスタンス型であり、トレイト実装対象外とする。Compose トレイトの廃止を今回に含める。
 - Show はユーザが表示を実装するためのトレイトとし、プリミティブの既存実装は維持する。
   暗黙の Show 提供を廃止し、derive Show はフィールド・payload の Show を再帰的に要求する。
-- その他の関数演算子トレイトの整理は別タスクとし、今回その宣言・実装を変更しない。
-  関数型の全トレイト禁止の有効化は、その移行完了を前提にする。
+- 関数演算子トレイトの移行を今回含める。移行後に関数型の全トレイト禁止を有効化する。
 - `Test::assert_eq` は Eq を要求し、Eq 未実装時に表示比較へ戻らない。
 - PartialEq の新設、通常値のコピー方式変更、比較用の個体 ID 追加は今回の対象外。
 
@@ -86,7 +85,7 @@ inspect(Result) の表示は、Result の Show の有無とは独立して提供
 | Int / String / Boolean | 標準の値比較 |
 | Float | 現行の finite-only と数値比較に従う |
 | Unit | 常に等しい |
-| Tuple | 各要素の Eq による対応位置の比較 |
+| Tuple | 2〜8 要素の標準 Eq を提供し、各要素の Eq による対応位置の比較 |
 | List<T> | T: Eq。長さ・順序・要素が一致 |
 | HashMap<V> | V: Eq。キー集合・対応する値が一致。挿入・格納順は無関係 |
 | Result<T> | 前節の専用契約 |
@@ -95,10 +94,10 @@ inspect(Result) の表示は、Result の Show の有無とは独立して提供
 | Duration / Range / Option / Either 等の通常型 | 通常の impl / derive 規則。必要な要素・payload の Eq を要求 |
 | Error / 関数値 | 全トレイト実装禁止 |
 | FacetPath | Eq 対象外 |
-| MatchResult / MatchArms / CondClauses / DoBlock / BulkUpdateEntries / Lazy / StandbyInit / Hole | 一般の値比較を提供しない方針。既存の利用制約との整合を実装時に確認 |
-| Generator | 比較仕様未確定。今回 Eq を追加しない |
-| Regex / RegexMatch / RegexCaptures / RandomGenerator | 比較範囲未確定。今回 Eq を追加しない |
-| FileHandle / TaskHandle / Workers / WorkerLease | 個体の意味・寿命を含む比較仕様未確定。今回 Eq を追加しない |
+| MatchResult / MatchArms / CondClauses / DoBlock / BulkUpdateEntries / Lazy / StandbyInit / Hole | 一般の値比較を提供しない。利用者のトレイト実装を拒否する |
+| Generator | 比較仕様未確定。今回 Eq を追加せず、利用者の実装も拒否する |
+| Regex / RegexMatch / RegexCaptures / RandomGenerator | 比較範囲未確定。今回 Eq を追加せず、利用者の実装も拒否する |
+| FileHandle / TaskHandle / Workers / WorkerLease | 個体の意味・寿命を含む比較仕様未確定。今回 Eq を追加せず、利用者の実装も拒否する |
 
 コンテナの条件は型単位で検査する。空 List や両辺 Err を理由に要素型の Eq 制約を外さない。
 通常の enum の構造比較は variant identity と payload の比較とし、Result の kind 比較を
@@ -112,7 +111,7 @@ PID は異なる process type 間の比較を拒否する。再起動・失効�
 
 PR の主目的は Eq と Test の整理だが、Sindr の関心事はトレイト全般である。
 Eq 専用の許可フラグを増やす方式にはしない。型別監査では、会話で確定した通常型扱い、
-Error・関数値・Facet の禁止、PID の Eq と、未確定の管理型への提案を区別する。
+Error・関数値・Facet の禁止、PID の Eq と、意味論未確定の管理型への実装禁止を区別する。
 
 「トレイトを実装できるか」と「実装が実際に提供されているか」を分離する。
 許可メタデータだけで trait obligation を満たしたことにしない。
@@ -153,12 +152,12 @@ Error・関数型の全トレイト禁止と、特定型の Eq 禁止を区別�
 | Duration、通常 struct / record / enum、Option 等 | 通常実装可能 | コンパイラ内の名前・表現上の特別扱いから権限を推測しない。既存の通常 impl / derive / coherence に従う |
 | Error | 全トレイト禁止（確定） | 標準 Show / Convert を削除。観測 API とトレイトを分離 |
 | 関数型 / Closure marker / ExtractorClosure | 全トレイト禁止（確定） | inspect はトレイト能力ではない。既存の関数合成 impl の移行は第7節で扱う |
-| MatchArms / CondClauses / DoBlock / BulkUpdateEntries / Lazy / Hole | 全トレイト禁止を提案 | 構文・評価用マーカー。inherent / signature の既存使用制約と別に設定 |
-| MatchResult / StandbyInit | 全トレイト禁止を提案 | Extractor / process のプロトコル用 carrier。Result と見た目が似ていても同じ能力を自動付与しない |
+| MatchArms / CondClauses / DoBlock / BulkUpdateEntries / Lazy / Hole | 全トレイト禁止 | 構文・評価用マーカー。inherent / signature の既存使用制約と別に設定 |
+| MatchResult / StandbyInit | 全トレイト禁止 | Extractor / process のプロトコル用 carrier。Result と見た目が似ていても同じ能力を自動付与しない |
 | Facet（FacetPath の型表現） | 全トレイト禁止 | Compose を今回廃止し、`/` は Facet::chain に対応する固定構文へ移す。標準 Compose の許可例外は作らない |
-| PID | 原則禁止、列挙した標準能力のみ許可を提案 | singleton / worker の Eq は確定。Show・Convert・Compare 等まで同時に許可しない。handler capability は Eq の対象に含めない |
-| Regex / RegexMatch / RegexCaptures / RandomGenerator / Generator | 原則禁止、必要な標準能力だけを個別に設計する案 | Eq は保留。暗黙 Show は廃止し、必要なら明示実装の可否を別途決める |
-| FileHandle / Workers / WorkerLease / TaskHandle | 原則禁止、必要な標準能力だけを個別に設計する案 | 資源・実行主体の handle。Eq 未確定と全トレイト権限を分ける。既存 helper や handle 操作はこの提案だけで削除しない |
+| PID | Eq の compiler-owned capability だけ許可 | singleton / worker の Eq を提供する。Show・Convert・Compare 等は拒否する。handler capability は Eq の対象に含めない |
+| Regex / RegexMatch / RegexCaptures / RandomGenerator / Generator | 全トレイト禁止 | 比較意味論は保留。未確定能力は利用者から見れば実装禁止であり、暗黙 Show も提供しない |
+| FileHandle / Workers / WorkerLease / TaskHandle | 全トレイト禁止 | 資源・実行主体の handle。比較意味論は保留し、既存 helper や handle 操作は維持する |
 
 調査対象は `BUILTIN_TYPE_METAS`、`TypeName`、Tuple と実際の関数型 family。
 型 head の一覧にない PID や function signature、通常宣言である Duration も区別した。
@@ -238,14 +237,20 @@ named function capture、closure、partial application、ExtractorClosure を含
 
 ### ルートから原因を説明する
 
-例として、Root.jobs が List<Job>、Job.callback が (Int -> Int) のとき、
-`@derive Eq` の失敗は次のような情報を含める。以下は診断の概念例であり、固定文言ではない。
+例として、Root.callbacks が List<(Int -> Int)> のとき、`@derive Eq` の失敗は
+次のような情報を含める。以下は診断の概念例であり、固定文言ではない。
 
 ```text
 Root の Eq を derive できません。
-Root.jobs -> List の要素 Job -> Job.callback -> (Int -> Int)
+Root.callbacks -> List の要素 -> (Int -> Int)
 関数型はトレイト実装対象外です。
 ```
+
+通常型の内部は、その型自身の明示 impl / derive を能力の境界とする。例えば
+`Job.callback` が関数型なら `Job` の derive 失敗は `Job.callback` を根から説明する。
+外側の `Root.jobs: List<Job>` は、`Job: Eq` の不足を示す。手書きの `Job: Eq` が
+存在すれば関数フィールドを比較しない実装も正当なので、`Root` の診断から
+`Job.callback` へ無条件に潜らない。
 
 - root の derive 指定と、原因となる field / payload の宣言位置を source label で示す。
 - nested type、enum variant、tuple position、container の型引数を依存経路として示す。
@@ -274,7 +279,7 @@ Root.jobs -> List の要素 Job -> Job.callback -> (Int -> Int)
 - 関数値や Eq 未確定型のテストは、公開 API の結果等、実際に検証したい値を比較する。
 - 異なる値が同じ inspect 表示になっても、それだけでテストが成功してはならない。
 
-## 7. 実装前の未確定事項と既存経路の移行
+## 7. 実装範囲と既存経路の移行
 
 ### 今回の対象: Compose の廃止
 
@@ -291,7 +296,7 @@ Root.jobs -> List の要素 Job -> Job.callback -> (Int -> Int)
 演算子全体の分類は [演算子整理タスク](./flow_operator_dispatch_and_repl_lookup_plan.md) と
 共有する。Compose 廃止は本 PR の担当とし、他の演算子トレイト移行を取り込まない。
 
-### 別タスク: 関数合成・パイプ適用
+### 今回含める関数合成・パイプ適用の移行
 
 現行標準には以下の関数型へのトレイト実装が存在する。
 
@@ -299,40 +304,46 @@ Root.jobs -> List の要素 Job -> Job.callback -> (Int -> Int)
 - `lib/traits/operator/pipe_apply.srt`: PipeApply、演算子 |>
 - `lib/types/{result,list,option}.srt`: LiftComposable / KleisliComposable、演算子 >* / >=>
 
-これらの宣言・実装の変更は今回の対象外とし、上記の演算子整理タスクに残す。
-関数型の全トレイト禁止を有効化する前に、そのタスクで既存 impl の移行を完了する必要がある。
-実装・統合順は「別タスクで移行 → 関数型の全禁止を有効化」とする。
-別タスク未完了の状態で全禁止を実装済みとせず、既存演算子を壊して完了にも数えない。
-標準 impl への暫定例外や新旧二経路を設けず、依存が満たされるまで有効化を保留する。
+これらの宣言・実装の移行を今回含める。[演算子整理タスク](./flow_operator_dispatch_and_repl_lookup_plan.md)
+に示した Bootstrap builtin operator へ置き換えた後で、関数型の全トレイト禁止を有効化する。
+REPL の検索入口は演算子そのもの、または対応する `fun_name` とする。
+標準 impl への暫定例外や新旧二経路は設けない。
 
 ### 実装対象の棚卸し
 
-第4節の未確定な型別方針を採用する範囲と、opaque 型・handle 型への明示的な標準能力を確定する。
-暗黙 Show の廃止、通常型扱い、Compose の廃止は確定事項として扱う。
-トレイト全般の管理は本 PR の範囲だが、未確定の個別能力を実装済み・採用済みとはしない。
+実装範囲は次のとおり確定した。現行ソースとの対応を示す。
+
+| 判断事項 | 現行状態と選択肢 |
+|---|---|
+| tuple の標準 Eq arity | `lib/types/tuple.srt` の 2 要素を 2〜8 要素へ拡張し、Compare と提供範囲を揃える |
+| 管理型の権限 | PID は Eq のみ。その他の内部型・opaque 型・handle 型には未確定能力を公開せず、利用者のトレイト実装を拒否する |
+| 関数型の全禁止 | 現存する Composable / PipeApply / LiftComposable / KleisliComposable の関数型 impl を今回移行してから有効化する |
+
+暗黙 Show の廃止、通常型扱い、Compose の廃止も今回実施する。
+意味論未確定の能力は、将来仕様が定まるまで利用者からの実装を拒否する。
 
 標準の通常型を含む Eq の不足箇所、利用可能な tuple arity、enum の compiler-owned
 capability と通常 impl の境界を確認し、対応漏れをなくす。現行 `lib/types/tuple.srt` の
 Eq は pair に限られ、Compare の 2〜8 要素対応とは範囲が異なる。
-tuple の標準 Eq 提供 arity は会話で未確定なので実装前に決める。
+tuple の標準 Eq は 2〜8 要素へ提供する。
 Regex 系・RandomGenerator・各 handle 型の比較意味論は別途確定するまで保留する。
 
 generic derive Show は第5節の Show bound による検査へ移行する。
 既存の型制約処理に接続し、宣言と具体型適用のどちらで失敗したかを診断に保持する。
 
 本ターンは最初の変更を戻す依頼に従い、`doc/open-issues.md` は復元した。
-今回の未確定事項はこの節を正本として残し、同ファイルへ重複追加しない。
+今回採用しない各 handle 等の比較意味論は、将来の個別設計に残す。
 
 ## 8. 実装計画と受入条件
 
-1. Eq 対象範囲を確定し、関数演算子の別タスクとの依存・統合順を確認する。
+1. Eq 対象範囲と関数演算子の移行・禁止の依存順を正本へ反映する。
 2. Sindr のトレイト全般のポリシーと Sigil / Scar の検査を実装し、直接・generic・derive・
    compiler-owned capability の迂回を拒否する。型別の基本方針と必要な標準能力を検証する。
 3. ルートから原因へ至る構造化診断を実装し、直下・nested・generic・再帰型を確認する。
 4. Error の Show / Convert と暗黙 Show を削除し、derive Show を再帰的な能力検査と表示へ移行する。
 5. Compose を削除し、`/` を Facet::chain の固定規則へ接続する。コメント・文書を集約する。
 6. 通常の標準 Eq と Result / PID の比較を追加・整合し、Test を Eq 判定へ変更する。
-7. 別タスクの関数演算子移行後に関数型の全禁止を有効化する。他の演算子トレイトを本 PR で編集しない。
+7. 関数演算子を Bootstrap builtin operator へ移行してから、関数型の全禁止を有効化する。
 8. 既存テストと正本文書を移行し、全体検証と独立レビューを行う。
 
 正本の更新先は `docs/dev/Trait_system_spec.md`、`docs/dev/diagnostics.md`、
@@ -354,11 +365,10 @@ generic derive Show は第5節の Show bound による検査へ移行する。
 - Eq を持たない型は assert_eq で compile error。文字列化による救済を設けない。
 - デバッグ情報あり／なしの同一ソースで assertion の判定が一致する。
 - Compose 宣言・impl・dispatch を除去し、`/` と Facet::chain の型・可視性規則が一致する。
-- 他の演算子トレイトは別タスクの担当とし、移行完了前に関数型全禁止を有効化しない。
+- 関数演算子を移行し、旧トレイト impl を削除した後に関数型の全禁止を有効化する。
 
 実装時は変更契約を直接検証する層で TDD を行い、最終的に
 `rtk cargo nextest run --profile ci --workspace` と
 `cargo run -- test --quiet --all`、独立レビューを実施する。
 
-今回の検証は文書差分・参照・仕様整合性の確認のみ。製品コード・実行可能テストは変更せず、
-コンパイル・実行テストは未実施。将来の実装完了を意味しない。
+実装の完了時に実行コマンド・結果・残件を報告する。

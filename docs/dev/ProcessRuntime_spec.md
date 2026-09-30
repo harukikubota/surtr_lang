@@ -708,6 +708,12 @@ process runtime snapshot / VM dump は worker set の観測情報を `worker_set
 
 Worker は `spawn` で生成し、`PID<Proc>` を通して扱う。
 
+`PID<Proc>` の `Eq` は compiler-owned capability であり、同じ process type の PID だけを比較する。
+Singleton は process type ごとに一意なので、restart 前後の handle も等しい。
+Worker は同じ instance ID のときだけ等しく、終了後に保持された PID も同じ ID なら等しい。
+異なる process type は型エラー、`PID<OutHandler>` 等の handler capability は Eq 対象外である。
+PID を対象にしたユーザの trait impl は許可しない。
+
 | 項目 | 仕様 |
 |---|---|
 | default owner | current process |

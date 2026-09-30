@@ -82,7 +82,7 @@ print(inspect(Color::Red < Color::Blue))
 
 ### `Show`
 
-`Show` は型の `to_string` を `inspect(self)` に委譲します。フィールドごとの `Show` 実装は要求しません。
+`Show` は各 field / variant payload の `Show::to_string` を呼び、型の表示を組み立てます。各要素に `Show` が必要です。generic 型では必要なフィールド型に `Show` の条件が付き、具体型に適用するときも検査されます。`inspect` による暗黙の代用はありません。
 
 ```surtr
 @derive Show
@@ -96,7 +96,7 @@ print(to_string(user))
 # => "User(name: alice, age: 30)"
 ```
 
-`inspect` を直接呼び出した場合の quote を含む表示など、表示形式の詳細は [`structs.md`](./structs.md) を参照してください。
+内側の型に手書きの `Show` があれば、その表示が使われます。`inspect` は `Show` の有無と独立した観測関数です。quote を含む表示など、`inspect` の形式は [`structs.md`](./structs.md) を参照してください。
 
 ### `Default`
 

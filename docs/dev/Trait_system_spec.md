@@ -625,7 +625,17 @@ well-formedness診断は少なくとも次のmessage、label、helpを構築で�
 - `where Applicative: Add`のようにTrait名をsubjectにした場合、そのTrait名をlabelし、
   `where $F: Applicative + Add`のように名前付き型変数を通じて複数constraintを宣言するhelpを出す。
 
-### 4.2 `Default` derive の生成境界
+### 4.2 `Show` derive と実装権限
+
+`Show` の compiler-wide な暗黙提供は行わない。primitive の標準 impl、通常型の明示 impl、derive だけが能力を提供する。`inspect` は独立した観測関数であり、Trait obligation や dispatch の fallback ではない。
+
+`@derive Show` は各 field / enum payload の `Show::to_string` を呼ぶ構造的な本体を生成する。generic 型には必要な `Show` bound を付け、具象化時も各要素の能力を検査する。内側の型に手書き `Show` があればその impl を利用し、内部表現を再展開しない。
+
+標準 `Eq` の compiler-generated な enum 比較は payload のない variant に限る。payload を持つ enum の値比較には、各 payload の `Eq` を要求する明示 impl または `@derive Eq` を使う。variant tag だけの比較を payload を持つ値の Eq として公開しない。
+
+Trait impl target の権限は inherent impl の可否と独立して Sindr の型ポリシーに置く。Error・関数型・Facet・構文／プロトコル用 marker・未確定の opaque/handle 型はユーザ impl を拒否する。PID は singleton / worker に compiler-owned Eq だけを提供し、ユーザ impl と他の Trait capability を拒否する。通常型と Tuple / List / HashMap / Result は通常の coherence 規則に従う。
+
+### 4.3 `Default` derive の生成境界
 
 `Default` trait の標準契約は次で固定する。
 
@@ -707,7 +717,7 @@ generalize しない。外側 declaration の rigid generic は新しい local g
 closure / capture / ExtractorClosure を高階関数へ直接渡す場合は、引数の expected callable type を内側へ伝播し、
 その場で一意に concrete 化できれば明示注釈を要求しない。
 
-call、constructor、Trait helper、Apply/PipeApply、Compose/KleisliCompose は共通の argument inference route を使う。
+call、constructor、Trait helper、`|>`、`>>`、`>*`、`>=>` は共通の argument inference route を使う。
 expected type が unbound variable なら actual を synthesize して unify し、既知なら closure を check して shape を
 内側へ伝播する。tuple の既知 slot、list element、`if` の全 branch、`match` の全 arm に expected type を伝播する。
 空 collection や引数注釈のない曖昧 closure は、別の制約または expected type を要する。
