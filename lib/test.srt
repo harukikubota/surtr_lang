@@ -95,6 +95,10 @@ defmod Test {
     if(flag, _fail("expected False, got True"), Ok(()))
   }
 
+  @doc """
+  Assert equality through `Eq` for two values of the same static type.
+  `inspect` is used only to render a failure message, not to decide equality.
+  """
   def assert_eq(expected: $A, actual: $A) -> Result<()>
   where
     $A: Eq
@@ -106,6 +110,9 @@ defmod Test {
     )
   }
 
+  @doc """
+  Assert that a result is `Ok(actual)` and that `actual` equals `expected` via `Eq`.
+  """
   def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()>
   where
     $A: Eq

@@ -37,10 +37,11 @@ concrete error は、最初の標準ステージから使えるようここに�
 同時に、`import` / `include` のような language-provided macro surface も
 `Bootstrap` module 配下の `@builtin def` として source に残します。
 ただし surface 構文では引き続き top-level 専用の special form として扱います。
+固定関数演算子 `|>` / `>>` / `>*` / `>=>` の宣言と `@doc` も `Bootstrap` に置きます。
 
 ### `Kernel`
 
-- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
+- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `print`, `inspect`, `eprint`, `set_exit_code` のような共通の builtin を置く
 - auto import される最小の標準 API を置く
 
 primitive type に強く結びつかない builtin は、ここへ集めます。
@@ -48,8 +49,7 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 説明を標準 surface に残すため `Kernel` に置きます。
 `and` / `or` も宣言上は通常の 2 引数関数ですが、コンパイラが short-circuit
 評価へ lower する call-style helper としてここに置きます。
-equality / concat 系の call-style helper (`eq`, `neq`, `concat` など) も
-primitive module をまたぐ読みやすさを優先して `Kernel` に置きます。
+`eq` / `neq` は auto import される `Eq` trait、`concat` は `Concat` trait、`to_string` は `Show` trait の surface です。`Kernel` の builtin としては提供しません。
 ordered comparison は `compare(left, right)` または `< <= > >=` を使い、専用の Boolean helper 名は公開しません。
 
 ### `SpecialTypes`
@@ -362,6 +362,7 @@ ret = List::reverse(acc)
 ## 10. `Result` module の位置づけ
 
 `Result` module は constructor contract と、よく使う variant 判定 helper の置き場です。
+`Result<T>` の `Eq` は `T: Eq` を要求し、`Err` 同士は先頭の具象 error kind で比較します。詳細は [エラー処理](./error-handling.md) と [trait 実装](./trait-impls.md) を参照してください。
 
 ```surtr
 @builtin type Result<$T>
@@ -375,6 +376,7 @@ ret = List::reverse(acc)
 ## 11. `Option` module の位置づけ
 
 `Option` は user-facing な補助 enum です。
+`Option<T>` と `Either<L, R>` は payload の `Eq` を条件に `@derive Eq` を持ちます。
 `Some(value)` / `None` 相当の値を表せますが、Surtr の失敗伝播の主軸ではありません。
 
 ```surtr

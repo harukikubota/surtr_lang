@@ -15,7 +15,26 @@ Surtr の trait system は V1 です。
 
 `/` は `Facet::chain` に対応する固定構文です。`|>`、`>>`、`>*`、`>=>` は関数演算子の固定規則であり、関数型への trait impl を要求しません。
 
-`Eq` は同じ静的型の値を比較します。標準では Unit、2〜8 要素の Tuple、要素に `Eq` がある List / HashMap / Result などを比較でき、`Test::assert_eq` も `Eq` で判定します。Result の `Err` 同士は先頭の具象 error kind を比較し、message や cause は比較しません。Error と関数型は trait 実装対象外なので、比較したい情報を通常の値として取り出してください。
+### `Eq` と比較できる型
+
+`Eq` は同じ静的型の値同士に適用し、異種比較や暗黙変換はしません。通常型に自動で付く能力ではなく、標準 impl、明示 impl、`@derive Eq` のいずれかが必要です。
+
+| 型 | 等価性 |
+| --- | --- |
+| `Int` / `Float` / `String` / `Boolean` | 値を比較する。`Float` は finite-only |
+| `Unit` | 常に等しい |
+| 2〜8 要素の Tuple | 対応する各要素の `Eq`。それ以外の arity に標準 `Eq` はない |
+| `List<T>` | `T: Eq` を要求し、長さ・順序・各要素を比較する |
+| `HashMap<V>` | `V: Eq` を要求し、キー集合と対応する値を比較する。挿入順は無関係 |
+| `Result<T>` | `T: Eq` を要求する。`Ok` 同士は値を比較し、`Ok` と `Err` は異なる。`Err` 同士は先頭の具象 error kind だけを比較する |
+| `Option<T>` / `Either<L, R>` | variant と payload を比較する。payload に対応する `Eq` が必要 |
+| `Duration` / `Range<T>` | 通常の標準 impl。`Range<T>` は `T: Eq` を要求する |
+| 通常の struct / record / enum | 明示 impl または `@derive Eq` に従う。payload のない enum のみ compiler が Eq を提供する |
+| singleton / worker の `PID<T>` | 同じ process 型に限る。singleton は等しく、worker は個体 ID を比較する |
+
+`Result` の失敗枝では message・cause・発生位置・診断情報を比較しません。`Error` 自体に `Eq` はなく、`inspect` の表示が同じでも `Eq` の結果は変わりません。`Test::assert_eq` は `Eq` だけで合否を決め、`inspect` は失敗時の説明に使います。表示文字列の契約を検査するときは `inspect(value)` の結果を明示的に比較します。
+
+`Error`、関数値、Facet path、構文・プロトコル用 marker、比較仕様が未確定の opaque 型や handle 型には、ユーザーの trait impl を作れません。PID に許される compiler 所有の能力は上記の `Eq` だけです。比較したい情報は通常の値として取り出してください。
 
 `Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
 数値 helper は generic trait ではなく、`Int::abs` / `Float::safe_div` のような concrete type owner surface として提供します。

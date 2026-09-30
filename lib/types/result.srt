@@ -6,6 +6,9 @@ This is the language's Either-oriented success/failure representation.
 Its runtime representation is enum-like, but the language treats `Result` as a
 dedicated built-in abstraction rather than exposing it as the future general
 `Enum` surface.
+`Result<$T>` supports `Eq` when `$T: Eq`. `Ok` values compare their contents;
+an `Ok` and an `Err` differ; two `Err` values compare only the first concrete
+error kind, regardless of message or cause.
 """
 @builtin
 defenum Result<$T> {

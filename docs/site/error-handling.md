@@ -109,6 +109,12 @@ def render_bool(text: String) -> String {
 `Err(err)` arm で束縛した `err` は抽象 `Error` として見えますが、中身は依然として具象 error です。  
 そのため `Error::kind(err)` や `Error::format(err)` のような共通 helper で観測でき、`Result::map_err(..., err)` や `assert(..., err)` のような標準 helper へそのまま渡せます。
 
+### `Result` の等価性
+
+`Result<T>` の `Eq` は `T: Eq` を要求します。`Ok` 同士は成功値の `Eq` を使い、`Ok` と `Err` は異なります。`Err` 同士は先頭の具象 error kind だけを比較し、message、cause、発生位置や診断情報は比較しません。`Error::same_kind` はこの kind 判定用の helper であり、`Error` 自体の `Eq` や `Show` を提供するものではありません。
+
+`inspect(result)` は表示の観測です。等価性を検査するときは `Eq::eq`、表示そのものを検査するときは `inspect` の戻り値を比較します。
+
 ## `=?` SafeBind と早期リターン
 
 `=?` は「`Ok` を取り出し、`Err` ならその場で返す」ための束縛です。通常は

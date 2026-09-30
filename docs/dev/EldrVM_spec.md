@@ -240,6 +240,7 @@ compile / surface 契約との対応は次のとおり。
 - `inspect(HashMap)` / `to_string(HashMap)` / `map_keys` / `map_values_list` はキー昇順の deterministic order を使う
 - `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
 - `Error::kind(Error)` は `RichError.kind`、`Error::message(Error)` は `RichError.message` を `String` として返す
+- `Error::same_kind(Error, Error)` は先頭の具象 `RichError.kind` だけを比較する。`Result` の `Err` 同士の `Eq` が利用し、message・cause・location・診断情報は判定に含めない。壊れた Error 表現や非 Error 値を `False` にせず runtime invariant failure とする
 - `Error::format(Error)` は `eprint(Error)` と同じ行列を stderr へ出さず、`\n` join した `String` として返す
 
 ---
@@ -321,7 +322,7 @@ Opcode は以下のカテゴリを持つ。
 - Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list miss は `IndexOutOfBounds`、map miss は `KeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
-- `Error::kind` / `Error::message` / `Error::format` は `Error` 値を introspection / 表示文字列化する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
+- `Error::kind` / `Error::message` / `Error::format` / `Error::same_kind` は `Error` 値を introspection / 表示文字列化・kind 比較する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は `HashMap<String, Value>` の immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする

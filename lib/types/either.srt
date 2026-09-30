@@ -1,6 +1,7 @@
 @doc """
 One of two independently typed values.
 Either is a general choice value, not Result-style error control flow.
+It derives `Eq` when both payload types support `Eq`.
 
 ## REPL
 xldr(1)> Either<String, Int>::Right(2)

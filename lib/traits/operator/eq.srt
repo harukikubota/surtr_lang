@@ -1,6 +1,8 @@
 @doc """
 Standard `Eq` trait declaration.
 `Eq` models equality for values that support exact comparison.
+Both operands have the same static type. A type needs a standard, explicit,
+or derived `Eq` implementation; display text does not establish equality.
 The unqualified helper `eq(...)` comes from this auto-imported
 trait surface rather than from a compiler-only builtin shim.
 

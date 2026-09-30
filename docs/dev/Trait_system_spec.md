@@ -629,11 +629,15 @@ well-formedness診断は少なくとも次のmessage、label、helpを構築で�
 
 `Show` の compiler-wide な暗黙提供は行わない。primitive の標準 impl、通常型の明示 impl、derive だけが能力を提供する。`inspect` は独立した観測関数であり、Trait obligation や dispatch の fallback ではない。
 
-`@derive Show` は各 field / enum payload の `Show::to_string` を呼ぶ構造的な本体を生成する。generic 型には必要な `Show` bound を付け、具象化時も各要素の能力を検査する。内側の型に手書き `Show` があればその impl を利用し、内部表現を再展開しない。
+`@derive Show` は各 field / enum payload の `Show::to_string` を呼ぶ構造的な本体を生成する。generic 型では使用するフィールド型全体に必要な `Show` 条件を付け、具象化時も検査する。内側の型に手書き `Show` があればその impl を利用し、内部表現を再展開しない。`@derive Eq` も各フィールド・payload の能力を要求し、関数型など禁止された末端型を `inspect` で補わない。
 
 標準 `Eq` の compiler-generated な enum 比較は payload のない variant に限る。payload を持つ enum の値比較には、各 payload の `Eq` を要求する明示 impl または `@derive Eq` を使う。variant tag だけの比較を payload を持つ値の Eq として公開しない。
 
 Trait impl target の権限は inherent impl の可否と独立して Sindr の型ポリシーに置く。Error・関数型・Facet・構文／プロトコル用 marker・未確定の opaque/handle 型はユーザ impl を拒否する。PID は singleton / worker に compiler-owned Eq だけを提供し、ユーザ impl と他の Trait capability を拒否する。通常型と Tuple / List / HashMap / Result は通常の coherence 規則に従う。
+
+Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が提供する Eq は信頼済みの標準 `Eq` に限り、payload のない enum と有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。
+
+標準 Eq の実装主体は各 `lib/types/*.srt` とする。Unit、Tuple 2〜8、List、HashMap、Result は通常の impl と要素条件を使う。Result の `Ok` 同士は成功値の Eq、`Ok` / `Err` は不一致、`Err` 同士は具象 Error の先頭 kind の一致で判定し、message・cause・場所・診断情報を含めない。Error 自体の Eq / Show / Convert は禁止し、観測は `inspect` / `eprint` と Error の公開 helper を使う。`Test::assert_eq` は Eq obligation と dispatch のみで合否を決め、表示は失敗文の生成に限る。
 
 ### 4.3 `Default` derive の生成境界
 

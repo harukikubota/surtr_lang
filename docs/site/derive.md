@@ -35,7 +35,7 @@ print(to_string(user))
 | --- | --- | --- |
 | `Eq` | `eq(self, rhs) -> Boolean` | 全フィールドを宣言順に比較し、すべて等しければ `True` neqも使えるようになる|
 | `Compare` | `compare(self, rhs) -> Ordering` | フィールドを宣言順に辞書順比較 |
-| `Show` | `to_string(self) -> String` | `inspect(self)` を呼び出す |
+| `Show` | `to_string(self) -> String` | 各 field / payload の `Show::to_string` を使って表示を組み立てる |
 | `Default` | `default::<Self>() -> Self` | 各 field / payload を `default()` で生成 |
 
 ### `Eq`

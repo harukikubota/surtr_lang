@@ -10,6 +10,7 @@ Using `Option<T>` in a struct field is therefore equivalent to using `T?`.
 Result-oriented updates still need explicit conversion in and out of `Option`.
 `Option` does support the contextual operators `|*>` and `|>=` in its own
 container family.
+It derives `Eq` when its payload type supports `Eq`.
 
 Example:
 

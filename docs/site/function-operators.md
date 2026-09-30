@@ -13,6 +13,10 @@ apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capt
 - `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度、左結合です
 - `=` は同じ記号帯ですが expression operator ではなく、束縛構文として別扱いです
 
+`|>`, `>>`, `>*`, `>=>` は `Bootstrap` の builtin 宣言に対応する固定規則です。関数型への trait impl は不要です。`>*` は `Functor` の `fmap`、`>=>` は `Monad` の `bind` が使える型を要求します。`/` は別の固定規則で、Facet path の `Facet::chain` に対応します。
+
+REPL の `:doc` / `:sig` は `:doc |>`, `:sig >>`, `:doc >*`, `:sig >=>`, `:doc /` のように演算子記号を直接引けます。`/` は `Facet::chain` の説明と signature を表示します。
+
 ## `=` Bind
 
 `=` は一番基本の束縛フォームです。
