@@ -50,6 +50,7 @@ Surtr は Rust で実装する静的型付き関数型の Hobby 言語。
 
 ## 作業運用
 - 開発プロセスは `surtr-development`（`/Users/haruca/.codex/skills/surtr-development/SKILL.md`）を使う。仕様入力の有無と level1〜4 に応じて、同スキルに記載された手順で進める。
+- 日本語のチャット応答、および `docs/site/`・`docs/dev/`・`doc/`・`lib/**/*.srt` の `@doc` など日本語ドキュメントの作成・編集では、`/Users/haruca/.codex/skills/yomiyasu/SKILL.md` を適用する。文体の推敲は既存の仕様・コード・テスト・文書構造を変えない範囲で行う。
 - ユーザが仕様書を入力・指定していないターンでは調査と仕様書作成までとし、実装しない。検証範囲は同スキルの level 別条件を適用する。
 - ユーザが明示的にファイルなしで指示すればそのまま進める。但し作業方針を詰めてから実施する。
 - 中断時は残作業と次の一手を残す。
