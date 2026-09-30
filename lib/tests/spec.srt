@@ -154,10 +154,6 @@ test("Spec") {
           "two",
           1,
           "two",
-          "two:1",
-          "[1, 2, 3]",
-          "[a, b, c]",
-          "[]",
         ),
         (
           num,
@@ -168,12 +164,22 @@ test("Spec") {
           pair._1,
           left,
           right,
+        ),
+      )
+      assert_eq(
+        (
+          "two:1",
+          "[1, 2, 3]",
+          "[\"a\", \"b\", \"c\"]",
+          "[]",
+        ),
+        (
           match pair {
             (n, text) => text ++ ":" ++ to_string(n),
           },
-          to_string(nums),
-          to_string(strs),
-          to_string(empty),
+          inspect(nums),
+          inspect(strs),
+          inspect(empty),
         ),
       )
     }

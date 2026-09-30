@@ -88,14 +88,14 @@ const OPERATOR_DOC_TARGETS: &[(&str, &str)] = &[
     ("<=", "Compare::lte"),
     (">", "Compare::gt"),
     (">=", "Compare::gte"),
-    ("/", "Compose::compose"),
+    ("/", "Facet::chain"),
     ("++", "Concat::concat"),
-    ("|>", "PipeApply::pipe_apply"),
+    ("|>", "Bootstrap::|>"),
     ("|*>", "Functor::fmap"),
     ("|>=", "Monad::bind"),
-    (">>", "Composable::compose"),
-    (">*", "LiftComposable::lift_compose"),
-    (">=>", "KleisliComposable::kleisli_compose"),
+    (">>", "Bootstrap::>>"),
+    (">*", "Bootstrap::>*"),
+    (">=>", "Bootstrap::>=>"),
 ];
 const OPERATOR_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("+", "Add"),
@@ -109,14 +109,9 @@ const OPERATOR_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("<=", "Compare"),
     (">", "Compare"),
     (">=", "Compare"),
-    ("/", "Compose"),
     ("++", "Concat"),
-    ("|>", "PipeApply"),
     ("|*>", "Functor"),
     ("|>=", "Monad"),
-    (">>", "Composable"),
-    (">*", "LiftComposable"),
-    (">=>", "KleisliComposable"),
 ];
 const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("add", "Add"),
@@ -3414,13 +3409,10 @@ impl ReplEngine {
             "<=" => "lte",
             ">" => "gt",
             ">=" => "gte",
-            "/" | ">>" => "compose",
+            "/" => "chain",
             "++" => "concat",
-            "|>" => "pipe_apply",
             "|*>" => "fmap",
             "|>=" => "bind",
-            ">*" => "lift_compose",
-            ">=>" => "kleisli_compose",
             _ => return None,
         })
     }
@@ -3433,14 +3425,10 @@ impl ReplEngine {
             "==" => "Eq",
             "!=" => "Eq",
             "<" | "<=" | ">" | ">=" => "Compare",
-            "/" => "Compose",
+            "/" => "Facet",
             "++" => "Concat",
-            "|>" => "PipeApply",
             "|*>" => "Functor",
             "|>=" => "Monad",
-            ">>" => "Composable",
-            ">*" => "LiftComposable",
-            ">=>" => "KleisliComposable",
             _ => return None,
         })
     }
@@ -5924,7 +5912,6 @@ impl ReplEngine {
     fn trait_method_family_signature_lines(&self, symbol: &str) -> Option<Vec<String>> {
         let (trait_name, member) = match symbol {
             "compare" => ("Compare", "compare"),
-            "|>" => ("PipeApply", "pipe_apply"),
             "|*>" => ("Functor", "fmap"),
             _ => return None,
         };
@@ -6561,7 +6548,7 @@ impl ReplEngine {
                 )?;
                 Ok((
                     format!(
-                        "PipeApply::pipe_apply(lhs: {}, rhs: {}) -> {}",
+                        "Bootstrap::|>(lhs: {}, rhs: {}) -> {}",
                         format_query_ty(&lhs_ty),
                         format_query_ty(&rhs_ty),
                         format_query_ty(&ret)
@@ -6614,7 +6601,7 @@ impl ReplEngine {
                     );
                     Ok((
                         format!(
-                            "Compose::compose(lhs: {}, rhs: {}) -> {}",
+                            "Facet::chain(lhs: {}, rhs: {}) -> {}",
                             format_query_ty(&lhs_ty),
                             format_query_ty(&rhs_ty),
                             format_query_ty(&result_ty)
@@ -6642,7 +6629,7 @@ impl ReplEngine {
                 );
                 Ok((
                     format!(
-                        "Composable::compose(lhs: {}, rhs: {}) -> {}",
+                        "Bootstrap::>>(lhs: {}, rhs: {}) -> {}",
                         format_query_ty(&lhs_ty),
                         format_query_ty(&rhs_ty),
                         format_query_ty(&result_ty)
@@ -6692,7 +6679,7 @@ impl ReplEngine {
                 );
                 Ok((
                     format!(
-                        "LiftComposable::lift_compose(lhs: {}, rhs: {}) -> {}",
+                        "Bootstrap::>*(lhs: {}, rhs: {}) -> {}",
                         format_query_ty(&lhs_ty),
                         format_query_ty(&rhs_ty),
                         format_query_ty(&result_ty)
@@ -6756,7 +6743,7 @@ impl ReplEngine {
                 );
                 Ok((
                     format!(
-                        "KleisliComposable::kleisli_compose(lhs: {}, rhs: {}) -> {}",
+                        "Bootstrap::>=>(lhs: {}, rhs: {}) -> {}",
                         format_query_ty(&lhs_ty),
                         format_query_ty(&rhs_ty),
                         format_query_ty(&result_ty)

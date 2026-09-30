@@ -1,0 +1,8 @@
+defstruct NoEq { value: Int }
+
+impl NoEq {
+  def new(value: Int) -> NoEq { NoEq { value: value } }
+}
+
+pair = (1, NoEq::new(2))
+Eq::eq(pair, pair)

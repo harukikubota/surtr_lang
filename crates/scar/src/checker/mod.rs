@@ -447,6 +447,8 @@ struct TraitMethodInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitInfo {
     id: ResolvedId,
+    /// Set only while checking the trusted standard definition stage.
+    compiler_owned_equality: bool,
     type_params: Vec<ResolvedTypeParam>,
     where_clause: Option<TypedWhereClause>,
     constructor_slots: Vec<String>,
@@ -494,6 +496,8 @@ struct TraitImplInfo {
     target_ast_ty: AstTy,
     target_ty: Ty,
     where_clause: Option<TypedWhereClause>,
+    #[serde(default)]
+    generated_derive: bool,
     type_param_vars: Vec<u32>,
     type_param_vars_by_name: HashMap<String, u32>,
     constructor_slot_vars: Vec<u32>,
@@ -1595,10 +1599,14 @@ impl ScarSession {
     where
         I: IntoIterator<Item = (&'a str, u32)>,
     {
+        let functions = functions.into_iter().collect::<Vec<_>>();
+        let materialized_fun_idxs = functions
+            .iter()
+            .map(|(_, fun_idx)| *fun_idx)
+            .collect::<HashSet<_>>();
         let function_indices = functions.into_iter().collect::<HashMap<_, _>>();
         let mut function_id_entries = self.state.function_ids_by_name.iter().collect::<Vec<_>>();
         function_id_entries.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
-        let specializable_by_name = self.specializable_fun_idxs_by_name();
         let mut next_fun_idx = function_indices
             .values()
             .copied()
@@ -1613,14 +1621,29 @@ impl ScarSession {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
             };
-            let fun_idx = if let Some(fun_idx) = function_indices.get(qualified_name.as_str()) {
-                *fun_idx
-            } else if let Some(old_fun_idx) = specializable_by_name.get(qualified_name.as_str()) {
+            let fun_idx = if let Some(old_fun_idx) = old_fun_idx.filter(|fun_idx| {
+                self.state
+                    .specializable_defs
+                    .get(fun_idx)
+                    .is_some_and(|def| match &def.node {
+                        TypedInner::Def(_, def_id, ..)
+                        | TypedInner::ExtractorDef(_, def_id, ..) => {
+                            def_id.unique_id == id.unique_id
+                        }
+                        _ => false,
+                    })
+            }) {
+                // A generated specialization can retain its origin's qualified
+                // name. Match the retained origin by its current environment
+                // index, not by a bytecode name that may refer to that
+                // specialization instead.
                 let new_fun_idx = next_fun_idx;
                 next_fun_idx += 1;
-                specializable_rekeys.push((*old_fun_idx, new_fun_idx));
-                fun_idx_rewrites.insert(*old_fun_idx, new_fun_idx);
+                specializable_rekeys.push((old_fun_idx, new_fun_idx));
+                fun_idx_rewrites.insert(old_fun_idx, new_fun_idx);
                 new_fun_idx
+            } else if let Some(fun_idx) = function_indices.get(qualified_name.as_str()) {
+                *fun_idx
             } else {
                 continue;
             };
@@ -1643,6 +1666,12 @@ impl ScarSession {
             &mut self.state.specialization_fun_idxs,
             &fun_idx_rewrites,
         );
+        // A typecheck stage can retain a generated specialization even when
+        // codegen did not materialize it. Reusing its cached index in a later
+        // chunk would call a function absent from the bytecode prefix.
+        self.state
+            .specialization_fun_idxs
+            .retain(|_, fun_idx| materialized_fun_idxs.contains(fun_idx));
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
@@ -1717,26 +1746,7 @@ impl ScarSession {
         }
     }
 
-    fn specializable_fun_idxs_by_name(&self) -> HashMap<String, u32> {
-        let mut entries: Vec<(String, u32)> = self
-            .state
-            .specializable_defs
-            .iter()
-            .filter_map(|(fun_idx, def)| Self::def_qualified_name(def).map(|name| (name, *fun_idx)))
-            .collect::<Vec<_>>();
-        entries.sort_by(|(left_name, left_idx), (right_name, right_idx)| {
-            left_name
-                .cmp(right_name)
-                .then_with(|| left_idx.cmp(right_idx))
-        });
-
-        let mut by_name = HashMap::new();
-        for (name, fun_idx) in entries {
-            by_name.entry(name).or_insert(fun_idx);
-        }
-        by_name
-    }
-
+    #[cfg(test)]
     fn def_qualified_name(def: &TypedNode) -> Option<String> {
         match &def.node {
             TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
@@ -2513,6 +2523,128 @@ mod specialization_state_tests {
                 .copied(),
             Some(77)
         );
+    }
+
+    #[test]
+    fn reconcile_function_indices_keeps_generic_origin_when_specialization_shares_name() {
+        let mut session = ScarSession::new();
+        let id = resolved_id("eq", "Global::eq", 10);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::eq".to_string(), id.clone());
+        session
+            .state
+            .env
+            .vars
+            .insert(id.unique_id, user_func_ty(40));
+        session
+            .state
+            .specializable_defs
+            .insert(40, specializable_def(40, "eq", id.unique_id));
+        session
+            .state
+            .specializable_defs
+            .insert(77, specializable_def(77, "eq", id.unique_id));
+        session
+            .state
+            .specialization_fun_idxs
+            .insert(specialization_key(), 77);
+        session.ensure_next_fun_idx_at_least(100);
+
+        session.reconcile_function_indices([("Global::eq", 77)]);
+
+        assert!(matches!(
+            session.state.env.vars.get(&id.unique_id),
+            Some(Ty::UserFunc { fun_idx: 100, .. })
+        ));
+        assert!(session.state.specializable_defs.contains_key(&100));
+        assert!(session.state.specializable_defs.contains_key(&77));
+        assert_eq!(
+            session
+                .state
+                .specialization_fun_idxs
+                .get(&specialization_key())
+                .copied(),
+            Some(77)
+        );
+    }
+
+    #[test]
+    fn reconcile_function_indices_does_not_rekey_unrelated_function_with_colliding_index() {
+        let mut session = ScarSession::new();
+        let unrelated = resolved_id("unrelated", "Global::a_unrelated", 11);
+        let generic = resolved_id("eq", "Global::z_eq", 10);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::a_unrelated".to_string(), unrelated.clone());
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::z_eq".to_string(), generic.clone());
+        session
+            .state
+            .env
+            .vars
+            .insert(unrelated.unique_id, user_func_ty(40));
+        session
+            .state
+            .env
+            .vars
+            .insert(generic.unique_id, user_func_ty(40));
+        session
+            .state
+            .specializable_defs
+            .insert(40, specializable_def(40, "eq", generic.unique_id));
+        session.ensure_next_fun_idx_at_least(100);
+
+        session.reconcile_function_indices([("Global::a_unrelated", 70), ("Global::z_eq", 71)]);
+
+        assert!(matches!(
+            session.state.env.vars.get(&unrelated.unique_id),
+            Some(Ty::UserFunc { fun_idx: 70, .. })
+        ));
+        assert!(matches!(
+            session.state.env.vars.get(&generic.unique_id),
+            Some(Ty::UserFunc { fun_idx: 100, .. })
+        ));
+        assert!(session.state.specializable_defs.contains_key(&100));
+    }
+
+    #[test]
+    fn reconcile_function_indices_drops_unmaterialized_specialization_cache_entry() {
+        let mut session = ScarSession::new();
+        let id = resolved_id("helper", "Global::helper", 10);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::helper".to_string(), id.clone());
+        session
+            .state
+            .env
+            .vars
+            .insert(id.unique_id, user_func_ty(40));
+        session
+            .state
+            .specializable_defs
+            .insert(40, specializable_def(40, "helper", id.unique_id));
+        session
+            .state
+            .specializable_defs
+            .insert(676, specializable_def(676, "helper", id.unique_id));
+        session
+            .state
+            .specialization_fun_idxs
+            .insert(specialization_key(), 676);
+        session.ensure_next_fun_idx_at_least(700);
+
+        session.reconcile_function_indices([("Global::helper", 77)]);
+
+        assert!(!session
+            .state
+            .specialization_fun_idxs
+            .contains_key(&specialization_key()));
     }
 
     #[test]
@@ -4502,6 +4634,8 @@ impl Checker {
                     }
                     self.validate_constructor_body_positions(body, &constructor_traits)?;
                 }
+                Resolved::BuiltinDecl(_, id, _, _, _, _, _)
+                    if Self::is_compiler_flow_operator_decl(id) => {}
                 Resolved::BuiltinDecl(_, _, _, params, ret, _, _) => {
                     for param in params {
                         self.validate_constructor_ast_ty(&param.ty, false, &constructor_traits)?;

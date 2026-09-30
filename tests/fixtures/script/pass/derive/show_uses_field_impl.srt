@@ -1,0 +1,33 @@
+defstruct Inner { value: Int }
+
+impl Inner {
+  def new(value: Int) -> Inner { Inner { value: value } }
+}
+
+impl Show for Inner {
+  def to_string(self: Self) -> String { "custom" }
+}
+
+@derive Show
+defstruct Outer { inner: Inner }
+
+impl Outer {
+  def new(inner: Inner) -> Outer { Outer { inner: inner } }
+}
+
+defstruct Manual { callback: (Int -> Int) }
+
+impl Manual {
+  def new(callback: (Int -> Int)) -> Manual { Manual { callback: callback } }
+}
+
+impl Show for Manual {
+  def to_string(self: Self) -> String {
+    observed = inspect(self.callback)
+    if(String::is_empty(observed), "missing", "manual")
+  }
+}
+
+def increment(value: Int) -> Int { value + 1 }
+print(to_string(Outer::new(Inner::new(1))))
+print(to_string(Manual::new(&increment)))

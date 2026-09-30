@@ -1,4 +1,6 @@
-# Function Application / Composition Operator 改修案
+# Function Application / Composition Operator 改修計画（実装済み）
+
+この計画は実装済みです。現行の利用者向け契約は [関数演算子](../docs/site/function-operators.md) と [trait 実装](../docs/site/trait-impls.md)、REPL の契約は [Xldr 仕様](../docs/dev/Xldr_spec.md) を正本とします。以下は実装時の計画を記録したものです。
 
 ## 目的
 
@@ -8,16 +10,9 @@ fmap、ap、bind は既存 surface を維持する。
 演算子トレイトはユーザ開放のポリモーフィズムの入口としてソースコードに置く。
 処理系が意味を固定する演算子は、トレイトを介さず固定規則へ接続する。
 
-## 関連 PR との分担
+## 関連変更
 
-[標準 Eq・トレイト実装制限 PR](./standard_eq_trait_policy_pr.md) では Compose の廃止を扱う。
-FacetPath はトレイト実装対象外とし、`/` は Facet::chain に対応する固定構文として維持する。
-Compose 宣言・Facet の impl・trait dispatch を削除し、説明と使用例は Facet::chain の
-@doc に集約する。この変更は同 PR の担当とし、本タスクで重複実装しない。
-
-Composable / PipeApply / LiftComposable / KleisliComposable の移行は引き続き本タスクが担当する。
-これらを関数型へのトレイト実装から移行した後に、関連 PR の関数型全トレイト禁止を有効化する。
-既存の標準 impl だけを許す暫定例外は設けない。
+[標準 Eq・trait 実装制限](../docs/dev/Trait_system_spec.md) とともに、Compose と関数型への Composable / PipeApply / LiftComposable / KleisliComposable 実装を廃止した。`/` は `Facet::chain` に対応する固定構文、`|>` / `>>` / `>*` / `>=>` は `Bootstrap` 宣言を持つ固定演算子へ移行した。関数型への trait impl の暫定例外はない。
 
 |*> は fmap implementation への trait dispatch を行うため、trait operator のままとする。>* は fmap が定義されていることを型規則として要求する builtin operator とする。
 

@@ -1,0 +1,5 @@
+phase: typecheck
+contains: No implementation satisfies Eq for HashMap<(Int -> Int)>
+json: /data/dependency/steps/0/kind = "hash_map_value"
+json: /data/dependency/leaf_type = "(Int -> Int)"
+json: /data/dependency/leaf_policy = "trait_implementation_forbidden"

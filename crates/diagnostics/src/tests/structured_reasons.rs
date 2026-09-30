@@ -94,6 +94,7 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             trait_arguments: vec!["String".into()],
             subject_type: Some("Int".into()),
             method: Some("convert".into()),
+            dependency: None,
         }),
         TraitMethodTypeListMismatch | TraitMethodTypeListArityMismatch => {
             DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
@@ -323,6 +324,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: Some("Wrapper".into()),
             entrypoint: None,
         }),
+        TraitImplementationForbidden => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::TraitImplementation,
+            subject: Some("Error".into()),
+            expected_type: Some("Eq".into()),
+            actual_type: Some("forbidden by the type's trait policy".into()),
+            stage: Some("declaration".into()),
+            entrypoint: None,
+        }),
         TraitHelperCaptureNeedsExpectedType => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::TraitHelperCaptureInference,
             subject: Some("concat".into()),
@@ -454,6 +463,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         ProcessHandlerScope,
         SourcePolicyViolation,
         CompilePolicyViolation,
+        TraitImplementationForbidden,
         ReservedIntrinsicMarkerUsage,
         TypecheckInvariantViolation,
         ProcessPolicyViolation,
@@ -582,6 +592,59 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         assert_eq!(before.hint, after.hint);
         assert_eq!(before.related, after.related);
     }
+}
+
+#[test]
+fn derive_dependency_is_shared_by_human_and_json_projection() {
+    let mut diagnostic = input(TypeDiagnosticReason::NoApplicableTraitImplementation);
+    diagnostic.primary = SourceFact::typed(
+        SourceRole::Value,
+        SourceId(0),
+        Span { start: 20, end: 30 },
+        "List<(Int -> Int)>",
+    );
+    diagnostic.related = vec![SourceFact::typed(
+        SourceRole::Declaration,
+        SourceId(0),
+        Span { start: 0, end: 30 },
+        "Holder",
+    )];
+    if let DiagnosticData::TraitDispatch(dispatch) = &mut diagnostic.data {
+        dispatch.dependency = Some(TraitDependencyData {
+            context: TraitDependencyContext::Derive,
+            root_type: "Holder".into(),
+            steps: vec![
+                TraitDependencyStep {
+                    kind: TraitDependencyStepKind::Field,
+                    name: Some("callbacks".into()),
+                    ordinal: None,
+                    ty: "List<(Int -> Int)>".into(),
+                },
+                TraitDependencyStep {
+                    kind: TraitDependencyStepKind::ListElement,
+                    name: None,
+                    ordinal: None,
+                    ty: "(Int -> Int)".into(),
+                },
+            ],
+            leaf_type: "(Int -> Int)".into(),
+            leaf_policy: TraitDependencyLeafPolicy::TraitImplementationForbidden,
+        });
+    }
+    let spec = structured_type_error_spec(&diagnostic);
+    assert!(spec.notes.iter().any(|note| {
+        note.contains("Holder.callbacks") && note.contains("List element: (Int -> Int)")
+    }));
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "x".repeat(40));
+    let json = serializable_report_by_id(&sources, source_id, "typecheck", &spec)
+        .errors
+        .remove(0);
+    assert_eq!(
+        json.data["dependency"]["leaf_policy"],
+        "trait_implementation_forbidden"
+    );
+    assert!(json.related.iter().any(|fact| fact.role == "declaration"));
 }
 
 #[test]

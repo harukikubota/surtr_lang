@@ -64,5 +64,5 @@ supervisor_init {
 
 owned =? MyPool::owned()
 _ =? MySup::adopt(owned)
-print(to_string(MyPool::report()))
-print(to_string(MyPool::value()))
+print(inspect(MyPool::report()))
+print(inspect(MyPool::value()))

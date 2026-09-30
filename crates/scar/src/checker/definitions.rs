@@ -219,6 +219,28 @@ impl Checker {
         ret_ty: &Option<sigil::resolved::ResolvedSignatureTy>,
         where_clause: Option<&ResolvedWhereClause>,
     ) -> Result<TypedNode, TypeError> {
+        if Self::is_compiler_flow_operator_decl(id) {
+            if !super::signatures::builtin_surface_matches(
+                id,
+                return_type_arguments,
+                params,
+                ret_ty.as_ref(),
+                where_clause,
+            ) {
+                return Err(TypeError::new(
+                    format!(
+                        "Builtin {} does not match its canonical surface signature",
+                        id.name
+                    ),
+                    span.clone(),
+                ));
+            }
+            return Ok(TypedNode {
+                ty: Ty::Unit,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Unit),
+            });
+        }
         let declared_name = id.name.rsplit("::").next().unwrap_or(&id.name);
         let is_kernel_is_match = declared_name == "is_match"
             && Self::surface_qualified_name(id.qualified_name.as_deref())
@@ -766,6 +788,12 @@ impl Checker {
         )
     }
 
+    pub(super) fn is_compiler_flow_operator_decl(id: &ResolvedId) -> bool {
+        matches!(id.name.as_str(), "|>" | ">>" | ">*" | ">=>")
+            && Self::surface_qualified_name(id.qualified_name.as_deref())
+                == Some(format!("Bootstrap::{}", id.name).as_str())
+    }
+
     fn special_form_contract(name: &str) -> SpecialFormContract {
         match name {
             "if" => SpecialFormContract {
@@ -897,6 +925,40 @@ impl Checker {
                 if let ResolvedWhereConstraintRhs::Trait { trait_id } = bound {
                     uses.push(CapabilityUse {
                         subject_ty: subject_ty.clone(),
+                        subject_name: subject_name.clone(),
+                        trait_id: self.trait_key(trait_id),
+                        span: trait_id.span.clone(),
+                        consumed: false,
+                    });
+                }
+            }
+        }
+        Ok(uses)
+    }
+
+    fn generated_derive_capability_uses(
+        &mut self,
+        where_clause: Option<&ResolvedWhereClause>,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: &Ty,
+    ) -> Result<Vec<CapabilityUse>, TypeError> {
+        let Some(where_clause) = where_clause else {
+            return Ok(Vec::new());
+        };
+        let mut uses = Vec::new();
+        for constraint in &where_clause.constraints {
+            let subject_ty = self.where_constraint_subject_ty(
+                &constraint.subject,
+                tyvars,
+                Some(self_ty),
+                &constraint.span,
+                true,
+            )?;
+            let subject_name = Self::surface_ast_ty(&constraint.subject);
+            for bound in &constraint.bounds {
+                if let ResolvedWhereConstraintRhs::Trait { trait_id } = bound {
+                    uses.push(CapabilityUse {
+                        subject_ty: self.resolve_ty(&subject_ty),
                         subject_name: subject_name.clone(),
                         trait_id: self.trait_key(trait_id),
                         span: trait_id.span.clone(),
@@ -1973,6 +2035,281 @@ impl Checker {
         })
     }
 
+    fn derive_dependency_for_subject(
+        &mut self,
+        target_ty: &Ty,
+        subject_span: &Span,
+        trait_key: &str,
+    ) -> Option<diagnostics::TraitDependencyData> {
+        use diagnostics::{TraitDependencyStep, TraitDependencyStepKind};
+
+        let root = self.resolve_ty(target_ty);
+        let root_type = self.diagnostic_ty_name(&root);
+        let (first_step, mut leaf) = match &root {
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => self
+                .env
+                .lookup_type_def(name)?
+                .field_type_spans
+                .iter()
+                .position(|span| span == subject_span)
+                .and_then(|index| nominal.fields.get(index))
+                .map(|(name, ty)| {
+                    let leaf = self.resolve_ty(ty);
+                    (
+                        TraitDependencyStep {
+                            kind: TraitDependencyStepKind::Field,
+                            name: Some(name.clone()),
+                            ordinal: None,
+                            ty: self.diagnostic_ty_name(&leaf),
+                        },
+                        leaf,
+                    )
+                })?,
+            Ty::Enum(name, _) => {
+                self.lookup_enum_variants_of(name)?
+                    .iter()
+                    .find_map(|variant| {
+                        variant.payload.iter().enumerate().find_map(|(index, ty)| {
+                            (variant.payload_type_spans.get(index) == Some(subject_span)).then(
+                                || {
+                                    let leaf = self.resolve_ty(ty);
+                                    (
+                                        TraitDependencyStep {
+                                            kind: TraitDependencyStepKind::VariantPayload,
+                                            name: Some(variant.short_name.clone()),
+                                            ordinal: Some(index as u32),
+                                            ty: self.diagnostic_ty_name(&leaf),
+                                        },
+                                        leaf,
+                                    )
+                                },
+                            )
+                        })
+                    })?
+            }
+            _ => return None,
+        };
+        let mut steps = vec![first_step];
+        let mut visited = Vec::new();
+        loop {
+            if visited.contains(&leaf) {
+                break;
+            }
+            visited.push(leaf.clone());
+            let next = match &leaf {
+                Ty::List(item)
+                    if self.trait_impl_requires_children(trait_key, &leaf, &[*item.clone()]) =>
+                {
+                    Some((
+                        TraitDependencyStepKind::ListElement,
+                        None,
+                        None,
+                        *item.clone(),
+                    ))
+                }
+                Ty::Enum(name, args)
+                    if sindr::names::builtin_type_name(sindr::names::surface_path_name(name))
+                        == Some(sindr::names::TypeName::HashMap)
+                        && args.len() == 1
+                        && self.trait_impl_requires_children(
+                            trait_key,
+                            &leaf,
+                            &[args[0].clone()],
+                        ) =>
+                {
+                    Some((
+                        TraitDependencyStepKind::HashMapValue,
+                        None,
+                        None,
+                        args[0].clone(),
+                    ))
+                }
+                Ty::Tuple(items) if self.trait_impl_requires_children(trait_key, &leaf, items) => {
+                    items
+                        .iter()
+                        .enumerate()
+                        .find(|(_, item)| !self.trait_impl_exists_for_args(trait_key, &[], item))
+                        .map(|(index, item)| {
+                            (
+                                TraitDependencyStepKind::TupleElement,
+                                None,
+                                Some(index as u32),
+                                item.clone(),
+                            )
+                        })
+                }
+                Ty::Result(ok, _)
+                    if self.trait_impl_requires_children(trait_key, &leaf, &[*ok.clone()]) =>
+                {
+                    Some((
+                        TraitDependencyStepKind::ResultSuccess,
+                        None,
+                        None,
+                        *ok.clone(),
+                    ))
+                }
+                _ => None,
+            };
+            let Some((kind, name, ordinal, next_ty)) = next else {
+                break;
+            };
+            leaf = self.resolve_ty(&next_ty);
+            steps.push(TraitDependencyStep {
+                kind,
+                name,
+                ordinal,
+                ty: self.diagnostic_ty_name(&leaf),
+            });
+        }
+        let leaf_policy =
+            if self.trait_impl_policy_for_ty(&leaf) == sindr::names::TraitImplPolicy::Open {
+                diagnostics::TraitDependencyLeafPolicy::TraitImplementationMissing
+            } else {
+                diagnostics::TraitDependencyLeafPolicy::TraitImplementationForbidden
+            };
+        Some(diagnostics::TraitDependencyData {
+            context: diagnostics::TraitDependencyContext::Derive,
+            root_type,
+            steps,
+            leaf_type: self.diagnostic_ty_name(&leaf),
+            leaf_policy,
+        })
+    }
+
+    pub(super) fn trait_dependency_for_requirement(
+        &self,
+        trait_key: &str,
+        subject: &Ty,
+    ) -> Option<diagnostics::TraitDependencyData> {
+        use diagnostics::{TraitDependencyStep, TraitDependencyStepKind};
+
+        let root = self.resolve_ty(subject);
+        let root_type = self.diagnostic_ty_name(&root);
+        let mut probe = self.spawn_child_checker(self.env.clone());
+        let mut leaf = root;
+        let mut steps = Vec::new();
+        let mut visited = Vec::new();
+        loop {
+            if visited.contains(&leaf) {
+                break;
+            }
+            visited.push(leaf.clone());
+            let next = match &leaf {
+                Ty::List(item)
+                    if self.trait_impl_requires_children(trait_key, &leaf, &[*item.clone()]) =>
+                {
+                    Some((TraitDependencyStepKind::ListElement, None, *item.clone()))
+                }
+                Ty::Enum(name, args)
+                    if sindr::names::builtin_type_name(sindr::names::surface_path_name(name))
+                        == Some(sindr::names::TypeName::HashMap)
+                        && args.len() == 1
+                        && self.trait_impl_requires_children(
+                            trait_key,
+                            &leaf,
+                            &[args[0].clone()],
+                        ) =>
+                {
+                    Some((TraitDependencyStepKind::HashMapValue, None, args[0].clone()))
+                }
+                Ty::Tuple(items) if self.trait_impl_requires_children(trait_key, &leaf, items) => {
+                    items
+                        .iter()
+                        .enumerate()
+                        .find(|(_, item)| !probe.trait_impl_exists_for_args(trait_key, &[], item))
+                        .map(|(index, item)| {
+                            (
+                                TraitDependencyStepKind::TupleElement,
+                                Some(index as u32),
+                                item.clone(),
+                            )
+                        })
+                }
+                Ty::Result(ok, _)
+                    if self.trait_impl_requires_children(trait_key, &leaf, &[*ok.clone()]) =>
+                {
+                    Some((TraitDependencyStepKind::ResultSuccess, None, *ok.clone()))
+                }
+                _ => None,
+            };
+            let Some((kind, ordinal, next_ty)) = next else {
+                break;
+            };
+            leaf = self.resolve_ty(&next_ty);
+            steps.push(TraitDependencyStep {
+                kind,
+                name: None,
+                ordinal,
+                ty: self.diagnostic_ty_name(&leaf),
+            });
+        }
+        let leaf_policy =
+            if self.trait_impl_policy_for_ty(&leaf) == sindr::names::TraitImplPolicy::Open {
+                diagnostics::TraitDependencyLeafPolicy::TraitImplementationMissing
+            } else {
+                diagnostics::TraitDependencyLeafPolicy::TraitImplementationForbidden
+            };
+        if steps.is_empty()
+            && leaf_policy == diagnostics::TraitDependencyLeafPolicy::TraitImplementationMissing
+        {
+            return None;
+        }
+        Some(diagnostics::TraitDependencyData {
+            context: diagnostics::TraitDependencyContext::Requirement,
+            root_type,
+            steps,
+            leaf_type: self.diagnostic_ty_name(&leaf),
+            leaf_policy,
+        })
+    }
+
+    fn enrich_generated_derive_failure(
+        &mut self,
+        mut error: TypeError,
+        generated: bool,
+        target_ty: &Ty,
+        trait_key: &str,
+        declaration_span: &Span,
+    ) -> TypeError {
+        if !generated {
+            return error;
+        }
+        let Some(structured) = error.structured.as_mut() else {
+            return error;
+        };
+        let diagnostics::DiagnosticData::TraitDispatch(dispatch) = &mut structured.data else {
+            return error;
+        };
+        if dispatch.trait_name != trait_key {
+            return error;
+        }
+        let Some(dependency) =
+            self.derive_dependency_for_subject(target_ty, &error.span, trait_key)
+        else {
+            return error;
+        };
+        if dependency.leaf_policy
+            == diagnostics::TraitDependencyLeafPolicy::TraitImplementationForbidden
+        {
+            structured.remediation = Some(diagnostics::Remediation::Help {
+                text: if trait_key.ends_with("Show") {
+                    "Remove this derive or write Show explicitly, using inspect for the forbidden field when needed."
+                        .into()
+                } else {
+                    "Remove this derive or compare a supported value extracted from the type."
+                        .into()
+                },
+            });
+        }
+        dispatch.dependency = Some(dependency);
+        structured.related.push(self.type_fact(
+            SourceRole::Declaration,
+            declaration_span,
+            target_ty,
+        ));
+        TypeError::from_structured(structured.clone())
+    }
+
     pub(super) fn check_trait_impl_items(
         &mut self,
         span: &Span,
@@ -2021,7 +2358,11 @@ impl Checker {
             .map(|(name, var)| (name.clone(), Ty::Var(*var)))
             .collect::<HashMap<_, _>>();
         impl_tyvars.insert("Self".into(), target_ty.clone());
-        let mut block_capabilities = self.resolved_capability_uses(where_clause, &impl_tyvars)?;
+        let mut block_capabilities = if impl_info.generated_derive {
+            self.generated_derive_capability_uses(where_clause, &impl_tyvars, &target_ty)?
+        } else {
+            self.resolved_capability_uses(where_clause, &impl_tyvars)?
+        };
         for capability in &mut block_capabilities {
             if self.nominal_type_uses_capability(
                 &target_ty,
@@ -2082,6 +2423,7 @@ impl Checker {
                 target_ast_ty,
                 &trait_method.ret_ty,
                 impl_info.where_clause.as_ref(),
+                impl_info.generated_derive,
             )?;
 
             let contract = self.impl_method_instantiation_contract(
@@ -2148,8 +2490,11 @@ impl Checker {
                 &method.value_parameters,
                 Some(method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty)),
             );
-            let mut method_block_capabilities =
-                self.resolved_capability_uses(where_clause, &method_tyvars)?;
+            let mut method_block_capabilities = if impl_info.generated_derive {
+                self.generated_derive_capability_uses(where_clause, &method_tyvars, &target_ty)?
+            } else {
+                self.resolved_capability_uses(where_clause, &method_tyvars)?
+            };
             self.consume_signature_constructor_capabilities(
                 &mut method_block_capabilities,
                 &method.return_type_arguments,
@@ -2185,24 +2530,34 @@ impl Checker {
                 .lookup_type_def(&target_name)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
                 .then_some(Self::surface_name(&target_name).to_string());
-            let typed_body = self.check_body_in_isolated_scope(
-                &local_bindings,
-                &[],
-                &method_capabilities,
-                &mut method_block_capabilities,
-                method_tyvars.clone(),
-                type_params.iter().copied().collect(),
-                expected_ret.clone(),
-                method
-                    .ret_ty
-                    .as_ref()
-                    .map(|ty| Self::ast_ty_span(ty.syntax()))
-                    .unwrap_or_else(|| Self::ast_ty_span(trait_method.ret_ty.syntax())),
-                method.function_id.name.clone(),
-                impl_target,
-                false,
-                &method.body,
-            )?;
+            let typed_body = self
+                .check_body_in_isolated_scope(
+                    &local_bindings,
+                    &[],
+                    &method_capabilities,
+                    &mut method_block_capabilities,
+                    method_tyvars.clone(),
+                    type_params.iter().copied().collect(),
+                    expected_ret.clone(),
+                    method
+                        .ret_ty
+                        .as_ref()
+                        .map(|ty| Self::ast_ty_span(ty.syntax()))
+                        .unwrap_or_else(|| Self::ast_ty_span(trait_method.ret_ty.syntax())),
+                    method.function_id.name.clone(),
+                    impl_target,
+                    false,
+                    &method.body,
+                )
+                .map_err(|error| {
+                    self.enrich_generated_derive_failure(
+                        error,
+                        method.function_id.compiler_generated,
+                        &target_ty,
+                        &trait_key,
+                        span,
+                    )
+                })?;
             for checked in method_block_capabilities {
                 if checked.consumed {
                     if let Some(existing) = block_capabilities.iter_mut().find(|existing| {

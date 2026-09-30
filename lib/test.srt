@@ -95,17 +95,28 @@ defmod Test {
     if(flag, _fail("expected False, got True"), Ok(()))
   }
 
-  def assert_eq(expected: $A, actual: $A) -> Result<()> {
-    rendered_expected = inspect(expected)
-    rendered_actual = inspect(actual)
+  @doc """
+  Assert equality through `Eq` for two values of the same static type.
+  `inspect` is used only to render a failure message, not to decide equality.
+  """
+  def assert_eq(expected: $A, actual: $A) -> Result<()>
+  where
+    $A: Eq
+  {
     if(
-      rendered_expected == rendered_actual,
+      Eq::eq(expected, actual),
       Ok(()),
-      Err(TestAssertionFailed("expected #{rendered_expected}, got #{rendered_actual}")),
+      Err(TestAssertionFailed("expected #{inspect(expected)}, got #{inspect(actual)}")),
     )
   }
 
-  def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()> {
+  @doc """
+  Assert that a result is `Ok(actual)` and that `actual` equals `expected` via `Eq`.
+  """
+  def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()>
+  where
+    $A: Eq
+  {
     match result {
       Ok(actual) => assert_eq(expected, actual),
       Err(err) => _fail("expected Ok(#{inspect(expected)}), got Err(#{inspect(err)})"),

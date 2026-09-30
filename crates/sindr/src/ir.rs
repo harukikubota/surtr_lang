@@ -192,6 +192,9 @@ pub enum Opcode {
     SetCallableOriginSource(u8),
     /// Record the direct user-function target of a generated wrapper callable.
     SetCallableDelegateFunction(u32),
+    /// Compare process PID identity using its registered process instance policy.
+    /// Appended to preserve the bincode tags of existing opcodes.
+    EqPid,
 }
 
 impl Opcode {
@@ -226,6 +229,7 @@ impl Opcode {
             Self::SetCallableSignature(..) => "SetCallableSignature",
             Self::SetCallableOriginSource(..) => "SetCallableOriginSource",
             Self::SetCallableDelegateFunction(..) => "SetCallableDelegateFunction",
+            Self::EqPid => "EqPid",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -838,10 +842,6 @@ pub enum CallableTemplateArg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallableTemplateComposeFlavor {
     Plain,
-    ResultMap,
-    ResultBind,
-    ListMap,
-    ListBind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2258,7 +2258,7 @@ mod tests {
             CallableTemplate {
                 template_id: 2,
                 kind: CallableTemplateKind::ComposeDirect {
-                    flavor: CallableTemplateComposeFlavor::ResultBind,
+                    flavor: CallableTemplateComposeFlavor::Plain,
                 },
                 metadata: CallableTemplateMetadata::default(),
             },

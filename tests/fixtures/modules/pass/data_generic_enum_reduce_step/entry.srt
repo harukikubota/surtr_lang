@@ -1,2 +1,2 @@
-print(to_string(StepSignal::Resume(1)))
-print(to_string(StepSignal::Stop("done")))
+print(inspect(StepSignal::Resume(1)))
+print(inspect(StepSignal::Stop("done")))

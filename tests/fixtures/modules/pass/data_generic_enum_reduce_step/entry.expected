@@ -1,2 +1,2 @@
 StepSignal::Resume(1)
-StepSignal::Stop(done)
+StepSignal::Stop("done")

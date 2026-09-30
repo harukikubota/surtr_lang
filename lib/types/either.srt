@@ -1,6 +1,7 @@
 @doc """
 One of two independently typed values.
 Either is a general choice value, not Result-style error control flow.
+It derives `Eq` when both payload types support `Eq`.
 
 ## REPL
 xldr(1)> Either<String, Int>::Right(2)
@@ -8,6 +9,7 @@ Either::Right(2)
 xldr(2)> Either<String, Int>::Left("stop")
 Either::Left("stop")
 """
+@derive Eq
 defenum Either<$L, $R> {
   Left($L),
   Right($R),

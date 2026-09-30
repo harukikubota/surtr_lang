@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Argument type mismatch: expected PID<First>, got PID<Second>

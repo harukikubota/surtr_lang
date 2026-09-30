@@ -1,0 +1,5 @@
+phase: typecheck
+contains: No implementation satisfies Eq for (Int, NoEq)
+json: /data/dependency/steps/0/kind = "tuple_element"
+json: /data/dependency/steps/0/ordinal = 1
+json: /data/dependency/leaf_type = "NoEq"

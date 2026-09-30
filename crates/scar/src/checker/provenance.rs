@@ -159,6 +159,12 @@ impl Checker {
                 self.invoke_provenance(&function_source, &arguments, &node.ty)
                     .0
             }
+            TypedInner::Pipe(value, function) => {
+                let argument = self.source_provenance(value, bindings);
+                let function_source = self.source_provenance(function, bindings);
+                self.invoke_provenance(&function_source, &[argument], &node.ty)
+                    .0
+            }
             TypedInner::InjectCall(function, arguments) => Provenance::Injected {
                 function: Box::new(self.source_provenance(function, bindings)),
                 arguments: arguments

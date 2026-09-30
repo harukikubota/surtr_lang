@@ -1,7 +1,7 @@
-User(name: Ada, age: 37)
-User(name: Bob, age: 20)
-Account(id: 7, label: main)
+User(name: "Ada", age: 37)
+User(name: "Bob", age: 20)
+Account(id: 7, label: "main")
 Direction::Still
 Direction::Move(3)
 Box::Item(5)
-Choice2::Left(ok)
+Choice2::Left("ok")

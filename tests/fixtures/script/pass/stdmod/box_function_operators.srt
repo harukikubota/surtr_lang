@@ -35,18 +35,6 @@ impl Monad for Box<$T> {
   }
 }
 
-impl LiftComposable<$A, $B, $C, Box<$C>> for ($A -> Box<$B>) {
-  def lift_compose::<$A, Box<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Box<$C>) {
-    {|value| Functor::fmap(self(value), rhs)}
-  }
-}
-
-impl KleisliComposable<$A, $B, Box<$C>> for ($A -> Box<$B>) {
-  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Box<$C>)) -> ($A -> Box<$C>) {
-    {|value| Monad::bind(self(value), rhs)}
-  }
-}
-
 def inc(value: Int) -> Int {
   value + 1
 }

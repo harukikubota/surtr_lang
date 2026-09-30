@@ -156,6 +156,15 @@ pub enum ConstructorCapturePolicy {
     Forbidden,
 }
 
+/// Permission to declare a trait implementation for a compiler-known type.
+/// This is distinct from permission to declare inherent methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TraitImplPolicy {
+    Open,
+    CompilerOwned,
+    Forbidden,
+}
+
 /// Compile-space capability flags attached to a resolved symbol identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolCapabilities {
@@ -499,6 +508,42 @@ impl TypeName {
                 | Self::Pid
                 | Self::FileHandle
         )
+    }
+
+    pub const fn trait_impl_policy(self) -> TraitImplPolicy {
+        match self {
+            Self::Int
+            | Self::Float
+            | Self::String
+            | Self::Boolean
+            | Self::Unit
+            | Self::List
+            | Self::HashMap
+            | Self::Result
+            | Self::Duration => TraitImplPolicy::Open,
+            Self::Pid => TraitImplPolicy::CompilerOwned,
+            Self::Closure
+            | Self::MatchArms
+            | Self::CondClauses
+            | Self::DoBlock
+            | Self::MatchResult
+            | Self::ExtractorClosure
+            | Self::BulkUpdateEntries
+            | Self::Error
+            | Self::Regex
+            | Self::RegexCaptures
+            | Self::RegexMatch
+            | Self::RandomGenerator
+            | Self::Generator
+            | Self::StandbyInit
+            | Self::Lazy
+            | Self::Hole
+            | Self::Facet
+            | Self::FileHandle
+            | Self::Workers
+            | Self::WorkerLease
+            | Self::TaskHandle => TraitImplPolicy::Forbidden,
+        }
     }
 
     pub const fn usage_policy(self) -> BuiltinTypeUsagePolicy {

@@ -12,7 +12,8 @@ test("ExtractorClosure contract") {
       print("body")
       MatchResult::OK(value)
     }
-    assert_eq([], capture_stdout())
+    empty_output: List<String> = []
+    assert_eq(empty_output, capture_stdout())
     assert_eq(3, if_let(3, ext(result), result, 0))
     assert_eq(["body"], capture_stdout())
     assert_eq(4, match 4 { ext(result) => result, _ => 0 })
@@ -20,7 +21,7 @@ test("ExtractorClosure contract") {
     assert_eq(4, match 4 { ext(7) => 0, ext(result) => result, _ => 0 })
     assert_eq(["body", "body"], capture_stdout())
     assert_false(is_match((0, 4), (positive(), ext(_))))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
   }
 
   it("captures lexical values and escapes through helper signatures") {
@@ -83,7 +84,8 @@ test("ExtractorClosure contract") {
     })
     assert_eq(["input", "min", "max", "body"], capture_stdout())
     assert_false(is_match((0, 5), (positive(), ext(note("skipped-min", 2), note("skipped-max", 8), _))))
-    assert_eq([], capture_stdout())
+    empty_output: List<String> = []
+    assert_eq(empty_output, capture_stdout())
   }
 
   it("distinguishes a tuple input from two inputs and expands tuple payloads") {
@@ -138,8 +140,9 @@ test("ExtractorClosure contract") {
   it("preserves Result cause chains and stops after SafeBind failure") {
     ext = make_checked()
     capture_stdout()
+    empty_output: List<String> = []
     assert_eq("Err(ExtractorContextError(\"extractor context\"))\n|_ ExtractorSourceError(\"source rejected\")", inspect(run(ext, 0)))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
     assert_eq("Ok(3)", inspect(run(ext, 3)))
     assert_eq(["after-closure-result"], capture_stdout())
   }
@@ -147,8 +150,9 @@ test("ExtractorClosure contract") {
   it("preserves nested Extractor causes and stops after its failure") {
     ext = make_nested_checked()
     capture_stdout()
+    empty_output: List<String> = []
     assert_eq("Err(ExtractorContextError(\"extractor context\"))\n|_ ExtractorSourceError(\"source rejected\")", inspect(run(ext, 0)))
-    assert_eq([], capture_stdout())
+    assert_eq(empty_output, capture_stdout())
     assert_eq("Ok(3)", inspect(run(ext, 3)))
     assert_eq(["after-result", "after-closure-extractor"], capture_stdout())
   }

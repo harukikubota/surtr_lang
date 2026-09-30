@@ -36,17 +36,15 @@ test("Function") {
     }
   }
 
-  describe("trait integration") {
-    it("Composable::compose matches >>") {
-      direct = Composable::compose(&inc, &double)
-      operator = &inc >> &double
-      assert_eq(6, direct(2))
-      assert_eq(direct(2), operator(2))
+  describe("fixed composition") {
+    it(">> composes two unary functions") {
+      composed = &inc >> &double
+      assert_eq(6, composed(2))
     }
 
-    it("id composes on both sides through the trait") {
-      left = Composable::compose(&id, &inc)
-      right = Composable::compose(&inc, &id)
+    it("id composes on both sides") {
+      left = &id >> &inc
+      right = &inc >> &id
       assert_eq(inc(4), left(4))
       assert_eq(inc(4), right(4))
     }

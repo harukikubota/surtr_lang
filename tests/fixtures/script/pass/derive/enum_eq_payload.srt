@@ -1,0 +1,5 @@
+@derive Eq
+defenum Token { Number(Int), End }
+print(inspect(Token::Number(1) == Token::Number(1)))
+print(inspect(Token::Number(1) == Token::Number(2)))
+print(inspect(Token::Number(1) == Token::End))

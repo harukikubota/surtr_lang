@@ -1,9 +1,9 @@
 user: User = User("alice", 30)
-print(to_string(user))
+print(inspect(user))
 print(to_string(user.name))
 print(to_string(user.age))
 point = Point(1.0, 2.0)
-print(to_string(point))
+print(inspect(point))
 print(to_string(point.x))
 
 point2 = Point(y: 5.0, x: 3.0)

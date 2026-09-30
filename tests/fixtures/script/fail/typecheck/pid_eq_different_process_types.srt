@@ -1,0 +1,31 @@
+defgenserver First {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init() -> Result<Int> { Ok(1) }
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+defgenserver Second {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init() -> Result<Int> { Ok(2) }
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+def compare(left: PID<First>, right: PID<Second>) -> Boolean {
+  left == right
+}

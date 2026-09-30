@@ -1,0 +1,6 @@
+phase: typecheck
+contains: Eq
+json: /reason = "NoApplicableTraitImplementation"
+json: /data/dependency/leaf_type = "(Int -> Int)"
+json: /data/dependency/leaf_policy = "trait_implementation_forbidden"
+json: /data/dependency/steps/17/kind = "list_element"

@@ -218,8 +218,8 @@ fn callable_shape_reasons_are_structured() {
         ("value = 1\nvalue(2)", Reason::NotCallable),
         ("[1] |*> {|a: Int, b: Int| a + b}", Reason::CallableShapeMismatch),
         ("[1] |*> {|x: Int| Option::Some(x)}", Reason::CallableShapeMismatch),
-        ("def left(x: Int) -> List<Int> { [x] }\ndef right(x: String) -> String { x }\n&left >* &right", Reason::TypePayloadMismatch),
-        ("def left(x: Int) -> List<Int> { [x] }\ndef right(x: String) -> List<String> { [x] }\n&left >=> &right", Reason::TypePayloadMismatch),
+        ("def left(x: Int) -> List<Int> { [x] }\ndef right(x: String) -> String { x }\n&left >* &right", Reason::NoApplicableTraitImplementation),
+        ("def left(x: Int) -> List<Int> { [x] }\ndef right(x: String) -> List<String> { [x] }\n&left >=> &right", Reason::NoApplicableTraitImplementation),
     ] {
         let err = error(source);
         assert_eq!(err.reason(), Some(expected), "{source}: {err:?}");
@@ -263,21 +263,6 @@ fn contextual_operator_helper_parity_covers_apply_bind_and_compose() {
             "",
             "[1] |>= {|x: String| [x]}",
             "Monad::bind([1], {|x: String| [x]})",
-        ),
-        (
-            "",
-            "{|x: Int| x} >> {|x: String| x}",
-            "Composable::compose({|x: Int| x}, {|x: String| x})",
-        ),
-        (
-            "",
-            "{|x: Int| [x]} >* {|x: String| x}",
-            "LiftComposable::lift_compose({|x: Int| [x]}, {|x: String| x})",
-        ),
-        (
-            "",
-            "{|x: Int| [x]} >=> {|x: String| [x]}",
-            "KleisliComposable::kleisli_compose({|x: Int| [x]}, {|x: String| [x]})",
         ),
     ] {
         let op = error(&format!("{prefix}\n{operator}"));

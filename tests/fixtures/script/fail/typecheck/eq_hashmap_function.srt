@@ -1,0 +1,4 @@
+def inc(value: Int) -> Int { value + 1 }
+
+map: HashMap<(Int -> Int)> = hash!["x" => &inc]
+Eq::eq(map, map)

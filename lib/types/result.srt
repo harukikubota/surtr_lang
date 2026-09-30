@@ -6,11 +6,32 @@ This is the language's Either-oriented success/failure representation.
 Its runtime representation is enum-like, but the language treats `Result` as a
 dedicated built-in abstraction rather than exposing it as the future general
 `Enum` surface.
+`Result<$T>` supports `Eq` when `$T: Eq`. `Ok` values compare their contents;
+an `Ok` and an `Err` differ; two `Err` values compare only the first concrete
+error kind, regardless of message or cause.
 """
 @builtin
 defenum Result<$T> {
   Ok($T),
   Err(Error),
+}
+
+impl Eq for Result<$T>
+where
+  $T: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    match self {
+      Ok(left) => match rhs {
+        Ok(right) => Eq::eq(left, right),
+        Err(_) => False,
+      },
+      Err(left) => match rhs {
+        Ok(_) => False,
+        Err(right) => Error::same_kind(left, right),
+      },
+    }
+  }
 }
 
 @autoimport
@@ -476,25 +497,5 @@ impl Monad for Result<$T> {
       Ok(value) => mapper(value),
       _ => self,
     }
-  }
-}
-
-@doc """
-`LiftComposable` implementation for `Result`-returning unary functions.
-This is the source-level meaning of `left >* right` for `Result`.
-"""
-impl LiftComposable<$A, $B, $C, Result<$C>> for ($A -> Result<$B>) {
-  def lift_compose::<$A, Result<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Result<$C>) {
-    {|value| Functor::fmap(self(value), rhs)}
-  }
-}
-
-@doc """
-`KleisliComposable` implementation for `Result`-returning unary functions.
-This is the source-level meaning of `left >=> right` for `Result`.
-"""
-impl KleisliComposable<$A, $B, Result<$C>> for ($A -> Result<$B>) {
-  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Result<$C>)) -> ($A -> Result<$C>) {
-    {|value| Monad::bind(self(value), rhs)}
   }
 }

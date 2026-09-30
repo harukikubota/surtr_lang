@@ -199,24 +199,6 @@ impl Show for Int { @builtin def to_string(value: String) -> String }
 }
 
 #[test]
-fn builtin_trait_method_validates_the_instantiated_inherited_return() {
-    check(
-        r#"
-deftrait Compose<$Rhs, $Out> {
-  def compose::<$Out>(self: Self, rhs: $Rhs) -> $Out
-}
-impl Compose<Facet<$L, $A, $B, _, _>, Facet<$K, $S, $B, _, _>>
-for Facet<$K, $S, $A, _, _> {
-  @builtin def compose::<Facet<$K, $S, $B, _, _>>(
-    self: Self,
-    rhs: Facet<$L, $A, $B, _, _>,
-  )
-}
-"#,
-    );
-}
-
-#[test]
 fn trait_argument_is_distinct_from_dispatch_subject() {
     let nodes = check(
         r#"

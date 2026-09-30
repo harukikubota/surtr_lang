@@ -549,10 +549,10 @@ fn core_operator_completion_stages_function_operator_types() {
         .map(|candidate| candidate.label.as_str())
         .collect::<Vec<_>>();
     assert!(
-        !first_labels
+        ["|>", ">>", ">*", ">=>"]
             .iter()
-            .any(|label| matches!(*label, "|>" | "|*>" | "|>=" | ">>" | ">*" | ">=>")),
-        "function operator symbols must not be completion candidates: {first_labels:?}"
+            .all(|operator| first_labels.contains(operator)),
+        "builtin function operators should be completion candidates: {first_labels:?}"
     );
     let to_string_pos = first_labels
         .iter()
@@ -4204,8 +4204,20 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let operator_sig = engine.handle_line(":sig |>");
     let operator_sig = signature_text(&operator_sig);
-    assert!(operator_sig.contains("PipeApply::pipe_apply(self: Self, value: $A) -> $B"));
-    assert!(operator_sig.contains("impl targets:"), "{operator_sig}");
+    assert!(
+        operator_sig.contains("Bootstrap::|>(value: $A, f: ($A -> $B)) -> $B"),
+        "{operator_sig}"
+    );
+    for (symbol, signature) in [
+        (">>", "Bootstrap::>>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)"),
+        (">*", "Bootstrap::>*(left: ($A -> Functor<$B>), mapper: ($B -> $C)) -> ($A -> Functor<$C>)"),
+        (">=>", "Bootstrap::>=>(left: ($A -> Monad<$B>), mapper: ($B -> Monad<$C>)) -> ($A -> Monad<$C>)"),
+    ] {
+        let actual = signature_text(&engine.handle_line(&format!(":sig {symbol}")));
+        assert!(actual.contains(signature), "{symbol}: {actual}");
+        let doc = doc_text(&engine.handle_line(&format!(":doc {symbol}")));
+        assert!(doc.contains(symbol), "{symbol}: {doc}");
+    }
 
     let functor_sig = signature_text(&engine.handle_line(":sig |*>"));
     assert!(functor_sig.contains("Functor::fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>"));
@@ -4234,7 +4246,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let slash_doc = engine.handle_line(":doc /");
     let slash_doc = doc_text(&slash_doc);
-    assert!(slash_doc.contains("Compose::compose"), "{slash_doc}");
+    assert!(slash_doc.contains("Facet::chain"), "{slash_doc}");
 
     let bind_sig = engine.handle_line(":sig =");
     let bind_sig = signature_text(&bind_sig);
@@ -4406,18 +4418,6 @@ impl Monad for Box<$T> {
 
   def bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B> {
     mapper(self.value)
-  }
-}
-
-impl LiftComposable<$A, $B, $C, Box<$C>> for ($A -> Box<$B>) {
-  def lift_compose::<$A, Box<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Box<$C>) {
-    {|value| Functor::fmap(self(value), rhs)}
-  }
-}
-
-impl KleisliComposable<$A, $B, Box<$C>> for ($A -> Box<$B>) {
-  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Box<$C>)) -> ($A -> Box<$C>) {
-    {|value| Monad::bind(self(value), rhs)}
   }
 }"#,
     )

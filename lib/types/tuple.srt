@@ -1,7 +1,8 @@
 @doc """
 Standard tuple equality and comparison helpers.
-Surtr provides lexicographic `Compare` implementations for tuple arities 2
-through 8.
+Surtr provides positional `Eq` and lexicographic `Compare` implementations
+for tuple arities 2 through 8. Each position must implement the corresponding
+trait.
 A pair made with `left (,) right` is a 2-element tuple; chained pairs remain
 nested (`a (,) b (,) c` is `(a, (b, c))`) and do not become a flat tuple
 literal such as `(a, b, c)`. Pair values use these implementations, for
@@ -17,6 +18,87 @@ where
 {
   def eq(self: Self, rhs: Self) -> Boolean {
     Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1)
+  }
+}
+
+impl Eq for ($A0, $A1, $A2)
+where
+  $A0: Eq
+  $A1: Eq
+  $A2: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1) && Eq::eq(self._2, rhs._2)
+  }
+}
+
+impl Eq for ($A0, $A1, $A2, $A3)
+where
+  $A0: Eq
+  $A1: Eq
+  $A2: Eq
+  $A3: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1) && Eq::eq(self._2, rhs._2) && Eq::eq(self._3, rhs._3)
+  }
+}
+
+impl Eq for ($A0, $A1, $A2, $A3, $A4)
+where
+  $A0: Eq
+  $A1: Eq
+  $A2: Eq
+  $A3: Eq
+  $A4: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1) && Eq::eq(self._2, rhs._2) && Eq::eq(self._3, rhs._3) && Eq::eq(self._4, rhs._4)
+  }
+}
+
+impl Eq for ($A0, $A1, $A2, $A3, $A4, $A5)
+where
+  $A0: Eq
+  $A1: Eq
+  $A2: Eq
+  $A3: Eq
+  $A4: Eq
+  $A5: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1) && Eq::eq(self._2, rhs._2) && Eq::eq(self._3, rhs._3) && Eq::eq(self._4, rhs._4) && Eq::eq(self._5, rhs._5)
+  }
+}
+
+impl Eq for ($A0, $A1, $A2, $A3, $A4, $A5, $A6)
+where
+  $A0: Eq
+  $A1: Eq
+  $A2: Eq
+  $A3: Eq
+  $A4: Eq
+  $A5: Eq
+  $A6: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1) && Eq::eq(self._2, rhs._2) && Eq::eq(self._3, rhs._3) && Eq::eq(self._4, rhs._4) && Eq::eq(self._5, rhs._5) && Eq::eq(self._6, rhs._6)
+  }
+}
+
+impl Eq for ($A0, $A1, $A2, $A3, $A4, $A5, $A6, $A7)
+where
+  $A0: Eq
+  $A1: Eq
+  $A2: Eq
+  $A3: Eq
+  $A4: Eq
+  $A5: Eq
+  $A6: Eq
+  $A7: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1) && Eq::eq(self._2, rhs._2) && Eq::eq(self._3, rhs._3) && Eq::eq(self._4, rhs._4) && Eq::eq(self._5, rhs._5) && Eq::eq(self._6, rhs._6) && Eq::eq(self._7, rhs._7)
   }
 }
 

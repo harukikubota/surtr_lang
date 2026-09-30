@@ -240,6 +240,7 @@ compile / surface 契約との対応は次のとおり。
 - `inspect(HashMap)` / `to_string(HashMap)` / `map_keys` / `map_values_list` はキー昇順の deterministic order を使う
 - `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
 - `Error::kind(Error)` は `RichError.kind`、`Error::message(Error)` は `RichError.message` を `String` として返す
+- `Error::same_kind(Error, Error)` は先頭の具象 `RichError.kind` だけを比較する。`Result` の `Err` 同士の `Eq` が利用し、message・cause・location・診断情報は判定に含めない。壊れた Error 表現や非 Error 値を `False` にせず runtime invariant failure とする
 - `Error::format(Error)` は `eprint(Error)` と同じ行列を stderr へ出さず、`\n` join した `String` として返す
 
 ---
@@ -269,6 +270,7 @@ Opcode は以下のカテゴリを持つ。
 - `StoreConstLocal { const_idx, local_idx }` は `LoadConst(const_idx); StoreLocal(local_idx)` と同じ意味の圧縮 opcode とする。operand stack へ中間値を push せず、定数値を現在フレームの local slot に直接保存する。`const_idx` は `LoadConst` と同じ relocation / verifier 規則に従う
 - `CopyLocal { src_local_idx, dst_local_idx }` は `LoadLocal(src_local_idx); StoreLocal(dst_local_idx)` と同じ意味の圧縮 opcode とする。operand stack を経由せず、現在フレーム内で local 値を clone して保存する
 - `EqLocalTag { local_idx, tag_const_idx }` は `LoadLocal(local_idx); GetTag; LoadConst(tag_const_idx); EqTag` と同じ意味の圧縮 opcode とする。`tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う
+- `EqPid` は 2 つの `Value::Pid` を消費する。登録済みの同一 process type であることを検査し、Singleton は常に等しく、Worker は instance ID で比較する。未登録・異種 process type・非 PID 値は runtime invariant failure とする。`!=` は結果に `NotBool` を適用する
 - `MakeOk` は stack top の payload を `Tagged { tag: 0, fields: [payload] }` に包む Result 専用 constructor opcode とする
 - `MakeErr` は stack top の `Error` payload を `Tagged { tag: 1, fields: [payload] }` に包む Result 専用 constructor opcode とする。payload が `Error` でない bytecode は runtime error とする
 - `JumpIfLocalTagEq { local_idx, tag_const_idx, target_pc }` と `JumpIfLocalTagNe { local_idx, tag_const_idx, target_pc }` は `EqLocalTag` の直後に続く `JumpIfTrue` / `JumpIfFalse` を 1 opcode に畳み込む branch-fused fast-path とする。どちらも判定後の operand stack に Bool 中間値を残さない
@@ -320,7 +322,7 @@ Opcode は以下のカテゴリを持つ。
 - Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list miss は `IndexOutOfBounds`、map miss は `KeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
-- `Error::kind` / `Error::message` / `Error::format` は `Error` 値を introspection / 表示文字列化する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
+- `Error::kind` / `Error::message` / `Error::format` / `Error::same_kind` は `Error` 値を introspection / 表示文字列化・kind 比較する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は `HashMap<String, Value>` の immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする

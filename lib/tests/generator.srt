@@ -44,8 +44,9 @@ test("Generator") {
     }
 
     it("takes a prefix and handles non-positive counts") {
+      empty: List<Int> = []
       assert_eq(
-        ([1, 2, 4, 8], []),
+        ([1, 2, 4, 8], empty),
         (
           Generator::take(Generator::iterate(1, 10, {|x| x * 2}), 4),
           Generator::take(Generator::range(1, 3), 0),

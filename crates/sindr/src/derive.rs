@@ -44,7 +44,7 @@ pub enum FieldTraitRequirement {
 pub enum DeriveGenerator {
     StructuralEq,
     LexicographicCompare,
-    InspectShow,
+    StructuralShow,
     Default,
 }
 
@@ -77,8 +77,8 @@ const DERIVE_TRAIT_SPECS: &[DeriveTraitSpec] = &[
     },
     DeriveTraitSpec {
         name: "Show",
-        field_requirement: None,
-        generator: DeriveGenerator::InspectShow,
+        field_requirement: Some("Show"),
+        generator: DeriveGenerator::StructuralShow,
     },
     DeriveTraitSpec {
         name: "Default",
@@ -128,8 +128,11 @@ mod tests {
         assert_eq!(eq.generator, DeriveGenerator::StructuralEq);
 
         let show = derive_trait_meta("Show").expect("Show recipe");
-        assert_eq!(show.field_requirement, FieldTraitRequirement::None);
-        assert_eq!(show.generator, DeriveGenerator::InspectShow);
+        assert_eq!(
+            show.field_requirement,
+            FieldTraitRequirement::RequiresTrait(TraitIdentity::new("Show"))
+        );
+        assert_eq!(show.generator, DeriveGenerator::StructuralShow);
     }
 
     #[test]

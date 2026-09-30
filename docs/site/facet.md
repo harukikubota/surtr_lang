@@ -298,7 +298,7 @@ updated =? Facet::bulk_update(user) {
 
 ## chain
 
-ネストした path は `outer / inner` でつなぎます。`Facet::chain(...)` も同じ意味で使えます。
+ネストした path は `outer / inner` でつなぎます。`/` は `Facet::chain(outer, inner)` に対応する固定構文で、同じ型の接続条件と可視性規則を使います。
 
 ```surtr
 defstruct Profile {

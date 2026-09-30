@@ -822,6 +822,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         flow_apply_and_compose_operators_lower_to_trait_calls as fn(),
     ),
     (
+        "plain_flow_operators_use_compiler_rules",
+        plain_flow_operators_use_compiler_rules as fn(),
+    ),
+    (
         "user_defined_container_can_use_context_operators_via_traits",
         user_defined_container_can_use_context_operators_via_traits as fn(),
     ),
@@ -3308,14 +3312,7 @@ const BAD = VALUE / VALUE"#,
 fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
     let err = typecheck_with_rules(r#"print(to_string(10 / 3))"#, RuntimeSourcePolicy::script())
         .expect_err("numeric infix slash should fail");
-    assert_eq!(
-        err.reason(),
-        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
-    );
-    assert!(
-        matches!(err.structured.as_ref().map(|diagnostic| &diagnostic.origin),
-        Some(diagnostics::DiagnosticOrigin::Operator { operator }) if operator == "/")
-    );
+    assert!(err.message.contains("Expected Facet<...> value"), "{err:?}");
     assert!(err
         .hint
         .as_deref()
@@ -7980,32 +7977,34 @@ mapped = Functor::fmap(Ok(1), &inc)"#,
     }
 }
 
+fn plain_flow_operators_use_compiler_rules() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def inc(x: Int) -> Int { x + 1 }
+def twice(x: Int) -> Int { x * 2 }
+applied = 1 |> &inc
+composed = &inc >> &twice"#,
+    );
+    let mut bound = typed.iter().filter_map(|node| match &node.node {
+        TypedInner::Bind(_, value) => Some(&value.node),
+        _ => None,
+    });
+    assert!(bound
+        .clone()
+        .any(|node| matches!(node, TypedInner::Pipe(_, _))));
+    assert!(bound.any(|node| matches!(
+        node,
+        TypedInner::Compose(scar::typed::ComposeFlavor::Plain, _, _)
+    )));
+}
+
 fn flow_apply_and_compose_operators_lower_to_trait_calls() {
     let typed = typecheck_with_builtin_prelude(
-        r#"def inc(x: Int) -> Int {
-  x + 1
-}
-
-def show_int(x: Int) -> String {
-  to_string(x)
-}
-
-def parse(x: Int) -> Result<Int> {
-  Ok(x)
-}
-
-def parse_list(x: Int) -> List<Int> {
-  [x]
-}
-
-def maybe_parse(x: Int) -> Option<Int> {
-  Option::Some(x)
-}
-
-def maybe_show(x: Int) -> Option<String> {
-  Option::Some(to_string(x))
-}
-
+        r#"def inc(x: Int) -> Int { x + 1 }
+def show_int(x: Int) -> String { to_string(x) }
+def parse(x: Int) -> Result<Int> { Ok(x) }
+def parse_list(x: Int) -> List<Int> { [x] }
+def maybe_parse(x: Int) -> Option<Int> { Option::Some(x) }
+def maybe_show(x: Int) -> Option<String> { Option::Some(to_string(x)) }
 applied = 1 |> &inc
 plain = &inc >> &show_int
 lifted = &parse >* &show_int
@@ -8013,106 +8012,52 @@ kleisli = &parse_list >=> {|x| [x, x + 1]}
 lifted_option = &maybe_parse >* &show_int
 kleisli_option = &maybe_parse >=> &maybe_show"#,
     );
-    let calls = typed
+    let values = typed
         .iter()
         .filter_map(|node| match &node.node {
-            TypedInner::Bind(_, rhs) => match &rhs.node {
-                TypedInner::TraitCall {
-                    trait_name,
-                    method_name,
-                    origin,
-                    ..
-                } => Some((trait_name.as_str(), method_name.as_str(), origin, &rhs.ty)),
+            TypedInner::Bind(_, rhs) => Some(rhs),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(values
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::Pipe(_, _))));
+    assert!(values.iter().any(|node| matches!(
+        node.node,
+        TypedInner::Compose(scar::typed::ComposeFlavor::Plain, _, _)
+    )));
+    let contextual = values
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Block(items) => match items.last().map(|item| &item.node) {
+                Some(TypedInner::Closure(_, _, body)) => match &body.node {
+                    TypedInner::TraitCall {
+                        trait_name,
+                        method_name,
+                        ..
+                    } => Some((trait_name.as_str(), method_name.as_str())),
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,
         })
         .collect::<Vec<_>>();
-
-    assert!(calls
-        .iter()
-        .any(|(trait_name, method_name, origin, result_ty)| {
-            trait_name.starts_with("PipeApply<")
-                && *method_name == "pipe_apply"
-                && matches!(
-                    origin,
-                    TraitCallOrigin::Operator {
-                        op: OperatorTraitOp::PipeApply,
-                        lhs_ty: Ty::Int,
-                        rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                    }
-                )
-                && matches!(result_ty, Ty::Int)
-        }));
-    assert!(calls
-        .iter()
-        .any(|(trait_name, method_name, origin, result_ty)| {
-            trait_name.starts_with("Composable<")
-                && *method_name == "compose"
-                && matches!(
-                    origin,
-                    TraitCallOrigin::Operator {
-                        op: OperatorTraitOp::Compose,
-                        lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                        rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                    }
-                )
-                && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Str))
-        }));
-    assert!(calls.iter().any(|(trait_name, method_name, origin, result_ty)| {
-        trait_name.starts_with("LiftComposable<")
-            && *method_name == "lift_compose"
-            && matches!(
-                origin,
-                TraitCallOrigin::Operator {
-                    op: OperatorTraitOp::LiftCompose,
-                    lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                    rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                }
-            )
-            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Str)))
-    }));
-    assert!(calls
-        .iter()
-        .any(|(trait_name, method_name, origin, result_ty)| {
-            trait_name.starts_with("KleisliComposable<")
-                && *method_name == "kleisli_compose"
-                && matches!(
-                    origin,
-                    TraitCallOrigin::Operator {
-                        op: OperatorTraitOp::KleisliCompose,
-                        lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                        rhs_ty: Ty::Func(_, _),
-                    }
-                )
-                && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::List(_)))
-        }));
-    assert!(calls.iter().any(|(trait_name, method_name, origin, result_ty)| {
-        trait_name.starts_with("LiftComposable<")
-            && *method_name == "lift_compose"
-            && matches!(
-                origin,
-                TraitCallOrigin::Operator {
-                    op: OperatorTraitOp::LiftCompose,
-                    lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                    rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                }
-            )
-            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if (name == "Option" || name == "Global::Option") && matches!(args.as_slice(), [Ty::Str])))
-    }));
-    assert!(calls.iter().any(|(trait_name, method_name, origin, result_ty)| {
-        trait_name.starts_with("KleisliComposable<")
-            && *method_name == "kleisli_compose"
-            && matches!(
-                origin,
-                TraitCallOrigin::Operator {
-                    op: OperatorTraitOp::KleisliCompose,
-                    lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                    rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
-                }
-            )
-            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if (name == "Option" || name == "Global::Option") && matches!(args.as_slice(), [Ty::Str])))
-    }));
+    assert_eq!(contextual.len(), 4);
+    assert_eq!(
+        contextual
+            .iter()
+            .filter(|(_, method)| *method == "fmap")
+            .count(),
+        2
+    );
+    assert_eq!(
+        contextual
+            .iter()
+            .filter(|(_, method)| *method == "bind")
+            .count(),
+        2
+    );
 }
 
 fn user_defined_container_can_use_context_operators_via_traits() {
@@ -8148,18 +8093,6 @@ impl Monad for Boxed<$T> {
     match self {
       Boxed::Box(value) => mapper(value),
     }
-  }
-}
-
-impl LiftComposable<$A, $B, $C, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def lift_compose::<$A, Boxed<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
-    {|value| Functor::fmap(self(value), rhs)}
-  }
-}
-
-impl KleisliComposable<$A, $B, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
-    {|value| Monad::bind(self(value), rhs)}
   }
 }
 

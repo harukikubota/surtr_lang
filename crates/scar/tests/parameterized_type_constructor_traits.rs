@@ -284,12 +284,6 @@ lifted: Wrap<Base, Int> = MonadT::lift(view)
 #[test]
 fn declared_return_expectation_reaches_pipe_list_and_tuple_contents() {
     let declarations = r#"
-deftrait PipeApply<$A, $B> {
-  def pipe_apply::<$B>(self: Self, value: $A) -> $B
-}
-impl PipeApply<$A, $B> for ($A -> $B) {
-  def pipe_apply::<$B>(self: Self, value: $A) -> $B { self(value) }
-}
 deftrait Monad where Self: Type<$A> {
   def return::<Self>(value: $A) -> Self<$A>
 }

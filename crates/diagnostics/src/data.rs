@@ -74,6 +74,7 @@ pub enum TypeDiagnosticReason {
     TraitHelperCaptureNeedsExpectedType,
     ReservedIntrinsicMarkerUsage,
     TypecheckInvariantViolation,
+    TraitImplementationForbidden,
 }
 
 impl TypeDiagnosticReason {
@@ -147,6 +148,7 @@ impl TypeDiagnosticReason {
             Self::TraitHelperCaptureNeedsExpectedType => "TraitHelperCaptureNeedsExpectedType",
             Self::ReservedIntrinsicMarkerUsage => "ReservedIntrinsicMarkerUsage",
             Self::TypecheckInvariantViolation => "TypecheckInvariantViolation",
+            Self::TraitImplementationForbidden => "TraitImplementationForbidden",
         }
     }
 }
@@ -720,6 +722,49 @@ pub struct TraitDispatchData {
     pub trait_arguments: Vec<String>,
     pub method: Option<String>,
     pub subject_type: Option<String>,
+    pub dependency: Option<TraitDependencyData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TraitDependencyData {
+    pub context: TraitDependencyContext,
+    pub root_type: String,
+    pub steps: Vec<TraitDependencyStep>,
+    pub leaf_type: String,
+    pub leaf_policy: TraitDependencyLeafPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraitDependencyContext {
+    Derive,
+    Requirement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TraitDependencyStep {
+    pub kind: TraitDependencyStepKind,
+    pub name: Option<String>,
+    pub ordinal: Option<u32>,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraitDependencyStepKind {
+    Field,
+    VariantPayload,
+    ListElement,
+    HashMapValue,
+    TupleElement,
+    ResultSuccess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraitDependencyLeafPolicy {
+    TraitImplementationForbidden,
+    TraitImplementationMissing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -829,6 +874,7 @@ pub enum TypePolicy {
     TraitHelperCaptureInference,
     IntrinsicMarkerUsage,
     ProducerContract,
+    TraitImplementation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

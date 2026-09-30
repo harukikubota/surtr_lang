@@ -102,15 +102,6 @@ mod tests {
     const ALTERNATIVE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/alternative.srt");
     const MONOID_MODULE_SOURCE: &str = include_str!("../../../lib/types/monoid.srt");
-    const PIPE_APPLY_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/pipe_apply.srt");
-    const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compose.srt");
-    const COMPOSABLE_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/composable.srt");
-    const LIFT_COMPOSABLE_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/lift_composable.srt");
-    const KLEISLI_COMPOSABLE_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/kleisli_composable.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/types/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/types/string.srt");
     const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/types/regex.srt");
@@ -118,6 +109,7 @@ mod tests {
     const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/types/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/types/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/types/list.srt");
+    const TUPLE_MODULE_SOURCE: &str = include_str!("../../../lib/types/tuple.srt");
     const GENERATOR_MODULE_SOURCE: &str = include_str!("../../../lib/types/generator.srt");
     const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/types/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/types/result.srt");
@@ -312,17 +304,13 @@ mod tests {
                 ("State", STATE_MODULE_SOURCE),
                 ("Alternative", ALTERNATIVE_MODULE_SOURCE),
                 ("Monoid", MONOID_MODULE_SOURCE),
-                ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
-                ("Compose", COMPOSE_MODULE_SOURCE),
-                ("Composable", COMPOSABLE_MODULE_SOURCE),
-                ("LiftComposable", LIFT_COMPOSABLE_MODULE_SOURCE),
-                ("KleisliComposable", KLEISLI_COMPOSABLE_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
                 ("Regex", REGEX_MODULE_SOURCE),
                 ("Boolean", BOOLEAN_MODULE_SOURCE),
                 ("Error", ERROR_MODULE_SOURCE),
                 ("List", LIST_MODULE_SOURCE),
+                ("Tuple", TUPLE_MODULE_SOURCE),
                 ("Generator", GENERATOR_MODULE_SOURCE),
                 ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),

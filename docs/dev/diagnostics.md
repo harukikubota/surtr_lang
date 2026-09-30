@@ -66,12 +66,24 @@ source span を必要としない説明や修正案を `labels` に置かない�
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `InvalidResultEffectAnnotation`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
+| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `InvalidResultEffectAnnotation`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
 `MissingTypeConstructorCapability`はconstructor carrier occurrenceの能力不足であり、相互に置換しない。
 未確定inference variableのobligationは`Deferred`として保持し、候補数や登録順からreasonや型を決めない。
+`TraitImplementationForbidden`は対象型の実装権限に反する宣言に使い、`Policy` dataに対象型、Trait、
+制限理由を保持する。impl対象とTrait名をそれぞれ source fact に結び、単なる能力不足と区別する。
+生成された `Eq` / `Show` の実装本体または `Eq` の呼出しで能力が不足するときは、元のTrait失敗reasonを維持し、
+`TraitDispatch.dependency` に発生文脈、root、field / variant payload / container の依存段階、
+末端型とその実装権限を保持する。derive では失敗した field / payload の型注釈を primary、
+derive 宣言を related にする。呼出しでは元の呼出し位置を primary にする。
+失敗した field / payload は元の型注釈 span と解決済み型から特定し、表示用の型名で照合しない。
+通常型の内部はその型の明示 impl / derive の境界とし、外側の型から無条件に展開しない。
+内側の derive が失敗した場合は、その derive を root とする経路を報告する。
+container の要素へ進むのは、対象に一致する impl の実際の条件が同じ Trait をその要素へ要求する場合だけとする。
+異なる Trait の条件や複数候補で原因を特定できない場合は外側の型で止める。循環は型の同一性で検出し、深さで打ち切らない。
+Human の依存経路 note と JSON の `dependency` を同じ typed data から生成する。
 
 `DiagnosticData`はreasonに必要な型付きpayloadを保持する。JSONでは`kind` discriminatorと、次表の
 serialized fieldだけを投影する。source factなど一部の内部fieldはrendererでlabel/noteを構成するための値で、

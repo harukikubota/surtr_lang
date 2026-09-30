@@ -81,6 +81,7 @@ enum Projection<'a> {
         expected_constraints: &'a [String],
         actual_constraints: &'a [String],
         failures: &'a [CandidateFailureData],
+        dependency: Option<&'a TraitDependencyData>,
     },
     TypeConstructorCarrier {
         #[serde(flatten)]
@@ -216,6 +217,10 @@ impl DiagnosticData {
                     failures: match self {
                         DiagnosticData::CandidateSelection(v) => &v.failures,
                         _ => &[],
+                    },
+                    dependency: match self {
+                        DiagnosticData::TraitDispatch(v) => v.dependency.as_ref(),
+                        _ => None,
                     },
                 }
             }

@@ -3939,7 +3939,7 @@ mod tests {
             ),
             span: span(1, 20),
             node: TypedInner::Compose(
-                ComposeFlavor::ResultBind,
+                ComposeFlavor::Plain,
                 Box::new(TypedNode {
                     ty: Ty::Func(
                         vec![Ty::Str],
@@ -3993,7 +3993,7 @@ mod tests {
             matches!(
                 template.kind,
                 CallableTemplateKind::ComposeDirect {
-                    flavor: CallableTemplateComposeFlavor::ResultBind,
+                    flavor: CallableTemplateComposeFlavor::Plain,
                 }
             )
         }));
@@ -6392,40 +6392,6 @@ impl Codegen {
     ) -> Option<CallableTemplateComposeFlavor> {
         match flavor {
             ComposeFlavor::Plain => Some(CallableTemplateComposeFlavor::Plain),
-            ComposeFlavor::ResultMap => Some(CallableTemplateComposeFlavor::ResultMap),
-            ComposeFlavor::ResultBind => Some(CallableTemplateComposeFlavor::ResultBind),
-            ComposeFlavor::ListMap { .. } => Some(CallableTemplateComposeFlavor::ListMap),
-            ComposeFlavor::ListBind { .. } => Some(CallableTemplateComposeFlavor::ListBind),
-        }
-    }
-
-    fn operator_compose_template_flavor(
-        op: &OperatorTraitOp,
-        lhs_ty: &Ty,
-    ) -> Option<CallableTemplateComposeFlavor> {
-        match op {
-            OperatorTraitOp::Compose => Some(CallableTemplateComposeFlavor::Plain),
-            OperatorTraitOp::LiftCompose | OperatorTraitOp::KleisliCompose => {
-                let Ty::Func(_, ret) = lhs_ty else {
-                    return None;
-                };
-                match (op, ret.as_ref()) {
-                    (OperatorTraitOp::LiftCompose, Ty::Result(_, _)) => {
-                        Some(CallableTemplateComposeFlavor::ResultMap)
-                    }
-                    (OperatorTraitOp::LiftCompose, Ty::List(_)) => {
-                        Some(CallableTemplateComposeFlavor::ListMap)
-                    }
-                    (OperatorTraitOp::KleisliCompose, Ty::Result(_, _)) => {
-                        Some(CallableTemplateComposeFlavor::ResultBind)
-                    }
-                    (OperatorTraitOp::KleisliCompose, Ty::List(_)) => {
-                        Some(CallableTemplateComposeFlavor::ListBind)
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
         }
     }
 
@@ -6766,132 +6732,27 @@ impl Codegen {
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
         self.in_function = true;
-
-        match flavor {
-            ComposeFlavor::Plain => {
-                self.emit(Opcode::LoadLocal(input_slot));
-                if let Some((lhs, rhs)) = direct_targets {
-                    self.emit_direct_call(lhs, 1, span);
-                    self.emit_direct_call(rhs, 1, span);
-                } else {
-                    self.emit(Opcode::LoadLocal(rhs_slot));
-                    self.emit(Opcode::LoadLocal(lhs_slot));
-                    self.emit(Opcode::LoadLocal(input_slot));
-                    self.emit(Opcode::CallClosure {
-                        arity: 1,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    });
-                    self.emit(Opcode::CallClosure {
-                        arity: 1,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    });
-                }
-                self.emit(Opcode::Return);
-            }
-            ComposeFlavor::ResultMap | ComposeFlavor::ResultBind => {
-                self.emit(Opcode::LoadLocal(input_slot));
-                if let Some((lhs, _)) = direct_targets {
-                    self.emit_direct_call(lhs, 1, span);
-                } else {
-                    self.emit(Opcode::LoadLocal(lhs_slot));
-                    self.emit(Opcode::LoadLocal(input_slot));
-                    self.emit(Opcode::CallClosure {
-                        arity: 1,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    });
-                }
-                let result_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(result_slot));
-
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit(Opcode::GetTag);
-                let err_tag = self.add_constant(Constant::Tag(1));
-                self.emit(Opcode::LoadConst(err_tag));
-                self.emit(Opcode::EqTag);
-
-                let ok_path = self.fresh_label();
-                self.emit_jump_if_false(ok_path);
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit(Opcode::Return);
-
-                self.patch_label(ok_path);
-                match flavor {
-                    ComposeFlavor::ResultMap => {
-                        let ok_tag = self.add_constant(Constant::Tag(0));
-                        self.emit(Opcode::LoadConst(ok_tag));
-                        if let Some((_, rhs)) = direct_targets {
-                            self.emit(Opcode::LoadLocal(result_slot));
-                            self.emit(Opcode::GetField { field_index: 0 });
-                            self.emit_direct_call(rhs, 1, span);
-                        } else {
-                            self.emit(Opcode::LoadLocal(rhs_slot));
-                            self.emit(Opcode::LoadLocal(result_slot));
-                            self.emit(Opcode::GetField { field_index: 0 });
-                            self.emit(Opcode::CallClosure {
-                                arity: 1,
-                                span_start: span.start as u32,
-                                span_end: span.end as u32,
-                            });
-                        }
-                        self.emit(Opcode::StructNew { field_count: 1 });
-                        self.emit(Opcode::Return);
-                    }
-                    ComposeFlavor::ResultBind => {
-                        if let Some((_, rhs)) = direct_targets {
-                            self.emit(Opcode::LoadLocal(result_slot));
-                            self.emit(Opcode::GetField { field_index: 0 });
-                            self.emit_direct_call(rhs, 1, span);
-                        } else {
-                            self.emit(Opcode::LoadLocal(rhs_slot));
-                            self.emit(Opcode::LoadLocal(result_slot));
-                            self.emit(Opcode::GetField { field_index: 0 });
-                            self.emit(Opcode::CallClosure {
-                                arity: 1,
-                                span_start: span.start as u32,
-                                span_end: span.end as u32,
-                            });
-                        }
-                        self.emit(Opcode::Return);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            ComposeFlavor::ListMap { helper } | ComposeFlavor::ListBind { helper } => {
-                self.emit(Opcode::LoadLocal(input_slot));
-                if let Some((lhs, rhs)) = direct_targets {
-                    self.emit_direct_call(lhs, 1, span);
-                    self.emit_direct_callable_ref(rhs);
-                } else {
-                    self.emit(Opcode::LoadLocal(lhs_slot));
-                    self.emit(Opcode::LoadLocal(input_slot));
-                    self.emit(Opcode::CallClosure {
-                        arity: 1,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    });
-                    self.emit(Opcode::LoadLocal(rhs_slot));
-                }
-                match helper {
-                    ListHelperRef::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
-                        builtin_id: *builtin_id,
-                        arity: 2,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    }),
-                    ListHelperRef::User(fun_idx) => self.emit(Opcode::Call {
-                        fun_idx: *fun_idx,
-                        arity: 2,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    }),
-                }
-                self.emit(Opcode::Return);
-            }
+        let ComposeFlavor::Plain = flavor;
+        self.emit(Opcode::LoadLocal(input_slot));
+        if let Some((lhs, rhs)) = direct_targets {
+            self.emit_direct_call(lhs, 1, span);
+            self.emit_direct_call(rhs, 1, span);
+        } else {
+            self.emit(Opcode::LoadLocal(rhs_slot));
+            self.emit(Opcode::LoadLocal(lhs_slot));
+            self.emit(Opcode::LoadLocal(input_slot));
+            self.emit(Opcode::CallClosure {
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
+            self.emit(Opcode::CallClosure {
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
         }
+        self.emit(Opcode::Return);
 
         self.in_function = prev_in_function;
         self.state.functions.push(FunctionEntry {
@@ -7825,29 +7686,6 @@ impl Codegen {
                     )?;
                     return Ok(());
                 }
-                if let TraitCallOrigin::Operator { op, lhs_ty, .. } = origin {
-                    if args.len() == 2
-                        && self.template_compatible_callable(&args[0])?
-                        && self.template_compatible_callable(&args[1])?
-                    {
-                        if let Some(flavor) = Self::operator_compose_template_flavor(op, lhs_ty) {
-                            let template_id = self.add_callable_template(
-                                CallableTemplateKind::ComposeDirect { flavor },
-                                CallableTemplateMetadata {
-                                    origin: CallableOrigin::Closure,
-                                    module: None,
-                                    name: None,
-                                    full_signature: Some(ty_to_string(&node.ty)),
-                                },
-                            );
-                            self.emit_callable_template_ref(template_id);
-                            self.emit_callable_ref(&args[0])?;
-                            self.emit_callable_ref(&args[1])?;
-                            self.emit(Opcode::CaptureClosure(2));
-                            return Ok(());
-                        }
-                    }
-                }
                 match dispatch {
                     TraitDispatch::Pending | TraitDispatch::Selected(_) => {
                         return Err(CodegenError {
@@ -7875,6 +7713,9 @@ impl Codegen {
                         self.emit_node(&args[1])?;
                         let opcode = self.binop_to_opcode(op, receiver_ty, &node.span)?;
                         self.emit(opcode);
+                        if matches!((op, receiver_ty), (BinOp::Neq, Ty::Pid(_))) {
+                            self.emit(Opcode::NotBool);
+                        }
                     }
                     TraitDispatch::Static(TraitDispatchTarget::Builtin(id)) => {
                         for arg in args {
@@ -7946,6 +7787,9 @@ impl Codegen {
                     self.emit_node(right)?;
                     let opcode = self.binop_to_opcode(op, &left.ty, &node.span)?;
                     self.emit(opcode);
+                    if matches!((op, &left.ty), (BinOp::Neq, Ty::Pid(_))) {
+                        self.emit(Opcode::NotBool);
+                    }
                 }
             }
 
@@ -12610,6 +12454,9 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(right_slot));
                 let opcode = self.binop_to_opcode(op, receiver_ty, span)?;
                 self.emit(opcode);
+                if matches!((op, receiver_ty), (BinOp::Neq, Ty::Pid(_))) {
+                    self.emit(Opcode::NotBool);
+                }
                 Ok(())
             }
             TraitDispatch::Static(TraitDispatchTarget::Builtin(id)) => {
@@ -12680,6 +12527,9 @@ impl Codegen {
                 self.emit_node(&args[1])?;
                 let opcode = self.binop_to_opcode(binop, receiver_ty, span)?;
                 self.emit(opcode);
+                if matches!((binop, receiver_ty), (BinOp::Neq, Ty::Pid(_))) {
+                    self.emit(Opcode::NotBool);
+                }
                 return Ok(());
             }
             TraitDispatch::Static(TraitDispatchTarget::Builtin(id)) => {
@@ -12733,6 +12583,8 @@ impl Codegen {
             (BinOp::Neq, Ty::Str) => Ok(Opcode::NeqStr),
             (BinOp::Eq, Ty::Bool) => Ok(Opcode::EqBool),
             (BinOp::Neq, Ty::Bool) => Ok(Opcode::NeqBool),
+            (BinOp::Eq, Ty::Pid(_)) => Ok(Opcode::EqPid),
+            (BinOp::Neq, Ty::Pid(_)) => Ok(Opcode::EqPid),
             (BinOp::Concat, Ty::Str) => Ok(Opcode::ConcatStr),
             _ => Err(CodegenError {
                 message: format!("Unsupported binop {:?} for type", op),

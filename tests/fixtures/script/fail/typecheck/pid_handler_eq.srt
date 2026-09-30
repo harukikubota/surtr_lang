@@ -1,0 +1,3 @@
+def same_handler(left: PID<OutHandler>, right: PID<OutHandler>) -> Boolean {
+  left == right
+}

@@ -18,6 +18,40 @@ type itself lives in `error.srt`.
 # stage-0 anchor for the loader.
 defmod Bootstrap {
   @doc """
+  Apply a value to a unary callable.
+
+  ## Examples
+  1 |> {|n| n + 1}
+  """
+  @builtin def |>(value: $A, f: ($A -> $B)) -> $B
+
+  @doc """
+  Compose two unary callables from left to right.
+
+  ## Examples
+  {|n: Int| n + 1} >> {|n| n * 2}
+  """
+  @builtin def >>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)
+
+  @doc """
+  Compose a contextual unary callable with a plain mapper. The result
+  carrier must implement Functor.
+
+  ## Examples
+  {|n: Int| [n]} >* {|n| n + 1}
+  """
+  @builtin def >*(left: ($A -> Functor<$B>), mapper: ($B -> $C)) -> ($A -> Functor<$C>)
+
+  @doc """
+  Compose two contextual unary callables. The result carrier must implement
+  Monad.
+
+  ## Examples
+  {|n: Int| [n]} >=> {|n| [n, n + 1]}
+  """
+  @builtin def >=>(left: ($A -> Monad<$B>), mapper: ($B -> Monad<$C>)) -> ($A -> Monad<$C>)
+
+  @doc """
   Construct a 2-tuple from `lhs` and `rhs`.
 
   `left (,) right` is a right-associative pair constructor. It always creates

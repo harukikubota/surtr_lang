@@ -18,5 +18,5 @@ nums =? parse_csv("1,2,3")
 [head, ..tail] =? nums
 
 print(to_string(head))
-print(to_string(tail |>= expand()))
-print(to_string((head |> singleton()) |*> show()))
+print(inspect(tail |>= expand()))
+print(inspect((head |> singleton()) |*> show()))

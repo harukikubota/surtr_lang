@@ -66,6 +66,69 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         spec.notes
             .push(format!("`{marker}` is not an ordinary value type"));
     }
+    if let DiagnosticData::TraitDispatch(value) = &input.data {
+        if let Some(dependency) = &value.dependency {
+            let mut path = dependency.root_type.clone();
+            for step in &dependency.steps {
+                let relation = match step.kind {
+                    crate::TraitDependencyStepKind::Field => {
+                        format!(".{}", step.name.as_deref().expect("field path name"))
+                    }
+                    crate::TraitDependencyStepKind::VariantPayload => format!(
+                        "::{} payload {}",
+                        step.name.as_deref().expect("variant path name"),
+                        step.ordinal.expect("variant payload position") + 1
+                    ),
+                    crate::TraitDependencyStepKind::ListElement => "List element".into(),
+                    crate::TraitDependencyStepKind::HashMapValue => "HashMap value".into(),
+                    crate::TraitDependencyStepKind::TupleElement => format!(
+                        "tuple position {}",
+                        step.ordinal.expect("tuple element position") + 1
+                    ),
+                    crate::TraitDependencyStepKind::ResultSuccess => "Result success value".into(),
+                };
+                if matches!(
+                    step.kind,
+                    crate::TraitDependencyStepKind::Field
+                        | crate::TraitDependencyStepKind::VariantPayload
+                ) {
+                    path.push_str(&format!("{relation}: {}", step.ty));
+                } else {
+                    path.push_str(&format!(" -> {relation}: {}", step.ty));
+                }
+            }
+            let context = match dependency.context {
+                crate::TraitDependencyContext::Derive => "derive dependency",
+                crate::TraitDependencyContext::Requirement => "trait dependency",
+            };
+            spec.notes.push(format!("{context}: {path}"));
+            if dependency.leaf_policy
+                == crate::TraitDependencyLeafPolicy::TraitImplementationForbidden
+            {
+                spec.notes.push(format!(
+                    "{} cannot implement the required trait",
+                    dependency.leaf_type
+                ));
+                if spec.help.is_none() {
+                    spec.help = Some(match dependency.context {
+                        crate::TraitDependencyContext::Derive
+                            if value.trait_name.ends_with("Show") =>
+                        {
+                            "Remove this derive or write Show explicitly, using inspect for the forbidden field when needed."
+                                .into()
+                        }
+                        crate::TraitDependencyContext::Derive => {
+                            "Remove this derive or compare a supported value extracted from the type."
+                                .into()
+                        }
+                        crate::TraitDependencyContext::Requirement => {
+                            "Compare a supported value extracted from the type.".into()
+                        }
+                    });
+                }
+            }
+        }
+    }
     spec
 }
 
@@ -393,6 +456,14 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                     .subject
                     .clone()
                     .expect("result effect annotation failure");
+            }
+        }
+        TypeDiagnosticReason::TraitImplementationForbidden => {
+            if let DiagnosticData::Policy(value) = &input.data {
+                let target = value.subject.as_deref().expect("trait impl target");
+                let trait_name = value.expected_type.as_deref().expect("trait name");
+                let restriction = value.actual_type.as_deref().expect("trait impl policy");
+                return format!("trait impl {trait_name} for {target} is {restriction}");
             }
         }
         TypeDiagnosticReason::TraitHelperCaptureNeedsExpectedType => {

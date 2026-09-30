@@ -1,0 +1,3 @@
+@derive Eq
+defstruct Root { callbacks: List<List<List<List<List<List<List<List<List<List<List<List<List<List<List<List<List<(Int -> Int)>>>>>>>>>>>>>>>>> }
+impl Root { def new(callbacks: List<List<List<List<List<List<List<List<List<List<List<List<List<List<List<List<List<(Int -> Int)>>>>>>>>>>>>>>>>>) -> Self { Root { callbacks: callbacks } } }
