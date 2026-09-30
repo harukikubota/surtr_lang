@@ -4,6 +4,17 @@ Surtr の `&` は、既存の関数、method、データ型コンストラクタ
 「あとで呼べる関数値」に変える演算子です。
 このページでは bare capture と placeholder capture の両方をまとめます。
 
+## 構文一覧
+
+| 対象 | 構文パターン | 指すもの | 例 |
+|---|---|---|---|
+| 関数 | `&<関数>` / `&<修飾名>::<関数>` | 名前付き関数、method | `&add`, `&String::trim` |
+| 関数値変数 | `&<関数値変数>` | 関数値変数を部分適用 | `&f(&1, 10)` |
+| コンストラクタ | `&<型>` / `&<型>::<variant>` | Record、Struct、Enum variant のコンストラクタ | `&User`, `&Direction::Move` |
+| コンストラクタ（引数指定） | `&<constructor>(<placeholder>, <固定値>, ...)` | 一部の引数を固定したコンストラクタ callable | `&User(&1, 20)`, `&Direction::Move(&1, 0)` |
+| FacetPath | `&<FacetPath>` | 既存の FacetPath を callable にしたもの | `&User.name`, `&Tuple._0`, `&List.[idx]` |
+
+
 ## 先に覚えるルール
 
 - `&f` は named capture です
@@ -35,6 +46,26 @@ negate = &`Boolean::not`
 ```
 
 これは「その関数そのものを値として取り出す」と読むと分かりやすいです。
+
+## 部分適用
+
+関数値に placeholder を含む引数を付けて capture すると、部分適用になります。
+関数値の origin は問いません。名前付き関数、closure、capture、関数値変数のいずれにも
+同じ構文を使えます。
+
+```surtr
+def add(x: Int, y: Int) -> Int { x + y }
+
+by_add: (Int, Int -> Int) = &add
+inc: (Int -> Int) = &add(&1, 1)
+inc_from_value: (Int -> Int) = &by_add(&1, 1)
+```
+
+`&f` は、`f` の解決先によって振る舞いが変わります。
+
+- `f` が名前付き関数なら、関数を capture して関数値にします。
+- `f` が関数値変数なら、保持している関数値をそのまま参照します。
+- どちらの場合も、`&f(&1, ...)` のように placeholder を付ければ部分適用になります。
 
 ## データ型コンストラクタ capture
 
