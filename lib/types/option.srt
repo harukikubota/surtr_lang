@@ -24,6 +24,7 @@ Option::Some(1)
 xldr(2)> Option<Int>::None
 Option::None
 """
+@derive Eq
 defenum Option<$T> {
   Some($T),
   None,
@@ -203,26 +204,6 @@ impl Alternative for Option<$T> {
       Option::Some(_) => left,
       Option::None => right,
     }
-  }
-}
-
-@doc """
-`LiftComposable` implementation for `Option`-returning unary functions.
-This is the source-level meaning of `left >* right` for `Option`.
-"""
-impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
-  def lift_compose::<$A, Option<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
-    {|value| Functor::fmap(self(value), rhs)}
-  }
-}
-
-@doc """
-`KleisliComposable` implementation for `Option`-returning unary functions.
-This is the source-level meaning of `left >=> right` for `Option`.
-"""
-impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
-  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
-    {|value| Monad::bind(self(value), rhs)}
   }
 }
 

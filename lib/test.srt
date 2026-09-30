@@ -95,17 +95,21 @@ defmod Test {
     if(flag, _fail("expected False, got True"), Ok(()))
   }
 
-  def assert_eq(expected: $A, actual: $A) -> Result<()> {
-    rendered_expected = inspect(expected)
-    rendered_actual = inspect(actual)
+  def assert_eq(expected: $A, actual: $A) -> Result<()>
+  where
+    $A: Eq
+  {
     if(
-      rendered_expected == rendered_actual,
+      Eq::eq(expected, actual),
       Ok(()),
-      Err(TestAssertionFailed("expected #{rendered_expected}, got #{rendered_actual}")),
+      Err(TestAssertionFailed("expected #{inspect(expected)}, got #{inspect(actual)}")),
     )
   }
 
-  def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()> {
+  def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()>
+  where
+    $A: Eq
+  {
     match result {
       Ok(actual) => assert_eq(expected, actual),
       Err(err) => _fail("expected Ok(#{inspect(expected)}), got Err(#{inspect(err)})"),

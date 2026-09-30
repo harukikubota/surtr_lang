@@ -22,6 +22,15 @@ Examples:
 """
 @builtin type HashMap<$V>
 
+impl Eq for HashMap<$V>
+where
+  $V: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(HashMap::entries(self), HashMap::entries(rhs))
+  }
+}
+
 impl HashMap {
   defp _map_values_go(
     source: HashMap<$A>,

@@ -413,27 +413,11 @@ impl Facet {
   path is rejected at compile time.
 
   ## REPL
-  Compose is easiest to try with a user-defined nested type in a source file.
-  In the REPL, use the same shape as:
+  For a user-defined nested type, use the same shape as:
   outer = User.profile
   inner = Profile.name
   path2 = outer / inner
   path = Facet::chain(outer, inner)
   """
   @builtin def chain(outer: Facet<$K, $S, $A, _, _>, inner: Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>
-}
-
-@doc """
-`Compose` implementation for nested `Facet` paths.
-This is the source-level meaning of `left / right` for Facet values.
-
-The surface contract is expressed through `Compose::compose`.
-"""
-impl Compose<Facet<$L, $A, $B, _, _>, Facet<$K, $S, $B, _, _>> for Facet<$K, $S, $A, _, _> {
-  @doc """
-  Compose the receiver path before `rhs`.
-  `left / right` and `Compose::compose(left, right)` follow this contract.
-  `Facet::chain(left, right)` remains the canonical helper form.
-  """
-  @builtin def compose::<Facet<$K, $S, $B, _, _>>(self: Self, rhs: Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>
 }

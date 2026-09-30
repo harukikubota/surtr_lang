@@ -8,6 +8,7 @@ Either::Right(2)
 xldr(2)> Either<String, Int>::Left("stop")
 Either::Left("stop")
 """
+@derive Eq
 defenum Either<$L, $R> {
   Left($L),
   Right($R),

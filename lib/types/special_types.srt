@@ -125,6 +125,12 @@ It is not an ordinary public API or data transport type.
 @hidden
 @builtin def Ready(value: $T) -> StandbyInit<$T>
 
+impl Eq for Unit {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    True
+  }
+}
+
 impl Show for Unit {
   @doc """
   Return the standard string rendering for `Unit`.
