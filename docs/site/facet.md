@@ -111,6 +111,17 @@ pairs |*> _._0
 List::sort_by(users, &compare `Function::on` _.age)
 ```
 
+同じ関数呼び出しの他の引数や期待返り型から source 型が決まる場合も使えます。
+
+```surtr
+Function::apply(_.[0], [1])       # Ok(1)
+Function::apply(&List.[0], [1])   # Ok(1)
+Function::apply(&Tuple._0, (1, 2)) # 1
+```
+
+source 型が最後まで決まらない場合はエラーになります。型推論のために引数の検査を
+保留することはありますが、実行時の引数評価順は変わりません。
+
 source 型を明示したい場合は `&Type.path` を使います。
 
 ```surtr

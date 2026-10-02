@@ -278,6 +278,19 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
 一意に得られる場合は省略でき、引数位置からも期待型からも得られない場合は`::<Type>`で明示する。
 `::<$F: Monad>`のようなcall-site制約指定は受理しない。TypeCtorTraitを要求するRTAでは、constructor head、完全な型application、`_`を含む型applicationを一項の型入力として受理し、外側のconstructor variableは通常のgeneric contextから暗黙に導入しない。
 
+#### FacetPath capture の呼び出し内推論
+
+通常の関数呼び出しでは、`&Type.path` と `_.path` の期待単項関数型の source が未確定なら、
+Scar 内でその引数の検査を保留する。同じ呼び出しの他の引数と期待返り型の制約で source を確定し、
+既存の root・segment・可視性・readonly・Result 化の規則で検査する。位置引数、名前付き引数、
+関数値の呼び出しで同じ規則を使い、括弧で囲んでも変わらない。
+
+待つのは各 segment の receiver を解決するための型構造であり、参照しない field や最終 focus の
+型変数ではない。最終 focus は capture の期待返り型との照合からも確定できる。解決できた引数を
+元の位置に保持し、保留項目が減らなくなったら最初の未解決 capture の span と source 型で拒否する。
+source 待ちの引数より、検査できる引数のエラーが先に報告される。保留を要しない通常引数の
+診断順は維持する。解決待ちの capture は Forge へ渡さず、実行時の引数評価順も変更しない。
+
 ### 0.7 実装済みの移行不変条件
 
 0.1–0.6は現行実装の正本契約である。次は Type Constructor Signature Unification で移行済みの

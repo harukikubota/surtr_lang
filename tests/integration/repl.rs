@@ -1676,7 +1676,7 @@ fn repl_rejects_function_on_inferred_facet_capture_without_source_evidence() {
     );
     let combined = strip_ansi(&combined);
     assert!(
-        combined.contains("Cannot access field on"),
+        combined.contains("FacetPath capture has unresolved source type"),
         "expected missing source evidence diagnostic, got:\n{}",
         combined
     );

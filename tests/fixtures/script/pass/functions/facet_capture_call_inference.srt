@@ -1,0 +1,30 @@
+defrecord User(name: String)
+def chain(outer: ($B -> $C), inner: ($A -> $B), value: $A) -> $C {
+  outer(inner(value))
+}
+def getter(f: ($A -> $B)) -> ($A -> $B) { f }
+
+# Typechecking may wait for source, but argument evaluation keeps its order.
+def source() -> List<Int> { print("source"); [1] }
+def marker() -> Int { print("marker"); 0 }
+def index() -> Int { print("index"); 0 }
+def read_marked(f: (List<$A> -> Result<$A>), value: List<$A>, mark: Int) -> Result<$A> {
+  f(value)
+}
+
+print(inspect(Function::apply(&List.[0], [1])))
+print(inspect(Function::apply(_.[0], [1])))
+print(inspect(Function::apply(&Tuple._0, (1, 2))))
+print(inspect(Function::apply(_._0, (1, 2))))
+print(inspect(Function::apply(&HashMap.["a"], HashMap::map_from_entries([("a", 1)]))))
+print(inspect(Function::apply(&Option.Some, Option::Some(1))))
+print(Function::apply(&User.name, User("alice")))
+print(Function::apply(_.name, User("bob")))
+print(inspect(Function::apply(&List.[0..1], [1, 2])))
+print(inspect(Function::apply(_.[0..1], [1, 2])))
+print(inspect(Function::apply(value: [1], f: &List.[0])))
+print(chain(_.name, &Tuple._0, (User("carol"), 1)))
+read: (List<Int> -> Result<Int>) = getter(&List.[0])
+print(inspect(read([1])))
+
+print(inspect(read_marked(&List.[index()], source(), marker())))

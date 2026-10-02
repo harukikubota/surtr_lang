@@ -27,6 +27,20 @@ enum FacetPathInput<'a> {
     Capture(PendingFacetPath),
 }
 
+enum OrderedCallArgument<'a> {
+    Present(&'a Resolved),
+    Missing(&'a str),
+}
+
+#[derive(Clone, Copy)]
+enum CallArgumentMode {
+    User {
+        allow_error_observer: bool,
+        defer_constructor_conflicts: bool,
+    },
+    Positional,
+}
+
 struct PreparedFacetInput {
     typed_source: TypedNode,
     source_is_result: bool,
@@ -7763,7 +7777,6 @@ impl Checker {
                     .collect::<Vec<_>>()
             })
             .or_else(|| self.user_func_params.get(&callee_uid).cloned());
-        let mut typed_args = Vec::with_capacity(params.len());
 
         if has_named {
             let names = param_names.as_ref().ok_or_else(|| TypeError {
@@ -7835,53 +7848,25 @@ impl Checker {
                 reordered[idx] = Some(expr);
             }
 
-            for (idx, expected_ty) in params.iter().enumerate() {
-                let expr = reordered[idx].ok_or_else(|| TypeError {
-                    structured: Some(self.argument_contract_diagnostic(
-                        TypeDiagnosticReason::MissingArgument,
-                        callee_label,
-                        Some(&names[idx]),
-                        params.len(),
-                        args.len(),
-                        span,
-                        DiagnosticOrigin::Call,
-                    )),
-                    message: format!("Missing argument '{}'", names[idx]),
-                    span: span.clone(),
-                    hint: None,
-                })?;
-                let defer = defer_constructor_conflicts
-                    && self.constructor_argument_needs_deferred_check(expected_ty);
-                let typed = if defer {
-                    self.check_node(expr)?
-                } else {
-                    self.check_argument_node_with_error_observer_context(
-                        expr,
-                        expected_ty,
-                        allow_error_observer_args,
-                    )?
-                };
-                self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
-                self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
-                if !defer && !matches!(self.resolve_ty(expected_ty), Ty::Hole) {
-                    self.assert_type_relation(
-                        expected_ty,
-                        &typed.ty,
-                        self.type_fact(SourceRole::Expected, span, expected_ty),
-                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
-                        TypeDiagnosticReason::ArgumentTypeMismatch,
-                        DiagnosticOrigin::Call,
-                        callee_label,
-                        typed_args.len() as u32,
-                    )
-                    .map_err(|error| match callable_hint {
-                        Some(hint) => error.with_hint(hint),
-                        None => error,
-                    })?;
-                }
-                typed_args.push(typed);
-            }
-            return Ok(typed_args);
+            let ordered = reordered
+                .into_iter()
+                .zip(names)
+                .map(|(expr, name)| match expr {
+                    Some(expr) => OrderedCallArgument::Present(expr),
+                    None => OrderedCallArgument::Missing(name),
+                })
+                .collect::<Vec<_>>();
+            return self.typecheck_ordered_call_args(
+                span,
+                callee_label,
+                params,
+                &ordered,
+                callable_hint,
+                CallArgumentMode::User {
+                    allow_error_observer: allow_error_observer_args,
+                    defer_constructor_conflicts,
+                },
+            );
         }
 
         if args.len() != params.len() {
@@ -7906,56 +7891,389 @@ impl Checker {
             });
         }
 
-        for (expected_ty, arg) in params.iter().zip(args) {
-            let ResolvedRecordLitArg::Positional(expr) = arg else {
-                return Err(TypeError {
-                    structured: Some(self.argument_contract_diagnostic(
-                        TypeDiagnosticReason::ArgumentModeMismatch,
-                        callee_label,
-                        None,
-                        params.len(),
-                        args.len(),
-                        span,
-                        DiagnosticOrigin::Call,
-                    )),
-                    message: "Cannot mix positional and named arguments".into(),
-                    span: span.clone(),
-                    hint: None,
-                });
-            };
-            let defer = defer_constructor_conflicts
-                && self.constructor_argument_needs_deferred_check(expected_ty);
-            let typed = if defer {
-                self.check_node(expr)?
-            } else {
-                self.check_argument_node_with_error_observer_context(
-                    expr,
-                    expected_ty,
-                    allow_error_observer_args,
-                )?
-            };
-            self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
-            self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
-            if !defer && !matches!(self.resolve_ty(expected_ty), Ty::Hole) {
-                self.assert_type_relation(
-                    expected_ty,
-                    &typed.ty,
-                    self.type_fact(SourceRole::Expected, span, expected_ty),
-                    self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
-                    TypeDiagnosticReason::ArgumentTypeMismatch,
-                    DiagnosticOrigin::Call,
-                    callee_label,
-                    typed_args.len() as u32,
-                )
-                .map_err(|error| match callable_hint {
-                    Some(hint) => error.with_hint(hint),
-                    None => error,
-                })?;
-            }
-            typed_args.push(typed);
-        }
+        let ordered = args
+            .iter()
+            .map(|arg| match arg {
+                ResolvedRecordLitArg::Positional(expr) => OrderedCallArgument::Present(expr),
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("argument modes were validated"),
+            })
+            .collect::<Vec<_>>();
+        self.typecheck_ordered_call_args(
+            span,
+            callee_label,
+            params,
+            &ordered,
+            callable_hint,
+            CallArgumentMode::User {
+                allow_error_observer: allow_error_observer_args,
+                defer_constructor_conflicts,
+            },
+        )
+    }
 
-        Ok(typed_args)
+    // Only direct unary FacetPath captures depend on a source supplied by the
+    // surrounding call. Callable shape errors are checked immediately.
+    fn pending_facet_capture_source(&self, expr: &Resolved, expected: &Ty) -> Option<Ty> {
+        let segments = Self::facet_capture_segments(expr)?;
+        let Ty::Func(params, _) = self.resolve_ty(expected) else {
+            return None;
+        };
+        let [source] = params.as_slice() else {
+            return None;
+        };
+        let root = Self::facet_capture_root(expr);
+        if root.is_some_and(|root| Self::known_non_facet_root_name(root).is_some()) {
+            return None;
+        }
+        if !matches!(source, Ty::Var(_) | Ty::Hole) {
+            if let Some(root) = root {
+                let valid_shape = match Self::facet_root_kind(root) {
+                    Some(FacetRootKind::TypeRoot) => {
+                        Self::facet_type_root_matches_source(root, source)
+                    }
+                    Some(FacetRootKind::Tuple) => matches!(source, Ty::Tuple(_)),
+                    Some(FacetRootKind::List) => matches!(source, Ty::List(_)),
+                    Some(FacetRootKind::HashMap) => matches!(source, Ty::Enum(name, args)
+                        if Self::surface_name(name) == "HashMap" && args.len() == 1),
+                    None => true,
+                };
+                if !valid_shape {
+                    return None;
+                }
+            }
+        }
+        let mut receiver = source.clone();
+        for (index, segment) in segments.iter().enumerate() {
+            receiver = self.resolve_ty(&receiver);
+            if matches!(&receiver, Ty::Var(var) if !self.rigid_tyvars.contains(var)) {
+                return Some(receiver);
+            }
+            // The final focus need not be fixed: checking the capture against
+            // its expected return type can determine it. Only receivers of
+            // remaining segments require a known shape.
+            if index + 1 == segments.len() {
+                break;
+            }
+            receiver = self.facet_capture_dependency_focus(&receiver, segment)?;
+        }
+        None
+    }
+
+    fn facet_capture_root(expr: &Resolved) -> Option<&Resolved> {
+        fn root(expr: &Resolved) -> &Resolved {
+            match expr {
+                Resolved::FieldAccess(_, inner, _)
+                | Resolved::FacetSegmentAccess(_, inner, _)
+                | Resolved::Grouped(_, inner) => root(inner),
+                _ => expr,
+            }
+        }
+        match expr {
+            Resolved::Grouped(_, inner) => Self::facet_capture_root(inner),
+            Resolved::Capture(_, target, _) => Some(root(target)),
+            _ => None,
+        }
+    }
+
+    fn facet_capture_segments(expr: &Resolved) -> Option<Vec<ResolvedFacetPathSegment>> {
+        fn path_segments(expr: &Resolved, segments: &mut Vec<ResolvedFacetPathSegment>) {
+            match expr {
+                Resolved::FieldAccess(_, inner, name) => {
+                    path_segments(inner, segments);
+                    segments.push(ResolvedFacetPathSegment::Field {
+                        name: name.clone(),
+                        optional: false,
+                    });
+                }
+                Resolved::FacetSegmentAccess(_, inner, segment) => {
+                    path_segments(inner, segments);
+                    segments.push(segment.clone());
+                }
+                Resolved::Grouped(_, inner) => path_segments(inner, segments),
+                _ => {}
+            }
+        }
+        match expr {
+            Resolved::Grouped(_, inner) => Self::facet_capture_segments(inner),
+            Resolved::InferredFacetCapture(_, segments) => Some(segments.clone()),
+            Resolved::Capture(_, target, args)
+                if args.is_empty() && Self::capture_target_is_facet_path(target) =>
+            {
+                let mut segments = Vec::new();
+                path_segments(target, &mut segments);
+                Some(segments)
+            }
+            _ => None,
+        }
+    }
+
+    // This reads dependencies only. Unsupported selectors return no dependency
+    // and are diagnosed by the ordinary root/segment checker; no error is
+    // caught and no candidate type or owner is inferred here.
+    fn facet_capture_dependency_focus(
+        &self,
+        source: &Ty,
+        segment: &ResolvedFacetPathSegment,
+    ) -> Option<Ty> {
+        match (source, segment) {
+            (
+                Ty::Tuple(items),
+                ResolvedFacetPathSegment::Field {
+                    name,
+                    optional: false,
+                },
+            ) => items.get(Self::parse_tuple_index_name(name)?).cloned(),
+            (
+                Ty::Record(owner, fields) | Ty::Struct(owner, fields),
+                ResolvedFacetPathSegment::Field {
+                    name,
+                    optional: false,
+                },
+            ) => {
+                let (field_name, field_ty) = if matches!(source, Ty::Record(..)) {
+                    if let Some(index) = Self::parse_tuple_index_name(name) {
+                        fields.get(index)?
+                    } else {
+                        fields.iter().find(|(field, _)| field == name)?
+                    }
+                } else {
+                    fields.iter().find(|(field, _)| field == name)?
+                };
+                if self
+                    .env
+                    .field_policy(owner, field_name)
+                    .is_some_and(|policy| policy.private)
+                    && self.current_impl_struct_target.as_deref() != Some(Self::surface_name(owner))
+                    && !self.allow_private_facet_inspection
+                {
+                    return None;
+                }
+                Some(field_ty.clone())
+            }
+            (Ty::List(inner), ResolvedFacetPathSegment::Bracket(bracket)) => Some(
+                if matches!(bracket.expr.as_ref(), Resolved::RangeLiteral(..)) {
+                    source.clone()
+                } else {
+                    inner.as_ref().clone()
+                },
+            ),
+            (Ty::Enum(name, args), ResolvedFacetPathSegment::Bracket(_))
+                if Self::surface_name(name) == "HashMap" && args.len() == 1 =>
+            {
+                Some(args[0].clone())
+            }
+            (
+                source,
+                ResolvedFacetPathSegment::Field {
+                    name,
+                    optional: false,
+                },
+            ) => {
+                let enum_name = Self::facet_enum_source_name(source)?;
+                let variant = self.lookup_enum_variant_by_short_name(&enum_name, name)?;
+                let (template_args, actual_args) = match (&variant.enum_ty, source) {
+                    (Ty::Enum(_, template), Ty::Enum(_, actual)) => {
+                        (template.clone(), actual.clone())
+                    }
+                    (Ty::Result(t_ok, t_err), Ty::Result(a_ok, a_err)) => (
+                        vec![*t_ok.clone(), *t_err.clone()],
+                        vec![*a_ok.clone(), *a_err.clone()],
+                    ),
+                    (Ty::Bool, Ty::Bool) => (Vec::new(), Vec::new()),
+                    _ => return None,
+                };
+                let bindings = template_args
+                    .iter()
+                    .zip(actual_args)
+                    .filter_map(|(template, actual)| {
+                        if let Ty::Var(var) = template {
+                            Some((*var, actual))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<HashMap<_, _>>();
+                let payload = variant
+                    .payload
+                    .iter()
+                    .map(|ty| self.substitute_type_def_ty(ty, &bindings))
+                    .collect::<Vec<_>>();
+                Some(match payload.as_slice() {
+                    [] => Ty::Unit,
+                    [only] => only.clone(),
+                    _ => Ty::Tuple(payload),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn typecheck_ordered_call_args(
+        &mut self,
+        span: &Span,
+        callee_label: &str,
+        params: &[Ty],
+        args: &[OrderedCallArgument<'_>],
+        callable_hint: Option<&str>,
+        mode: CallArgumentMode,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let mut typed_args = vec![None; params.len()];
+        let mut remaining = params.len();
+        loop {
+            let before = remaining;
+            let mut checked_this_pass = Vec::new();
+            for (ordinal, (expected_ty, arg)) in params.iter().zip(args).enumerate() {
+                if typed_args[ordinal].is_some() {
+                    continue;
+                }
+                let expr = match arg {
+                    OrderedCallArgument::Present(expr) => *expr,
+                    OrderedCallArgument::Missing(name) => {
+                        return Err(TypeError {
+                            structured: Some(
+                                self.argument_contract_diagnostic(
+                                    TypeDiagnosticReason::MissingArgument,
+                                    callee_label,
+                                    Some(name),
+                                    params.len(),
+                                    args.iter()
+                                        .filter(|arg| {
+                                            matches!(arg, OrderedCallArgument::Present(_))
+                                        })
+                                        .count(),
+                                    span,
+                                    DiagnosticOrigin::Call,
+                                ),
+                            ),
+                            message: format!("Missing argument '{}'", name),
+                            span: span.clone(),
+                            hint: None,
+                        })
+                    }
+                };
+                if self
+                    .pending_facet_capture_source(expr, expected_ty)
+                    .is_some()
+                {
+                    continue;
+                }
+                let (typed, defer) = match mode {
+                    CallArgumentMode::User {
+                        allow_error_observer,
+                        defer_constructor_conflicts,
+                    } => {
+                        let defer = defer_constructor_conflicts
+                            && self.constructor_argument_needs_deferred_check(expected_ty);
+                        let typed = if defer {
+                            self.check_node(expr)?
+                        } else {
+                            self.check_argument_node_with_error_observer_context(
+                                expr,
+                                expected_ty,
+                                allow_error_observer,
+                            )?
+                        };
+                        self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
+                        self.check_expected_constructor_capability(
+                            expected_ty,
+                            callee_label,
+                            &typed,
+                        )?;
+                        (typed, defer)
+                    }
+                    CallArgumentMode::Positional => (
+                        if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+                            self.check_node(expr)?
+                        } else {
+                            self.check_node_with_expected(expr, Some(expected_ty))?
+                        },
+                        false,
+                    ),
+                };
+                if !defer {
+                    if matches!(mode, CallArgumentMode::Positional) {
+                        checked_this_pass.push(ordinal);
+                    } else {
+                        self.check_call_argument_relation(
+                            span,
+                            callee_label,
+                            expected_ty,
+                            &typed,
+                            callable_hint,
+                            ordinal,
+                        )?;
+                    }
+                }
+                typed_args[ordinal] = Some(typed);
+                remaining -= 1;
+            }
+            // Function-value/positional calls historically check expressions
+            // before relating their types. Preserve that diagnostic order while
+            // making their constraints available to source-dependent captures.
+            for ordinal in checked_this_pass {
+                self.check_call_argument_relation(
+                    span,
+                    callee_label,
+                    &params[ordinal],
+                    typed_args[ordinal].as_ref().expect("argument was checked"),
+                    callable_hint,
+                    ordinal,
+                )?;
+            }
+            if remaining == 0 {
+                return Ok(typed_args
+                    .into_iter()
+                    .map(|arg| arg.expect("all call arguments were checked"))
+                    .collect());
+            }
+            if remaining == before {
+                let ordinal = typed_args
+                    .iter()
+                    .position(Option::is_none)
+                    .expect("remaining call argument exists");
+                let OrderedCallArgument::Present(expr) = args[ordinal] else {
+                    unreachable!("missing arguments were rejected")
+                };
+                let source = self
+                    .pending_facet_capture_source(expr, &params[ordinal])
+                    .expect("unchecked call argument must be a source-dependent capture");
+                return Err(TypeError {
+                    structured: None,
+                    message: format!("FacetPath capture has unresolved source type: {}",
+                        self.diagnostic_ty_name(&source)),
+                    span: self.resolved_span(expr).clone(),
+                    hint: Some("Provide the source type through another argument or a callable annotation.".into()),
+                });
+            }
+        }
+    }
+
+    fn check_call_argument_relation(
+        &mut self,
+        span: &Span,
+        callee_label: &str,
+        expected: &Ty,
+        typed: &TypedNode,
+        callable_hint: Option<&str>,
+        ordinal: usize,
+    ) -> Result<(), TypeError> {
+        if matches!(self.resolve_ty(expected), Ty::Hole) {
+            return Ok(());
+        }
+        self.assert_type_relation(
+            expected,
+            &typed.ty,
+            self.type_fact(SourceRole::Expected, span, expected),
+            self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Call,
+            callee_label,
+            ordinal as u32,
+        )
+        .map_err(|error| match callable_hint {
+            Some(hint) => error.with_hint(hint),
+            None => error,
+        })
     }
 
     fn constructor_argument_needs_deferred_check(&self, expected_ty: &Ty) -> bool {
@@ -10900,41 +11218,21 @@ impl Checker {
             });
         }
 
-        let typed_args: Vec<TypedNode> = args
+        let ordered = args
             .iter()
-            .zip(params.iter())
-            .map(|(arg, expected)| match arg {
-                ResolvedRecordLitArg::Positional(expr) => match self.resolve_ty(expected) {
-                    Ty::Hole => self.check_node(expr),
-                    _ => self.check_node_with_expected(expr, Some(expected)),
-                },
-                ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
-                    structured: None,
-                    message: named_arg_error.clone(),
-                    span: span.clone(),
-                    hint: None,
-                }),
+            .map(|arg| match arg {
+                ResolvedRecordLitArg::Positional(expr) => OrderedCallArgument::Present(expr),
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("named arguments were rejected"),
             })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        for (ordinal, (param, arg)) in params.iter().zip(&typed_args).enumerate() {
-            if !matches!(self.resolve_ty(param), Ty::Hole) {
-                self.assert_type_relation(
-                    param,
-                    &arg.ty,
-                    self.type_fact(SourceRole::Expected, span, param),
-                    self.type_fact(SourceRole::Value, &arg.span, &arg.ty),
-                    TypeDiagnosticReason::ArgumentTypeMismatch,
-                    DiagnosticOrigin::Call,
-                    callee_name,
-                    ordinal as u32,
-                )
-                .map_err(|error| match &callable_hint {
-                    Some(hint) => error.with_hint(hint),
-                    None => error,
-                })?;
-            }
-        }
+            .collect::<Vec<_>>();
+        let typed_args = self.typecheck_ordered_call_args(
+            span,
+            callee_name,
+            params,
+            &ordered,
+            callable_hint.as_deref(),
+            CallArgumentMode::Positional,
+        )?;
 
         typed_args
             .into_iter()
@@ -14674,6 +14972,21 @@ impl Checker {
         }))
     }
 
+    fn facet_type_root_matches_source(root: &Resolved, source: &Ty) -> bool {
+        let Resolved::Var(_, id) = root else {
+            return false;
+        };
+        let authored_owner = id.qualified_name.as_deref().unwrap_or(&id.name);
+        let expected_owner = match source {
+            Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.as_str(),
+            Ty::Bool => "Boolean",
+            Ty::Result(_, _) => "Result",
+            _ => return false,
+        };
+        Self::canonical_user_type_name(authored_owner)
+            == Self::canonical_user_type_name(expected_owner)
+    }
+
     fn check_type_root_facet_path_with_expected(
         &mut self,
         span: &Span,
@@ -14688,16 +15001,10 @@ impl Checker {
                     Resolved::Var(_, id) => id.qualified_name.as_deref().unwrap_or(&id.name),
                     _ => unreachable!("type-root Facet paths are resolved variables"),
                 };
-                let expected_owner = match self.resolve_ty(&expected_source_ty) {
-                    Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => Some(name),
-                    Ty::Bool => Some("Boolean".into()),
-                    Ty::Result(_, _) => Some("Result".into()),
-                    _ => None,
-                };
-                let same_owner = expected_owner.is_some_and(|expected_owner| {
-                    Self::canonical_user_type_name(authored_owner)
-                        == Self::canonical_user_type_name(&expected_owner)
-                });
+                let same_owner = Self::facet_type_root_matches_source(
+                    expr,
+                    &self.resolve_ty(&expected_source_ty),
+                );
                 if !same_owner {
                     return Err(TypeError {
                         structured: None,

@@ -45,8 +45,6 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
-    surface_case!(error_kind_rejects_user_type_positions),
-    surface_case!(recover_kind_rejects_invalid_handlers),
     (
         "process_stdlib_no_longer_declares_task_hidden_lower_helpers",
         process_stdlib_no_longer_declares_task_hidden_lower_helpers as fn(),
@@ -79,6 +77,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "match_bool_qualified_constructor_patterns_require_exhaustive_arms",
         match_bool_qualified_constructor_patterns_require_exhaustive_arms as fn(),
     ),
+    surface_case!(facet_capture_call_inference_preserves_argument_diagnostics),
+    surface_case!(error_kind_rejects_user_type_positions),
+    surface_case!(recover_kind_rejects_invalid_handlers),
+    surface_case!(facet_capture_call_inference_resolves_later_arguments),
+    surface_case!(facet_capture_call_inference_resolves_dependencies_and_return),
+    surface_case!(facet_capture_call_inference_rejects_invalid_paths_and_unresolved_source),
     surface_case!(match_root_or_contributes_to_exhaustiveness),
     surface_case!(match_root_or_as_alias_contributes_to_exhaustiveness),
     surface_case!(if_let_or_shares_binding_type),
@@ -11386,6 +11390,172 @@ ordinary()"#,
             "{source}"
         );
     }
+}
+
+fn facet_capture_call_inference_resolves_later_arguments() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(name: String)
+a = Function::apply(&List.[0], [1])
+b = Function::apply(&Tuple._0, (1, 2))
+c = Function::apply(&HashMap.["a"], HashMap::map_from_entries([("a", 1)]))
+d = Function::apply(&Option.Some, Option::Some(1))
+e = Function::apply(&User.name, User("alice"))
+f = Function::apply(_.[0], [1])
+g = Function::apply(_._0, (1, 2))
+h = Function::apply(_.name, User("alice"))
+i = Function::apply(&List.[0..1], [1, 2])
+j = Function::apply(_.[0..1], [1, 2])
+k = Function::apply(value: [1], f: &List.[0])
+l = Function::apply(value: [1], f: _.[0])
+m = Function::apply(_.["a"], HashMap::map_from_entries([("a", 1)]))
+n = Function::apply(_.Some, Option::Some(1))
+o = Function::apply((&List.[0]), [1])
+p = Function::apply((_._0), (1, 2))"#,
+    );
+    for name in ["a", "c", "d", "f", "k", "l", "m", "n", "o"] {
+        assert!(
+            matches!(&typed_bind_rhs(&typed, name).ty,
+            Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Int)),
+            "{name}"
+        );
+    }
+    for name in ["b", "g", "p"] {
+        assert!(matches!(typed_bind_rhs(&typed, name).ty, Ty::Int), "{name}");
+    }
+    for name in ["e", "h"] {
+        assert!(matches!(typed_bind_rhs(&typed, name).ty, Ty::Str), "{name}");
+    }
+    for name in ["i", "j"] {
+        assert!(
+            matches!(&typed_bind_rhs(&typed, name).ty,
+            Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::List(_))),
+            "{name}"
+        );
+    }
+}
+
+fn facet_capture_call_inference_resolves_dependencies_and_return() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def chain(outer: ($B -> $C), inner: ($A -> $B), value: $A) -> $C {
+  outer(inner(value))
+}
+def getter(f: ($A -> $B)) -> ($A -> $B) { f }
+def empty_after(f: ($A -> $B)) -> List<$A> { [] }
+def consume(f: (($A, Int) -> String)) -> Unit { () }
+def nested(f: (($A, Int) -> String), value: $A) -> String { f((value, 0)) }
+defrecord User(name: String)
+a = chain(_.name, &Tuple._0, (User("alice"), 1))
+b = chain(&User.name, _._0, (User("bob"), 2))
+c: (List<Int> -> Result<Int>) = getter(&List.[0])
+d: (List<Int> -> Result<Int>) = getter(_.[0])
+f: ((List<Int> -> Result<Int>), List<Int> -> Result<Int>) = &Function::apply
+e = f(&List.[0], [1])
+list_reader: (List<Int> -> Result<Int>) = &List.[0]
+g = Function::apply(list_reader, [1])
+h = Facet::view(List.[0], [1])
+i = Facet::view(~[1].[0])
+j = List::map([(1, [])], &Tuple._0)
+k = List::map([(1, [])], _._0)
+consume(&Tuple._0)
+consume(_._0)
+l = nested(_._0.name, User("alice"))
+m: List<User> = empty_after(_.name)"#,
+    );
+    for name in ["a", "b", "l"] {
+        assert!(matches!(typed_bind_rhs(&typed, name).ty, Ty::Str), "{name}");
+    }
+    assert!(
+        matches!(&typed_bind_rhs(&typed, "m").ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Record(_, _)))
+    );
+    for name in ["c", "d"] {
+        assert!(
+            matches!(typed_bind_rhs(&typed, name).ty, Ty::Func(_, _)),
+            "{name}"
+        );
+    }
+    for name in ["j", "k"] {
+        assert!(
+            matches!(&typed_bind_rhs(&typed, name).ty, Ty::List(inner) if matches!(inner.as_ref(), Ty::Int)),
+            "{name}"
+        );
+    }
+    for name in ["e", "g", "h", "i"] {
+        assert!(
+            matches!(&typed_bind_rhs(&typed, name).ty,
+            Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Int)),
+            "{name}"
+        );
+    }
+}
+
+fn facet_capture_call_inference_rejects_invalid_paths_and_unresolved_source() {
+    for (source, message) in [
+        (
+            r#"Function::apply(&List.[0], "text")"#,
+            "List root Facet path requires List<T>",
+        ),
+        ("Function::apply(&Tuple._2, (1, 2))", "out of bounds"),
+        ("Function::apply(_._2, (1, 2))", "out of bounds"),
+        (
+            r#"Function::apply(&HashMap.[1], HashMap::map_from_entries([("a", 1)]))"#,
+            "must be String",
+        ),
+        (
+            "defrecord User(name: String)\nFunction::apply(&User.name, (1, 2))",
+            "owner mismatch",
+        ),
+        ("_.name", "requires expected unary function context"),
+        ("def getter(f: ($A -> $B)) -> ($A -> $B) { f }\ngetter(&Int._0)", "not a Facet path root"),
+
+        ("defstruct Secret<$A> { private value: $A }\nimpl Secret { def new(value: $A) -> Secret<$A> { Secret { value: value } } }\ndef consume(f: (Secret<$A> -> String)) -> Unit { () }\nconsume(_.value.name)", "private"),
+
+        (r#"Function::apply(&List.["bad"], [1])"#, "must be Int"),
+        (
+            "defrecord User(name: String)\nFunction::apply(&User.missing, User(\"alice\"))",
+            "missing",
+        ),
+        (
+            "defrecord User(name: String)\nFunction::apply(_.missing, User(\"alice\"))",
+            "missing",
+        ),
+        (
+            "def getter(f: ($A -> $B)) -> ($A -> $B) { f }\ngetter(&List.[0])",
+            "unresolved source type",
+        ),
+        (
+            "def getter(f: ($A -> $B)) -> ($A -> $B) { f }\ngetter(_.name)",
+            "unresolved source type",
+        ),
+        (
+            "def pair(f: ($A -> $B), g: ($B -> $A)) -> Unit { () }\npair(_.name, _.name)",
+            "unresolved source type",
+        ),
+    ] {
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+        assert!(
+            error.message.contains(message),
+            "{source}: {}",
+            error.message
+        );
+    }
+}
+
+fn facet_capture_call_inference_preserves_argument_diagnostics() {
+    let source = "def f(a: Int, b: Int) -> Unit { () }\nf(a: \"bad\")";
+    let error = typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+    assert!(error.message.contains("mismatch"), "{}", error.message);
+    assert!(!error.message.contains("Missing argument"));
+
+    let source = "def pair(f: ($A -> $B), g: ($B -> $A)) -> Unit { () }\npair(_.name, _.name)";
+    let error = typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+    let start = source.find("_.name").unwrap();
+    assert_eq!(
+        error.span,
+        Span {
+            start,
+            end: start + "_.name".len()
+        }
+    );
 }
 
 fn error_kind_rejects_user_type_positions() {
