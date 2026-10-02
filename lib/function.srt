@@ -21,6 +21,9 @@ defmod Function {
   `($A, $A -> $C)` by applying `key` to both inputs before calling `f`.
 
   This is useful for keyed comparisons and grouping logic.
+  Bare infix `on` and `Function::on` bind below pipeline operators.
+  The reserved name cannot be used for variables, parameters, or fields;
+  callable declarations and existing import rules are unchanged.
 
   ## REPL
   xldr(1)> by_len = on({|left, right| compare(left, right)}, &String::len)

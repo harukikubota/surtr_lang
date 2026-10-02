@@ -120,6 +120,8 @@ apply_pattern([10, 20, 30], [_1: Int, .._2: List<Int>])
 
 Extractor の失敗は元の Error を保持した `Err` になります。普通の Pattern 不一致も `Err` になりますが、外側の関数から早期 return しません。入力が Result でもそのまま照合するので、成功 payload を取り出す場合は `apply_pattern(Ok(3), Ok(_1))` と書きます。Pattern 内の通常 binding は外へ公開されません。
 
+pipeは右辺の最外Callだけを操作し、直接引数のplaceholderへ、なければ先頭へ左辺を挿入します。引数数によって挿入方法を変えず、PatternやLazyへの注入を拒否します。入れ子のCallやPattern内部ではpipe slotを探しません。
+
 projection は `apply_pattern` の Pattern 内専用です。事前引数では使えず、OR Pattern もこの consumer では使えません。`_` や `_name` は値を取り出さない wildcard のままです。
 
 ## Result を返す関数を使う

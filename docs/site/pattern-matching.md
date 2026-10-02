@@ -66,6 +66,19 @@ print(to_string(if_let(pair, (1, x) | (2, x), x, 0)))
 
 具体例は `../../tests/fixtures/script/pass/control/` と `../../tests/fixtures/script/fail/exhaustiveness/` が参考になります。
 
+## consumer の呼び出し
+
+`is_match`、`apply_pattern`、`if_let`、`if_let_then` は、第2引数をPatternとして読みます。通常の前置Call、`Kernel::` 修飾、backtick前置Callで同じ文法を使います。`Regex::is_match` は通常のExpr引数Callです。
+
+```surtr
+Ok(1) `is_match` Ok(_) | Err(_)
+[10, 20] `apply_pattern` [_, _1]
+```
+
+中置Callは左辺を第1引数、右辺をPatternとして扱います。後続のExpr演算子はPatternの外側へ戻ります。`if_let` / `if_let_then` は2引数では不足するため中置Callにできません。ORと中置Callの改行規則は通常演算子と同じです。
+
+`p1 | p2 @ whole` はOR全体にaliasを付けます。最外aliasは照合対象全体、子Patternのaliasはその子位置の値を束縛します。同じ階層に `@` を連続させることはできません。
+
 ## projection を Result へ返す
 
 `apply_pattern(value, pattern)` は値全体を一度だけ照合し、成功した projection を `Ok`、失敗を `Err` にします。`_1`〜`_16` は1から連続・重複なしで指定し、番号順に返します。0個なら Unit、1個ならその値、複数なら tuple になります。
