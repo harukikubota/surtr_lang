@@ -13,7 +13,7 @@ Extractor は `match` や `=?` で使う「分解の入口」です。
 
 これは `$Tail` や Union を対象にする1個の generic Extractor ではありません。適用する値から、`List<$T>` と `String` のどちらか一方の concrete な静的契約が選ばれます。runtime 実装は共有できますが、SRT だけで定義する場合は型ごとに別の Extractor として記述します。
 
-pattern の `[head, ..tail]` はこの alias です。
+Pattern の `[head, ..tail]` も同じ head / tail の分解を表します。ただし、list の構造的 Pattern と `uncons(...)` では失敗 Error が異なります。空 list の `[head, ..tail]` は `EmptyList`、`uncons(head, tail)` は `PatternMismatch` を返します。分岐ではどちらも不一致ですが、`=?` や `apply_pattern` ではこの違いが保持されます。
 
 ## user-defined extractor
 
@@ -146,7 +146,7 @@ REPLで `:doc Extractor` を開くと、named Extractor、ExtractorClosure、事
 - extractor 名は constructor-style の大文字始まりにしない
 - extractor の入力型と pattern 期待型が合わないと type error
 - extractor の照合対象に裸の generic type parameter や Trait `where` 一般化を使わない
-- 戻り値の arity と pattern 側の束縛数が合う必要がある
+- 成功 payload に対応する子 Pattern 数を合わせる。単値は1個、tuple は要素数、Unit は0個または1個。literal や wildcard も子 Pattern に数える
 
 関連する compile error 例は `../../tests/fixtures/modules/fail/resolve_extractor_*` と `../../tests/fixtures/modules/fail/type_mismatch_extractor_*` にあります。
 

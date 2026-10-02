@@ -244,8 +244,8 @@ both = &and(&1, &2)
 # (Boolean, (-> Boolean) -> Boolean)
 both(True, {|| False}) # False
 
-check = &is_match(&1, Ok(_))
-pick = &apply_pattern(&1, [_1, .._])
+check: (Result<Int> -> Boolean) = &is_match(&1, Ok(_))
+pick: (List<Int> -> Result<Int>) = &apply_pattern(&1, [_1, .._])
 add_on_success = &if_let(&1, Ok(x), x + &2, 0)
 # 第2引数は Int
 ```

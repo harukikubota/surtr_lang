@@ -367,11 +367,14 @@ defmod Kernel {
   below records the List contract; the compiler-owned String pattern route uses
   the String contract while sharing the same runtime primitive.
 
-  In pattern position, `[head, ..tail]` is an alias of `uncons(head, tail)`.
-  This alias is MatchBlock-only; expression position keeps list construction
-  semantics, so `["t", ..source]` is still a list expression.
+  In pattern position, `[head, ..tail]` expresses the same head/tail decomposition.
+  A structural List pattern has its own failure Error: empty head/tail input
+  gives `EmptyList`, whereas direct `uncons(head, tail)` gives `PatternMismatch`.
+  Expression position keeps list construction semantics, so `["t", ..source]`
+  is still a list expression.
 
-  Empty input returns `MatchResult::Err` with `PatternMismatch("Pattern did not match.")`.
+  Empty input to `uncons` returns `MatchResult::Err` with
+  `PatternMismatch("Pattern did not match.")`.
   Branch consumers treat this as no match; `=?` preserves the Error.
 
   ## REPL

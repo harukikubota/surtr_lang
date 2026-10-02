@@ -156,7 +156,7 @@ defmod Extractor {
     }
 }
 
-decimal = Extractor::from_result(&String::try_to_int)
+decimal = Extractor::from_result(&Int::parse)
 apply_pattern("123", decimal(_1: Int))
 # Ok(123)
 ```
@@ -304,6 +304,16 @@ result = apply_pattern([10, 20], [temporary, _1: Int])
 非保持 consumer は Error の kind / message / location / cause を表示・伝播・記録しない。OK 後の literal / constructor / list shape 等の子 Pattern 不一致は既存の Pattern failure である。nested Extractor が Err を返した場合、保持 consumer は実際に失敗した nested Extractor の Error を使う。
 
 Error を返す consumer policy と Extractor の返却 carrier 解釈は共通 Pattern engine の責務として接続する。apply_pattern や do が独自の Extractor tag / 名前判定を再実装しない。
+
+## match の網羅性解析の範囲
+
+網羅性は guard のない arm だけから判定する。binding / wildcard、および子がすべて catch-all の tuple / Record は単一 arm の catch-all になる。compiler-owned な `Duration::deconstruct` も子がすべて catch-all なら同じ判定を行う。一般の Extractor は catch-all とみなさない。
+
+catch-all がない場合、Boolean / Result / enum は外側の variant、List は空 / head-tail、String は空文字 / `uncons` の被覆を検査する。OR と as-pattern を介した被覆も扱うが、constructor の payload や list の子 Pattern がすべての値を覆うかまでは解析しない。したがって、外側の被覆として受理された `match` でも、子 Pattern による実行時の取りこぼしがあり得る。複数 arm の子 Pattern を合成した一般的な構造的網羅性の証明は現行契約に含めない。
+
+## sequence 分解の失敗 Error
+
+`[head, ..tail]` と `Kernel::uncons(head, tail)` は同じ head / tail の分解を表すが、list の構造的 Pattern と named Extractor の実行経路は区別する。空 list の構造的 head-tail Pattern は `EmptyList`、固定長 list の長さ不一致は `IndexOutOfBounds` を使う。直接 `uncons` を適用した空 list / string は builtin の `PatternMismatch` を保持する。分岐 consumer はこれらを不一致として扱い、保持 consumer は各経路の Error をそのまま返す。分解の説明で用いる alias は Error の同一性まで意味しない。
 
 ## MatchResult 本文内の SafeBind
 

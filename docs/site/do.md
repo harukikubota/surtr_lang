@@ -146,7 +146,7 @@ total `<-`は利用できても、partial `<-`やSafeBindは能力不足にな�
 
 - `guard`、`pure`、`return`は通常callです。引数式の評価をdoが特別に遅延化しません。
 - nested doはそれぞれ自身のcarrierでfailure targetを決め、外側のResult effectを継承しません。
-- do外のSafeBindは最も近いcallable自身のResult/Result-effect return targetを要求します。
+- do外のSafeBindは最も近いcallable自身のfailure targetを使います。通常の関数・ClosureではResult/Result-effect return target、Extractor・ExtractorClosure本文ではMatchResult return targetへ元Errorを保持して返します。
 - `DoBlock`はcompiler専用signature markerで、利用者が値、field、annotation、implに使う型ではありません。
 
 構文の一覧は[言語リファレンス](./language-reference.md)、Errorの扱いは[エラーハンドリング](./error-handling.md)、
