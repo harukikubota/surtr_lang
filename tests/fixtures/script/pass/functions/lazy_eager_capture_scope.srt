@@ -1,0 +1,18 @@
+def prepare(value: Int) -> Int { print("eager"); value + 1 }
+def make(value: Int) -> (Result<Int> -> Int) {
+  &if_let(&1, Ok(value), (prepare(value)), 0)
+}
+
+data = &if_let(Ok(1), Ok(x), x + &1, 0)
+print(to_string(data(2)))
+fixed = make(10)
+print("created")
+print(to_string(fixed(Ok(99))))
+print(to_string(fixed(Err(NoneError))))
+direct = &if(&1, ((&2)), 0)
+print(to_string(direct(True, {|| 7})))
+grouping = &if_let(Ok(1), Ok(x), x + (&1 + 1), 0)
+print(to_string(grouping(2)))
+extract = *{|offset: Int, value: Int| MatchResult::OK(value + offset)}
+pattern_arg = &if_let(&1, extract(&2, x), x, 0)
+print(to_string(pattern_arg(1, 2)))

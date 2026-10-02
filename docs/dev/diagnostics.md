@@ -52,6 +52,7 @@ source span を必要としない説明や修正案を `labels` に置かない�
 
 正規化と各フェーズの責務は[Lazy special formの実装契約](Lazy_spec.md)に従う。
 Pattern 位置の直接プレースホルダ、binding を作る Pattern の成功 branch に対する DirectExpression 要求、eager 式から成功 binding を参照した `UndefinedVariable` は、それぞれの構文・scope・型契約に従って診断する。
+Lazy の eager 式からキャプチャの生成引数を参照した場合は、Sigil の `Capture` reason で拒否し、プレースホルダの参照 span を示す。直接置換の `&N`・`(&N)` は対象外とする。通常の名前解決失敗はその診断を維持し、型不一致や thunk 化による救済へ進めない。
 Pattern を通常 Expr として解析し直すことや、照合前の eager 式を成功 scope へ戻す救済は行わない。
 
 Lazy の正規化は最大一段の wrap に限定する。正規化後の型不一致と、同じ capture placeholder の要求型競合は通常の型関係で拒否する。

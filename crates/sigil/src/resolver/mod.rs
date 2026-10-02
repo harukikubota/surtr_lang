@@ -1190,6 +1190,8 @@ pub fn effective_visible_entries(
 
 struct Resolver {
     scope: Scope,
+    /// Identities introduced by capture placeholders in the enclosing closures.
+    capture_placeholder_ids: HashSet<u32>,
     /// Shared provisional identities while resolving one whole Pattern. Their
     /// binding/outer choice is carried explicitly to Scar, never inferred here.
     pattern_proxies: Option<HashMap<String, ResolvedId>>,

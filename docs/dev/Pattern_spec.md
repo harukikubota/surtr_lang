@@ -394,7 +394,7 @@ Extractor の Expr / 子 Pattern の役割を確定した情報から binding �
 DirectExpression は成功 branch 位置へ直接書く Expr を指す。通常データを受け取る `&N` や `x + &N` を許可し、外部 thunk に成功 scope を後から与えない。
 この要求はtyped armに保持し、後続の型推論・generic forwarding・specialization後にも検証する。生成時点で型が未知でも、後から外部0引数関数に確定すれば拒否する。
 Pattern自体が束縛した関数値と、成功branch内で生成した通常closureは、外部thunkによる成功branchの置換と区別する。payloadの暗黙注入やlexical scopeの付け替えは行わない。
-成功 branch の eager 式 `(EXPR)` は照合前の scope で名前解決する。外側に同名 binding がなければ `UndefinedVariable` とする。
+成功 branch の eager 式 `(EXPR)` は、Pattern binding とキャプチャの生成引数が導入される前のローカル scope で名前解決する。外側に同名 binding がなければ `UndefinedVariable` とする。今回の `&N` を eager 式から参照することは、成功・失敗 branch と binding の有無によらず Sigil で拒否する。`x + &N` のように成功 scope で直接評価する式と、位置全体の `&N`・`(&N)` は維持する。
 `match` arm の括弧は arm 内の grouping とし、Lazy の eager 境界を適用しない。
 
 Pattern と成功 branch を同じ生成 closure 内に保持したキャプチャ関数値は、通常の引数・戻り値・変数として受け渡せる。

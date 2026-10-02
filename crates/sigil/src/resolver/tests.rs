@@ -8739,6 +8739,87 @@ fn if_let_eager_boundary_resolves_before_binding_scope() {
 }
 
 #[test]
+fn lazy_eager_expression_rejects_capture_parameter_references() {
+    let modules = vec![
+        staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { OK($T), Err(Error) }", "")),
+        staged_auto_import_module("Kernel", parse_module_ast(
+            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def assert(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
+        kernel_pattern_test_module(),
+        staged_module("Result", parse_module_ast(
+            "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
+    ];
+    for source in [
+        "f = &if(&1, (1 + &2), 0)",
+        "f = &Kernel::if(&1, 0, (1 + &2))",
+        "f = &if_then(&1, (print(to_string(&2))))",
+        "f = &and(&1, (True == &2))",
+        "f = &or(&1, (True == &2))",
+        "f = &assert(&1, (inspect(&2)))",
+        "f = &ensure(&1, &inspect, (inspect(&2)))",
+        "f = &Result::map_err(&1, (inspect(&2)))",
+        "f = &Result::cause(&1, (inspect(&2)))",
+        "x = 10\nf = &if_let(&1, Ok(x), (x + &2), 0)",
+        "f = &Kernel::if_let(&1, Ok(_), (1 + &2), 0)",
+        "f = &if_let(&1, Ok(x), x, (1 + &2))",
+        "f = &if_let_then(&1, Ok(x), (print(to_string(&2))))",
+        "f = &if_let_then(&1, Ok(_), (print(to_string(&2))))",
+        "f = &inspect(if(True, (1 + &1), 0))",
+        "x = 10\nf = &inspect(if_let(Ok(1), Ok(x), (x + &1), 0))",
+        "f = &if(&1, (if(True, &2, 0)), 0)",
+        "e = *{|limit: Int, value: Int| MatchResult::OK(value)}\nf = &if(&1, (is_match(1, e(&2, _))), False)",
+        "e = *{|limit: Int, value: Int| MatchResult::OK(value)}\nf = &if(&1, (if_let(1, e(&2, x), x, 0)), 0)",
+    ] {
+        let error = resolve_user_with_modules(source, &[modules.clone()])
+            .err()
+            .unwrap_or_else(|| panic!("Lazy eager expression must reject: {source}"));
+        assert_eq!(
+            error.diagnostic.reason,
+            crate::error::ResolveErrorReason::Capture,
+            "{source}: {error:?}"
+        );
+        assert!(
+            error.message.contains("Lazy eager expression"),
+            "{source}: {error:?}"
+        );
+        assert!(
+            matches!(&source[error.span.start..error.span.end], "&1" | "&2"),
+            "{source}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn lazy_eager_scope_preserves_direct_parameters_and_ordinary_grouping() {
+    for source in [
+        "f = &if_let(&1, Ok(x), &2, 0)",
+        "f = &if_let(&1, Ok(x), ((&2)), 0)",
+        "f = &if_let(&1, Ok(x), x + &2, 0)",
+        "f = &if_let(&1, Ok(x), x + (&2 + 1), 0)",
+        "f = &if_let(&1, Ok(x), match x { _ => (&2 + 1) }, 0)",
+        "x = 10\nf = &if_let(&1, Ok(x), (x + 1), 0)",
+    ] {
+        parse_and_resolve_pattern_consumers(source).expect(source);
+    }
+    // Ordinary function arguments have grouping, without a Lazy eager boundary.
+    parse_and_resolve("def add(x: Int, y: Int) -> Int { x + y }\nf = &add(&1, (1 + &2))")
+        .expect("ordinary grouped argument keeps its capture placeholders");
+    resolve_user_with_modules(
+        "e = *{|limit: Int, value: Int| MatchResult::OK(value)}\nf = &if_let(&1, e(&2, x), x, 0)",
+        &[vec![
+            kernel_pattern_test_module(),
+            staged_module(
+                "",
+                parse_module_ast(
+                    "@builtin defenum MatchResult<$T> { OK($T), Err(Error) }",
+                    "",
+                ),
+            ),
+        ]],
+    )
+    .expect("Pattern pre-argument outside a Lazy eager boundary keeps its placeholder");
+}
+
+#[test]
 fn capture_placeholder_references_have_generated_identity() {
     let resolved = parse_and_resolve_pattern_consumers("f = &if_let(&1, Ok(x), &2, 0)").unwrap();
     let Resolved::Bind(_, _, body) = &resolved[0] else {

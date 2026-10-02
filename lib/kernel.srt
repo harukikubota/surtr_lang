@@ -83,6 +83,10 @@ defmod Kernel {
 
   A branch placeholder in a capture receives the normalized zero-argument
   callable type. `&N` and `(&N)` have the same meaning in that position.
+  A fixed eager expression `(EXPR)` reads the local context before capture
+  parameters are introduced and cannot refer to a capture placeholder.
+  For example, `&if(&1, (1 + &2), 0)` is rejected. Fixed eager expressions
+  still run once before branch selection on each invocation of the capture.
   If both branches are placeholders, an expected callable type or annotation
   must determine their signature. For example, `&if(&1, &2, 0)` has type
   `(Boolean, (-> Int) -> Int)`; its second argument is a callable, not an `Int`.
@@ -114,7 +118,10 @@ defmod Kernel {
   written success expression, even when the expression does not use a binding.
   Without bindings, the success branch follows ordinary Lazy normalization.
   A parenthesized eager expression resolves names before pattern matching,
-  so it cannot use a binding introduced by this pattern.
+  so it cannot use a binding introduced by this pattern. In a captured call,
+  it also cannot refer to a capture placeholder: `x + &1` is a direct
+  success expression, while `(x + &1)` is rejected even if an outer `x` exists.
+  A direct placeholder `&N` or `(&N)` is not an eager expression.
 
   A complete call can be captured with the pattern written in place, such as
   `&if_let(&1, Ok(x), x + &2, 0)`. Here `&2` receives ordinary `Int` data.
@@ -138,6 +145,10 @@ defmod Kernel {
   xldr(4)> add_on_ok = &if_let(&1, Ok(x), x + &2, 0)
   xldr(5)> add_on_ok(Ok(1), 2)
   3
+  xldr(6)> outer_value = 10
+  xldr(7)> fixed = &if_let(&1, Ok(outer_value), (outer_value + 1), 0)
+  xldr(8)> fixed(Ok(99))
+  11
   """
   @builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B
 
@@ -153,6 +164,8 @@ defmod Kernel {
   A binding-producing pattern requires a directly written success expression;
   a binding-free pattern uses ordinary Lazy normalization. Eager expressions
   resolve names before matching and cannot refer to new pattern bindings.
+  In a captured call they also cannot refer to capture placeholders.
+  Direct placeholders `&N` and `(&N)` remain ordinary parameter references.
   Complete calls can be captured with a fixed pattern. Bare consumer captures
   and placeholders replacing the pattern itself are rejected.
   `&if_let_then(Ok(1), Ok(_), &1)` has type `((-> Unit) -> Unit)`.
