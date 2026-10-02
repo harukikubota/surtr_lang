@@ -1,2 +1,2 @@
 phase: parse
-contains: Expected the end of a Pattern argument
+contains: Expected RParen, got LParen

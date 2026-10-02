@@ -7628,7 +7628,7 @@ def parse() -> Int { add(7, 3) }"#,
 
 #[test]
 fn test_pipeline_rhs_desugars_partial_special_forms_into_closures() {
-    let resolved = parse_and_resolve(
+    let resolved = resolve_user_with_modules(
         r#"deferror GuardError { "guard" }
 
 def pred(n: Int) -> Boolean {
@@ -7640,6 +7640,12 @@ flagged = True |> and(False)
 verified = Ok(True) |>= assert(GuardError)
 replaced = Err(GuardError) |> map_err(GuardError)
 wrapped = Err(GuardError) |> cause(GuardError)"#,
+        &[vec![
+            staged_auto_import_module("Kernel", parse_module_ast(
+                "@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>\n@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def assert(condition: Boolean, error: Lazy<Error>) -> Result<Unit>", "Kernel")),
+            staged_module("Result", parse_module_ast(
+                "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
+        ]],
     )
     .expect("pipeline partial special forms should resolve");
 
@@ -8710,19 +8716,6 @@ fn complete_pattern_consumer_captures_preserve_pattern_scope() {
         let resolved = parse_and_resolve_pattern_consumers(source).expect(source);
         assert!(matches!(resolved.last(), Some(Resolved::Bind(_, _, body))
             if matches!(body.as_ref(), Resolved::CaptureClosure(..))));
-    }
-}
-
-#[test]
-fn pattern_capture_rejects_direct_pattern_placeholder() {
-    for source in ["f = &is_match(&1, &2)", "f = &is_match(&1, (&2))"] {
-        let error = parse_and_resolve_pattern_consumers(source).expect_err(source);
-        assert!(
-            error
-                .message
-                .contains("Pattern argument cannot be a capture placeholder"),
-            "{error:?}"
-        );
     }
 }
 

@@ -76,6 +76,7 @@ impl Parser<'_> {
         matches!(
             self.peek(),
             Token::LBrack
+                | Token::ReservedCallName(_)
                 | Token::LParen
                 | Token::Unit
                 | Token::Ident(_)
@@ -227,12 +228,10 @@ impl Parser<'_> {
     pub(super) fn parse_pattern(&mut self) -> Result<AstPattern, ParseError> {
         let mut alts = vec![self.parse_bind_pattern_atom()?];
         loop {
-            self.skip_newlines();
             if !matches!(self.peek(), Token::Pipe) {
                 break;
             }
             self.advance();
-            self.skip_newlines();
             alts.push(self.parse_bind_pattern_atom()?);
         }
         let mut pat = if let [single] = alts.as_slice() {
@@ -248,12 +247,8 @@ impl Parser<'_> {
                 .unwrap_or(start);
             AstPattern::Or(Span { start, end }, alts)
         };
-        loop {
-            self.skip_newlines();
-            let compact_alias = matches!(self.peek(), Token::Annotator(_));
-            if !compact_alias && !matches!(self.peek(), Token::At) {
-                break;
-            }
+        let compact_alias = matches!(self.peek(), Token::Annotator(_));
+        if compact_alias || matches!(self.peek(), Token::At) {
             if super::pattern_depth(&pat) >= super::MAX_PARSE_NESTING {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::PatternSyntax,
@@ -283,10 +278,14 @@ impl Parser<'_> {
                     self.expect_ident()?
                 }
             };
-            if sindr::pattern::PatternConsumer::from_name(&alias).is_some() {
+            if sindr::names::is_reserved_value_name(&alias) {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::PatternSyntax,
-                    "Pattern consumer names cannot be bound or shadowed",
+                    if sindr::pattern::PatternConsumer::from_name(&alias).is_some() {
+                        "Pattern consumer names cannot be bound or shadowed"
+                    } else {
+                        "Reserved call names cannot be bound or shadowed"
+                    },
                     alias_span,
                 ));
             }
@@ -335,6 +334,13 @@ impl Parser<'_> {
             } else {
                 AstPattern::As(span, Box::new(pat), alias, alias_ty, alias_span)
             };
+        }
+        if matches!(self.peek(), Token::At | Token::Annotator(_)) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
+                "A Pattern allows only one as-pattern alias at each level",
+                self.peek_span(),
+            ));
         }
         Ok(pat)
     }
@@ -422,119 +428,8 @@ impl Parser<'_> {
                 self.advance();
                 Ok(AstPattern::BoolLit(sp, false))
             }
-            Token::Ident(name) => {
-                if name == "self" && self.impl_target_stack.is_empty() {
-                    return Err(ParseError::syntax(
-                        crate::error::ParseErrorReason::PatternSyntax,
-                        "`self` can only be used inside impl methods",
-                        sp,
-                    ));
-                }
-                self.advance();
-                let mut segments = vec![name.clone()];
-                let mut path_end = sp.end;
-                while self.has_path_separator()
-                    && matches!(
-                        self.peek_n(2),
-                        Some(Token::Ident(_) | Token::True | Token::False)
-                    )
-                {
-                    self.consume_path_separator()?;
-                    let (seg, seg_span) = match self.peek().clone() {
-                        Token::Ident(_) => self.expect_ident()?,
-                        Token::True => {
-                            let span = self.advance().span;
-                            ("True".into(), span)
-                        }
-                        Token::False => {
-                            let span = self.advance().span;
-                            ("False".into(), span)
-                        }
-                        _ => unreachable!("path segment token was checked before consuming `::`"),
-                    };
-                    path_end = seg_span.end;
-                    segments.push(seg);
-                }
-
-                let callee_name = segments.join("::");
-                if matches!(self.peek(), Token::LParen) {
-                    return self.with_parse_nesting(sp.clone(), |parser| {
-                        parser.advance();
-                        parser.skip_newlines();
-                        let mut inners = Vec::new();
-                        if !matches!(parser.peek(), Token::RParen) {
-                            inners.push(parser.parse_pattern_argument()?);
-                            parser.skip_newlines();
-                            while matches!(parser.peek(), Token::Comma) {
-                                parser.advance();
-                                parser.skip_newlines();
-                                if matches!(parser.peek(), Token::RParen) {
-                                    break;
-                                }
-                                inners.push(parser.parse_pattern_argument()?);
-                                parser.skip_newlines();
-                            }
-                        }
-                        let end = parser.expect(&Token::RParen)?;
-                        Ok(AstPattern::Call(
-                            Span {
-                                start: sp.start,
-                                end: end.end,
-                            },
-                            callee_name,
-                            inners,
-                        ))
-                    });
-                }
-
-                let is_ctor = segments
-                    .last()
-                    .and_then(|segment| segment.chars().next())
-                    .map(|ch| ch.is_uppercase())
-                    .unwrap_or(false);
-                // The lexer emits adjacent `()` as Unit. In a head application
-                // this denotes an empty argument list, not a Unit pattern.
-                if matches!(self.peek(), Token::Unit) {
-                    let end = self.advance().span;
-                    return Ok(AstPattern::Call(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        callee_name,
-                        Vec::new(),
-                    ));
-                }
-                if is_ctor {
-                    let ctor_name = callee_name;
-                    return Ok(AstPattern::Constructor(
-                        Span {
-                            start: sp.start,
-                            end: path_end,
-                        },
-                        ctor_name,
-                        Vec::new(),
-                    ));
-                }
-
-                if segments.len() > 1 {
-                    return Err(ParseError::syntax(
-                        crate::error::ParseErrorReason::PatternSyntax,
-                        "Qualified patterns support constructor forms only",
-                        Span {
-                            start: sp.start,
-                            end: path_end,
-                        },
-                    ));
-                }
-
-                self.ensure_non_const_identifier(&name, sp.clone(), "Pattern binding")?;
-                if matches!(self.peek(), Token::Colon) {
-                    self.advance();
-                    return Ok(AstPattern::Annotated(sp, name, self.parse_type()?));
-                }
-                Ok(AstPattern::Var(sp, name))
-            }
+            Token::Ident(name) => self.parse_named_pattern_atom(name, sp),
+            Token::ReservedCallName(kind) => self.parse_named_pattern_atom(kind.name().to_string(), sp),
             Token::LBrack => self.parse_list_bind_pattern(),
             Token::Unit => Err(ParseError::syntax(
                 crate::error::ParseErrorReason::PatternSyntax,
@@ -617,6 +512,130 @@ impl Parser<'_> {
             "OR patterns are not allowed in binding patterns",
             pipe.span.clone(),
         ))
+    }
+    fn parse_named_pattern_atom(
+        &mut self,
+        name: Symbol,
+        sp: Span,
+    ) -> Result<AstPattern, ParseError> {
+        if name == "self" && self.impl_target_stack.is_empty() {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
+                "`self` can only be used inside impl methods",
+                sp,
+            ));
+        }
+        self.advance();
+        let mut segments = vec![name.clone()];
+        let mut path_end = sp.end;
+        while self.has_path_separator()
+            && matches!(
+                self.peek_n(2),
+                Some(Token::Ident(_) | Token::ReservedCallName(_) | Token::True | Token::False)
+            )
+        {
+            self.consume_path_separator()?;
+            let (seg, seg_span) = match self.peek().clone() {
+                Token::Ident(_) | Token::ReservedCallName(_) => self.expect_callable_ident()?,
+                Token::True => {
+                    let span = self.advance().span;
+                    ("True".into(), span)
+                }
+                Token::False => {
+                    let span = self.advance().span;
+                    ("False".into(), span)
+                }
+                _ => unreachable!("path segment token was checked before consuming `::`"),
+            };
+            path_end = seg_span.end;
+            segments.push(seg);
+        }
+
+        let callee_name = segments.join("::");
+        if matches!(self.peek(), Token::LParen) {
+            return self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.skip_newlines();
+                let mut inners = Vec::new();
+                if !matches!(parser.peek(), Token::RParen) {
+                    inners.push(parser.parse_pattern_argument()?);
+                    parser.skip_newlines();
+                    while matches!(parser.peek(), Token::Comma) {
+                        parser.advance();
+                        parser.skip_newlines();
+                        if matches!(parser.peek(), Token::RParen) {
+                            break;
+                        }
+                        inners.push(parser.parse_pattern_argument()?);
+                        parser.skip_newlines();
+                    }
+                }
+                let end = parser.expect(&Token::RParen)?;
+                Ok(AstPattern::Call(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    callee_name,
+                    inners,
+                ))
+            });
+        }
+
+        let is_ctor = segments
+            .last()
+            .and_then(|segment| segment.chars().next())
+            .map(|ch| ch.is_uppercase())
+            .unwrap_or(false);
+        // The lexer emits adjacent `()` as Unit. In a head application
+        // this denotes an empty argument list, not a Unit pattern.
+        if matches!(self.peek(), Token::Unit) {
+            let end = self.advance().span;
+            return Ok(AstPattern::Call(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                callee_name,
+                Vec::new(),
+            ));
+        }
+        if is_ctor {
+            let ctor_name = callee_name;
+            return Ok(AstPattern::Constructor(
+                Span {
+                    start: sp.start,
+                    end: path_end,
+                },
+                ctor_name,
+                Vec::new(),
+            ));
+        }
+
+        if segments.len() > 1 {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
+                "Qualified patterns support constructor forms only",
+                Span {
+                    start: sp.start,
+                    end: path_end,
+                },
+            ));
+        }
+
+        if sindr::names::is_reserved_value_name(&name) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
+                "Reserved call names cannot be bound or shadowed",
+                sp,
+            ));
+        }
+        self.ensure_non_const_identifier(&name, sp.clone(), "Pattern binding")?;
+        if matches!(self.peek(), Token::Colon) {
+            self.advance();
+            return Ok(AstPattern::Annotated(sp, name, self.parse_type()?));
+        }
+        Ok(AstPattern::Var(sp, name))
     }
 }
 

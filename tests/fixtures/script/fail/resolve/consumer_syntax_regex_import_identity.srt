@@ -1,0 +1,4 @@
+import Regex::is_match;
+
+re =? Regex::compile("^ok$")
+print(to_string(is_match(re, "ok")))

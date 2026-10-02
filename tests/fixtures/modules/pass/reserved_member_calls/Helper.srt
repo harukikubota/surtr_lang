@@ -1,0 +1,5 @@
+defmod Helper {
+  def and(left: Boolean, right: Boolean) -> Boolean { print("qualified-and"); right }
+  def or(left: Boolean, right: Boolean) -> Boolean { print("qualified-or"); right }
+  def lt(left: Int, right: Int) -> Int { left * right }
+}

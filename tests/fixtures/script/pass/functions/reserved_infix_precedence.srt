@@ -1,0 +1,17 @@
+def note(tag: String, value: Boolean) -> Boolean { print(tag); value }
+def key(value: Int) -> Int { value + 1 }
+
+print(to_string(3 `eq` 1 + 2))
+print(to_string(3 `neq` 1 + 2))
+print(to_string(2 `lt` 1 + 2))
+print(to_string(3 `lte` 1 + 2))
+print(to_string(4 `gt` 1 + 2))
+print(to_string(3 `gte` 1 + 2))
+print(to_string(False `and` note("unreachable-and", True)))
+print(to_string(True `or` note("unreachable-or", False)))
+print(to_string(True `and` note("and-rhs", True)))
+print(to_string(False `or` note("or-rhs", True)))
+compare_by_key = &eq `on` &key
+compare_by_qualified_key = &eq `Function::on` &key
+print(to_string(compare_by_key(2, 2)))
+print(to_string(compare_by_qualified_key(2, 3)))

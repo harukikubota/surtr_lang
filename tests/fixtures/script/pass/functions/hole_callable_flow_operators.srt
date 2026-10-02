@@ -1,6 +1,10 @@
-mapped = [1, 2] |*> always(10)
-bound = [1, 2] |>= always([10])
-optional = Option::Some(1) |>= always(Option::Some(10))
+mapped_fn = always(10)
+bound_fn = always([10])
+optional_fn = always(Option::Some(10))
+
+mapped = [1, 2] |*> mapped_fn
+bound = [1, 2] |>= bound_fn
+optional = Option::Some(1) |>= optional_fn
 
 print(inspect(mapped))
 print(inspect(bound))

@@ -14,11 +14,64 @@ fn consumer_error(message: impl Into<String>, span: Span) -> ResolveError {
     }
 }
 
+#[cfg(test)]
+mod pipe_contract_tests {
+    use super::*;
+    use spire::ast::AstPath;
+
+    fn named_target(resolver: &mut Resolver, owner: &str, member: &str) -> Box<Ast> {
+        let span = Span { start: 0, end: 1 };
+        let name = format!("{owner}::{member}");
+        let uid = resolver.scope.define(&name, span.clone());
+        resolver.declaration_uids.insert(name, uid);
+        Box::new(Ast::Path(
+            span.clone(),
+            AstPath {
+                span,
+                segments: vec![owner.into(), member.into()],
+            },
+        ))
+    }
+
+    #[test]
+    fn consumer_pipe_inserts_first_without_selecting_by_arity() {
+        let mut resolver = Resolver::new();
+        let callee = named_target(&mut resolver, "Kernel", "is_match");
+        let span = Span { start: 0, end: 1 };
+        let argument = AstPatternArgument {
+            span: span.clone(),
+            expression: Some(Box::new(Ast::Lit(span.clone(), Lit::Bool(true)))),
+            pattern: None,
+            named_pattern: None,
+            expression_error: None,
+            pattern_error: None,
+        };
+        let rewritten = resolver
+            .prepare_pattern_consumer_pipe(span, callee, vec![argument.clone(), argument])
+            .expect("insertion is determined before arity validation");
+        assert!(matches!(rewritten, Ast::Closure(_, _, body)
+            if matches!(*body, Ast::PatternConsumerCall(_, _, ref args) if args.len() == 3)));
+    }
+
+    #[test]
+    fn consumer_syntax_rejects_an_ordinary_builtin_identity() {
+        let mut resolver = Resolver::new();
+        let callee = named_target(&mut resolver, "Regex", "is_match");
+        let error = resolver
+            .resolve_pattern_consumer_identity(&callee)
+            .expect_err("consumer syntax cannot become an ordinary call");
+        assert!(
+            error.message.contains("canonical Kernel consumer"),
+            "{error:?}"
+        );
+    }
+}
+
 impl Resolver {
     pub(super) fn resolve_pattern_consumer_identity(
         &mut self,
         callee: &Ast,
-    ) -> Result<Option<PatternConsumer>, ResolveError> {
+    ) -> Result<PatternConsumer, ResolveError> {
         let resolved = match callee {
             Ast::Var(span, name) => self.resolve_var_like(span.clone(), name.clone(), false)?,
             Ast::Path(span, path) => {
@@ -42,17 +95,12 @@ impl Resolver {
                 .map(|entry| entry.fq_name.as_str())
         });
         if let Some(kind) = qualified.and_then(PatternConsumer::from_canonical_name) {
-            return Ok(Some(kind));
+            return Ok(kind);
         }
-        // A reserved member spelling does not turn a canonical runtime builtin
-        // (notably Regex::is_match) into a Pattern consumer.
-        if let Some(qualified) = qualified {
-            let member = qualified.rsplit("::").next().unwrap_or(qualified);
-            if sindr::builtin::builtin_surface_variant_for_decl(member, Some(qualified)).is_some() {
-                return Ok(None);
-            }
-        }
-        Err(consumer_error("Reserved Pattern consumer name does not identify a canonical Kernel consumer or standard builtin", callee.span().clone()))
+        Err(consumer_error(
+            "Pattern consumer syntax does not identify the canonical Kernel consumer",
+            callee.span().clone(),
+        ))
     }
 
     fn consumer_expression(arg: AstPatternArgument) -> Result<Ast, ResolveError> {
@@ -72,13 +120,6 @@ impl Resolver {
         mut args: Vec<AstPatternArgument>,
     ) -> Result<Resolved, ResolveError> {
         let kind = self.resolve_pattern_consumer_identity(&callee)?;
-        let Some(kind) = kind else {
-            let args = args
-                .into_iter()
-                .map(|arg| Self::consumer_expression(arg).map(RecordLitArg::Positional))
-                .collect::<Result<Vec<_>, _>>()?;
-            return self.resolve_node(Ast::App(span, callee, args));
-        };
         if args.len() != kind.arity() {
             return Err(consumer_error(
                 format!(
@@ -193,50 +234,31 @@ impl Resolver {
         callee: Box<Ast>,
         mut args: Vec<AstPatternArgument>,
     ) -> Result<Ast, ResolveError> {
-        let Some(kind) = self.resolve_pattern_consumer_identity(&callee)? else {
-            let args = args
-                .into_iter()
-                .map(|arg| Self::consumer_expression(arg).map(RecordLitArg::Positional))
-                .collect::<Result<Vec<_>, _>>()?;
-            return self.prepare_pipe_rhs(Ast::App(span, callee, args));
-        };
-        let param_name = format!("__pattern_pipe_{}_{}", span.start, span.end);
-        let param = Ast::Var(span.clone(), param_name.clone());
-        if args.len() + 1 == kind.arity() {
-            args.insert(
-                0,
-                AstPatternArgument {
-                    span: span.clone(),
-                    expression: Some(Box::new(param)),
-                    pattern: None,
-                    named_pattern: None,
-                    expression_error: None,
-                    pattern_error: None,
-                },
-            );
-        } else if args.len() == kind.arity() {
-            let mut slots = 0;
-            for (index, arg) in args.iter_mut().enumerate() {
-                if index == kind.pattern_index() {
-                    continue;
-                }
-                if matches!(
-                    arg.expression.as_deref(),
-                    Some(Ast::NumberedPlaceholder(_, 1))
-                ) {
-                    slots += 1;
-                    arg.expression = Some(Box::new(param.clone()));
-                }
-            }
-            if slots != 1 {
-                return Err(consumer_error("Pattern consumer pipe requires one direct Expr argument slot; pipe injection into a Pattern is not allowed", span));
-            }
-        } else {
+        let kind = self.resolve_pattern_consumer_identity(&callee)?;
+        let slot =
+            Self::pipe_argument_slot(&span, args.iter().map(|arg| arg.expression.as_deref()))?;
+        if slot == Some(kind.pattern_index()) {
             return Err(consumer_error(
-                format!("{} has invalid pipe argument count", kind.name()),
+                "pipe injection into a Pattern is not allowed",
                 span,
             ));
         }
+        if slot.is_some_and(|index| kind.is_lazy_argument(index)) {
+            return Err(consumer_error(
+                "pipe injection into a Lazy parameter is not allowed",
+                span,
+            ));
+        }
+        let param_name = Self::pipe_slot_param_name(&span);
+        let argument = AstPatternArgument {
+            span: span.clone(),
+            expression: Some(Box::new(Ast::Var(span.clone(), param_name.clone()))),
+            pattern: None,
+            named_pattern: None,
+            expression_error: None,
+            pattern_error: None,
+        };
+        Self::insert_pipe_argument(&mut args, slot, argument);
         Ok(Ast::Closure(
             span.clone(),
             vec![ClosureParam {

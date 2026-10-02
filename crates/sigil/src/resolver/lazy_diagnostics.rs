@@ -24,11 +24,7 @@ impl Resolver {
     ) -> Result<Option<LazyCaptureSource>, ResolveError> {
         let (kind, arguments, lazy_ordinals) =
             if let Ast::PatternConsumerCall(_, callee, arguments) = target {
-                let kind = match self
-                    .resolve_pattern_consumer_identity(callee)
-                    .ok()
-                    .flatten()
-                {
+                let kind = match self.resolve_pattern_consumer_identity(callee).ok() {
                     Some(PatternConsumer::IfLet) => LazyCaptureKind::IfLet,
                     Some(PatternConsumer::IfLetThen) => LazyCaptureKind::IfLetThen,
                     _ => return Ok(None),
@@ -186,10 +182,7 @@ impl Resolver {
                 }
             }
             Ast::PatternConsumerCall(_, callee, arguments) => {
-                let kind = self
-                    .resolve_pattern_consumer_identity(callee)
-                    .ok()
-                    .flatten();
+                let kind = self.resolve_pattern_consumer_identity(callee).ok();
                 if let Some(source) = self.lazy_capture_source(expr, &[])? {
                     used.extend(
                         source
@@ -200,7 +193,7 @@ impl Resolver {
                     );
                 } else {
                     // The canonical consumer selects exactly one Pattern slot;
-                    // ordinary builtins (including Regex) select only Expr slots.
+                    // ordinary builtins (including Regex) use ordinary call syntax.
                     for (index, argument) in arguments.iter().enumerate() {
                         if kind.is_some_and(|kind| index == kind.pattern_index()) {
                             continue;

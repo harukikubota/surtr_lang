@@ -3718,16 +3718,6 @@ impl Checker {
                 self.check_function_value_operand(node, op_name)
             }
             Resolved::App(span, func, args) => {
-                let checkpoint = self.candidate_probe_checkpoint();
-                if let Ok(typed) = self.check_app(span, func, args) {
-                    if matches!(
-                        self.resolve_ty(&typed.ty),
-                        Ty::Func(..) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. }
-                    ) {
-                        return Ok(typed);
-                    }
-                }
-                self.rollback_candidate_probe(checkpoint);
                 self.check_injected_call(span, func, args, op_name)
             }
             _ => Err(TypeError {

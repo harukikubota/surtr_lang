@@ -9150,8 +9150,8 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
 right = Range(10ms, 30ms)
 same = Range(10ms, 20ms)
 ordering = compare(left, right)
-eq = left == same
-neq = left != right"#,
+equal = left == same
+different = left != right"#,
     );
 
     assert!(!typed.iter().any(has_pending_trait_call));

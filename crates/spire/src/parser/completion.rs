@@ -437,4 +437,62 @@ mod tests {
         assert!(parse_operator_completion_context("print(", 6).is_none());
         assert!(parse_operator_completion_context("name", 4).is_none());
     }
+    #[test]
+    fn incomplete_consumer_calls_use_the_same_grammar_as_complete_calls() {
+        for source in [
+            "is_match(input, ",
+            "`Kernel::is_match`(input, ",
+            "input `is_match` ",
+            "input |> apply_pattern([_, ",
+            "True |> is_match(Ok(1), Ok(_)) + ",
+            "True |> Boolean::eqv(is_match(input, ",
+            "if_let(input, _, match other { 1 | ",
+        ] {
+            let result = parse_incomplete_expr(source, ParserContext::repl(1)).expect(source);
+            assert!(!result.expected_tokens.is_empty(), "{source}");
+            assert_eq!(result.cursor_span.start, source.len(), "{source}");
+            assert_ne!(result.context, CompletionContext::TypeContext, "{source}");
+        }
+        for source in ["is_match(^input, ", "input `if_let` "] {
+            let error = parse_incomplete_expr(source, ParserContext::repl(1)).expect_err(source);
+            assert!(
+                !error.is_incomplete(),
+                "invalid grammar is not an unfinished call: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn tolerant_recovery_after_partial_consumer_preserves_later_call_grammars() {
+        use crate::ast::{Ast, RecordLitArg};
+        let source = "bad = input |> apply_pattern(_ | )\ngood = is_match(input, _)\nplain = Regex::is_match(regex, input)\nnested = True |> Boolean::eqv(is_match(input, _))";
+        let result =
+            super::super::parse_tolerant_with_context(source, ParserContext::repl(1), None);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(result.ast.len(), 3, "{:?}", result.ast);
+        let Ast::Bind(_, _, good) = &result.ast[0] else {
+            panic!("good binding")
+        };
+        let Ast::PatternConsumerCall(_, _, args) = good.as_ref() else {
+            panic!("consumer")
+        };
+        assert!(args[0].expression.is_some() && args[1].pattern.is_some());
+        let Ast::Bind(_, _, plain) = &result.ast[1] else {
+            panic!("plain binding")
+        };
+        assert!(matches!(plain.as_ref(), Ast::App(..)));
+        let Ast::Bind(_, _, nested) = &result.ast[2] else {
+            panic!("nested binding")
+        };
+        let Ast::Pipe(_, _, rhs) = nested.as_ref() else {
+            panic!("Pipe")
+        };
+        let Ast::App(_, _, args) = rhs.as_ref() else {
+            panic!("outer Call")
+        };
+        let RecordLitArg::Positional(Ast::PatternConsumerCall(_, _, args)) = &args[0] else {
+            panic!("inner consumer")
+        };
+        assert!(args[0].expression.is_some() && args[1].pattern.is_some());
+    }
 }

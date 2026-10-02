@@ -1,0 +1,1 @@
+print(inspect([1, 2] |*> always(10)))

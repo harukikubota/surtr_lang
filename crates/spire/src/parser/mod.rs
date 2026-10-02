@@ -114,7 +114,10 @@ pub(super) fn reject_marker_owner_paths(tokens: &[Spanned<Token>]) -> Result<(),
         if is_marker
             && matches!(window[1].token, Token::Colon)
             && matches!(window[2].token, Token::Colon)
-            && matches!(window[3].token, Token::Ident(_))
+            && matches!(
+                window[3].token,
+                Token::Ident(_) | Token::ReservedCallName(_) | Token::PatternConsumer(_)
+            )
         {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::PositionRule,
@@ -139,6 +142,7 @@ struct Parser<'a> {
     impl_target_stack: Vec<Symbol>,
     allow_trailing_call_block: bool,
     parse_nesting_depth: usize,
+    pending_pipe_outer_call: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -152,6 +156,7 @@ impl<'a> Parser<'a> {
             impl_target_stack: Vec::new(),
             allow_trailing_call_block: true,
             parse_nesting_depth: 0,
+            pending_pipe_outer_call: false,
         }
     }
 
@@ -287,12 +292,20 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn expect_callable_ident(&mut self) -> Result<(Symbol, Span), ParseError> {
+        if let Token::ReservedCallName(kind) = self.peek().clone() {
+            let span = self.advance().span;
+            return Ok((kind.name().to_string(), span));
+        }
+        self.expect_ident()
+    }
+
     fn expect_member_ident(&mut self) -> Result<(Symbol, Span), ParseError> {
         if let Token::PatternConsumer(kind) = self.peek().clone() {
             let span = self.advance().span;
             return Ok((kind.name().to_string(), span));
         }
-        self.expect_ident()
+        self.expect_callable_ident()
     }
 
     fn numbered_placeholder_index(digits: &str, span: Span) -> Result<u8, ParseError> {
@@ -312,6 +325,10 @@ impl<'a> Parser<'a> {
     fn expect_builtin_decl_name(&mut self) -> Result<(Symbol, Span), ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
+            Token::ReservedCallName(kind) => {
+                self.advance();
+                Ok((kind.name().to_string(), sp))
+            }
             Token::PipeApply => {
                 self.advance();
                 Ok(("|>".to_string(), sp))

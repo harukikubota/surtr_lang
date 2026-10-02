@@ -1,0 +1,14 @@
+def note(tag: String, value: Int) -> Int { print(tag); value }
+def add(value: Int, extra: Int) -> Int { value + extra }
+def singleton(value: Int, extra: Int) -> List<Int> { [value + extra] }
+def make(extra: Int) -> (Int -> Int) { print("make"); {|value| value + extra} }
+
+empty: List<Int> = []
+print(inspect(empty |*> add(note("empty-map-extra", 10))))
+print(inspect([1, 2] |*> add(note("map-extra", 10))))
+print(inspect(empty |>= singleton(note("empty-bind-extra", 10))))
+print(inspect([1, 2] |>= singleton(note("bind-extra", 10))))
+dynamic = &add
+print(inspect([1, 2] |*> dynamic(note("dynamic-extra", 10))))
+print(inspect([1, 2] |*> (make(note("grouped-extra", 10)))))
+print(inspect(empty |*> (make(note("empty-grouped-extra", 10)))))

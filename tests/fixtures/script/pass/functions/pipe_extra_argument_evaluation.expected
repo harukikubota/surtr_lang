@@ -1,0 +1,16 @@
+empty-map-extra
+[]
+map-extra
+[11, 12]
+empty-bind-extra
+[]
+bind-extra
+[11, 12]
+dynamic-extra
+[11, 12]
+grouped-extra
+make
+[11, 12]
+empty-grouped-extra
+make
+[]

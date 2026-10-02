@@ -296,6 +296,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "const" => Token::Const,
                 "type" | "Type" => Token::Type,
                 "where" => Token::Where,
+                _ if sindr::names::ReservedCallName::from_name(&text).is_some() => {
+                    Token::ReservedCallName(
+                        sindr::names::ReservedCallName::from_name(&text).unwrap(),
+                    )
+                }
                 _ if sindr::pattern::PatternConsumer::from_name(&text).is_some() => {
                     Token::PatternConsumer(
                         sindr::pattern::PatternConsumer::from_name(&text).unwrap(),

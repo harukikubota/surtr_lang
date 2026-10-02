@@ -280,52 +280,6 @@ impl Resolver {
         }
     }
 
-    fn fallback_partial_pipeline_special_form_from_surface(
-        func: &Ast,
-    ) -> Option<CanonicalSpecialForm> {
-        match func {
-            Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
-                "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
-                "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-                "assert" => Some(CanonicalSpecialForm::Assert),
-                "ensure" => Some(CanonicalSpecialForm::Ensure),
-                "map_err" => Some(CanonicalSpecialForm::MapErr),
-                "cause" => Some(CanonicalSpecialForm::Cause),
-                "and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
-                "or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    fn canonical_special_form_arity(kind: CanonicalSpecialForm) -> usize {
-        match kind {
-            CanonicalSpecialForm::If(IfKind::If3) => 3,
-            CanonicalSpecialForm::If(IfKind::IfThen2) => 2,
-            CanonicalSpecialForm::Assert => 2,
-            CanonicalSpecialForm::Ensure => 3,
-            CanonicalSpecialForm::MapErr => 2,
-            CanonicalSpecialForm::Cause => 2,
-            CanonicalSpecialForm::RecoverKind => 3,
-            CanonicalSpecialForm::Logic(LogicKind::And) => 2,
-            CanonicalSpecialForm::Logic(LogicKind::Or) => 2,
-        }
-    }
-
-    fn partial_pipeline_special_form_arity(kind: CanonicalSpecialForm) -> Option<usize> {
-        match kind {
-            CanonicalSpecialForm::If(IfKind::If3)
-            | CanonicalSpecialForm::If(IfKind::IfThen2)
-            | CanonicalSpecialForm::Assert
-            | CanonicalSpecialForm::Ensure
-            | CanonicalSpecialForm::MapErr
-            | CanonicalSpecialForm::Cause
-            | CanonicalSpecialForm::Logic(_) => Some(Self::canonical_special_form_arity(kind)),
-            CanonicalSpecialForm::RecoverKind => None,
-        }
-    }
-
     fn resolve_canonical_special_form_call(
         &mut self,
         span: Span,
@@ -345,92 +299,11 @@ impl Resolver {
         }
     }
 
-    fn desugar_pipeline_rhs_special_form_partial(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
-        let Ast::App(span, func, args) = rhs else {
-            return Ok(rhs);
-        };
-
-        if matches!(func.as_ref(), Ast::FuncLiteralRef(_, pair) if pair.body == "(,)") {
-            let args: [RecordLitArg; 1] = args.try_into().map_err(|_| ResolveError {
-                message:
-                    "quoted pair constructor pipeline call expects exactly one positional argument"
-                        .into(),
-                span: span.clone(),
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::SpecialForm,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            })?;
-            let [RecordLitArg::Positional(right)] = args else {
-                return Err(ResolveError {
-                    message: "quoted pair constructor pipeline call expects exactly one positional argument"
-                        .into(),
-                    span: span.clone(),
-                    diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None },
-                    related_labels: Vec::new(),
-                });
-            };
-            let param_name = format!("__pipe_injected_{}_{}", span.start, span.end);
-            let param_span = span.clone();
-            return Ok(Ast::Closure(
-                span.clone(),
-                vec![ClosureParam {
-                    name: param_name.clone(),
-                    ty: None,
-                    span: param_span.clone(),
-                }],
-                Box::new(Ast::TupleLiteral(
-                    span,
-                    vec![Ast::Var(param_span, param_name), right],
-                )),
-            ));
-        }
-
-        if !matches!(func.as_ref(), Ast::Var(_, _) | Ast::InternalVar(_, _)) {
-            return Ok(Ast::App(span, func, args));
-        }
-
-        let kind = match self.resolve_node(*func.clone()) {
-            Ok(resolved_func) => self.classify_canonical_special_form_callee(&resolved_func),
-            Err(_) => Self::fallback_partial_pipeline_special_form_from_surface(func.as_ref()),
-        };
-        let Some(kind) = kind else {
-            return Ok(Ast::App(span, func, args));
-        };
-        let Some(expected_arity) = Self::partial_pipeline_special_form_arity(kind) else {
-            return Ok(Ast::App(span, func, args));
-        };
-        if args.len() + 1 != expected_arity {
-            return Ok(Ast::App(span, func, args));
-        }
-
-        let param_name = format!("__pipe_injected_{}_{}", span.start, span.end);
-        let param_span = span.clone();
-        let mut injected_args = Vec::with_capacity(args.len() + 1);
-        injected_args.push(RecordLitArg::Positional(Ast::Var(
-            param_span.clone(),
-            param_name.clone(),
-        )));
-        injected_args.extend(args);
-
-        let call = Ast::App(span.clone(), func, injected_args);
-        Ok(Ast::Closure(
-            span.clone(),
-            vec![ClosureParam {
-                name: param_name,
-                ty: None,
-                span: param_span,
-            }],
-            Box::new(call),
-        ))
-    }
-
     fn capture_placeholder_param_name(span: &Span, index: usize) -> String {
         format!("__cap_{}_{}_{}", span.start, span.end, index)
     }
 
-    fn pipe_slot_param_name(span: &Span) -> String {
+    pub(super) fn pipe_slot_param_name(span: &Span) -> String {
         format!("__pipe_slot_{}_{}", span.start, span.end)
     }
 
@@ -1869,107 +1742,155 @@ impl Resolver {
         }
     }
 
-    fn lower_pipe_rhs_slots(&self, rhs: Ast) -> Result<Ast, ResolveError> {
-        let Ast::App(span, func, args) = rhs else {
-            if let Some(slot_span) = Self::pipe_slot_span(&rhs) {
-                return Err(ResolveError {
-                    message: "pipe placeholder `_1` is only allowed as a direct argument of the outermost call on the right-hand side".into(),
-                    span: slot_span,
-                    diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None },
-                    related_labels: Vec::new(),
-                });
-            }
-            return Ok(rhs);
-        };
-
-        let mut slot_count = 0usize;
-        let mut lowered_args = Vec::with_capacity(args.len());
-        let mut positional_only = Vec::with_capacity(args.len());
-        for arg in args {
-            match arg {
-                RecordLitArg::Positional(Ast::NumberedPlaceholder(arg_span, 1)) => {
-                    slot_count += 1;
-                    let lowered = Ast::Var(arg_span.clone(), Self::pipe_slot_param_name(&span));
-                    lowered_args.push(lowered.clone());
-                    positional_only.push(RecordLitArg::Positional(lowered));
+    /// Choose insertion solely from direct argument slots, before arity or
+    /// parameter-role validation. Pattern nodes are not searched for pipe slots.
+    pub(super) fn pipe_argument_slot<'a>(
+        span: &Span,
+        arguments: impl Iterator<Item = Option<&'a Ast>>,
+    ) -> Result<Option<usize>, ResolveError> {
+        let mut slot = None;
+        for (index, expression) in arguments.enumerate() {
+            let Some(expression) = expression else {
+                continue;
+            };
+            if let Ast::NumberedPlaceholder(argument_span, number) = expression {
+                if *number != 1 {
+                    return Err(Self::pipe_argument_error(
+                        "pipe placeholder must be `_1`",
+                        argument_span.clone(),
+                    ));
                 }
-                RecordLitArg::Positional(expr) => {
-                    if let Some(slot_span) = Self::pipe_slot_span(&expr) {
-                        return Err(ResolveError {
-                            message: "pipe placeholder `_1` cannot be used as an expression".into(),
-                            span: slot_span,
-                            diagnostic: crate::error::ResolveErrorDiagnostic {
-                                reason: crate::error::ResolveErrorReason::SpecialForm,
-                                subject: None,
-                            },
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    lowered_args.push(expr.clone());
-                    positional_only.push(RecordLitArg::Positional(expr));
+                if slot.replace(index).is_some() {
+                    return Err(Self::pipe_argument_error(
+                        "pipe placeholder `_1` can only be used once",
+                        span.clone(),
+                    ));
                 }
-                RecordLitArg::Named(name, expr) => {
-                    if let Some(slot_span) = Self::pipe_slot_span(&expr) {
-                        return Err(ResolveError {
-                            message: "pipe placeholder `_1` cannot be used as an expression".into(),
-                            span: slot_span,
-                            diagnostic: crate::error::ResolveErrorDiagnostic {
-                                reason: crate::error::ResolveErrorReason::SpecialForm,
-                                subject: None,
-                            },
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if slot_count > 0 {
-                        return Err(ResolveError {
-                            message: "pipe placeholder `_1` does not support named arguments"
-                                .into(),
-                            span: span.clone(),
-                            diagnostic: crate::error::ResolveErrorDiagnostic {
-                                reason: crate::error::ResolveErrorReason::SpecialForm,
-                                subject: None,
-                            },
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    positional_only.push(RecordLitArg::Named(name, expr));
-                }
+            } else if let Some(argument_span) = Self::pipe_slot_span(expression) {
+                return Err(Self::pipe_argument_error(
+                    "pipe placeholder `_1` cannot be used as an expression",
+                    argument_span,
+                ));
             }
         }
+        Ok(slot)
+    }
 
-        if slot_count == 0 {
-            return Ok(Ast::App(span, func, positional_only));
+    fn pipe_argument_error(message: &str, span: Span) -> ResolveError {
+        ResolveError {
+            message: message.into(),
+            span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::SpecialForm,
+                subject: None,
+            },
+            related_labels: Vec::new(),
         }
-        if slot_count > 1 {
-            return Err(ResolveError {
-                message: "pipe placeholder `_1` can only be used once".into(),
-                span,
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::SpecialForm,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            });
-        }
+    }
 
-        Ok(self.make_closure_from_call(
-            &span,
-            vec![ClosureParam {
-                name: Self::pipe_slot_param_name(&span),
-                ty: None,
-                span: span.clone(),
-            }],
-            *func,
-            lowered_args,
-        ))
+    pub(super) fn insert_pipe_argument<T>(
+        arguments: &mut Vec<T>,
+        slot: Option<usize>,
+        argument: T,
+    ) {
+        if let Some(index) = slot {
+            arguments[index] = argument;
+        } else {
+            arguments.insert(0, argument);
+        }
     }
 
     pub(super) fn prepare_pipe_rhs(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
-        if let Ast::PatternConsumerCall(span, callee, args) = rhs {
-            return self.prepare_pattern_consumer_pipe(span, callee, args);
+        let (span, callee, mut arguments) = match rhs {
+            Ast::PatternConsumerCall(span, callee, arguments) => {
+                return self.prepare_pattern_consumer_pipe(span, callee, arguments);
+            }
+            Ast::App(span, callee, arguments) => (span, callee, arguments),
+            other => {
+                if let Some(span) = Self::pipe_slot_span(&other) {
+                    return Err(Self::pipe_argument_error(
+                        "pipe placeholder `_1` is only allowed as a direct argument of the outermost call on the right-hand side", span));
+                }
+                return Ok(other);
+            }
+        };
+        let slot = Self::pipe_argument_slot(
+            &span,
+            arguments.iter().map(|argument| {
+                Some(match argument {
+                    RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => expr,
+                })
+            }),
+        )?;
+        if slot.is_some()
+            && arguments
+                .iter()
+                .any(|argument| matches!(argument, RecordLitArg::Named(..)))
+        {
+            return Err(Self::pipe_argument_error(
+                "pipe placeholder `_1` does not support named arguments",
+                span,
+            ));
         }
-        let rhs = self.lower_pipe_rhs_slots(rhs)?;
-        self.desugar_pipeline_rhs_special_form_partial(rhs)
+        let pair = matches!(callee.as_ref(), Ast::FuncLiteralRef(_, pair) if pair.body == "(,)");
+        let special = if pair {
+            true
+        } else if matches!(
+            callee.as_ref(),
+            Ast::Var(..) | Ast::InternalVar(..) | Ast::Path(..)
+        ) {
+            let resolved = match callee.as_ref() {
+                Ast::Var(span, name) | Ast::InternalVar(span, name) => {
+                    self.resolve_var_like(span.clone(), name.clone(), false)?
+                }
+                Ast::Path(span, path) => {
+                    self.resolve_var_like(span.clone(), path.segments.join("::"), false)?
+                }
+                _ => unreachable!(),
+            };
+            self.classify_canonical_special_form_callee(&resolved)
+                .is_some()
+        } else {
+            false
+        };
+        // Ordinary first insertion stays in Scar's InjectCall representation:
+        // explicit arguments are evaluated once when the callable is formed.
+        if slot.is_none() && !special {
+            return Ok(Ast::App(span, callee, arguments));
+        }
+        let param_name = Self::pipe_slot_param_name(&span);
+        Self::insert_pipe_argument(
+            &mut arguments,
+            slot,
+            RecordLitArg::Positional(Ast::Var(span.clone(), param_name.clone())),
+        );
+        let body = if pair {
+            let [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]: [RecordLitArg;
+                2] = arguments.try_into().map_err(|_| {
+                Self::pipe_argument_error(
+                    "quoted pair constructor pipeline call expects exactly one positional argument",
+                    span.clone(),
+                )
+            })?
+            else {
+                return Err(Self::pipe_argument_error(
+                    "quoted pair constructor pipeline call expects exactly one positional argument",
+                    span,
+                ));
+            };
+            Ast::TupleLiteral(span.clone(), vec![left, right])
+        } else {
+            Ast::App(span.clone(), callee, arguments)
+        };
+        Ok(Ast::Closure(
+            span.clone(),
+            vec![ClosureParam {
+                name: param_name,
+                ty: None,
+                span,
+            }],
+            Box::new(body),
+        ))
     }
 
     fn undefined_callable_arity_message(func: &Ast, arity: usize) -> Option<String> {
@@ -3147,8 +3068,7 @@ impl Resolver {
 
             Ast::ContextApply(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let rhs = self.prepare_pipe_rhs(*right)?;
-                let r = self.resolve_node(rhs)?;
+                let r = self.resolve_node(*right)?;
                 Ok(Resolved::ContextApply(span, Box::new(l), Box::new(r)))
             }
 
