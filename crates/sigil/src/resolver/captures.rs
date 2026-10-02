@@ -198,7 +198,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(value, bound, free);
             collect_captures_inner(handler, bound, free);
         }
-        Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
+        Resolved::Match(_, scrutinee, arms)
+        | Resolved::IsMatch(_, scrutinee, arms)
+        | Resolved::IfLet(_, scrutinee, arms, _) => {
             collect_captures_inner(scrutinee, bound, free);
             for arm in arms {
                 let mut arm_bound = bound.clone();

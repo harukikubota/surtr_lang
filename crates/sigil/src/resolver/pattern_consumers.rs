@@ -15,7 +15,7 @@ fn consumer_error(message: impl Into<String>, span: Span) -> ResolveError {
 }
 
 impl Resolver {
-    fn resolve_pattern_consumer_identity(
+    pub(super) fn resolve_pattern_consumer_identity(
         &mut self,
         callee: &Ast,
     ) -> Result<Option<PatternConsumer>, ResolveError> {
@@ -126,16 +126,29 @@ impl Resolver {
                 Self::consumer_expression(args.next().unwrap())?,
             ),
             PatternConsumer::IfLetThen => (
-                Ast::Block(
-                    span.clone(),
-                    vec![
-                        Self::consumer_expression(args.next().unwrap())?,
-                        Ast::Lit(span.clone(), Lit::Unit),
-                    ],
-                ),
+                Self::consumer_expression(args.next().unwrap())?,
                 Ast::Lit(span.clone(), Lit::Unit),
             ),
             PatternConsumer::ApplyPattern => unreachable!(),
+        };
+        // A Lazy argument's grouping is evaluated in the scope before matching.
+        // Grouped synthetic capture parameters are ordinary parameter references.
+        fn capture_parameter(expr: &Ast) -> bool {
+            match expr {
+                Ast::InternalVar(_, name) => name.starts_with("__cap_"),
+                Ast::Grouped(_, inner) => capture_parameter(inner),
+                _ => false,
+            }
+        }
+        let eager_body = if matches!(&body, Ast::Grouped(..)) && !capture_parameter(&body) {
+            Some(self.resolve_node(body.clone())?)
+        } else {
+            None
+        };
+        let resolving_body = if eager_body.is_some() {
+            Ast::Lit(span.clone(), Lit::Unit)
+        } else {
+            body
         };
         let resolved = self.resolve_node(Ast::Match(
             span.clone(),
@@ -144,7 +157,7 @@ impl Resolver {
                 AstMatchArm {
                     pattern,
                     guard: None,
-                    body,
+                    body: resolving_body,
                 },
                 AstMatchArm {
                     pattern: AstPattern::Wildcard(span.clone()),
@@ -156,13 +169,21 @@ impl Resolver {
         let Resolved::Match(span, input, mut arms) = resolved else {
             unreachable!()
         };
+        if let Some(body) = eager_body {
+            arms[0].body = body;
+        }
         if kind == PatternConsumer::IsMatch {
             if let ResolvedPattern::Deferred { allow_bindings, .. } = &mut arms[0].pattern {
                 *allow_bindings = false;
             }
-            Ok(Resolved::Match(span, input, arms))
+            Ok(Resolved::IsMatch(span, input, arms))
         } else {
-            Ok(Resolved::IfLet(span, input, arms))
+            Ok(Resolved::IfLet(
+                span,
+                input,
+                arms,
+                kind == PatternConsumer::IfLetThen,
+            ))
         }
     }
 

@@ -1,0 +1,4 @@
+Shapes::Point(value: 2)
+Shapes::Direction::Up
+Err(Shapes::Trouble("problem"))
+Shapes::Point(value: 3)

@@ -23,6 +23,7 @@ mod declarations;
 mod derive;
 mod expr;
 mod imports;
+mod lazy_diagnostics;
 mod pattern_consumers;
 mod patterns;
 mod scope_init;
@@ -798,10 +799,12 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::RecoverKind(_, value, marker, handler) => {
             rebase_resolved_node(value, base, offset);
-            rebase_resolved_node(marker, base, offset);
+            rebase_resolved_id(marker, base, offset);
             rebase_resolved_node(handler, base, offset);
         }
-        Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
+        Resolved::Match(_, scrutinee, arms)
+        | Resolved::IsMatch(_, scrutinee, arms)
+        | Resolved::IfLet(_, scrutinee, arms, _) => {
             rebase_resolved_node(scrutinee, base, offset);
             for arm in arms {
                 rebase_pattern(&mut arm.pattern, base, offset);

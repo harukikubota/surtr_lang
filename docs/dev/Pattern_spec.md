@@ -370,6 +370,38 @@ direct = *{|value: Int|
 
 予約語 token は qualified member / capture 構文でも解析できるようにする。既存の canonical 標準 builtin の qualified 通常 call / capture は維持する。たとえば `Regex::is_match(re, input)` とその capture は通常の Regex builtin であり、第2引数は Expr のままである。Pattern consumer と判定するのは canonical な Kernel consumer identity だけとし、member の綴りが `is_match` であることでは判定しない。この許可を新規 user member 宣言や予約 consumer の shadowing に広げず、Regex API の改名や表示名による fallback は追加しない。
 
+### Pattern consumerのキャプチャと成功scope
+
+共通のLazy正規化・capture要求型とフェーズ間契約は[Lazy spec](Lazy_spec.md)に従う。
+canonical な Kernel の `is_match`、`apply_pattern`、`if_let`、`if_let_then` は、Pattern を直接記述した完全 call のキャプチャを許可する。
+Pattern 引数そのものを `&N` で置き換えること、Pattern 未指定の bare capture、consumer 自体の一般値参照は禁止する。
+Pattern 内の事前 Expr にある既存のプレースホルダは、Pattern 全体の直接置換とは区別する。
+projection `_1`〜`_16` と capture `&1`〜`&16` の意味は変更しない。
+consumer 判定には canonical identity を使い、同名の `Regex::is_match` を Pattern consumer と扱わない。
+
+```surtr
+&is_match(&1, Ok(_))
+&apply_pattern(&1, [_1, .._])
+&if_let(&1, Ok(x), x + &2, 0)
+&is_match(&1, &2) # 拒否: Pattern位置の直接置換
+```
+
+`if_let`・`if_let_then` の成功 branch は、Pattern が binding を作らない場合だけ通常の Lazy 正規化を使う。
+binding がある場合は Pattern 成功 scope 内の DirectExpression を要求する。
+判定条件は binding の生成であり、成功 branch がその binding を使用するかどうかではない。
+Extractor の Expr / 子 Pattern の役割を確定した情報から binding を求め、OR の名前・型・順序の一致規則を維持する。
+
+DirectExpression は成功 branch 位置へ直接書く Expr を指す。通常データを受け取る `&N` や `x + &N` を許可し、外部 thunk に成功 scope を後から与えない。
+この要求はtyped armに保持し、後続の型推論・generic forwarding・specialization後にも検証する。生成時点で型が未知でも、後から外部0引数関数に確定すれば拒否する。
+Pattern自体が束縛した関数値と、成功branch内で生成した通常closureは、外部thunkによる成功branchの置換と区別する。payloadの暗黙注入やlexical scopeの付け替えは行わない。
+成功 branch の eager 式 `(EXPR)` は照合前の scope で名前解決する。外側に同名 binding がなければ `UndefinedVariable` とする。
+`match` arm の括弧は arm 内の grouping とし、Lazy の eager 境界を適用しない。
+
+Pattern と成功 branch を同じ生成 closure 内に保持したキャプチャ関数値は、通常の引数・戻り値・変数として受け渡せる。
+call ごとに入力を一回評価し、成功した Pattern の binding だけを成功 branch へ公開する。
+失敗 branch や consumer 外へ binding 名を公開しない。成功 branch 内で作った通常 closure が binding の値を保持することは、通常の lexical capture 規則に従う。
+Forge 以降には Lazy を残さず、確定した評価順と scope を渡す。
+
 旧名 `apply_matcher` は consumer 名 / 予約語 / alias として存在しない。同名の通常 user function があっても、その引数を Pattern と解釈する互換経路はない。
 
 OR Pattern `p1 | p2` は target のホワイトリストで許可する。対象は `match` arm、`if_let`、`if_let_then`、`is_match` のみで、いずれも root / nested OR を許可する。`=` / `=?`、do `<-` / `=?`、`apply_pattern` は binding 数が 0 でも OR を拒否する。`apply_pattern` に OR の projection slot 統一規則や複数の失敗 Error の選択規則を追加しない。

@@ -1,0 +1,2 @@
+value =? Err(NoneError)
+print(inspect(Result::recover_kind(Err(NoneError), value, {|_| Ok(1)})))

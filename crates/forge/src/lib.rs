@@ -1006,6 +1006,7 @@ mod tests {
             node: TypedInner::Match(
                 Box::new(list_cons_expr(512)),
                 vec![TypedMatchArm {
+                    direct_expression: false,
                     pattern: list_cons_match_pattern(512),
                     guard: None,
                     body: unit_lit(),

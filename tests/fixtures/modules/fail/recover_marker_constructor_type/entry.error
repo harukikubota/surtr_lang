@@ -1,2 +1,2 @@
-phase: typecheck
-contains: expected String, got Int
+phase: resolve
+contains: recover_kind marker must be a concrete deferror type name

@@ -1,2 +1,2 @@
 phase: typecheck
-contains: if branches have different types: Int and Unit
+contains: if branches have different types: Unit and Int

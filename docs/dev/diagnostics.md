@@ -48,6 +48,39 @@ source span を必要としない説明や修正案を `labels` に置かない�
 
 - `apply_pattern` の projection は選択済み Pattern 引数だけで検査する。index の範囲・重複・欠番・許可位置と注釈型の不一致は静的エラーとし、runtime `Err` に変換しない。通常 Pattern 不一致には既存の literal / list / constructor 診断を使い、Extractor の `Err` は kind・message・cause・source を保持する。consumer 自体は外側 callable / do へ早期 return しない。
 
+## Lazy・PatternキャプチャとErrorKind
+
+正規化と各フェーズの責務は[Lazy special formの実装契約](Lazy_spec.md)に従う。
+Pattern 位置の直接プレースホルダ、binding を作る Pattern の成功 branch に対する DirectExpression 要求、eager 式から成功 binding を参照した `UndefinedVariable` は、それぞれの構文・scope・型契約に従って診断する。
+Pattern を通常 Expr として解析し直すことや、照合前の eager 式を成功 scope へ戻す救済は行わない。
+
+Lazy の正規化は最大一段の wrap に限定する。正規化後の型不一致と、同じ capture placeholder の要求型競合は通常の型関係で拒否する。
+両 branch が未知の場合は期待される関数型から確定し、REPL 行の完了時に未確定 signature が残れば callable の具体化契約で拒否する。
+外側の注釈によって既知 branch の評価方法を変更しない。
+
+Lazyキャプチャの型不一致では、通常のreasonを維持し、解決済み標準関数の由来が確定している場合に関数別の説明・修正案を追加する。
+対象は`and`、`or`、`if`、`if_then`、`if_let`、`if_let_then`、`assert`、`ensure`、`Result::map_err`、`Result::cause`。
+案内は生成されたsignatureとplaceholderの対応に従い、引数の並べ替えも反映する。関数名や関数型の形、エラー文面から由来を推測しない。
+同じplaceholderに通常値とLazyの要求が競合する場合は番号を分ける案内とし、両branchが未知の場合は具体的な期待関数型を与える案内とする。
+Pattern bindingを伴う成功branchにはDirectExpressionの契約を適用し、通常値をthunkで包む修正案を出さない。
+入れ子callの失敗を外側のLazyキャプチャへ付け替えず、由来が確定していない通常の関数値には通常の型診断を使う。
+error placeholderを持つ`assert`、`ensure`、`Result::map_err`、`Result::cause`のcaptureにも既存のError受け渡し制約を適用する。
+通常callの拒否reasonは維持し、error式をcapture内に固定する修正案を示す。`(-> Error)`を通常引数として渡す修正で既存制約を迂回しない。
+裸の標準Lazy special formのcaptureはSigilで拒否し、引数を記述したcaptureへ案内する。Lazy markerを保持したbuiltin参照を通常の関数値として後段へ渡さない。
+
+Sigilはcanonical calleeの種類、直接placeholderの引数位置・span、通常Expr内での使用を生成parameterへ記録する。
+入れ子の使用は最も近いcallの引数として分類し、Pattern consumerは宣言から選択済みの引数roleだけを使う。
+未確定のPattern roleから成功branchの由来を推測しない。診断用metadataの収集によって通常のresolveエラーやその優先順位を変更しない。
+Scarは生成signatureと由来をbindingのUIDに対応させ、alias・`&f`・groupingを通じて保持する。
+REPLの保存・復元と候補検査のrollbackにはこの状態も含め、失敗した候補やcaptureの一時状態を後続の診断へ漏らさない。
+placeholderの競合では、その正規化で確定した要求型をまとめて使う。未確定型を含むsignatureを完成済みとして表示しない。
+追加の案内はhuman表示と構造化remediationへ同じ内容を渡し、通常のreason・primary spanを保持する。
+
+`ErrorKind` には具体的な `deferror` の解決済み型 identity だけを渡す。
+未定義型名、非エラー型、抽象 `Error`、runtime Error 値、constructor call、文字列、直接 placeholder を静的に拒否する。
+標準引数以外の marker 使用も拒否し、旧 Lazy marker や任意文字列へ fallback しない。
+表示名の比較で ErrorKind の許可を判定せず、Sigil が確定した canonical identity を使う。
+
 ## stable reason と typed data
 
 型関係・callable・Trait・TypeCtorTrait・branchの実装済み経路は、次の閉じた`TypeDiagnosticReason`を使う。

@@ -17,7 +17,7 @@ use sindr::ir::{
     RuntimeProcessDependencies, RuntimeStateSpec, RuntimeSupervisionSpec,
     RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef, SingletonBootEntry,
 };
-use sindr::names::{surface_path_name, surface_rendered_name};
+use sindr::names::{compiler_global_error_kind, surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt};
 use sindr::runtime::{quote_surtr_string_literal, CallableOrigin};
 use spire::ast::{
@@ -565,9 +565,23 @@ fn collect_missing_singleton_calls(
                 );
             }
         }
-        TypedInner::Assert(left, right)
-        | TypedInner::Ensure(left, right, _)
-        | TypedInner::RecoverKind(left, right, _) => {
+        TypedInner::RecoverKind(value, _, handler) => {
+            collect_missing_singleton_calls(
+                value,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                handler,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
+        TypedInner::Assert(left, right) | TypedInner::Ensure(left, right, _) => {
             collect_missing_singleton_calls(
                 left,
                 surface_to_process,
@@ -583,7 +597,7 @@ fn collect_missing_singleton_calls(
                 first_missing,
             );
             match &node.node {
-                TypedInner::Ensure(_, _, third) | TypedInner::RecoverKind(_, _, third) => {
+                TypedInner::Ensure(_, _, third) => {
                     collect_missing_singleton_calls(
                         third,
                         surface_to_process,
@@ -2464,14 +2478,6 @@ mod tests {
         }
     }
 
-    fn qualified_var(name: &str, qualified_name: &str, unique_id: u32, ty: Ty) -> TypedNode {
-        TypedNode {
-            ty,
-            span: span(0, 0),
-            node: TypedInner::Var(resolved_id(name, Some(qualified_name), unique_id)),
-        }
-    }
-
     fn function_entry(fun_idx: u32, entry_pc: u32, end_pc: u32) -> FunctionEntry {
         FunctionEntry {
             fun_idx,
@@ -2766,6 +2772,7 @@ mod tests {
         gene.emit_match(
             &scrutinee,
             &[TypedMatchArm {
+                direct_expression: false,
                 pattern: TypedMatchPattern::BoolLit(true),
                 guard: None,
                 body,
@@ -3335,6 +3342,7 @@ mod tests {
         gene.emit_match(
             &local_var("pair", 91, tuple_ty),
             &[TypedMatchArm {
+                direct_expression: false,
                 pattern: TypedMatchPattern::Tuple(vec![
                     TypedMatchPattern::Binding(resolved_id("left", None, 92)),
                     TypedMatchPattern::Binding(resolved_id("right", None, 93)),
@@ -3367,6 +3375,7 @@ mod tests {
         gene.emit_match(
             &local_var("source", 200, source_ty.clone()),
             &[TypedMatchArm {
+                direct_expression: false,
                 pattern: TypedMatchPattern::Or(vec![
                     TypedMatchPattern::Constructor {
                         tag: 1,
@@ -3419,6 +3428,7 @@ mod tests {
         gene.emit_match(
             &local_var("source", 210, Ty::Tuple(vec![Ty::Int, Ty::Bool])),
             &[TypedMatchArm {
+                direct_expression: false,
                 pattern: TypedMatchPattern::Tuple(vec![
                     TypedMatchPattern::IntLit(7.into()),
                     TypedMatchPattern::Or(vec![
@@ -3855,7 +3865,7 @@ mod tests {
                     30,
                     Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
                 )),
-                Box::new(qualified_var("MyError", "Global::MyError", 32, Ty::Error)),
+                "Global::MyError".into(),
                 Box::new(handler),
             ),
         };
@@ -4383,7 +4393,7 @@ mod tests {
         let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
 
         assert!(state.constants.iter().any(
-            |constant| matches!(constant, Constant::Str(value) if value == "InvalidMatchResult")
+            |constant| matches!(constant, Constant::Str(value) if value == "Global::InvalidMatchResult")
         ));
         assert!(opcodes.iter().any(|opcode| matches!(
             opcode,
@@ -6334,48 +6344,6 @@ impl Codegen {
             }
             DirectCallableTarget::User(fun_idx) => self.emit(Opcode::LoadFunctionRef(fun_idx)),
         }
-    }
-
-    fn direct_callable_target_for_id(&self, id: &ResolvedId) -> Option<DirectCallableTarget> {
-        self.state
-            .callable_defs
-            .get(&id.unique_id)
-            .copied()
-            .or_else(|| {
-                id.qualified_name
-                    .as_ref()
-                    .and_then(|name| self.state.callable_names.get(name).copied())
-            })
-            .or_else(|| self.state.callable_names.get(&id.name).copied())
-    }
-
-    fn direct_callable_target_for_marker_node(
-        &self,
-        node: &TypedNode,
-    ) -> Option<DirectCallableTarget> {
-        match &node.node {
-            TypedInner::Var(id) => self
-                .direct_callable_target_for_ref(node)
-                .ok()
-                .flatten()
-                .or_else(|| self.direct_callable_target_for_id(id)),
-            TypedInner::App(func, _)
-            | TypedInner::Capture(func, _)
-            | TypedInner::Semi(func)
-            | TypedInner::EagerBoundary(func) => self.direct_callable_target_for_marker_node(func),
-            _ => None,
-        }
-    }
-
-    fn emit_recover_kind_marker_ref(&mut self, marker: &TypedNode) -> Result<(), CodegenError> {
-        let target = self
-            .direct_callable_target_for_marker_node(marker)
-            .ok_or_else(|| CodegenError {
-                message: "recover_kind marker must resolve to a deferror constructor".into(),
-                span: marker.span.clone(),
-            })?;
-        self.emit_direct_callable_ref(target);
-        Ok(())
     }
 
     fn callable_template_target(target: DirectCallableTarget) -> CallableTemplateDirectTarget {
@@ -10190,7 +10158,12 @@ impl Codegen {
     }
 
     fn emit_error_value(&mut self, kind: &str, message: &str, span: &Span) {
-        if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
+        if let Some((fun_idx, arity)) = self
+            .state
+            .error_ctor_funs
+            .get(&compiler_global_error_kind(kind))
+            .copied()
+        {
             match arity {
                 0 => {
                     self.emit(Opcode::Call {
@@ -10218,7 +10191,7 @@ impl Codegen {
             }
         }
 
-        let kind_idx = self.add_constant(Constant::Str(kind.into()));
+        let kind_idx = self.add_constant(Constant::Str(compiler_global_error_kind(kind)));
         let message_idx = self.add_constant(Constant::Str(message.into()));
         self.emit(Opcode::MakeErrorLiteral {
             kind_const_idx: kind_idx,
@@ -10233,7 +10206,12 @@ impl Codegen {
         diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
     ) {
         if diagnostic.is_none() {
-            if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
+            if let Some((fun_idx, arity)) = self
+                .state
+                .error_ctor_funs
+                .get(&compiler_global_error_kind(kind))
+                .copied()
+            {
                 match arity {
                     1 => {
                         self.emit(Opcode::Call {
@@ -10264,7 +10242,7 @@ impl Codegen {
         let template_id = self.state.error_templates.len() as u32;
         self.state.error_templates.push(ErrTemplate {
             id: template_id,
-            kind: kind.into(),
+            kind: compiler_global_error_kind(kind),
             span_start: span.start as u32,
             span_end: span.end as u32,
             line: 0,
@@ -11463,31 +11441,43 @@ impl Codegen {
 
         match &tail_node.node {
             TypedInner::If(cond, then, else_opt) => {
+                let then_eager = self.materialize_eager_boundary(then)?;
+                let else_eager = else_opt
+                    .as_ref()
+                    .map(|branch| self.materialize_eager_boundary(branch))
+                    .transpose()?
+                    .flatten();
                 if let Some(cond_value) = Self::literal_bool_value(cond) {
                     if cond_value {
-                        self.emit_tail_node(then)?;
+                        if else_opt.is_some() {
+                            self.emit_tail_lazy_argument(then, then_eager)?;
+                        } else {
+                            self.emit_lazy_argument(then, then_eager)?;
+                            self.emit(Opcode::Pop);
+                            self.emit_unit_const();
+                            self.emit(Opcode::Return);
+                        }
                     } else if let Some(else_branch) = else_opt {
-                        self.emit_tail_node(else_branch)?;
+                        self.emit_tail_lazy_argument(else_branch, else_eager)?;
                     } else {
                         self.emit_unit_const();
                         self.emit(Opcode::Return);
                     }
                     return Ok(());
                 }
-
                 self.emit_node(cond)?;
                 match else_opt {
                     Some(else_branch) => {
                         let else_label = self.fresh_label();
                         self.emit_jump_if_false(else_label);
-                        self.emit_tail_node(then)?;
+                        self.emit_tail_lazy_argument(then, then_eager)?;
                         self.patch_label(else_label);
-                        self.emit_tail_node(else_branch)?;
+                        self.emit_tail_lazy_argument(else_branch, else_eager)?;
                     }
                     None => {
                         let end_label = self.fresh_label();
                         self.emit_jump_if_false(end_label);
-                        self.emit_node(then)?;
+                        self.emit_lazy_argument(then, then_eager)?;
                         self.emit(Opcode::Pop);
                         self.patch_label(end_label);
                         self.emit_unit_const();
@@ -11500,6 +11490,11 @@ impl Codegen {
                     self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
                     return Ok(());
                 }
+
+                let eager_slots = arms
+                    .iter()
+                    .map(|arm| self.materialize_eager_boundary(&arm.body))
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 self.emit_node(scrutinee)?;
 
@@ -11528,7 +11523,7 @@ impl Codegen {
                         self.emit_node(guard)?;
                         self.emit_jump_if_false(next_arm);
                     }
-                    self.emit_tail_node(&arm.body)?;
+                    self.emit_tail_lazy_argument(&arm.body, eager_slots[i])?;
 
                     if i + 1 < arms.len() {
                         self.patch_label(arm_labels[i + 1]);
@@ -11568,8 +11563,13 @@ impl Codegen {
         &mut self,
         node: &TypedNode,
     ) -> Result<Option<u32>, CodegenError> {
-        let TypedInner::EagerBoundary(inner) = &node.node else {
-            return Ok(None);
+        let inner = match &node.node {
+            TypedInner::EagerBoundary(inner) => inner,
+            TypedInner::App(target, args) if args.is_empty() => match &target.node {
+                TypedInner::EagerBoundary(inner) => inner,
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
         };
         self.emit_node(inner)?;
         let slot = self.state.next_slot;
@@ -11585,8 +11585,31 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         if let Some(slot) = eager_slot {
             self.emit(Opcode::LoadLocal(slot));
+            if matches!(&node.node, TypedInner::App(target, args)
+                if args.is_empty() && matches!(target.node, TypedInner::EagerBoundary(_)))
+            {
+                self.emit(Opcode::CallClosure {
+                    arity: 0,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
         } else {
             self.emit_node(node)?;
+        }
+        Ok(())
+    }
+
+    fn emit_tail_lazy_argument(
+        &mut self,
+        node: &TypedNode,
+        eager_slot: Option<u32>,
+    ) -> Result<(), CodegenError> {
+        if eager_slot.is_some() {
+            self.emit_lazy_argument(node, eager_slot)?;
+            self.emit(Opcode::Return);
+        } else {
+            self.emit_tail_node(node)?;
         }
         Ok(())
     }
@@ -11712,10 +11735,9 @@ impl Codegen {
         &mut self,
         node: &TypedNode,
         value: &TypedNode,
-        marker: &TypedNode,
+        kind: &str,
         handler: &TypedNode,
     ) -> Result<(), CodegenError> {
-        let marker_eager = self.materialize_eager_boundary(marker)?;
         self.emit_node(value)?;
         let result_slot = self.state.next_slot;
         self.state.next_slot += 1;
@@ -11735,11 +11757,8 @@ impl Codegen {
 
         self.patch_label(err_path);
         self.emit(Opcode::LoadLocal(result_slot));
-        // The eager value is deliberately materialized before the result tag
-        // check, but recover_kind's runtime ABI still consumes the static
-        // constructor reference used as its kind marker.
-        let _ = marker_eager;
-        self.emit_recover_kind_marker_ref(marker)?;
+        let kind_constant = self.add_constant(Constant::Str(kind.to_string()));
+        self.emit(Opcode::LoadConst(kind_constant));
         self.emit_callable_ref(handler)?;
         let builtin_id = Self::builtin_id("__recover_kind").ok_or_else(|| CodegenError {
             message: "Unknown builtin: __recover_kind".into(),
@@ -11904,6 +11923,11 @@ impl Codegen {
             return self.emit_pattern_mismatch_failure(scrutinee.span.clone());
         }
 
+        let eager_slots = arms
+            .iter()
+            .map(|arm| self.materialize_eager_boundary(&arm.body))
+            .collect::<Result<Vec<_>, _>>()?;
+
         self.emit_node(scrutinee)?;
 
         let scrut_slot = self.state.next_slot;
@@ -11935,7 +11959,7 @@ impl Codegen {
             }
 
             // Emit body
-            self.emit_node(&arm.body)?;
+            self.emit_lazy_argument(&arm.body, eager_slots[i])?;
             self.emit_jump(end_label);
 
             // Patch next arm label

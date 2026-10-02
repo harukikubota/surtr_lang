@@ -163,7 +163,7 @@ fn special_form_shape_recover_kind(
 ) -> bool {
     params.len() == 3
         && Checker::is_result_of_named(&params[0].ty, "$A")
-        && Checker::is_lazy_of_named(&params[1].ty, "Error")
+        && Checker::is_named_type(&params[1].ty, "ErrorKind")
         && Checker::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
         && ret_ty
             .as_ref()
@@ -314,7 +314,7 @@ impl Checker {
             .map(|param| {
                 self.resolve_builtin_signature_ty_in_context(
                     &param.ty,
-                    TypeSyntaxContext::General,
+                    TypeSyntaxContext::StdBuiltinParameter,
                     &mut tyvars,
                 )
             })
@@ -848,7 +848,7 @@ impl Checker {
             },
             "recover_kind" => SpecialFormContract {
                 expected_qname: "Result::recover_kind",
-                expected_signature: "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
+                expected_signature: "@builtin def recover_kind(value: Result<$A>, marker: ErrorKind, handler: (Error -> Result<$A>)) -> Result<$A>",
                 shape_ok: special_form_shape_recover_kind,
             },
             "and" => SpecialFormContract {
@@ -1403,7 +1403,9 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|branch| self.body_tail_is_return_type_argument_call(branch))
             }
-            Resolved::Match(_, _, arms) | Resolved::IfLet(_, _, arms) => arms
+            Resolved::Match(_, _, arms)
+            | Resolved::IsMatch(_, _, arms)
+            | Resolved::IfLet(_, _, arms, _) => arms
                 .iter()
                 .any(|arm| self.body_tail_is_return_type_argument_call(&arm.body)),
             Resolved::App(_, function, _) | Resolved::Capture(_, function, _) => {
@@ -4215,30 +4217,6 @@ impl Checker {
                 ),
                 span: node.span.clone(),
                 hint: None,
-            });
-        }
-        Ok(())
-    }
-
-    pub(super) fn ensure_recover_kind_marker(&self, node: &TypedNode) -> Result<(), TypeError> {
-        if !matches!(node.ty, Ty::Error) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "recover_kind marker must evaluate to Error, got {}",
-                    self.ty_name(&node.ty)
-                ),
-                span: node.span.clone(),
-                hint: None,
-            });
-        }
-        if !self.is_concrete_error_value(node) {
-            return Err(TypeError {
-                structured: None,
-                message: "recover_kind marker must be a concrete deferror name or constructor"
-                    .into(),
-                span: node.span.clone(),
-                hint: Some("Pass a deferror name like Timeout or a constructor call like Timeout(\"detail\").".into()),
             });
         }
         Ok(())

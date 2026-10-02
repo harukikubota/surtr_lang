@@ -1,0 +1,2 @@
+phase: typecheck
+contains: ErrorKind is reserved for direct std builtin parameters

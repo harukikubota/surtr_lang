@@ -14,7 +14,7 @@ use spire::ast::{
 
 // Pattern candidates may contain Expr pre-arguments even when their enclosing
 // syntax has no Expr interpretation (for example an annotated projection).
-fn visit_pattern_expressions(
+pub(super) fn visit_pattern_expressions(
     pattern: &AstPattern,
     visit: &mut impl FnMut(&Ast) -> Result<(), ResolveError>,
 ) -> Result<(), ResolveError> {
@@ -176,7 +176,7 @@ fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CanonicalSpecialForm {
+pub(super) enum CanonicalSpecialForm {
     If(IfKind),
     Assert,
     Ensure,
@@ -202,7 +202,7 @@ impl Resolver {
         }
     }
 
-    fn classify_canonical_special_form_callee(
+    pub(super) fn classify_canonical_special_form_callee(
         &self,
         resolved_func: &Resolved,
     ) -> Option<CanonicalSpecialForm> {
@@ -671,6 +671,39 @@ impl Resolver {
         match expr {
             Ast::NumberedPlaceholder(..) => Ok(()),
             Ast::PatternConsumerCall(_, callee, args) => {
+                let kind = match callee.as_ref() {
+                    Ast::Var(_, name) => sindr::pattern::PatternConsumer::from_name(name),
+                    Ast::Path(_, path)
+                        if path.segments.len() == 2 && path.segments[0] == "Kernel" =>
+                    {
+                        sindr::pattern::PatternConsumer::from_name(&path.segments[1])
+                    }
+                    _ => None,
+                };
+                fn direct_placeholder(expression: &Ast) -> bool {
+                    match expression {
+                        Ast::CapturePlaceholder(..) => true,
+                        Ast::Grouped(_, inner) => direct_placeholder(inner),
+                        _ => false,
+                    }
+                }
+                if let Some(argument) = kind.and_then(|kind| args.get(kind.pattern_index())) {
+                    if argument
+                        .expression
+                        .as_deref()
+                        .is_some_and(direct_placeholder)
+                    {
+                        return Err(ResolveError {
+                            message: "Pattern argument cannot be a capture placeholder".into(),
+                            span: argument.span.clone(),
+                            related_labels: Vec::new(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Capture,
+                                subject: None,
+                            },
+                        });
+                    }
+                }
                 self.collect_capture_placeholders(
                     callee,
                     allow_placeholders,
@@ -1060,7 +1093,7 @@ impl Resolver {
                         related_labels: Vec::new(),
                     });
                 }
-                Ok(Ast::Var(
+                Ok(Ast::InternalVar(
                     span.clone(),
                     Self::capture_placeholder_param_name(capture_span, index),
                 ))
@@ -2889,6 +2922,7 @@ impl Resolver {
         for param in params {
             let uid = closure_scope.define(&param.name, param.span.clone());
             resolved_params.push(ResolvedClosureParam {
+                lazy_capture: None,
                 id: ResolvedId {
                     name: param.name,
                     qualified_name: None,
@@ -2939,6 +2973,10 @@ impl Resolver {
             Ast::InternalVar(span, name) => self.resolve_value_var_like(span, name, true),
             Ast::Path(span, path) => {
                 let name = path.segments.join("::");
+                if path.segments.last().and_then(|segment| segment.chars().next())
+                    .is_some_and(char::is_uppercase) {
+                    return self.resolve_node(Ast::ConstructorCall(span, name, Vec::new()));
+                }
                 self.resolve_value_var_like(span, name, false)
             }
             Ast::FuncLiteralRef(span, func) => Err(ResolveError {
@@ -4291,6 +4329,20 @@ impl Resolver {
             }
 
             Ast::Capture(span, target, args) => {
+                let lazy_capture = self.lazy_capture_source(&target, &args)?;
+                if matches!(target.as_ref(), Ast::PatternConsumerCall(..)) {
+                    let max_index = self.validate_capture_placeholders(&span, std::slice::from_ref(target.as_ref()))?;
+                    let body = self.rewrite_capture_placeholders(*target, &span, true, true)?;
+                    let params = (1..=max_index).map(|index| ClosureParam {
+                        name: Self::capture_placeholder_param_name(&span, index),
+                        ty: None, span: span.clone(),
+                    }).collect();
+                    return match self.resolve_node(Ast::Closure(span, params, Box::new(body)))? {
+                        Resolved::Closure(span, params, captures, body) =>
+                            Ok(Resolved::CaptureClosure(span, Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()), captures, body)),
+                        _ => unreachable!("capture lowering must resolve to a closure"),
+                    };
+                }
                 let capture_uses_named_callable =
                     !matches!(target.as_ref(), Ast::FuncLiteralRef(_, _));
                 if let Some((policy, constructor_name)) =
@@ -4334,7 +4386,13 @@ impl Resolver {
                 }
                 match self.lower_capture_expr(span.clone(), *target, args)? {
                     Ast::Capture(_, target, args) => {
-                        let resolved_target = self.resolve_node(*target)?;
+                        let resolved_target = match *target {
+                            Ast::Path(path_span, path) => self.resolve_value_var_like(path_span, path.segments.join("::"), false)?,
+                            target => self.resolve_node(target)?,
+                        };
+                        if args.is_empty() {
+                            self.reject_bare_lazy_capture(&resolved_target, &span)?;
+                        }
                         let resolved_args = args
                             .into_iter()
                             .map(|arg| self.resolve_node(arg))
@@ -4348,7 +4406,7 @@ impl Resolver {
                     Ast::Closure(closure_span, params, body) if capture_uses_named_callable => {
                         match self.resolve_node(Ast::Closure(closure_span, params, body))? {
                             Resolved::Closure(span, params, captures, body) => {
-                                Ok(Resolved::CaptureClosure(span, params, captures, body))
+                                Ok(Resolved::CaptureClosure(span, Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()), captures, body))
                             }
                             other => Ok(other),
                         }

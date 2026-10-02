@@ -6,7 +6,7 @@ use regex::Regex;
 use sindr::builtin::{
     builtin_meta_by_id, BUILTIN_METAS, MATCH_RESULT_ERR_VARIANT, MATCH_RESULT_OK_VARIANT,
 };
-use sindr::names::surface_path_name;
+use sindr::names::{compiler_global_error_kind, surface_path_name};
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     quote_surtr_string_literal, Callable, CallableTarget, FileHandleValue, HashMapHandle,
@@ -2150,13 +2150,16 @@ fn builtin_result_chain(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
 
 fn builtin_result_recover_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let result = decode_result_arg(&args[0], "__recover_kind", "value")?;
-    let marker = decode_callable_arg(&args[1], "__recover_kind", "marker")?;
-    let expected_kind = recover_kind_marker_name(vm, &marker)?;
+    let Value::Str(expected_kind) = &args[1] else {
+        return Err(RuntimeError::new(
+            "__recover_kind expects a static kind String",
+        ));
+    };
     let handler = decode_callable_arg(&args[2], "__recover_kind", "handler")?;
 
     match result {
         Ok(value) => Ok(ok_result(value)),
-        Err(err) if err.kind == expected_kind => {
+        Err(err) if err.kind == expected_kind.as_ref() => {
             let handler_result = vm.invoke_callable_sync(handler, vec![err_value(err.clone())])?;
             match decode_result_arg(&handler_result, "__recover_kind", "handler result")? {
                 Ok(value) => Ok(ok_result(value)),
@@ -2165,28 +2168,6 @@ fn builtin_result_recover_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, R
         }
         Err(err) => Ok(err_result_from_rich_error(err)),
     }
-}
-
-fn recover_kind_marker_name(vm: &VM, marker: &Callable) -> Result<String, RuntimeError> {
-    let qualified_name = match &marker.target {
-        sindr::runtime::CallableTarget::Function(fun_idx) => vm
-            .function_entries()
-            .get(*fun_idx as usize)
-            .and_then(|entry| entry.qualified_name.as_deref())
-            .ok_or_else(|| {
-                RuntimeError::new(format!(
-                    "__recover_kind marker references unknown function {}",
-                    fun_idx
-                ))
-            })?,
-        other => {
-            return Err(RuntimeError::new(format!(
-                "__recover_kind marker must be a deferror constructor function, got {:?}",
-                other
-            )))
-        }
-    };
-    Ok(qualified_name.to_string())
 }
 
 fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -4711,7 +4692,7 @@ fn builtin_rich_error(vm: &VM, kind: &str, message: &str) -> RichError {
     });
 
     RichError {
-        kind: kind.into(),
+        kind: compiler_global_error_kind(kind),
         message: message.into(),
         location,
         diagnostic: None,
@@ -4837,7 +4818,7 @@ mod tests {
             let Value::Error(error) = &fields[1] else {
                 panic!("expected rich Error")
             };
-            assert_eq!(error.kind, "PatternMismatch");
+            assert_eq!(error.kind, "Global::PatternMismatch");
             assert_eq!(error.message, "Pattern did not match.");
             assert_eq!(error.location.func, "<builtin>");
             assert!(error.cause.is_none());
@@ -5193,7 +5174,7 @@ mod tests {
         .expect("json_parse itself should not raise RuntimeError for malformed user JSON");
         match result {
             Value::Tagged { tag: 1, fields } => match fields.as_slice() {
-                [Value::Error(rich)] => assert_eq!(rich.kind, "JsonParseError"),
+                [Value::Error(rich)] => assert_eq!(rich.kind, "Global::JsonParseError"),
                 other => panic!("expected JsonParseError value, got {:?}", other),
             },
             other => panic!("expected Err result, got {:?}", other),
@@ -5484,7 +5465,7 @@ mod tests {
                 .expect("int_until should return Result");
         match invalid_until {
             Value::Tagged { tag: 1, fields } => match fields.first() {
-                Some(Value::Error(rich)) => assert_eq!(rich.kind, "InvalidRandomRange"),
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "Global::InvalidRandomRange"),
                 other => panic!("expected InvalidRandomRange error, got {:?}", other),
             },
             other => panic!("expected Err result, got {:?}", other),
@@ -5498,7 +5479,7 @@ mod tests {
         .expect("int_range should return Result");
         match invalid_range {
             Value::Tagged { tag: 1, fields } => match fields.first() {
-                Some(Value::Error(rich)) => assert_eq!(rich.kind, "InvalidRandomRange"),
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "Global::InvalidRandomRange"),
                 other => panic!("expected InvalidRandomRange error, got {:?}", other),
             },
             other => panic!("expected Err result, got {:?}", other),
@@ -5530,7 +5511,7 @@ mod tests {
         match err {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "RegexCompileError");
+                    assert_eq!(rich.kind, "Global::RegexCompileError");
                     assert!(
                         !rich.message.is_empty(),
                         "RegexCompileError should carry regex parser detail"
@@ -5632,7 +5613,7 @@ mod tests {
         match value {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "ZeroDivisionError");
+                    assert_eq!(rich.kind, "Global::ZeroDivisionError");
                     assert_eq!(rich.message, "division by zero");
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
@@ -5784,7 +5765,7 @@ mod tests {
         match err {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "NegativeShiftCount");
+                    assert_eq!(rich.kind, "Global::NegativeShiftCount");
                     assert_eq!(rich.message, "shift amount must be non-negative: -1");
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
@@ -5818,7 +5799,7 @@ mod tests {
         match err {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "NegativeShiftCount");
+                    assert_eq!(rich.kind, "Global::NegativeShiftCount");
                     assert_eq!(rich.message, "shift amount must be non-negative: -1");
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
@@ -5886,7 +5867,7 @@ mod tests {
         match negative {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "NegativeBitIndex");
+                    assert_eq!(rich.kind, "Global::NegativeBitIndex");
                     assert_eq!(rich.message, "bit index must be non-negative: -1");
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
@@ -5997,7 +5978,7 @@ mod tests {
         match value {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "InvalidStringEncoding");
+                    assert_eq!(rich.kind, "Global::InvalidStringEncoding");
                     assert_eq!(rich.message, "ASCII code out of range at index 0: 128");
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
@@ -6143,7 +6124,7 @@ mod tests {
         .expect("map_get should return Result");
         assert!(matches!(
             miss,
-            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "NoneError")
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::NoneError")
         ));
 
         let removed = call_builtin(
@@ -6198,7 +6179,7 @@ mod tests {
                     tag: 1,
                     ref fields
                 }
-                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "IndexOutOfBounds")
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::IndexOutOfBounds")
             ),
             "{missing:?}"
         );
@@ -6241,7 +6222,7 @@ mod tests {
                     tag: 1,
                     ref fields
                 }
-                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "KeyNotFound")
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::KeyNotFound")
             ),
             "{missing:?}"
         );
@@ -6335,7 +6316,7 @@ mod tests {
         match value {
             Value::Tagged { tag: 1, fields } => match fields.as_slice() {
                 [Value::Error(rich)] => {
-                    assert_eq!(rich.kind, "InputError");
+                    assert_eq!(rich.kind, "Global::InputError");
                     assert_eq!(rich.message, "end of input");
                 }
                 other => panic!("expected Err(InputError), got {:?}", other),
@@ -6478,7 +6459,7 @@ mod tests {
 
         assert!(matches!(
             err_kind(&result),
-            "FileSystemPermissionDenied" | "FileSystemIoError"
+            "Global::FileSystemPermissionDenied" | "Global::FileSystemIoError"
         ));
     }
 
@@ -6514,7 +6495,7 @@ mod tests {
 
         assert!(matches!(
             err_kind(&result),
-            "FileSystemPermissionDenied" | "FileSystemIoError"
+            "Global::FileSystemPermissionDenied" | "Global::FileSystemIoError"
         ));
     }
 
@@ -6529,7 +6510,7 @@ mod tests {
         )
         .expect_err("missing canonical path should map to ShellIoError");
 
-        assert_eq!(err_kind(&err), "ShellIoError");
+        assert_eq!(err_kind(&err), "Global::ShellIoError");
         assert_eq!(vm.cwd(), original.as_path());
     }
 

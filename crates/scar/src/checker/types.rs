@@ -449,6 +449,11 @@ impl Checker {
         }
     }
 
+    fn builtin_type_is_std_parameter_only(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name))
+            .is_some_and(|policy| policy.usage == BuiltinTypeUsage::StdParameterOnly)
+    }
+
     fn builtin_type_is_lazy_signature_surface_only(name: &str) -> bool {
         builtin_type_usage_policy(Self::surface_name(name))
             .is_some_and(|policy| policy.lazy_signature_surface_only)
@@ -950,6 +955,14 @@ impl Checker {
         ast_ty: &AstTy,
         context: TypeSyntaxContext,
     ) -> Result<Ty, TypeError> {
+        if matches!(ast_ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if Self::builtin_type_is_std_parameter_only(name))
+        {
+            return Err(TypeError::new(
+                "ErrorKind is reserved for direct std builtin parameters",
+                Self::ast_ty_span(ast_ty).clone(),
+            ));
+        }
+
         if context == TypeSyntaxContext::ErrorMarker {
             return self.resolve_error_marker_type(ast_ty);
         }
@@ -1073,6 +1086,7 @@ impl Checker {
                                 | TypeName::Duration
                                 | TypeName::StandbyInit
                                 | TypeName::Lazy
+                                | TypeName::ErrorKind
                                 | TypeName::Hole
                                 | TypeName::Closure
                                 | TypeName::MatchArms
@@ -1743,7 +1757,11 @@ impl Checker {
         ast_ty: &AstTy,
         tyvars: &mut HashMap<String, Ty>,
     ) -> Result<Ty, TypeError> {
-        self.resolve_builtin_ast_ty_in_context(ast_ty, TypeSyntaxContext::General, tyvars)
+        self.resolve_builtin_ast_ty_in_context(
+            ast_ty,
+            TypeSyntaxContext::StdBuiltinParameter,
+            tyvars,
+        )
     }
 
     pub(super) fn resolve_signature_ast_ty_in_context(
@@ -1858,6 +1876,7 @@ impl Checker {
         tyvars: &mut HashMap<String, Ty>,
         mode: SignatureTyMode<'_>,
     ) -> Result<Ty, TypeError> {
+        let context = Self::std_parameter_type_context(signature_ty.syntax(), context);
         let Some(trait_id) = signature_ty.direct_constructor_trait.as_ref() else {
             return self.resolve_signature_like_ast_ty_in_context(
                 signature_ty.syntax(),
@@ -1967,6 +1986,16 @@ impl Checker {
         }
     }
 
+    fn std_parameter_type_context(ast_ty: &AstTy, context: TypeSyntaxContext) -> TypeSyntaxContext {
+        if context == TypeSyntaxContext::StdBuiltinParameter
+            && !matches!(ast_ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if Self::builtin_type_is_std_parameter_only(name))
+        {
+            TypeSyntaxContext::General
+        } else {
+            context
+        }
+    }
+
     fn signature_like_param_context(context: TypeSyntaxContext) -> TypeSyntaxContext {
         match context {
             TypeSyntaxContext::BindingAnnotation
@@ -1983,6 +2012,7 @@ impl Checker {
         tyvars: &mut HashMap<String, Ty>,
         mode: SignatureTyMode<'_>,
     ) -> Result<Ty, TypeError> {
+        let context = Self::std_parameter_type_context(ast_ty, context);
         match ast_ty {
             AstTy::Named(span, name) => {
                 if let Some(alias) =
@@ -2084,6 +2114,21 @@ impl Checker {
         tyvars: &mut HashMap<String, Ty>,
         mode: SignatureTyMode<'_>,
     ) -> Result<Ty, TypeError> {
+        if matches!(ast_ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if Self::builtin_type_is_std_parameter_only(name))
+        {
+            return match ast_ty {
+                AstTy::Named(_, _)
+                    if mode.allows_lazy() && context == TypeSyntaxContext::StdBuiltinParameter =>
+                {
+                    Ok(Ty::Enum("ErrorKind".into(), Vec::new()))
+                }
+                _ => Err(TypeError::new(
+                    "ErrorKind is reserved for direct std builtin parameters",
+                    Self::ast_ty_span(ast_ty).clone(),
+                )),
+            };
+        }
+
         match ast_ty {
             AstTy::Named(_, name) if name == "Self" => {
                 if let Some(self_ty) = mode.self_ty() {
@@ -4463,13 +4508,14 @@ impl Checker {
             ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
                 Box::new(self.resolve_typed_node(*value)),
-                Box::new(self.resolve_typed_node(*marker)),
+                marker,
                 Box::new(self.resolve_typed_node(*handler)),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.resolve_typed_node(*scrutinee)),
                 arms.into_iter()
                     .map(|arm| TypedMatchArm {
+                        direct_expression: arm.direct_expression,
                         pattern: self.resolve_typed_match_pattern(arm.pattern),
                         guard: arm.guard.map(|guard| self.resolve_typed_node(guard)),
                         body: self.resolve_typed_node(arm.body),
@@ -5064,6 +5110,39 @@ mod tests {
             "StandbyInit"
         ));
         assert!(!Checker::builtin_type_is_clause_block_surface_only("Lazy"));
+    }
+
+    #[test]
+    fn error_kind_is_only_a_direct_std_builtin_parameter() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let span = Span { start: 0, end: 9 };
+        let marker = AstTy::Named(span.clone(), "ErrorKind".into());
+        let int = AstTy::Named(span.clone(), "Int".into());
+        let mut tyvars = HashMap::new();
+        assert!(checker.resolve_builtin_ast_ty(&marker, &mut tyvars).is_ok());
+        for nested in [
+            AstTy::Generic(span.clone(), "List".into(), vec![marker.clone()]),
+            AstTy::Func(span.clone(), vec![marker.clone()], Box::new(int.clone())),
+            AstTy::Func(span.clone(), vec![int.clone()], Box::new(marker.clone())),
+            AstTy::Tuple(span.clone(), vec![marker.clone(), int]),
+        ] {
+            let error = checker
+                .resolve_builtin_ast_ty(&nested, &mut tyvars)
+                .expect_err("nested ErrorKind must not expose a kind capability");
+            assert!(
+                error
+                    .message
+                    .contains("ErrorKind is reserved for direct std builtin parameters"),
+                "{nested:?}: {error:?}"
+            );
+        }
+        assert!(checker
+            .resolve_builtin_ast_ty_in_context(
+                &marker,
+                TypeSyntaxContext::FunctionReturn,
+                &mut tyvars
+            )
+            .is_err());
     }
 
     #[test]

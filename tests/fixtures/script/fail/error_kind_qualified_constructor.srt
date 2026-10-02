@@ -1,0 +1,2 @@
+namespace Remote { deferror Timeout { "timeout" } }
+value = Result::recover_kind(Err(Remote::Timeout), Remote::Timeout(), {|_| Ok(1)})

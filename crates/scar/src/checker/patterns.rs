@@ -381,7 +381,23 @@ impl Checker {
                 }
             }
             let input_hint = self.apply_pattern_input_hint(&selected, &projection_types);
-            let value = self.check_node_with_expected(value, input_hint.as_ref())?;
+            let source = value;
+            let mut value = self.check_node_with_expected(source, input_hint.as_ref())?;
+            if Self::is_lazy_placeholder(source) {
+                if let Some(hint) = input_hint.as_ref() {
+                    self.assert_type_relation(
+                        hint,
+                        &value.ty,
+                        self.type_fact(diagnostics::SourceRole::Expected, span, hint),
+                        self.type_fact(diagnostics::SourceRole::Value, &value.span, &value.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        diagnostics::DiagnosticOrigin::Call,
+                        "apply_pattern",
+                        0,
+                    )?;
+                    value.ty = self.resolve_ty(&value.ty);
+                }
+            }
             self.ensure_no_runtime_facet_args(std::slice::from_ref(&value), span, "apply_pattern")?;
             let (pattern, _) = self.check_pattern(&selected, &value.ty, span)?;
             self.bind_typed_pattern(&pattern, &value.ty);

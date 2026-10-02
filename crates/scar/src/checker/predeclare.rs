@@ -4511,7 +4511,7 @@ impl Checker {
                         .map(|param| {
                             self.resolve_builtin_signature_ty_in_context(
                                 &param.ty,
-                                TypeSyntaxContext::General,
+                                TypeSyntaxContext::StdBuiltinParameter,
                                 &mut tyvars,
                             )
                         })

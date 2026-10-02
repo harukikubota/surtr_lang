@@ -29,6 +29,23 @@ contract を持っています。
 field / parameter / return / annotation、inherent / Trait impl targetでの利用は拒否されます。
 Monadの逐次処理には[do式](./do.md)を書いてください。
 
+## 標準引数専用の`Lazy`と`ErrorKind`
+
+`Lazy<T>` は special form の遅延引数を表すマーカーです。コンパイラが0引数関数へ正規化し、選ばれた branch だけを一回呼び出します。
+利用者の関数で遅延処理を受け取るときは、通常の `(-> T)` を使います。
+詳細は [Lazy evaluation](./lazy-evaluation.md) を参照してください。
+
+`ErrorKind` は `Result::recover_kind` に具体的な `deferror` 型名を渡すためのマーカーです。
+修飾名も使え、constructor の payload 数に依存しません。Error の生成や constructor の実行は行いません。
+
+両マーカーとも標準引数専用で、利用者の引数・戻り値・型注釈や通常の変数には使えません。
+`ErrorKind` の値を作る API はなく、Error 値・constructor call・文字列・抽象 `Error`・非エラー型は marker として渡せません。
+キャプチャでも型名を固定し、markerを直接プレースホルダで置き換えることはできません。
+
+```surtr
+Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)}) # Ok(1)
+```
+
 ## `Unit`
 
 `Unit` は special type の中では、もっとも ordinary な型です。

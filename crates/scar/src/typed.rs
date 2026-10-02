@@ -431,7 +431,7 @@ pub enum TypedInner {
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     MapErr(Box<TypedNode>, Box<TypedNode>),
     Cause(Box<TypedNode>, Box<TypedNode>),
-    RecoverKind(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
+    RecoverKind(Box<TypedNode>, String, Box<TypedNode>),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
     /// Expression-local Pattern execution with projection results in slot order.
     ApplyPattern {
@@ -742,6 +742,10 @@ pub enum TypedMatchPattern {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedMatchArm {
+    /// An if_let success expression whose Pattern introduces bindings, even if unused.
+    /// Preserved and revalidated through inference and specialization: an external thunk
+    /// cannot replace it, while a Pattern-bound function or a closure created here can.
+    pub direct_expression: bool,
     pub pattern: TypedMatchPattern,
     pub guard: Option<TypedNode>,
     pub body: TypedNode,

@@ -27,7 +27,9 @@ mod captures;
 mod carriers;
 mod definitions;
 mod expr;
+mod lazy_diagnostics;
 mod matching;
+use lazy_diagnostics::{ActiveLazyCapture, LazyCaptureDiagnostic};
 mod patterns;
 mod predeclare;
 mod provenance;
@@ -420,6 +422,7 @@ enum CallableContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeSyntaxContext {
     General,
+    StdBuiltinParameter,
     BindingAnnotation,
     FunctionReturn,
     HoleClosureParam,
@@ -1281,6 +1284,7 @@ struct PersistentCheckerState {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
     facet_bindings: HashMap<u32, StoredFacetPath>,
+    lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     /// Canonical signature registry shared by ordinary and builtin callables.
@@ -1306,6 +1310,7 @@ impl PersistentCheckerState {
             env: initialize_env(),
             consts: HashMap::new(),
             facet_bindings: HashMap::new(),
+            lazy_capture_bindings: HashMap::new(),
             error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
             callable_signatures: HashMap::new(),
@@ -1330,6 +1335,7 @@ impl PersistentCheckerState {
             env: self.env.clone(),
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
+            lazy_capture_bindings: self.lazy_capture_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
@@ -1357,6 +1363,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             env: checkpoint.env,
             consts: checkpoint.consts,
             facet_bindings: checkpoint.facet_bindings,
+            lazy_capture_bindings: checkpoint.lazy_capture_bindings,
             error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
             callable_signatures: checkpoint.callable_signatures,
@@ -1382,6 +1389,8 @@ pub struct ScarCheckpoint {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
     facet_bindings: HashMap<u32, StoredFacetPath>,
+    #[serde(default)]
+    lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     #[serde(default)]
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
@@ -2083,9 +2092,8 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
                 Self::rewrite_fun_indices_in_node(err, rewrites);
             }
-            TypedInner::RecoverKind(value, marker, handler) => {
+            TypedInner::RecoverKind(value, _, handler) => {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
-                Self::rewrite_fun_indices_in_node(marker, rewrites);
                 Self::rewrite_fun_indices_in_node(handler, rewrites);
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -2749,6 +2757,7 @@ mod specialization_state_tests {
 }
 
 struct Checker {
+    active_lazy_capture: Option<ActiveLazyCapture>,
     env: TypeEnv,
     function_return_ty: Option<Ty>,
     local_annotation_tyvars: HashMap<String, Ty>,
@@ -2762,6 +2771,7 @@ struct Checker {
     callable_context: CallableContext,
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
+    lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
@@ -2769,6 +2779,8 @@ struct Checker {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
+    /// Derived anew for each specialization pass; never persisted across sessions.
+    direct_pattern_requirement_tyvars: HashMap<u32, Vec<u32>>,
     specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
@@ -2913,6 +2925,8 @@ impl Checker {
             callable_context: CallableContext::Function,
             closure_depth: 0,
             facet_bindings: state.facet_bindings,
+            lazy_capture_bindings: state.lazy_capture_bindings,
+            active_lazy_capture: None,
             error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
@@ -2921,6 +2935,7 @@ impl Checker {
             function_ids_by_name: state.function_ids_by_name,
             specializable_defs: state.specializable_defs,
             specialization_fun_idxs: state.specialization_fun_idxs,
+            direct_pattern_requirement_tyvars: HashMap::new(),
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
             pending_trait_obligations: HashMap::new(),
@@ -2972,6 +2987,8 @@ impl Checker {
         checker.callable_context = self.callable_context;
         checker.closure_depth = self.closure_depth;
         checker.facet_bindings = self.facet_bindings.clone();
+        checker.lazy_capture_bindings = self.lazy_capture_bindings.clone();
+        checker.active_lazy_capture = self.active_lazy_capture.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
@@ -3434,7 +3451,11 @@ impl Checker {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(err);
             }
-            TypedInner::Ensure(value, pred, err) | TypedInner::RecoverKind(value, pred, err) => {
+            TypedInner::RecoverKind(value, _, handler) => {
+                self.collect_unused_value_warnings_in_node(value);
+                self.collect_unused_value_warnings_in_node(handler);
+            }
+            TypedInner::Ensure(value, pred, err) => {
                 self.collect_unused_value_warnings_in_node(value);
                 self.collect_unused_value_warnings_in_node(pred);
                 self.collect_unused_value_warnings_in_node(err);
@@ -4082,6 +4103,7 @@ impl Checker {
             env: self.env.clone(),
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
+            lazy_capture_bindings: self.lazy_capture_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
@@ -4106,6 +4128,7 @@ impl Checker {
             env: self.env,
             consts: self.consts,
             facet_bindings: self.facet_bindings,
+            lazy_capture_bindings: self.lazy_capture_bindings,
             error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
             callable_signatures: self.callable_signatures,
@@ -4510,12 +4533,18 @@ impl Checker {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
-            Resolved::Ensure(_, a, b, c) | Resolved::RecoverKind(_, a, b, c) => {
+            Resolved::RecoverKind(_, a, _, c) => {
+                self.validate_constructor_body_positions(a, constructor_traits)?;
+                self.validate_constructor_body_positions(c, constructor_traits)?;
+            }
+            Resolved::Ensure(_, a, b, c) => {
                 self.validate_constructor_body_positions(a, constructor_traits)?;
                 self.validate_constructor_body_positions(b, constructor_traits)?;
                 self.validate_constructor_body_positions(c, constructor_traits)?;
             }
-            Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
+            Resolved::Match(_, scrutinee, arms)
+            | Resolved::IsMatch(_, scrutinee, arms)
+            | Resolved::IfLet(_, scrutinee, arms, _) => {
                 self.validate_constructor_body_positions(scrutinee, constructor_traits)?;
                 for arm in arms {
                     self.validate_constructor_pattern(&arm.pattern, constructor_traits)?;
@@ -4853,6 +4882,9 @@ impl Checker {
             if let Some(start) = t {
                 specialize_program_dur = start.elapsed();
             }
+            for node in &specialized {
+                self.validate_direct_pattern_branches(node)?;
+            }
             if let Some((trait_name, method_name, subject, span)) = specialized
                 .iter()
                 .find_map(|node| self.first_pending_trait_helper(node))
@@ -4962,7 +4994,9 @@ impl Checker {
             Resolved::EnumDef(_, id, ..) => format!("EnumDef {}", id.name),
             Resolved::Bind(..) => "Bind".to_string(),
             Resolved::SafeBind(..) => "SafeBind".to_string(),
-            Resolved::Match(..) | Resolved::IfLet(..) => "Match".to_string(),
+            Resolved::Match(..) | Resolved::IsMatch(..) | Resolved::IfLet(..) => {
+                "Match".to_string()
+            }
             Resolved::Block(..) => "Block".to_string(),
             Resolved::App(..) => "App".to_string(),
             Resolved::Dbg(..) => "Dbg".to_string(),
@@ -4995,7 +5029,7 @@ impl Checker {
             Resolved::EnumDef(..) => "EnumDef",
             Resolved::Bind(..) => "Bind",
             Resolved::SafeBind(..) => "SafeBind",
-            Resolved::Match(..) | Resolved::IfLet(..) => "Match",
+            Resolved::Match(..) | Resolved::IsMatch(..) | Resolved::IfLet(..) => "Match",
             Resolved::Block(..) => "Block",
             Resolved::App(..) => "App",
             Resolved::Dbg(..) => "Dbg",
