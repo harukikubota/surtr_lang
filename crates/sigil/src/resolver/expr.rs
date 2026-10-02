@@ -2067,6 +2067,7 @@ impl Resolver {
     pub(super) fn new() -> Self {
         Self {
             scope: initialize_scope(),
+            capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
@@ -2090,6 +2091,7 @@ impl Resolver {
     pub(super) fn with_scope(scope: Scope) -> Self {
         Self {
             scope,
+            capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
@@ -2181,6 +2183,7 @@ impl Resolver {
         f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
     ) -> Result<T, ResolveError> {
         let mut child = Resolver::with_scope(self.scope.clone());
+        child.capture_placeholder_ids = self.capture_placeholder_ids.clone();
         child.pattern_proxies = self.pattern_proxies.clone();
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
@@ -2837,6 +2840,7 @@ impl Resolver {
         params: Vec<ClosureParam>,
         body: Box<Ast>,
         extractor: bool,
+        capture: bool,
     ) -> Result<Resolved, ResolveError> {
         let mut closure_scope = self.scope.clone();
         let mut resolved_params = Vec::new();
@@ -2857,6 +2861,12 @@ impl Resolver {
         }
 
         let mut body_resolver = Resolver::with_scope(closure_scope);
+        body_resolver.capture_placeholder_ids = self.capture_placeholder_ids.clone();
+        if capture {
+            body_resolver
+                .capture_placeholder_ids
+                .extend(resolved_params.iter().map(|param| param.id.unique_id));
+        }
         body_resolver.declaration_uids = self.declaration_uids.clone();
         body_resolver.declaration_entries = self
             .declaration_entries
@@ -4242,10 +4252,10 @@ impl Resolver {
             }),
 
             Ast::Closure(span, params, body) => {
-                self.resolve_literal_closure(span, params, body, false)
+                self.resolve_literal_closure(span, params, body, false, false)
             }
             Ast::ExtractorClosure(span, params, body) => {
-                self.resolve_literal_closure(span, params, body, true)
+                self.resolve_literal_closure(span, params, body, true, false)
             }
 
             Ast::Capture(span, target, args) => {
@@ -4257,7 +4267,7 @@ impl Resolver {
                         name: Self::capture_placeholder_param_name(&span, index),
                         ty: None, span: span.clone(),
                     }).collect();
-                    return match self.resolve_node(Ast::Closure(span, params, Box::new(body)))? {
+                    return match self.resolve_literal_closure(span, params, Box::new(body), false, true)? {
                         Resolved::Closure(span, params, captures, body) =>
                             Ok(Resolved::CaptureClosure(span, Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()), captures, body)),
                         _ => unreachable!("capture lowering must resolve to a closure"),
@@ -4288,7 +4298,10 @@ impl Resolver {
                                 *target,
                                 args,
                             )?;
-                            return match self.resolve_node(lowered)? {
+                            let Ast::Closure(closure_span, params, body) = lowered else {
+                                unreachable!("constructor capture lowering must produce a closure")
+                            };
+                            return match self.resolve_literal_closure(closure_span, params, body, false, true)? {
                                 Resolved::Closure(closure_span, params, captures, body) => {
                                     Ok(Resolved::CaptureClosure(
                                         closure_span,
@@ -4324,12 +4337,15 @@ impl Resolver {
                         ))
                     }
                     Ast::Closure(closure_span, params, body) if capture_uses_named_callable => {
-                        match self.resolve_node(Ast::Closure(closure_span, params, body))? {
+                        match self.resolve_literal_closure(closure_span, params, body, false, true)? {
                             Resolved::Closure(span, params, captures, body) => {
                                 Ok(Resolved::CaptureClosure(span, Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()), captures, body))
                             }
                             other => Ok(other),
                         }
+                    }
+                    Ast::Closure(closure_span, params, body) => {
+                        self.resolve_literal_closure(closure_span, params, body, false, true)
                     }
                     lowered => self.resolve_node(lowered),
                 }

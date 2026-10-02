@@ -174,18 +174,15 @@ impl Resolver {
         };
         // A Lazy argument's grouping is evaluated in the scope before matching.
         // Grouped synthetic capture parameters are ordinary parameter references.
-        fn capture_parameter(expr: &Ast) -> bool {
-            match expr {
-                Ast::InternalVar(_, name) => name.starts_with("__cap_"),
-                Ast::Grouped(_, inner) => capture_parameter(inner),
-                _ => false,
-            }
-        }
-        let eager_body = if matches!(&body, Ast::Grouped(..)) && !capture_parameter(&body) {
-            Some(self.resolve_node(body.clone())?)
+        let eager_body = if matches!(&body, Ast::Grouped(..))
+            && !self.is_direct_capture_parameter(&body)
+        {
+            Some(self.resolve_lazy_input(body.clone())?)
         } else {
             None
         };
+        let eager_fallback = matches!(&fallback, Ast::Grouped(..))
+            && !self.is_direct_capture_parameter(&fallback);
         let resolving_body = if eager_body.is_some() {
             Ast::Lit(span.clone(), Lit::Unit)
         } else {
@@ -212,6 +209,9 @@ impl Resolver {
         };
         if let Some(body) = eager_body {
             arms[0].body = body;
+        }
+        if eager_fallback {
+            self.reject_eager_capture_parameters(&arms[1].body)?;
         }
         if kind == PatternConsumer::IsMatch {
             if let ResolvedPattern::Deferred { allow_bindings, .. } = &mut arms[0].pattern {

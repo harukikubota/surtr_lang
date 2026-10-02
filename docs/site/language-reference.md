@@ -407,7 +407,7 @@ Option::Some(saved) =? Option::Some(1)
 - Result 以外の RHS は値と型を変えず、constructor / literal / list / string / Extractor などの partial patternが値全体を明示検査するときだけ受理する
 - total pattern + non-Result RHS は、非MonadとResult以外のMonadを区別したSafeBind compile errorにする
 - 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
-- `do` 外では、enclosing callableがcanonical `Result`または有効なResult-effect carrierを返す必要がある
+- `do` 外の通常関数・Closureでは、enclosing callableがcanonical `Result`または有効なResult-effect carrierを返す必要がある。Extractor・ExtractorClosure本文では、その本文自身の `MatchResult::Err` へ元Errorを保持して返す
 - `do` 内では、do-local carrierのResult effectを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
 - Extractor の `MatchResult::Err` は元 Error を保持する。一般の不一致は `PatternMismatch`、list/string 等の構造 pattern 固有 Error は維持する
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
@@ -490,25 +490,31 @@ result: Option<Int> = do::<Option> {
 
 ## 5. パターン
 
-現時点で確定している `match` パターンは次のとおりです。
+Pattern は照合位置に直接記述します。通常の式や第一級の値として保持するものではありません。基本形は次のとおりです。
 
 - binding pattern
 - `True`
 - `False`
 - `Ok(x)`
 - `Err(e)`
-- `_` または `_` で始まる identifier（wildcard pattern。束縛を生成しない）
+- `_` または `_name` のような identifier（wildcard pattern。束縛を生成しない）。数字だけの `_N` は projection 等の専用位置に限る
 - as-pattern は `pattern @ name` または `pattern@name` で書ける
 - `Int` リテラル
 - `String` リテラル
-- list pattern
+- Duration リテラル（`1ms` など。Float リテラルと Unit 値 `()` の検査 Pattern は使えない）
+- pin `^name`（外側で束縛済みの値と `Eq` で比較）
+- tuple Pattern `(left, right)`（1要素の tuple Pattern は使えない）
+- list Pattern `[]`、`[first, second]`、`[head, ..tail]`。String の head / tail 分解にも `[head, ..tail]` を使う
 - 入れ子になった constructor pattern
+- Record の構造的 Pattern `User(name, age)` / `User(age: selected_age, name: selected_name)`（全 field を指定する）
+- named Extractor または束縛済み ExtractorClosure の `head(pre_args..., payload_patterns...)`
 - OR Pattern `p1 | p2`（`match` arm、`if_let`、`if_let_then`、binding-free な `is_match`。子 Pattern 内でも使用可能）
 
 `match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・順序が一致する必要があります。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding、`apply_pattern` の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
 
-構造体の constructor pattern は attached extractor `Type::deconstruct(...)` を通ります。  
-詳細は `./structs.md` と `./extractors.md` を参照してください。
+構造体の constructor Pattern は attached Extractor `Type::deconstruct(...)` を通ります。Record の構造的 Pattern とは別の契約です。通常の `=` は全体が必ず成功する Pattern だけに使えます。Extractor は常に partial として扱います。
+
+`match` の網羅性は guard のない arm から検査します。現行解析は外側の variant や空 / 非空の被覆を中心とし、複数 arm の子 Pattern を合成した一般的な構造的網羅性は証明しません。実行時の取りこぼしを避ける書き方と詳細は [Pattern Matching](./pattern-matching.md)、型ごとの分解は [Record](./record.md) / [Structs](./structs.md) / [Extractors](./extractors.md) を参照してください。
 
 ## 6. フィールドアクセス
 
@@ -753,6 +759,7 @@ defmod Bootstrap {
 - Extractor の元 Error と通常 Pattern の Error を `Err` に保持し、外側 callable から早期 return しない
 - OR、Pattern への pipe 注入、Pattern 引数の部分適用補完は拒否する。`value |> apply_pattern(pattern)` は第1 Expr 引数へ注入する
 - `if_let` / `if_let_then` / `is_match` / `apply_pattern` は予約 consumer 名。`Regex::is_match` は canonical identity により通常 call / capture として扱う
+- これらの consumer は Pattern を直接記述した完全 call を capture できる（`&is_match(&1, Ok(_))`、`&apply_pattern(&1, [_1, .._])` など）。bare capture、Pattern 引数の `&N` による直接置換は拒否する
 
 ### Result callable の Extractor 変換
 

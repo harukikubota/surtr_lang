@@ -1,3 +1,4 @@
+use super::captures::collect_eager_references;
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +14,48 @@ pub(super) enum LogicKind {
 }
 
 impl Resolver {
+    pub(super) fn is_direct_capture_parameter(&self, expr: &Ast) -> bool {
+        match expr {
+            Ast::InternalVar(_, name) => self
+                .scope
+                .lookup(name)
+                .is_some_and(|uid| self.capture_placeholder_ids.contains(&uid)),
+            Ast::Grouped(_, inner) => self.is_direct_capture_parameter(inner),
+            _ => false,
+        }
+    }
+
+    pub(super) fn reject_eager_capture_parameters(
+        &self,
+        resolved: &Resolved,
+    ) -> Result<(), ResolveError> {
+        if let Some(id) = collect_eager_references(resolved)
+            .into_iter()
+            .find(|id| self.capture_placeholder_ids.contains(&id.unique_id))
+        {
+            return Err(ResolveError {
+                message: "capture placeholder is not available in a Lazy eager expression".into(),
+                span: id.span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Capture,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn resolve_lazy_input(&mut self, expr: Ast) -> Result<Resolved, ResolveError> {
+        let eager = matches!(&expr, Ast::Grouped(..)) && !self.is_direct_capture_parameter(&expr);
+        let resolved = self.resolve_node(expr)?;
+        if eager {
+            // Preserve ordinary name-resolution diagnostic precedence.
+            self.reject_eager_capture_parameters(&resolved)?;
+        }
+        Ok(resolved)
+    }
+
     pub(super) fn resolve_if(
         &mut self,
         span: Span,
@@ -24,19 +67,19 @@ impl Resolver {
                 let [cond_expr, then_expr, else_expr] =
                     collect_fixed_positional_args(span.clone(), args, "if", 3)?;
                 let cond = self.resolve_node(cond_expr)?;
-                let then = self.resolve_node(then_expr)?;
+                let then = self.resolve_lazy_input(then_expr)?;
                 return Ok(Resolved::If(
                     span,
                     Box::new(cond),
                     Box::new(then),
-                    Some(Box::new(self.resolve_node(else_expr)?)),
+                    Some(Box::new(self.resolve_lazy_input(else_expr)?)),
                 ));
             }
             IfKind::IfThen2 => {
                 let [cond_expr, then_expr] =
                     collect_fixed_positional_args(span.clone(), args, "if_then", 2)?;
                 let cond = self.resolve_node(cond_expr)?;
-                let then = self.resolve_node(then_expr)?;
+                let then = self.resolve_lazy_input(then_expr)?;
                 return Ok(Resolved::If(span, Box::new(cond), Box::new(then), None));
             }
         }
@@ -49,7 +92,7 @@ impl Resolver {
     ) -> Result<Resolved, ResolveError> {
         let [cond_expr, err_expr] = collect_fixed_positional_args(span.clone(), args, "assert", 2)?;
         let cond = self.resolve_node(cond_expr)?;
-        let err = self.resolve_node(err_expr)?;
+        let err = self.resolve_lazy_input(err_expr)?;
         Ok(Resolved::Assert(span, Box::new(cond), Box::new(err)))
     }
 
@@ -62,7 +105,7 @@ impl Resolver {
             collect_fixed_positional_args(span.clone(), args, "ensure", 3)?;
         let value = self.resolve_node(value_expr)?;
         let pred = self.resolve_node(pred_expr)?;
-        let err = self.resolve_node(err_expr)?;
+        let err = self.resolve_lazy_input(err_expr)?;
         Ok(Resolved::Ensure(
             span,
             Box::new(value),
@@ -79,7 +122,7 @@ impl Resolver {
         let [value_expr, err_expr] =
             collect_fixed_positional_args(span.clone(), args, "map_err", 2)?;
         let value = self.resolve_node(value_expr)?;
-        let err = self.resolve_node(err_expr)?;
+        let err = self.resolve_lazy_input(err_expr)?;
         Ok(Resolved::MapErr(span, Box::new(value), Box::new(err)))
     }
 
@@ -90,7 +133,7 @@ impl Resolver {
     ) -> Result<Resolved, ResolveError> {
         let [value_expr, err_expr] = collect_fixed_positional_args(span.clone(), args, "cause", 2)?;
         let value = self.resolve_node(value_expr)?;
-        let err = self.resolve_node(err_expr)?;
+        let err = self.resolve_lazy_input(err_expr)?;
         Ok(Resolved::Cause(span, Box::new(value), Box::new(err)))
     }
 
@@ -169,7 +212,7 @@ impl Resolver {
         let [left_expr, right_expr] =
             collect_fixed_positional_args(span.clone(), args, callee_name, 2)?;
         let left = self.resolve_node(left_expr)?;
-        let right = self.resolve_node(right_expr)?;
+        let right = self.resolve_lazy_input(right_expr)?;
         let bool_lit = |value| Resolved::Lit(span.clone(), Lit::Bool(value));
 
         let (then_branch, else_branch) = match kind {

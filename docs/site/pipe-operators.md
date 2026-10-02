@@ -112,7 +112,7 @@ value |> wrap("[", _1, "]") # => wrap("[", value, "]")
 
 - pipe RHS の最外 call の direct positional argument にのみ置ける
 - 1 つの RHS call で 1 回だけ使える
-- pipe の外では使えない
+- pipe placeholder としては pipe の外では使えない
 - tuple path の `pair._1` とは別物です
 
 次は OK です。
@@ -132,6 +132,18 @@ x = _1
 ```
 
 最初の例が不許可なのは、`_1` が nested expression の中へ入っているためです。
+
+### Pattern の projection との区別
+
+`apply_pattern` の Pattern 内に書く `_1`〜`_16` は、照合結果を取り出す projection です。pipe の入力位置を指定する placeholder とは別で、pipe の外でも使えます。
+
+```surtr
+apply_pattern([10, 20], [_1, .._2])       # Ok((10, [20]))
+[10, 20] |> apply_pattern([_1, .._2])     # Ok((10, [20]))
+[10, 20] |> apply_pattern(_1, [_1, .._2]) # Ok((10, [20]))
+```
+
+最後の例では、第1引数の `_1` が pipe の入力位置、Pattern 内の `_1` / `_2` が出力 projection です。Pattern 内の projection は自動注入を止めません。Pattern 位置へ pipe の入力を注入することや、Extractor の事前引数内を探索して入力位置にすることはできません。詳細は [Pattern Matching](./pattern-matching.md) を参照してください。
 
 ## nested `_1` は前のパイプ段へ出す
 

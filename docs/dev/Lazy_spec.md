@@ -69,6 +69,9 @@ depthは型の先頭に連続する0引数関数の段数である。引数付�
 両branchが未知なら期待される関数型から確定する。local binding・REPL行の完了時に未確定signatureを保存せず、後のcallから決め直さない。
 外側の宣言済みrigid genericを保持することと、未確定型をlocal polymorphic schemeへ一般化することは区別する。
 
+固定式の事前評価境界 `(EXPR)` では、キャプチャの生成引数が導入される前のローカルコンテキストを参照する。この境界内から今回の `&N` を参照した場合は Sigil が拒否する。型不一致や追加の thunk 化で救済しない。直接置換の `&N`・`(&N)` はこの境界ではない。Lazy 引数位置以外の grouping と Pattern の事前 Expr に、この禁止を広げない。
+実行時の評価はキャプチャの呼び出しごとに分岐選択前に一回行い、キャプチャ生成時へ移動しない。
+
 同じ番号のplaceholderは一つのparameterであり、通常Expr内の使用を含むすべての要求型を統一する。
 `&and(&1, &1)`の`Boolean`と`(-> Boolean)`は競合する。番号の並べ替えは生成parameterの順序へ反映する。
 裸の標準Lazy capture（`&and`など）はSigilで拒否し、引数を記述したcaptureへ案内する。暗黙wrapperは生成しない。

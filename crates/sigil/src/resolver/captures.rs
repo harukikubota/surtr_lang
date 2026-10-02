@@ -4,16 +4,48 @@ pub(super) fn collect_captures(
     body: &Resolved,
     params: &[ResolvedClosureParam],
 ) -> Vec<ResolvedId> {
+    collect_references(body, params, false)
+}
+
+/// Lexical scope validation must inspect references in unresolved Pattern roles,
+/// even though ordinary closure capture metadata waits for Scar to select them.
+pub(super) fn collect_eager_references(body: &Resolved) -> Vec<ResolvedId> {
+    collect_references(body, &[], true)
+}
+
+struct CaptureCollection {
+    ids: Vec<ResolvedId>,
+    include_deferred_patterns: bool,
+}
+
+impl CaptureCollection {
+    fn reference(&mut self, id: &ResolvedId, bound: &HashSet<u32>) {
+        if !bound.contains(&id.unique_id)
+            && !self.ids.iter().any(|seen| seen.unique_id == id.unique_id)
+        {
+            self.ids.push(id.clone());
+        }
+    }
+}
+
+fn collect_references(
+    body: &Resolved,
+    params: &[ResolvedClosureParam],
+    include_deferred_patterns: bool,
+) -> Vec<ResolvedId> {
     let mut bound = HashSet::new();
     for param in params {
         bound.insert(param.id.unique_id);
     }
-    let mut free = Vec::new();
+    let mut free = CaptureCollection {
+        ids: Vec::new(),
+        include_deferred_patterns,
+    };
     collect_captures_inner(body, &mut bound, &mut free);
-    free
+    free.ids
 }
 
-fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut Vec<ResolvedId>) {
+fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut CaptureCollection) {
     match node {
         Resolved::ApplyPattern(_, value, pattern) => {
             collect_captures_inner(value, bound, free);
@@ -21,11 +53,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Lit(_, _) => {}
         Resolved::Var(_, id) => {
-            if !bound.contains(&id.unique_id)
-                && !free.iter().any(|seen| seen.unique_id == id.unique_id)
-            {
-                free.push(id.clone());
-            }
+            free.reference(id, bound);
         }
         Resolved::App(_, func, args) => {
             collect_captures_inner(func, bound, free);
@@ -273,14 +301,18 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
             collect_captures_inner(body, &mut fun_bound, free);
         }
-        Resolved::Closure(_, _, captures, _)
-        | Resolved::CaptureClosure(_, _, captures, _)
-        | Resolved::ExtractorClosure(_, _, captures, _) => {
-            for cap in captures {
-                if !bound.contains(&cap.unique_id)
-                    && !free.iter().any(|seen| seen.unique_id == cap.unique_id)
-                {
-                    free.push(cap.clone());
+        Resolved::Closure(_, params, captures, body)
+        | Resolved::CaptureClosure(_, params, captures, body)
+        | Resolved::ExtractorClosure(_, params, captures, body) => {
+            if free.include_deferred_patterns {
+                let mut closure_bound = bound.clone();
+                for param in params {
+                    closure_bound.insert(param.id.unique_id);
+                }
+                collect_captures_inner(body, &mut closure_bound, free);
+            } else {
+                for cap in captures {
+                    free.reference(cap, bound);
                 }
             }
         }
@@ -297,18 +329,30 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
 fn collect_pattern_captures(
     pat: &ResolvedPattern,
     bound: &HashSet<u32>,
-    free: &mut Vec<ResolvedId>,
+    free: &mut CaptureCollection,
 ) {
     match pat {
         ResolvedPattern::Projection { inner, .. } => collect_pattern_captures(inner, bound, free),
-        // Signature-dependent captures are finalized from canonical Typed IDs.
-        ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {}
-        ResolvedPattern::Pin(id) => {
-            if !bound.contains(&id.unique_id)
-                && !free.iter().any(|seen| seen.unique_id == id.unique_id)
-            {
-                free.push(id.clone());
+        ResolvedPattern::Deferred { pattern, .. } => {
+            if free.include_deferred_patterns {
+                collect_pattern_captures(pattern, bound, free);
             }
+        }
+        ResolvedPattern::ExtractorApplication { head, args } => {
+            if free.include_deferred_patterns {
+                free.reference(head, bound);
+                for arg in args {
+                    if let Ok(expr) = &arg.expr {
+                        collect_captures_inner(expr, &mut bound.clone(), free);
+                    }
+                    if let Ok(pattern) = &arg.pattern {
+                        collect_pattern_captures(pattern, bound, free);
+                    }
+                }
+            }
+        }
+        ResolvedPattern::Pin(id) => {
+            free.reference(id, bound);
         }
         ResolvedPattern::Constructor(_, inners)
         | ResolvedPattern::Tuple(inners)

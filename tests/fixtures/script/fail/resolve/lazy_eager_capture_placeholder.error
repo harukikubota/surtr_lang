@@ -1,0 +1,2 @@
+phase: resolve
+contains: capture placeholder is not available in a Lazy eager expression
