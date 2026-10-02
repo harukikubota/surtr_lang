@@ -1117,7 +1117,7 @@ outer()
 }
 
 #[test]
-fn run_source_allows_explicit_bootstrap_import() {
+fn run_source_rejects_explicit_bootstrap_import() {
     let temp = unique_temp_dir("surtr_explicit_bootstrap_import");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -1136,17 +1136,22 @@ print("ok")"#,
         .expect("failed to run source command");
 
     assert!(
-        output.status.success(),
-        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("ok"),
-        "expected bootstrap-imported script to print ok\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        stderr.contains("Duplicate import"),
+        "expected duplicate import diagnostic, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Bootstrap"),
+        "expected Bootstrap in diagnostic, got:\n{}",
+        stderr
     );
 
     let _ = fs::remove_dir_all(temp);
@@ -1180,8 +1185,8 @@ print(to_string(add(1, 2)))"#,
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Import conflict"),
-        "expected import conflict diagnostic, got:\n{}",
+        stderr.contains("Duplicate import"),
+        "expected duplicate import diagnostic, got:\n{}",
         stderr
     );
     assert!(

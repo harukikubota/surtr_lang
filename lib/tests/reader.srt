@@ -1,5 +1,4 @@
 import Test;
-import Function::apply;
 
 def reader_increment(value: Int) -> Reader<Int, Int> {
   Reader::new({|environment| value + environment})

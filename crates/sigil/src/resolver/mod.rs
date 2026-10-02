@@ -151,14 +151,23 @@ pub fn declaration_symbol_identity_info(
     ))
 }
 
-fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {
+/// Autoimport provenance includes the defining stage even for empty modules.
+struct AutoImportModule {
+    name: String,
+    stage_index: usize,
+}
+
+fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<AutoImportModule> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
-    for stage in module_stages {
+    for (stage_index, stage) in module_stages.iter().enumerate() {
         for module in stage {
             let module_name = surface_module_name(&module.module_path);
             if module.auto_import && seen.insert(module_name.clone()) {
-                names.push(module_name);
+                names.push(AutoImportModule {
+                    name: module_name,
+                    stage_index,
+                });
             }
         }
     }
@@ -590,7 +599,7 @@ fn resolve_stage_modules_parallel(
     stage_index: usize,
     stage_local_base: u32,
     global_scope: &Scope,
-    auto_import_modules: &[String],
+    auto_import_modules: &[AutoImportModule],
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,

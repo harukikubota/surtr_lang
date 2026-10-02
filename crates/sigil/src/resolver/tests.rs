@@ -5247,22 +5247,35 @@ impl User {
 }
 
 #[test]
-fn test_explicit_import_of_autoimport_module_is_allowed() {
+fn explicit_imports_of_autoimport_module_are_duplicates() {
     let module_stages = vec![vec![staged_auto_import_module(
         "Prelude",
         parse_module_ast(r#"def greet() -> String { "hi" }"#, "Prelude"),
     )]];
-
-    let resolved = resolve_user_with_modules(
-        r#"import Prelude;
-value = greet()"#,
-        &module_stages,
-    )
-    .expect("explicit import of autoimport module should be allowed");
-
-    assert!(resolved
-        .iter()
-        .any(|node| matches!(node, Resolved::Bind(_, _, _))));
+    for source in [
+        "import Prelude",
+        "import Prelude::greet",
+        "import Prelude::{greet}",
+    ] {
+        let error = resolve_user_with_modules(source, &module_stages)
+            .expect_err("file-start autoimport already imported the module");
+        assert!(
+            error.message.contains("Duplicate import"),
+            "{source}: {error:?}"
+        );
+        assert!(error.message.contains("autoimport"), "{source}: {error:?}");
+        assert_eq!(
+            error.diagnostic.reason,
+            crate::error::ResolveErrorReason::Import
+        );
+        assert_eq!(
+            error.span,
+            Span {
+                start: 0,
+                end: source.len()
+            }
+        );
+    }
 }
 
 #[test]
@@ -5324,55 +5337,27 @@ deftrait Metric {
 }
 
 #[test]
-fn test_explicit_import_of_autoimport_trait_is_allowed() {
+fn explicit_imports_of_autoimport_trait_are_duplicates() {
     let module_stages = vec![vec![staged_module(
         "Metric",
         parse_module_ast(
-            r#"@autoimport
-deftrait Metric {
-  def add(self: Self, rhs: Self) -> Self
-}"#,
+            "@autoimport\ndeftrait Metric { def add(self: Self, rhs: Self) -> Self }",
             "Metric",
         ),
     )]];
-
-    let resolved = resolve_user_with_modules(
-        r#"import Metric;
-value = add(1, 2)"#,
-        &module_stages,
-    )
-    .expect("explicit import of autoimport trait should be allowed");
-
-    let declaration_id = resolved
-        .iter()
-        .find_map(|node| match node {
-            Resolved::TraitDef(_, id, _, _, methods, _) if id.name == "Metric" => {
-                methods.first().map(|method| &method.id)
-            }
-            _ => None,
-        })
-        .expect("trait method declaration should exist");
-    let callee_id = resolved
-        .iter()
-        .find_map(|node| match node {
-            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-                Resolved::App(_, func, _) => match func.as_ref() {
-                    Resolved::Var(_, id) => Some(id),
-                    _ => None,
-                },
-                _ => None,
-            },
-            _ => None,
-        })
-        .expect("explicitly imported trait method call should exist");
-
-    assert_eq!(callee_id.name, "add");
-    assert_eq!(callee_id.unique_id, declaration_id.unique_id);
-    assert_eq!(
-        callee_id.symbol_info.as_ref().map(|info| info.identity),
-        Some(TypeIdentity::Trait),
-        "a bare explicit-import alias must retain its canonical trait owner"
-    );
+    for source in [
+        "import Metric",
+        "import Metric::add",
+        "import Metric::{add}",
+    ] {
+        let error = resolve_user_with_modules(source, &module_stages)
+            .expect_err("file-start autoimport already imported the trait");
+        assert!(
+            error.message.contains("Duplicate import"),
+            "{source}: {error:?}"
+        );
+        assert!(error.message.contains("autoimport"), "{source}: {error:?}");
+    }
 }
 
 #[test]
@@ -8748,4 +8733,152 @@ fn capture_placeholder_references_have_generated_identity() {
     };
     assert!(id.compiler_generated);
     assert_eq!(id.unique_id, params[1].id.unique_id);
+}
+
+#[test]
+fn autoimport_provenance_covers_own_file_namespaced_owners_and_empty_modules() {
+    let own = staged_auto_import_module(
+        "Prelude",
+        parse_module_ast("import Prelude::greet\ndef greet() -> Int { 1 }", "Prelude"),
+    );
+    let error = resolve_user_with_modules("1", &[vec![own]])
+        .expect_err("own module also has file-start autoimport provenance");
+    assert!(
+        error.message.contains("Duplicate import") && error.message.contains("autoimport"),
+        "{error:?}"
+    );
+
+    let namespaced = staged_auto_import_module(
+        "Global::Domain::Prelude",
+        parse_module_ast("def greet() -> Int { 1 }", "Global::Domain::Prelude"),
+    );
+    let error = resolve_user_with_modules("import Domain::Prelude::{greet}", &[vec![namespaced]])
+        .expect_err("surface owner must match canonical autoimport metadata");
+    assert!(
+        error.message.contains("Duplicate import") && error.message.contains("Domain::Prelude"),
+        "{error:?}"
+    );
+
+    let empty = staged_auto_import_module("Empty", Vec::new());
+    let error = resolve_user_with_modules("import Empty", &[vec![empty]])
+        .expect_err("an empty autoimport module is still already imported");
+    assert!(
+        error.message.contains("Duplicate import") && error.message.contains("autoimport"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn autoimport_provenance_is_available_in_each_file_but_not_future_stages() {
+    let prelude = staged_auto_import_module(
+        "Prelude",
+        parse_module_ast("def greet() -> Int { 1 }", "Prelude"),
+    );
+    for owner in ["Left", "Right"] {
+        let consumer = staged_module(
+            owner,
+            parse_module_ast(
+                "import Prelude::greet\ndef use_greet() -> Int { greet() }",
+                owner,
+            ),
+        );
+        let error = resolve_user_with_modules("1", &[vec![prelude.clone(), consumer]])
+            .expect_err("every file begins with the same available autoimports");
+        assert!(
+            error.message.contains("Duplicate import") && error.message.contains("autoimport"),
+            "{owner}: {error:?}"
+        );
+    }
+
+    let earlier = staged_module(
+        "Earlier",
+        parse_module_ast(
+            "import Prelude::greet\ndef use_greet() -> Int { greet() }",
+            "Earlier",
+        ),
+    );
+    let error = resolve_user_with_modules("1", &[vec![earlier], vec![prelude]])
+        .expect_err("future-stage autoimport is not visible yet");
+    assert!(
+        error.message.contains("not available in the current stage"),
+        "{error:?}"
+    );
+    assert!(!error.message.contains("Duplicate import"), "{error:?}");
+}
+
+#[test]
+fn autoimport_trait_container_selection_rejects_only_the_imported_trait_surface() {
+    for module_name in ["Domain", "Global::Domain"] {
+        let modules = vec![vec![staged_module(module_name, parse_module_ast(
+            "@autoimport deftrait Metric { def add(self: Self, rhs: Self) -> Self }\ndef ordinary() -> Int { 1 }",
+            module_name,
+        ))]];
+        resolve_user_with_modules("value = add(1, 2)", &modules)
+            .expect("autoimport must provide the canonical trait helper");
+        for source in [
+            "import Domain::Metric",
+            "import Domain::{Metric}",
+            "import Domain",
+            "import Domain::Metric::add",
+            "import Domain::Metric::{add}",
+        ] {
+            let error = resolve_user_with_modules(source, &modules)
+                .err()
+                .expect("the selected autoimported trait surface is a duplicate");
+            assert!(
+                error.message.contains("Duplicate import") && error.message.contains("autoimport"),
+                "{module_name} {source}: {error:?}"
+            );
+        }
+        for source in [
+            "import Domain::ordinary\nvalue = ordinary()",
+            "import Domain::{ordinary}\nvalue = ordinary()",
+        ] {
+            resolve_user_with_modules(source, &modules)
+                .expect("ordinary members of a nonautoimport container remain importable");
+        }
+    }
+
+    let domain = staged_module(
+        "Domain",
+        parse_module_ast(
+            "@autoimport deftrait Metric { def add(self: Self, rhs: Self) -> Self }",
+            "Domain",
+        ),
+    );
+    for source in [
+        "import Domain::Metric",
+        "import Domain::{Metric}",
+        "import Domain",
+    ] {
+        let earlier = staged_module("Earlier", parse_module_ast(source, "Earlier"));
+        let error = resolve_user_with_modules("1", &[vec![earlier], vec![domain.clone()]])
+            .err()
+            .expect("a future-stage trait is not already autoimported");
+        assert!(
+            error.message.contains("not available in the current stage")
+                || error.message.contains("unavailable import members"),
+            "{source}: {error:?}"
+        );
+        assert!(
+            !error.message.contains("Duplicate import"),
+            "{source}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn autoimport_provenance_does_not_match_only_the_owner_tail() {
+    let modules = vec![vec![
+        staged_auto_import_module(
+            "Global::Domain::Prelude",
+            parse_module_ast("def greet() -> Int { 1 }", "Global::Domain::Prelude"),
+        ),
+        staged_module(
+            "Other::Prelude",
+            parse_module_ast("def greet() -> Int { 2 }", "Other::Prelude"),
+        ),
+    ]];
+    resolve_user_with_modules("import Other::Prelude::{greet}\nvalue = greet()", &modules)
+        .expect("an unrelated owner with the same terminal name remains importable");
 }

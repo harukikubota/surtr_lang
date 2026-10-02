@@ -1,5 +1,3 @@
-import Function::apply;
-
 @doc """
 Standard `State` structure.
 `State<$S, $A>` stores a pure state transition from `$S` to `($A, $S)`.
