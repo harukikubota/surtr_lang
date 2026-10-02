@@ -68,6 +68,7 @@ impl Checker {
             }
         }
         self.ensure_no_match_result_value(&typed_scrut.ty, &typed_scrut.span)?;
+        let callable_expected = self.contextual_callable_expected(expected);
         let mut typed_arms = Vec::new();
         let mut result_ty: Option<Ty> = None;
         let mut failure = None;
@@ -100,7 +101,7 @@ impl Checker {
                 }
             }
             let body_node = &typed_arm.body;
-            if let Some(first) = typed_arms.first() {
+            if let Some(first) = typed_arms.first().filter(|_| callable_expected.is_none()) {
                 let first: &TypedMatchArm = first;
                 let relation = self.assert_type_relation(
                     &first.body.ty,
@@ -120,7 +121,7 @@ impl Checker {
                 }
             }
             if let Some(expected) = expected {
-                let relation = self.assert_type_relation(
+                let relation = self.assert_value_type_relation(
                     expected,
                     &body_node.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
@@ -157,7 +158,7 @@ impl Checker {
         // subtrees unresolved here and let check_program do one final pass.
         self.check_match_exhaustive(span, &typed_scrut.ty, &typed_arms)?;
 
-        let ty = result_ty.unwrap_or(Ty::Unit);
+        let ty = callable_expected.or(result_ty).unwrap_or(Ty::Unit);
         Ok(TypedNode {
             ty,
             span: span.clone(),
@@ -1371,6 +1372,7 @@ impl Checker {
         expected: Option<&Ty>,
         then_only: bool,
     ) -> Result<TypedNode, TypeError> {
+        let callable_expected = self.contextual_callable_expected(expected);
         let [success, failure] = arms else {
             return Err(
                 self.typecheck_invariant_error("if_let requires a success and failure arm", span)
@@ -1422,31 +1424,58 @@ impl Checker {
             (then, self.check_node(&failure.body)?)
         } else if direct {
             let then = success_input.node;
-            let otherwise =
-                self.check_lazy_argument_with_expected(&failure.body, &then.ty, span)?;
+            let otherwise = self.check_lazy_argument_with_expected(
+                &failure.body,
+                callable_expected.as_ref().unwrap_or(&then.ty),
+                span,
+            )?;
             (then, otherwise)
         } else {
             let failure_input = self.check_lazy_input(&failure.body, expected, span)?;
             self.normalize_lazy_pair(success_input, failure_input, expected, span)?
         };
-        self.assert_type_relation(
-            &then.ty,
-            &otherwise.ty,
-            self.branch_fact(SourceRole::Branch, &then, 0),
-            self.branch_fact(SourceRole::Branch, &otherwise, 1),
-            TypeDiagnosticReason::IfBranchTypeMismatch,
-            DiagnosticOrigin::Branch {
-                form: diagnostics::BranchForm::IfLet,
-                ordinal: 1,
-            },
-            "if_let",
-            1,
-        )
-        .map_err(|error| self.complete_branch_error(error, &[&then, &otherwise], &[None, None]))?;
-        self.record_lazy_capture_signature(span, &then.ty);
+        if let Some(expected) = &callable_expected {
+            for (ordinal, branch) in [&then, &otherwise].into_iter().enumerate() {
+                self.assert_value_type_relation(
+                    expected,
+                    &branch.ty,
+                    self.type_fact(SourceRole::Expected, span, expected),
+                    self.branch_fact(SourceRole::Branch, branch, ordinal),
+                    TypeDiagnosticReason::IfBranchTypeMismatch,
+                    DiagnosticOrigin::Branch {
+                        form: diagnostics::BranchForm::IfLet,
+                        ordinal: ordinal as u32,
+                    },
+                    "if_let",
+                    ordinal as u32,
+                )
+                .map_err(|error| {
+                    self.complete_branch_error(error, &[&then, &otherwise], &[None, None])
+                })?;
+            }
+        } else {
+            self.assert_type_relation(
+                &then.ty,
+                &otherwise.ty,
+                self.branch_fact(SourceRole::Branch, &then, 0),
+                self.branch_fact(SourceRole::Branch, &otherwise, 1),
+                TypeDiagnosticReason::IfBranchTypeMismatch,
+                DiagnosticOrigin::Branch {
+                    form: diagnostics::BranchForm::IfLet,
+                    ordinal: 1,
+                },
+                "if_let",
+                1,
+            )
+            .map_err(|error| {
+                self.complete_branch_error(error, &[&then, &otherwise], &[None, None])
+            })?;
+        }
+        let ty = self.resolve_ty(callable_expected.as_ref().unwrap_or(&then.ty));
+        self.record_lazy_capture_signature(span, &ty);
         let required = if then_only { Some(&Ty::Unit) } else { expected };
         if let Some(required) = required {
-            self.assert_type_relation(
+            self.assert_value_type_relation(
                 required,
                 &then.ty,
                 self.type_fact(SourceRole::Expected, span, required),
@@ -1463,7 +1492,6 @@ impl Checker {
         if direct {
             self.ensure_if_let_direct_expression(&then, &bindings)?;
         }
-        let ty = self.resolve_ty(&then.ty);
         Ok(TypedNode {
             ty,
             span: span.clone(),

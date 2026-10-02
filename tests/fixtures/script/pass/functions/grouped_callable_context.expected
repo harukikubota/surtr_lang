@@ -1,0 +1,28 @@
+plain
+10
+map
+[10, 10]
+empty map
+[]
+bind
+[20, 20]
+empty bind
+[]
+option
+Option::Some(30)
+absent option
+Option::None
+result
+Ok(40)
+failed result
+True
+50
+50
+50
+60
+70
+80
+90
+right
+left
+100

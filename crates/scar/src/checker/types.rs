@@ -2674,6 +2674,38 @@ impl Checker {
         Ok(Ty::Error)
     }
 
+    pub(super) fn contextual_callable_expected(&self, expected: Option<&Ty>) -> Option<Ty> {
+        let expected = expected?;
+        let resolved = self.resolve_ty(expected);
+        let (inputs, _) = self.function_parts(&resolved)?;
+        (inputs.len() == 1).then(|| expected.clone())
+    }
+
+    /// Expected value compatibility is directed. An ignored unary input accepts
+    /// the expected input without changing Hole's strict type identity. Outputs
+    /// and every other shape still use the ordinary relation.
+    pub(super) fn value_types_compatible(&mut self, expected: &Ty, actual: &Ty) -> bool {
+        let resolved_expected = self.resolve_ty(expected);
+        let resolved_actual = self.resolve_ty(actual);
+        if let (Some((expected_inputs, expected_output)), Some((actual_inputs, actual_output))) = (
+            self.function_parts(&resolved_expected),
+            self.function_parts(&resolved_actual),
+        ) {
+            if expected_inputs.len() == 1 && matches!(actual_inputs, [Ty::Hole]) {
+                let expected_output = self
+                    .function_parts(expected)
+                    .map_or(expected_output, |(_, output)| output)
+                    .clone();
+                let actual_output = self
+                    .function_parts(actual)
+                    .map_or(actual_output, |(_, output)| output)
+                    .clone();
+                return self.types_compatible(&expected_output, &actual_output);
+            }
+        }
+        self.types_compatible(expected, actual)
+    }
+
     pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> bool {
         let profile = self.profiler.start();
         let expected_bare_occurrence = Self::bare_constructor_occurrence(expected);
@@ -4978,6 +5010,38 @@ mod tests {
             parents: Vec::new(),
             methods: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn value_relation_and_callable_context_preserve_bare_return_origin() {
+        let source = "deftrait Functor where Self: Type<$A> {}\nimpl Functor for List<$T> {}";
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker.check_program(sigil::resolve(ast).unwrap()).unwrap();
+        let Ty::Var(occurrence) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        let trait_key = checker
+            .declaration_constructor_trait_key("Functor")
+            .unwrap();
+        checker
+            .constructor_witness_traits
+            .insert(occurrence, trait_key);
+        checker
+            .substitutions
+            .insert(occurrence, Ty::List(Box::new(Ty::Hole)));
+        let bare_return = Ty::SelfApp(vec![Ty::Hole, Ty::Var(occurrence)]);
+        let expected = Ty::Func(vec![Ty::Int], Box::new(bare_return));
+        let actual = Ty::Func(vec![Ty::Hole], Box::new(Ty::List(Box::new(Ty::Bool))));
+
+        assert_eq!(
+            checker.contextual_callable_expected(Some(&expected)),
+            Some(expected.clone())
+        );
+        assert!(
+            checker.value_types_compatible(&expected, &actual),
+            "bare return compares carrier identity without equating its mapped payload"
+        );
     }
 
     #[test]

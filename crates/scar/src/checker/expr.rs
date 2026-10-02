@@ -1731,7 +1731,7 @@ impl Checker {
                         Some(&relation),
                     )?;
                     self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
-                    let relation = self.assert_type_relation(&expected, &typed_rhs.ty,
+                    let relation = self.assert_value_type_relation(&expected, &typed_rhs.ty,
                         self.type_fact(SourceRole::Annotation, Self::ast_ty_span(ast_ty), &expected), self.type_fact(SourceRole::Value, &typed_rhs.span, &typed_rhs.ty),
                         TypeDiagnosticReason::AnnotationTypeMismatch, DiagnosticOrigin::Annotation, "binding", 0);
                     if let Err(error) = relation {
@@ -2440,7 +2440,7 @@ impl Checker {
         else {
             return Ok(());
         };
-        self.assert_type_relation(
+        self.assert_value_type_relation(
             expected,
             &constraints.signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, expected),
@@ -2535,7 +2535,7 @@ impl Checker {
         if !is_stable_context(&canonical_expected, &self.rigid_tyvars) {
             return Ok(());
         }
-        self.assert_type_relation(
+        self.assert_value_type_relation(
             &normalized_expected,
             &constraints.signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, &normalized_expected),
@@ -2587,7 +2587,7 @@ impl Checker {
         }
 
         for argument in &constraints.value_arguments {
-            let relation = self.assert_type_relation(
+            let relation = self.assert_value_type_relation(
                 &argument.expected,
                 &argument.actual,
                 self.type_fact(SourceRole::Expected, span, &argument.expected),
@@ -8250,7 +8250,7 @@ impl Checker {
         if matches!(self.resolve_ty(expected), Ty::Hole) {
             return Ok(());
         }
-        self.assert_type_relation(
+        self.assert_value_type_relation(
             expected,
             &typed.ty,
             self.type_fact(SourceRole::Expected, span, expected),
@@ -13991,6 +13991,7 @@ impl Checker {
         else_opt: &Option<Box<Resolved>>,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        let callable_expected = self.contextual_callable_expected(expected);
         let typed_cond = self.check_node(cond)?;
         self.assert_type_relation(
             &Ty::Bool,
@@ -14017,22 +14018,51 @@ impl Checker {
             )
         };
         if let Some(other) = &typed_else {
-            self.assert_type_relation(
-                &typed_then.ty,
-                &other.ty,
-                self.branch_fact(SourceRole::Branch, &typed_then, 0),
-                self.branch_fact(SourceRole::Branch, other, 1),
-                TypeDiagnosticReason::IfBranchTypeMismatch,
-                DiagnosticOrigin::Branch {
-                    form: diagnostics::BranchForm::If,
-                    ordinal: 1,
-                },
-                "if",
-                1,
-            )
-            .map_err(|error| {
-                self.complete_branch_error(error, &[&typed_then, other], &[Some(&typed_cond), None])
-            })?;
+            if let Some(expected) = &callable_expected {
+                for (ordinal, branch) in [&typed_then, other].into_iter().enumerate() {
+                    self.assert_value_type_relation(
+                        expected,
+                        &branch.ty,
+                        self.type_fact(SourceRole::Expected, span, expected),
+                        self.branch_fact(SourceRole::Branch, branch, ordinal),
+                        TypeDiagnosticReason::IfBranchTypeMismatch,
+                        DiagnosticOrigin::Branch {
+                            form: diagnostics::BranchForm::If,
+                            ordinal: ordinal as u32,
+                        },
+                        "if",
+                        ordinal as u32,
+                    )
+                    .map_err(|error| {
+                        self.complete_branch_error(
+                            error,
+                            &[&typed_then, other],
+                            &[Some(&typed_cond), None],
+                        )
+                    })?;
+                }
+            } else {
+                self.assert_type_relation(
+                    &typed_then.ty,
+                    &other.ty,
+                    self.branch_fact(SourceRole::Branch, &typed_then, 0),
+                    self.branch_fact(SourceRole::Branch, other, 1),
+                    TypeDiagnosticReason::IfBranchTypeMismatch,
+                    DiagnosticOrigin::Branch {
+                        form: diagnostics::BranchForm::If,
+                        ordinal: 1,
+                    },
+                    "if",
+                    1,
+                )
+                .map_err(|error| {
+                    self.complete_branch_error(
+                        error,
+                        &[&typed_then, other],
+                        &[Some(&typed_cond), None],
+                    )
+                })?;
+            }
         }
         if typed_else.is_none() {
             self.assert_type_relation(
@@ -14050,13 +14080,13 @@ impl Checker {
             )?;
         }
         let ty = if typed_else.is_some() {
-            typed_then.ty.clone()
+            callable_expected.unwrap_or_else(|| typed_then.ty.clone())
         } else {
             Ty::Unit
         };
         self.record_lazy_capture_signature(span, &ty);
         if let Some(expected) = expected {
-            self.assert_type_relation(
+            self.assert_value_type_relation(
                 expected,
                 &ty,
                 self.type_fact(SourceRole::Expected, span, expected),
