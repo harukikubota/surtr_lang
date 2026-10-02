@@ -1752,7 +1752,7 @@ impl Checker {
                 self.constructor_annotation_compatible(&trait_key, &expected_ret, &typed_body.ty)
             });
         let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
-        let relation = self.assert_type_relation(
+        let relation = self.assert_value_type_relation(
             &expected_ret,
             &typed_body.ty,
             self.type_fact(
@@ -2591,7 +2591,7 @@ impl Checker {
                 return Err(err);
             }
             let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
-            let relation = self.assert_type_relation(
+            let relation = self.assert_value_type_relation(
                 &expected_ret,
                 &typed_body.ty,
                 self.type_fact(

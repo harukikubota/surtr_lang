@@ -1606,7 +1606,7 @@ impl Parser<'_> {
         while self.has_path_separator()
             && matches!(
                 self.peek_n(2),
-                Some(Token::Ident(_) | Token::PatternConsumer(_))
+                Some(Token::Ident(_) | Token::ReservedCallName(_) | Token::PatternConsumer(_))
             )
         {
             saw_separator = true;
@@ -1971,7 +1971,7 @@ impl Parser<'_> {
                 ));
             }
         };
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_callable_ident()?;
         let return_type_arguments = self.parse_return_type_arguments_for_context(
             Some(target.to_string()),
             trait_impl_substitution,
@@ -2718,7 +2718,7 @@ impl Parser<'_> {
                 ));
             }
         };
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_callable_ident()?;
         let return_type_arguments = self.parse_return_type_arguments()?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
@@ -3524,7 +3524,7 @@ impl Parser<'_> {
         let (name, name_span) = if allow_builtin_keyword_name {
             self.expect_builtin_decl_name()?
         } else {
-            self.expect_ident()?
+            self.expect_callable_ident()?
         };
         if !allow_builtin_keyword_name {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Function name")?;

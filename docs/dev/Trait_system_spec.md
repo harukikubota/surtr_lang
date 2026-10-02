@@ -79,6 +79,8 @@
 | `@autoimport` | Trait helper aliasをfile-local preludeへ入れるTrait単位のopt-in |
 | `@derive` | 対応Trait implをresolverが生成する型宣言側annotator |
 
+関数型の入力にある`_`は、関数がその入力を使わないことを表す。期待関数型を与えて式を検査するときも、この入力契約を維持して返り型を推論する。groupingは期待型を内側へ伝え、通常引数・注釈・返り値・分岐とパイプで同じ規則を使う。単項関数値の実際の入力が`_`の場合に限り期待入力を受け入れ、返り型は通常通り照合する。使用する入力型や引数数は従来通り検査する。trait signatureの一致判定、集約型の内部、関数の返り型内へこの適合規則を広げず、`Hole`を一般の型比較のwildcardにしない。既知の期待型を持つ分岐では各枝を期待型へ照合し、枝の順序で結果を変えない。
+
 `Type`は型形状指定のcompiler-special surface name、`TypeConstructor`はcompiler内部のkind/identity分類、
 `TypeCtorTrait`は`Self: Type<...>`を持つTraitの分類であり、相互に同義ではない。
 

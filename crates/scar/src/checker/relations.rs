@@ -110,11 +110,65 @@ impl Checker {
         callable: &str,
         ordinal: u32,
     ) -> Result<(), TypeError> {
+        self.assert_relation(
+            expected,
+            actual,
+            expected_fact,
+            actual_fact,
+            reason,
+            origin,
+            callable,
+            ordinal,
+            false,
+        )
+    }
+
+    pub(super) fn assert_value_type_relation(
+        &mut self,
+        expected: &Ty,
+        actual: &Ty,
+        expected_fact: SourceFact,
+        actual_fact: SourceFact,
+        reason: TypeDiagnosticReason,
+        origin: DiagnosticOrigin,
+        callable: &str,
+        ordinal: u32,
+    ) -> Result<(), TypeError> {
+        self.assert_relation(
+            expected,
+            actual,
+            expected_fact,
+            actual_fact,
+            reason,
+            origin,
+            callable,
+            ordinal,
+            true,
+        )
+    }
+
+    fn assert_relation(
+        &mut self,
+        expected: &Ty,
+        actual: &Ty,
+        expected_fact: SourceFact,
+        actual_fact: SourceFact,
+        reason: TypeDiagnosticReason,
+        origin: DiagnosticOrigin,
+        callable: &str,
+        ordinal: u32,
+        value_relation: bool,
+    ) -> Result<(), TypeError> {
         // Concrete and rigid-only comparisons cannot bind inference variables.
         // Avoid cloning the candidate-probe state for declaration-owned generics:
         // they are common in standard-library bodies but are immutable here.
         let checkpoint = self.type_relation_checkpoint_for(&[expected, actual]);
-        if self.types_compatible(expected, actual) {
+        let compatible = if value_relation {
+            self.value_types_compatible(expected, actual)
+        } else {
+            self.types_compatible(expected, actual)
+        };
+        if compatible {
             return Ok(());
         }
         if let Some(checkpoint) = checkpoint {
@@ -345,6 +399,7 @@ impl Checker {
         clauses: &[(Resolved, Resolved)],
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        let callable_expected = self.contextual_callable_expected(expected);
         let mut failure = None;
         let mut checked: Vec<(TypedNode, TypedNode)> = Vec::new();
         for (ordinal, (condition, body)) in clauses.iter().enumerate() {
@@ -366,7 +421,7 @@ impl Checker {
                 Some(expected) => self.check_lazy_argument_with_expected(body, expected, span)?,
                 None => self.check_lazy_argument(body, span)?,
             };
-            if let Some((_, first)) = checked.first() {
+            if let Some((_, first)) = checked.first().filter(|_| callable_expected.is_none()) {
                 let relation = self.assert_type_relation(
                     &first.ty,
                     &body.ty,
@@ -385,7 +440,7 @@ impl Checker {
                 }
             }
             if let Some(expected) = expected {
-                let relation = self.assert_type_relation(
+                let relation = self.assert_value_type_relation(
                     expected,
                     &body.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
@@ -419,7 +474,7 @@ impl Checker {
             .ok_or_else(|| TypeError::new("cond requires at least one clause", span.clone()))?;
         while let Some((condition, body)) = checked.pop() {
             tail = TypedNode {
-                ty: tail.ty.clone(),
+                ty: callable_expected.clone().unwrap_or_else(|| tail.ty.clone()),
                 span: span.clone(),
                 node: TypedInner::If(Box::new(condition), Box::new(body), Some(Box::new(tail))),
             };

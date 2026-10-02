@@ -176,6 +176,8 @@ defmod Kernel {
 
   Returns `True` when the value matches the pattern, otherwise `False`.
   This form does not permit binding variables in the pattern argument.
+  Prefix, Kernel-qualified, backtick-prefix, and infix calls use the same
+  Pattern grammar. An infix call with `is_match` accepts an OR Pattern.
   Use `_` or an identifier beginning with `_` to ignore values, or switch to `if_let` / `match` when bindings
   are required.
   A complete call such as `&is_match(&1, Ok(_))` can be captured.

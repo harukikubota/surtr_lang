@@ -1,5 +1,4 @@
 import Test;
-import Function::apply;
 
 defstruct Probe<$A> {
   value: $A,

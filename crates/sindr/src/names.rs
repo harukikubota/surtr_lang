@@ -2,6 +2,59 @@ use serde::{Deserialize, Serialize};
 
 use crate::intrinsic::IntrinsicId;
 
+/// Reserved callable spellings whose bare infix syntax has a fixed precedence.
+/// Reservation concerns variable and field positions; member declarations and
+/// import eligibility remain independent contracts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReservedCallName {
+    On,
+    And,
+    Or,
+    Eq,
+    Neq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+}
+
+impl ReservedCallName {
+    pub const ALL: [Self; 9] = [
+        Self::On,
+        Self::And,
+        Self::Or,
+        Self::Eq,
+        Self::Neq,
+        Self::Lt,
+        Self::Lte,
+        Self::Gt,
+        Self::Gte,
+    ];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Eq => "eq",
+            Self::Neq => "neq",
+            Self::Lt => "lt",
+            Self::Lte => "lte",
+            Self::Gt => "gt",
+            Self::Gte => "gte",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+}
+
+pub fn is_reserved_value_name(name: &str) -> bool {
+    ReservedCallName::from_name(name).is_some()
+        || crate::pattern::PatternConsumer::from_name(name).is_some()
+}
+
 /// Internal canonical namespace used for implicit top-level definitions.
 ///
 /// The compiler keeps this namespace in canonical identities, but user-facing

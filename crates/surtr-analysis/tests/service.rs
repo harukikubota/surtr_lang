@@ -1890,3 +1890,46 @@ fn temp_root(name: &str) -> PathBuf {
         .as_nanos();
     std::env::temp_dir().join(format!("surtr-analysis-service-{name}-{nonce}"))
 }
+
+#[test]
+fn analysis_service_refreshes_consumer_parse_contract_after_unfinished_edit() {
+    use spire::ast::{Ast, RecordLitArg};
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    for (version, source, expects_parse_error) in [
+        (1, "lt = 1", true),
+        (2, "input |> apply_pattern([_, ", true),
+        (3, "True |> Boolean::eqv(is_match(input, _))", false),
+    ] {
+        service.update_document(path.clone(), Some(version), source.to_string());
+        let context = resolve_context(AnalysisContextRequest {
+            workspace_root: PathBuf::from("/repo"),
+            active_file: path.clone(),
+            selected_context: Some(SelectedContext::ScriptEntry(path.clone())),
+            runner_selection: None,
+            open_documents: service.document_store().open_document_versions(),
+        });
+        let snapshot = service.analyze(context);
+        assert_eq!(
+            snapshot
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Parse),
+            expects_parse_error,
+            "{source}"
+        );
+        if !expects_parse_error {
+            let ast = snapshot.ast.as_ref().expect("complete source AST");
+            let Ast::Pipe(_, _, rhs) = &ast[0] else {
+                panic!("Pipe")
+            };
+            let Ast::App(_, _, args) = rhs.as_ref() else {
+                panic!("outer ordinary Call")
+            };
+            let RecordLitArg::Positional(Ast::PatternConsumerCall(_, _, args)) = &args[0] else {
+                panic!("inner complete consumer")
+            };
+            assert!(args[0].expression.is_some() && args[1].pattern.is_some());
+        }
+    }
+}

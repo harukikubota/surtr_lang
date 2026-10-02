@@ -20,6 +20,7 @@ pub enum Token {
 
     // ── Identifier ──
     Ident(String),
+    ReservedCallName(sindr::names::ReservedCallName),
     PatternConsumer(sindr::pattern::PatternConsumer),
     NumberedPlaceholder(String),
     FuncLiteral(String),

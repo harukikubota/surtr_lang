@@ -13,6 +13,35 @@ fn restricted_surface_import_message(fq_name: &str) -> String {
     format!("Import target `{fq_name}` cannot be imported from user code")
 }
 
+fn duplicate_autoimport_error(owner: &str, span: Span) -> ResolveError {
+    let owner = global_surface_name(owner);
+    ResolveError {
+        message: format!(
+            "Duplicate import: `{owner}` is already imported by file-start autoimport"
+        ),
+        span,
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::Import,
+            subject: Some(owner.to_string()),
+        },
+        related_labels: Vec::new(),
+    }
+}
+
+fn reject_autoimported_trait_selection(
+    entry: &DeclarationEntry,
+    current_stage_index: usize,
+    span: &Span,
+) -> Result<(), ResolveError> {
+    if entry.kind == DeclarationKind::Trait
+        && entry.auto_import
+        && entry.stage_index <= current_stage_index
+    {
+        return Err(duplicate_autoimport_error(&entry.fq_name, span.clone()));
+    }
+    Ok(())
+}
+
 fn builtin_special_variant_bare_alias(entry: &DeclarationEntry) -> Option<&'static str> {
     if entry.kind != DeclarationKind::EnumVariant {
         return None;
@@ -26,10 +55,17 @@ fn builtin_special_variant_bare_alias(entry: &DeclarationEntry) -> Option<&'stat
     }
 }
 
-fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<String> {
+fn auto_import_trait_names(
+    declaration_index: &DeclarationIndex,
+    current_stage_index: usize,
+) -> HashSet<String> {
     declaration_index
         .values()
-        .filter(|entry| entry.kind == DeclarationKind::Trait && entry.auto_import)
+        .filter(|entry| {
+            entry.kind == DeclarationKind::Trait
+                && entry.auto_import
+                && entry.stage_index <= current_stage_index
+        })
         .map(|entry| entry.name.clone())
         .collect()
 }
@@ -120,7 +156,7 @@ pub(super) fn build_global_scope(
 
 pub(super) fn build_module_scope(
     global_scope: &Scope,
-    auto_import_modules: &[String],
+    auto_import_modules: &[AutoImportModule],
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
@@ -150,7 +186,7 @@ pub(super) struct ModuleScopeBuild {
 
 pub(super) fn build_module_scope_with_imports(
     global_scope: &Scope,
-    auto_import_modules: &[String],
+    auto_import_modules: &[AutoImportModule],
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
@@ -163,10 +199,11 @@ pub(super) fn build_module_scope_with_imports(
     let mut explicit_function_imports = Vec::new();
     let mut effective_auto_import_fq_names = Vec::new();
     let mut shadowed_auto_import_bindings = Vec::new();
-    let auto_import_traits = auto_import_trait_names(declaration_index);
+    let auto_import_traits = auto_import_trait_names(declaration_index, current_stage_index);
     let auto_import_module_set = auto_import_modules
         .iter()
-        .map(|name| name.as_str())
+        .filter(|module| module.stage_index <= current_stage_index)
+        .map(|module| module.name.as_str())
         .collect::<HashSet<_>>();
     let mut import_context = ImportContext {
         auto_import_modules: &auto_import_module_set,
@@ -187,8 +224,12 @@ pub(super) fn build_module_scope_with_imports(
         }
     }
 
-    for auto_import in auto_import_modules {
-        if current_module_path == Some(auto_import.as_str()) {
+    for module in auto_import_modules
+        .iter()
+        .filter(|module| module.stage_index <= current_stage_index)
+    {
+        let auto_import = module.name.as_str();
+        if current_module_path.map(global_surface_name) == Some(auto_import) {
             continue;
         }
         import_module_into_scope(
@@ -286,6 +327,22 @@ fn apply_import_to_scope(
     span: Span,
 ) -> Result<(), ResolveError> {
     let module_name = path.segments.join("::");
+    // Every file conceptually begins with import_all from its available
+    // autoimport sources. Validate that provenance before visiting members:
+    // same-UID aliases and module contents cannot turn a duplicate into success.
+    let already_autoimported = import_context
+        .auto_import_modules
+        .contains(module_name.as_str())
+        || import_context.declaration_index.values().any(|entry| {
+            entry.kind == DeclarationKind::Trait
+                && entry.auto_import
+                && entry.stage_index <= import_context.current_stage_index
+                && (global_surface_name(&entry.fq_name) == module_name
+                    || global_surface_name(&entry.name) == module_name)
+        });
+    if already_autoimported {
+        return Err(duplicate_autoimport_error(&module_name, span));
+    }
     match spec {
         spire::ast::ImportSpec::All => {
             import_module_into_scope(scope, import_context, &module_name, false, span)
@@ -403,6 +460,8 @@ fn import_list_into_scope(
             issues.unknown_members.push(fq_name);
             continue;
         };
+
+        reject_autoimported_trait_selection(entry, import_context.current_stage_index, &span)?;
 
         if special_non_importable_member(import_context.declaration_index, module_name, name) {
             issues.not_importable.push(fq_name);
@@ -528,6 +587,10 @@ fn import_module_into_scope(
         if global_surface_name(&entry.module_path) != module_name {
             continue;
         }
+        if !auto_import {
+            reject_autoimported_trait_selection(entry, import_context.current_stage_index, &span)?;
+        }
+
         match declaration_import_surface_status(entry, import_context.current_stage_index) {
             ImportSurfaceStatus::Importable => {}
             ImportSurfaceStatus::FutureStage => {
@@ -835,6 +898,8 @@ fn import_single_into_scope(
             related_labels: Vec::new(),
         });
     };
+
+    reject_autoimported_trait_selection(entry, import_context.current_stage_index, &span)?;
 
     if special_non_importable_member(import_context.declaration_index, module_name, name) {
         return Err(ResolveError {

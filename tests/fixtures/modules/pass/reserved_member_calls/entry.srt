@@ -1,0 +1,8 @@
+import Helper;
+
+def note(tag: String, value: Boolean) -> Boolean { print(tag); value }
+print(to_string(False `Helper::and` note("and-rhs", True)))
+print(to_string(True `Helper::or` note("or-rhs", False)))
+print(to_string(2 `Helper::lt` 3 + 4))
+print(to_string(and(False, note("imported-and-rhs", True))))
+print(to_string(lt(2, 3)))

@@ -479,6 +479,9 @@ result: Option<Int> = do::<Option> {
 - `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
 - 結合優先度は `Bind < StdOn < Apply=Compose < AndOr < Compare < Pair < Expr`
+- `on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名。変数・引数・Patternの束縛名・フィールド名には使えない。関数の宣言名には使え、import規則は変更しない
+- 裸の比較関数6名の中置Callは比較演算子と同じ `Compare` 層・左結合。修飾中置Callは既存の `Function::on`・`Kernel::and`・`Kernel::or` を除き通常の `Expr` 層
+- `compare`、`pipe` / `fmap` / `bind`、関数合成の関数インターフェースは予約せず、名前付き中置Callは通常の2引数Call
 - pair constructor `(,)` は右結合で、`left (,) right` を nested pair に lower する
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
@@ -612,9 +615,10 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 
 ### auto import
 
-- `Bootstrap`, `Kernel` と `@autoimport` 付き標準 `impl Type` owner helper surface / 標準 trait は auto import 対象
+- `Bootstrap`、`Kernel`、`Function` などの `@autoimport` 付き標準モジュールと、`@autoimport` 付き標準 `impl Type` owner helper surface / 標準 trait は auto import 対象
 - `Functor`, `Applicative`, `Monad` は auto import 対象であり、`fmap`, `pure`, `ap`, `return`, `bind` を bare 名で呼べる
-- `Bootstrap` / `Kernel` の明示 `import` は compile error
+- auto importは各ファイルの先頭で対象モジュールを全件importする規則である。既にauto importされたモジュールへの明示importは、全件・単一member・リストのいずれも重複importとしてcompile errorになる
+- auto importされたtrait宣言とhelperも導入済みとして扱う。namespaceの親モジュールからそのtraitを選択するimportも重複になるが、親モジュールの他のmemberだけをimportすることはできる
 - それ以外の標準定義ソースは auto import しない
 
 ### import の意味
@@ -626,7 +630,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 - `Struct` 名や `new` のように import 不可の宣言もある
 - `import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書ける
 - `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
-- 明示 import は同名の auto-import surface を shadow できる
+- 別モジュールからの明示 import は同名の auto-import surface を shadow できる。auto import済みのモジュール自体を再importすることはできない
 - 明示 import 同士、または auto-import 同士が同じ unqualified 名を導入する場合は原則 compile error
 - 現行実装では `Result::chain` / `Facet::chain` だけが例外であるため、この名前は qualified call を使う
 
@@ -687,17 +691,15 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 
 ### import の重複
 
-同一 file では、同じモジュールまたは同じメンバーの再 import を禁止します。
+同一 file では、同じモジュールまたは同じメンバーの再 import を禁止します。auto importもこの重複判定に含みます。Kernelは既に導入済みなので、次はいずれも最初の明示importでエラーになります。
 
 禁止例:
 
 ```surtr
 import Kernel;
-import Kernel;
 ```
 
 ```surtr
-import Kernel;
 import Kernel::print;
 ```
 

@@ -1,2 +1,2 @@
 phase: resolve
-contains: apply_pattern has invalid pipe argument count
+contains: apply_pattern expects exactly 2 positional arguments

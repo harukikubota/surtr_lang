@@ -3,6 +3,8 @@ Standard `Compare` trait declaration.
 `Compare` models three-way comparison and returns `Ordering`.
 The unqualified helpers `compare(...)`, `lt(...)`, `lte(...)`, `gt(...)`, and
 `gte(...)` come from this auto-imported trait surface.
+Bare infix `lt`, `lte`, `gt`, and `gte` use comparison precedence and left
+associativity. These four names are reserved; `compare` remains an ordinary name.
 
 ## REPL
 xldr(1)> Compare::compare(1, 2)

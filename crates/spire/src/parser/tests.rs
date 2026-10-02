@@ -5292,6 +5292,11 @@ fn test_or_pattern_is_rejected_in_binding_contexts() {
         for operator in ["=", "=?"] {
             let source = format!("{pattern} {operator} input");
             let error = parse(&source).expect_err(&source);
+            if pattern.contains('\n') {
+                // Newlines end ordinary Pattern operators just as they end Expr
+                // operators; these inputs reject before binding OR validation.
+                continue;
+            }
             assert_eq!(error.reason(), ParseErrorReason::PatternSyntax, "{source}");
             assert!(
                 error
@@ -5308,6 +5313,11 @@ fn test_or_pattern_is_rejected_in_binding_contexts() {
         for operator in ["<-", "=?"] {
             let source = format!("do {{ {pattern} {operator} input\n Ok(()) }}");
             let error = parse(&source).expect_err(&source);
+            if pattern.contains('\n') {
+                // Newlines end ordinary Pattern operators just as they end Expr
+                // operators; these inputs reject before binding OR validation.
+                continue;
+            }
             assert_eq!(error.reason(), ParseErrorReason::PatternSyntax, "{source}");
             assert!(
                 error
@@ -7707,4 +7717,334 @@ fn qualified_bare_names_remain_distinct_from_constructor_calls() {
         &args[1],
         RecordLitArg::Positional(Ast::ConstructorCall(..))
     ));
+}
+
+#[test]
+fn pattern_consumers_choose_argument_grammar_directly_in_all_call_forms() {
+    for callee in [
+        "is_match",
+        "Kernel::is_match",
+        "`is_match`",
+        "`Kernel::is_match`",
+    ] {
+        let source = format!("{callee}(input, Ok(_) | Err(_))");
+        let ast = parse(&source).expect(&source);
+        let Ast::PatternConsumerCall(_, _, args) = &ast[0] else {
+            panic!("{source}: {:?}", ast[0])
+        };
+        assert!(
+            args[0].expression.is_some() && args[0].pattern.is_none(),
+            "{source}"
+        );
+        assert!(
+            args[1].expression.is_none() && args[1].pattern.is_some(),
+            "{source}"
+        );
+    }
+    for callee in ["Regex::is_match", "`Regex::is_match`"] {
+        let source = format!("{callee}(regex, input)");
+        assert!(
+            matches!(&parse(&source).unwrap()[0], Ast::App(..)),
+            "{source}"
+        );
+    }
+    for source in ["is_match(^input, _)", "if_let(input, _, 1 | 2, 0)"] {
+        parse(source).expect_err(source);
+    }
+}
+
+#[test]
+fn pattern_consumer_infix_rhs_returns_to_expression_grammar() {
+    for callee in ["is_match", "Kernel::is_match"] {
+        let source = format!("input `{callee}` Ok(_) | Err(_) `and` flag");
+        let ast = parse(&source).expect(&source);
+        let Ast::App(_, _, args) = &ast[0] else {
+            panic!("and Call")
+        };
+        let RecordLitArg::Positional(Ast::PatternConsumerCall(_, _, args)) = &args[0] else {
+            panic!("consumer LHS")
+        };
+        assert!(matches!(
+            args[1].pattern.as_deref(),
+            Some(AstPattern::Or(..))
+        ));
+        let source = format!("input `{callee}` _ + 1");
+        assert!(
+            matches!(&parse(&source).unwrap()[0], Ast::BinOp(_, BinOp::Add, lhs, _) if matches!(lhs.as_ref(), Ast::PatternConsumerCall(..)))
+        );
+    }
+    parse("input `apply_pattern` [_1, .._]").expect("projection RHS");
+    for source in [
+        "input `if_let` _",
+        "input `if_let_then` _",
+        "apply_pattern(input, 1 | 2)",
+        "apply_pattern(input, Some(1 | 2))",
+    ] {
+        parse(source).expect_err(source);
+    }
+    assert!(matches!(
+        &parse("regex `Regex::is_match` input").unwrap()[0],
+        Ast::App(..)
+    ));
+}
+
+#[test]
+fn pattern_consumer_pipe_context_applies_only_to_outer_call() {
+    for callee in [
+        "apply_pattern",
+        "Kernel::apply_pattern",
+        "`apply_pattern`",
+        "`Kernel::apply_pattern`",
+    ] {
+        let source = format!("input |> {callee}([_, _1])");
+        let ast = parse(&source).expect(&source);
+        let Ast::Pipe(_, _, rhs) = &ast[0] else {
+            panic!("Pipe")
+        };
+        let Ast::PatternConsumerCall(_, _, args) = rhs.as_ref() else {
+            panic!("consumer")
+        };
+        assert!(
+            args[0].expression.is_none() && args[0].pattern.is_some(),
+            "{source}"
+        );
+    }
+    let ast = parse("True |> Boolean::eqv(is_match(Ok(1), Ok(_)))").unwrap();
+    let Ast::Pipe(_, _, rhs) = &ast[0] else {
+        panic!("Pipe")
+    };
+    let Ast::App(_, _, args) = rhs.as_ref() else {
+        panic!("ordinary Call")
+    };
+    let RecordLitArg::Positional(Ast::PatternConsumerCall(_, _, args)) = &args[0] else {
+        panic!("nested consumer")
+    };
+    assert!(args[0].expression.is_some() && args[1].pattern.is_some());
+    let ast = parse("input |> apply_pattern(_1, [_, _2])").unwrap();
+    let Ast::Pipe(_, _, rhs) = &ast[0] else {
+        panic!("Pipe")
+    };
+    let Ast::PatternConsumerCall(_, _, args) = rhs.as_ref() else {
+        panic!("consumer")
+    };
+    assert!(args[0].expression.is_some() && args[1].pattern.is_some());
+}
+
+#[test]
+fn pattern_or_alias_and_newline_follow_atomic_grammar() {
+    let ast = parse("match input { 1 | 2 @ whole => whole, _ => 0 }").unwrap();
+    let Ast::Match(_, _, arms) = &ast[0] else {
+        panic!("Match")
+    };
+    assert!(
+        matches!(&arms[0].pattern, AstPattern::As(_, inner, _, _, _) if matches!(inner.as_ref(), AstPattern::Or(..)))
+    );
+    for source in [
+        "match input { _ @ first @ second => 0 }",
+        "match input { 1\n | 2 => 0 }",
+        "match input { 1 |\n 2 => 0 }",
+        "input `is_match`\n _",
+    ] {
+        parse(source).expect_err(source);
+    }
+}
+
+#[test]
+fn named_comparisons_share_compare_precedence() {
+    for name in ["eq", "neq", "lt", "lte", "gt", "gte"] {
+        let source = format!("1 `{name}` 2 + 3");
+        let ast = parse(&source).unwrap();
+        let Ast::App(_, callee, args) = &ast[0] else {
+            panic!("comparison Call: {source}")
+        };
+        assert!(matches!(callee.as_ref(), Ast::Var(_, actual) if actual == name));
+        assert!(
+            matches!(
+                &args[1],
+                RecordLitArg::Positional(Ast::BinOp(_, BinOp::Add, _, _))
+            ),
+            "{source}"
+        );
+        let source = format!("1 `User::{name}` 2 + 3");
+        assert!(
+            matches!(&parse(&source).unwrap()[0], Ast::BinOp(_, BinOp::Add, lhs, _) if matches!(lhs.as_ref(), Ast::App(..)))
+        );
+    }
+}
+
+#[test]
+fn pattern_consumer_pipe_recognizes_every_direct_slot_without_projection_confusion() {
+    for source in [
+        "input |> apply_pattern(_1, _1)",
+        "input |> apply_pattern(input, _1)",
+    ] {
+        let ast = parse(source).unwrap();
+        let Ast::Pipe(_, _, rhs) = &ast[0] else {
+            panic!("Pipe")
+        };
+        let Ast::PatternConsumerCall(_, _, args) = rhs.as_ref() else {
+            panic!("consumer")
+        };
+        assert!(
+            args[1].expression.is_some() && args[1].pattern.is_none(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn grouped_pipe_placeholder_preserves_expression_and_pattern_grammar() {
+    let ast = parse("input |> apply_pattern((_1))").unwrap();
+    let Ast::Pipe(_, _, rhs) = &ast[0] else {
+        panic!("Pipe")
+    };
+    let Ast::PatternConsumerCall(_, _, args) = rhs.as_ref() else {
+        panic!("consumer")
+    };
+    assert!(args[0].expression.is_none() && args[0].pattern.is_some());
+    let ast = parse("input |> ordinary((_1))").unwrap();
+    let Ast::Pipe(_, _, rhs) = &ast[0] else {
+        panic!("Pipe")
+    };
+    assert!(
+        matches!(rhs.as_ref(), Ast::App(_, _, args) if matches!(&args[0], RecordLitArg::Positional(Ast::Grouped(_, inner)) if matches!(inner.as_ref(), Ast::NumberedPlaceholder(..))))
+    );
+}
+
+#[test]
+fn reserved_callable_pattern_heads_preserve_application_without_bindings() {
+    for name in ["on", "and", "or", "eq", "neq", "lt", "lte", "gt", "gte"] {
+        for head in [
+            format!("{name}(_)"),
+            format!("User::{name}(_)"),
+            format!("User::{name}()"),
+        ] {
+            parse(&format!("match input {{ {head} => 1, _ => 0 }}"))
+                .expect("callable Pattern head");
+            parse(&format!("{head} =? input")).expect("callable binding Pattern head");
+        }
+        for pattern in [
+            name.to_string(),
+            format!("{name}: Int"),
+            format!("_ @{name}"),
+            format!("User::{name}"),
+        ] {
+            parse(&format!("match input {{ {pattern} => 1 }}"))
+                .expect_err("reserved binding or noncallable path");
+        }
+    }
+}
+
+#[test]
+fn pattern_capture_rejects_direct_pattern_placeholder_in_parser() {
+    for source in ["f = &is_match(&1, &2)", "f = &is_match(&1, (&2))"] {
+        let error = parse(source).expect_err("Pattern cannot be a capture placeholder");
+        assert_eq!(error.reason(), ParseErrorReason::PatternSyntax, "{source}");
+    }
+    let error = parse("f = &is_match(&1, &2)").unwrap_err();
+    assert!(error
+        .message()
+        .contains("Pattern argument cannot be a capture placeholder"));
+}
+
+#[test]
+fn grouped_and_tuple_pipe_rhs_do_not_forward_injection_to_inner_calls() {
+    for source in [
+        "True |> (is_match(Ok(1), Ok(_)))",
+        "True |> (Boolean::eqv(is_match(Ok(1), Ok(_))))",
+        "True |> (is_match(Ok(1), Ok(_)), False)",
+    ] {
+        fn find_consumer(node: &Ast) -> &[AstPatternArgument] {
+            match node {
+                Ast::PatternConsumerCall(_, _, args) => args,
+                Ast::Grouped(_, inner) => find_consumer(inner),
+                Ast::TupleLiteral(_, items) => find_consumer(&items[0]),
+                Ast::App(_, _, args) => match &args[0] {
+                    RecordLitArg::Positional(expr) => find_consumer(expr),
+                    _ => panic!("positional argument"),
+                },
+                _ => panic!("expected consumer within grouped/tuple expression"),
+            }
+        }
+        let ast = parse(source).expect(source);
+        let Ast::Pipe(_, _, rhs) = &ast[0] else {
+            panic!("Pipe")
+        };
+        let args = find_consumer(rhs);
+        assert_eq!(args.len(), 2, "{source}");
+        assert!(
+            args[0].expression.is_some() && args[0].pattern.is_none(),
+            "{source}"
+        );
+        assert!(
+            args[1].expression.is_none() && args[1].pattern.is_some(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn pipe_consumer_grammar_applies_only_when_call_is_entire_rhs() {
+    fn find_consumer(node: &Ast) -> &[AstPatternArgument] {
+        match node {
+            Ast::PatternConsumerCall(_, _, args) => args,
+            Ast::Pipe(_, _, rhs) => find_consumer(rhs),
+            Ast::BinOp(_, _, lhs, _) | Ast::FieldAccess(_, lhs, _) => find_consumer(lhs),
+            Ast::App(_, _, args) => match &args[0] {
+                RecordLitArg::Positional(expr) => find_consumer(expr),
+                _ => panic!("positional argument"),
+            },
+            _ => panic!("consumer nested inside RHS wrapper"),
+        }
+    }
+    for callee in ["is_match", "Kernel::is_match", "`Kernel::is_match`"] {
+        for tail in ["+ 1", "`helper` 2", ".flag", "`MyMod::on` projector"] {
+            let source = format!("True |> {callee}(Ok(1), Ok(_)) {tail}");
+            let ast = parse(&source).expect(&source);
+            let args = find_consumer(&ast[0]);
+            assert_eq!(args.len(), 2, "{source}");
+            assert!(
+                args[0].expression.is_some() && args[0].pattern.is_none(),
+                "{source}"
+            );
+            assert!(
+                args[1].expression.is_none() && args[1].pattern.is_some(),
+                "{source}"
+            );
+        }
+    }
+    for tail in ["`on` projector", "`Function::on` projector", "|> next()"] {
+        let source = format!("input |> apply_pattern([_1]) {tail}");
+        let ast = parse(&source).expect(&source);
+        let Ast::Pipe(_, _, rhs) = (match &ast[0] {
+            Ast::App(_, _, args) => match &args[0] {
+                RecordLitArg::Positional(pipe) => pipe,
+                _ => panic!("on lhs"),
+            },
+            Ast::Pipe(_, lhs, _) => lhs.as_ref(),
+            _ => panic!("outer lower precedence operator"),
+        }) else {
+            panic!("consumer pipe")
+        };
+        let Ast::PatternConsumerCall(_, _, args) = rhs.as_ref() else {
+            panic!("outer consumer call")
+        };
+        assert_eq!(args.len(), 1, "{source}");
+        assert!(
+            args[0].expression.is_none() && args[0].pattern.is_some(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn consumer_pipe_context_respects_cond_and_match_delimiters() {
+    for source in [
+        "cond { input |> is_match(_) => 1, True => 0 }",
+        "match input |> apply_pattern([_1]) { _ => 0 }",
+    ] {
+        parse(source).expect(source);
+    }
+    let error = parse("input |> is_match([_").expect_err("unfinished Pattern");
+    assert!(error.is_incomplete());
 }

@@ -12,7 +12,7 @@ Surtr には、値や文脈付きの値を左から右へ流すためのパイ�
 - 右辺が call 式なら、左辺値は第 1 引数へ注入されます
 - `_1` は右辺 call の direct positional argument に 1 回だけ置けます
 - `_1` は pipe の外では使えません
-- pipe RHS の `(make_callable())` は、式を評価して得た callable を使えます
+- pipe RHS の `(make_callable())` は、括弧内を一度評価して得た callable に入力を渡します。括弧内のcallへ入力を注入しません
 - `Lazy<T>` parameter は pipe の注入先にできません
 
 ## `|>` plain apply

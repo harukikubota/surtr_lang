@@ -1,5 +1,3 @@
-import Function::apply;
-
 @doc """
 Standard `Identity` structure.
 `Identity<$A>` stores one ordinary value without adding effects or changing its

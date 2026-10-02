@@ -17,32 +17,6 @@ import ResultSchema::{
   safe_inc,
   safe_step3,
 };
-import Result::{
-  all,
-  cause,
-  chain,
-  flat_lift,
-  flat_lift2,
-  flat_lift3,
-  flat_with,
-  flat_with2,
-  flat_with3,
-  flatten,
-  is_err,
-  is_ok,
-  lift,
-  lift2,
-  lift3,
-  map_err,
-  tap_ok,
-  tap_err,
-  then,
-  with,
-  with2,
-  with3,
-  zip,
-  zip3,
-};
 import Test;
 
 test("Result") {

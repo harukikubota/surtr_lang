@@ -767,6 +767,12 @@ fn keyword_token(text: &str) -> (Token, SyntaxTokenKind) {
         "const" => Some(Token::Const),
         "type" => Some(Token::Type),
         "where" => Some(Token::Where),
+        _ if sindr::names::ReservedCallName::from_name(text).is_some() => Some(
+            Token::ReservedCallName(sindr::names::ReservedCallName::from_name(text).unwrap()),
+        ),
+        _ if sindr::pattern::PatternConsumer::from_name(text).is_some() => Some(
+            Token::PatternConsumer(sindr::pattern::PatternConsumer::from_name(text).unwrap()),
+        ),
         _ => None,
     };
     match keyword {

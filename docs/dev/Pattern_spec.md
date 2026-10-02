@@ -370,6 +370,14 @@ direct = *{|value: Int|
 
 予約語 token は qualified member / capture 構文でも解析できるようにする。既存の canonical 標準 builtin の qualified 通常 call / capture は維持する。たとえば `Regex::is_match(re, input)` とその capture は通常の Regex builtin であり、第2引数は Expr のままである。Pattern consumer と判定するのは canonical な Kernel consumer identity だけとし、member の綴りが `is_match` であることでは判定しない。この許可を新規 user member 宣言や予約 consumer の shadowing に広げず、Regex API の改名や表示名による fallback は追加しない。
 
+consumerの引数位置・個数・OR許可は共有の構文契約を使う。Spireは裸名と正規の `Kernel::name` から第2引数のPattern文法を直接選び、入力とbranchはExprとして読む。通常・backtick前置Callと2引数consumerの中置Callで同じ契約を使い、`if_let`系の中置Callは引数不足として拒否する。`Regex::is_match` の引数はExprとして読む。Sigilはconsumer表記とcanonical identityの一致を検証し、不一致を通常Callへ再解釈しない。
+
+consumer名はフィールド名にも使えない。キーワード化を理由にimportを禁止しない。Kernelは各ファイルでautoimport済みのため、全件・単一consumer・リストの明示importを重複importとして拒否する。この規則はconsumer名やキーワード分類ではなく、import元のモジュールに適用する。
+
+Pattern文法は `(PatternExpr (| PatternExpr)*) (@ Var)?` とする。`p1 | p2 @ whole` のasはOR全体に結合し、最外では入力全体、子Patternでは子位置の値を束縛する。同一階層の連続asは拒否する。ORと中置Callの改行は通常演算子と同じ規則に従う。Patternが受け取らない後続tokenは外側Exprへ戻す。Pattern内のExtractor引数候補は宣言・型情報で選択するため維持する。
+
+`|>` / `|*>` / `|>=` の引数操作は右辺の最外Callだけに適用する。`|*|` は文脈内callableとvalueの適用であり、引数注入しない。直接引数placeholderがあればその位置へ、なければ先頭へ挿入し、引数数・パラメータ種別によって挿入方式を選び直さない。Pattern/Lazyへの注入禁止はこの操作と別に検証する。PatternのprojectionやExtractor事前Exprへslot探索を広げず、入れ子のCallやExprへconsumerのPattern文脈を漏らさない。
+
 ### Pattern consumerのキャプチャと成功scope
 
 共通のLazy正規化・capture要求型とフェーズ間契約は[Lazy spec](Lazy_spec.md)に従う。

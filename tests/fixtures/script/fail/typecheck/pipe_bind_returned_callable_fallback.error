@@ -1,0 +1,2 @@
+phase: typecheck
+contains: injects the left value as the first argument

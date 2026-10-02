@@ -88,7 +88,9 @@ value |> wrap("[", "]")       # => wrap(value, "[", "]")
 value |> (make_normalizer(10))
 ```
 
-これは `make_normalizer(10)(value)` の意味です。
+これは `make_normalizer(10)(value)` の意味です。括弧内を一度評価し、得られた関数値へ入力を渡します。`|*>` と `|>=` でも同じで、括弧内の評価は要素ごとに繰り返しません。
+
+括弧は期待型も内側の式へ伝えます。これはパイプに限らず、通常の引数、型注釈、関数の返り値、分岐内でも同じです。`always(10)` のように入力を使わない関数値も、使用側の関数型に沿って結果型を推論します。
 
 ## capture 演算子 `&`
 
@@ -246,6 +248,8 @@ left `concat` right
 - unqualified ``left `on` right`` は `Function::on(left, right)` として扱います
 - ``left `Function::on` right`` も同じ意味で、flow 演算子より低優先度です
 - ``left `Other::on` right`` は通常どおり `Other::on(left, right)` です
+
+`on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名です。変数・引数・Patternの束縛名・フィールド名には使えませんが、関数の宣言名には使えます。import規則は変わりません。標準の `and` / `or` は短絡評価を維持し、裸の比較関数6名は比較演算子と同じ優先度です。`MyMod::and` などの修飾中置Callは通常のCallとして引数を評価します。
 
 FuncLiteral は値にならないので、単独では置けません。
 

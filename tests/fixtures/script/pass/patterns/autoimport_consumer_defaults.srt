@@ -1,0 +1,6 @@
+print(to_string(is_match(2, 1 | 2)))
+print(inspect(apply_pattern([4], [_1])))
+print(to_string(if_let(Ok(2), Ok(x), x, 0)))
+if_let_then(Ok(2), Ok(x), print(to_string(x)))
+print(to_string(2 `eq` 2))
+print(to_string(2 `lt` 3))

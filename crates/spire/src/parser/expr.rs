@@ -194,7 +194,7 @@ impl Parser<'_> {
                 None
             };
             let right = if let Some((func_span, body)) = direct_partial_pair_call {
-                let pair_call = self.parse_quoted_callee_call(func_span, body, true)?;
+                let pair_call = self.parse_quoted_callee_call(func_span, body, true, false)?;
                 if !matches!(
                     self.peek(),
                     Token::Newline
@@ -214,7 +214,11 @@ impl Parser<'_> {
                 }
                 pair_call
             } else {
-                self.parse_and_or_expr()?
+                let saved = self.pending_pipe_outer_call;
+                self.pending_pipe_outer_call = Self::flow_op_injects_first_argument(next);
+                let result = self.parse_and_or_expr();
+                self.pending_pipe_outer_call = saved;
+                result?
             };
             let span = Span {
                 start: left.span().start,
@@ -380,7 +384,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn comparison_func_literal_name(body: &str) -> bool {
-        matches!(body, "eq" | "neq")
+        matches!(body, "eq" | "neq" | "lt" | "lte" | "gt" | "gte")
     }
 
     pub(super) fn logical_func_literal_name(body: &str) -> bool {
@@ -446,6 +450,40 @@ impl Parser<'_> {
             }
 
             self.advance();
+            let callee = match &func_kind {
+                FuncLiteralBodyKind::Name(name) => Some(Ast::Var(func_span.clone(), name.clone())),
+                FuncLiteralBodyKind::Path(path) => Some(Ast::Path(path.span.clone(), path.clone())),
+                FuncLiteralBodyKind::Operator(_) => None,
+            };
+            if let Some(callee) = callee {
+                if let Some(kind) = Self::source_pattern_consumer(&callee) {
+                    if kind.arity() != 2 {
+                        return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::ExpressionSyntax,
+                            format!(
+                                "{} requires a complete prefix call with {} arguments",
+                                kind.name(),
+                                kind.arity()
+                            ),
+                            func_span,
+                        ));
+                    }
+                    let pattern = self.parse_consumer_pattern(kind)?;
+                    let span = Span {
+                        start: left.span().start,
+                        end: super::pattern_span(&pattern).end,
+                    };
+                    left = Ast::PatternConsumerCall(
+                        span,
+                        Box::new(callee),
+                        vec![
+                            Self::consumer_expression_argument(left),
+                            Self::consumer_pattern_argument(pattern),
+                        ],
+                    );
+                    continue;
+                }
+            }
             let right = self.parse_postfix()?;
             match func_kind {
                 FuncLiteralBodyKind::Operator(op_body) => {
@@ -885,6 +923,7 @@ impl Parser<'_> {
 
     pub(super) fn parse_primary(&mut self) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
+        let pipe_outer_call = std::mem::take(&mut self.pending_pipe_outer_call);
 
         match self.peek().clone() {
             Token::Bang => {
@@ -1086,7 +1125,9 @@ impl Parser<'_> {
                 sp,
             )),
 
-            Token::FuncLiteral(body) => self.parse_quoted_callee_call(sp, body, false),
+            Token::FuncLiteral(body) => {
+                self.parse_quoted_callee_call(sp, body, false, pipe_outer_call)
+            }
 
             // Match expression
             Token::Match => self.parse_match_expr(),
@@ -1100,11 +1141,15 @@ impl Parser<'_> {
             // Identifier — could be: variable, binding, function call
             Token::Ident(name) => {
                 self.advance();
-                self.parse_ident_continuation(name, sp)
+                self.parse_ident_continuation(name, sp, pipe_outer_call)
+            }
+            Token::ReservedCallName(kind) => {
+                self.advance();
+                self.parse_ident_continuation(kind.name().to_string(), sp, pipe_outer_call)
             }
             Token::PatternConsumer(kind) => {
                 self.advance();
-                self.parse_ident_continuation(kind.name().to_string(), sp)
+                self.parse_ident_continuation(kind.name().to_string(), sp, pipe_outer_call)
             }
             Token::NumberedPlaceholder(digits) => {
                 self.advance();
@@ -1293,6 +1338,7 @@ impl Parser<'_> {
         span: Span,
         body: String,
         allow_partial_pair_constructor_call: bool,
+        pipe_outer_call: bool,
     ) -> Result<Ast, ParseError> {
         let func_span = self.advance().span.clone();
         if !matches!(self.peek(), Token::LParen | Token::Unit) {
@@ -1301,6 +1347,23 @@ impl Parser<'_> {
                 "FuncLiteral must appear in infix position or be followed by a call",
                 func_span,
             ));
+        }
+
+        let kind = Self::parse_func_literal_body(&body, func_span.clone())?;
+        let callee = match &kind {
+            FuncLiteralBodyKind::Name(name) => Some(Ast::Var(func_span.clone(), name.clone())),
+            FuncLiteralBodyKind::Path(path) => Some(Ast::Path(path.span.clone(), path.clone())),
+            FuncLiteralBodyKind::Operator(_) => None,
+        };
+        if let Some(callee) = callee {
+            if let Some(consumer) = Self::source_pattern_consumer(&callee) {
+                return self.parse_pattern_consumer_call(
+                    callee,
+                    consumer,
+                    span.start,
+                    pipe_outer_call,
+                );
+            }
         }
 
         let args = if matches!(self.peek(), Token::Unit) {
@@ -1559,6 +1622,203 @@ impl Parser<'_> {
         ))
     }
 
+    fn source_pattern_consumer(callee: &Ast) -> Option<sindr::pattern::PatternConsumer> {
+        match callee {
+            Ast::Var(_, name) => sindr::pattern::PatternConsumer::from_name(name),
+            Ast::Path(_, path) => sindr::pattern::PatternConsumer::from_source_path(&path.segments),
+            _ => None,
+        }
+    }
+
+    fn consumer_expression_argument(expression: Ast) -> AstPatternArgument {
+        AstPatternArgument {
+            span: expression.span().clone(),
+            expression: Some(Box::new(expression)),
+            pattern: None,
+            named_pattern: None,
+            expression_error: None,
+            pattern_error: None,
+        }
+    }
+
+    fn consumer_pattern_argument(pattern: AstPattern) -> AstPatternArgument {
+        AstPatternArgument {
+            span: super::pattern_span(&pattern).clone(),
+            pattern: Some(Box::new(pattern)),
+            expression: None,
+            named_pattern: None,
+            expression_error: None,
+            pattern_error: None,
+        }
+    }
+
+    fn parse_consumer_pattern(
+        &mut self,
+        kind: sindr::pattern::PatternConsumer,
+    ) -> Result<AstPattern, ParseError> {
+        if matches!(self.peek(), Token::Amp) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
+                "Pattern argument cannot be a capture placeholder",
+                self.peek_span(),
+            ));
+        }
+        let pattern = self.parse_pattern()?;
+        if !kind.allows_or() {
+            self.reject_binding_or(&pattern)?;
+        }
+        Ok(pattern)
+    }
+
+    /// Locate slots only in direct argument syntax. Nested expressions and Pattern
+    /// projections do not participate in the outer pipe operation.
+    fn direct_pipe_argument_slots(&self) -> Vec<usize> {
+        let mut slots = Vec::new();
+        if !matches!(self.peek(), Token::LParen) {
+            return slots;
+        }
+        let mut depth = 0usize;
+        let mut start = self.pos + 1;
+        let mut ordinal = 0usize;
+        for index in start..self.tokens.len() {
+            let token = &self.tokens[index].token;
+            if depth == 0 && matches!(token, Token::Comma | Token::RParen) {
+                let mut argument = &self.tokens[start..index];
+                while argument
+                    .first()
+                    .is_some_and(|token| matches!(token.token, Token::Newline))
+                {
+                    argument = &argument[1..];
+                }
+                while argument
+                    .last()
+                    .is_some_and(|token| matches!(token.token, Token::Newline))
+                {
+                    argument = &argument[..argument.len() - 1];
+                }
+                if matches!(argument, [token] if matches!(token.token, Token::NumberedPlaceholder(_)))
+                {
+                    slots.push(ordinal);
+                }
+                if matches!(token, Token::RParen) {
+                    return slots;
+                }
+                ordinal += 1;
+                start = index + 1;
+            } else {
+                match token {
+                    Token::LParen | Token::LBrack | Token::LBrace => depth += 1,
+                    Token::RParen | Token::RBrack | Token::RBrace => {
+                        depth = depth.saturating_sub(1)
+                    }
+                    Token::Eof => return slots,
+                    _ => {}
+                }
+            }
+        }
+        slots
+    }
+
+    /// A prefix call receives pipe argument mapping only when it is the RHS
+    /// expression itself. Look ahead through delimiters; never reparse arguments
+    /// after choosing their grammar, and keep unfinished calls in that grammar.
+    fn pipe_consumer_is_outer_call(&self) -> Result<bool, ParseError> {
+        let next_index = if matches!(self.peek(), Token::Unit) {
+            self.pos + 1
+        } else {
+            let mut depth = 0usize;
+            let mut end = None;
+            for (index, spanned) in self.tokens.iter().enumerate().skip(self.pos) {
+                match spanned.token {
+                    Token::LParen => depth += 1,
+                    Token::RParen => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            end = Some(index + 1);
+                            break;
+                        }
+                    }
+                    Token::Eof => return Ok(true),
+                    _ => {}
+                }
+            }
+            let Some(end) = end else {
+                return Ok(true);
+            };
+            end
+        };
+        let Some(next) = self.tokens.get(next_index) else {
+            return Ok(true);
+        };
+        if Self::expr_binop(&next.token).is_some()
+            || Self::logical_binop(&next.token).is_some()
+            || Self::and_or_name(&next.token).is_some()
+            || matches!(next.token, Token::Dot)
+            || matches!(&next.token, Token::Annotator(name) if name == "timeout")
+            || matches!(
+                (
+                    &next.token,
+                    self.tokens.get(next_index + 1).map(|token| &token.token),
+                    self.tokens.get(next_index + 2).map(|token| &token.token)
+                ),
+                (Token::LParen, Some(Token::Comma), Some(Token::RParen))
+            )
+        {
+            return Ok(false);
+        }
+        if let Token::FuncLiteral(body) = &next.token {
+            let kind = Self::parse_func_literal_body(body, next.span.clone())?;
+            return Ok(Self::low_precedence_on_target_callee(&kind, &next.span).is_some());
+        }
+        Ok(true)
+    }
+
+    fn parse_pattern_consumer_call(
+        &mut self,
+        callee: Ast,
+        kind: sindr::pattern::PatternConsumer,
+        start: usize,
+        pipe_outer_call: bool,
+    ) -> Result<Ast, ParseError> {
+        let pipe_outer_call = pipe_outer_call && self.pipe_consumer_is_outer_call()?;
+        let slots = if pipe_outer_call {
+            self.direct_pipe_argument_slots()
+        } else {
+            Vec::new()
+        };
+        let inject_first = pipe_outer_call && slots.is_empty();
+        let mut args = Vec::new();
+        let end = if matches!(self.peek(), Token::Unit) {
+            self.advance().span.end
+        } else {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            while !matches!(self.peek(), Token::RParen) {
+                let written_index = args.len();
+                let parameter_index = written_index + usize::from(inject_first);
+                let arg =
+                    if parameter_index == kind.pattern_index() && !slots.contains(&written_index) {
+                        Self::consumer_pattern_argument(self.parse_consumer_pattern(kind)?)
+                    } else {
+                        Self::consumer_expression_argument(self.parse_expr()?)
+                    };
+                args.push(arg);
+                self.skip_newlines();
+                if !matches!(self.peek(), Token::Comma) {
+                    break;
+                }
+                self.advance();
+                self.skip_newlines();
+            }
+            self.expect(&Token::RParen)?.end
+        };
+        Ok(Ast::PatternConsumerCall(
+            Span { start, end },
+            Box::new(callee),
+            args,
+        ))
+    }
+
     /// After seeing an identifier, figure out what it is:
     /// - `Name { field: val }` → StructLit (uppercase start + `{`)
     /// - `Name(args)` → ConstructorCall if uppercase, App if lowercase
@@ -1570,13 +1830,18 @@ impl Parser<'_> {
         &mut self,
         name: Symbol,
         name_span: Span,
+        pipe_outer_call: bool,
     ) -> Result<Ast, ParseError> {
-        if sindr::pattern::PatternConsumer::from_name(&name).is_some()
+        if sindr::names::is_reserved_value_name(&name)
             && matches!(self.peek(), Token::Bind | Token::SafeBind | Token::Colon)
         {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::DeclarationSyntax,
-                "Pattern consumer names cannot be bound or shadowed",
+                if sindr::pattern::PatternConsumer::from_name(&name).is_some() {
+                    "Pattern consumer names cannot be bound or shadowed"
+                } else {
+                    "Reserved call names cannot be bound or shadowed"
+                },
                 name_span,
             ));
         }
@@ -1600,7 +1865,7 @@ impl Parser<'_> {
         while self.has_path_separator()
             && matches!(
                 self.peek_n(2),
-                Some(Token::Ident(_) | Token::PatternConsumer(_))
+                Some(Token::Ident(_) | Token::PatternConsumer(_) | Token::ReservedCallName(_))
             )
         {
             self.consume_path_separator()?;
@@ -1627,58 +1892,16 @@ impl Parser<'_> {
             None
         };
 
-        if path_segments
-            .last()
-            .and_then(|name| sindr::pattern::PatternConsumer::from_name(name))
-            .is_some()
-            && matches!(self.peek(), Token::LParen | Token::Unit)
-        {
-            let callee = path_ast.unwrap_or_else(|| Ast::Var(name_span.clone(), name.clone()));
-            if matches!(self.peek(), Token::Unit) {
-                let end = self.advance().span.end;
-                return Ok(Ast::PatternConsumerCall(
-                    Span {
-                        start: name_span.start,
-                        end,
-                    },
-                    Box::new(callee),
-                    Vec::new(),
-                ));
+        if let Some(consumer) = sindr::pattern::PatternConsumer::from_source_path(&path_segments) {
+            if matches!(self.peek(), Token::LParen | Token::Unit) {
+                let callee = path_ast.unwrap_or_else(|| Ast::Var(name_span.clone(), name.clone()));
+                return self.parse_pattern_consumer_call(
+                    callee,
+                    consumer,
+                    name_span.start,
+                    pipe_outer_call,
+                );
             }
-            self.advance();
-            self.skip_newlines();
-            let mut args = Vec::new();
-            while !matches!(self.peek(), Token::RParen) {
-                let mut arg = self.parse_pattern_argument()?;
-                if path_segments
-                    .last()
-                    .and_then(|name| sindr::pattern::PatternConsumer::from_name(name))
-                    .is_some_and(|kind| !kind.allows_or())
-                {
-                    if let Some(pattern) = &arg.pattern {
-                        if let Err(error) = self.reject_binding_or(pattern) {
-                            arg.pattern = None;
-                            arg.pattern_error = Some(error);
-                        }
-                    }
-                }
-                args.push(arg);
-                self.skip_newlines();
-                if !matches!(self.peek(), Token::Comma) {
-                    break;
-                }
-                self.advance();
-                self.skip_newlines();
-            }
-            let end = self.expect(&Token::RParen)?.end;
-            return Ok(Ast::PatternConsumerCall(
-                Span {
-                    start: name_span.start,
-                    end,
-                },
-                Box::new(callee),
-                args,
-            ));
         }
 
         let path_last_is_uppercase = path_segments
@@ -2527,14 +2750,18 @@ impl Parser<'_> {
             )));
         }
         let (mut target, mut end) = match self.peek().clone() {
-            Token::Ident(_) | Token::PatternConsumer(_) => {
+            Token::Ident(_) | Token::PatternConsumer(_) | Token::ReservedCallName(_) => {
                 let (name, name_span) = self.expect_member_ident()?;
                 let mut path_segments = vec![name.clone()];
                 let mut path_end = name_span.end;
                 while self.has_path_separator()
                     && matches!(
                         self.peek_n(2),
-                        Some(Token::Ident(_) | Token::PatternConsumer(_))
+                        Some(
+                            Token::Ident(_)
+                                | Token::PatternConsumer(_)
+                                | Token::ReservedCallName(_)
+                        )
                     )
                 {
                     self.consume_path_separator()?;
@@ -2628,45 +2855,11 @@ impl Parser<'_> {
             end = target.span().end;
         }
 
-        let consumer = match &target {
-            Ast::Var(_, name) => sindr::pattern::PatternConsumer::from_name(name),
-            Ast::Path(_, path) if path.segments.len() == 2 && path.segments[0] == "Kernel" => {
-                sindr::pattern::PatternConsumer::from_name(&path.segments[1])
-            }
-            _ => None,
-        };
-        if let Some(kind) = consumer.filter(|_| matches!(self.peek(), Token::LParen)) {
-            self.advance();
-            self.skip_newlines();
-            let mut arguments = Vec::new();
-            while !matches!(self.peek(), Token::RParen) {
-                let argument = if arguments.len() == kind.pattern_index() {
-                    self.parse_pattern_argument()?
-                } else {
-                    let expression = self.parse_expr()?;
-                    AstPatternArgument {
-                        span: expression.span().clone(),
-                        expression: Some(Box::new(expression)),
-                        pattern: None,
-                        named_pattern: None,
-                        expression_error: None,
-                        pattern_error: None,
-                    }
-                };
-                arguments.push(argument);
-                self.skip_newlines();
-                if !matches!(self.peek(), Token::Comma) {
-                    break;
-                }
-                self.advance();
-                self.skip_newlines();
-            }
-            end = self.expect(&Token::RParen)?.end;
-            let span = Span {
-                start: sp.start,
-                end,
-            };
-            let call = Ast::PatternConsumerCall(span.clone(), Box::new(target), arguments);
+        if let Some(kind) = Self::source_pattern_consumer(&target)
+            .filter(|_| matches!(self.peek(), Token::LParen | Token::Unit))
+        {
+            let call = self.parse_pattern_consumer_call(target, kind, sp.start, false)?;
+            let span = call.span().clone();
             return Ok(Ast::Capture(span, Box::new(call), Vec::new()));
         }
 
