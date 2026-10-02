@@ -186,6 +186,8 @@ macro_rules! repl_core_case {
 }
 
 const REPL_CORE_CASES: &[(&str, fn())] = &[
+    repl_core_case!(lazy_capture_guidance_survives_repl_alias_and_failed_line),
+    repl_core_case!(lazy_capture_requires_signature_at_repl_line_completion),
     repl_core_case!(core_completion_returns_global_candidates_with_details),
     repl_core_case!(range_literal_used_as_operator_shows_bracket_help),
     repl_core_case!(core_completion_keeps_all_matching_candidates),
@@ -6108,5 +6110,54 @@ fn core_extractor_module_queries_and_from_result_work_across_chunks() {
         rendered_text(&result).contains("Ok(42)"),
         "{}",
         rendered_text(&result)
+    );
+}
+
+fn lazy_capture_requires_signature_at_repl_line_completion() {
+    let mut engine = engine();
+    let rejected = engine.handle_line("unknown = &if(True, &1, &2)");
+    let diagnostic = rendered_text(&rejected);
+    assert!(diagnostic.contains("concrete signature"), "{diagnostic}");
+    let accepted = engine.handle_line("select: ((-> Int), (-> Int) -> Int) = &if(True, &1, &2)");
+    assert!(
+        !rendered_text(&accepted).contains("Error"),
+        "{}",
+        rendered_text(&accepted)
+    );
+    let value = engine.handle_line("select({|| 7}, {|| 0})");
+    assert_eq!(rendered_text(&value), "7");
+}
+
+fn lazy_capture_guidance_survives_repl_alias_and_failed_line() {
+    let mut engine = engine();
+    for source in ["both = &and(&1, &2)", "alias = both", "reference = &alias"] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{}",
+            rendered_text(&result)
+        );
+    }
+    let rejected = engine.handle_line("reference(True, False)");
+    let text = rendered_text(&rejected);
+    assert!(
+        text.contains("signature") && text.contains("(-> Boolean)") && text.contains("{ ||"),
+        "{text}"
+    );
+    let accepted = engine.handle_line("reference(True, {|| False})");
+    assert_eq!(rendered_text(&accepted), "False");
+
+    let ordinary =
+        engine.handle_line("def ordinary(a: Boolean, b: (-> Boolean)) -> Boolean { b() }");
+    assert!(
+        matches!(ordinary.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&ordinary)
+    );
+    let rejected = engine.handle_line("ordinary(True, False)");
+    let text = rendered_text(&rejected);
+    assert!(
+        !text.contains("Lazy capture") && !text.contains("{ ||"),
+        "{text}"
     );
 }

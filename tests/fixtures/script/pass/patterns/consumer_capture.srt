@@ -1,0 +1,26 @@
+defenum Choice { Left(Int), Right(Int), Empty }
+def invoke(f: (Choice -> Int), value: Choice) -> Int { f(value) }
+def input() -> Choice { print("input"); Choice::Right(7) }
+
+def retained(value: Choice) -> (Int -> Int) {
+  if_let(value, Choice::Right(x), {|y: Int| x + y}, {|y: Int| y})
+}
+
+matches = &is_match(&1, Choice::Left(_) | Choice::Right(_))
+print(to_string(matches(Choice::Right(7))))
+project: (List<Int> -> Result<Int>) = &apply_pattern(&1, [_1, .._])
+print(inspect(project([4, 5])))
+choose = &if_let(&1, Choice::Left(x) | Choice::Right(x), x + &2, 0)
+print(to_string(choose(input(), 3)))
+print(to_string(choose(Choice::Empty, 3)))
+fixed = &if_let(&1, Choice::Right(x), x + 1, 0)
+print(to_string(invoke(fixed, Choice::Right(5))))
+data = &if_let(&1, Choice::Right(x), (&2), 0)
+print(to_string(data(Choice::Right(9), 12)))
+action = &if_let_then(&1, Choice::Right(x), print(to_string(x)))
+action(Choice::Right(8))
+action(Choice::Empty)
+
+plus = retained(Choice::Right(6))
+print(to_string(plus(2)))
+print(to_string(match Choice::Right(3) { Choice::Right(x) => (x + 1), _ => 0 }))

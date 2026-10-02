@@ -1,0 +1,7 @@
+Ok(1)
+Err(Right::Retry("runtime"))
+Ok(3)
+Ok(5)
+Ok(9)
+root
+left

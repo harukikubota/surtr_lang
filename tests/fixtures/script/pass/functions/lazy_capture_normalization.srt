@@ -1,0 +1,36 @@
+def make(label: String) -> (-> Int) {
+  print(label)
+  {|| 7}
+}
+def select_tail(flag: Boolean) -> Int {
+  if(flag, (make("tail then eager")), (make("tail else eager")))
+}
+def invoke(block: (-> Int)) -> Int { block() }
+def produce() -> Int { print("deferred bare call"); 13 }
+def make_closure() -> (-> Int) {
+  print("acquire closure")
+  {|| print("execute closure"); 9}
+}
+
+print(to_string(select_tail(True)))
+choose = &if(&1, (&2), {|| 0})
+print(to_string(choose(False, {|| print("must not execute"); 10})))
+print(to_string(choose(True, {|| print("selected thunk"); 11})))
+raw = if(True, make("bare selected"), {|| {|| 2}})
+print(to_string(invoke(raw)))
+shallow = if(False, {|| {|| 3}}, {|| print("shallow thunk"); 4})
+print("before retained thunk")
+print(to_string(shallow()))
+shallow_reverse = if(True, {|| print("reverse shallow thunk"); 5}, {|| {|| 6}})
+print("before reverse retained thunk")
+print(to_string(shallow_reverse()))
+select: ((-> Int), (-> Int) -> Int) = &if(False, &1, &2)
+print(to_string(select({|| print("wrong branch"); 1}, {|| 12})))
+print(to_string(Result::is_err(assert(False, {|| NoneError()}))))
+
+deferred = if(True, produce(), {|| {|| 0}})
+print("before deferred call")
+print(to_string(deferred()))
+
+print(to_string(if(False, (make_closure()), { (1 + 2) * 3 })))
+print(to_string(if(True, (make_closure()), { (1 + 2) * 3 })))

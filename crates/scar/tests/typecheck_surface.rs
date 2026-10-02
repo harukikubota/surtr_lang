@@ -45,6 +45,8 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
+    surface_case!(error_kind_rejects_user_type_positions),
+    surface_case!(recover_kind_rejects_invalid_handlers),
     (
         "process_stdlib_no_longer_declares_task_hidden_lower_helpers",
         process_stdlib_no_longer_declares_task_hidden_lower_helpers as fn(),
@@ -478,8 +480,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         zero_arg_deferror_value_can_flow_into_error_parameter as fn(),
     ),
     (
-        "recover_kind_constructor_marker_typechecks",
-        recover_kind_constructor_marker_typechecks as fn(),
+        "recover_kind_payload_type_name_typechecks",
+        recover_kind_payload_type_name_typechecks as fn(),
     ),
     (
         "forward_reference_type_tags_are_deterministic_across_runs",
@@ -3782,14 +3784,14 @@ deferror NotFound {
         .any(|node| matches!(node.node, TypedInner::Bind(_, _))));
 }
 
-fn recover_kind_constructor_marker_typechecks() {
+fn recover_kind_payload_type_name_typechecks() {
     let resolved = resolve_with_builtin_prelude(
-        r#"value = Result::recover_kind(Err(NotFound("runtime")), NotFound("marker"), {|err| Ok(1)})
+        r#"value = Result::recover_kind(Err(NotFound("runtime")), NotFound, {|err| Ok(1)})
 deferror NotFound(detail: String) {
   detail
 }"#,
     );
-    let typed = typecheck(resolved).expect("recover_kind constructor marker should typecheck");
+    let typed = typecheck(resolved).expect("recover_kind payload type name should typecheck");
     assert!(typed
         .iter()
         .any(|node| matches!(node.node, TypedInner::Bind(_, _))));
@@ -8979,10 +8981,8 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, marker, handler) => {
-                has_pending_trait_call(value)
-                    || has_pending_trait_call(marker)
-                    || has_pending_trait_call(handler)
+            TypedInner::RecoverKind(value, _, handler) => {
+                has_pending_trait_call(value) || has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {
                 has_pending_trait_call(scrutinee)
@@ -9105,10 +9105,8 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, marker, handler) => {
-                has_pending_trait_call(value)
-                    || has_pending_trait_call(marker)
-                    || has_pending_trait_call(handler)
+            TypedInner::RecoverKind(value, _, handler) => {
+                has_pending_trait_call(value) || has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {
                 has_pending_trait_call(scrutinee)
@@ -11388,4 +11386,35 @@ ordinary()"#,
             "{source}"
         );
     }
+}
+
+fn error_kind_rejects_user_type_positions() {
+    for source in [
+        "def expose(kind: ErrorKind) -> Int { 1 }",
+        "def expose() -> ErrorKind { NoneError }",
+        "value: ErrorKind = NoneError",
+        "defstruct Exposed { kind: ErrorKind }",
+        "def expose(values: List<ErrorKind>) -> Int { 1 }",
+    ] {
+        let resolved = resolve_with_builtin_prelude(source);
+        let error = typecheck(resolved).expect_err("ErrorKind must stay in direct std parameters");
+        assert!(
+            error
+                .message
+                .contains("ErrorKind is reserved for direct std builtin parameters"),
+            "{source}: {error:?}"
+        );
+    }
+}
+
+fn recover_kind_rejects_invalid_handlers() {
+    for handler in ["{|| Ok(1)}", "{|left, right| Ok(1)}", "{|_| 1}"] {
+        let source = format!("value = Result::recover_kind(Err(NoneError), NoneError, {handler})");
+        let resolved = resolve_with_builtin_prelude(&source);
+        typecheck(resolved).expect_err("recover_kind requires one Error input and a Result output");
+    }
+    let resolved = resolve_with_builtin_prelude(
+        "def call1(f: ($A -> $B), value: $A) -> $B { f(value) }\nvalue = call1(&Result::recover_kind(&1, NoneError, &1), Ok(1))",
+    );
+    typecheck(resolved).expect_err("one placeholder cannot be both Result value and handler");
 }

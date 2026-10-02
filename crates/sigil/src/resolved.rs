@@ -248,12 +248,15 @@ pub enum Resolved {
     /// `Result::cause(value, err)` special form
     Cause(Span, Box<Resolved>, Box<Resolved>),
 
-    /// `Result::recover_kind(value, ErrorKind, handler)` special form
-    RecoverKind(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
+    /// `Result::recover_kind(value, ErrorKind, handler)` special form.
+    /// The kind is a concrete deferror declaration identity, never an evaluated expression.
+    RecoverKind(Span, Box<Resolved>, ResolvedId, Box<Resolved>),
 
     /// Match expression
     Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
-    IfLet(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
+    /// Canonical is_match call; preserves the source call boundary for Lazy normalization.
+    IsMatch(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
+    IfLet(Span, Box<Resolved>, Vec<ResolvedMatchArm>, bool),
 
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
@@ -565,6 +568,9 @@ pub struct ResolvedExtractorParam {
 /// Closure parameter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedClosureParam {
+    /// Source provenance for optional diagnostics; it does not alter the parameter's type.
+    #[serde(default)]
+    pub lazy_capture: Option<ResolvedLazyCaptureParam>,
     pub id: ResolvedId,
     pub ty: Option<AstTy>,
 }
@@ -640,4 +646,31 @@ pub struct ResolvedTypeParam {
     pub name: Symbol,
     pub bound: Option<Symbol>,
     pub span: Span,
+}
+
+/// Canonical source identity retained solely for Lazy capture diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LazyCaptureKind {
+    And,
+    Or,
+    If,
+    IfThen,
+    IfLet,
+    IfLetThen,
+    Assert,
+    Ensure,
+    MapErr,
+    Cause,
+}
+
+/// Diagnostic-only roles of one generated capture parameter in a canonical Lazy call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedLazyCaptureParam {
+    pub kind: LazyCaptureKind,
+    /// Includes occurrences within ordinary expressions, rather than direct Lazy inputs.
+    pub ordinary: bool,
+    /// Direct placeholder uses only; expressions containing a placeholder are ordinary inputs.
+    /// Each entry contains the zero-based source argument ordinal and the use span,
+    /// independently of the generated parameter's position after placeholder ordering.
+    pub lazy_uses: Vec<(u32, Span)>,
 }

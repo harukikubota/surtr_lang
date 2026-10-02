@@ -7,7 +7,7 @@ use sindr::ir::{
     RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable,
     RuntimeSupervisorPolicy, SourceMap,
 };
-use sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX;
+use sindr::names::{compiler_global_error_kind, IMPLICIT_ROOT_NAMESPACE_PREFIX};
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
@@ -3454,7 +3454,8 @@ impl VM {
                 tco: false,
             },
         );
-        RichError::new(kind, message, location, None).with_stack_trace(stack_trace)
+        RichError::new(compiler_global_error_kind(kind), message, location, None)
+            .with_stack_trace(stack_trace)
     }
 
     #[allow(dead_code)]
@@ -8164,7 +8165,7 @@ mod tests {
 
         match ctx.stack.as_slice() {
             [Value::Tagged { tag: 1, fields }] => match fields.first() {
-                Some(Value::Error(rich)) => assert_eq!(rich.kind, "ZeroDivisionError"),
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "Global::ZeroDivisionError"),
                 other => panic!("expected Err(Value::Error), got {other:?}"),
             },
             other => panic!("expected Err result, got {other:?}"),
@@ -9341,7 +9342,7 @@ mod tests {
         match value {
             Value::Tagged { tag: 1, fields } => match fields.as_slice() {
                 [Value::Error(error)] => {
-                    assert_eq!(error.kind, kind);
+                    assert_eq!(error.kind, sindr::names::compiler_global_error_kind(kind));
                     assert!(
                         error.visible_message().contains(message_part),
                         "expected `{}` in `{}`",
@@ -9830,7 +9831,7 @@ mod tests {
             .expect("awaiting timed task should resolve timeout result");
         assert!(matches!(
             value,
-            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Timeout")
         ));
         assert!(
             vm.process_runtime.reply_table.is_empty(),
@@ -10872,7 +10873,7 @@ mod tests {
         match vm.last_value().cloned().expect("result should be recorded") {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "ZeroDivisionError");
+                    assert_eq!(rich.kind, "Global::ZeroDivisionError");
                     assert_eq!(rich.location.line, 1);
                     assert_eq!(rich.location.column, 1);
                     assert_eq!(rich.location.span_start, 0);
@@ -10914,7 +10915,7 @@ mod tests {
         let Value::Error(error) = vm.last_value().unwrap() else {
             panic!("expected preserved Error")
         };
-        assert_eq!(error.kind, "PatternMismatch");
+        assert_eq!(error.kind, "Global::PatternMismatch");
         assert_eq!(error.message, "Pattern did not match.");
         assert_eq!(error.location.file, "extractor.srt");
         assert_eq!((error.location.line, error.location.column), (1, 1));
@@ -11612,12 +11613,12 @@ mod tests {
         vm.run().expect("run should succeed");
 
         let expected_kinds = [
-            "NegativeShiftCount",
-            "NegativeShiftCount",
-            "NegativeBitIndex",
-            "NegativeBitIndex",
-            "NegativeBitIndex",
-            "NegativeBitIndex",
+            "Global::NegativeShiftCount",
+            "Global::NegativeShiftCount",
+            "Global::NegativeBitIndex",
+            "Global::NegativeBitIndex",
+            "Global::NegativeBitIndex",
+            "Global::NegativeBitIndex",
         ];
         for (value, expected_kind) in vm.stack.iter().zip(expected_kinds) {
             match value {
@@ -12298,7 +12299,7 @@ mod tests {
 
         assert!(matches!(
             value,
-            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Boom")
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Boom")
         ));
         assert!(matches!(
             vm.process_runtime
@@ -12484,7 +12485,7 @@ mod tests {
 
         assert!(matches!(
             vm.ready_future_value(reply_future),
-            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Timeout")
         ));
         assert!(vm.process_runtime.reply_table.is_empty());
         assert!(vm
@@ -12508,7 +12509,7 @@ mod tests {
 
         assert!(matches!(
             vm.ready_future_value(reply_future),
-            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Timeout")
         ));
         assert!(vm.process_runtime.detached_tasks.is_empty());
     }

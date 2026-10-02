@@ -12,6 +12,16 @@ mod do_block;
 
 static SYNTHETIC_RANGE_UID: AtomicU32 = AtomicU32::new(3_000_000_000);
 
+/// A source Lazy input before its single closure shell is consumed.
+/// Shells describe evaluation semantics; they do not each require a runtime allocation.
+pub(super) struct LazyInput {
+    pub(super) node: TypedNode,
+    /// A direct capture parameter, including its grouping, already denotes a normalized input.
+    placeholder: bool,
+    /// A bare call contributes one delayed shell regardless of its return type.
+    call_shell: bool,
+}
+
 enum FacetPathInput<'a> {
     Expr(&'a Resolved),
     Capture(PendingFacetPath),
@@ -136,6 +146,8 @@ struct ExpectedCallableContract {
 
 #[derive(Clone)]
 pub(super) struct CandidateProbeCheckpoint {
+    lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
+    active_lazy_capture: Option<ActiveLazyCapture>,
     env: TypeEnv,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
@@ -367,9 +379,9 @@ impl Checker {
             TypedInner::Ensure(value, predicate, error) => recurse(value)
                 .or_else(|| recurse(predicate))
                 .or_else(|| recurse(error)),
-            TypedInner::RecoverKind(value, marker, handler) => recurse(value)
-                .or_else(|| recurse(marker))
-                .or_else(|| recurse(handler)),
+            TypedInner::RecoverKind(value, _, handler) => {
+                recurse(value).or_else(|| recurse(handler))
+            }
             TypedInner::Match(scrutinee, arms) => recurse(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
@@ -427,6 +439,8 @@ impl Checker {
         self.candidate_probe_checkpoint_count
             .set(self.candidate_probe_checkpoint_count.get() + 1);
         CandidateProbeCheckpoint {
+            lazy_capture_bindings: self.lazy_capture_bindings.clone(),
+            active_lazy_capture: self.active_lazy_capture.clone(),
             env: self.env.clone(),
             substitutions: self.substitutions.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
@@ -440,6 +454,8 @@ impl Checker {
     }
 
     pub(super) fn rollback_candidate_probe(&mut self, checkpoint: CandidateProbeCheckpoint) {
+        self.lazy_capture_bindings = checkpoint.lazy_capture_bindings;
+        self.active_lazy_capture = checkpoint.active_lazy_capture;
         self.env = checkpoint.env;
         self.substitutions = checkpoint.substitutions;
         self.tyvar_bounds = checkpoint.tyvar_bounds;
@@ -737,39 +753,47 @@ impl Checker {
         &self,
         node: &'a TypedNode,
     ) -> Option<(&'a str, &'a str, &'a Ty, &'a Span)> {
-        if let Some(pending) = Self::pattern_expression_nodes(node)
-            .into_iter()
-            .find_map(|expr| self.first_pending_trait_helper(expr))
-        {
-            return Some(pending);
-        }
-        match &node.node {
+        self.find_typed_node(node, &|_, node| match &node.node {
             TypedInner::TraitCall {
                 trait_name,
                 method_name,
                 receiver_ty,
                 dispatch,
-                args,
                 ..
-            } => {
-                if matches!(dispatch, crate::typed::TraitDispatch::Pending) {
-                    Some((
-                        trait_name.as_str(),
-                        method_name.as_str(),
-                        receiver_ty,
-                        &node.span,
-                    ))
-                } else {
-                    args.iter()
-                        .find_map(|arg| self.first_pending_trait_helper(arg))
-                }
-            }
+            } if matches!(dispatch, crate::typed::TraitDispatch::Pending) => Some((
+                trait_name.as_str(),
+                method_name.as_str(),
+                receiver_ty,
+                &node.span,
+            )),
+            _ => None,
+        })
+    }
+
+    pub(super) fn find_typed_node<'a, T>(
+        &self,
+        node: &'a TypedNode,
+        inspect: &impl Fn(&Self, &'a TypedNode) -> Option<T>,
+    ) -> Option<T> {
+        if let Some(found) = inspect(self, node) {
+            return Some(found);
+        }
+        if let Some(pending) = Self::pattern_expression_nodes(node)
+            .into_iter()
+            .find_map(|expr| self.find_typed_node(expr, inspect))
+        {
+            return Some(pending);
+        }
+        match &node.node {
+            TypedInner::TraitCall { args, .. } => args
+                .iter()
+                .find_map(|arg| self.find_typed_node(arg, inspect)),
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)
             | TypedInner::Capture(func, args) => {
-                self.first_pending_trait_helper(func).or_else(|| {
+                self.find_typed_node(func, inspect).or_else(|| {
                     args.iter()
-                        .find_map(|arg| self.first_pending_trait_helper(arg))
+                        .find_map(|arg| self.find_typed_node(arg, inspect))
                 })
             }
             TypedInner::Block(stmts)
@@ -778,97 +802,96 @@ impl Checker {
             | TypedInner::ConstructorCall(_, stmts)
             | TypedInner::StructLit(_, stmts) => stmts
                 .iter()
-                .find_map(|stmt| self.first_pending_trait_helper(stmt)),
+                .find_map(|stmt| self.find_typed_node(stmt, inspect)),
             TypedInner::HashMapLiteral(entries) => entries.iter().find_map(|(key, value)| {
-                self.first_pending_trait_helper(key)
-                    .or_else(|| self.first_pending_trait_helper(value))
+                self.find_typed_node(key, inspect)
+                    .or_else(|| self.find_typed_node(value, inspect))
             }),
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
-            | TypedInner::FieldAccess(rhs, _) => self.first_pending_trait_helper(rhs),
+            | TypedInner::FieldAccess(rhs, _) => self.find_typed_node(rhs, inspect),
             TypedInner::DoSafeBind(control) => {
-                self.first_pending_trait_helper(&control.rhs).or_else(|| {
+                self.find_typed_node(&control.rhs, inspect).or_else(|| {
                     match &control.failure_target {
                         SafeBindFailureTarget::DoAlternative { empty } => {
-                            self.first_pending_trait_helper(empty)
+                            self.find_typed_node(empty, inspect)
                         }
                         _ => None,
                     }
-                    .or_else(|| self.first_pending_trait_helper(&control.continuation))
+                    .or_else(|| self.find_typed_node(&control.continuation, inspect))
                 })
             }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right) => self
-                .first_pending_trait_helper(left)
-                .or_else(|| self.first_pending_trait_helper(right)),
+                .find_typed_node(left, inspect)
+                .or_else(|| self.find_typed_node(right, inspect)),
             TypedInner::If(cond, then_branch, else_branch) => self
-                .first_pending_trait_helper(cond)
-                .or_else(|| self.first_pending_trait_helper(then_branch))
+                .find_typed_node(cond, inspect)
+                .or_else(|| self.find_typed_node(then_branch, inspect))
                 .or_else(|| {
                     else_branch
                         .as_deref()
-                        .and_then(|branch| self.first_pending_trait_helper(branch))
+                        .and_then(|branch| self.find_typed_node(branch, inspect))
                 }),
             TypedInner::Assert(cond, err) => self
-                .first_pending_trait_helper(cond)
-                .or_else(|| self.first_pending_trait_helper(err)),
+                .find_typed_node(cond, inspect)
+                .or_else(|| self.find_typed_node(err, inspect)),
             TypedInner::Ensure(value, pred, err) => self
-                .first_pending_trait_helper(value)
-                .or_else(|| self.first_pending_trait_helper(pred))
-                .or_else(|| self.first_pending_trait_helper(err)),
+                .find_typed_node(value, inspect)
+                .or_else(|| self.find_typed_node(pred, inspect))
+                .or_else(|| self.find_typed_node(err, inspect)),
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => self
-                .first_pending_trait_helper(value)
-                .or_else(|| self.first_pending_trait_helper(err)),
-            TypedInner::RecoverKind(value, marker, handler) => self
-                .first_pending_trait_helper(value)
-                .or_else(|| self.first_pending_trait_helper(marker))
-                .or_else(|| self.first_pending_trait_helper(handler)),
+                .find_typed_node(value, inspect)
+                .or_else(|| self.find_typed_node(err, inspect)),
+            TypedInner::RecoverKind(value, _, handler) => self
+                .find_typed_node(value, inspect)
+                .or_else(|| self.find_typed_node(handler, inspect)),
             TypedInner::Match(scrutinee, arms) => {
-                self.first_pending_trait_helper(scrutinee).or_else(|| {
+                self.find_typed_node(scrutinee, inspect).or_else(|| {
                     arms.iter().find_map(|arm| {
                         arm.guard
                             .as_ref()
-                            .and_then(|guard| self.first_pending_trait_helper(guard))
-                            .or_else(|| self.first_pending_trait_helper(&arm.body))
+                            .and_then(|guard| self.find_typed_node(guard, inspect))
+                            .or_else(|| self.find_typed_node(&arm.body, inspect))
                     })
                 })
             }
             TypedInner::InterpolatedStr(parts) => parts.iter().find_map(|part| match part {
                 crate::typed::TypedInterpolatedPart::Text(_) => None,
                 crate::typed::TypedInterpolatedPart::Expr(expr) => {
-                    self.first_pending_trait_helper(expr)
+                    self.find_typed_node(expr, inspect)
                 }
             }),
             TypedInner::Dbg(args) => args
                 .iter()
-                .find_map(|arg| self.first_pending_trait_helper(&arg.expr)),
-            TypedInner::EagerBoundary(inner) => self.first_pending_trait_helper(inner),
+                .find_map(|arg| self.find_typed_node(&arg.expr, inspect)),
+            TypedInner::EagerBoundary(inner) => self.find_typed_node(inner, inspect),
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
             | TypedInner::ExtractorClosure(_, _, body)
-            | TypedInner::CaptureClosure(_, _, body) => self.first_pending_trait_helper(body),
+            | TypedInner::CaptureClosure(_, _, body) => self.find_typed_node(body, inspect),
             TypedInner::CaptureConstructorClosure(_, _, _, body) => {
-                self.first_pending_trait_helper(body)
+                self.find_typed_node(body, inspect)
             }
-            TypedInner::SupervisorSpawn { init, .. } => self.first_pending_trait_helper(init),
-            TypedInner::SupervisorAdopt { pid, .. } => self.first_pending_trait_helper(pid),
+            TypedInner::SupervisorSpawn { init, .. } => self.find_typed_node(init, inspect),
+            TypedInner::SupervisorAdopt { pid, .. } => self.find_typed_node(pid, inspect),
             TypedInner::SupervisorWorkers { init, strategy, .. } => self
-                .first_pending_trait_helper(init)
-                .or_else(|| self.first_pending_trait_helper(strategy)),
-            TypedInner::FacetView { source, .. } => self.first_pending_trait_helper(source),
+                .find_typed_node(init, inspect)
+                .or_else(|| self.find_typed_node(strategy, inspect)),
+            TypedInner::FacetView { source, .. } => self.find_typed_node(source, inspect),
             TypedInner::FacetSet { source, value, .. } => self
-                .first_pending_trait_helper(source)
-                .or_else(|| self.first_pending_trait_helper(value)),
+                .find_typed_node(source, inspect)
+                .or_else(|| self.find_typed_node(value, inspect)),
             TypedInner::FacetOver {
                 source, update_fun, ..
             } => self
-                .first_pending_trait_helper(source)
-                .or_else(|| self.first_pending_trait_helper(update_fun)),
+                .find_typed_node(source, inspect)
+                .or_else(|| self.find_typed_node(update_fun, inspect)),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ResultEffectFailure(_)
@@ -961,9 +984,8 @@ impl Checker {
                     collect(pred, obligations);
                     collect(err, obligations);
                 }
-                TypedInner::RecoverKind(value, marker, handler) => {
+                TypedInner::RecoverKind(value, _, handler) => {
                     collect(value, obligations);
-                    collect(marker, obligations);
                     collect(handler, obligations);
                 }
                 TypedInner::Match(scrutinee, arms) => {
@@ -1295,7 +1317,7 @@ impl Checker {
             ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
                 Box::new(self.concretize_pending_trait_calls(*value)?),
-                Box::new(self.concretize_pending_trait_calls(*marker)?),
+                marker,
                 Box::new(self.concretize_pending_trait_calls(*handler)?),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
@@ -1303,6 +1325,7 @@ impl Checker {
                 arms.into_iter()
                     .map(|arm| {
                         Ok(crate::typed::TypedMatchArm {
+                            direct_expression: arm.direct_expression,
                             pattern: arm.pattern,
                             guard: arm
                                 .guard
@@ -1683,9 +1706,9 @@ impl Checker {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if Self::ty_exposes_error_value(&expected) {
-                        return Err(self.error_function_param_not_allowed_error(
+                        return Err(self.lazy_error_transport_error(self.error_function_param_not_allowed_error(
                             Self::ast_ty_span(ast_ty),
-                        ));
+                        ), rhs));
                     }
                     let relation = ExpectedTypeRelation::annotation(Self::ast_ty_span(ast_ty));
                     let mut typed_rhs = self.check_node_with_expected_relation(
@@ -1729,7 +1752,7 @@ impl Checker {
                     }
                     }
                 }
-                self.require_concrete_callable_binding(&typed_rhs.ty, &typed_rhs.span)?;
+                self.require_concrete_callable_binding(&typed_rhs.ty, &typed_rhs.span).map_err(|error| self.lazy_unknown_binding_error(error, rhs))?;
                 self.ensure_no_match_result_value(&typed_rhs.ty, &typed_rhs.span)?;
                 let facet_path = if matches!(typed_rhs.ty, Ty::Facet(..)) {
                     Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
@@ -1771,6 +1794,7 @@ impl Checker {
                 } else {
                     self.clear_facet_pattern_bindings(&typed_pat);
                 }
+                self.bind_lazy_capture_diagnostic(&typed_pat, rhs, &typed_rhs);
                 self.normalize_env_bindings();
 
                 Ok(TypedNode {
@@ -1836,11 +1860,11 @@ impl Checker {
                 self.check_recover_kind(span, value, marker, handler)
             }
 
-            Resolved::Match(span, scrutinee, arms) => {
+            Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms) => {
                 self.check_match(span, scrutinee, arms, None, None)
             }
-            Resolved::IfLet(span, scrutinee, arms) => {
-                self.check_if_let(span, scrutinee, arms, None)
+            Resolved::IfLet(span, scrutinee, arms, then_only) => {
+                self.check_if_let(span, scrutinee, arms, None, *then_only)
             }
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
@@ -3097,10 +3121,13 @@ impl Checker {
             (Resolved::If(span, cond, then, else_opt), Some(expected_ty)) => {
                 self.check_if_with_expected(span, cond, then, else_opt, expected_ty)
             }
-            (Resolved::IfLet(span, scrutinee, arms), Some(expected_ty)) => {
-                self.check_if_let(span, scrutinee, arms, Some(expected_ty))
+            (Resolved::IfLet(span, scrutinee, arms, then_only), Some(expected_ty)) => {
+                self.check_if_let(span, scrutinee, arms, Some(expected_ty), *then_only)
             }
-            (Resolved::Match(span, scrutinee, arms), Some(expected_ty)) => {
+            (
+                Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms),
+                Some(expected_ty),
+            ) => {
                 let branch_relation = expected_relation
                     .filter(|relation| relation.synthetic_do_match_pending)
                     .map(ExpectedTypeRelation::after_synthetic_do_match);
@@ -3913,6 +3940,7 @@ impl Checker {
         let synthetic = Resolved::Closure(
             span.clone(),
             vec![ResolvedClosureParam {
+                lazy_capture: None,
                 id: param_id,
                 ty: None,
             }],
@@ -4295,8 +4323,9 @@ impl Checker {
             | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
             | Resolved::RecoverKind(span, _, _, _)
-            | Resolved::IfLet(span, _, _)
+            | Resolved::IfLet(span, _, _, _)
             | Resolved::Match(span, _, _)
+            | Resolved::IsMatch(span, _, _)
             | Resolved::FieldAccess(span, _, _)
             | Resolved::FacetSegmentAccess(span, _, _)
             | Resolved::InferredFacetCapture(span, _)
@@ -6428,6 +6457,7 @@ impl Checker {
         let synthetic = Resolved::Closure(
             span.clone(),
             vec![ResolvedClosureParam {
+                lazy_capture: None,
                 id: param_id,
                 ty: None,
             }],
@@ -10336,7 +10366,8 @@ impl Checker {
 
         if let Resolved::Var(call_span, id) = func {
             if self.error_observer_bindings.contains(&id.unique_id) {
-                return Err(self.error_observer_call_error(call_span));
+                return Err(self
+                    .lazy_error_transport_error(self.error_observer_call_error(call_span), func));
             }
         }
 
@@ -10780,7 +10811,7 @@ impl Checker {
                 )),
             }
         })();
-        result
+        result.map_err(|error| self.lazy_call_error(error, span, func, args))
     }
 
     fn is_registered_callable_declaration(&self, unique_id: u32) -> bool {
@@ -11991,6 +12022,7 @@ impl Checker {
             };
             let typed_body = if kind == CallableContext::ExtractorClosure
                 || body_is_result_constructor
+                || matches!(body, Resolved::If(..) | Resolved::IfLet(..))
                 || self.body_tail_is_return_type_argument_call(body)
             {
                 if let Some(Ty::Func(_, expected_ret)) = expected {
@@ -12104,7 +12136,14 @@ impl Checker {
         body: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let mut typed = self.check_closure(span, params, captures, body, expected, None)?;
+        let saved_capture = self.active_lazy_capture.take();
+        self.active_lazy_capture =
+            ActiveLazyCapture::new(params, expected, self.resolved_span(body).clone());
+        let result = self
+            .check_closure(span, params, captures, body, expected, None)
+            .map_err(|error| self.lazy_capture_annotation_error(error));
+        self.active_lazy_capture = saved_capture;
+        let mut typed = result?;
         let TypedInner::Closure(params, captures, typed_body) = typed.node else {
             return Err(TypeError {
                 structured: None,
@@ -12280,7 +12319,11 @@ impl Checker {
                 span.clone(),
                 id.clone(),
             )));
-            params.push(ResolvedClosureParam { id, ty: None });
+            params.push(ResolvedClosureParam {
+                lazy_capture: None,
+                id,
+                ty: None,
+            });
         }
 
         let body = match body {
@@ -12402,6 +12445,7 @@ impl Checker {
                     param_id.clone(),
                 )));
                 closure_params.push(ResolvedClosureParam {
+                    lazy_capture: None,
                     id: param_id,
                     ty: None,
                 });
@@ -12437,6 +12481,7 @@ impl Checker {
                         let synthetic = Resolved::Closure(
                             span.clone(),
                             vec![ResolvedClosureParam {
+                                lazy_capture: None,
                                 id: param_id.clone(),
                                 ty: None,
                             }],
@@ -12560,6 +12605,7 @@ impl Checker {
             let synthetic = Resolved::Closure(
                 span.clone(),
                 vec![ResolvedClosureParam {
+                    lazy_capture: None,
                     id: param_id,
                     ty: None,
                 }],
@@ -13307,46 +13353,280 @@ impl Checker {
         })
     }
 
-    /// Typecheck a `Lazy<T>` argument while preserving a source-level pair of
-    /// parentheses as an explicit eager boundary.  An ungrouped argument keeps
-    /// the historical branch convention: a zero-argument callable is invoked
-    /// only if its lazy path is selected.
-    pub(super) fn check_lazy_argument(
+    pub(super) fn is_lazy_placeholder(arg: &Resolved) -> bool {
+        match arg {
+            Resolved::Grouped(_, inner) => Self::is_lazy_placeholder(inner),
+            Resolved::Var(_, id) => id.compiler_generated && id.name.starts_with("__cap_"),
+            _ => false,
+        }
+    }
+
+    pub(super) fn check_lazy_input(
         &mut self,
         arg: &Resolved,
+        expected: Option<&Ty>,
         call_span: &Span,
-    ) -> Result<TypedNode, TypeError> {
-        // Sigil lowers a RHS `_1` slot into a synthetic closure parameter.
-        // Detect that parameter here, after the special form's parameter role
-        // is known, so the diagnostic remains a TypeError rather than a
-        // resolver error.
+    ) -> Result<LazyInput, TypeError> {
         if let Resolved::Var(span, id) = arg {
             if id.name.starts_with("__pipe_slot_") {
                 return Err(TypeError {
                     structured: None,
                     message: "pipe injection into a Lazy parameter is not allowed".into(),
                     span: span.clone(),
-                    hint: Some(
-                        "Lazy parameters are evaluated under the callee's control. Bind the value first, then pass that binding explicitly, or use a closure to make the evaluation order explicit."
-                            .into(),
-                    ),
+                    hint: Some("Lazy parameters are evaluated under the callee's control. Bind the value first, then pass that binding explicitly, or use a closure to make the evaluation order explicit.".into()),
                 });
             }
         }
-        match arg {
-            Resolved::Grouped(span, inner) => {
-                let inner = self.check_node(inner)?;
-                Ok(TypedNode {
-                    ty: inner.ty.clone(),
-                    span: span.clone(),
-                    node: TypedInner::EagerBoundary(Box::new(inner)),
-                })
+        let placeholder = Self::is_lazy_placeholder(arg);
+        if let Resolved::Grouped(span, inner) = arg {
+            let mut input = self.check_lazy_input(inner, expected, call_span)?;
+            // Parentheses around a normalized capture parameter only group it.
+            if placeholder {
+                input.placeholder = true;
+                return Ok(input);
             }
-            _ => {
-                let raw = self.check_node(arg)?;
-                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
+            input.call_shell = false;
+            input.node = TypedNode {
+                ty: input.node.ty.clone(),
+                span: span.clone(),
+                node: TypedInner::EagerBoundary(Box::new(input.node)),
+            };
+            return Ok(input);
+        }
+        let node = if self.branch_tail_is_return_type_argument_call(arg) && expected.is_some() {
+            let checkpoint = self.candidate_probe_checkpoint();
+            match self.check_node(arg) {
+                Ok(node) => node,
+                Err(error)
+                    if error.reason()
+                        == Some(TypeDiagnosticReason::AmbiguousReturnTypeArgument) =>
+                {
+                    self.rollback_candidate_probe(checkpoint);
+                    let expected = expected.expect("checked expected branch result");
+                    match arg {
+                        Resolved::Closure(span, params, captures, body)
+                        | Resolved::ExtractorClosure(span, params, captures, body)
+                        | Resolved::CaptureClosure(span, params, captures, body)
+                            if params.is_empty() =>
+                        {
+                            self.check_closure(
+                                span,
+                                params,
+                                captures,
+                                body,
+                                Some(&Ty::Func(vec![], Box::new(expected.clone()))),
+                                None,
+                            )?
+                        }
+                        _ => self.check_node_with_expected(arg, Some(expected))?,
+                    }
+                }
+                Err(error) => {
+                    self.rollback_candidate_probe(checkpoint);
+                    return Err(error);
+                }
+            }
+        } else {
+            self.check_node(arg)?
+        };
+        Ok(LazyInput {
+            node,
+            placeholder,
+            call_shell: matches!(
+                arg,
+                Resolved::App(..)
+                    | Resolved::ConstructorCall(..)
+                    | Resolved::EnumConstructorCall(..)
+                    | Resolved::If(..)
+                    | Resolved::IfLet(..)
+                    | Resolved::Assert(..)
+                    | Resolved::Ensure(..)
+                    | Resolved::MapErr(..)
+                    | Resolved::Cause(..)
+                    | Resolved::RecoverKind(..)
+                    | Resolved::ApplyPattern(..)
+                    | Resolved::IsMatch(..)
+                    | Resolved::Dbg(..)
+            ),
+        })
+    }
+
+    fn lazy_depth(&self, ty: &Ty) -> usize {
+        match self.resolve_ty(ty) {
+            Ty::Func(params, ret)
+            | Ty::UserFunc { params, ret, .. }
+            | Ty::BuiltinFunc { params, ret, .. }
+                if params.is_empty() =>
+            {
+                1 + self.lazy_depth(&ret)
+            }
+            _ => 0,
+        }
+    }
+
+    fn lazy_shell_type(&self, input: &LazyInput) -> Ty {
+        let ty = self.resolve_ty(&input.node.ty);
+        if input.call_shell {
+            Ty::Func(vec![], Box::new(ty))
+        } else {
+            ty
+        }
+    }
+
+    /// Consume exactly one normalized shell, preserving any function in its result.
+    fn consume_lazy_input(&self, mut input: LazyInput, wrap: bool, span: &Span) -> TypedNode {
+        input.node.ty = self.resolve_ty(&input.node.ty);
+        if wrap && input.call_shell {
+            // Consuming the extra adjustment shell leaves the original shell
+            // around a bare call. That remaining shell must be represented as
+            // a real thunk rather than evaluating the call now.
+            let outer_ids = self
+                .env
+                .vars
+                .iter()
+                .filter_map(|(id, ty)| {
+                    (!matches!(ty, Ty::UserFunc { .. } | Ty::BuiltinFunc { .. })
+                        && !self.env.type_constructor_ids.contains(id))
+                    .then_some(*id)
+                })
+                .collect::<HashSet<_>>();
+            let captures = Self::finalized_closure_captures(&input.node, &outer_ids);
+            TypedNode {
+                ty: Ty::Func(vec![], Box::new(input.node.ty.clone())),
+                span: input.node.span.clone(),
+                node: TypedInner::Closure(vec![], captures, Box::new(input.node)),
+            }
+        } else if wrap || input.call_shell {
+            input.node
+        } else {
+            self.maybe_call_zero_arg_function(input.node, span.clone())
+        }
+    }
+
+    /// Known inputs decide the shell depth; an expected type only determines unknown parameters.
+    /// Each shallower input receives at most one shell before the ordinary branch relation.
+    pub(super) fn normalize_lazy_pair(
+        &mut self,
+        left: LazyInput,
+        right: LazyInput,
+        expected: Option<&Ty>,
+        span: &Span,
+    ) -> Result<(TypedNode, TypedNode), TypeError> {
+        let mut left_type = self.lazy_shell_type(&left);
+        let mut right_type = self.lazy_shell_type(&right);
+        let mut wrap_left = false;
+        let mut wrap_right = false;
+        match (left.placeholder, right.placeholder) {
+            (true, true) => {
+                let result = expected.cloned().unwrap_or_else(|| self.env.fresh_tyvar());
+                let required = Ty::Func(vec![], Box::new(result));
+                self.assert_lazy_placeholder(
+                    &required,
+                    &left.node,
+                    span,
+                    &[(&left.node, &required), (&right.node, &required)],
+                )?;
+                self.assert_lazy_placeholder(
+                    &required,
+                    &right.node,
+                    span,
+                    &[(&left.node, &required), (&right.node, &required)],
+                )?;
+            }
+            (true, false) => {
+                if self.lazy_depth(&right_type) == 0 {
+                    wrap_right = true;
+                    right_type = Ty::Func(vec![], Box::new(right_type));
+                }
+                self.assert_lazy_placeholder(
+                    &right_type,
+                    &left.node,
+                    span,
+                    &[(&left.node, &right_type)],
+                )?;
+            }
+            (false, true) => {
+                if self.lazy_depth(&left_type) == 0 {
+                    wrap_left = true;
+                    left_type = Ty::Func(vec![], Box::new(left_type));
+                }
+                self.assert_lazy_placeholder(
+                    &left_type,
+                    &right.node,
+                    span,
+                    &[(&right.node, &left_type)],
+                )?;
+            }
+            (false, false) => {
+                let left_depth = self.lazy_depth(&left_type);
+                let right_depth = self.lazy_depth(&right_type);
+                wrap_left = left_depth == 0 && right_depth == 0 || left_depth < right_depth;
+                wrap_right = left_depth == 0 && right_depth == 0 || right_depth < left_depth;
             }
         }
+        // The ordinary branch relation below checks the resulting values;
+        // at most one shell is added, so deeper mismatches remain errors.
+        Ok((
+            self.consume_lazy_input(left, wrap_left, span),
+            self.consume_lazy_input(right, wrap_right, span),
+        ))
+    }
+
+    /// Keep all requirements known at this normalization step available to diagnostics,
+    /// even when the first placeholder relation fails.
+    fn assert_lazy_placeholder(
+        &mut self,
+        required: &Ty,
+        node: &TypedNode,
+        span: &Span,
+        requirements: &[(&TypedNode, &Ty)],
+    ) -> Result<(), TypeError> {
+        let result = self.assert_type_relation(
+            required,
+            &node.ty,
+            self.type_fact(SourceRole::Expected, span, required),
+            self.type_fact(SourceRole::Value, &node.span, &node.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Call,
+            "Lazy",
+            0,
+        );
+        result.map_err(|error| self.lazy_placeholder_error(error, required, node, requirements))
+    }
+
+    pub(super) fn check_lazy_argument(
+        &mut self,
+        arg: &Resolved,
+        call_span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        let input = self.check_lazy_input(arg, None, call_span)?;
+        if input.placeholder {
+            return Err(TypeError::new(
+                "Lazy capture parameter requires a known branch or expected type",
+                input.node.span.clone(),
+            ));
+        }
+        let wrap = self.lazy_depth(&self.lazy_shell_type(&input)) == 0;
+        Ok(self.consume_lazy_input(input, wrap, call_span))
+    }
+
+    pub(super) fn normalize_lazy_single(
+        &mut self,
+        input: LazyInput,
+        expected: &Ty,
+        span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        if input.placeholder {
+            let required = Ty::Func(vec![], Box::new(expected.clone()));
+            self.assert_lazy_placeholder(
+                &required,
+                &input.node,
+                span,
+                &[(&input.node, &required)],
+            )?;
+        }
+        let wrap = !input.placeholder && self.lazy_depth(&self.lazy_shell_type(&input)) == 0;
+        Ok(self.consume_lazy_input(input, wrap, span))
     }
 
     pub(super) fn check_lazy_argument_with_expected(
@@ -13355,47 +13635,8 @@ impl Checker {
         expected: &Ty,
         call_span: &Span,
     ) -> Result<TypedNode, TypeError> {
-        if self.branch_tail_is_return_type_argument_call(arg) {
-            let checkpoint = self.candidate_probe_checkpoint();
-            match self.check_lazy_argument(arg, call_span) {
-                Ok(typed) => return Ok(typed),
-                Err(error)
-                    if error.reason()
-                        == Some(TypeDiagnosticReason::AmbiguousReturnTypeArgument) =>
-                {
-                    self.rollback_candidate_probe(checkpoint);
-                }
-                Err(error) => {
-                    self.rollback_candidate_probe(checkpoint);
-                    return Err(error);
-                }
-            }
-        }
-        match arg {
-            Resolved::Closure(span, params, captures, body)
-            | Resolved::ExtractorClosure(span, params, captures, body)
-            | Resolved::CaptureClosure(span, params, captures, body)
-                if params.is_empty() =>
-            {
-                let thunk_type = Ty::Func(Vec::new(), Box::new(expected.clone()));
-                let raw =
-                    self.check_closure(span, params, captures, body, Some(&thunk_type), None)?;
-                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
-            }
-
-            Resolved::Grouped(span, inner) => {
-                let inner = self.check_node_with_expected(inner, Some(expected))?;
-                Ok(TypedNode {
-                    ty: inner.ty.clone(),
-                    span: span.clone(),
-                    node: TypedInner::EagerBoundary(Box::new(inner)),
-                })
-            }
-            _ => {
-                let raw = self.check_node_with_expected(arg, Some(expected))?;
-                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
-            }
-        }
+        let input = self.check_lazy_input(arg, Some(expected), call_span)?;
+        self.normalize_lazy_single(input, expected, call_span)
     }
 
     pub(super) fn check_branch_node_with_expected(
@@ -13476,17 +13717,17 @@ impl Checker {
             "if",
             0,
         )?;
-        let typed_then = match expected {
-            Some(expected) => self.check_lazy_argument_with_expected(then, expected, span)?,
-            None => self.check_lazy_argument(then, span)?,
+        let (typed_then, typed_else) = if let Some(branch) = else_opt {
+            let then_input = self.check_lazy_input(then, expected, span)?;
+            let else_input = self.check_lazy_input(branch, expected, span)?;
+            let (then, other) = self.normalize_lazy_pair(then_input, else_input, expected, span)?;
+            (then, Some(other))
+        } else {
+            (
+                self.check_lazy_argument_with_expected(then, &Ty::Unit, span)?,
+                None,
+            )
         };
-        let typed_else = else_opt
-            .as_ref()
-            .map(|branch| match expected {
-                Some(expected) => self.check_lazy_argument_with_expected(branch, expected, span),
-                None => self.check_lazy_argument(branch, span),
-            })
-            .transpose()?;
         if let Some(other) = &typed_else {
             self.assert_type_relation(
                 &typed_then.ty,
@@ -13505,11 +13746,27 @@ impl Checker {
                 self.complete_branch_error(error, &[&typed_then, other], &[Some(&typed_cond), None])
             })?;
         }
+        if typed_else.is_none() {
+            self.assert_type_relation(
+                &Ty::Unit,
+                &typed_then.ty,
+                self.type_fact(SourceRole::Expected, span, &Ty::Unit),
+                self.type_fact(SourceRole::Value, &typed_then.span, &typed_then.ty),
+                TypeDiagnosticReason::IfBranchTypeMismatch,
+                DiagnosticOrigin::Branch {
+                    form: diagnostics::BranchForm::If,
+                    ordinal: 0,
+                },
+                "if_then",
+                0,
+            )?;
+        }
         let ty = if typed_else.is_some() {
             typed_then.ty.clone()
         } else {
             Ty::Unit
         };
+        self.record_lazy_capture_signature(span, &ty);
         if let Some(expected) = expected {
             self.assert_type_relation(
                 expected,
@@ -13586,7 +13843,7 @@ impl Checker {
             });
         }
 
-        let typed_err = self.check_lazy_argument(err, span)?;
+        let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
         self.ensure_guard_error_value(&typed_err, "assert")?;
 
         Ok(TypedNode {
@@ -13612,9 +13869,12 @@ impl Checker {
                 hint: Some("Use `&predicate` or `{|value| predicate(value) }`; call expressions such as `predicate()` are not accepted here.".into()),
             });
         }
-        let typed_pred = self.check_compose_callable(pred, "ensure")?;
-        self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
         let expected_pred = Ty::Func(vec![self.resolve_ty(&typed_value.ty)], Box::new(Ty::Bool));
+        let mut typed_pred = if Self::is_lazy_placeholder(pred) {
+            self.check_node(pred)?
+        } else {
+            self.check_compose_callable(pred, "ensure")?
+        };
         self.assert_type_relation(
             &expected_pred,
             &typed_pred.ty,
@@ -13626,7 +13886,10 @@ impl Checker {
             1,
         )?;
 
-        let typed_err = self.check_lazy_argument(err, span)?;
+        typed_pred.ty = self.resolve_ty(&typed_pred.ty);
+        self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
+
+        let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
         self.ensure_guard_error_value(&typed_err, "ensure")?;
 
         Ok(TypedNode {
@@ -13650,7 +13913,7 @@ impl Checker {
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_result_value(value, "map_err", None)?;
-        let typed_err = self.check_lazy_argument(err, span)?;
+        let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
         self.ensure_result_error_arg(&typed_err, "map_err")?;
 
         Ok(TypedNode {
@@ -13667,7 +13930,7 @@ impl Checker {
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_result_value(value, "cause", None)?;
-        let typed_err = self.check_lazy_argument(err, span)?;
+        let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
         self.ensure_result_error_arg(&typed_err, "cause")?;
 
         Ok(TypedNode {
@@ -13681,11 +13944,21 @@ impl Checker {
         &mut self,
         span: &Span,
         value: &Resolved,
-        marker: &Resolved,
+        marker: &ResolvedId,
         handler: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_marker = self.check_lazy_argument(marker, span)?;
-        self.ensure_recover_kind_marker(&typed_marker)?;
+        if !self.env.is_error_constructor(marker.unique_id) {
+            return Err(TypeError::new(
+                "recover_kind marker must be a concrete deferror type name",
+                marker.span.clone(),
+            ));
+        }
+        let kind = marker.qualified_name.clone().ok_or_else(|| {
+            TypeError::new(
+                "recover_kind ErrorKind identity has no canonical declaration name",
+                marker.span.clone(),
+            )
+        })?;
         // Infer the success type from the handler before checking a
         // polymorphic `Err(...)` value.  Otherwise `Err(NoneError)` is
         // checked without context and its success slot defaults to `Unit`,
@@ -13695,7 +13968,20 @@ impl Checker {
             vec![Ty::Error],
             Box::new(Ty::Result(Box::new(ok_ty.clone()), Box::new(Ty::Error))),
         );
-        let typed_handler = self.check_node_with_expected(handler, Some(&expected_handler))?;
+        let mut typed_handler = self.check_node_with_expected(handler, Some(&expected_handler))?;
+        if matches!(self.resolve_ty(&typed_handler.ty), Ty::Var(_)) {
+            self.assert_type_relation(
+                &expected_handler,
+                &typed_handler.ty,
+                self.type_fact(SourceRole::Expected, span, &expected_handler),
+                self.type_fact(SourceRole::Value, &typed_handler.span, &typed_handler.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                "recover_kind",
+                2,
+            )?;
+            typed_handler.ty = self.resolve_ty(&typed_handler.ty);
+        }
         let (handler_in, handler_out) =
             self.unary_function_parts(&typed_handler.ty, "recover_kind", &typed_handler.span)?;
         if !self.types_compatible(&Ty::Error, &handler_in) {
@@ -13739,11 +14025,7 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Result(Box::new(ok_ty), Box::new(Ty::Error)),
             span: span.clone(),
-            node: TypedInner::RecoverKind(
-                Box::new(typed_value),
-                Box::new(typed_marker),
-                Box::new(typed_handler),
-            ),
+            node: TypedInner::RecoverKind(Box::new(typed_value), kind, Box::new(typed_handler)),
         })
     }
 

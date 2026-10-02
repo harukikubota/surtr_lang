@@ -1,0 +1,24 @@
+tail then eager
+tail else eager
+7
+0
+selected thunk
+11
+bare selected
+7
+before retained thunk
+shallow thunk
+4
+before reverse retained thunk
+reverse shallow thunk
+5
+12
+True
+before deferred call
+deferred bare call
+13
+acquire closure
+9
+acquire closure
+execute closure
+9

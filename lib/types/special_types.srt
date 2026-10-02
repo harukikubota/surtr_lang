@@ -103,10 +103,45 @@ Use level: std builtin declaration marker only.
 language evaluates conditionally, such as `if`, `and`, `or`, and related
 special forms.
 It is not an ordinary first-class wrapper type for user data.
-Do not use it in user-defined bindings, fields, container elements, or return
-types.
+Do not use it in user-defined parameters, bindings, fields, container elements,
+return types, or type annotations. Use an ordinary `(-> T)` parameter when a
+user-defined function needs delayed work.
+
+A direct call in a Lazy argument is delayed regardless of its return type;
+a parenthesized expression is evaluated before branch selection. The compiler
+normalizes the inputs to a common zero-argument callable and invokes the
+selected branch once. A callable left in the result is returned without an
+extra invocation.
+
+A capture placeholder receives the normalized callable type, and `(&N)` means
+the same as `&N`. Write a complete call such as `&and(&1, &2)`; a bare capture
+of a standard Lazy special form such as `&and` is rejected.
+Existing Error placement restrictions remain in force for `Lazy<Error>`.
+
+## REPL
+xldr(1)> both = &and(&1, &2)
+xldr(2)> both(True, {|| False})
+False
 """
 @builtin type Lazy<$T>
+
+@doc """
+Compiler-reserved error kind marker for direct std builtin parameters.
+`ErrorKind` accepts a concrete `deferror` type name in `Result::recover_kind`.
+Qualified type names are accepted; constructor calls, runtime Error values,
+strings, abstract `Error`, and non-error names are rejected. The marker is
+independent of constructor payload arity and never constructs an Error.
+It has no runtime constructor and cannot be stored in bindings, fields, or
+containers, or exposed through user parameters, return types, or annotations.
+The kind must also be fixed as a type name inside a capture; a direct capture
+placeholder cannot replace it.
+
+## REPL
+xldr(1)> Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)})
+Ok(1)
+"""
+@builtin type ErrorKind
+
 
 @doc """
 Compiler-reserved process initialization protocol marker.

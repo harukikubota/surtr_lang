@@ -1,0 +1,97 @@
+# Lazy special formの実装契約
+
+`Lazy<T>`は標準special formの引数専用マーカーであり、通常の値型ではない。
+利用者のparameter・return・annotation・field・containerには公開せず、実行するbranchは通常の0引数関数として正規化する。
+標準signatureの正本は`crates/sindr/src/builtin.rs`の`BUILTIN_METAS`と対応する標準定義である。
+利用者向けの規則と関数別の例は[Lazy evaluation](../site/lazy-evaluation.md)、標準APIの説明は`lib/kernel.srt`・`lib/types/result.srt`の`@doc`に置く。
+
+## フェーズの責務
+
+| フェーズ | 責務 |
+|---|---|
+| Spire | callの引数領域、grouping、capture placeholderを保持する。Patternを通常Exprへ解析し直して救済しない |
+| Sigil | canonical callee・Pattern binding・deferrorのidentityとlexical scopeを確定する。裸の標準Lazy captureを拒否し、診断用の由来を生成parameterへ保持する |
+| Scar | Lazy入力の型とclosure shellを正規化し、生成parameterの要求型・callの戻り値型を確定する。通常の型関係とError制約を維持する |
+| Forge | 照合・branch選択前のeager入力を一回評価し、選択されたbranchの正規化済みshellを一回consumeする。tail位置でも同じ順序を守る |
+| Eldr | 通常のcall frame・closureと、静的に確定したError kindの内部ABIを実行する。Lazy値やErrorKind値を利用者へ公開しない |
+
+概念上のwrapとruntime closure allocationは別である。Forgeは確定した評価順と型を実行し、すべてのbranchにclosure allocationを要求しない。
+実行式のbranchへLazyマーカーを残したり、正規化済みparameterへ再びLazy処理を適用したりしない。
+
+## 入力とclosure depth
+
+Scarの`LazyInput`は、型検査済みのnode、直接placeholderかどうか、裸callの概念的なshellを保持する。
+
+- 裸callは戻り値型によらず一段包む。callが0引数関数を返しても、callの実行はbranch選択まで遅延する。
+- Lazy引数位置の`(EXPR)`はeager境界である。式を選択前に一度評価し、その結果を正規化する。関数値の取得と本体の実行を区別する。
+- 直接placeholderとそのgrouping（`&N`・`(&N)`）は同じ仮引数参照である。固定式のeager境界を再適用せず、追加のwrap・callも行わない。
+- `match` arm内の括弧はそのarm内のgroupingであり、Lazy引数のeager境界ではない。
+
+depthは型の先頭に連続する0引数関数の段数である。引数付き関数型は基底型として扱う。
+
+| 入力型 | depth | 基底型 |
+|---|---:|---|
+| `Int` | 0 | `Int` |
+| `(-> Int)` | 1 | `Int` |
+| `(-> (-> Int))` | 2 | `Int` |
+| `(Int -> String)` | 0 | `(Int -> String)` |
+
+裸callの概念的なshellは、上記の戻り値型のdepthに加えて扱う。
+例えば`make()`が`(-> Int)`を返す場合、Lazy位置の`make()`はdepth 2、`(make())`の評価結果はdepth 1となる。
+
+## 正規化と一回のconsume
+
+既知の両branchは次の規則で共通型へ揃える。
+
+1. 同型かつdepth 0なら、両方を一段wrapする。
+2. 同型かつdepth 1以上なら、そのまま使う。
+3. depthが異なる場合は、浅い側だけを一段wrapする。
+4. その後は通常の型関係で整合を検査する。二段以上の差や基底型の不一致を追加wrap・暗黙変換で隠さない。
+
+正規化後の共通型が`(-> R)`なら、選択branchを一回呼び、callの戻り値を`R`とする。
+`R`がさらに関数型でも追加で呼ばない。浅い側を一段wrapした場合は、その一回のconsumeで元の値を返す。
+単branchの`if_then`と、bindingを作らない`if_let_then`の成功branchは`(-> Unit)`を要求する。bindingを作る成功branchはDirectExpressionとして`Unit`を要求する。
+`assert`・`ensure`・`Result::map_err`・`Result::cause`のerrorは`(-> Error)`を要求する。
+`and`・`or`の右辺は`(-> Boolean)`を要求し、それぞれ左辺が`True`・`False`のときだけ実行する。
+個別の条件とError受け渡し制約は標準APIの契約に従う。
+
+## キャプチャの要求型
+
+直接placeholderには、正規化済みのbranch型を要求する。placeholder自体を一段wrapして型不一致を救済しない。
+
+| branchの組み合わせ | placeholderの要求型 | callの戻り値型 |
+|---|---|---|
+| `&1, 1` | `(-> Int)` | `Int` |
+| `&1, {|| 1}` | `(-> Int)` | `Int` |
+| `&1, {|| {|| 1}}` | `(-> (-> Int))` | `(-> Int)` |
+
+既知branchの型とdepthが優先する。外側の注釈は型の整合に使い、既知branchの評価方法を変更しない。
+両branchが未知なら期待される関数型から確定する。local binding・REPL行の完了時に未確定signatureを保存せず、後のcallから決め直さない。
+外側の宣言済みrigid genericを保持することと、未確定型をlocal polymorphic schemeへ一般化することは区別する。
+
+同じ番号のplaceholderは一つのparameterであり、通常Expr内の使用を含むすべての要求型を統一する。
+`&and(&1, &1)`の`Boolean`と`(-> Boolean)`は競合する。番号の並べ替えは生成parameterの順序へ反映する。
+裸の標準Lazy capture（`&and`など）はSigilで拒否し、引数を記述したcaptureへ案内する。暗黙wrapperは生成しない。
+既存の関数値に対する`&f`は同じ値の参照であり、通常のidentity規則を維持する。
+
+生成された関数は通常のcall frameを使う。引数は評価済みの値として渡され、branch用の関数値を取得したことはその本体を実行したことを意味しない。
+利用者のwrapperも通常の`(-> T)`を受け取る。`Lazy<T>`を利用者のsignatureへ公開しない。
+`(-> Error)`を含む生成関数にも既存のError受け渡し制約が適用される。Error系を通常の関数値として使う場合はerror式をcapture内へ固定する。
+
+## PatternとErrorKindの境界
+
+Pattern consumerの完全call capture、固定Pattern、bindingを伴う成功branchのDirectExpression、照合前scopeのeager式は[Pattern spec](Pattern_spec.md#pattern-consumerのキャプチャと成功scope)に従う。
+Pattern自体・DirectExpressionBlock自体をplaceholderで置き換えず、特殊ブロック内への新しいplaceholder許可やpipeの引数注入規則を追加しない。
+`&N`、projectionの`_N`、pipeの`_N`はそれぞれの構文・役割を維持する。
+
+`Result::recover_kind`の`ErrorKind`はLazy入力ではない。標準builtinの直接parameterだけに許可し、利用者の型注釈や入れ子の型・container・field・returnへ公開しない。
+Sigilは修飾名を含む具体的な`deferror`型名を解決する。constructor call、runtime Error、文字列、抽象`Error`、直接placeholderは拒否する。
+constructorのpayload arityは関係しない。Forgeはcanonical identityを静的kind metadataへ消去し、Eldrはhidden ABIでkindを照合する。
+利用者向けのkind値・constructor・Error生成能力や、旧Lazy marker／任意文字列へのfallbackを設けない。内部ABIの詳細は[EldrVM spec](EldrVM_spec.md)に従う。
+
+## 診断と検証
+
+関数別の修正案、由来の保存、通常のreason・構造化入力の保持は[診断契約](diagnostics.md#lazy・patternキャプチャとerrorkind)に従う。
+型と評価の境界は`crates/scar/tests/lazy_capture_revision.rs`、関数別案内は`crates/scar/tests/lazy_capture_diagnostics.rs`で検証する。
+評価回数・grouping・短絡は`tests/fixtures/script/pass/functions/lazy_capture_normalization.srt`、consumer captureは`tests/fixtures/script/pass/patterns/consumer_capture.srt`、ErrorKindの許可・拒否は対応するscript/module fixtureで検証する。
+REPLのsignature確定と診断由来の継続は`crates/xldr/tests/repl_core.rs`で確認する。

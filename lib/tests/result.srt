@@ -154,10 +154,10 @@ test("Result") {
       )
     }
 
-    it("recover_kind accepts constructor markers with payload") {
+    it("recover_kind accepts payload error type names") {
       assert_eq(
         "Ok(16)",
-        inspect(recover_kind(Err(ApiError("boom")), ApiError("ignored"), {|err| Ok(String::len(inspect(err)))})),
+        inspect(recover_kind(Err(ApiError("boom")), ApiError, {|err| Ok(String::len(inspect(err)))})),
       )
     }
   }

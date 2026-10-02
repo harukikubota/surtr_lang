@@ -5,6 +5,42 @@ use sindr::warning::WarningKind;
 use spire::ast::{AstTy, BinOp, Lit};
 use spire::parse;
 
+#[test]
+fn bare_lazy_special_form_captures_reject_before_runtime_with_individual_guidance() {
+    let modules = vec![
+        staged_auto_import_module("Kernel", parse_module_ast(
+            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def assert(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
+        staged_module("Result", parse_module_ast(
+            "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
+    ];
+    for function in [
+        "and",
+        "or",
+        "if",
+        "if_then",
+        "assert",
+        "ensure",
+        "Result::map_err",
+        "Result::cause",
+    ] {
+        let error = resolve_user_with_modules(&format!("f = &{function}"), &[modules.clone()])
+            .expect_err("bare Lazy capture must reject");
+        assert_eq!(
+            error.diagnostic.reason,
+            crate::error::ResolveErrorReason::Capture,
+            "{error:?}"
+        );
+        assert!(
+            error.message.contains(function)
+                && error.message.contains("explicit")
+                && error.message.contains("Lazy"),
+            "{error:?}"
+        );
+    }
+    resolve_user_with_modules("f = &and(&1, &2)\ng = &f", &[modules])
+        .expect("existing function identity capture remains valid");
+}
+
 fn permissive_module_rules() -> spire::ParseRules {
     spire::ParseRules::permissive_for_tests()
 }
@@ -3527,7 +3563,7 @@ fn test_if_let_conversion() {
     let resolved = parse_and_resolve_pattern_consumers("x = if_let(Ok(1), Ok(v), v, 0)").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::IfLet(_, _, arms) => {
+            Resolved::IfLet(_, _, arms, _) => {
                 assert_eq!(arms.len(), 2);
                 assert!(matches!(
                     &arms[0].pattern,
@@ -3548,9 +3584,10 @@ fn test_if_let_then_conversion() {
             .unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::IfLet(_, _, arms) => {
+            Resolved::IfLet(_, _, arms, then_only) => {
+                assert!(*then_only);
                 assert_eq!(arms.len(), 2);
-                assert!(matches!(&arms[0].body, Resolved::Block(_, _)));
+                assert!(matches!(&arms[0].body, Resolved::App(_, _, _)));
                 assert!(matches!(&arms[1].body, Resolved::Lit(_, Lit::Unit)));
             }
             other => panic!("Expected IfLet for if_let_then(...), got {:?}", other),
@@ -3568,7 +3605,7 @@ fn test_if_let_or_alternatives_share_one_binding_identity() {
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
-    let Resolved::IfLet(_, _, arms) = rhs.as_ref() else {
+    let Resolved::IfLet(_, _, arms, _) = rhs.as_ref() else {
         panic!("expected if_let, got {rhs:?}");
     };
     let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
@@ -3600,7 +3637,7 @@ fn test_if_let_nested_or_alternatives_share_one_binding_identity() {
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
-    let Resolved::IfLet(_, _, arms) = rhs.as_ref() else {
+    let Resolved::IfLet(_, _, arms, _) = rhs.as_ref() else {
         panic!("expected if_let, got {rhs:?}");
     };
     let ResolvedPattern::Tuple(outer) = &arms[0].pattern else {
@@ -3635,7 +3672,7 @@ fn test_if_let_then_or_binding_is_visible_in_success_block() {
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
-    let Resolved::IfLet(_, _, arms) = rhs.as_ref() else {
+    let Resolved::IfLet(_, _, arms, _) = rhs.as_ref() else {
         panic!("expected lowered if_let");
     };
     let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
@@ -3647,10 +3684,7 @@ fn test_if_let_then_or_binding_is_visible_in_success_block() {
     let ResolvedPattern::Var(bound_id) = &first[1] else {
         panic!("expected bound value");
     };
-    let Resolved::Block(_, body) = &arms[0].body else {
-        panic!("expected success block");
-    };
-    let Resolved::App(_, _, args) = &body[0] else {
+    let Resolved::App(_, _, args) = &arms[0].body else {
         panic!("expected print call");
     };
     let ResolvedRecordLitArg::Positional(Resolved::Var(_, used_id)) = &args[0] else {
@@ -3703,7 +3737,7 @@ fn test_is_match_conversion() {
     let resolved = parse_and_resolve_pattern_consumers("x = is_match(Ok(1), Ok(_))").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Match(_, _, arms) => {
+            Resolved::IsMatch(_, _, arms) => {
                 assert_eq!(arms.len(), 2);
                 assert!(matches!(&arms[0].body, Resolved::Lit(_, Lit::Bool(true))));
                 assert!(matches!(&arms[1].body, Resolved::Lit(_, Lit::Bool(false))));
@@ -3762,17 +3796,38 @@ x = ensure(1, &is_even, SomeError)"#,
 }
 
 #[test]
-fn test_recover_kind_constructor_marker_conversion() {
+fn test_recover_kind_accepts_payload_error_type_name() {
     let resolved = parse_and_resolve(
         r#"deferror Timeout(detail: String) { detail }
-x = Result::recover_kind(Err(Timeout("runtime")), Timeout("marker"), {|err| Ok(1)})"#,
+x = Result::recover_kind(Err(Timeout("runtime")), Timeout, {|err| Ok(1)})"#,
     )
-    .expect("recover_kind constructor marker should resolve");
-    match &resolved[1] {
-        Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::RecoverKind(_, _, _, _)));
-        }
-        other => panic!("Expected Bind with RecoverKind, got {other:?}"),
+    .expect("payload error kind name should resolve");
+    assert!(
+        matches!(&resolved[1], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::RecoverKind(..)))
+    );
+}
+
+#[test]
+fn test_recover_kind_rejects_runtime_marker_expressions() {
+    for marker in [
+        "Timeout()",
+        "Timeout(\"marker\")",
+        "\"Timeout\"",
+        "Error",
+        "Int",
+        "&1",
+    ] {
+        let source = format!("deferror Timeout(detail: String) {{ detail }}\nx = Result::recover_kind(Err(Timeout(\"runtime\")), {marker}, {{|err| Ok(1)}})");
+        let error =
+            parse_and_resolve(&source).expect_err("ErrorKind requires a concrete type name");
+        assert!(
+            error
+                .message
+                .contains("recover_kind marker must be a concrete deferror type name")
+                || ((marker == "Error" || marker == "Int")
+                    && error.message.contains("Undefined variable")),
+            "{marker}: {error:?}"
+        );
     }
 }
 
@@ -4543,7 +4598,6 @@ fn canonical_pattern_consumers_cannot_be_values_or_captures() {
         for source in [
             format!("f = Kernel::{}", consumer.name()),
             format!("f = &Kernel::{}", consumer.name()),
-            format!("f = &Kernel::{}(&1, 1)", consumer.name()),
         ] {
             let error = parse_and_resolve_pattern_consumers(&source)
                 .expect_err("canonical Pattern consumers are syntax, not callable values");
@@ -8632,7 +8686,7 @@ fn local_extractor_predicate_defers_its_binding_prohibition() {
     let resolved =
         parse_and_resolve_pattern_consumers("e = {|value| value}\nis_match(1, e(candidate))")
             .unwrap();
-    let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+    let Resolved::IsMatch(_, _, arms) = resolved.last().unwrap() else {
         panic!("predicate match");
     };
     assert!(matches!(
@@ -8642,4 +8696,63 @@ fn local_extractor_predicate_defers_its_binding_prohibition() {
             ..
         }
     ));
+}
+
+#[test]
+fn complete_pattern_consumer_captures_preserve_pattern_scope() {
+    for source in [
+        "f = &is_match(&1, Ok(_))",
+        "f = &Kernel::is_match(&1, Ok(_))",
+        "f = &apply_pattern(&1, [_1, .._])",
+        "f = &if_let(&1, Ok(x), x + &2, 0)",
+        "f = &if_let_then(&1, Ok(x), print(x))",
+    ] {
+        let resolved = parse_and_resolve_pattern_consumers(source).expect(source);
+        assert!(matches!(resolved.last(), Some(Resolved::Bind(_, _, body))
+            if matches!(body.as_ref(), Resolved::CaptureClosure(..))));
+    }
+}
+
+#[test]
+fn pattern_capture_rejects_direct_pattern_placeholder() {
+    for source in ["f = &is_match(&1, &2)", "f = &is_match(&1, (&2))"] {
+        let error = parse_and_resolve_pattern_consumers(source).expect_err(source);
+        assert!(
+            error
+                .message
+                .contains("Pattern argument cannot be a capture placeholder"),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn if_let_eager_boundary_resolves_before_binding_scope() {
+    let error = parse_and_resolve_pattern_consumers("if_let(Ok(1), Ok(x), (x + 1), 0)")
+        .expect_err("eager boundary must not see pattern binding");
+    assert!(
+        error.message.contains("Undefined variable") || error.message.contains("UndefinedVariable"),
+        "{error:?}"
+    );
+    parse_and_resolve_pattern_consumers("x = 10\nf = &if_let(&1, Ok(x), (x + 1), 0)")
+        .expect("outer binding belongs to eager boundary");
+}
+
+#[test]
+fn capture_placeholder_references_have_generated_identity() {
+    let resolved = parse_and_resolve_pattern_consumers("f = &if_let(&1, Ok(x), &2, 0)").unwrap();
+    let Resolved::Bind(_, _, body) = &resolved[0] else {
+        panic!("bind")
+    };
+    let Resolved::CaptureClosure(_, params, _, body) = body.as_ref() else {
+        panic!("capture")
+    };
+    let Resolved::IfLet(_, _, arms, _) = body.as_ref() else {
+        panic!("consumer")
+    };
+    let Resolved::Var(_, id) = &arms[0].body else {
+        panic!("parameter")
+    };
+    assert!(id.compiler_generated);
+    assert_eq!(id.unique_id, params[1].id.unique_id);
 }

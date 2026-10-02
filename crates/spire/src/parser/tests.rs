@@ -5613,7 +5613,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
     assert!(matches!(
         ast[0],
         Ast::Bind(_, _, ref rhs)
-            if matches!(rhs.as_ref(), Ast::ConstructorCall(_, name, args) if name == "Direction::Up" && args.is_empty())
+            if matches!(rhs.as_ref(), Ast::Path(_, path) if path.segments == ["Direction", "Up"])
     ));
     assert!(matches!(
         ast[1],
@@ -7690,4 +7690,21 @@ fn pattern_consumers_reserve_names_and_accept_projection_syntax() {
     ] {
         parse(source).expect_err("Pattern consumer names are reserved");
     }
+}
+
+#[test]
+fn qualified_bare_names_remain_distinct_from_constructor_calls() {
+    let names = parse("Result::recover_kind(value, Left::Retry, handler)").unwrap();
+    let Ast::App(_, _, args) = &names[0] else {
+        panic!("call")
+    };
+    assert!(matches!(&args[1], RecordLitArg::Positional(Ast::Path(..))));
+    let calls = parse("Result::recover_kind(value, Left::Retry(), handler)").unwrap();
+    let Ast::App(_, _, args) = &calls[0] else {
+        panic!("call")
+    };
+    assert!(matches!(
+        &args[1],
+        RecordLitArg::Positional(Ast::ConstructorCall(..))
+    ));
 }

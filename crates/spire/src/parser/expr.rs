@@ -1779,17 +1779,8 @@ impl Parser<'_> {
                 return Ok(Ast::App(span, Box::new(path_expr), args));
             }
 
-            if path_last_is_uppercase {
-                return Ok(Ast::ConstructorCall(
-                    Span {
-                        start: name_span.start,
-                        end: path_end,
-                    },
-                    path_name,
-                    Vec::new(),
-                ));
-            }
-
+            // Keep a bare qualified name distinct from an explicit constructor call.
+            // Standard marker positions inspect this syntax before value resolution.
             return Ok(path_expr);
         }
 
@@ -2536,8 +2527,8 @@ impl Parser<'_> {
             )));
         }
         let (mut target, mut end) = match self.peek().clone() {
-            Token::Ident(_) => {
-                let (name, name_span) = self.expect_ident()?;
+            Token::Ident(_) | Token::PatternConsumer(_) => {
+                let (name, name_span) = self.expect_member_ident()?;
                 let mut path_segments = vec![name.clone()];
                 let mut path_end = name_span.end;
                 while self.has_path_separator()
@@ -2635,6 +2626,48 @@ impl Parser<'_> {
         if self.explicit_type_args_start() {
             target = self.parse_explicit_return_type_argument_apply(target)?;
             end = target.span().end;
+        }
+
+        let consumer = match &target {
+            Ast::Var(_, name) => sindr::pattern::PatternConsumer::from_name(name),
+            Ast::Path(_, path) if path.segments.len() == 2 && path.segments[0] == "Kernel" => {
+                sindr::pattern::PatternConsumer::from_name(&path.segments[1])
+            }
+            _ => None,
+        };
+        if let Some(kind) = consumer.filter(|_| matches!(self.peek(), Token::LParen)) {
+            self.advance();
+            self.skip_newlines();
+            let mut arguments = Vec::new();
+            while !matches!(self.peek(), Token::RParen) {
+                let argument = if arguments.len() == kind.pattern_index() {
+                    self.parse_pattern_argument()?
+                } else {
+                    let expression = self.parse_expr()?;
+                    AstPatternArgument {
+                        span: expression.span().clone(),
+                        expression: Some(Box::new(expression)),
+                        pattern: None,
+                        named_pattern: None,
+                        expression_error: None,
+                        pattern_error: None,
+                    }
+                };
+                arguments.push(argument);
+                self.skip_newlines();
+                if !matches!(self.peek(), Token::Comma) {
+                    break;
+                }
+                self.advance();
+                self.skip_newlines();
+            }
+            end = self.expect(&Token::RParen)?.end;
+            let span = Span {
+                start: sp.start,
+                end,
+            };
+            let call = Ast::PatternConsumerCall(span.clone(), Box::new(target), arguments);
+            return Ok(Ast::Capture(span, Box::new(call), Vec::new()));
         }
 
         let mut parsed_args = Vec::new();

@@ -222,6 +222,63 @@ placeholder の規則は次です。
 &add(&17, 10)  # index の上限を超える
 ```
 
+## Lazy・Pattern・ErrorKind引数
+
+引数固有の構文・型制約は、キャプチャでも適用されます。
+標準Lazy関数は`&and(&1, &2)`など、引数を記述した呼び出しをキャプチャしてください。裸の`&and`などは拒否します。
+
+| 引数位置 | 直接プレースホルダ |
+|---|---|
+| 通常の値 | 通常の要求型で受け取る |
+| `Lazy<T>` | 正規化後の0引数関数型で受け取る |
+| Pattern | 禁止。呼び出し内へ Pattern を直接書く |
+| bindingを作るPatternの成功branch | 成功 scope に直接書く Expr。通常データの仮引数参照を許可 |
+| `ErrorKind` | 禁止。具体的な `deferror` 型名を直接書く |
+
+```surtr
+choose = &if(&1, &2, {|| 0})
+# (Boolean, (-> Int) -> Int)
+choose(True, {|| 42}) # 42
+
+both = &and(&1, &2)
+# (Boolean, (-> Boolean) -> Boolean)
+both(True, {|| False}) # False
+
+check = &is_match(&1, Ok(_))
+pick = &apply_pattern(&1, [_1, .._])
+add_on_success = &if_let(&1, Ok(x), x + &2, 0)
+# 第2引数は Int
+```
+
+`is_match`・`apply_pattern`・`if_let`・`if_let_then` は、Pattern を直接記述した完全な call をキャプチャできます。
+Pattern がない bare capture と、consumer 自体の一般値参照は禁止です。
+`Regex::is_match` は通常関数なので、この Pattern consumer の規則には分類しません。
+
+```surtr
+&is_match(&1, &2)                     # compile error: Patternの直接置換
+&is_match                            # compile error: Pattern未指定
+&Result::recover_kind(&1, &2, &3)     # compile error: ErrorKindの直接置換
+&Result::recover_kind(&1, NoneError, &2) # OK: 型名を固定
+```
+
+Lazy 位置の `&N` と `(&N)` は同じです。固定式の括弧による eager 境界と区別します。
+同じ番号を再使用した場合、すべての位置の要求型が一致しなければなりません。
+たとえば `&and(&1, &1)` は `Boolean` と `(-> Boolean)` が衝突するため拒否します。
+両 branch が未知の `&if(flag, &1, &2)` は、外側の型注釈または期待される関数型が必要です。
+
+Pattern と成功 branch を本体に持つ生成関数値は、通常の引数・戻り値・変数として渡せます。
+binding は call ごとの照合成功時に束縛され、成功 branch 内だけで参照できます。
+Pattern 内の事前 Expr にある既存プレースホルダ、projection の `_1`〜`_16`、キャプチャの `&1`〜`&16` は別の役割です。
+特殊ブロック内部へ新たにプレースホルダを許可する規則ではありません。
+
+Lazy位置を直接プレースホルダにすると、通常の呼び出しで渡せる値と、生成された関数が受け取る型は異なります。
+たとえば `and(True, False)` は有効ですが、上の `both`には `both(True, {|| False})` と渡します。
+`Lazy<Error>`の正規化型は `(-> Error)` ですが、Errorを通常の関数型へ公開する制約は解除されません。
+`assert`・`ensure`・`Result::map_err`・`Result::cause`を通常の関数値として使うキャプチャでは、error式を呼び出し内へ固定してください。
+引数の並べ替えも型に反映され、`&and(&2, &1)` の型は `((-> Boolean), Boolean -> Boolean)` です。
+
+共通の正規化規則と、関数ごとのシグネチャ・実行条件は [Lazy evaluation](./lazy-evaluation.md#関数ごとのlazy引数) を参照してください。
+
 ## outer capture だけで使える
 
 placeholder は outermost な capture にだけ属します。

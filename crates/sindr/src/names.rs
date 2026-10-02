@@ -8,6 +8,17 @@ use crate::intrinsic::IntrinsicId;
 /// surfaces should hide it to keep signatures and diagnostics stable.
 pub const IMPLICIT_ROOT_NAMESPACE_PREFIX: &str = "Global::";
 
+/// Canonical identity for a compiler-generated error declared at the implicit
+/// root. Callers supply known compiler/std error heads, never source expressions
+/// or a runtime error kind received from user code.
+pub fn compiler_global_error_kind(kind: &str) -> String {
+    assert!(
+        !kind.contains("::"),
+        "compiler error kind must be an unqualified root head"
+    );
+    format!("{IMPLICIT_ROOT_NAMESPACE_PREFIX}{kind}")
+}
+
 /// Return a path name with the implicit root namespace hidden when it appears at
 /// the beginning of a canonical name.
 pub fn surface_path_name(name: &str) -> &str {
@@ -288,6 +299,7 @@ pub enum BuiltinTypeUsage {
     IntrinsicSignatureOnly(IntrinsicId),
     /// MatchResult is confined to an Extractor's result and return paths.
     ExtractorResultOnly,
+    StdParameterOnly,
 }
 
 /// Compile-space usage policy for builtin type heads.
@@ -453,6 +465,7 @@ pub enum TypeName {
     DoBlock,
     MatchResult,
     ExtractorClosure,
+    ErrorKind,
 }
 
 impl TypeName {
@@ -471,6 +484,7 @@ impl TypeName {
             Self::ExtractorClosure => "ExtractorClosure",
             Self::BulkUpdateEntries => "BulkUpdateEntries",
             Self::Error => "Error",
+            Self::ErrorKind => "ErrorKind",
             Self::Regex => "Regex",
             Self::RegexCaptures => "RegexCaptures",
             Self::RegexMatch => "RegexMatch",
@@ -505,6 +519,7 @@ impl TypeName {
                 | Self::BulkUpdateEntries
                 | Self::StandbyInit
                 | Self::Lazy
+                | Self::ErrorKind
                 | Self::Pid
                 | Self::FileHandle
         )
@@ -537,6 +552,7 @@ impl TypeName {
             | Self::Generator
             | Self::StandbyInit
             | Self::Lazy
+            | Self::ErrorKind
             | Self::Hole
             | Self::Facet
             | Self::FileHandle
@@ -552,6 +568,16 @@ impl TypeName {
                 BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false)
             }
             Self::Lazy => BuiltinTypeUsagePolicy::lazy_signature_surface_only(),
+            Self::ErrorKind => BuiltinTypeUsagePolicy::new_with_usage(
+                BuiltinTypeUsage::StdParameterOnly,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+            ),
             Self::Hole | Self::Closure => BuiltinTypeUsagePolicy::compiler_surface_only(),
             Self::MatchArms | Self::CondClauses | Self::BulkUpdateEntries => {
                 BuiltinTypeUsagePolicy::clause_block_surface_only()
@@ -582,6 +608,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "ExtractorClosure" => Some(TypeName::ExtractorClosure),
         "BulkUpdateEntries" => Some(TypeName::BulkUpdateEntries),
         "Error" => Some(TypeName::Error),
+        "ErrorKind" => Some(TypeName::ErrorKind),
         "Regex" => Some(TypeName::Regex),
         "RegexCaptures" => Some(TypeName::RegexCaptures),
         "RegexMatch" => Some(TypeName::RegexMatch),
@@ -620,6 +647,7 @@ pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName)
             | TypeName::ExtractorClosure
             | TypeName::BulkUpdateEntries
             | TypeName::Error
+            | TypeName::ErrorKind
             | TypeName::Regex
             | TypeName::RegexCaptures
             | TypeName::RegexMatch

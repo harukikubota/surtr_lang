@@ -79,7 +79,7 @@ impl Resolver {
         let [value_expr, err_expr] =
             collect_fixed_positional_args(span.clone(), args, "map_err", 2)?;
         let value = self.resolve_node(value_expr)?;
-        let err = self.resolve_error_constructor_expr(err_expr, "map_err", "error argument")?;
+        let err = self.resolve_node(err_expr)?;
         Ok(Resolved::MapErr(span, Box::new(value), Box::new(err)))
     }
 
@@ -90,7 +90,7 @@ impl Resolver {
     ) -> Result<Resolved, ResolveError> {
         let [value_expr, err_expr] = collect_fixed_positional_args(span.clone(), args, "cause", 2)?;
         let value = self.resolve_node(value_expr)?;
-        let err = self.resolve_error_constructor_expr(err_expr, "cause", "error argument")?;
+        let err = self.resolve_node(err_expr)?;
         Ok(Resolved::Cause(span, Box::new(value), Box::new(err)))
     }
 
@@ -102,66 +102,58 @@ impl Resolver {
         let [value_expr, marker_expr, handler_expr] =
             collect_fixed_positional_args(span.clone(), args, "recover_kind", 3)?;
         let value = self.resolve_node(value_expr)?;
-        let marker = self.resolve_error_constructor_expr(marker_expr, "recover_kind", "marker")?;
+        let marker = self.resolve_error_kind_name(marker_expr)?;
         let handler = self.resolve_node(handler_expr)?;
         Ok(Resolved::RecoverKind(
             span,
             Box::new(value),
-            Box::new(marker),
+            marker,
             Box::new(handler),
         ))
     }
 
-    fn resolve_error_constructor_expr(
-        &mut self,
-        expr: Ast,
-        form_name: &str,
-        role_name: &str,
-    ) -> Result<Resolved, ResolveError> {
-        match expr {
-            Ast::Var(..) | Ast::Path(..) | Ast::ConstructorCall(..) => self.resolve_node(expr),
-            Ast::App(span, func, args) => match *func {
-                Ast::Var(..) | Ast::Path(..) => {
-                    let resolved_func = self.resolve_node(*func)?;
-                    let resolved_args = args
-                        .into_iter()
-                        .map(|arg| match arg {
-                            RecordLitArg::Positional(expr) => {
-                                Ok(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?))
-                            }
-                            RecordLitArg::Named(name, expr) => {
-                                Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(expr)?))
-                            }
-                        })
-                        .collect::<Result<Vec<_>, ResolveError>>()?;
-                    Ok(Resolved::App(span, Box::new(resolved_func), resolved_args))
-                }
-                other => Err(ResolveError {
-                    message: format!(
-                        "{} {} must be a deferror name or constructor",
-                        form_name, role_name
-                    ),
-                    span: other.span().clone(),
-                    diagnostic: crate::error::ResolveErrorDiagnostic {
-                        reason: crate::error::ResolveErrorReason::SpecialForm,
-                        subject: None,
-                    },
-                    related_labels: Vec::new(),
-                }),
+    fn resolve_error_kind_name(&mut self, expr: Ast) -> Result<ResolvedId, ResolveError> {
+        let span = expr.span().clone();
+        let invalid = || ResolveError {
+            message: "recover_kind marker must be a concrete deferror type name".into(),
+            span: span.clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::SpecialForm,
+                subject: None,
             },
-            other => Err(ResolveError {
-                message: format!(
-                    "{} {} must be a deferror name or constructor",
-                    form_name, role_name
-                ),
-                span: other.span().clone(),
+            related_labels: Vec::new(),
+        };
+        if matches!(&expr, Ast::Var(_, name) if name == "Error")
+            || !matches!(expr, Ast::Var(..) | Ast::Path(..))
+        {
+            return Err(invalid());
+        }
+        // A qualified name in this position is a declaration reference,
+        // not the ordinary value expression's nullary constructor lowering.
+        let name_expr = match expr {
+            Ast::Path(path_span, path) => Ast::Var(path_span, path.segments.join("::")),
+            other => other,
+        };
+        let Resolved::Var(_, mut id) = self.resolve_node(name_expr)? else {
+            return Err(invalid());
+        };
+        // Declaration identity excludes the abstract Error head and all
+        // runtime values, regardless of their name or constructor layout.
+        if self.declaration_uid_kinds.get(&id.unique_id) != Some(&DeclarationKind::Deferror) {
+            return Err(invalid());
+        }
+        id.qualified_name = Some(self.declaration_fq_name_for_uid(id.unique_id).ok_or_else(
+            || ResolveError {
+                message: "recover_kind ErrorKind identity has no canonical declaration name".into(),
+                span,
                 diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::SpecialForm,
-                    subject: None,
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: Some(id.name.clone()),
                 },
                 related_labels: Vec::new(),
-            }),
-        }
+            },
+        )?);
+        Ok(id)
     }
 
     pub(super) fn resolve_logic_call(

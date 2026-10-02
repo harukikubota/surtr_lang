@@ -101,6 +101,108 @@ impl Checker {
         }
     }
 
+    fn collect_direct_pattern_requirements(
+        &self,
+        definitions: &HashMap<u32, TypedNode>,
+    ) -> Result<HashMap<u32, Vec<u32>>, TypeError> {
+        use std::cell::RefCell;
+        let mut signatures = HashMap::new();
+        let mut requirements = HashMap::<u32, Vec<u32>>::new();
+        for (index, definition) in definitions {
+            let mut variables = Vec::new();
+            match &definition.node {
+                TypedInner::Def(_, _, arguments, parameters, result, _, _, _) => {
+                    for argument in arguments {
+                        Self::collect_ty_vars(&argument.ty, &mut variables);
+                    }
+                    for parameter in parameters {
+                        Self::collect_ty_vars(&parameter.ty, &mut variables);
+                    }
+                    Self::collect_ty_vars(result, &mut variables);
+                }
+                TypedInner::ExtractorDef(_, _, _, parameters, result, _, _) => {
+                    for parameter in parameters {
+                        Self::collect_ty_vars(&parameter.ty, &mut variables);
+                    }
+                    Self::collect_ty_vars(result, &mut variables);
+                }
+                _ => {
+                    return Err(self.typecheck_invariant_error(
+                        "specializable definition metadata must name a callable definition",
+                        &definition.span,
+                    ))
+                }
+            }
+            let signature = variables.into_iter().collect::<HashSet<_>>();
+            let own = RefCell::new(Vec::new());
+            if let Some(error) = self.find_typed_node(definition, &|checker, node| {
+                if let TypedInner::Match(_, arms) = &node.node {
+                    for arm in arms {
+                        match checker.deferred_direct_pattern_variable(arm) {
+                            Ok(Some(variable)) if signature.contains(&variable) => {
+                                if !own.borrow().contains(&variable) {
+                                    own.borrow_mut().push(variable);
+                                }
+                            }
+                            Err(error) => return Some(error),
+                            _ => {}
+                        }
+                    }
+                }
+                None
+            }) {
+                return Err(error);
+            }
+            let mut own = own.into_inner();
+            own.sort_unstable();
+            if !own.is_empty() {
+                requirements.insert(*index, own);
+            }
+            signatures.insert(*index, signature);
+        }
+        // Forwarding a generic callable forwards its deferred Pattern contract.
+        // Add only declaration-owned slots, using each resolved call substitution.
+        loop {
+            let mut changed = false;
+            for (index, definition) in definitions {
+                let found = RefCell::new(requirements.get(index).cloned().unwrap_or_default());
+                self.find_typed_node(definition, &|_, node| {
+                    if let Ty::UserFunc {
+                        fun_idx,
+                        call_substitution,
+                        ..
+                    } = &node.ty
+                    {
+                        if let Some(required) = requirements.get(fun_idx) {
+                            for variable in required {
+                                if let Some((_, Ty::Var(forwarded))) =
+                                    call_substitution.iter().find(|(slot, _)| slot == variable)
+                                {
+                                    if signatures[index].contains(forwarded)
+                                        && !found.borrow().contains(forwarded)
+                                    {
+                                        found.borrow_mut().push(*forwarded);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None::<()>
+                });
+                let mut found = found.into_inner();
+                found.sort_unstable();
+                if !found.is_empty() && requirements.get(index) != Some(&found) {
+                    requirements.insert(*index, found);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Ok(requirements)
+    }
+
     pub(super) fn specialize_program(
         &mut self,
         stmts: Vec<TypedNode>,
@@ -113,10 +215,20 @@ impl Checker {
             }
         }
 
+        self.direct_pattern_requirement_tyvars =
+            self.collect_direct_pattern_requirements(&defs_by_fun_idx)?;
+
         let mut needs_specialization = HashSet::new();
         let mut bound_tyvars_by_fun_idx = HashMap::new();
         for (fun_idx, def) in &defs_by_fun_idx {
-            let bound_tyvars = self.collect_bound_tyvars_for_def(def);
+            let mut bound_tyvars = self.collect_bound_tyvars_for_def(def);
+            if let Some(required) = self.direct_pattern_requirement_tyvars.get(fun_idx) {
+                for variable in required {
+                    if !bound_tyvars.contains(variable) {
+                        bound_tyvars.push(*variable);
+                    }
+                }
+            }
             let needs = Self::typed_node_has_pending_trait_call(def) || !bound_tyvars.is_empty();
             if needs {
                 needs_specialization.insert(*fun_idx);
@@ -410,8 +522,8 @@ impl Checker {
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
-            TypedInner::Ensure(first, second, third)
-            | TypedInner::RecoverKind(first, second, third) => visit(first)
+            TypedInner::RecoverKind(first, _, third) => visit(first).or_else(|| visit(third)),
+            TypedInner::Ensure(first, second, third) => visit(first)
                 .or_else(|| visit(second))
                 .or_else(|| visit(third)),
             TypedInner::Match(scrutinee, arms) => visit(scrutinee).or_else(|| {
@@ -850,7 +962,9 @@ impl Checker {
                         // still waiting for a later type witness. This keeps a
                         // valid function-table entry instead of leaking the
                         // pre-normalization generic index into Forge.
-                        if fully_concrete || !Self::typed_node_has_pending_trait_call(original_def)
+                        if fully_concrete
+                            || (!Self::typed_node_has_pending_trait_call(original_def)
+                                && !self.direct_pattern_requirement_tyvars.contains_key(fun_idx))
                         {
                             let concrete_tys = bound_tyvars
                                 .iter()
@@ -1501,14 +1615,7 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?,
-                self.rewrite_specializations_in_node(
-                    *marker,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
+                marker,
                 self.rewrite_specializations_in_node(
                     *handler,
                     defs_by_fun_idx,
@@ -1530,6 +1637,7 @@ impl Checker {
                 arms.into_iter()
                     .map(|arm| {
                         Ok(TypedMatchArm {
+                            direct_expression: arm.direct_expression,
                             pattern: self.concretize_specialized_match_pattern(
                                 arm.pattern,
                                 &span,
@@ -1897,7 +2005,10 @@ impl Checker {
                                     mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
                                 });
                             if fully_concrete
-                                || !Self::typed_node_has_pending_trait_call(original_def)
+                                || (!Self::typed_node_has_pending_trait_call(original_def)
+                                    && !self
+                                        .direct_pattern_requirement_tyvars
+                                        .contains_key(&fun_idx))
                             {
                                 let concrete_tys = bound_tyvars
                                     .iter()
@@ -2819,9 +2930,8 @@ impl Checker {
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
             }
-            TypedInner::RecoverKind(value, marker, handler) => {
+            TypedInner::RecoverKind(value, _, handler) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(marker, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(handler, ordered, seen);
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -3014,9 +3124,8 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
-            TypedInner::RecoverKind(value, marker, handler) => {
+            TypedInner::RecoverKind(value, _, handler) => {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
-                self.collect_bound_tyvars_in_node(marker, ordered, seen);
                 self.collect_bound_tyvars_in_node(handler, ordered, seen);
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -3514,13 +3623,14 @@ impl Checker {
             ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*marker, mapping)),
+                marker,
                 Box::new(self.substitute_typed_node_with_mapping(*handler, mapping)),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.substitute_typed_node_with_mapping(*scrutinee, mapping)),
                 arms.into_iter()
                     .map(|arm| TypedMatchArm {
+                        direct_expression: arm.direct_expression,
                         pattern: self
                             .substitute_typed_match_pattern_with_mapping(arm.pattern, mapping),
                         guard: arm
@@ -4863,9 +4973,8 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, marker, handler) => {
+            TypedInner::RecoverKind(value, _, handler) => {
                 Self::typed_node_has_pending_trait_call(value)
-                    || Self::typed_node_has_pending_trait_call(marker)
                     || Self::typed_node_has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {

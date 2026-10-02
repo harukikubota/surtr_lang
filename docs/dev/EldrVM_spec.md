@@ -220,7 +220,8 @@ compile / surface 契約との対応は次のとおり。
 - user code は `Error` を一般の first-class data として保持しない
 - `Error` が surface 上で生存するのは `Err(Error)`、`match` の `Err(err)` で束縛された局所スコープ、標準定義ソース内の `Error` 観測 helper の引数位置に限る
 - `Result::map_err` / `Result::cause` / `assert` / `ensure` は、この既存 `Error` 値を forward してよい
-- `Result::recover_kind` だけは existing `Error` value ではなく concrete `deferror` kind marker surface を受ける。compiler は marker payload を runtime 値として評価せず、kind 名だけを hidden builtin `__recover_kind` へ渡して runtime 側で判定と handler 呼び出しを行う
+- `Result::recover_kind` の marker は標準引数専用の `ErrorKind` とし、具体的な `deferror` 型名だけを受ける。Sigil は修飾名を含む canonical 型 identity を確定し、Forge はその `fq_name` を静的 metadata から hidden builtin `__recover_kind` へ渡す。Eldr は内部 ABI の kind 文字列を照合して handler を呼び出す。marker は Error の生成や constructor 呼び出しを行わず、利用者が任意の文字列を渡せる surface は提供しない。
+- Lazyの正規化とeager入力の評価順は[Lazy spec](Lazy_spec.md)に従う。VMへLazy markerは渡さず、確定した分岐と通常call命令を実行する。branchをruntime callableとして表す場合も呼び出しは一回とし、戻り値がcallableでも追加で実行しない。
 
 - parallel error は持たない
 - `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける

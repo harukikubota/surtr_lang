@@ -3850,6 +3850,11 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
+        name: TypeName::ErrorKind.as_str(),
+        params: &[],
+        identity: TypeIdentity::Type,
+    },
+    BuiltinTypeMeta {
         name: TypeName::Lazy.as_str(),
         params: &["$T"],
         identity: TypeIdentity::TypeConstructor,

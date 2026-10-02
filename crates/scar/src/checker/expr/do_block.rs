@@ -647,6 +647,7 @@ impl Checker {
             span: statement_span.clone(),
         };
         let parameters = vec![ResolvedClosureParam {
+            lazy_capture: None,
             id: parameter_id.clone(),
             ty: None,
         }];
@@ -1206,6 +1207,7 @@ impl Checker {
             span: self.resolved_span(statement).clone(),
         };
         let parameters = vec![ResolvedClosureParam {
+            lazy_capture: None,
             id: parameter_id,
             ty: None,
         }];

@@ -39,12 +39,18 @@ defmod Kernel {
   Ordinary expression form stays available:
   `if_then(flag, print("flag is true"))`
 
-  In other words, the signature describes the language semantics, while the
-  surface syntax keeps the convenient expression-oriented style.
+  The compiler normalizes the branch to a zero-argument callable and invokes
+  it once only when selected. A directly written call is wrapped once;
+  a parenthesized expression is evaluated first, before normalization.
+  Capturing a branch placeholder requires `(-> Unit)` rather than `Unit`.
+  `&if_then(&1, &2)` has type `(Boolean, (-> Unit) -> Unit)`.
 
   ## REPL
   xldr(1)> if_then(True, print("flag is true"))
   flag is true
+  xldr(2)> when_true = &if_then(&1, &2)
+  xldr(3)> when_true(True, {|| print("selected")})
+  selected
   """
   @builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit
 
@@ -70,12 +76,26 @@ defmod Kernel {
   condition selects a branch; without parentheses it evaluates only when the
   branch is selected.
 
+  Normalization invokes the common branch once. A remaining callable is
+  returned as a value, without an additional invocation. The known branch
+  determines the normalized type of a captured branch placeholder; an outer
+  annotation cannot change that normalization or evaluation behavior.
+
+  A branch placeholder in a capture receives the normalized zero-argument
+  callable type. `&N` and `(&N)` have the same meaning in that position.
+  If both branches are placeholders, an expected callable type or annotation
+  must determine their signature. For example, `&if(&1, &2, 0)` has type
+  `(Boolean, (-> Int) -> Int)`; its second argument is a callable, not an `Int`.
+
   When the branches both return `Unit`, prefer `if_then(...)` to make the
   intent explicit.
 
   ## REPL
   xldr(1)> if(True, "ok", "ng")
   "ok"
+  xldr(2)> choose = &if(&1, &2, 0)
+  xldr(3)> choose(True, {|| 42})
+  42
   """
   @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
 
@@ -90,11 +110,34 @@ defmod Kernel {
   - evaluates `else_branch` when it does not match
 
   Any bindings introduced by the pattern are available only inside the
-  successful branch body.
+  successful branch body. A binding-producing pattern requires a directly
+  written success expression, even when the expression does not use a binding.
+  Without bindings, the success branch follows ordinary Lazy normalization.
+  A parenthesized eager expression resolves names before pattern matching,
+  so it cannot use a binding introduced by this pattern.
+
+  A complete call can be captured with the pattern written in place, such as
+  `&if_let(&1, Ok(x), x + &2, 0)`. Here `&2` receives ordinary `Int` data.
+  The generated function may be passed through ordinary parameters, returns,
+  and variables; each invocation binds the pattern names only in its own
+  successful branch. A closure created in that branch may retain the bound
+  values according to the ordinary lexical-capture rules. A function value
+  bound by the Pattern itself remains ordinary data in the success scope;
+  this is distinct from replacing the branch with an external thunk.
+  Pattern pre-argument expressions, projection slots `_1` through `_16`, and
+  capture placeholders `&1` through `&16` retain their separate roles.
+  The pattern itself cannot be replaced by a placeholder. With no bindings,
+  `&if_let(Ok(1), Ok(_), &1, 0)` has type `((-> Int) -> Int)`.
 
   ## REPL
   xldr(1)> if_let(Ok(1), Ok(value), to_string(value), "miss")
   "1"
+  xldr(2)> on_ok = &if_let(Ok(1), Ok(_), &1, 0)
+  xldr(3)> on_ok({|| 42})
+  42
+  xldr(4)> add_on_ok = &if_let(&1, Ok(x), x + &2, 0)
+  xldr(5)> add_on_ok(Ok(1), 2)
+  3
   """
   @builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B
 
@@ -107,10 +150,21 @@ defmod Kernel {
   The input value is evaluated once.
   The branch expression is evaluated only when the pattern matches.
   Non-match returns `Unit` without evaluating the branch expression.
+  A binding-producing pattern requires a directly written success expression;
+  a binding-free pattern uses ordinary Lazy normalization. Eager expressions
+  resolve names before matching and cannot refer to new pattern bindings.
+  Complete calls can be captured with a fixed pattern. Bare consumer captures
+  and placeholders replacing the pattern itself are rejected.
+  `&if_let_then(Ok(1), Ok(_), &1)` has type `((-> Unit) -> Unit)`.
+  A binding-producing pattern instead keeps the success expression in the
+  matching scope; its data placeholders are not converted to thunks.
 
   ## REPL
   xldr(1)> if_let_then(Ok(1), Ok(value), print(to_string(value)))
   1
+  xldr(2)> on_match = &if_let_then(Ok(1), Ok(_), &1)
+  xldr(3)> on_match({|| print("matched")})
+  matched
   """
   @builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit
 
@@ -124,6 +178,9 @@ defmod Kernel {
   This form does not permit binding variables in the pattern argument.
   Use `_` or an identifier beginning with `_` to ignore values, or switch to `if_let` / `match` when bindings
   are required.
+  A complete call such as `&is_match(&1, Ok(_))` can be captured.
+  The pattern must be written directly; bare capture and replacing the pattern
+  with a placeholder are rejected.
 
   ## REPL
   xldr(1)> is_match(Ok(1), Ok(_))
@@ -139,6 +196,9 @@ defmod Kernel {
   Zero slots return Unit, one returns its value, and multiple slots return a tuple.
   Extractor failures preserve their original Error. Failure returns here without
   returning from the enclosing function. Result inputs are not unwrapped.
+  Complete calls such as `&apply_pattern(&1, [_1, .._])` can be captured.
+  Projection slots belong to the pattern, while `&1` is a capture argument.
+  The pattern itself cannot be replaced by a capture placeholder.
 
   ## REPL
   xldr(1)> apply_pattern([10, 20], [_1: Int, .._2: List<Int>])
@@ -170,9 +230,16 @@ defmod Kernel {
   the compiler evaluates the right-hand side only when the left-hand side is
   `True`.
   This keeps call-style source syntax while preserving short-circuit behavior.
+  Capturing `&and(&1, &2)` produces `(Boolean, (-> Boolean) -> Boolean)`.
+  Call that function with a zero-argument right-hand side, such as
+  `both(True, {|| False})`; passing `False` directly is a type error.
+  Reusing `&1` for both positions is rejected because their required types differ.
 
   ## REPL
   xldr(1)> and(True, False)
+  False
+  xldr(2)> both = &and(&1, &2)
+  xldr(3)> both(True, {|| False})
   False
   """
   @builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean
@@ -187,9 +254,15 @@ defmod Kernel {
   `False`.
   Like `and`, this is exposed as ordinary call-style syntax while keeping
   short-circuit semantics.
+  Capturing `&or(&1, &2)` produces `(Boolean, (-> Boolean) -> Boolean)`.
+  Call that function with a zero-argument right-hand side, such as
+  `either(False, {|| True})`; its body runs only when the left side is `False`.
 
   ## REPL
   xldr(1)> or(False, True)
+  True
+  xldr(2)> either = &or(&1, &2)
+  xldr(3)> either(False, {|| True})
   True
   """
   @builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean
@@ -206,13 +279,20 @@ defmod Kernel {
   value obtained elsewhere.
 
   Parenthesizing the error expression evaluates it once before the condition
-  is checked.
+  is checked. An error placeholder normalizes to `(-> Error)`, giving
+  `&assert(&1, &2)` the shape `(Boolean, (-> Error) -> Result<Unit>)`.
+  Existing Error restrictions prevent calling or forwarding that capture as
+  an ordinary function value. Fix the error expression inside the capture:
+  `&assert(&1, NoneError())` has type `(Boolean -> Result<Unit>)`.
 
   Ordinary expression form stays available:
   `assert(user.age >= 0, InvalidUserAge(user.age))`
 
   ## REPL
   xldr(1)> assert(True, NoneError)
+  Ok(())
+  xldr(2)> check = &assert(&1, NoneError())
+  xldr(3)> check(True)
   Ok(())
   """
   @builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>
@@ -227,6 +307,11 @@ defmod Kernel {
   inside `Ok(...)` when the predicate succeeds.
   The error branch is evaluated only when validation fails. Call sites may
   construct a fresh `deferror` or forward an existing `Error` value.
+  A captured error placeholder normalizes to `(-> Error)`; the predicate
+  remains an ordinary unary callable. Existing Error restrictions prevent
+  exposing that thunk as an ordinary function parameter. Fix the error
+  expression instead: for an `Int` input,
+  `&ensure(&1, {|n| n > 0}, NoneError())` has type `(Int -> Result<Int>)`.
 
   The predicate must be a unary callable value such as a capture or closure:
   `ensure(num, &is_even, SomeError)` or `ensure(num, {|x| x > 0 }, SomeError)`.
@@ -234,6 +319,9 @@ defmod Kernel {
 
   ## REPL
   xldr(1)> ensure(3, {|n| n > 0}, NoneError)
+  Ok(3)
+  xldr(2)> positive: (Int -> Result<Int>) = &ensure(&1, {|n| n > 0}, NoneError())
+  xldr(3)> positive(3)
   Ok(3)
   """
   @builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>

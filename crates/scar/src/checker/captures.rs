@@ -66,7 +66,11 @@ impl Checker {
                 children.push(then_branch);
                 children.extend(else_branch.as_deref());
             }
-            TypedInner::Ensure(a, b, c) | TypedInner::RecoverKind(a, b, c) => {
+            TypedInner::RecoverKind(a, _, c) => {
+                children.push(a);
+                children.push(c);
+            }
+            TypedInner::Ensure(a, b, c) => {
                 children.push(a);
                 children.push(b);
                 children.push(c);

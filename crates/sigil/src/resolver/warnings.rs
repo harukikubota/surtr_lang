@@ -221,10 +221,12 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         }
         Resolved::RecoverKind(_, value, marker, handler) => {
             collect_node_usage(value, usage);
-            collect_node_usage(marker, usage);
+            usage.use_id(marker);
             collect_node_usage(handler, usage);
         }
-        Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
+        Resolved::Match(_, scrutinee, arms)
+        | Resolved::IsMatch(_, scrutinee, arms)
+        | Resolved::IfLet(_, scrutinee, arms, _) => {
             collect_node_usage(scrutinee, usage);
             for ResolvedMatchArm {
                 pattern,

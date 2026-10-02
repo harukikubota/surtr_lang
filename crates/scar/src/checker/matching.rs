@@ -48,10 +48,25 @@ impl Checker {
         let pattern_hint = arms
             .iter()
             .find_map(|arm| self.infer_match_pattern_ty(&arm.pattern));
-        let typed_scrut = match pattern_hint.as_ref() {
+        let mut typed_scrut = match pattern_hint.as_ref() {
             Some(expected) => self.check_node_with_expected(scrutinee, Some(expected))?,
             None => self.check_node(scrutinee)?,
         };
+        if Self::is_lazy_placeholder(scrutinee) {
+            if let Some(hint) = pattern_hint.as_ref() {
+                self.assert_type_relation(
+                    hint,
+                    &typed_scrut.ty,
+                    self.type_fact(SourceRole::Expected, span, hint),
+                    self.type_fact(SourceRole::Value, &typed_scrut.span, &typed_scrut.ty),
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::Call,
+                    "Pattern",
+                    0,
+                )?;
+                typed_scrut.ty = self.resolve_ty(&typed_scrut.ty);
+            }
+        }
         self.ensure_no_match_result_value(&typed_scrut.ty, &typed_scrut.span)?;
         let mut typed_arms = Vec::new();
         let mut result_ty: Option<Ty> = None;
@@ -546,6 +561,7 @@ impl Checker {
             // scoped arm. The env frame is discarded below, and the containing
             // TypedInner::Match is normalized once at the program boundary.
             Ok(TypedMatchArm {
+                direct_expression: false,
                 pattern: typed_pat,
                 guard: typed_guard,
                 body: typed_body,
@@ -1278,41 +1294,196 @@ impl Checker {
 }
 
 impl Checker {
+    fn external_pattern_success_value(node: &TypedNode, bindings: &HashSet<u32>) -> bool {
+        match &node.node {
+            TypedInner::EagerBoundary(inner) => {
+                Self::external_pattern_success_value(inner, bindings)
+            }
+            TypedInner::Var(id) => !bindings.contains(&id.unique_id),
+            TypedInner::Capture(..) => true,
+            _ => false,
+        }
+    }
+
+    pub(super) fn deferred_direct_pattern_variable(
+        &self,
+        arm: &TypedMatchArm,
+    ) -> Result<Option<u32>, TypeError> {
+        if !arm.direct_expression {
+            return Ok(None);
+        }
+        let mut bindings = HashSet::new();
+        Self::typed_match_pattern_bindings(&arm.pattern, &mut bindings)?;
+        if Self::external_pattern_success_value(&arm.body, &bindings) {
+            if let Ty::Var(variable) = self.resolve_ty(&arm.body.ty) {
+                return Ok(Some(variable));
+            }
+        }
+        Ok(None)
+    }
+
+    fn ensure_if_let_direct_expression(
+        &self,
+        node: &TypedNode,
+        bindings: &HashSet<u32>,
+    ) -> Result<(), TypeError> {
+        let ty = self.resolve_ty(&node.ty);
+        if Self::external_pattern_success_value(node, bindings)
+            && matches!(ty,
+            Ty::Func(ref params, _) | Ty::UserFunc { ref params, .. }
+            | Ty::BuiltinFunc { ref params, .. } if params.is_empty())
+        {
+            return Err(TypeError::new("if_let success branch with Pattern bindings requires a DirectExpression, not an external thunk", node.span.clone()));
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_direct_pattern_branches(
+        &self,
+        node: &TypedNode,
+    ) -> Result<(), TypeError> {
+        let error = self.find_typed_node(node, &|checker, node| {
+            if let TypedInner::Match(_, arms) = &node.node {
+                for arm in arms.iter().filter(|arm| arm.direct_expression) {
+                    let mut bindings = HashSet::new();
+                    if let Err(error) =
+                        Self::typed_match_pattern_bindings(&arm.pattern, &mut bindings)
+                    {
+                        return Some(error);
+                    }
+                    if let Err(error) =
+                        checker.ensure_if_let_direct_expression(&arm.body, &bindings)
+                    {
+                        return Some(error);
+                    }
+                }
+            }
+            None
+        });
+        error.map_or(Ok(()), Err)
+    }
+
     pub(super) fn check_if_let(
         &mut self,
         span: &Span,
         scrutinee: &Resolved,
         arms: &[ResolvedMatchArm],
         expected: Option<&Ty>,
+        then_only: bool,
     ) -> Result<TypedNode, TypeError> {
-        self.check_match(span, scrutinee, arms, expected, None)
-            .map_err(|mut error| {
-                if let Some(diagnostic) = &mut error.structured {
-                    if diagnostic.reason == TypeDiagnosticReason::MatchArmTypeMismatch
-                        && matches!(
-                            diagnostic.origin,
-                            DiagnosticOrigin::Branch {
-                                form: diagnostics::BranchForm::Match,
-                                ..
-                            }
-                        )
-                        && arms
-                            .iter()
-                            .any(|arm| self.resolved_span(&arm.body) == &diagnostic.primary.span)
-                    {
-                        diagnostic.reason = TypeDiagnosticReason::IfBranchTypeMismatch.into();
-                        if let DiagnosticOrigin::Branch { form, .. } = &mut diagnostic.origin {
-                            *form = diagnostics::BranchForm::IfLet;
-                        }
-                        if let diagnostics::DiagnosticData::BranchAssertion(data) =
-                            &mut diagnostic.data
-                        {
-                            data.form = diagnostics::BranchForm::IfLet;
-                        }
-                        return TypeError::from_structured(diagnostic.clone());
-                    }
-                }
-                error
-            })
+        let [success, failure] = arms else {
+            return Err(
+                self.typecheck_invariant_error("if_let requires a success and failure arm", span)
+            );
+        };
+        if success.guard.is_some() || failure.guard.is_some() {
+            return Err(self.typecheck_invariant_error("if_let arms cannot have guards", span));
+        }
+        let hint = self.infer_match_pattern_ty(&success.pattern);
+        let mut typed_value = self.check_node_with_expected(scrutinee, hint.as_ref())?;
+        if let Some(hint) = &hint {
+            self.assert_type_relation(
+                hint,
+                &typed_value.ty,
+                self.type_fact(SourceRole::Expected, span, hint),
+                self.type_fact(SourceRole::Value, &typed_value.span, &typed_value.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                "if_let",
+                0,
+            )?;
+            typed_value.ty = self.resolve_ty(&typed_value.ty);
+        }
+        self.ensure_no_match_result_value(&typed_value.ty, &typed_value.span)?;
+        let provenance = self.constructor_capability_for_node(&typed_value);
+        self.env.push_var_scope();
+        let saved_provenance = self.constructor_capabilities.clone();
+        let checked = (|| {
+            let pattern = self.check_match_subpattern(&success.pattern, &typed_value.ty)?;
+            self.bind_match_constructor_provenance(&pattern, (provenance, typed_value.ty.clone()));
+            let mut bindings = HashSet::new();
+            Self::typed_match_pattern_bindings(&pattern, &mut bindings)?;
+            let direct = !bindings.is_empty();
+            let input = self.check_lazy_input(&success.body, expected, span)?;
+            if direct {
+                self.ensure_if_let_direct_expression(&input.node, &bindings)?;
+            }
+            Ok((pattern, input, direct, bindings))
+        })();
+        self.env.pop_var_scope();
+        self.constructor_capabilities = saved_provenance;
+        let (pattern, success_input, direct, bindings) = checked?;
+        let (then, otherwise) = if then_only {
+            let then = if direct {
+                success_input.node
+            } else {
+                self.normalize_lazy_single(success_input, &Ty::Unit, span)?
+            };
+            (then, self.check_node(&failure.body)?)
+        } else if direct {
+            let then = success_input.node;
+            let otherwise =
+                self.check_lazy_argument_with_expected(&failure.body, &then.ty, span)?;
+            (then, otherwise)
+        } else {
+            let failure_input = self.check_lazy_input(&failure.body, expected, span)?;
+            self.normalize_lazy_pair(success_input, failure_input, expected, span)?
+        };
+        self.assert_type_relation(
+            &then.ty,
+            &otherwise.ty,
+            self.branch_fact(SourceRole::Branch, &then, 0),
+            self.branch_fact(SourceRole::Branch, &otherwise, 1),
+            TypeDiagnosticReason::IfBranchTypeMismatch,
+            DiagnosticOrigin::Branch {
+                form: diagnostics::BranchForm::IfLet,
+                ordinal: 1,
+            },
+            "if_let",
+            1,
+        )
+        .map_err(|error| self.complete_branch_error(error, &[&then, &otherwise], &[None, None]))?;
+        self.record_lazy_capture_signature(span, &then.ty);
+        let required = if then_only { Some(&Ty::Unit) } else { expected };
+        if let Some(required) = required {
+            self.assert_type_relation(
+                required,
+                &then.ty,
+                self.type_fact(SourceRole::Expected, span, required),
+                self.branch_fact(SourceRole::Branch, &then, 0),
+                TypeDiagnosticReason::IfBranchTypeMismatch,
+                DiagnosticOrigin::Branch {
+                    form: diagnostics::BranchForm::IfLet,
+                    ordinal: 0,
+                },
+                "if_let",
+                0,
+            )?;
+        }
+        if direct {
+            self.ensure_if_let_direct_expression(&then, &bindings)?;
+        }
+        let ty = self.resolve_ty(&then.ty);
+        Ok(TypedNode {
+            ty,
+            span: span.clone(),
+            node: TypedInner::Match(
+                Box::new(typed_value),
+                vec![
+                    TypedMatchArm {
+                        direct_expression: direct,
+                        pattern,
+                        guard: None,
+                        body: then,
+                    },
+                    TypedMatchArm {
+                        direct_expression: false,
+                        pattern: TypedMatchPattern::Wildcard,
+                        guard: None,
+                        body: otherwise,
+                    },
+                ],
+            ),
+        })
     }
 }
