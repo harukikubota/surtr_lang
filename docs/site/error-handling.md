@@ -162,6 +162,13 @@ Result-effect carrier の SafeBind では、RHS の `Err(error)`、pattern failu
 Extractor の `MatchResult::Err(error)` が保持する元 Error を
 `inner: Err(error)` として保持します。
 
+エラー表示の主キャプションは、Error を生成した位置を指します。明示的に Error を作った場合は
+その構築式、パターンの不一致は失敗した子パターンを表示します。list の長さなど構造自体が
+一致しなかった場合は、その構造パターン全体を表示します。
+関数や Extractor から返した Error も、SafeBind で伝播しても生成位置を保持します。
+新しい Error で wrap すると、その新しい Error の構築位置を表示し、元 Error は cause に残ります。
+呼び出し経路はスタックトレースで確認できます。
+
 `do` 内では、Result effect がない carrier の同じ failure を
 `Alternative::empty()` へ変換します。failureMatcher となる partial `<-` も同じ規則で、
 do-local ResultContext の能力判定は `Result effect > Alternative > Monad` です。

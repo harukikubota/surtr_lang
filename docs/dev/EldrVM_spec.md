@@ -247,6 +247,13 @@ Unicodeエスケープは小文字16進数・不要な先頭ゼロなしとす�
 
 `cause` は runtime 管理の線形 chain とする。
 
+`location` は Error を生成したソース位置を保持し、主キャプションもこの位置を使う。
+明示的な Error の構築はその構築式、構文 Pattern の不一致は失敗した子 Pattern、
+構造自体の不一致はその構造 Pattern を指す。既存 Error の carrier への格納や伝播で位置を更新しない。
+新しい Error による wrap は、新しい Error の構築位置と元 Error の cause を保持する。
+`stack_trace` は呼出し経路の追跡用であり、先頭 frame の位置を Error の生成位置として使わない。
+Source map から確定した位置を受け渡し、表示文や Error 名から位置を推測しない。
+
 compile / surface 契約との対応は次のとおり。
 
 - source に現れる `Error` は abstract failure view であり、runtime 実体は常に concrete `deferror` 由来の `RichError`
@@ -498,8 +505,20 @@ Eldr は解決済みの bytecode を受け取り、VM 内で追加の import 解
 - `SrcP` は path / normalized path / content hash / optional source text を持つ
 - `.eldr` の `span_start` / `span_end` と line / column 算出は character offset 契約に従う
 
-現行実装では Surtr の span 自体は source id を持たないため、`Line` / `SpnT` / `PcSp` / `SrcP` は単一 source を主対象にした viewer 情報として扱う。  
-call opcode / error template / function span を使って source 対応を補完する。
+module の span は登録済み source ID ごとの範囲へ符号化する。VM は符号化した ID と
+`SrcP` の `source_id` を厳密に照合し、該当ファイルのローカル span と行・列へ変換する。
+script、include、標準定義を呼出し側の単一 source へ割り当て直さない。
+`.eldr` の encode / decode は元の source ID を維持し、ID の欠番を詰めない。
+
+現行の符号化では、各 source の Unicode scalar value 数を `MODULE_SPAN_STRIDE`（1,000,000）未満に
+制限する。CLI は script と include module を含む各 source をコンパイル前に検査し、
+この上限以上の入力を `LoadError` で拒否する。他 source の ID と重なる位置を推測して解決しない。
+
+source metadata は省略可能である。符号化した ID の登録がなければ、その ID と元の符号化 span を
+保持し、ファイル表示を `<source:ID>`、行・列を 0 にする。符号化した module span に対応する
+source text がない場合も行・列は 0 とする。符号化していない span は Error template の保存済み座標を使える。
+別ファイルの本文や外側の call span から生成位置を推測しない。
+`Line` / `SpnT` / `PcSp` は viewer 用の索引として、この runtime の位置契約と区別する。
 
 ### 8.4 `CInf`
 

@@ -690,9 +690,7 @@ impl Checker {
         )?;
         let pattern_input_ty = match &projection {
             SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } => payload_ty,
-            SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
-                pattern_input_ty
-            }
+            SafeBindRhsProjection::PatternInput { pattern_input_ty } => pattern_input_ty,
         };
         let pattern = self.concretize_specialized_typed_pattern(
             pattern,
@@ -1586,9 +1584,7 @@ impl Checker {
                 )?;
                 let pattern_input_ty = match &projection {
                     SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } => payload_ty,
-                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
-                        pattern_input_ty
-                    }
+                    SafeBindRhsProjection::PatternInput { pattern_input_ty } => pattern_input_ty,
                 };
                 let pattern = self.concretize_specialized_typed_pattern(
                     pattern,
@@ -3632,8 +3628,8 @@ impl Checker {
                         payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
                         error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
                     },
-                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
-                        SafeBindRhsProjection::PassThroughNonResultPartial {
+                    SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
+                        SafeBindRhsProjection::PatternInput {
                             pattern_input_ty: self
                                 .substitute_ty_with_mapping(&pattern_input_ty, mapping),
                         }
@@ -3697,8 +3693,8 @@ impl Checker {
                             payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
                             error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
                         },
-                        SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
-                            SafeBindRhsProjection::PassThroughNonResultPartial {
+                        SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
+                            SafeBindRhsProjection::PatternInput {
                                 pattern_input_ty: self
                                     .substitute_ty_with_mapping(&pattern_input_ty, mapping),
                             }
@@ -4199,6 +4195,10 @@ impl Checker {
         mapping: &HashMap<u32, Ty>,
     ) -> TypedPattern {
         match pattern {
+            TypedPattern::Located(source, inner) => TypedPattern::Located(
+                source,
+                Box::new(self.substitute_typed_pattern_with_mapping(*inner, mapping)),
+            ),
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(self.substitute_ty_with_mapping(&ty, mapping), id)
             }
@@ -4783,6 +4783,15 @@ impl Checker {
             checker.resolve_ty(expected.unwrap_or(ty))
         };
         Ok(match pattern {
+            TypedPattern::Located(source, inner) => TypedPattern::Located(
+                source,
+                Box::new(self.concretize_specialized_typed_pattern(
+                    *inner,
+                    expected_ty,
+                    span,
+                    context,
+                )?),
+            ),
             TypedPattern::Pin(ty, id, dispatch) => {
                 let ty = normalized_ty(self, &ty, expected_ty);
                 let dispatch =
@@ -5032,6 +5041,7 @@ impl Checker {
 
     fn typed_pattern_has_pending_dispatch(pattern: &TypedPattern) -> bool {
         match pattern {
+            TypedPattern::Located(_, inner) => Self::typed_pattern_has_pending_dispatch(inner),
             TypedPattern::Pin(_, _, dispatch) => matches!(dispatch, TraitDispatch::Pending),
             TypedPattern::As(_, inner, _) => Self::typed_pattern_has_pending_dispatch(inner),
             TypedPattern::ListCons(_, head, tail) => {
@@ -5436,7 +5446,10 @@ mod tests {
         let mut checker = Checker::new(TypecheckContext::default());
         let result_ty = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
         let control = Box::new(TypedDoSafeBind {
-            pattern: TypedPattern::Wildcard(Ty::Var(91_200)),
+            pattern: TypedPattern::Located(
+                Span { start: 11, end: 14 },
+                Box::new(TypedPattern::Wildcard(Ty::Var(91_200))),
+            ),
             rhs: Box::new(TypedNode {
                 ty: result_ty.clone(),
                 span: test_span(),
@@ -5479,7 +5492,13 @@ mod tests {
             )
             .expect("do SafeBind specialization should succeed");
 
-        assert!(matches!(rewritten.pattern, TypedPattern::Wildcard(Ty::Int)));
+        assert!(
+            matches!(&rewritten.pattern, TypedPattern::Located(source, _) if *source == Span { start: 11, end: 14 })
+        );
+        assert!(matches!(
+            rewritten.pattern.unlocated(),
+            TypedPattern::Wildcard(Ty::Int)
+        ));
     }
 
     #[test]

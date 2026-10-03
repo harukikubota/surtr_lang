@@ -3651,9 +3651,13 @@ fn test_if_let_or_alternatives_share_one_binding_identity() {
     let Resolved::IfLet(_, _, arms, _) = rhs.as_ref() else {
         panic!("expected if_let, got {rhs:?}");
     };
-    let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
+    let ResolvedPattern::Or(alternatives) = arms[0].pattern.unlocated() else {
         panic!("expected one OR pattern in the success arm");
     };
+    let alternatives = alternatives
+        .iter()
+        .map(ResolvedPattern::unlocated)
+        .collect::<Vec<_>>();
     let [ResolvedPattern::Tuple(first), ResolvedPattern::Tuple(second)] = alternatives.as_slice()
     else {
         panic!("expected tuple alternatives");
@@ -3683,12 +3687,16 @@ fn test_if_let_nested_or_alternatives_share_one_binding_identity() {
     let Resolved::IfLet(_, _, arms, _) = rhs.as_ref() else {
         panic!("expected if_let, got {rhs:?}");
     };
-    let ResolvedPattern::Tuple(outer) = &arms[0].pattern else {
+    let ResolvedPattern::Tuple(outer) = arms[0].pattern.unlocated() else {
         panic!("expected outer tuple");
     };
-    let ResolvedPattern::Or(alternatives) = &outer[1] else {
+    let ResolvedPattern::Or(alternatives) = outer[1].unlocated() else {
         panic!("expected nested OR");
     };
+    let alternatives = alternatives
+        .iter()
+        .map(ResolvedPattern::unlocated)
+        .collect::<Vec<_>>();
     let [ResolvedPattern::Tuple(first), ResolvedPattern::Tuple(second)] = alternatives.as_slice()
     else {
         panic!("expected tuple alternatives");
@@ -3718,10 +3726,10 @@ fn test_if_let_then_or_binding_is_visible_in_success_block() {
     let Resolved::IfLet(_, _, arms, _) = rhs.as_ref() else {
         panic!("expected lowered if_let");
     };
-    let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
+    let ResolvedPattern::Or(alternatives) = arms[0].pattern.unlocated() else {
         panic!("expected OR in the success arm");
     };
-    let ResolvedPattern::Tuple(first) = &alternatives[0] else {
+    let ResolvedPattern::Tuple(first) = alternatives[0].unlocated() else {
         panic!("expected first tuple");
     };
     let ResolvedPattern::Var(bound_id) = &first[1] else {
@@ -4942,7 +4950,10 @@ fn test_safebind_list_with_constructor_literal_pattern_resolution() {
         _ => panic!("Expected prelude bind"),
     }
     match &resolved[1] {
-        Resolved::SafeBind(_, ResolvedPattern::ListCons(head, tail), rhs) => {
+        Resolved::SafeBind(_, pattern, rhs) => {
+            let ResolvedPattern::ListCons(head, tail) = pattern.unlocated() else {
+                panic!("list pattern");
+            };
             assert!(matches!(
                 head.as_ref(),
                 ResolvedPattern::Constructor(ctor, inner)
@@ -4966,7 +4977,7 @@ fn test_as_pattern_resolution() {
     match &resolved[1] {
         Resolved::SafeBind(_, ResolvedPattern::As(inner, alias, Some(_)), rhs) => {
             assert_eq!(alias.name, "list_dup");
-            assert!(matches!(inner.as_ref(), ResolvedPattern::ListCons(_, _)));
+            assert!(matches!(inner.unlocated(), ResolvedPattern::ListCons(_, _)));
             assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
         }
         _ => panic!("Expected SafeBind with as-pattern"),
@@ -6966,7 +6977,7 @@ result = match value {
                     assert_eq!(alias.name, "whole");
                     assert_eq!(ty_name, "List");
                     assert_eq!(ty_args.len(), 1);
-                    assert!(matches!(inner.as_ref(), ResolvedPattern::ListCons(_, _)));
+                    assert!(matches!(inner.unlocated(), ResolvedPattern::ListCons(_, _)));
                     assert!(matches!(body, Resolved::Var(_, id) if id.name == "head"));
                 }
                 _ => panic!("Expected as-pattern with generic annotation"),
@@ -8595,7 +8606,7 @@ fn extractor_prearguments_and_pins_keep_outer_binding_identity() {
     let Resolved::Match(_, _, arms) = rhs.as_ref() else {
         panic!("match");
     };
-    let ResolvedPattern::Tuple(items) = &arms[0].pattern else {
+    let ResolvedPattern::Tuple(items) = arms[0].pattern.unlocated() else {
         panic!("tuple");
     };
     let [ResolvedPattern::Var(shadow), ResolvedPattern::Extractor(_, args, children), ResolvedPattern::Pin(pin)] =

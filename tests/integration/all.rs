@@ -3,6 +3,8 @@ mod support;
 
 #[path = "build_roundtrip.rs"]
 mod build_roundtrip;
+#[path = "error_source_locations.rs"]
+mod error_source_locations;
 #[path = "language_features.rs"]
 mod language_features;
 #[path = "module_import_fixtures.rs"]

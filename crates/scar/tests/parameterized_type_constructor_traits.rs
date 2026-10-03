@@ -314,7 +314,8 @@ full = MonadT::lift::<Wrap<Base, Int>>(source)
     ))
     .expect("the explicit constructor application typechecks");
     let full_pattern = typed.iter().find_map(|node| match &node.node {
-        TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "full" => {
+        TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "full") => {
+                let TypedPattern::Var(ty, _) = pattern.unlocated() else { unreachable!("binding guard checked"); };
             Some((ty, &rhs.ty))
         }
         _ => None,

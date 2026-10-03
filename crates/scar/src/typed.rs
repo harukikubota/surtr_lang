@@ -634,6 +634,8 @@ pub enum TypedInterpolatedPart {
 /// Pattern in a binding (typed).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedPattern {
+    /// Exact source position of this Pattern node, preserved through specialization.
+    Located(Span, Box<TypedPattern>),
     Var(Ty, ResolvedId),
     Pin(Ty, ResolvedId, TraitDispatch),
     As(Ty, Box<TypedPattern>, ResolvedId),
@@ -667,8 +669,15 @@ pub enum TypedPattern {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SafeBindRhsProjection {
-    CanonicalResultOnce { payload_ty: Ty, error_ty: Ty },
-    PassThroughNonResultPartial { pattern_input_ty: Ty },
+    CanonicalResultOnce {
+        payload_ty: Ty,
+        error_ty: Ty,
+    },
+    /// Match the checked Pattern input directly. It may itself be Result when
+    /// supplied as a Monad payload by `<-`; this projection never unwraps it.
+    PatternInput {
+        pattern_input_ty: Ty,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1002,4 +1011,13 @@ pub struct StructuralTypePath {
     pub role: TypeListRole,
     pub ordinal: u32,
     pub nested_arguments: Vec<u32>,
+}
+
+impl TypedPattern {
+    pub fn unlocated(&self) -> &Self {
+        match self {
+            Self::Located(_, inner) => inner.unlocated(),
+            other => other,
+        }
+    }
 }

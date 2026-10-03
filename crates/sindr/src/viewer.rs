@@ -232,10 +232,6 @@ pub enum OpcodeView {
     MakeError {
         template_id: u32,
     },
-    MakeErrorLiteral {
-        kind_const_idx: u32,
-        message_const_idx: u32,
-    },
     CallClosure {
         arity: u8,
         span_start: u32,
@@ -495,6 +491,7 @@ fn constant_view(idx: u32, constant: &Constant) -> ConstantView {
 
 fn opcode_view(opcode: &Opcode) -> OpcodeView {
     match opcode {
+        Opcode::Reserved56 => panic!("reserved opcode tag 56 cannot be displayed"),
         Opcode::LoadConst(idx) => OpcodeView::LoadConst { const_idx: *idx },
         Opcode::LoadBuiltinRef(id) => OpcodeView::LoadBuiltinRef {
             builtin_id: *id,
@@ -667,13 +664,6 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::MakeError { template_id } => OpcodeView::MakeError {
             template_id: *template_id,
         },
-        Opcode::MakeErrorLiteral {
-            kind_const_idx,
-            message_const_idx,
-        } => OpcodeView::MakeErrorLiteral {
-            kind_const_idx: *kind_const_idx,
-            message_const_idx: *message_const_idx,
-        },
         Opcode::CallClosure {
             arity,
             span_start,
@@ -832,6 +822,12 @@ mod tests {
     };
 
     #[test]
+    #[should_panic(expected = "reserved opcode tag 56 cannot be displayed")]
+    fn viewer_rejects_manually_constructed_reserved_opcode() {
+        super::opcode_view(&Opcode::Reserved56);
+    }
+
+    #[test]
     fn viewer_model_contains_core_sections() {
         let print_id = builtin_id_by_name("print").expect("print builtin must exist");
         let bytecode = Bytecode {
@@ -852,6 +848,7 @@ mod tests {
             error_templates: vec![ErrTemplate {
                 id: 0,
                 kind: "SampleError".into(),
+                location_source: crate::ir::ErrorLocationSource::SourceSpan,
                 span_start: 0,
                 span_end: 5,
                 line: 1,

@@ -6795,10 +6795,8 @@ mod tests {
         let mut vm = VM::new(Bytecode {
             opcodes: vec![
                 Opcode::LoadConst(0),
-                Opcode::MakeErrorLiteral {
-                    kind_const_idx: 1,
-                    message_const_idx: 2,
-                },
+                Opcode::LoadConst(2),
+                Opcode::MakeError { template_id: 0 },
                 Opcode::StructNew { field_count: 1 },
                 Opcode::Return,
             ],
@@ -6808,6 +6806,18 @@ mod tests {
                 Constant::Str("boom".into()),
             ],
             type_registry: registry,
+            error_templates: vec![sindr::ir::ErrTemplate {
+                id: 0,
+                kind: "FileIoError".into(),
+                location_source: sindr::ir::ErrorLocationSource::SourceSpan,
+                span_start: 0,
+                span_end: 1,
+                line: 1,
+                column: 1,
+                format: String::new(),
+                num_params: 1,
+                diagnostic: None,
+            }],
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 0,

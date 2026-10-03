@@ -72,6 +72,14 @@ Result-effect return targetでもTransformer RHSを自動unwrapしない。
 Result-preserving routeはRHS Err、既存pattern Errorのkind/message/location/causeを保存する。
 Extractor / ExtractorClosure は MatchResult を返し、Err の元 Error を Result-effect route で保持する。Alternative route は破棄する。Extractor / ExtractorClosure 本文内でも do の failure は do-local target に接続し、外側 MatchResult へ直接 return しない。
 partial `<-`のno-matchは共通pattern ErrorをResult effectで保持し、Alternative routeではemptyにする。
+Result-effect route の主キャプションは Error の生成位置であり、構文 Pattern では失敗した子、
+構造自体の不一致ではその構造 Pattern を指す。Extractor 内や RHS 内で生成した既存 Error を
+`<-` の位置へ置き換えない。新しい Error で wrap した場合はその構築位置を使う。
+この保持は canonical Result と検証済み Result-effect carrier（`OptionT<Result, T>` など）に限る。
+非 Result-effect の Option / List 等は現行の Alternative route を維持し、Extractor Error を破棄する。
+partial `<-` は `Monad::bind` が渡した payload 全体を照合し、その payload が `Result` でも
+SafeBind の外側一段の自動分解を追加しない。`Ok(x) <- [Ok(1), Err(NoneError)]` は成功要素だけを残す。
+do 本文内の `apply_pattern` は自身の `Result` を返す式であり、外側 carrier の failure target を使わない。
 各binding/continuationの実行ごとにRHSを一度評価し、failureとなった経路の後続continuationを実行しない。
 List等の分岐carrierでは、後続continuationを各payloadについて実行する。
 

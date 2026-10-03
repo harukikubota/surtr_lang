@@ -556,6 +556,15 @@ pub(crate) fn compile_source_with_measurement(
     let user_source_id = compile_sources.user_source_id;
     let user_source = sources.source(user_source_id).unwrap_or("");
 
+    for entry in sources.entries() {
+        if entry.source.chars().take(xldr::MODULE_SPAN_STRIDE).count() == xldr::MODULE_SPAN_STRIDE {
+            return Err(RuneError::message(1, format!(
+                "LoadError: source {} must contain fewer than {} characters for source span encoding",
+                entry.file_name, xldr::MODULE_SPAN_STRIDE,
+            )));
+        }
+    }
+
     let stdlib_load_start = std::time::Instant::now();
     let std_snapshot = load_default_stdlib_snapshot(env, compile_sources)?;
     if let Some(measurement) = measurement.as_deref_mut() {

@@ -207,10 +207,26 @@ compiler 内部の source span は Unicode scalar value（Rust `char`）単位�
 UTF-8 byte offset や LSP の UTF-16 code unit ではない。human diagnostic と JSON の
 `line` / `column` / `span`、`.eldr` source map、runtime error location もこの単位を引き継ぐ。
 byte range や UTF-16 position を要求する外部 API へは、その protocol 境界でだけ変換する。
+source ID を符号化する現行の span 範囲は、各 source の Unicode scalar value 数が
+`MODULE_SPAN_STRIDE`（1,000,000）未満であることを要求する。CLI は script と include module を含め、
+上限以上の source をコンパイル前の `LoadError` として拒否する。
 
 ### Human-readable
 
 renderer は `message`、`labels`、`notes`、`help` をそれぞれ headline、source caption、note、help として出力する。Ariadne の色、罫線、空白、label の順序は安定契約にしない。
+
+言語レベルの Error の主キャプションは、その Error を生成したソース位置を使う。
+明示的な `deferror` の構築は構築式、構文 Pattern の不一致は実際に失敗した子 Pattern を指す。
+list の長さや空入力など構造自体の不一致は、失敗した構造 Pattern 全体を指す。
+入れ子の失敗を親 Pattern、alias、SafeBind の RHS、外側の呼出し位置へ置き換えない。
+関数、named Extractor、ExtractorClosure による区別は設けない。
+
+`Err` / `MatchResult::Err` への格納、SafeBind、および Result-effect context の partial `<-` は、
+元 Error の kind / message / location / cause を保持する。新しい Error で wrap した場合は、
+新しい Error の構築位置を主キャプションとし、元 Error の位置は cause に保持する。
+呼出し経路は stack trace で追跡し、stack trace の先頭で生成位置を上書きしない。
+位置の由来を Error 名、表示文、carrier 名から推測するフォールバックは設けない。
+REPL 固有のソース座標ずれは別タスクとし、この生成位置の共通契約とは区別する。
 
 ### JSON
 

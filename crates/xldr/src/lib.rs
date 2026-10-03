@@ -67,7 +67,7 @@ use sindr::policy::{
     CompileUnitKind, EntryPoint, RuntimeSourcePolicy, SOURCE_POLICY_SCHEMA_VERSION,
 };
 
-pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
+pub use sindr::ir::MODULE_SPAN_STRIDE;
 
 pub(crate) fn surface_path_name(name: &str) -> &str {
     sindr::names::surface_path_name(name)
@@ -108,21 +108,8 @@ pub fn rebase_module_ast_spans(
 }
 
 pub fn decode_rebased_module_span(span: &spire::ast::Span) -> Option<(SourceId, spire::ast::Span)> {
-    if span.start < MODULE_SPAN_STRIDE {
-        return None;
-    }
-    let bucket = span.start / MODULE_SPAN_STRIDE;
-    if bucket == 0 {
-        return None;
-    }
-    let base = bucket * MODULE_SPAN_STRIDE;
-    Some((
-        SourceId((bucket - 1) as u32),
-        spire::ast::Span {
-            start: span.start.saturating_sub(base),
-            end: span.end.saturating_sub(base),
-        },
-    ))
+    let (source_id, start, end) = sindr::ir::decode_module_source_span(span.start, span.end)?;
+    Some((SourceId(source_id), spire::ast::Span { start, end }))
 }
 
 // ── Public types used by other crates ────────────────────────────────────────

@@ -880,10 +880,7 @@ impl RichError {
     }
 
     pub fn primary_location(&self) -> &Location {
-        self.stack_trace
-            .iter()
-            .find_map(|frame| frame.location.as_ref())
-            .unwrap_or(&self.location)
+        &self.location
     }
 
     pub fn visible_message(&self) -> &str {
@@ -976,6 +973,7 @@ mod tests {
         ListHandle, Location, RichError, RuntimeErrorDiagnostic, TypeEntry, TypeKind, TypeRegistry,
         Value,
     };
+    use super::{RuntimeCallKind, RuntimeExecutionPhase, RuntimeStackFrame};
     use crate::primitives::int;
 
     #[test]
@@ -1066,6 +1064,37 @@ mod tests {
             secret_user.to_display_string(&registry),
             "SecretUser(name: alice, ..private)"
         );
+    }
+
+    #[test]
+    fn rich_error_primary_location_keeps_creation_span_with_call_trace() {
+        let creation = Location {
+            file: "sample.srt".into(),
+            func: "Failure".into(),
+            line: 2,
+            column: 3,
+            span_start: 20,
+            span_end: 27,
+        };
+        let mut error = RichError::new("Failure", "failed", creation.clone(), None);
+        error.stack_trace.push(RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some("main".into()),
+            fun_idx: Some(0),
+            call_kind: RuntimeCallKind::DirectFunction,
+            location: Some(Location {
+                file: "sample.srt".into(),
+                func: "main".into(),
+                line: 8,
+                column: 1,
+                span_start: 80,
+                span_end: 86,
+            }),
+            process: None,
+            tco: false,
+        });
+        assert_eq!(error.primary_location(), &creation);
+        assert_eq!(error.stack_trace[0].location.as_ref().unwrap().line, 8);
     }
 
     #[test]

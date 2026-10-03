@@ -175,6 +175,7 @@ impl Checker {
         }
         fn binding(pat: &TypedPattern, outer: &HashSet<u32>, out: &mut Vec<ResolvedId>) {
             match pat {
+                TypedPattern::Located(_, inner) => binding(inner, outer, out),
                 TypedPattern::Pin(_, id, _) => reference(id, outer, out),
                 TypedPattern::Extractor {
                     extractor,

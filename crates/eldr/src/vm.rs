@@ -1100,12 +1100,43 @@ impl VM {
         span_end: u32,
         func: impl Into<String>,
     ) -> Option<Location> {
-        let file = self
-            .source_file()
-            .map(str::to_string)
-            .unwrap_or_else(|| "<runtime>".to_string());
-        let (line, column) = self
-            .source()
+        let (file, source, span_start, span_end) =
+            match sindr::ir::decode_module_source_span(span_start as usize, span_end as usize) {
+                Some((source_id, start, end)) => {
+                    let Some(entry) = self
+                        .bytecode
+                        .sources
+                        .iter()
+                        .find(|entry| entry.source_id == source_id)
+                    else {
+                        return Some(Location {
+                            file: format!("<source:{source_id}>"),
+                            func: func.into(),
+                            line: 0,
+                            column: 0,
+                            span_start,
+                            span_end,
+                        });
+                    };
+                    (
+                        entry
+                            .normalized_path
+                            .as_deref()
+                            .unwrap_or(&entry.path)
+                            .to_string(),
+                        entry.text.as_deref(),
+                        u32::try_from(start).ok()?,
+                        u32::try_from(end).ok()?,
+                    )
+                }
+                None => (
+                    self.source_file().unwrap_or("<runtime>").to_string(),
+                    self.source(),
+                    span_start,
+                    span_end,
+                ),
+            };
+        let (line, column) = source
             .map(|source| line_column_for_offset(source, span_start as usize))
             .unwrap_or((0, 0));
         Some(Location {
@@ -4596,6 +4627,9 @@ impl VM {
     ) -> Result<OpcodeControl, RuntimeError> {
         match op {
             Opcode::Halt => return Ok(OpcodeControl::Halt),
+            Opcode::Reserved56 => {
+                return Err(RuntimeError::new("Reserved opcode tag 56 cannot execute"));
+            }
 
             Opcode::LoadConst(idx) => {
                 let val = self.constant_value(idx)?;
@@ -5320,27 +5354,30 @@ impl VM {
                     .ok_or_else(|| {
                         RuntimeError::new(format!("Unknown error template: {}", template_id))
                     })?;
-                let call_site = self.current_frame()?.call_site;
-                let (span_start, span_end) =
-                    call_site.unwrap_or((template.span_start, template.span_end));
-                let (line, column) = match call_site {
-                    Some((span_start, _)) => self
-                        .source()
-                        .map(|source| line_column_for_offset(source, span_start as usize))
-                        .unwrap_or((template.line, template.column)),
-                    None => (template.line, template.column),
+                let (span_start, span_end) = match template.location_source {
+                    sindr::ir::ErrorLocationSource::ConstructorCallSite => {
+                        self.current_frame()?.call_site.ok_or_else(|| {
+                            RuntimeError::new("Error constructor has no construction source span")
+                        })?
+                    }
+                    sindr::ir::ErrorLocationSource::SourceSpan => {
+                        (template.span_start, template.span_end)
+                    }
                 };
-                let location = Location {
-                    file: self
-                        .source_file()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "<repl>".to_string()),
-                    func: template.kind.clone(),
-                    line,
-                    column,
-                    span_start,
-                    span_end,
-                };
+                let mut location = self
+                    .location_for_span(span_start, span_end, template.kind.clone())
+                    .ok_or_else(|| RuntimeError::new("Error construction span is invalid"))?;
+                if location.line == 0
+                    && sindr::ir::decode_module_source_span(span_start as usize, span_end as usize)
+                        .is_none()
+                    && matches!(
+                        template.location_source,
+                        sindr::ir::ErrorLocationSource::SourceSpan
+                    )
+                {
+                    location.line = template.line;
+                    location.column = template.column;
+                }
                 let mut error = match &template.diagnostic {
                     Some(sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch {
                         lhs,
@@ -5373,66 +5410,6 @@ impl VM {
                 );
                 self.stack.push(Value::Error(Box::new(error)));
             }
-            Opcode::MakeErrorLiteral {
-                kind_const_idx,
-                message_const_idx,
-            } => {
-                let kind = match self.bytecode.constants.get(kind_const_idx as usize) {
-                    Some(Constant::Str(s)) => s.clone(),
-                    Some(other) => {
-                        return Err(RuntimeError::new(format!(
-                            "MakeErrorLiteral kind expects String constant, got {:?}",
-                            other
-                        )))
-                    }
-                    None => {
-                        return Err(RuntimeError::new(format!(
-                            "MakeErrorLiteral kind index out of bounds: {}",
-                            kind_const_idx
-                        )))
-                    }
-                };
-                let message = match self.bytecode.constants.get(message_const_idx as usize) {
-                    Some(Constant::Str(s)) => s.clone(),
-                    Some(other) => {
-                        return Err(RuntimeError::new(format!(
-                            "MakeErrorLiteral message expects String constant, got {:?}",
-                            other
-                        )))
-                    }
-                    None => {
-                        return Err(RuntimeError::new(format!(
-                            "MakeErrorLiteral message index out of bounds: {}",
-                            message_const_idx
-                        )))
-                    }
-                };
-                let (line, column) = self
-                    .source()
-                    .map(|source| line_column_for_offset(source, 0))
-                    .unwrap_or((0, 0));
-                let stack_trace = self.stack_trace_snapshot_without_head_function(&kind);
-                self.stack.push(Value::Error(Box::new(
-                    RichError::new(
-                        kind,
-                        message,
-                        Location {
-                            file: self
-                                .source_file()
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "<repl>".to_string()),
-                            func: "<pattern>".into(),
-                            line,
-                            column,
-                            span_start: 0,
-                            span_end: 0,
-                        },
-                        None,
-                    )
-                    .with_stack_trace(stack_trace),
-                )));
-            }
-
             Opcode::CaptureClosure(num_captured) => {
                 let mut lexical_captures = Vec::with_capacity(num_captured as usize);
                 for _ in 0..num_captured {
@@ -6500,6 +6477,21 @@ mod tests {
     use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
+    fn test_source_error_template(kind: &str) -> ErrTemplate {
+        ErrTemplate {
+            id: 0,
+            kind: kind.into(),
+            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
+            span_start: 0,
+            span_end: 1,
+            line: 1,
+            column: 1,
+            format: String::new(),
+            num_params: 1,
+            diagnostic: None,
+        }
+    }
+
     pub(super) fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
             opcodes,
@@ -6693,6 +6685,15 @@ mod tests {
             )],
         };
         bytecode
+    }
+
+    #[test]
+    fn manually_constructed_reserved_opcode_is_rejected() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let error = vm.execute_opcode(Opcode::Reserved56, &mut 0).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Reserved opcode tag 56 cannot execute"));
     }
 
     #[test]
@@ -8594,10 +8595,8 @@ mod tests {
         let mut bytecode = base_bytecode(vec![
             Opcode::Halt,
             Opcode::LoadConst(0),
-            Opcode::MakeErrorLiteral {
-                kind_const_idx: 1,
-                message_const_idx: 2,
-            },
+            Opcode::LoadConst(2),
+            Opcode::MakeError { template_id: 0 },
             Opcode::StructNew { field_count: 1 },
             Opcode::Return,
         ]);
@@ -8607,6 +8606,7 @@ mod tests {
             Constant::Str("task failed".into()),
         ];
         bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::task_body"))];
+        bytecode.error_templates = vec![test_source_error_template("Boom")];
         let mut vm =
             VM::new(bytecode).with_source("Task::async(body)\n".into(), "sample.srt".into());
         vm.frames[0].call_site = Some((0, 17));
@@ -9110,17 +9110,15 @@ mod tests {
 
     #[test]
     fn boot_failure_keeps_singleton_unpublished() {
-        let bytecode = singleton_boot_bytecode(
+        let mut bytecode = singleton_boot_bytecode(
             "Broken",
             RuntimeProcessKind::Agent,
             false,
             true,
             vec![
                 Opcode::LoadConst(0),
-                Opcode::MakeErrorLiteral {
-                    kind_const_idx: 1,
-                    message_const_idx: 2,
-                },
+                Opcode::LoadConst(2),
+                Opcode::MakeError { template_id: 0 },
                 Opcode::StructNew { field_count: 1 },
                 Opcode::Return,
             ],
@@ -9130,6 +9128,7 @@ mod tests {
                 Constant::Str("bad boot".into()),
             ],
         );
+        bytecode.error_templates = vec![test_source_error_template("BootFailure")];
         let mut vm = VM::new(bytecode);
 
         let err = vm
@@ -9188,10 +9187,8 @@ mod tests {
             Opcode::StructNew { field_count: 1 },
             Opcode::Return,
             Opcode::LoadConst(2),
-            Opcode::MakeErrorLiteral {
-                kind_const_idx: 3,
-                message_const_idx: 4,
-            },
+            Opcode::LoadConst(4),
+            Opcode::MakeError { template_id: 0 },
             Opcode::StructNew { field_count: 1 },
             Opcode::Return,
         ]);
@@ -9242,6 +9239,7 @@ mod tests {
                 source: BootEntrySource::ExplicitConfig,
             },
         ];
+        bytecode.error_templates = vec![test_source_error_template("BootFailure")];
         let mut vm = VM::new(bytecode);
 
         let err = vm
@@ -9640,6 +9638,7 @@ mod tests {
         bytecode.error_templates = vec![ErrTemplate {
             id: 0,
             kind: "Old".into(),
+            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
             span_start: 0,
             span_end: 0,
             line: 1,
@@ -9669,6 +9668,7 @@ mod tests {
             error_templates: vec![ErrTemplate {
                 id: 0,
                 kind: "NewKind".into(),
+                location_source: sindr::ir::ErrorLocationSource::SourceSpan,
                 span_start: 10,
                 span_end: 20,
                 line: 2,
@@ -9697,6 +9697,134 @@ mod tests {
     }
 
     #[test]
+    fn make_error_resolves_embedded_source_by_exact_id_and_character_offset() {
+        let base = 10 * sindr::ir::MODULE_SPAN_STRIDE as u32;
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::MakeError { template_id: 0 },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Str("failed".into())];
+        bytecode.sources = vec![sindr::ir::SourceFileEntry {
+            source_id: 9,
+            path: "definition.srt".into(),
+            normalized_path: None,
+            content_hash: None,
+            text: Some("前\n  1 =? 2\n".into()),
+        }];
+        bytecode.error_templates = vec![ErrTemplate {
+            id: 0,
+            kind: "Global::PatternMismatch".into(),
+            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
+            span_start: base + 4,
+            span_end: base + 5,
+            line: 0,
+            column: 0,
+            format: String::new(),
+            num_params: 1,
+            diagnostic: None,
+        }];
+        let mut vm = VM::new(bytecode).with_source("main()\n".into(), "main.srt".into());
+        vm.run().expect("registered source must execute");
+        let Value::Error(error) = vm.last_value().unwrap() else {
+            panic!("expected language Error");
+        };
+        assert_eq!(error.location.file, "definition.srt");
+        assert_eq!((error.location.span_start, error.location.span_end), (4, 5));
+        assert_eq!((error.location.line, error.location.column), (2, 3));
+    }
+
+    #[test]
+    fn make_error_preserves_module_identity_without_source_metadata() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::MakeError { template_id: 0 },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Str("failed".into())];
+        bytecode.error_templates = vec![ErrTemplate {
+            id: 0,
+            kind: "Failure".into(),
+            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
+            span_start: sindr::ir::MODULE_SPAN_STRIDE as u32,
+            span_end: sindr::ir::MODULE_SPAN_STRIDE as u32 + 1,
+            line: 99,
+            column: 42,
+            format: String::new(),
+            num_params: 1,
+            diagnostic: None,
+        }];
+        for sources in [
+            vec![],
+            vec![sindr::ir::SourceFileEntry {
+                source_id: 0,
+                path: "definition.srt".into(),
+                normalized_path: None,
+                content_hash: None,
+                text: None,
+            }],
+        ] {
+            let has_entry = !sources.is_empty();
+            bytecode.sources = sources;
+            let mut vm =
+                VM::new(bytecode.clone()).with_source("main()\n".into(), "main.srt".into());
+            vm.run().expect("source text is optional metadata");
+            let Value::Error(error) = vm.last_value().unwrap() else {
+                panic!("expected language Error");
+            };
+            assert_eq!((error.location.line, error.location.column), (0, 0));
+            if has_entry {
+                assert_eq!(error.location.file, "definition.srt");
+                assert_eq!((error.location.span_start, error.location.span_end), (0, 1));
+            } else {
+                assert_eq!(error.location.file, "<source:0>");
+                assert_eq!(
+                    error.location.span_start,
+                    sindr::ir::MODULE_SPAN_STRIDE as u32
+                );
+                assert_eq!(
+                    error.location.span_end,
+                    sindr::ir::MODULE_SPAN_STRIDE as u32 + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn make_error_keeps_inline_pattern_source_span_inside_a_called_frame() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::MakeError { template_id: 0 },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Str("2".into())];
+        bytecode.error_templates = vec![ErrTemplate {
+            id: 0,
+            kind: "Global::PatternMismatch".into(),
+            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
+            span_start: 0,
+            span_end: 1,
+            line: 1,
+            column: 1,
+            format: String::new(),
+            num_params: 1,
+            diagnostic: Some(
+                sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch {
+                    lhs: "1".into(),
+                },
+            ),
+        }];
+        let mut vm = VM::new(bytecode).with_source("1 =? 2\nmain()\n".into(), "sample.srt".into());
+        vm.frames[0].call_site = Some((7, 13));
+        vm.run().expect("valid inline error should execute");
+        let Value::Error(error) = vm.last_value().unwrap() else {
+            panic!("expected pattern Error");
+        };
+        assert_eq!((error.location.span_start, error.location.span_end), (0, 1));
+        assert_eq!((error.location.line, error.location.column), (1, 1));
+    }
+
+    #[test]
     fn make_error_prefers_call_site_line_and_column_when_source_is_available() {
         let source = "deferror Boom {\n  \"boom\"\n}\n\nBoom()\n".to_string();
         let mut vm =
@@ -9722,6 +9850,7 @@ mod tests {
                 error_templates: vec![ErrTemplate {
                     id: 0,
                     kind: "Boom".into(),
+                    location_source: sindr::ir::ErrorLocationSource::ConstructorCallSite,
                     span_start: 0,
                     span_end: 5,
                     line: 1,

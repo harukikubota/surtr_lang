@@ -353,7 +353,7 @@ value = Box(1)"#,
     )
     .expect("generic struct construction should typecheck");
     let value_ty = typed.iter().find_map(|node| match &node.node {
-        TypedInner::Bind(pattern, _) => match pattern {
+        TypedInner::Bind(pattern, _) => match pattern.unlocated() {
             scar::typed::TypedPattern::Var(ty, id) if id.name == "value" => Some(ty),
             _ => None,
         },

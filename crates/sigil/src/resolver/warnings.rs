@@ -321,6 +321,7 @@ fn collect_record_arg_usage(arg: &ResolvedRecordLitArg, usage: &mut WarningUsage
 
 fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
     match pattern {
+        ResolvedPattern::Located(_, inner) => collect_pattern_usage(inner, usage),
         ResolvedPattern::Projection { inner, .. } => collect_pattern_usage(inner, usage),
         ResolvedPattern::Deferred {
             pattern, bindings, ..

@@ -3,14 +3,20 @@ use super::*;
 use diagnostics::{DiagnosticOrigin, PatternKind, SourceRole, TypeDiagnosticReason};
 
 impl Checker {
-    pub(super) fn resolved_pattern_span(pattern: &ResolvedPattern) -> Span {
-        match pattern {
-            ResolvedPattern::Deferred { pattern, .. } => Self::resolved_pattern_span(pattern),
+    pub(super) fn resolved_pattern_span(pattern: &ResolvedPattern) -> Result<Span, TypeError> {
+        Ok(match pattern {
+            ResolvedPattern::Located(span, _) => span.clone(),
+            ResolvedPattern::Deferred { pattern, .. } => {
+                return Self::resolved_pattern_span(pattern)
+            }
             ResolvedPattern::ExtractorApplication { head, .. }
-            | ResolvedPattern::Projection { id: head, .. } => head.span.clone(),
-            ResolvedPattern::Var(id)
-            | ResolvedPattern::Annotated(id, _)
-            | ResolvedPattern::Pin(id) => id.span.clone(),
+            | ResolvedPattern::Projection { id: head, .. }
+            | ResolvedPattern::Var(head)
+            | ResolvedPattern::Annotated(head, _)
+            | ResolvedPattern::Pin(head)
+            | ResolvedPattern::Constructor(head, _)
+            | ResolvedPattern::Extractor(head, _, _)
+            | ResolvedPattern::Record(head, _) => head.span.clone(),
             ResolvedPattern::Wildcard(span)
             | ResolvedPattern::AnnotatedWildcard(span, _)
             | ResolvedPattern::ListNil(span)
@@ -18,17 +24,16 @@ impl Checker {
             | ResolvedPattern::StrLit(span, _)
             | ResolvedPattern::BoolLit(span, _)
             | ResolvedPattern::DurationLit(span, _) => span.clone(),
-            ResolvedPattern::ListCons(head, _) | ResolvedPattern::As(head, _, _) => {
-                Self::resolved_pattern_span(head)
+            ResolvedPattern::As(inner, _, _) => return Self::resolved_pattern_span(inner),
+            ResolvedPattern::ListCons(..)
+            | ResolvedPattern::Tuple(..)
+            | ResolvedPattern::Or(..) => {
+                return Err(TypeError::new(
+                    "Internal invariant broken: structural Pattern source location is missing",
+                    Span { start: 0, end: 0 },
+                ));
             }
-            ResolvedPattern::Constructor(id, _)
-            | ResolvedPattern::Extractor(id, _, _)
-            | ResolvedPattern::Record(id, _) => id.span.clone(),
-            ResolvedPattern::Tuple(items) | ResolvedPattern::Or(items) => items
-                .first()
-                .map(Self::resolved_pattern_span)
-                .unwrap_or(Span { start: 0, end: 0 }),
-        }
+        })
     }
 
     pub(super) fn check_match(
@@ -172,6 +177,7 @@ impl Checker {
     /// to `String`) and that constraint flows back into the scrutinee type.
     pub(super) fn infer_match_pattern_ty(&mut self, pat: &ResolvedPattern) -> Option<Ty> {
         match pat {
+            ResolvedPattern::Located(_, inner) => self.infer_match_pattern_ty(inner),
             ResolvedPattern::Deferred { pattern, .. } => self.infer_match_pattern_ty(pattern),
             ResolvedPattern::Projection {
                 inner, annotation, ..
@@ -579,7 +585,17 @@ impl Checker {
         pat: &ResolvedPattern,
         expected_ty: &Ty,
     ) -> Result<TypedMatchPattern, TypeError> {
-        self.ensure_no_match_result_value(expected_ty, &Self::resolved_pattern_span(pat))?;
+        let source_span = Self::resolved_pattern_span(pat)?;
+        self.check_match_subpattern_inner(pat.unlocated(), expected_ty, &source_span)
+    }
+
+    fn check_match_subpattern_inner(
+        &mut self,
+        pat: &ResolvedPattern,
+        expected_ty: &Ty,
+        source_span: &Span,
+    ) -> Result<TypedMatchPattern, TypeError> {
+        self.ensure_no_match_result_value(expected_ty, source_span)?;
         if let ResolvedPattern::Pin(id) = pat {
             let canonical = self.canonical_pattern_id(id)?;
             if canonical.unique_id != id.unique_id {
@@ -587,6 +603,10 @@ impl Checker {
             }
         }
         match pat {
+            ResolvedPattern::Located(_, _) => Err(self.typecheck_invariant_error(
+                "duplicate structural Pattern source wrapper",
+                source_span,
+            )),
             ResolvedPattern::Projection { id, .. } => Err(self.projection_shape_error(
                 "the apply_pattern consumer",
                 "a projection outside apply_pattern",
@@ -693,7 +713,7 @@ impl Checker {
             ResolvedPattern::Wildcard(_) => Ok(TypedMatchPattern::Wildcard),
             ResolvedPattern::Tuple(items) => {
                 let expected_ty = self.resolve_ty(expected_ty);
-                let span = Self::resolved_pattern_span(pat);
+                let span = source_span.clone();
                 let Ty::Tuple(item_tys) = &expected_ty else {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternShapeMismatch,
@@ -801,7 +821,7 @@ impl Checker {
             }
             ResolvedPattern::Or(items) => {
                 if items.is_empty() {
-                    let span = Self::resolved_pattern_span(pat);
+                    let span = source_span.clone();
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternShapeMismatch,
                         PatternKind::Other,
@@ -1126,7 +1146,7 @@ impl Checker {
                     ))
                 }
                 Ty::Str => {
-                    let pattern_span = Self::resolved_pattern_span(pat);
+                    let pattern_span = source_span.clone();
                     let extractor_id = self.kernel_uncons_id(&pattern_span)?;
                     let (input_ty, extractor_ty, pre_args, seq_tys, success_tag, err_tag) = self
                         .extractor_contract_for_observed_ty(
@@ -1159,7 +1179,7 @@ impl Checker {
                     None,
                     None,
                     Vec::new(),
-                    &Self::resolved_pattern_span(pat),
+                    source_span,
                 )),
             },
             ResolvedPattern::Extractor(extractor_id, pre_args, items) => {

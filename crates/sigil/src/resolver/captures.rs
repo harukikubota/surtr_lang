@@ -352,6 +352,7 @@ fn collect_pattern_captures(
     free: &mut CaptureCollection,
 ) {
     match pat {
+        ResolvedPattern::Located(_, inner) => collect_pattern_captures(inner, bound, free),
         ResolvedPattern::Projection { inner, .. } => collect_pattern_captures(inner, bound, free),
         ResolvedPattern::Deferred { pattern, .. } => {
             if free.include_deferred_patterns {
@@ -413,6 +414,7 @@ fn collect_pattern_captures(
 
 fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>) {
     match pat {
+        ResolvedPattern::Located(_, inner) => collect_bind_pattern_bindings(inner, bound),
         ResolvedPattern::Projection { inner, .. } => collect_bind_pattern_bindings(inner, bound),
         // Signature-dependent captures are finalized from canonical Typed IDs.
         ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {}

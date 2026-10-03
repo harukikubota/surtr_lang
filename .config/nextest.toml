@@ -11,7 +11,7 @@ fail-fast = false
 slow-timeout = { period = "15s", terminate-after = 1, grace-period = "0s" }
 status-level = "pass"
 final-status-level = "slow"
-default-filter = 'not (test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/))'
+default-filter = 'not (test(/^run_eldr::/) | test(/^error_source_locations::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/))'
 
 [profile.ci]
 default-filter = 'all()'
@@ -25,16 +25,16 @@ filter = "all()"
 setup = "ci-stdlib-prewarm"
 
 [profile.cold]
-default-filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
+default-filter = 'test(/^run_eldr::/) | test(/^error_source_locations::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 
 [[profile.cold.scripts]]
 filter = "all()"
 setup = "ci-stdlib-prewarm"
 
 [[profile.default.overrides]]
-filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
+filter = 'test(/^run_eldr::/) | test(/^error_source_locations::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 threads-required = 2
 
 [[profile.ci.overrides]]
-filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
+filter = 'test(/^run_eldr::/) | test(/^error_source_locations::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 threads-required = 2

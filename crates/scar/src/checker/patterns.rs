@@ -145,6 +145,19 @@ impl Checker {
         pattern: &ResolvedPattern,
     ) -> Result<ResolvedPattern, TypeError> {
         Ok(match pattern {
+            ResolvedPattern::Located(source, inner) => {
+                if matches!(inner.unlocated(), ResolvedPattern::Or(..)) {
+                    return Err(self.projection_shape_error(
+                        "a Pattern without OR in apply_pattern",
+                        "OR Pattern",
+                        source,
+                    ));
+                }
+                ResolvedPattern::Located(
+                    source.clone(),
+                    Box::new(self.select_application_pattern(inner)?),
+                )
+            }
             ResolvedPattern::ExtractorApplication { head, args } => {
                 let selected = self.select_extractor_application(head, args)?;
                 return self.select_application_pattern(&selected);
@@ -210,7 +223,7 @@ impl Checker {
                 return Err(self.projection_shape_error(
                     "a Pattern without OR in apply_pattern",
                     "OR Pattern",
-                    &Self::resolved_pattern_span(pattern),
+                    &Self::resolved_pattern_span(pattern)?,
                 ))
             }
             other => other.clone(),
@@ -223,6 +236,10 @@ impl Checker {
         slots: &mut std::collections::BTreeMap<u8, ResolvedId>,
     ) -> Result<ResolvedPattern, TypeError> {
         Ok(match pattern {
+            ResolvedPattern::Located(source, inner) => ResolvedPattern::Located(
+                source,
+                Box::new(self.lower_pattern_projections(*inner, slots)?),
+            ),
             ResolvedPattern::Projection {
                 index,
                 id,
@@ -305,6 +322,9 @@ impl Checker {
         projection_types: &HashMap<u32, Ty>,
     ) -> Option<Ty> {
         match pattern {
+            ResolvedPattern::Located(_, inner) => {
+                self.apply_pattern_input_hint(inner, projection_types)
+            }
             ResolvedPattern::Deferred { pattern, .. } => {
                 self.apply_pattern_input_hint(pattern, projection_types)
             }
@@ -646,6 +666,7 @@ impl Checker {
         out: &mut HashSet<u32>,
     ) -> Result<(), TypeError> {
         match pattern {
+            TypedPattern::Located(_, inner) => Self::typed_pattern_bindings(inner, out)?,
             TypedPattern::Var(_, id) => Self::insert_pattern_binding(out, id)?,
             TypedPattern::As(_, inner, id) => {
                 Self::typed_pattern_bindings(inner, out)?;
@@ -704,6 +725,7 @@ impl Checker {
     pub(super) fn pattern_expression_nodes(node: &TypedNode) -> Vec<&TypedNode> {
         fn binding<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedNode>) {
             match pat {
+                TypedPattern::Located(_, inner) => binding(inner, out),
                 TypedPattern::Extractor {
                     pre_args, items, ..
                 } => {
@@ -771,6 +793,7 @@ impl Checker {
     pub(super) fn pattern_expression_nodes_mut(node: &mut TypedNode) -> Vec<&mut TypedNode> {
         fn binding<'a>(pat: &'a mut TypedPattern, out: &mut Vec<&'a mut TypedNode>) {
             match pat {
+                TypedPattern::Located(_, inner) => binding(inner, out),
                 TypedPattern::Extractor {
                     pre_args, items, ..
                 } => {
@@ -912,6 +935,7 @@ impl Checker {
 
     pub(super) fn is_total_bind_pattern(pat: &ResolvedPattern) -> bool {
         match pat {
+            ResolvedPattern::Located(_, inner) => Self::is_total_bind_pattern(inner),
             ResolvedPattern::Deferred { pattern, .. } => Self::is_total_bind_pattern(pattern),
             ResolvedPattern::ExtractorApplication { .. } | ResolvedPattern::Projection { .. } => {
                 false
@@ -944,6 +968,21 @@ impl Checker {
         rhs_ty: &Ty,
         span: &Span,
     ) -> Result<(TypedPattern, Ty), TypeError> {
+        let source_span = Self::resolved_pattern_span(pat)?;
+        let (pattern, ty) = self.check_pattern_inner(pat.unlocated(), rhs_ty, span)?;
+        let pattern = match pattern {
+            TypedPattern::Located(_, inner) => *inner,
+            other => other,
+        };
+        Ok((TypedPattern::Located(source_span, Box::new(pattern)), ty))
+    }
+
+    fn check_pattern_inner(
+        &mut self,
+        pat: &ResolvedPattern,
+        rhs_ty: &Ty,
+        span: &Span,
+    ) -> Result<(TypedPattern, Ty), TypeError> {
         self.ensure_no_match_result_value(rhs_ty, span)?;
         if let ResolvedPattern::Pin(id) = pat {
             let canonical = self.canonical_pattern_id(id)?;
@@ -952,6 +991,7 @@ impl Checker {
             }
         }
         match pat {
+            ResolvedPattern::Located(_, inner) => self.check_pattern_inner(inner, rhs_ty, span),
             ResolvedPattern::Projection { id, .. } => Err(self.projection_shape_error(
                 "the apply_pattern consumer",
                 "a projection outside apply_pattern",
@@ -1535,6 +1575,7 @@ impl Checker {
     pub(super) fn bind_typed_pattern(&mut self, pat: &TypedPattern, rhs_ty: &Ty) {
         let rhs_ty = self.resolve_ty(rhs_ty);
         match pat {
+            TypedPattern::Located(_, inner) => self.bind_typed_pattern(inner, &rhs_ty),
             TypedPattern::Var(_, id) => {
                 self.env.bind_var(id.unique_id, rhs_ty.clone());
                 if Self::ty_is_error_observer_callable(&rhs_ty) {
@@ -1613,6 +1654,7 @@ impl Checker {
 
     pub(super) fn collect_pattern_result_error_types(&self, pat: &TypedPattern, out: &mut Vec<Ty>) {
         match pat {
+            TypedPattern::Located(_, inner) => self.collect_pattern_result_error_types(inner, out),
             TypedPattern::Constructor { fields, .. } => {
                 for field in fields {
                     self.collect_pattern_result_error_types(field, out);

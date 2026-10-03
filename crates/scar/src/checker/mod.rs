@@ -2026,7 +2026,7 @@ impl ScarSession {
                         Self::rewrite_fun_indices_in_ty(payload_ty, rewrites);
                         Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
                     }
-                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                    SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                         Self::rewrite_fun_indices_in_ty(pattern_input_ty, rewrites);
                     }
                 }
@@ -2201,7 +2201,11 @@ impl ScarSession {
     }
 
     fn rewrite_fun_indices_in_pattern(pattern: &mut TypedPattern, rewrites: &HashMap<u32, u32>) {
+        if let TypedPattern::Located(_, inner) = pattern {
+            return Self::rewrite_fun_indices_in_pattern(inner, rewrites);
+        }
         match pattern {
+            TypedPattern::Located(_, _) => unreachable!("metadata handled before dispatch"),
             TypedPattern::Pin(ty, _, dispatch) => {
                 Self::rewrite_fun_indices_in_ty(ty, rewrites);
                 Self::rewrite_fun_indices_in_dispatch(dispatch, rewrites);
@@ -2236,6 +2240,7 @@ impl ScarSession {
             }
         }
         match pattern {
+            TypedPattern::Located(_, _) => unreachable!("metadata handled before dispatch"),
             TypedPattern::As(_, inner, _) => {
                 Self::rewrite_fun_indices_in_pattern(inner, rewrites);
             }
@@ -4398,6 +4403,9 @@ impl Checker {
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match pattern {
+            ResolvedPattern::Located(_, inner) => {
+                self.validate_constructor_pattern(inner, constructor_traits)?
+            }
             ResolvedPattern::Projection {
                 inner, annotation, ..
             } => {

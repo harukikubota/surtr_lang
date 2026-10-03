@@ -1750,6 +1750,9 @@ impl Checker {
         expected_self: Option<&Ty>,
     ) -> Result<(), TypeError> {
         match pattern {
+            TypedPattern::Located(_, inner) => {
+                self.ensure_self_rebinding_types_inner(inner, span, expected_self)
+            }
             TypedPattern::Var(bind_ty, id) => {
                 if id.name == "self" {
                     let Some(expected) = expected_self else {
