@@ -1,7 +1,7 @@
 # Result Applicative API 整理仕様
 
 日付: 2026-09-28
-状態: 調査済み・未実装
+状態: 実装済み（2026-10-03）
 
 ## 目的
 
@@ -203,7 +203,7 @@ left |>= {|a|
 - `flatten`, `then`: Monad の `bind` で表現可能
 - `tap_ok`: Functor の mapper 内で観測して元値を返すことで表現可能
 
-これらまで同時に削除すると `examples/guess.srt`、Mahjong examples、および Error 観測 API の対称性へ判断が広がる。まず lift/with family の旧経路だけを除去し、上記は別の API 最小化判断として扱う。
+これらは直接扱える API として維持する。式の合成を毎回書く冗長さを避けるため、合成で表現できることだけを理由に削除しない。`then` は削除対象への内部依存をなくし、既存の動作を保つ。
 
 ### 追加候補ごとの置換例
 
@@ -287,11 +287,11 @@ Result API の完全な一覧は `lib/types/result.srt` の宣言と `@doc` を�
 製品コード側で lift/with family を参照する Rust 実装はない。既知の変更対象は次の通り。
 
 - `lib/types/result.srt`: 12 API と各 `@doc` を削除
-- `lib/tests/result.srt`: 対象 import と専用テストを削除し、Applicative の成功・Err 順序境界へ集約
+- `lib/tests/result.srt`: 旧 API のテストを、元の処理を再現する Applicative / Monad 合成の成功・Err 順序境界へ置換。削除名の解決失敗を確認するテストは追加しない
 - `tests/fixtures/script/pass/stdmod/result_helpers.srt` と `.expected`: 対象呼び出しと出力を削除または Applicative の代表例へ置換
-- `crates/xldr/tests/repl_core.rs`: `Result::with` を標準 helper の authored signature 例に使っている箇所を、維持する owner helper または canonical Trait helper の検証へ変更
+- `crates/xldr/tests/repl_core.rs`: authored signature の補完・署名テストを、維持する `Result::then` へ置換。製品 Rust コードは変更しない
 
-`tests/fixtures/script/pass/stdmod/result_helpers.srt` は Rune の dump/peephole 統合テストからも入力として参照される。期待値を直接固定してはいないが、fixture 更新後に該当 cold tests を再実行する。
+`tests/fixtures/script/pass/stdmod/result_helpers.srt` は Rune の dump/peephole 統合テストからも入力として参照される。期待値を直接固定してはいないが、fixture 更新後に Surtr の直接実行で `.expected` と出力を照合する。対応する Rune の dump テストも確認する。
 
 repository 内の通常 example / site docs には lift/with family の利用は見つからなかった。`MonadT::lift` の tests/docs は名前が似ていても変更しない。
 
@@ -305,32 +305,38 @@ repository 内の通常 example / site docs には lift/with family の利用は
 - 複数値の途中が `Err` の場合は左から最初の Error を返し、それ以降の mapper 適用を行わない。
 - `MonadT::lift(base)` は従来どおり解決・実行できる。
 
-### 拒否
-
-- `Result::lift(...)` は未定義 member として拒否する。
-- `import Result::{lift}` は未定義 member として拒否する。
-- auto-import による bare `lift(...)` を Result helper として解決しない。
-- `lift2` 互換の暗黙 curry や未カリー化 callable の `|*|` 適用は追加しない。
+削除名が解決不能になることは定義と参照の静的確認で確かめる。関数が存在しないことを検証するテストは追加しない。暗黙 curry や未カリー化 callable の `|*|` 適用を追加する変更も行わない。
 
 ## 受入条件
 
-1. lift/with family 12 API の定義・doc・import・completion/signature surface が残っていない。
+1. lift/with family 12 API の定義・`@doc`・Surtr コード内の参照が残っておらず、標準定義から生成される completion/signature surface に公開されない。
 2. 旧 API を経由しない Applicative の unary / curried multi-argument 成功例が通る。
 3. mapper-first、値の左から右という Err の優先順位が維持される。
-4. `MonadT::lift`、`lift_compose`、Result 固有の Error API、`all` は変更されない。
+4. `MonadT::lift`、`lift_compose`、Result 固有の Error API、`all`、`zip`、`zip3`、`flatten`、`then`、`tap_ok` を維持する。`then` の内部実装は依存除去のため変更してよい。
 5. 旧 API の互換 alias、名前ベース fallback、compiler special-case を追加しない。
 
 ## 実装時の検証
 
-最小範囲から次を実行する。
+標準定義の整理は level 1 とする。追加依頼により Rust の既存テスト期待値も修正し、対象 bucket と共有する REPL core を検証する。
 
 ```sh
-cargo run -- test --quiet tests/result.srt
-rtk cargo nextest run -p rune --test integration run_srt
-rtk cargo nextest run -p xldr core_completion_and_sig_prefer_authored_signatures_for_imported_helpers
-rtk cargo nextest run --profile cold -p rune --test integration dump_peephole_candidates_omits_fully_lowered_result_helpers_patterns
-rtk cargo nextest run --profile cold -p rune --test integration dump_opcode_histogram_tracks_result_branch_opcode_batch
+cargo run -- test --quiet result.srt
+cargo run --quiet -- run tests/fixtures/script/pass/stdmod/result_helpers.srt
 cargo run -- test --quiet --all
+rtk cargo nextest run -p xldr --test repl_core repl_core_bucket_1
+rtk cargo nextest run -p xldr --test repl_core
+rtk cargo nextest run --profile cold -p rune --test integration -E 'test(dump_peephole_candidates_omits_fully_lowered_result_helpers_patterns) | test(dump_opcode_histogram_includes_function_summary) | test(dump_opcode_histogram_tracks_result_branch_opcode_batch)'
 ```
 
-最後に `rg` で削除対象の public qualified name と Result test import が残っていないことを確認する。文書作成時点では実装もテスト実行も行っていない。
+fixture の直接実行結果は `.expected` と照合する。最後に `rg` で Surtr コード内に削除対象の定義・呼び出しが残っていないことを確認する。Rust コード内の旧 API 参照も確認する。
+
+## 実施結果（2026-10-03）
+
+- Result 専用の 12 API と各 `@doc` を削除し、`then` の内部依存を `=?` と `next()` へ置換した。
+- `lib/tests/result.srt` に旧処理の合成による再現テストを置いた。削除名の拒否テストは追加していない。
+- 削除前後の `cargo run -- test --quiet result.srt` が成功した。
+- `cargo run -- test --quiet --all` が成功した。初回は File テストの `tmp/sandbox/` が未作成で 5 件失敗したが、ディレクトリが作成された後の再実行では全件成功した。
+- fixture の直接実行出力は既存の `.expected` と一致した。dump の peephole 候補がなく、Result 分岐命令と関数 summary が残ることも確認した。
+- サブエージェントの最終差分レビューは修正指摘なし。`git diff --check` が成功した。
+- 追加依頼により、Xldr の `core_completion_and_sig_prefer_authored_signatures_for_imported_helpers` が期待する API を `Result::then` に置換した。修正前に対象 bucket の失敗を確認した。製品 Rust コードは変更していない。
+- 追加修正後の対象 bucket 1 件と REPL core 全 12 件が成功した。fixture を使う Rune の dump 関連 3 件も成功し、`cargo fmt --all -- --check` と `git diff --check` が通った。サブエージェントの追加差分レビューは修正指摘なし。
