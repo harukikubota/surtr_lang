@@ -1,0 +1,26 @@
+FnCapture(module: Facet, name: view, sig: (Duration -> Int))
+FnCapture(module: Facet, name: view, sig: (Duration -> Int))
+FnCapture(module: Facet, name: view, sig: (Duration -> Int))
+FnCapture(module: Facet, name: view, sig: (Duration -> Int))
+FnCapture(module: Facet, name: view, sig: (Duration -> Int))
+FnCapture(module: Facet, name: view, sig: (Duration -> Int))
+[10, 10, 10, 10, 10, 10]
+10
+FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))
+FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))
+(3, "a")
+(3, "a")
+a
+a
+created
+index
+Ok(10)
+index
+Ok(30)
+Ok(20)
+Ok(20)
+Ok(30)
+Ok(20)
+Ok(7)
+Ok([10, 20])
+Ok(20)

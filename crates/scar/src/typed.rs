@@ -380,6 +380,35 @@ pub enum TypedFacetOverMode {
     CaseFocusResult,
 }
 
+/// Resolved Facet API identity survives intrinsic lowering for callable metadata.
+/// Path sugar uses View; closure literals retain their own callable identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypedFacetApi {
+    View,
+    Preview,
+    Put,
+    Set,
+    Over,
+    OverResult,
+    CaseSet,
+    CaseOver,
+}
+
+impl TypedFacetApi {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Preview => "preview",
+            Self::Put => "put",
+            Self::Set => "set",
+            Self::Over => "over",
+            Self::OverResult => "over_result",
+            Self::CaseSet => "case_set",
+            Self::CaseOver => "case_over",
+        }
+    }
+}
+
 /// Inner structure of a typed node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedInner {
@@ -484,6 +513,7 @@ pub enum TypedInner {
 
     /// Facet view application with compile-time path metadata.
     FacetView {
+        api: TypedFacetApi,
         source: Box<TypedNode>,
         path: TypedFacetPath,
         source_is_result: bool,
@@ -491,6 +521,7 @@ pub enum TypedInner {
 
     /// Facet set application with compile-time path metadata.
     FacetSet {
+        api: TypedFacetApi,
         source: Box<TypedNode>,
         path: TypedFacetPath,
         value: Box<TypedNode>,
@@ -500,6 +531,7 @@ pub enum TypedInner {
 
     /// Facet over application with compile-time path metadata.
     FacetOver {
+        api: TypedFacetApi,
         source: Box<TypedNode>,
         path: TypedFacetPath,
         update_fun: Box<TypedNode>,

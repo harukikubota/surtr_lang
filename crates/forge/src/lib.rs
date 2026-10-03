@@ -1726,6 +1726,48 @@ value4 =? Facet::set(User.score.["talk"], user, 90)"#,
         }
     }
 
+    #[test]
+    fn facet_api_capture_preserves_resolved_callable_metadata() {
+        let bytecode = codegen_source(
+            r#"defrecord User(name: String)
+defrecord Score(value: Result<Int>)
+defenum Slot { Some(Int), None }
+read: (User -> String) = &Facet::view(User.name, &1)
+put: (User -> User) = &Facet::put(User.name, &1, "bob")
+set: (User -> Result<User>) = &Facet::set(User.name, &1, "bob")
+preview: (Slot -> Result<Int>) = &Facet::preview(Slot.Some, &1)
+over: (User -> Result<User>) = &Facet::over(User.name, &1, {|name: String| Ok(name)})
+over_result: (Score -> Result<Score>) = &Facet::over_result(Score.value, &1, {|value: Result<Int>| Ok(value)})
+case_set: (Slot -> Result<Slot>) = &Facet::case_set(Slot.Some, &1, 2)
+case_over: (Slot -> Result<Slot>) = &Facet::case_over(Slot.Some, &1, {|value: Int| Ok(value)})
+literal = {|user: User| Facet::view(User.name, user)}"#,
+        );
+        for (name, signature) in [
+            ("view", "(User -> String)"),
+            ("put", "(User -> User)"),
+            ("set", "(User -> Result<User>)"),
+            ("preview", "(Slot -> Result<Int>)"),
+            ("over", "(User -> Result<User>)"),
+            ("over_result", "(Score -> Result<Score>)"),
+            ("case_set", "(Slot -> Result<Slot>)"),
+            ("case_over", "(Slot -> Result<Slot>)"),
+        ] {
+            let qualified = format!("Facet::{name}");
+            assert!(
+                bytecode.functions.iter().any(|entry| entry.flags.closure
+                    && entry.qualified_name.as_deref() == Some(qualified.as_str())
+                    && entry.signature.as_deref() == Some(signature)),
+                "missing {qualified} capture metadata"
+            );
+        }
+        assert!(
+            bytecode.functions.iter().any(|entry| entry.flags.closure
+                && entry.qualified_name.is_none()
+                && entry.signature.as_deref() == Some("(User -> String)")),
+            "literal closure must retain its closure identity"
+        );
+    }
+
     fn facet_bindings_are_erased_and_only_viewed_values_are_captured() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)

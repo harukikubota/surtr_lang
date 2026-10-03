@@ -1390,21 +1390,25 @@ impl Checker {
                 strategy: Box::new(self.concretize_pending_trait_calls(*strategy)?),
             },
             TypedInner::FacetView {
+                api,
                 source,
                 path,
                 source_is_result,
             } => TypedInner::FacetView {
+                api,
                 source: Box::new(self.concretize_pending_trait_calls(*source)?),
                 path,
                 source_is_result,
             },
             TypedInner::FacetSet {
+                api,
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
             } => TypedInner::FacetSet {
+                api,
                 source: Box::new(self.concretize_pending_trait_calls(*source)?),
                 path,
                 value: Box::new(self.concretize_pending_trait_calls(*value)?),
@@ -1412,12 +1416,14 @@ impl Checker {
                 mode,
             },
             TypedInner::FacetOver {
+                api,
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
             } => TypedInner::FacetOver {
+                api,
                 source: Box::new(self.concretize_pending_trait_calls(*source)?),
                 path,
                 update_fun: Box::new(self.concretize_pending_trait_calls(*update_fun)?),
@@ -3949,7 +3955,7 @@ impl Checker {
             span: span.clone(),
         };
         let body = Self::inferred_capture_body(span, &param_id, segments);
-        let synthetic = Resolved::Closure(
+        let synthetic = Resolved::CaptureClosure(
             span.clone(),
             vec![ResolvedClosureParam {
                 lazy_capture: None,
@@ -9022,7 +9028,16 @@ impl Checker {
             Box::new(Ty::Hole),
             Box::new(Ty::Hole),
         );
-        let path_node = self.check_node_with_expected(path_expr, Some(&expected_path_ty))?;
+        // view can obtain its plain source from a concrete path. An unresolved
+        // source is not an authored owner constraint; containers still require
+        // receiver structure from the ordinary expected/call context.
+        let path_expected =
+            if op_name == "Facet::view" && matches!(self.resolve_ty(source_value_ty), Ty::Var(_)) {
+                None
+            } else {
+                Some(&expected_path_ty)
+            };
+        let path_node = self.check_node_with_expected(path_expr, path_expected)?;
         let path = self.resolve_facet_path_from_node(path_node, span, Some(source_value_ty))?;
 
         if !self.types_compatible(&path.source_ty, source_value_ty) {
@@ -10007,6 +10022,7 @@ impl Checker {
             ty: out_ty,
             span: span.clone(),
             node: TypedInner::FacetView {
+                api: TypedFacetApi::View,
                 source: Box::new(typed_source),
                 path,
                 source_is_result,
@@ -10053,6 +10069,7 @@ impl Checker {
             ty: Ty::Result(Box::new(focus_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetView {
+                api: TypedFacetApi::Preview,
                 source: Box::new(typed_source),
                 path,
                 source_is_result,
@@ -10096,6 +10113,7 @@ impl Checker {
             ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetSet {
+                api: TypedFacetApi::Set,
                 source: Box::new(typed_source),
                 path,
                 value: Box::new(typed_value),
@@ -10153,6 +10171,7 @@ impl Checker {
             ty: update_source_ty,
             span: span.clone(),
             node: TypedInner::FacetSet {
+                api: TypedFacetApi::Put,
                 source: Box::new(typed_source),
                 path,
                 value: Box::new(typed_value),
@@ -10192,6 +10211,7 @@ impl Checker {
             ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
+                api: TypedFacetApi::Over,
                 source: Box::new(typed_source),
                 path,
                 update_fun: Box::new(typed_update),
@@ -10259,6 +10279,7 @@ impl Checker {
             ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetSet {
+                api: TypedFacetApi::CaseSet,
                 source: Box::new(typed_source),
                 path,
                 value: Box::new(typed_value),
@@ -10310,6 +10331,7 @@ impl Checker {
             ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
+                api: TypedFacetApi::CaseOver,
                 source: Box::new(typed_source),
                 path,
                 update_fun: Box::new(typed_update),
@@ -10374,6 +10396,7 @@ impl Checker {
             ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
+                api: TypedFacetApi::OverResult,
                 source: Box::new(typed_source),
                 path,
                 update_fun: Box::new(typed_update),
@@ -12846,7 +12869,7 @@ impl Checker {
                             compiler_generated: true,
                             span: span.clone(),
                         };
-                        let synthetic = Resolved::Closure(
+                        let synthetic = Resolved::CaptureClosure(
                             span.clone(),
                             vec![ResolvedClosureParam {
                                 lazy_capture: None,
@@ -12970,7 +12993,7 @@ impl Checker {
                 ),
                 _ => self.resolve_ty(focus_ty.as_ref()),
             };
-            let synthetic = Resolved::Closure(
+            let synthetic = Resolved::CaptureClosure(
                 span.clone(),
                 vec![ResolvedClosureParam {
                     lazy_capture: None,
@@ -12981,14 +13004,7 @@ impl Checker {
                 Box::new(body),
             );
             let expected = Ty::Func(vec![self.resolve_ty(source_ty.as_ref())], Box::new(ret_ty));
-            let checkpoint = self.candidate_probe_checkpoint();
-            return match self.check_node_with_expected(&synthetic, Some(&expected)) {
-                Ok(typed) => Ok(typed),
-                Err(_) => {
-                    self.rollback_candidate_probe(checkpoint);
-                    self.check_node(&synthetic)
-                }
-            };
+            return self.check_node_with_expected(&synthetic, Some(&expected));
         }
         let (params, ret) = match &target_ty {
             Ty::BuiltinFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
@@ -15468,6 +15484,7 @@ impl Checker {
             ty: out_ty,
             span: span.clone(),
             node: TypedInner::FacetView {
+                api: TypedFacetApi::View,
                 source: Box::new(typed_expr),
                 path,
                 source_is_result,

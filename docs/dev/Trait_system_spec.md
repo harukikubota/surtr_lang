@@ -293,6 +293,29 @@ Scar 内でその引数の検査を保留する。同じ呼び出しの他の引
 source 待ちの引数より、検査できる引数のエラーが先に報告される。保留を要しない通常引数の
 診断順は維持する。解決待ちの capture は Forge へ渡さず、実行時の引数評価順も変更しない。
 
+#### Facet API capture の型制約とスコープ
+
+`Facet::view` は source が未確定でも path の source 制約を先に反映してから root と
+segment を検査する。`&Facet::view(Duration.millis, &1)`、期待型付きの同式、
+`&Duration.millis`、ローカル path binding を参照する `&view(p, &1)` / `&p` は、
+共通の view 処理で `Duration -> Int` に確定する。autoimport は通常の import・呼び出し先
+解決を経て Facet API の専用処理に入る。期待型の矛盾は正規の診断で拒否し、失敗後の
+無注釈再検査や式ごとの正規化を追加しない。無注釈では `Result<Duration>` source を推測しない。
+
+`preview` / `put` / `set` / `over` / `over_result` / `case_set` / `case_over` は通常の
+capture 型推論に従う。FacetPath 自体を placeholder 仮引数で受け取ることは位置制約として拒否する。
+直接の置換や合成の path 部分の置換も対象とし、違反式の span を指す。
+一方、`[expr]` 内の placeholder は index / key / range endpoint の通常データを埋め込むため許可する。
+これらの要求型は通常の bracket 規則に従い、FacetPath の runtime transport にはならない。
+`chain` 自体の capture は FacetPath の返却禁止により拒否する。bracket に placeholder を含む path の
+合成結果を Facet API で消費する capture は許可する。
+
+FacetPath は compile-time capability のまま、外側の local binding を capture / closure literal の
+body から参照し、Facet API で消費できる。path を復元して消費してから runtime capture list を
+構成する。index / key の通常データは lexical capture になり、bracket 式は呼び出しごとに一度
+評価する。Facet API 以外への path 引数渡し、Facet 型の closure 仮引数、関数・closure からの
+path 返却は拒否する。`const Facet<...>` の literal bracket 制約は維持する。
+
 ### 0.7 実装済みの移行不変条件
 
 0.1–0.6は現行実装の正本契約である。次は Type Constructor Signature Unification で移行済みの

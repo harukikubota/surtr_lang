@@ -2114,6 +2114,7 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_pending_facet_path(path, rewrites);
             }
             TypedInner::FacetView {
+                api: _,
                 source,
                 path,
                 source_is_result: _,
@@ -2122,6 +2123,7 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_facet_path(path, rewrites);
             }
             TypedInner::FacetSet {
+                api: _,
                 source,
                 path,
                 value,
@@ -2133,6 +2135,7 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
             }
             TypedInner::FacetOver {
+                api: _,
                 source,
                 path,
                 update_fun,

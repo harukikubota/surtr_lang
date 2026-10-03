@@ -89,6 +89,7 @@ impl Checker {
                 .0
             }
             TypedInner::FacetView {
+                api: _,
                 source,
                 path,
                 source_is_result,

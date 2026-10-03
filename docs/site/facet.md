@@ -1,6 +1,6 @@
 # Facet
 
-`Facet` は同一スコープ内でのみ使用可能な path capability です。  
+`Facet` はコンパイル時だけ存在する path capability です。
 正本の `@doc` は `../../lib/facet.srt` にあります。
 
 ## まず API を見る
@@ -138,7 +138,7 @@ users |*> &User.name
 
 `&User.name` は type-root の FacetPath を unary capture として使う明示形です。
 `User.name` 自体は `Facet<InfallibleStructural, User, String, _, _>` の path ですが、`&User.name` は
-`(User -> String)` が期待される場所で使う callable になります。
+`User -> String` の読み取り関数になります。型 root だけで必要な型が決まらない場合は期待型を使います。
 
 ```surtr
 users |*> &User.name
@@ -190,6 +190,14 @@ List と HashMap の bracket segment は、通常の Facet path では runtime �
 - `HashMap.[expr]` の `expr` は plain `String`
 - `Result<Int>` / `Result<String>` はそのまま使えないので、先に `=?` や `match` で unwrap する
 - `const Facet<...>` だけは compile-time 固定のままで、bracket segment は literal のみ
+
+キャプチャの `[expr]` 内ではプレースホルダを使えます。受け取るのは index / key などの通常データで、
+FacetPath 自体を仮引数として受け取るものではありません。直接の path 置換や合成の path 部分の置換は拒否します。
+
+```surtr
+read_at: (Int, List<Int> -> Result<Int>) = &Facet::view(List.[&1], &2)
+read_at(1, [10, 20]) # => Ok(20)
+```
 
 ```surtr
 score =? Facet::view(List.[index + 1], scores)
@@ -449,8 +457,8 @@ normalized =? Facet::over(User.nickname, user, {|name|
 
 ## 制約
 
-- `Facet` は同一スコープ内でのみ使用可能
-- 関数引数として渡したり、戻り値にしたり、`List` や `Result` に入れたりしない
+- ローカル `Facet` binding は同じレキシカルスコープと内側のクロージャから Facet API で消費できる
+- Facet API 以外の関数引数、関数・クロージャの戻り値、`List` や `Result` の要素にはできない
 - private field path は、その private field が見えるスコープの外では compile error になる
 - readonly は path 作成ではなく mutating Facet operation に対して判定される
 
@@ -485,10 +493,9 @@ facet = User.password
 ## 躓きやすいポイント
 
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
-- `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `->` で同じスコープ内に消費してください。
+- `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。同じレキシカルスコープと内側のクロージャで、`Facet::view(...)` や `->` に使えます。
 - chain した path は canonical 表示へ圧縮されるので、`User.profile -> Profile.name` を inspect すると `User.profile.name` に見えます。`->` の組み立て履歴そのものは残りません。
 - variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|binding>` で確認するのが一番わかりやすいです。
-- スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
-- `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。
+- 関数へ渡す値には、path を消費した読み取り関数や `Facet::view(...)` の結果を使います。
 - `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。
 - `bulk_update` は DSL ですが path 能力は通常の Facet API と揃っているので、dynamic bracket や `case_*` も同じ感覚で使えます。

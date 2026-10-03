@@ -724,13 +724,29 @@ impl Resolver {
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
             | Ast::FieldAccess(_, rhs, _)
-            | Ast::FacetSegmentAccess(_, rhs, _)
             | Ast::FacetCapture(_, rhs) => self.collect_capture_placeholders(
                 rhs,
                 allow_placeholders,
                 inside_placeholder_capture,
                 used,
             ),
+            Ast::FacetSegmentAccess(_, root, segment) => {
+                self.collect_capture_placeholders(
+                    root,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                if let FacetPathSegment::Bracket(index) = segment {
+                    self.collect_capture_placeholders(
+                        &index.expr,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
             Ast::BinOp(_, _, left, right)
             | Ast::Pipe(_, left, right)
             | Ast::ContextMap(_, left, right)
@@ -955,6 +971,36 @@ impl Resolver {
                 }
                 Ok(Ast::PatternConsumerCall(span, callee, args))
             }
+            Ast::FacetSegmentAccess(span, root, segment) => {
+                let root = self.rewrite_capture_placeholders(
+                    *root,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?;
+                let segment = match segment {
+                    FacetPathSegment::Bracket(mut index) => {
+                        index.expr = Box::new(self.rewrite_capture_placeholders(
+                            *index.expr,
+                            capture_span,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                        )?);
+                        FacetPathSegment::Bracket(index)
+                    }
+                    field => field,
+                };
+                Ok(Ast::FacetSegmentAccess(span, Box::new(root), segment))
+            }
+            Ast::FacetCapture(span, root) => Ok(Ast::FacetCapture(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *root,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
             Ast::CapturePlaceholder(span, index) => {
                 if !allow_placeholders {
                     return Err(ResolveError {
@@ -1610,6 +1656,52 @@ impl Resolver {
             })
             .collect();
         Ok(self.make_closure_from_call(&span, params, target, rewritten_args))
+    }
+
+    /// Check the original capture positions using resolved placeholder identities.
+    /// Imported and qualified Facet calls share this path; ordinary same-name
+    /// functions do not acquire compile-time Facet argument restrictions.
+    /// Bracket operands accept placeholders as ordinary data; nested calls
+    /// enforce their own path positions during normal call resolution.
+    fn reject_facet_path_placeholders(
+        &self,
+        callee: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<(), ResolveError> {
+        let Resolved::Var(_, id) = callee else {
+            return Ok(());
+        };
+        let Some(qualified) = id.qualified_name.as_deref() else {
+            return Ok(());
+        };
+        let count = match surface_path_name(qualified) {
+            "Facet::chain" => 2,
+            "Facet::view" | "Facet::preview" | "Facet::put" | "Facet::set" | "Facet::over"
+            | "Facet::over_result" | "Facet::case_set" | "Facet::case_over" => 1,
+            _ => return Ok(()),
+        };
+        for argument in args.iter().take(count) {
+            let expression = match argument {
+                ResolvedRecordLitArg::Positional(expr) | ResolvedRecordLitArg::Named(_, expr) => {
+                    expr
+                }
+            };
+            if let Some(placeholder) = super::captures::collect_facet_path_references(expression)
+                .into_iter()
+                .find(|reference| self.capture_placeholder_ids.contains(&reference.unique_id))
+            {
+                return Err(ResolveError {
+                    message: "capture placeholders cannot replace a FacetPath or its root".into(),
+                    span: placeholder.span,
+                    related_labels: Vec::new(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Capture,
+                        subject: None,
+                    },
+                });
+            }
+        }
+        Ok(())
     }
 
     fn inferred_facet_capture_segments(expr: &Ast) -> Option<Vec<FacetPathSegment>> {
@@ -2978,6 +3070,7 @@ impl Resolver {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                self.reject_facet_path_placeholders(&resolved_func, &resolved_args)?;
                 Ok(Resolved::App(span, Box::new(resolved_func), resolved_args))
             }
 

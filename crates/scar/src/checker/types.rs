@@ -4586,21 +4586,25 @@ impl Checker {
                 TypedInner::PendingFacetPath(self.resolve_pending_facet_path(path))
             }
             TypedInner::FacetView {
+                api,
                 source,
                 path,
                 source_is_result,
             } => TypedInner::FacetView {
+                api,
                 source: Box::new(self.resolve_typed_node(*source)),
                 path: self.resolve_typed_facet_path(path),
                 source_is_result,
             },
             TypedInner::FacetSet {
+                api,
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
             } => TypedInner::FacetSet {
+                api,
                 source: Box::new(self.resolve_typed_node(*source)),
                 path: self.resolve_typed_facet_path(path),
                 value: Box::new(self.resolve_typed_node(*value)),
@@ -4608,12 +4612,14 @@ impl Checker {
                 mode,
             },
             TypedInner::FacetOver {
+                api,
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
             } => TypedInner::FacetOver {
+                api,
                 source: Box::new(self.resolve_typed_node(*source)),
                 path: self.resolve_typed_facet_path(path),
                 update_fun: Box::new(self.resolve_typed_node(*update_fun)),

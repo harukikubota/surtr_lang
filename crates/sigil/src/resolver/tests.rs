@@ -8963,3 +8963,83 @@ fn autoimport_provenance_does_not_match_only_the_owner_tail() {
     resolve_user_with_modules("import Other::Prelude::{greet}\nvalue = greet()", &modules)
         .expect("an unrelated owner with the same terminal name remains importable");
 }
+
+#[test]
+fn facet_path_capture_arguments_allow_bracket_data_but_reject_path_placeholders() {
+    let declarations = [
+        "view",
+        "preview",
+        "put",
+        "set",
+        "over",
+        "over_result",
+        "case_set",
+        "case_over",
+    ]
+    .into_iter()
+    .map(|name| format!("@builtin def {name}(facet: $P, source: $S, value: $A) -> $S"))
+    .chain(std::iter::once(
+        "@builtin def chain(outer: $P, inner: $Q) -> $R".into(),
+    ))
+    .collect::<Vec<_>>()
+    .join("\n");
+    let facet = staged_auto_import_module("Facet", parse_module_ast(&declarations, "Facet"));
+    for call in [
+        "Facet::view(&1, 0)",
+        "view(&1, 0)",
+        "Facet::view(&1 -> p, &2)",
+        "Facet::view(p -> &1, &2)",
+        "Facet::put((&1), &2, &3)",
+        "Facet::set(&1, &2, &3)",
+        "Facet::over(p -> &1, &2, &3)",
+        "Facet::case_set(&1, &2, &3)",
+        "Facet::case_over(&1, &2, &3)",
+        "Facet::chain(&1, p)",
+        "Facet::chain(p, &1)",
+        "Facet::view((&1).name, &2)",
+        "Facet::view((&1).[0], &2)",
+        "Facet::view((&1).[&1], &2)",
+        "Facet::view(List.[&1] -> &1, &2)",
+        "Facet::view(List.[Facet::view(&1, &2)], &3)",
+    ] {
+        let source = format!("p = Tuple._0\nf = &{call}");
+        let error = resolve_user_with_modules(&source, &[vec![facet.clone()]])
+            .expect_err("FacetPath argument placeholders must reject by position");
+        assert!(
+            error
+                .message
+                .contains("capture placeholders cannot replace a FacetPath or its root"),
+            "{call}: {error:?}"
+        );
+        assert_eq!(
+            error.diagnostic.reason,
+            crate::error::ResolveErrorReason::Capture
+        );
+        assert_eq!(&source[error.span.start..error.span.end], "&1", "{call}");
+        if call == "Facet::view(List.[&1] -> &1, &2)" {
+            assert_eq!(error.span.start, source.rfind("&1").unwrap());
+        }
+        if call == "Facet::view((&1).[&1], &2)" {
+            assert_eq!(error.span.start, source.find("&1").unwrap());
+        }
+    }
+    for source in [
+        "p = Tuple._0\nf = &Facet::view(p, &1)",
+        "f = &Facet::view(List.[&1], &2)",
+        "f = &Facet::view(List.[&1 + 1], &2)",
+        "f = &Facet::view(_.[&1], &2)",
+        "f = &Facet::view(List.[&1..&2], &3)",
+        "f = &Facet::view(HashMap.[&1], &2)",
+        "f = &Facet::preview(List.[&1], &2)",
+        "f = &Facet::put(List.[&1], &2, &3)",
+        "f = &Facet::over_result(List.[&1], &2, &3)",
+        "p = Tuple._0\nf = &Facet::view(Facet::chain(p, List.[&1]), &2)",
+        "p = Tuple._0\nf = &Facet::chain(p, List.[&1])",
+        "p = Tuple._0\nf = &Facet::put(p, &1, &2)",
+        "def view(path: Int, source: Int) -> Int { path }\nf = &view(&1, &2)",
+    ] {
+        resolve_user_with_modules(source, &[vec![facet.clone()]]).expect(
+            "bracket data, source/value placeholders and shadowed ordinary callables remain valid",
+        );
+    }
+}

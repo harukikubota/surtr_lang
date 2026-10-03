@@ -222,7 +222,10 @@ placeholder の規則は次です。
 &add(&17, 10)  # index の上限を超える
 ```
 
-## Lazy・Pattern・ErrorKind引数
+## FacetPath　capture
+`{|user: User| Facet::view(User.name, user) }` の糖衣構文として `&User.name` が使用できます。
+
+## Lazy・Pattern・ErrorKind・Facet引数
 
 引数固有の構文・型制約は、キャプチャでも適用されます。
 標準Lazy関数は`&and(&1, &2)`など、引数を記述した呼び出しをキャプチャしてください。裸の`&and`などは拒否します。
@@ -234,6 +237,7 @@ placeholder の規則は次です。
 | Pattern | 禁止。呼び出し内へ Pattern を直接書く |
 | bindingを作るPatternの成功branch | 成功 scope に直接書く Expr。通常データの仮引数参照を許可 |
 | `ErrorKind` | 禁止。具体的な `deferror` 型名を直接書く |
+| `Facet<...>` | 禁止。具体的な FacetPath または外側の path binding を指定する |
 
 ```surtr
 choose = &if(&1, &2, {|| 0})
@@ -279,6 +283,20 @@ Lazy位置を直接プレースホルダにすると、通常の呼び出しで�
 `Lazy<Error>`の正規化型は `(-> Error)` ですが、Errorを通常の関数型へ公開する制約は解除されません。
 `assert`・`ensure`・`Result::map_err`・`Result::cause`を通常の関数値として使うキャプチャでは、error式を呼び出し内へ固定してください。
 引数の並べ替えも型に反映され、`&and(&2, &1)` の型は `((-> Boolean), Boolean -> Boolean)` です。
+
+FacetPath 自体をプレースホルダ仮引数で受け取ることは禁止します。直接の置換や、合成の path 部分の置換もできません。
+`[expr]` 内のプレースホルダは、index / key などの通常データを受け取って埋め込むため、使用できます。
+外側の path binding はキャプチャ内で参照でき、source・更新値・更新関数には通常のプレースホルダを使えます。
+`chain` は FacetPath を返すため、キャプチャできません。合成した path を Facet API で消費することはできます。
+
+```surtr
+p = Duration.millis
+read = &Facet::view(p, &1)                  # OK: path を固定
+&Facet::view(&1, 10ms)                      # compile error: FacetPath の置換
+read_at: (Int, List<Int> -> Result<Int>) = &Facet::view(List.[&1], &2)
+read_at(1, [10, 20])                       # Ok(20)
+&Facet::view(&1 -> p, &2)                  # compile error: path 部分の置換
+```
 
 共通の正規化規則と、関数ごとのシグネチャ・実行条件は [Lazy evaluation](./lazy-evaluation.md#関数ごとのlazy引数) を参照してください。
 

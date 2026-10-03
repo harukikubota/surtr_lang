@@ -5750,6 +5750,9 @@ fn callable_head_for_invocation(node: &TypedNode) -> Option<(String, String)> {
         TypedInner::TupleLiteral(items) if items.len() == 2 => {
             Some(("Bootstrap".to_string(), "(,)".to_string()))
         }
+        TypedInner::FacetView { api, .. }
+        | TypedInner::FacetSet { api, .. }
+        | TypedInner::FacetOver { api, .. } => Some(("Facet".into(), api.name().into())),
         _ => None,
     }
 }
@@ -7954,6 +7957,7 @@ impl Codegen {
             }
 
             TypedInner::FacetView {
+                api: _,
                 source,
                 path,
                 source_is_result,
@@ -7961,6 +7965,7 @@ impl Codegen {
                 self.emit_facet_view(node, source, path, *source_is_result)?;
             }
             TypedInner::FacetSet {
+                api: _,
                 source,
                 path,
                 value,
@@ -7970,6 +7975,7 @@ impl Codegen {
                 self.emit_facet_set(node, source, path, value, *source_is_result, *mode)?;
             }
             TypedInner::FacetOver {
+                api: _,
                 source,
                 path,
                 update_fun,

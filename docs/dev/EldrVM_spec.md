@@ -206,7 +206,11 @@ capture から Capture / Closure origin を推測しない。metadata を復元�
 直接 binding と nested value は同一の runtime metadata を使い、REPL binding metadata が表示 origin を上書きしない。
 演算子 capture は lower 後の対応 Trait method の module / name を表示する。二要素 tuple の ``&`(,)` `` は
 `Bootstrap` / `(,)` を表示し、どちらも capture 作成位置で解決した実際の callable signature を使う。
-Facet capture の表示 identity と、現行で capture できない演算子はこの規則の対象外とする。
+Facet API capture は module を `Facet`、name を対象 API 名、sig を型検査で確定した関数型とする。
+`&Type.path`、`&p`、`_.path` の読み取りも `view` の同じ metadata を使う。たとえば
+`FnCapture(module: Facet, name: view, sig: (Duration -> Int))` と表示する。
+通常の closure literal は既存どおり `Closure(sig)` とする。capture できない `chain` や演算子を
+表示のために許可しない。
 `to_string` は文字列値を引用せず、`inspect` は文字列 literal として引用する。
 
 ### 4.1 RichError

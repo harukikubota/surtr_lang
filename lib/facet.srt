@@ -15,8 +15,8 @@ Standard `Facet` type declaration.
 `Facet<K, S, A, T, B>` is a compiler-managed path capability from source `S`
 to focus `A`; `K` is its compiler-derived path kind and `T`/`B` are the
 updated source/focus types. Use `_, _` for deferred update slots.
-Facet values are same-scope capabilities: bind them locally when useful, then
-consume them in that same scope via
+Facet paths are compile-time capabilities: bind them locally when useful, then
+consume them in that lexical scope or an inner closure via
 `Facet::view/preview/put/set/over/over_result/case_set/case_over`.
 
 Use `Facet` when you want to describe "where" inside a value the compiler should
@@ -56,8 +56,8 @@ Common path forms:
 `User.name` is the Facet path itself.
 `_.name` infers the source type from unary function context and uses the same
 field / Facet traversal rules.
-`&User.name` captures that type-root path as a unary function when a callable
-such as `(User -> String)` is expected.
+`&User.name` captures that type-root path as a unary function `User -> String`.
+Roots that do not determine the full receiver type require callable context.
 For example:
 
 `users |*> _.name`
@@ -73,13 +73,16 @@ The source expression is evaluated exactly once.
 It is never a first-class `Facet` value, and API-specific validity is still
 decided by the consuming `Facet` operation.
 
-`Facet` can be bound and consumed only in the same scope:
+`Facet` can be bound locally and consumed through lexical references:
 
 `facet = User.name`
 `tuple_facet = Tuple._1`
 
-It cannot be passed as a function argument, returned, captured by a closure, or
-stored inside containers such as `List`, tuples, `Ok(...)`, or `Err(...)`.
+An inner closure may use an outer path binding in a Facet API. The path itself
+is injected at compile time, not stored as a runtime capture. Ordinary index/key
+data may be captured lexically. A Facet cannot be passed to a non-Facet function,
+returned from a function or closure, used as a closure parameter, or stored inside
+containers such as `List`, tuples, `Ok(...)`, or `Err(...)`.
 
 ## REPL inspection
 
@@ -153,7 +156,24 @@ impl Facet {
   `Facet::view` may cross readonly fields and readonly struct boundaries because
   readonly is enforced only for mutating Facet operations.
 
+  Capturing `view` infers the source from a concrete path before checking its
+  root and segments. `&Facet::view(Duration.millis, &1)`, `&Duration.millis`,
+  and `&p` for `p = Duration.millis` all have type `Duration -> Int`.
+  Autoimported `view` uses the same resolved API. Conflicting annotations are
+  rejected. Tuple/List/HashMap roots still require sufficient type context.
+  Other Facet APIs use ordinary capture inference. A placeholder cannot
+  receive a FacetPath itself, including a path operand in composition.
+  Placeholders inside `[expr]` are ordinary index/key/range endpoint data
+  and are allowed under the usual bracket type rules.
+  Bracket expressions in a read capture are evaluated once per call.
+  Inspect shows `FnCapture(module: Facet, name: view, sig: (Duration -> Int))`.
+
   ## REPL
+  xldr(1)> read = &Facet::view(Duration.millis, &1)
+  > read: (Duration -> Int) = FnCapture(module: Facet, name: view, sig: (Duration -> Int))
+  xldr(2)> read(10ms)
+  10
+
   xldr(1)> cfg = Config::new("demo")
   > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
   xldr(2)> cfg.entrypoint
@@ -412,6 +432,12 @@ impl Facet {
   - `outer: Facet<K, S, A, _, _>`
   - `inner: Facet<L, A, B, _, _>`
   - result: `Facet<K, S, B, _, _>`
+
+  Both arguments are FacetPaths and cannot be replaced by capture placeholders.
+  Their bracket expressions may contain ordinary data placeholders.
+  `chain` cannot be captured as a callable because it returns a FacetPath.
+  A closure may compose lexical paths
+  and consume the result in a Facet API, but cannot return the composed path.
 
   This is the canonical path-composition API.
 

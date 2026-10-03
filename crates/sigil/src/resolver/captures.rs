@@ -4,18 +4,26 @@ pub(super) fn collect_captures(
     body: &Resolved,
     params: &[ResolvedClosureParam],
 ) -> Vec<ResolvedId> {
-    collect_references(body, params, false)
+    collect_references(body, params, false, true)
 }
 
 /// Lexical scope validation must inspect references in unresolved Pattern roles,
 /// even though ordinary closure capture metadata waits for Scar to select them.
 pub(super) fn collect_eager_references(body: &Resolved) -> Vec<ResolvedId> {
-    collect_references(body, &[], true)
+    collect_references(body, &[], true, true)
+}
+
+/// FacetPath receivers are compile-time capabilities, while bracket operands
+/// are ordinary data expressions. Exclude only bracket data from this position
+/// check; closure captures and eager lexical validation still visit it.
+pub(super) fn collect_facet_path_references(body: &Resolved) -> Vec<ResolvedId> {
+    collect_references(body, &[], true, false)
 }
 
 struct CaptureCollection {
     ids: Vec<ResolvedId>,
     include_deferred_patterns: bool,
+    include_facet_brackets: bool,
 }
 
 impl CaptureCollection {
@@ -32,6 +40,7 @@ fn collect_references(
     body: &Resolved,
     params: &[ResolvedClosureParam],
     include_deferred_patterns: bool,
+    include_facet_brackets: bool,
 ) -> Vec<ResolvedId> {
     let mut bound = HashSet::new();
     for param in params {
@@ -40,6 +49,7 @@ fn collect_references(
     let mut free = CaptureCollection {
         ids: Vec::new(),
         include_deferred_patterns,
+        include_facet_brackets,
     };
     collect_captures_inner(body, &mut bound, &mut free);
     free.ids
@@ -245,11 +255,21 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::FacetSegmentAccess(_, expr, segment) => {
             collect_captures_inner(expr, bound, free);
-            if let ResolvedFacetPathSegment::Bracket(bracket) = segment {
-                collect_captures_inner(&bracket.expr, bound, free);
+            if free.include_facet_brackets {
+                if let ResolvedFacetPathSegment::Bracket(bracket) = segment {
+                    collect_captures_inner(&bracket.expr, bound, free);
+                }
             }
         }
-        Resolved::InferredFacetCapture(_, _) => {}
+        Resolved::InferredFacetCapture(_, segments) => {
+            if free.include_facet_brackets {
+                for segment in segments {
+                    if let ResolvedFacetPathSegment::Bracket(bracket) = segment {
+                        collect_captures_inner(&bracket.expr, bound, free);
+                    }
+                }
+            }
+        }
         Resolved::ProcessContextHandler(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
             for field in fields {

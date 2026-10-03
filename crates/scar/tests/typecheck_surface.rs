@@ -45,6 +45,9 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
+    surface_case!(facet_view_capture_infers_source_from_path),
+    surface_case!(facet_view_capture_preserves_constraints),
+    surface_case!(facet_capture_compile_time_scope_boundaries),
     surface_case!(trait_result_error_omission_allows_impl_contract),
     surface_case!(trait_result_explicit_error_contract_is_declaration_metadata),
     (
@@ -11705,4 +11708,56 @@ impl SafeArithmetic for Int {
 SafeArithmetic::compute(1, 2)"#;
     typecheck(resolve_with_builtin_prelude(source))
         .expect("error marker does not become a value type argument");
+}
+
+fn facet_view_capture_infers_source_from_path() {
+    for capture in [
+        "&Facet::view(User.name, &1)",
+        "&view(User.name, &1)",
+        "&User.name",
+        "&view(path, &1)",
+        "&path",
+    ] {
+        let source = format!("defrecord User(name: String)\npath = User.name\ngetter = {capture}\ngetter(User(\"alice\"))");
+        let typed = typecheck_with_rules(&source, RuntimeSourcePolicy::script())
+            .unwrap_or_else(|error| panic!("{capture}: {}", error.message));
+        assert!(matches!(typed.last().unwrap().ty, Ty::Str));
+    }
+}
+
+fn facet_view_capture_preserves_constraints() {
+    for annotation in ["Int -> String", "User -> Int"] {
+        let source = format!(
+            "defrecord User(name: String)\nf: ({annotation}) = &Facet::view(User.name, &1)"
+        );
+        typecheck_with_rules(&source, RuntimeSourcePolicy::script())
+            .expect_err("conflicting source/focus must fail");
+    }
+    let typed = typecheck_with_rules(
+        "defrecord User(name: String)\nf: (Result<User> -> Result<String>) = &Facet::view(User.name, &1)\nf(Ok(User(\"alice\")))",
+        RuntimeSourcePolicy::script()).expect("explicit Result source preserves API lift");
+    assert!(matches!(typed.last().unwrap().ty, Ty::Result(..)));
+}
+
+fn facet_capture_compile_time_scope_boundaries() {
+    let bracket_chain = typecheck_with_rules(
+        "defrecord Container(values: List<Int>)\nf = &Facet::chain(Container.values, List.[&1])",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("bracket data does not permit returning a FacetPath from a capture");
+    assert!(
+        bracket_chain
+            .message
+            .contains("cannot be returned from closures"),
+        "{}",
+        bracket_chain.message
+    );
+    for capture in ["&Facet::chain", "{|x: User| Facet::chain(p, q)}"] {
+        let source = format!("defrecord Inner(name: String)\ndefrecord User(inner: Inner)\np = User.inner\nq = Inner.name\nf = {capture}");
+        typecheck_with_rules(&source, RuntimeSourcePolicy::script())
+            .expect_err("path transport/return and fixed partial captures stay forbidden");
+    }
+    let source = "defrecord User(name: String)\np = User.name\nf = {|path: Facet<InfallibleStructural, User, String, _, _>| Facet::view(path, User(\"alice\"))}";
+    typecheck_with_rules(source, RuntimeSourcePolicy::script())
+        .expect_err("Facet closure parameters stay forbidden");
 }

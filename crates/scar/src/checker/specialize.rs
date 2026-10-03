@@ -1724,10 +1724,12 @@ impl Checker {
                 )?)
             }
             TypedInner::FacetView {
+                api,
                 source,
                 path,
                 source_is_result,
             } => TypedInner::FacetView {
+                api,
                 source: self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -1747,12 +1749,14 @@ impl Checker {
                 source_is_result,
             },
             TypedInner::FacetSet {
+                api,
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
             } => TypedInner::FacetSet {
+                api,
                 source: self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -1781,12 +1785,14 @@ impl Checker {
                 mode,
             },
             TypedInner::FacetOver {
+                api,
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
             } => TypedInner::FacetOver {
+                api,
                 source: self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -3668,21 +3674,25 @@ impl Checker {
                 self.substitute_pending_facet_path_with_mapping(path, mapping),
             ),
             TypedInner::FacetView {
+                api,
                 source,
                 path,
                 source_is_result,
             } => TypedInner::FacetView {
+                api,
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
                 path: self.substitute_typed_facet_path_with_mapping(path, mapping),
                 source_is_result,
             },
             TypedInner::FacetSet {
+                api,
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
             } => TypedInner::FacetSet {
+                api,
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
                 path: self.substitute_typed_facet_path_with_mapping(path, mapping),
                 value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
@@ -3690,12 +3700,14 @@ impl Checker {
                 mode,
             },
             TypedInner::FacetOver {
+                api,
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
             } => TypedInner::FacetOver {
+                api,
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
                 path: self.substitute_typed_facet_path_with_mapping(path, mapping),
                 update_fun: Box::new(self.substitute_typed_node_with_mapping(*update_fun, mapping)),
