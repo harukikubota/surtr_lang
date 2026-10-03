@@ -174,15 +174,14 @@ impl Resolver {
         };
         // A Lazy argument's grouping is evaluated in the scope before matching.
         // Grouped synthetic capture parameters are ordinary parameter references.
-        let eager_body = if matches!(&body, Ast::Grouped(..))
-            && !self.is_direct_capture_parameter(&body)
-        {
-            Some(self.resolve_lazy_input(body.clone())?)
-        } else {
-            None
-        };
-        let eager_fallback = matches!(&fallback, Ast::Grouped(..))
-            && !self.is_direct_capture_parameter(&fallback);
+        let eager_body =
+            if matches!(&body, Ast::Grouped(..)) && !self.is_direct_capture_parameter(&body) {
+                Some(self.resolve_lazy_input(body.clone())?)
+            } else {
+                None
+            };
+        let eager_fallback =
+            matches!(&fallback, Ast::Grouped(..)) && !self.is_direct_capture_parameter(&fallback);
         let resolving_body = if eager_body.is_some() {
             Ast::Lit(span.clone(), Lit::Unit)
         } else {
