@@ -62,7 +62,7 @@ defgenserver FibManager {
   }
 
   def select_worker(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<(String, PID<FibWorker>)> {
-    rem =? Int::safe_mod(n, 2)
+    rem =? Mod::safe_mod(n, 2)
     if(rem == 0, Ok(("even", state._0)), Ok(("odd", state._1)))
   }
 

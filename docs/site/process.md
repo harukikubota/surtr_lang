@@ -148,10 +148,10 @@ cargo run -q -p rune -- run examples/process/task_call/entry.srt
 ```surtr
 include "./Workers.srt"
 
-print(inspect(FibManager::value(24)))
-print(inspect(FibManager::value(25)))
-print(inspect(FibManager::value(24)))
-print(inspect(FibManager::value(25)))
+print(inspect(FibManager::value(10)))
+print(inspect(FibManager::value(11)))
+print(inspect(FibManager::value(10)))
+print(inspect(FibManager::value(11)))
 ```
 
 実行:
@@ -159,6 +159,19 @@ print(inspect(FibManager::value(25)))
 ```bash
 cargo run -q -p rune -- run examples/process/memoized_fib_workers/entry.srt
 ```
+
+出力:
+
+```text
+Ok(("miss-even", 55))
+Ok(("miss-odd", 89))
+Ok(("hit-even", 55))
+Ok(("hit-odd", 89))
+```
+
+ビルド済みの開発環境では、4行の出力まで1〜5秒が目安です。2026-10-03 の確認では、上のコマンドが1.34秒で終了しました。初回ビルドの時間は別です。
+
+計算は `FibManager::slow_fib` が担当し、worker は計算済みの `n` の値を検索・保存します。再帰の中間値はキャッシュしないため、大きい入力では最初の出力まで時間がかかります。この例は偶奇での振り分けと cache miss / hit の確認を目的に、入力を10と11にしています。
 
 読みどころ:
 

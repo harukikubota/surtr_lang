@@ -1,6 +1,6 @@
 include "./Workers.srt"
 
-print(inspect(FibManager::value(24)))
-print(inspect(FibManager::value(25)))
-print(inspect(FibManager::value(24)))
-print(inspect(FibManager::value(25)))
+print(inspect(FibManager::value(10)))
+print(inspect(FibManager::value(11)))
+print(inspect(FibManager::value(10)))
+print(inspect(FibManager::value(11)))
