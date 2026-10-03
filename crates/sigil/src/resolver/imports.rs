@@ -3,6 +3,7 @@ use super::declarations::{
 };
 use super::scope_init::initialize_scope;
 use super::*;
+use sindr::names::surface_path_name;
 use spire::ast::Visibility;
 
 fn hidden_builtin_import_message(fq_name: &str) -> String {
@@ -236,7 +237,7 @@ pub(super) fn build_module_scope_with_imports(
 
     if let Some(module_path) = current_module_path {
         for entry in declaration_index.values() {
-            if entry.module_path == module_path {
+            if surface_path_name(&entry.module_path) == surface_path_name(module_path) {
                 if !is_module_visible_declaration(&entry.kind) {
                     continue;
                 }

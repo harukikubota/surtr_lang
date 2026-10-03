@@ -15,6 +15,71 @@ fn resolve_on_cli_sized_stack(source: String) -> Vec<Resolved> {
 }
 
 #[test]
+fn staged_builtin_members_keep_their_canonical_declaration_uid() {
+    for module_path in ["List", "Global::List"] {
+        let stages = vec![vec![
+            staged_module(module_path, parse_module_ast(
+                "@builtin type List<$A>\nimpl List {\n@builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>\ndefp saved(values: List<Int>) -> List<(Int, Int)> { zip(values, values) }\ndef collect(values: List<Int>) -> List<(Int, Int)> { saved(values) }\n}", module_path)),
+        ]];
+        let resolved =
+            resolve_user_with_modules("List::collect([1, 2])\nList::zip([1], [2])", &stages)
+                .expect("builtin and ordinary members should resolve through the same owner");
+        let declaration = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::BuiltinDecl(_, id, ..)
+                    if id.qualified_name.as_deref().map(global_surface_name)
+                        == Some("List::zip") =>
+                {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .expect("zip declaration");
+        let Resolved::App(_, target, _) = resolved.last().unwrap() else {
+            panic!("expected user call");
+        };
+        let Resolved::Var(_, reference) = target.as_ref() else {
+            panic!("expected builtin reference");
+        };
+        assert_eq!(declaration.unique_id, reference.unique_id);
+        let body = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::Def(_, id, _, _, _, _, body, _)
+                    if id.qualified_name.as_deref().map(global_surface_name)
+                        == Some("List::saved") =>
+                {
+                    Some(body)
+                }
+                _ => None,
+            })
+            .expect("private ordinary helper");
+        let Resolved::Block(_, statements) = body.as_ref() else {
+            panic!("expected helper block");
+        };
+        let Resolved::App(_, target, _) = statements.last().unwrap() else {
+            panic!("expected local call");
+        };
+        let Resolved::Var(_, reference) = target.as_ref() else {
+            panic!("expected local builtin reference");
+        };
+        assert_eq!(declaration.unique_id, reference.unique_id);
+    }
+}
+
+#[test]
+fn user_declarations_do_not_overlap_any_runtime_builtin_uid() {
+    let resolved = parse_and_resolve("user_binding = 1").expect("user binding should resolve");
+    let Resolved::Bind(_, ResolvedPattern::Var(binding), _) = &resolved[0] else {
+        panic!("expected user binding");
+    };
+    for (index, _) in builtin_function_metas().iter().enumerate() {
+        assert_ne!(binding.unique_id, builtin_uid(index as u16));
+    }
+}
+
+#[test]
 fn deep_nested_closure_bodies_resolve_on_cli_sized_stack() {
     let depth = 31;
     let source = format!(
@@ -3060,10 +3125,23 @@ fn test_builtin_decl_resolution() {
     let resolved = resolver
         .resolve_program(ast)
         .expect("builtin declaration should resolve");
+    let call = resolver
+        .resolve_program(spire::parse("print(\"value\")").unwrap())
+        .expect("declared builtin reference should resolve");
     match &resolved[0] {
         Resolved::BuiltinDecl(_, id, _, params, ret_ty, _, attrs) => {
             assert_eq!(id.name, "print");
-            assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
+            let Resolved::App(_, target, _) = &call[0] else {
+                panic!("expected builtin call");
+            };
+            let Resolved::Var(_, reference) = target.as_ref() else {
+                panic!("expected builtin reference");
+            };
+            assert_eq!(id.unique_id, reference.unique_id);
+            assert_eq!(
+                sindr::builtin::builtin_runtime_name(&id.name, id.qualified_name.as_deref()),
+                "print"
+            );
             assert_eq!(params.len(), 1);
             assert_eq!(
                 *attrs,
@@ -3159,26 +3237,26 @@ fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
 #[test]
 fn test_private_builtin_impl_member_is_private_surface() {
     let module_stages = vec![vec![staged_module(
-        "Generator",
+        "List",
         parse_module_ast(
-            r#"@builtin type Generator<$State, $Item>
-impl Generator {
-  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
-  def from_list(items: List<$Item>) -> Generator<Unit, $Item> {
-    gen_make(0, items)
+            r#"@builtin type List<$A>
+impl List {
+  @builtin defp zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
+  def paired() -> List<(Int, Int)> {
+    zip([1], [2])
   }
 }"#,
-            "Generator",
+            "List",
         ),
     )]];
 
-    resolve_user_with_modules("g = Generator::from_list([1, 2])", &module_stages)
+    resolve_user_with_modules("values = List::paired()", &module_stages)
         .expect("public wrapper should resolve private builtin within the same impl");
 
-    let err = resolve_user_with_modules("g = Generator::gen_make(0, [1, 2])", &module_stages)
+    let err = resolve_user_with_modules("values = List::zip([1], [2])", &module_stages)
         .expect_err("private builtin direct call should fail");
 
-    assert!(err.message.contains("Generator::gen_make/2"));
+    assert!(err.message.contains("List::zip/2"));
     assert!(
         err.message.contains("is private"),
         "actual error: {}",
@@ -3189,22 +3267,21 @@ impl Generator {
 #[test]
 fn test_private_builtin_impl_member_import_is_rejected() {
     let module_stages = vec![vec![staged_module(
-        "Generator",
+        "List",
         parse_module_ast(
-            r#"@builtin type Generator<$State, $Item>
-impl Generator {
-  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+            r#"@builtin type List<$A>
+impl List {
+  @builtin defp zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
 }"#,
-            "Generator",
+            "List",
         ),
     )]];
 
-    let err = resolve_user_with_modules("import Generator::gen_make", &module_stages)
+    let err = resolve_user_with_modules("import List::zip", &module_stages)
         .expect_err("private builtin import should fail");
 
     assert!(
-        err.message
-            .contains("Import target `Generator::gen_make` is private"),
+        err.message.contains("Import target `List::zip` is private"),
         "actual error: {}",
         err.message
     );
