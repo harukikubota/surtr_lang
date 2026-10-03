@@ -542,34 +542,126 @@ pub fn emit_invalid_result_missing_payload(
     );
 }
 
-fn error_spec_from_value_error_with_source(
+fn error_spec_from_value_error_at_span(
     value: &sindr::runtime::RichError,
     source_id: SourceId,
+    span: &Span,
 ) -> DiagnosticSpec {
-    let location = value.primary_location();
     diagnostics::runtime_value_error_spec(
         source_id,
         crate::surface_path_name(&value.kind).to_string(),
         value.visible_message(),
-        location.span_start as usize,
-        location.span_end as usize,
+        span.start,
+        span.end,
         value.diagnostic.as_ref(),
         runtime_value_cause_help(value),
     )
 }
 
+fn value_error_text_without_source(value: &sindr::runtime::RichError) -> String {
+    let mut text = format!(
+        "Error: {}: {}",
+        crate::surface_path_name(&value.kind),
+        value.visible_message()
+    );
+    let location = value.primary_location();
+    if location.line > 0 {
+        text.push_str(&format!(
+            "\n  at {}:{}:{}",
+            location.file, location.line, location.column
+        ));
+    } else {
+        text.push_str(&format!(
+            "\n  at {} (span {}..{})",
+            location.file, location.span_start, location.span_end
+        ));
+    }
+    if let Some(cause) = runtime_value_cause_help(value) {
+        text.push('\n');
+        text.push_str(&cause);
+    }
+    text
+}
+
+fn value_error_source_context(
+    vm: &eldr::VM,
+    sources: &SourceRegistry,
+    location: &sindr::runtime::Location,
+) -> Option<(SourceId, Span)> {
+    let raw_span = Span {
+        start: location.span_start as usize,
+        end: location.span_end as usize,
+    };
+    let (file, span) =
+        if let Some((source_id, local_span)) = crate::decode_rebased_module_span(&raw_span) {
+            if vm.bytecode().sources.is_empty() {
+                // The caller's live registry retains the compiler's original source IDs.
+                sources.get(source_id)?;
+                return Some((source_id, local_span));
+            }
+            // Embedded source registries may assign new IDs when omitting source text.
+            // Resolve the original ID through the canonical bytecode table first.
+            let entry = vm
+                .bytecode()
+                .sources
+                .iter()
+                .find(|entry| entry.source_id == source_id.0)?;
+            (
+                entry.normalized_path.as_deref().unwrap_or(&entry.path),
+                local_span,
+            )
+        } else {
+            (location.file.as_str(), raw_span)
+        };
+    let source_id = sources
+        .entries()
+        .iter()
+        .find(|entry| entry.file_name == file)?
+        .id;
+    Some((source_id, span))
+}
+
 pub fn runtime_value_error_text_from_vm(vm: &eldr::VM, value: &Value) -> String {
     match value {
         Value::Error(rich) => {
-            if let (Some(source), Some(file_name)) = (vm.source(), vm.source_file()) {
-                let spec = error_spec_from_value_error_with_source(rich, SourceId(0));
+            let location = rich.primary_location();
+            let raw_span = Span {
+                start: location.span_start as usize,
+                end: location.span_end as usize,
+            };
+            let origin =
+                if let Some((source_id, span)) = crate::decode_rebased_module_span(&raw_span) {
+                    vm.bytecode()
+                        .sources
+                        .iter()
+                        .find(|entry| entry.source_id == source_id.0)
+                        .and_then(|entry| {
+                            entry.text.as_deref().map(|text| {
+                                (
+                                    entry.normalized_path.as_deref().unwrap_or(&entry.path),
+                                    text,
+                                    span,
+                                )
+                            })
+                        })
+                } else if let Some(entry) = vm.bytecode().sources.iter().find(|entry| {
+                    entry.normalized_path.as_deref().unwrap_or(&entry.path) == location.file
+                }) {
+                    entry
+                        .text
+                        .as_deref()
+                        .map(|text| (location.file.as_str(), text, raw_span))
+                } else {
+                    vm.source_file()
+                        .filter(|file| *file == location.file)
+                        .zip(vm.source())
+                        .map(|(file, source)| (file, source, raw_span))
+                };
+            if let Some((file_name, source, span)) = origin {
+                let spec = error_spec_from_value_error_at_span(rich, SourceId(0), &span);
                 diagnostic_text(file_name, source, &spec)
             } else {
-                format!(
-                    "Error: {}: {}",
-                    crate::surface_path_name(&rich.kind),
-                    rich.visible_message()
-                )
+                value_error_text_without_source(rich)
             }
         }
         other => format!("Error: {}", inspect_value(vm, other)),
@@ -580,12 +672,18 @@ pub fn runtime_value_error_text_with_registry(
     vm: &eldr::VM,
     value: &Value,
     sources: &SourceRegistry,
-    source_id: SourceId,
+    _source_id: SourceId,
 ) -> String {
     match value {
         Value::Error(rich) => {
-            let spec = error_spec_from_value_error_with_source(rich, source_id);
-            diagnostic_text_by_id(sources, source_id, &spec)
+            if let Some((source_id, span)) =
+                value_error_source_context(vm, sources, rich.primary_location())
+            {
+                let spec = error_spec_from_value_error_at_span(rich, source_id, &span);
+                diagnostic_text_by_id(sources, source_id, &spec)
+            } else {
+                value_error_text_without_source(rich)
+            }
         }
         other => format!("Error: {}", inspect_value(vm, other)),
     }
@@ -668,10 +766,113 @@ pub fn emit_runtime_value_error_with_registry(
 mod tests {
     use super::{
         invalid_result_missing_payload_text, runtime_error_text, runtime_value_error_text_from_vm,
+        runtime_value_error_text_with_registry,
     };
     use eldr::{error::RuntimeErrorContext, VM};
     use sindr::ir::Bytecode;
     use sindr::runtime::{Location, RichError, Value};
+
+    #[test]
+    fn runtime_value_error_registry_uses_the_creation_file() {
+        let mut sources = diagnostics::SourceRegistry::new();
+        let script = sources.register("main.srt", "main()\n");
+        sources.register("definition.srt", "def source() {\n  Failure(\"bad\")\n}\n");
+        let vm = VM::new(Bytecode::default()).with_source("main()\n".into(), "main.srt".into());
+        let error = Value::Error(Box::new(RichError::new(
+            "Failure",
+            "bad",
+            Location {
+                file: "definition.srt".into(),
+                func: "Failure".into(),
+                line: 2,
+                column: 3,
+                span_start: 17,
+                span_end: 31,
+            },
+            None,
+        )));
+        let text = runtime_value_error_text_with_registry(&vm, &error, &sources, script);
+        assert!(text.contains("definition.srt:2:3"), "{text}");
+        assert!(!text.contains("main.srt:"), "{text}");
+    }
+
+    #[test]
+    fn runtime_value_error_does_not_substitute_an_unrelated_source() {
+        let mut sources = diagnostics::SourceRegistry::new();
+        let script = sources.register("main.srt", "UNRELATED_SCRIPT()\n");
+        for (file, start, embedded) in [
+            ("missing.srt", 4, vec![]),
+            (
+                "<source:9>",
+                10 * sindr::ir::MODULE_SPAN_STRIDE as u32 + 4,
+                vec![],
+            ),
+            (
+                "<source:0>",
+                sindr::ir::MODULE_SPAN_STRIDE as u32 + 4,
+                vec![sindr::ir::SourceFileEntry {
+                    source_id: 10,
+                    path: "main.srt".into(),
+                    normalized_path: None,
+                    content_hash: None,
+                    text: Some("UNRELATED_SCRIPT()\n".into()),
+                }],
+            ),
+        ] {
+            let vm = VM::new(Bytecode {
+                sources: embedded,
+                ..Bytecode::default()
+            })
+            .with_source("UNRELATED_SCRIPT()\n".into(), "main.srt".into());
+            let value = Value::Error(Box::new(RichError::new(
+                "Failure",
+                "bad",
+                Location {
+                    file: file.into(),
+                    func: "Failure".into(),
+                    line: 0,
+                    column: 0,
+                    span_start: start,
+                    span_end: start + 1,
+                },
+                None,
+            )));
+            for text in [
+                runtime_value_error_text_from_vm(&vm, &value),
+                runtime_value_error_text_with_registry(&vm, &value, &sources, script),
+            ] {
+                assert!(text.contains("Error: Failure: bad"), "{text}");
+                assert!(text.contains(file), "{text}");
+                assert!(!text.contains("UNRELATED_SCRIPT"), "{text}");
+                assert!(!text.contains("main.srt:"), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_value_error_resolves_an_encoded_origin_in_the_live_registry() {
+        let mut sources = diagnostics::SourceRegistry::new();
+        let script = sources.register("main.srt", "main()\n");
+        sources.register("definition.srt", "def source() {\n  Failure(\"bad\")\n}\n");
+        let vm = VM::new(Bytecode::default()).with_source("main()\n".into(), "main.srt".into());
+        let base = 2 * sindr::ir::MODULE_SPAN_STRIDE as u32;
+        let value = Value::Error(Box::new(RichError::new(
+            "Failure",
+            "bad",
+            Location {
+                file: "<source:1>".into(),
+                func: "Failure".into(),
+                line: 0,
+                column: 0,
+                span_start: base + 17,
+                span_end: base + 31,
+            },
+            None,
+        )));
+        let text = runtime_value_error_text_with_registry(&vm, &value, &sources, script);
+        assert!(text.contains("definition.srt:2:3"), "{text}");
+        assert!(!text.contains("main.srt:"), "{text}");
+    }
 
     #[test]
     fn runtime_error_text_uses_runtimeerror_headline_with_message() {

@@ -468,6 +468,8 @@ pub enum ResolvedInterpolatedPart {
 /// Pattern in a binding (resolved).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedPattern {
+    /// Source boundary of structural patterns whose children do not cover their syntax.
+    Located(Span, Box<ResolvedPattern>),
     Projection {
         index: u8,
         id: ResolvedId,
@@ -673,4 +675,13 @@ pub struct ResolvedLazyCaptureParam {
     /// Each entry contains the zero-based source argument ordinal and the use span,
     /// independently of the generated parameter's position after placeholder ordering.
     pub lazy_uses: Vec<(u32, Span)>,
+}
+
+impl ResolvedPattern {
+    pub fn unlocated(&self) -> &Self {
+        match self {
+            Self::Located(_, inner) => inner.unlocated(),
+            other => other,
+        }
+    }
 }

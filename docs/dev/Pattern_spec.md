@@ -56,6 +56,16 @@ defenum MatchResult<$Value> {
 
 Error の kind / message / location / cause は既存 Error / RichError 契約に従う。定義側が返した Error を compiler が共通 PatternMismatch で上書きしたり、Extractor 名や型名から message を再構成したりしない。builtin Extractor も同じ契約を持つ。空の list / string に対する `uncons` の Error は標準定義 / builtin の契約が選び、Forge の名前判定に置かない。
 
+Error の主キャプションは生成位置である。明示的な Error は構築式、構文 Pattern の不一致は
+失敗した子 Pattern だけを指し、長さ・空入力・variant など構造自体の不一致はその構造 Pattern を指す。
+Extractor 本文内の構文不一致や内部関数の Error は、その定義内の生成位置を保持する。
+`MatchResult::Err` の返却、SafeBind、`Kernel::apply_pattern` は呼出し位置へ置き換えない。
+Extractor が成功した後で子 Pattern が失敗した場合は、その子の位置を使う。
+as-pattern の alias は照合しないため、内部の失敗位置を変更しない。
+新しい Error で wrap した場合は新しい Error の構築位置を使い、呼出し経路は stack trace に保持する。
+`Kernel::apply_pattern` の失敗は常に自身の `Result` に保持する。非 Result-effect の do 本文内でも、
+外側 carrier の `Alternative::empty` へ変更しない。
+
 ### 利用位置
 
 MatchResult は一般のユーザ値ではない。許可する型位置は次に限る。

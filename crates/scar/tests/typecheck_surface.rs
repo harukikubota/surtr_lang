@@ -1424,9 +1424,9 @@ fn typed_bind_rhs<'a>(typed: &'a [TypedNode], name: &str) -> &'a TypedNode {
     typed
         .iter()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(TypedPattern::Var(_, id), rhs)
-            | TypedInner::SafeBind(TypedPattern::Var(_, id), rhs, _, _)
-                if id.name == name =>
+            TypedInner::Bind(pattern, rhs)
+            | TypedInner::SafeBind(pattern, rhs, _, _)
+                if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == name) =>
             {
                 Some(rhs.as_ref())
             }
@@ -1813,7 +1813,7 @@ Option::Some(num) =? value"#,
         Some(TypedInner::SafeBind(
             _,
             _,
-            SafeBindRhsProjection::PassThroughNonResultPartial { .. },
+            SafeBindRhsProjection::PatternInput { .. },
             SafeBindFailureTarget::TopLevel,
         ))
     ));
@@ -3766,7 +3766,8 @@ printable: Int = boxed.value"#,
     let boxed_bind = typed
         .iter()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "boxed" => {
+            TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "boxed") => {
+                let TypedPattern::Var(ty, _) = pattern.unlocated() else { unreachable!("binding guard checked"); };
                 Some((ty, rhs.as_ref()))
             }
             _ => None,
@@ -3799,7 +3800,8 @@ text: String = pair.right"#,
     let pair_bind = typed
         .iter()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "pair" => {
+            TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "pair") => {
+                let TypedPattern::Var(ty, _) = pattern.unlocated() else { unreachable!("binding guard checked"); };
                 Some((ty, rhs.as_ref()))
             }
             _ => None,
@@ -5933,7 +5935,7 @@ fn do_explicit_and_expected_carriers_typecheck() {
             .iter()
             .rev()
             .find_map(|node| match &node.node {
-                TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+                TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "result") => Some(rhs),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("expected result binding for {source}"));
@@ -6010,7 +6012,7 @@ fn do_infers_carrier_from_each_monadic_origin() {
             .iter()
             .rev()
             .find_map(|node| match &node.node {
-                TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+                TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "result") => Some(rhs),
                 _ => None,
             })
             .expect("expected result binding");
@@ -6514,7 +6516,7 @@ result: Option<Int> = do::<Option> {
         .iter()
         .rev()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+            TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "result") => Some(rhs),
             _ => None,
         })
         .expect("expected result binding");
@@ -6584,7 +6586,7 @@ fn do_partial_extract_requires_alternative() {
         .iter()
         .rev()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+            TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "result") => Some(rhs),
             _ => None,
         })
         .expect("expected result binding");
@@ -6594,20 +6596,19 @@ fn do_partial_extract_requires_alternative() {
     let TypedInner::Closure(_, _, body) = &args[1].node else {
         panic!("bind mapper must be a closure: {:?}", args[1])
     };
-    let TypedInner::Match(_, arms) = &body.node else {
-        panic!("partial extract mapper must match the payload: {body:?}")
+    let TypedInner::DoSafeBind(control) = &body.node else {
+        panic!("partial extract mapper must use common Pattern control: {body:?}")
     };
-    assert!(arms.iter().any(|arm| matches!(
-        &arm.body.node,
-        TypedInner::TraitCall {
-            trait_name,
-            method_name,
-            dispatch,
-            ..
-        } if trait_name == "Alternative"
-            && method_name == "empty"
-            && !matches!(dispatch, scar::typed::TraitDispatch::Pending)
-    )));
+    let scar::typed::SafeBindFailureTarget::DoAlternative { empty } = &control.failure_target
+    else {
+        panic!("non-Result partial extract requires Alternative.empty")
+    };
+    assert!(matches!(
+        &empty.node,
+        TypedInner::TraitCall { trait_name, method_name, dispatch, .. }
+            if trait_name == "Alternative" && method_name == "empty"
+                && !matches!(dispatch, scar::typed::TraitDispatch::Pending)
+    ));
 
     let error = typecheck_with_rules(
         r#"result: Identity<Int> = do::<Identity> {
@@ -6803,7 +6804,7 @@ fn do_safebind_selects_typed_failure_targets() {
     } = control.as_ref();
     assert!(matches!(
         projection,
-        SafeBindRhsProjection::PassThroughNonResultPartial { .. }
+        SafeBindRhsProjection::PatternInput { .. }
     ));
     let SafeBindFailureTarget::DoAlternative { empty } = failure_target else {
         panic!("Option do SafeBind must use Alternative empty: {failure_target:?}")
@@ -9413,7 +9414,8 @@ b = Box(10ms)"#,
     );
 
     let mut bindings = typed.iter().filter_map(|node| match &node.node {
-        TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "a" || id.name == "b" => {
+        TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "a" || id.name == "b") => {
+                let TypedPattern::Var(ty, id) = pattern.unlocated() else { unreachable!("binding guard checked"); };
             Some((id.name.as_str(), ty, rhs.as_ref()))
         }
         _ => None,
@@ -9467,7 +9469,7 @@ fn generic_struct_constructor_calls_remain_polymorphic_within_closure_body() {
     let factory = typed
         .iter()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "factory" => Some(rhs),
+            TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "factory") => Some(rhs),
             _ => None,
         })
         .expect("expected factory binding");
@@ -9480,9 +9482,8 @@ fn generic_struct_constructor_calls_remain_polymorphic_within_closure_body() {
     };
 
     let mut range_bindings = stmts.iter().filter_map(|node| match &node.node {
-        TypedInner::Bind(TypedPattern::Var(ty, id), rhs)
-            if id.name == "raw" || id.name == "dur" =>
-        {
+        TypedInner::Bind(pattern, rhs) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "raw" || id.name == "dur") => {
+                let TypedPattern::Var(ty, id) = pattern.unlocated() else { unreachable!("binding guard checked"); };
             Some((id.name.as_str(), ty, rhs.as_ref()))
         }
         _ => None,

@@ -13,7 +13,7 @@ fn ty(source: &str, name: &str) -> Ty {
     nodes
         .iter()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(TypedPattern::Var(_, id), value) if id.name == name => {
+            TypedInner::Bind(pattern, value) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == name) => {
                 Some(value.ty.clone())
             }
             _ => None,

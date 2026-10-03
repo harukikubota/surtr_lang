@@ -117,10 +117,9 @@ pub enum Opcode {
     MakeError {
         template_id: u32,
     },
-    MakeErrorLiteral {
-        kind_const_idx: u32,
-        message_const_idx: u32,
-    },
+    /// Permanently reserved wire tag. It cannot be serialized or deserialized.
+    #[serde(skip_serializing, deserialize_with = "reject_reserved_opcode")]
+    Reserved56,
     CallClosure {
         arity: u8,
         span_start: u32,
@@ -195,6 +194,10 @@ pub enum Opcode {
     /// Compare process PID identity using its registered process instance policy.
     /// Appended to preserve the bincode tags of existing opcodes.
     EqPid,
+}
+
+fn reject_reserved_opcode<'de, D: serde::Deserializer<'de>>(_: D) -> Result<(), D::Error> {
+    Err(serde::de::Error::custom("reserved opcode tag 56"))
 }
 
 impl Opcode {
@@ -281,7 +284,7 @@ impl Opcode {
             Self::Call { .. } => "Call",
             Self::CaptureClosure(..) => "CaptureClosure",
             Self::MakeError { .. } => "MakeError",
-            Self::MakeErrorLiteral { .. } => "MakeErrorLiteral",
+            Self::Reserved56 => "Reserved56",
             Self::CallClosure { .. } => "CallClosure",
             Self::Jump(..) => "Jump",
             Self::JumpIfFalse(..) => "JumpIfFalse",
@@ -442,6 +445,18 @@ pub struct SourceFileEntry {
     pub content_hash: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
+}
+
+/// Module source spans reserve one fixed range for each registered source.
+pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
+
+pub fn decode_module_source_span(start: usize, end: usize) -> Option<(u32, usize, usize)> {
+    if start < MODULE_SPAN_STRIDE {
+        return None;
+    }
+    let bucket = start / MODULE_SPAN_STRIDE;
+    let base = bucket * MODULE_SPAN_STRIDE;
+    Some(((bucket - 1) as u32, start - base, end.saturating_sub(base)))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1146,10 +1161,20 @@ pub enum RuntimeErrorDiagnosticTemplate {
     },
 }
 
+/// The source operand of an Error construction instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorLocationSource {
+    /// A `deferror` constructor uses the span of its constructor invocation.
+    ConstructorCallSite,
+    /// An inline compiler-generated Error uses its checked source span.
+    SourceSpan,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ErrTemplate {
     pub id: u32,
     pub kind: String,
+    pub location_source: ErrorLocationSource,
     pub span_start: u32,
     pub span_end: u32,
     pub line: u32,
@@ -2061,6 +2086,7 @@ mod tests {
             error_templates: vec![ErrTemplate {
                 id: 1,
                 kind: "ValidationError".to_string(),
+                location_source: crate::ir::ErrorLocationSource::SourceSpan,
                 span_start: 3,
                 span_end: 8,
                 line: 1,
@@ -2134,6 +2160,40 @@ mod tests {
         let bytes = bytecode.encode().expect("encode should succeed");
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
         assert_eq!(decoded, bytecode);
+    }
+
+    #[test]
+    fn opcode_reserved_wire_tag_is_rejected_without_shifting_neighbors() {
+        let cases = [
+            (55, Opcode::MakeError { template_id: 0 }),
+            (
+                57,
+                Opcode::CallClosure {
+                    arity: 0,
+                    span_start: 0,
+                    span_end: 0,
+                },
+            ),
+            (58, Opcode::Jump(0)),
+            (61, Opcode::Pop),
+            (62, Opcode::Return),
+            (63, Opcode::Halt),
+            (
+                64,
+                Opcode::StoreConstLocal {
+                    const_idx: 0,
+                    local_idx: 0,
+                },
+            ),
+        ];
+        for (wire_tag, opcode) in cases {
+            let bytes = bincode::serialize(&opcode).expect("valid opcode serializes");
+            assert_eq!(&bytes[..4], &u32::to_le_bytes(wire_tag));
+            assert_eq!(bincode::deserialize::<Opcode>(&bytes).unwrap(), opcode);
+        }
+        assert!(bincode::serialize(&Opcode::Reserved56).is_err());
+        let err = bincode::deserialize::<Opcode>(&56u32.to_le_bytes()).unwrap_err();
+        assert!(err.to_string().contains("reserved opcode tag 56"), "{err}");
     }
 
     #[test]
@@ -2557,6 +2617,7 @@ mod tests {
         let mut templates = vec![ErrTemplate {
             id: 0,
             kind: "Boom".into(),
+            location_source: crate::ir::ErrorLocationSource::SourceSpan,
             span_start: 16,
             span_end: 24,
             line: 0,

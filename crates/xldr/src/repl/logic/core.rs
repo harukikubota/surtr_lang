@@ -9112,6 +9112,7 @@ fn ast_ty_contains_query_placeholder(ty: &AstTy) -> bool {
 
 fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<String>) {
     match pat {
+        TypedPattern::Located(_, inner) => collect_unresolved_pattern_binding_names(inner, names),
         TypedPattern::Var(ty, id) => {
             if scar::type_contains_unresolved_vars(ty) {
                 names.push(id.name.clone());

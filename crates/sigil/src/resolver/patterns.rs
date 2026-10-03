@@ -248,7 +248,12 @@ impl Resolver {
         seen: &mut HashMap<String, Span>,
         outer: &Scope,
     ) -> Result<ResolvedPattern, ResolveError> {
-        match pat {
+        let location = super::special_forms::ast_pattern_span(&pat).clone();
+        let structural = matches!(
+            pat,
+            AstPattern::ListCons(..) | AstPattern::Tuple(..) | AstPattern::Or(..)
+        );
+        let result = match pat {
             AstPattern::Projection {
                 span,
                 index,
@@ -577,23 +582,23 @@ impl Resolver {
             )),
             AstPattern::Or(span, items) => {
                 if self.pattern_proxies.is_some() {
-                    return Ok(ResolvedPattern::Or(
+                    Ok(ResolvedPattern::Or(
                         items
                             .into_iter()
                             .map(|item| {
                                 self.resolve_pattern_inner(item, &mut HashMap::new(), outer)
                             })
                             .collect::<Result<Vec<_>, _>>()?,
-                    ));
-                }
-                let mut resolved_items = Vec::with_capacity(items.len());
-                let mut common_ids = HashMap::<String, u32>::new();
-                let mut common_bindings = Vec::<(String, Span)>::new();
-                for (index, item) in items.into_iter().enumerate() {
-                    let mut alternative_seen = seen.clone();
-                    let mut bindings = Vec::new();
-                    collect_pattern_bindings_preorder(&item, &mut bindings)?;
-                    let (mut resolved, ids) = self.with_child_scope(|child| {
+                    ))
+                } else {
+                    let mut resolved_items = Vec::with_capacity(items.len());
+                    let mut common_ids = HashMap::<String, u32>::new();
+                    let mut common_bindings = Vec::<(String, Span)>::new();
+                    for (index, item) in items.into_iter().enumerate() {
+                        let mut alternative_seen = seen.clone();
+                        let mut bindings = Vec::new();
+                        collect_pattern_bindings_preorder(&item, &mut bindings)?;
+                        let (mut resolved, ids) = self.with_child_scope(|child| {
                         let resolved = child.resolve_pattern_inner(item, &mut alternative_seen, outer)?;
                         let ids = bindings
                             .iter()
@@ -613,22 +618,23 @@ impl Resolver {
                             .collect::<Result<Vec<_>, _>>()?;
                         Ok((resolved, ids))
                     })?;
-                    if index == 0 {
-                        for ((name, _), id) in bindings.iter().zip(ids) {
-                            common_ids.insert(name.clone(), id);
+                        if index == 0 {
+                            for ((name, _), id) in bindings.iter().zip(ids) {
+                                common_ids.insert(name.clone(), id);
+                            }
+                            common_bindings = bindings;
+                        } else {
+                            remap_or_pattern_bindings(&mut resolved, &common_ids)?;
                         }
-                        common_bindings = bindings;
-                    } else {
-                        remap_or_pattern_bindings(&mut resolved, &common_ids)?;
+                        resolved_items.push(resolved);
                     }
-                    resolved_items.push(resolved);
+                    for (name, span) in common_bindings {
+                        seen.insert(name.clone(), span);
+                        let id = common_ids[&name];
+                        self.scope.define_with_id(&name, id);
+                    }
+                    Ok(ResolvedPattern::Or(resolved_items))
                 }
-                for (name, span) in common_bindings {
-                    seen.insert(name.clone(), span);
-                    let id = common_ids[&name];
-                    self.scope.define_with_id(&name, id);
-                }
-                Ok(ResolvedPattern::Or(resolved_items))
             }
             AstPattern::As(_span, inner, alias, alias_ty, alias_span) => {
                 let resolved_inner = self.resolve_pattern_inner(*inner, seen, outer)?;
@@ -639,7 +645,12 @@ impl Resolver {
                     alias_ty,
                 ))
             }
-        }
+        }?;
+        Ok(if structural {
+            ResolvedPattern::Located(location, Box::new(result))
+        } else {
+            result
+        })
     }
 
     pub(super) fn resolve_match_arm(
@@ -667,6 +678,7 @@ fn remap_or_pattern_bindings(
     common_ids: &HashMap<String, u32>,
 ) -> Result<(), ResolveError> {
     match pattern {
+        ResolvedPattern::Located(_, inner) => remap_or_pattern_bindings(inner, common_ids)?,
         ResolvedPattern::Projection { inner, .. } => remap_or_pattern_bindings(inner, common_ids)?,
         ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {
             return Err(pattern_argument_error(

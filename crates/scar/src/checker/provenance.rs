@@ -1288,6 +1288,9 @@ impl Checker {
         bindings: &mut Bindings,
     ) {
         match pattern {
+            TypedPattern::Located(_, inner) => {
+                self.pattern_provenance_bindings(inner, source, bindings)
+            }
             TypedPattern::Var(_, id) => {
                 bindings.insert(id.unique_id, source.clone());
             }

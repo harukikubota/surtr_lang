@@ -956,6 +956,7 @@ fn rebase_record_arg(arg: &mut ResolvedRecordLitArg, base: u32, offset: u32) {
 
 fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
     match pattern {
+        ResolvedPattern::Located(_, inner) => rebase_pattern(inner, base, offset),
         ResolvedPattern::Projection { id, inner, .. } => {
             rebase_resolved_id(id, base, offset);
             rebase_pattern(inner, base, offset);

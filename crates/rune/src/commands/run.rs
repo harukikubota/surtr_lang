@@ -604,7 +604,9 @@ fn execute_bytecode(
         return Err(RuneError::silent(1));
     }
 
-    if matches!(env, ExecutionEnv::Run) && report_final_result_error_if_any(&vm) {
+    if matches!(env, ExecutionEnv::Run)
+        && report_final_result_error_if_any(&vm, runtime_sources.as_ref())
+    {
         if matches!(error_context, ErrorContextMode::Verbose) {
             emit_verbose_vm_context(&vm);
         }
@@ -1135,23 +1137,32 @@ fn runtime_call_kind_label(kind: &sindr::runtime::RuntimeCallKind) -> &'static s
     }
 }
 
-fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
+fn report_final_result_error_if_any(
+    vm: &eldr::VM,
+    runtime_sources: Option<&(diagnostics::SourceRegistry, diagnostics::SourceId)>,
+) -> bool {
+    let emit_value_error = |value| match runtime_sources {
+        Some((sources, source_id)) => xldr::error_display::emit_runtime_value_error_with_registry(
+            vm,
+            value,
+            sources,
+            *source_id,
+            xldr::ErrorDisplayMode::Full,
+        ),
+        None => xldr::error_display::emit_runtime_value_error_from_vm(
+            vm,
+            value,
+            xldr::ErrorDisplayMode::Full,
+        ),
+    };
     match vm.last_value() {
         Some(value @ Value::Error(_)) => {
-            xldr::error_display::emit_runtime_value_error_from_vm(
-                vm,
-                value,
-                xldr::ErrorDisplayMode::Full,
-            );
+            emit_value_error(value);
             true
         }
         Some(Value::Tagged { tag: 1, fields }) => {
             if let Some(err_value) = fields.first() {
-                xldr::error_display::emit_runtime_value_error_from_vm(
-                    vm,
-                    err_value,
-                    xldr::ErrorDisplayMode::Full,
-                );
+                emit_value_error(err_value);
             } else {
                 xldr::error_display::emit_invalid_result_missing_payload(
                     vm.source(),

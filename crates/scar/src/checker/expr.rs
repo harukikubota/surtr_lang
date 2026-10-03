@@ -3484,6 +3484,7 @@ impl Checker {
         span: &Span,
     ) -> Result<(), TypeError> {
         match pattern {
+            TypedPattern::Located(_, inner) => self.bind_facet_pattern_bindings(inner, path, span),
             TypedPattern::Var(_, id) => {
                 self.facet_bindings.insert(id.unique_id, path.clone());
                 Ok(())
@@ -3510,6 +3511,7 @@ impl Checker {
 
     fn clear_facet_pattern_bindings(&mut self, pattern: &TypedPattern) {
         match pattern {
+            TypedPattern::Located(_, inner) => self.clear_facet_pattern_bindings(inner),
             TypedPattern::Var(_, id) => {
                 self.facet_bindings.remove(&id.unique_id);
             }
@@ -3583,7 +3585,7 @@ impl Checker {
             other => (
                 other.clone(),
                 Vec::new(),
-                SafeBindRhsProjection::PassThroughNonResultPartial {
+                SafeBindRhsProjection::PatternInput {
                     pattern_input_ty: other,
                 },
             ),
@@ -15674,7 +15676,7 @@ mod tests {
             node: TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
                 pattern: TypedPattern::Wildcard(Ty::Int),
                 rhs: Box::new(pending_trait_call("Global::RhsTrait", Ty::Int)),
-                projection: SafeBindRhsProjection::PassThroughNonResultPartial {
+                projection: SafeBindRhsProjection::PatternInput {
                     pattern_input_ty: Ty::Int,
                 },
                 failure_target: SafeBindFailureTarget::DoAlternative {

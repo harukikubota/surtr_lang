@@ -897,7 +897,36 @@ impl Checker {
                 None,
             ));
         }
-        failure_arm.body = replacement;
+        let failure_target = match replacement.node {
+            TypedInner::ResultEffectFailure(target) => {
+                SafeBindFailureTarget::DoResultContext(target)
+            }
+            TypedInner::DeferredDoFailure(target) => SafeBindFailureTarget::Deferred(target),
+            _ => SafeBindFailureTarget::DoAlternative {
+                empty: Box::new(replacement),
+            },
+        };
+        let TypedInner::Match(value, arms) = &mut body.node else {
+            unreachable!("partial mapper Match was validated above");
+        };
+        let (typed_pattern, _) = self.check_pattern(pattern, &value.ty, pattern_span)?;
+        let continuation = arms.remove(0).body;
+        body.node = TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+            pattern: typed_pattern,
+            rhs: value.clone(),
+            projection: SafeBindRhsProjection::PatternInput {
+                pattern_input_ty: value.ty.clone(),
+            },
+            failure_target,
+            continuation: Box::new(continuation),
+            origins: DoSafeBindOrigins {
+                do_span: do_span.clone(),
+                operator_span: statement_span.clone(),
+                pattern_span: pattern_span.clone(),
+                rhs_span: statement_span.clone(),
+                result_span: do_span.clone(),
+            },
+        }));
         Ok(*self.resolve_typed_node(checked))
     }
 
@@ -991,8 +1020,8 @@ impl Checker {
                 payload_ty: self.resolve_ty(&payload_ty),
                 error_ty: self.resolve_ty(&error_ty),
             },
-            SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
-                SafeBindRhsProjection::PassThroughNonResultPartial {
+            SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
+                SafeBindRhsProjection::PatternInput {
                     pattern_input_ty: self.resolve_ty(&pattern_input_ty),
                 }
             }

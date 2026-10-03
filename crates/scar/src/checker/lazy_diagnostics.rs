@@ -134,6 +134,7 @@ impl Checker {
             bindings: &mut HashMap<u32, LazyCaptureDiagnostic>,
         ) {
             match pattern {
+                TypedPattern::Located(_, inner) => bind(inner, origin, bindings),
                 TypedPattern::Var(_, id) => {
                     if let Some(origin) = origin {
                         bindings.insert(id.unique_id, origin.clone());

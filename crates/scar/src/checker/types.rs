@@ -4386,8 +4386,8 @@ impl Checker {
                         payload_ty: self.resolve_ty(&payload_ty),
                         error_ty: self.resolve_ty(&error_ty),
                     },
-                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
-                        SafeBindRhsProjection::PassThroughNonResultPartial {
+                    SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
+                        SafeBindRhsProjection::PatternInput {
                             pattern_input_ty: self.resolve_ty(&pattern_input_ty),
                         }
                     }
@@ -4443,8 +4443,8 @@ impl Checker {
                             payload_ty: self.resolve_ty(&payload_ty),
                             error_ty: self.resolve_ty(&error_ty),
                         },
-                        SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
-                            SafeBindRhsProjection::PassThroughNonResultPartial {
+                        SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
+                            SafeBindRhsProjection::PatternInput {
                                 pattern_input_ty: self.resolve_ty(&pattern_input_ty),
                             }
                         }
@@ -4801,6 +4801,9 @@ impl Checker {
 
     pub(super) fn resolve_typed_pattern(&self, pattern: TypedPattern) -> TypedPattern {
         match pattern {
+            TypedPattern::Located(source, inner) => {
+                TypedPattern::Located(source, Box::new(self.resolve_typed_pattern(*inner)))
+            }
             TypedPattern::Var(ty, id) => TypedPattern::Var(self.resolve_ty(&ty), id),
             TypedPattern::Pin(ty, id, dispatch) => {
                 TypedPattern::Pin(self.resolve_ty(&ty), id, dispatch)
@@ -5087,7 +5090,7 @@ mod tests {
                     span: Span { start: 15, end: 20 },
                     node: TypedInner::Lit(Lit::Int(1.into())),
                 }),
-                projection: SafeBindRhsProjection::PassThroughNonResultPartial {
+                projection: SafeBindRhsProjection::PatternInput {
                     pattern_input_ty: Ty::Int,
                 },
                 failure_target: SafeBindFailureTarget::TopLevel,
