@@ -759,6 +759,12 @@ result = Task::await(task) @timeout(100ms)
 
 `@timeout` は直前の runtime-managed call に timeout policy を付与する。timeout した場合、結果値は `Err(TimeOutError)` になる。
 
+`Task::async` は body を開始し、最初の待機・予算切れ・完了まで進んだ後に handle を返す。
+たとえば body が出力してから sleep する場合、その出力は handle を受け取った後の処理より先に起きる。
+CPU 処理が続く場合は予算切れで実行を切り替え、残りを背景で進める。
+入れ子の通常 callback は同じ予算を使い、呼び出すたびに予算を補充しない。
+timeout による取消でも、開いているファイルなどの後処理を終えてから結果を配送する。
+
 初期フェーズでは、Task.Supervisor / DynamicSupervisor link は扱わない。
 Task の `link` / `cancel` / `restart` も v2 public surface には含めない。
 
@@ -1467,7 +1473,7 @@ VM は少なくとも次の queue / table を持つ。
 | runnable queue | 実行可能 process を保持 |
 | deadline queue | timer / timeout deadline を保持 |
 | waiting table | reply / init ready / task completion 待ちを保持 |
-| execution context | process ごとの `pc` / stack / call frames を保持 |
+| execution context | process ごとの `pc` / stack / call frames と builtin / callback の継続状態を保持 |
 | singleton slot | singleton process の current PID を保持 |
 | process table | PID から process instance を引く |
 | spec table | RuntimeProcessId から immutable spec を引く |
@@ -1475,6 +1481,20 @@ VM は少なくとも次の queue / table を持つ。
 
 `RuntimeBootPlan`、`effective_supervisors`、singleton slot、`DynamicSupervisor` の既定 policy は
 runtime global state であり、process-local `ExecutionContext` には入れない。
+
+通常の batch / REPL chunk、process handler、Task::async / launch と detached task の再開は、
+共通の予算付き driver を通す。callback の開始や builtin の再開によって予算を補充せず、
+scheduler が runnable な実行を選び直したときに次の quantum を与える。
+
+- CPU の予算切れでは継続状態を Runnable として保存し、runnable queue へ一度だけ戻す。
+- Future 待機では待機先と継続状態を Waiting として保存し、解決時に runnable へ戻す。
+- 完了結果と失敗は保存した復帰先へ一度だけ配送する。process state の更新や wrapper の後処理も、この復帰先の責務に含む。
+- builtin 内に event loop を入れ子にして callback を完走させない。実行可能な処理がなく timer / I/O を待つときの待機は共通 driver が行う。
+
+継続状態は VM 内部にあり、利用者の process state / payload には入らない。
+immutable な値の backing storage は同一 VM 内で共有してよい。REPL checkpoint は中断中の状態も保存し、
+rollback 後は保存位置から再開する。外部 I/O の副作用を巻き戻す保証は加えない。
+未分割の Rust loop・外部呼出し・要素の clone / drop は、実時間の公平性保証の対象外とする。
 
 ---
 

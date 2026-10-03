@@ -161,18 +161,34 @@ buffer semantics を観測できなければならない。
 VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk()` だが、
 内部実行は `ExecutionContext` を介した step 単位に分ける。
 
-- `ExecutionContext` は `pc`、operand stack、call frames、実行 target を持つ。
+- `ExecutionContext` は `pc`、operand stack、call frames、実行 target と、未完了の builtin / callback の継続状態を持つ。
 - `VM` は bytecode、constant/function/type table、boot plan、process runtime、
   I/O、observer、file resource を所有し続ける。
 - `step_context(ctx)` は `ctx.pc` の opcode 1 個、またはそれに相当する小さな VM 実行単位だけを進める。
-- `run_until_outcome` は `step_context` の loop として扱い、既存の batch / REPL 契約を保つ。
+- batch / REPL の外部 API は結果まで待つ。内部では共通の予算付き driver を使い、Task / process を含む他の runnable な処理へ実行を切り替える。
 - `run_quantum(ctx, budget)` は reduction budget が切れた時点で scheduler 境界へ戻る。
-- 初期 cost は opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。
+- opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。builtin の再開は有界の状態遷移単位で課金し、callback の opcode と同じ予算を使う。予算 0 では進めず、新しい予算は scheduler が実行対象を選び直したときに与える。
 - `StepOutcome::Pending` は future id と resume 用 `ExecutionContext` を保持する。
 
-この段階では user-facing `yield`、新 opcode、bytecode format 変更、builtin continuation
-は導入しない。重い builtin はまだ分割不能な 1 step として扱い、後続フェーズで
-continuation / dirty worker へ移行する。
+### 3.9 Builtin / callback の継続実行
+
+builtin の内部結果は、完了、継続可能、callback 要求、Future 待機、RuntimeError を区別する。
+継続状態は VM の実行コンテキストが所有し、利用者の `Value` や bytecode に格納しない。
+即時完了する builtin も同じ dispatch へ接続する。
+
+- direct / closure / tail closure / partial / inject / compose と、Task / process handler は共通の実行契約を使う。
+- callback 要求では親の復帰先を保存し、子を通常の VM engine で進める。子の完了結果は親へ一度だけ渡す。引数評価や callback を再開時にやり直さない。
+- 予算切れは Runnable として保存し、Future 待機は Waiting として保存する。CPU の yield に Future を作らず、待機中の再実行や queue の二重登録を許さない。
+- 実行中の状態は切替え時に移動する。REPL checkpoint は独立した保存状態を持ち、rollback はその位置へ戻す。新規継続や失敗した chunk の進捗を破棄し、保存状態を二重実行しない。外部 I/O の巻き戻しは保証しない。
+- `__recover_kind` や `file_with_open` など、callback 後に処理がある wrapper は後処理も継続状態に保持する。ファイルは中断中も開いたまま保持し、完了・失敗時に所定の flush / close を一度だけ行う。
+- ファイルの所有権を含む継続は、開始直後の中断や timeout による取消でも後処理を失わない。取消中に後処理が Result のエラーを返しても、利用者 callback の後続命令は再開しない。
+- REPL checkpoint は開いているファイル資源も保持する。失敗した chunk が既存 handle を閉じた場合、rollback は保存した資源から handle の対応を復元する。パスを開き直したり、ファイルを切り詰めたり、OS の読み書き位置を巻き戻したりしない。
+- batch のトップレベルが完了しても background task が残る間はファイル資源を保持し、background task の終了後に shutdown を行う。
+- 失敗時は未完了状態を破棄し、呼出し元の source location と call trace を保つ。欠落した復帰先などの不正状態は RuntimeError とする。
+
+利用者 callback を同期ループで完走させる旧経路は残さない。入力サイズに比例する既存の純粋な Rust loop や、regex / JSON / OS I/O の一回の外部呼出しの分割は別途扱う。
+要素の clone / drop と allocator の時間も reduction の実時間上限には含めない。
+この契約は VM 全体の実時間の公平性上限を保証しない。
 
 ---
 

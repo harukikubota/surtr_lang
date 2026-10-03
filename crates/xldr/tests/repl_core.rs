@@ -261,6 +261,8 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_routes_print_side_effects_into_repl_result_lines),
     repl_core_case!(core_routes_eprint_side_effects_into_repl_stderr_lines),
     repl_core_case!(core_routes_background_prints_into_pump_result_lines),
+    repl_core_case!(core_chunk_shares_cpu_budget_with_background_tasks),
+    repl_core_case!(core_cpu_background_work_requests_immediate_pump),
     repl_core_case!(core_from_script_source_exposes_preloaded_docs_and_keeps_repl_policy),
     repl_core_case!(core_from_script_file_resolves_include_and_executes_preload_before_repl),
     repl_core_case!(core_from_module_source_exposes_preloaded_module_definitions),
@@ -2993,6 +2995,73 @@ fn core_routes_background_prints_into_pump_result_lines() {
 
     assert!(!background.should_exit);
     assert_eq!(visible_text(&background), "hello from background");
+}
+
+fn core_chunk_shares_cpu_budget_with_background_tasks() {
+    let mut engine = engine();
+    let definition = engine.handle_line(
+        "def countdown(remaining: Int) -> Int { if(remaining == 0, 0, countdown(remaining - 1)) }",
+    );
+    assert!(matches!(definition.output, ReplOutput::EvalSuccess { .. }));
+    let result = engine.handle_line(
+        r#"slow = Task::async({||
+  value = countdown(10000)
+  print("slow task")
+  Ok(value)
+})
+fast = Task::async({|| print("fast task"); Ok(1) })
+print(inspect(Task::await(slow)))
+print(inspect(Task::await(fast)))"#,
+    );
+    assert!(
+        matches!(result.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        visible_text(&result)
+    );
+    let output = visible_text(&result);
+    let fast = output.find("fast task").expect("fast task must complete");
+    let slow = output.find("slow task").expect("slow task must complete");
+    assert!(fast < slow, "{output}");
+    assert_eq!(output.matches("fast task").count(), 1, "{output}");
+    assert_eq!(output.matches("slow task").count(), 1, "{output}");
+    assert!(
+        output.contains("Ok(0)") && output.contains("Ok(1)"),
+        "{output}"
+    );
+}
+
+fn core_cpu_background_work_requests_immediate_pump() {
+    let mut engine = engine();
+    let definition = engine.handle_line(
+        "def countdown(remaining: Int) -> Int { if(remaining == 0, 0, countdown(remaining - 1)) }",
+    );
+    assert!(matches!(definition.output, ReplOutput::EvalSuccess { .. }));
+    let launched = engine
+        .handle_line(r#"Task::launch({|| countdown(10000); print("CPU task complete"); Ok(()) })"#);
+    assert!(
+        matches!(launched.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        visible_text(&launched)
+    );
+    assert!(!visible_text(&launched).contains("CPU task complete"));
+    assert!(engine.has_pending_background_work());
+    let mut completion_count = 0;
+    // Match the CLI's idle polling contract, without submitting another chunk.
+    for _ in 0..1000 {
+        if !engine.has_pending_background_work() {
+            break;
+        }
+        assert_eq!(
+            engine.next_background_deadline_delay(),
+            Some(Duration::ZERO)
+        );
+        let progress = engine.pump_background_to_next_deadline();
+        assert!(!matches!(progress.output, ReplOutput::EvalError { .. }));
+        completion_count += visible_text(&progress).matches("CPU task complete").count();
+    }
+    assert!(!engine.has_pending_background_work());
+    assert_eq!(completion_count, 1);
+    assert_eq!(engine.next_background_deadline_delay(), None);
 }
 
 fn core_from_script_source_exposes_preloaded_docs_and_keeps_repl_policy() {

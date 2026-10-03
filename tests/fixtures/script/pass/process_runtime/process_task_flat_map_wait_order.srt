@@ -1,0 +1,11 @@
+task = Task::async({||
+  values = List::flat_map([1, 2], {|value|
+    print("before=#{value}")
+    Process::sleep(10ms)
+    print("after=#{value}")
+    [value]
+  })
+  Ok(values)
+})
+print("got handle")
+print(inspect(Task::await(task)))
