@@ -64,7 +64,14 @@ supervisor_init {
   MyPool {}
 }
 
+def reply_kind(reply: Result<Int>) -> String {
+  match reply {
+    Ok(_) => "Ok",
+    Err(error) => Error::kind(error),
+  }
+}
+
 reply =? MyPool::delayed()
-print(inspect(reply))
+print(inspect(List::map(reply, &reply_kind)))
 value =? MyPool::value()
 print(inspect(value))

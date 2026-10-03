@@ -1,0 +1,12 @@
+values = [1..10000]
+slow = Task::async({||
+  mapped = List::flat_map([0], {|_| values})
+  print("slow")
+  Ok(List::len(mapped))
+})
+fast = Task::async({||
+  print("fast")
+  Ok(1)
+})
+print(inspect(Task::await(slow)))
+print(inspect(Task::await(fast)))

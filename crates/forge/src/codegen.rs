@@ -3909,6 +3909,54 @@ mod tests {
     }
 
     #[test]
+    fn emit_list_flat_map_uses_the_existing_builtin_call_and_template_paths() {
+        let list_ty = Ty::List(Box::new(Ty::Int));
+        let mapper_ty = Ty::Func(vec![Ty::Int], Box::new(list_ty.clone()));
+        let builtin = TypedNode {
+            ty: Ty::BuiltinFunc {
+                name: "list_flat_map".into(),
+                params: vec![list_ty.clone(), mapper_ty.clone()],
+                ret: Box::new(list_ty.clone()),
+            },
+            span: span(1, 15),
+            node: TypedInner::Var(resolved_id("flat_map", Some("List::flat_map"), 40)),
+        };
+        let mut gene = Codegen::new();
+        gene.state.slot_map.insert(41, 0);
+        gene.state.slot_map.insert(42, 1);
+        gene.state.next_slot = 2;
+        let mapper = local_var("mapper", 42, mapper_ty);
+        gene.emit_node(&TypedNode {
+            ty: list_ty.clone(),
+            span: span(1, 25),
+            node: TypedInner::App(
+                Box::new(builtin.clone()),
+                vec![local_var("values", 41, list_ty.clone()), mapper.clone()],
+            ),
+        })
+        .expect("flat_map direct call should lower");
+        gene.emit_node(&TypedNode {
+            ty: Ty::Func(vec![list_ty.clone()], Box::new(list_ty)),
+            span: span(30, 50),
+            node: TypedInner::InjectCall(Box::new(builtin), vec![mapper]),
+        })
+        .expect("flat_map injection should lower");
+        let (opcodes, state) = gene.finalize().expect("labels should resolve");
+        let expected = Codegen::builtin_id("list_flat_map").expect("flat_map builtin exists");
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin { builtin_id, arity: 2, .. } if *builtin_id == expected
+        )));
+        assert!(state.callable_templates.iter().any(|template| matches!(
+            template.kind,
+            CallableTemplateKind::InjectDirectCall {
+                target: CallableTemplateDirectTarget::Builtin(builtin_id),
+                bound_arg_count: 1,
+            } if builtin_id == expected
+        )));
+    }
+
+    #[test]
     fn emit_inject_call_records_direct_call_template() {
         let mut gene = Codegen::new();
         let node = TypedNode {

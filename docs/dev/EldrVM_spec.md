@@ -161,18 +161,34 @@ buffer semantics を観測できなければならない。
 VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk()` だが、
 内部実行は `ExecutionContext` を介した step 単位に分ける。
 
-- `ExecutionContext` は `pc`、operand stack、call frames、実行 target を持つ。
+- `ExecutionContext` は `pc`、operand stack、call frames、実行 target と、未完了の builtin / callback の継続状態を持つ。
 - `VM` は bytecode、constant/function/type table、boot plan、process runtime、
   I/O、observer、file resource を所有し続ける。
 - `step_context(ctx)` は `ctx.pc` の opcode 1 個、またはそれに相当する小さな VM 実行単位だけを進める。
-- `run_until_outcome` は `step_context` の loop として扱い、既存の batch / REPL 契約を保つ。
+- batch / REPL の外部 API は結果まで待つ。内部では共通の予算付き driver を使い、Task / process を含む他の runnable な処理へ実行を切り替える。
 - `run_quantum(ctx, budget)` は reduction budget が切れた時点で scheduler 境界へ戻る。
-- 初期 cost は opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。
+- opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。builtin の再開は有界の状態遷移単位で課金し、callback の opcode と同じ予算を使う。予算 0 では進めず、新しい予算は scheduler が実行対象を選び直したときに与える。
 - `StepOutcome::Pending` は future id と resume 用 `ExecutionContext` を保持する。
 
-この段階では user-facing `yield`、新 opcode、bytecode format 変更、builtin continuation
-は導入しない。重い builtin はまだ分割不能な 1 step として扱い、後続フェーズで
-continuation / dirty worker へ移行する。
+### 3.9 Builtin / callback の継続実行
+
+builtin の内部結果は、完了、継続可能、callback 要求、Future 待機、RuntimeError を区別する。
+継続状態は VM の実行コンテキストが所有し、利用者の `Value` や bytecode に格納しない。
+即時完了する builtin も同じ dispatch へ接続する。
+
+- direct / closure / tail closure / partial / inject / compose と、Task / process handler は共通の実行契約を使う。
+- callback 要求では親の復帰先を保存し、子を通常の VM engine で進める。子の完了結果は親へ一度だけ渡す。引数評価や callback を再開時にやり直さない。
+- 予算切れは Runnable として保存し、Future 待機は Waiting として保存する。CPU の yield に Future を作らず、待機中の再実行や queue の二重登録を許さない。
+- 実行中の状態は切替え時に移動する。REPL checkpoint は独立した保存状態を持ち、rollback はその位置へ戻す。新規継続や失敗した chunk の進捗を破棄し、保存状態を二重実行しない。外部 I/O の巻き戻しは保証しない。
+- `__recover_kind` や `file_with_open` など、callback 後に処理がある wrapper は後処理も継続状態に保持する。ファイルは中断中も開いたまま保持し、完了・失敗時に所定の flush / close を一度だけ行う。
+- ファイルの所有権を含む継続は、開始直後の中断や timeout による取消でも後処理を失わない。取消中に後処理が Result のエラーを返しても、利用者 callback の後続命令は再開しない。
+- REPL checkpoint は開いているファイル資源も保持する。失敗した chunk が既存 handle を閉じた場合、rollback は保存した資源から handle の対応を復元する。パスを開き直したり、ファイルを切り詰めたり、OS の読み書き位置を巻き戻したりしない。
+- batch のトップレベルが完了しても background task が残る間はファイル資源を保持し、background task の終了後に shutdown を行う。
+- 失敗時は未完了状態を破棄し、呼出し元の source location と call trace を保つ。欠落した復帰先などの不正状態は RuntimeError とする。
+
+利用者 callback を同期ループで完走させる旧経路は残さない。入力サイズに比例する既存の純粋な Rust loop や、regex / JSON / OS I/O の一回の外部呼出しの分割は別途扱う。
+要素の clone / drop と allocator の時間も reduction の実時間上限には含めない。
+この契約は VM 全体の実時間の公平性上限を保証しない。
 
 ---
 
@@ -253,6 +269,46 @@ compile / surface 契約との対応は次のとおり。
 - `Error::kind(Error)` は `RichError.kind`、`Error::message(Error)` は `RichError.message` を `String` として返す
 - `Error::same_kind(Error, Error)` は先頭の具象 `RichError.kind` だけを比較する。`Result` の `Err` 同士の `Eq` が利用し、message・cause・location・診断情報は判定に含めない。壊れた Error 表現や非 Error 値を `False` にせず runtime invariant failure とする
 - `Error::format(Error)` は `eprint(Error)` と同じ行列を stderr へ出さず、`\n` join した `String` として返す
+
+### 4.2 List の内部表現と flat_map
+
+公開型は常に `List<$A>` とし、runtime は空の `Empty`、先頭と tail を持つ `Cons`、
+共有 buffer と開始位置を持つ `Packed` を使う。`ListHandle` の表現と長さは private field とし、
+利用側は `len`、`head_value`、`tail_handle`、`iter` を通して論理順の要素を読む。
+
+- 空 List は `Empty` にそろえる。非空の `from_items(Vec<Value>)` は buffer の所有権を移して `Packed` を作る。
+- `cons` は tail の表現を保持したまま一つの `Cons` を作る。Packed の tail は buffer を共有し、開始位置だけを進める。
+- `len` は保存した長さを返す。長さと開始位置の加減算は checked API を使い、overflow や不正な状態を補正しない。
+- `len == 0` と Empty は同値。Cons の長さは tail の長さ + 1、Packed は `offset < items.len()` かつ `len == items.len() - offset` を満たす。非空の表現だけが Cons / Packed になる。
+- equality、iteration、display、inspect、Debug、List pattern は論理順を使い、内部表現を表示しない。
+- List は immutable である。process の payload でも backing storage を共有でき、受信側から送信側の List を変更できない。
+
+`List::flat_map(values, f)` は通常の `CallBuiltin(list_flat_map)` で実行する。
+継続は入力 cursor、mapper、出力 cursor、`ListBuilder` を所有する。入力一要素の処理と出力一要素の追加で
+共通予算を消費し、callback の命令も同じ予算で進める。mapper は入力順に一度だけ呼ぶ。
+mapper の結果が List でない不正な bytecode は RuntimeError とし、後続の mapper を実行しない。
+完了時にだけ Builder の buffer を ListHandle へ移す。中断状態や Builder は利用者の Value に追加しない。
+REPL checkpoint は Builder を独立に保存するが、通常の実行切替えでは所有権を移し、複製しない。
+
+要素操作を単位とする仮想計算量では、`cons` / `uncons` / `len` / `head` / `tail` は `O(1)`、
+全走査は `O(n)`、`append` は左辺の長さに比例する。flat_map は入力長を N、mapper が返す全要素数を M とすると
+`O(N + M + callback のコスト)` である。display と equality は要素の比較・表示のコストを別に加算する。
+`Vec::push` は償却 O(1) であり、再確保を含む一回の処理の実時間上限を意味しない。
+
+`Monad::bind` の source 定義と generic do lowering は維持し、各段は完成した List を返す。
+全 bind の入力訪問数の合計を B、出力要素数の合計を E とすると、構造的な処理量は
+`O(B + E)` に callback のコストを加えたものになる。flatten の構築は旧実装の `2E` 個の Cons から
+`E` 回の Builder 追加と各 bind 一回の finish へ減る。
+右辺や通常の束縛に別の bind / do を含まず、後続 continuation として直列に入れ子になった
+k 個の bind が末尾の M 要素を順に平坦化して返す場合、E = kM になる。
+一般の nested do は B / E で評価し、常に E = kM と仮定しない。
+三段の各入力が10要素、末尾が singleton なら B = 1110、M = 1000、E = 3000 となる。
+この構築操作の削減は、多段に残る kM の計算量クラスを変えない。
+
+これらは要素の物理的な clone / drop、allocator、実時間、RSS の改善を保証しない。
+Packed の tail は参照中の buffer 全体を保持し、処理済みの先頭部分を自動で縮めない。
+最後の参照の破棄では元の buffer 全体を解放し得る。Cons の長い鎖の反復解放と、
+checkpoint の一般的なコピー削減も未実装である。
 
 ---
 

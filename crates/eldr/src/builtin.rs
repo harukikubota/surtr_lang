@@ -1,6 +1,10 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
+mod list_flat_map;
+use list_flat_map::{builtin_list_flat_map, FlatMapContinuation};
+#[cfg(test)]
+pub(crate) use list_flat_map::{flat_map_metrics, reset_flat_map_metrics};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{
@@ -24,7 +28,77 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Function pointer type for built-in implementations.
-pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
+pub(crate) type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<BuiltinOutcome, RuntimeError>;
+
+/// VM-owned work. A callback is started by the engine, never driven on the Rust stack.
+#[derive(Debug, Clone)]
+pub(crate) enum BuiltinOutcome {
+    Complete(Value),
+    Call {
+        callable: Callable,
+        args: Vec<Value>,
+        continuation: BuiltinContinuation,
+    },
+    Resume(BuiltinContinuation),
+    Wait {
+        future_id: u64,
+        continuation: BuiltinContinuation,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum BuiltinContinuation {
+    FlatMap(FlatMapContinuation),
+    Runtime(crate::vm::RuntimeContinuation),
+    Identity,
+    RecoverKind,
+    FileWithOpen {
+        path: String,
+        handle: FileHandleValue,
+    },
+    Compose {
+        rhs: Callable,
+    },
+}
+
+impl BuiltinContinuation {
+    pub(crate) fn resume(
+        self,
+        vm: &mut VM,
+        result: Result<Value, RuntimeError>,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let value = match self {
+            Self::FlatMap(continuation) => return continuation.resume(result),
+            Self::Runtime(continuation) => return continuation.resume(vm, result),
+            Self::Identity => result?,
+            Self::RecoverKind => {
+                match decode_result_arg(&result?, "__recover_kind", "handler result")? {
+                    Ok(value) => ok_result(value),
+                    Err(err) => err_result_from_rich_error(err),
+                }
+            }
+            Self::FileWithOpen { path, handle } => {
+                let flush = vm.flush_file_resource(handle.id);
+                let close = vm.close_file_resource(handle.id);
+                if let Err(err) = flush {
+                    file_handle_error_result(vm, Some(&path), err)
+                } else if let Err(err) = close {
+                    file_handle_error_result(vm, Some(&path), err)
+                } else {
+                    result?
+                }
+            }
+            Self::Compose { rhs } => {
+                return Ok(BuiltinOutcome::Call {
+                    callable: rhs,
+                    args: vec![result?],
+                    continuation: Self::Identity,
+                })
+            }
+        };
+        Ok(BuiltinOutcome::Complete(value))
+    }
+}
 
 struct BuiltinImpl {
     name: &'static str,
@@ -35,107 +109,107 @@ struct BuiltinImpl {
 const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "print",
-        func: builtin_print,
+        func: |vm, args| builtin_print(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "to_string",
-        func: builtin_to_string,
+        func: |vm, args| builtin_to_string(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "inspect",
-        func: builtin_inspect,
+        func: |vm, args| builtin_inspect(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "safe_div",
-        func: builtin_safe_div,
+        func: |vm, args| builtin_safe_div(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "safe_mod",
-        func: builtin_safe_mod,
+        func: |vm, args| builtin_safe_mod(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "eprint",
-        func: builtin_eprint,
+        func: |vm, args| builtin_eprint(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "set_exit_code",
-        func: builtin_set_exit_code,
+        func: |vm, args| builtin_set_exit_code(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "shl",
-        func: builtin_shl,
+        func: |vm, args| builtin_shl(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "shr",
-        func: builtin_shr,
+        func: |vm, args| builtin_shr(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "len",
-        func: builtin_list_len,
+        func: |vm, args| builtin_list_len(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "gen_make",
-        func: builtin_gen_make,
+        func: |vm, args| builtin_gen_make(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "gen_idx",
-        func: builtin_gen_idx,
+        func: |vm, args| builtin_gen_idx(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "gen_items",
-        func: builtin_gen_items,
+        func: |vm, args| builtin_gen_items(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "bit_and",
-        func: builtin_bit_and,
+        func: |vm, args| builtin_bit_and(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "bit_or",
-        func: builtin_bit_or,
+        func: |vm, args| builtin_bit_or(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "bit_xor",
-        func: builtin_bit_xor,
+        func: |vm, args| builtin_bit_xor(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "bit_not",
-        func: builtin_bit_not,
+        func: |vm, args| builtin_bit_not(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "test_bit",
-        func: builtin_test_bit,
+        func: |vm, args| builtin_test_bit(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "set_bit",
-        func: builtin_set_bit,
+        func: |vm, args| builtin_set_bit(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "clear_bit",
-        func: builtin_clear_bit,
+        func: |vm, args| builtin_clear_bit(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "toggle_bit",
-        func: builtin_toggle_bit,
+        func: |vm, args| builtin_toggle_bit(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "codepoints",
-        func: builtin_codepoints,
+        func: |vm, args| builtin_codepoints(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "from_codepoints",
-        func: builtin_from_codepoints,
+        func: |vm, args| builtin_from_codepoints(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_err",
-        func: builtin_result_map_err,
+        func: |vm, args| builtin_result_map_err(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "cause",
-        func: builtin_result_cause,
+        func: |vm, args| builtin_result_cause(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "chain",
-        func: builtin_result_chain,
+        func: |vm, args| builtin_result_chain(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__recover_kind",
@@ -143,247 +217,247 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__test_push",
-        func: builtin_test_push,
+        func: |vm, args| builtin_test_push(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_pop",
-        func: builtin_test_pop,
+        func: |vm, args| builtin_test_pop(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_pass",
-        func: builtin_test_pass,
+        func: |vm, args| builtin_test_pass(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_fail",
-        func: builtin_test_fail,
+        func: |vm, args| builtin_test_fail(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_fail_error",
-        func: builtin_test_fail_error,
+        func: |vm, args| builtin_test_fail_error(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_fail_current",
-        func: builtin_test_fail_current,
+        func: |vm, args| builtin_test_fail_current(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "group_count",
-        func: builtin_list_group_count,
+        func: |vm, args| builtin_list_group_count(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "zip",
-        func: builtin_list_zip,
+        func: |vm, args| builtin_list_zip(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "empty_map",
-        func: builtin_empty_map,
+        func: |vm, args| builtin_empty_map(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_from_entries",
-        func: builtin_map_from_entries,
+        func: |vm, args| builtin_map_from_entries(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_len",
-        func: builtin_map_len,
+        func: |vm, args| builtin_map_len(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_contains_key",
-        func: builtin_map_contains_key,
+        func: |vm, args| builtin_map_contains_key(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_get",
-        func: builtin_map_get,
+        func: |vm, args| builtin_map_get(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_insert",
-        func: builtin_map_insert,
+        func: |vm, args| builtin_map_insert(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_remove",
-        func: builtin_map_remove,
+        func: |vm, args| builtin_map_remove(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_keys",
-        func: builtin_map_keys,
+        func: |vm, args| builtin_map_keys(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "map_values_list",
-        func: builtin_map_values_list,
+        func: |vm, args| builtin_map_values_list(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "view",
-        func: builtin_facet_view,
+        func: |vm, args| builtin_facet_view(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "preview",
-        func: builtin_facet_preview,
+        func: |vm, args| builtin_facet_preview(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_compose",
-        func: builtin_facet_compose,
+        func: |vm, args| builtin_facet_compose(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_put",
-        func: builtin_facet_replace,
+        func: |vm, args| builtin_facet_replace(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "set",
-        func: builtin_facet_set,
+        func: |vm, args| builtin_facet_set(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "over",
-        func: builtin_facet_over,
+        func: |vm, args| builtin_facet_over(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "over_result",
-        func: builtin_facet_over_result,
+        func: |vm, args| builtin_facet_over_result(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "case_set",
-        func: builtin_facet_case_set,
+        func: |vm, args| builtin_facet_case_set(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "case_over",
-        func: builtin_facet_case_over,
+        func: |vm, args| builtin_facet_case_over(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_list_get",
-        func: builtin_facet_list_get,
+        func: |vm, args| builtin_facet_list_get(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_list_set",
-        func: builtin_facet_list_set,
+        func: |vm, args| builtin_facet_list_set(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_list_slice_get",
-        func: builtin_facet_list_slice_get,
+        func: |vm, args| builtin_facet_list_slice_get(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_list_slice_set",
-        func: builtin_facet_list_slice_set,
+        func: |vm, args| builtin_facet_list_slice_set(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_map_get",
-        func: builtin_facet_map_get,
+        func: |vm, args| builtin_facet_map_get(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__facet_map_set_existing",
-        func: builtin_facet_map_set_existing,
+        func: |vm, args| builtin_facet_map_set_existing(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_capture_stdout",
-        func: builtin_test_capture_stdout,
+        func: |vm, args| builtin_test_capture_stdout(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_capture_stderr",
-        func: builtin_test_capture_stderr,
+        func: |vm, args| builtin_test_capture_stderr(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_push_stdin",
-        func: builtin_test_push_stdin,
+        func: |vm, args| builtin_test_push_stdin(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__test_begin_it",
-        func: builtin_test_begin_it,
+        func: |vm, args| builtin_test_begin_it(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "compile",
-        func: builtin_regex_compile,
+        func: |vm, args| builtin_regex_compile(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "is_match",
-        func: builtin_regex_is_match,
+        func: |vm, args| builtin_regex_is_match(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "captures",
-        func: builtin_regex_captures,
+        func: |vm, args| builtin_regex_captures(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "whole",
-        func: builtin_regex_whole,
+        func: |vm, args| builtin_regex_whole(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "capture_count",
-        func: builtin_regex_capture_count,
+        func: |vm, args| builtin_regex_capture_count(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "get",
-        func: builtin_regex_get,
+        func: |vm, args| builtin_regex_get(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "get_name",
-        func: builtin_regex_get_name,
+        func: |vm, args| builtin_regex_get_name(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "find",
-        func: builtin_regex_find,
+        func: |vm, args| builtin_regex_find(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "find_all",
-        func: builtin_regex_find_all,
+        func: |vm, args| builtin_regex_find_all(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "split",
-        func: builtin_regex_split,
+        func: |vm, args| builtin_regex_split(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__regex_replace",
-        func: builtin_regex_replace,
+        func: |vm, args| builtin_regex_replace(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "replace_all",
-        func: builtin_regex_replace_all,
+        func: |vm, args| builtin_regex_replace_all(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "escape",
-        func: builtin_regex_escape,
+        func: |vm, args| builtin_regex_escape(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "group_names",
-        func: builtin_regex_group_names,
+        func: |vm, args| builtin_regex_group_names(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "text",
-        func: builtin_regex_match_text,
+        func: |vm, args| builtin_regex_match_text(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "start",
-        func: builtin_regex_match_start,
+        func: |vm, args| builtin_regex_match_start(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "end",
-        func: builtin_regex_match_end,
+        func: |vm, args| builtin_regex_match_end(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "project_args",
-        func: builtin_project_args,
+        func: |vm, args| builtin_project_args(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "io_get",
-        func: builtin_io_get,
+        func: |vm, args| builtin_io_get(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "io_get_line",
-        func: builtin_io_get_line,
+        func: |vm, args| builtin_io_get_line(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_read",
-        func: builtin_file_read,
+        func: |vm, args| builtin_file_read(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_write",
-        func: builtin_file_write,
+        func: |vm, args| builtin_file_write(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_append",
-        func: builtin_file_append,
+        func: |vm, args| builtin_file_append(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_exists",
-        func: builtin_file_exists,
+        func: |vm, args| builtin_file_exists(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_delete",
-        func: builtin_file_delete,
+        func: |vm, args| builtin_file_delete(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_with_open",
@@ -391,119 +465,119 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "file_read_chunk",
-        func: builtin_file_read_chunk,
+        func: |vm, args| builtin_file_read_chunk(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_write_chunk",
-        func: builtin_file_write_chunk,
+        func: |vm, args| builtin_file_write_chunk(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "file_flush",
-        func: builtin_file_flush,
+        func: |vm, args| builtin_file_flush(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_path",
-        func: builtin_filesystem_path,
+        func: |vm, args| builtin_filesystem_path(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_join",
-        func: builtin_filesystem_join,
+        func: |vm, args| builtin_filesystem_join(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_parent",
-        func: builtin_filesystem_parent,
+        func: |vm, args| builtin_filesystem_parent(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_name",
-        func: builtin_filesystem_name,
+        func: |vm, args| builtin_filesystem_name(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_extension",
-        func: builtin_filesystem_extension,
+        func: |vm, args| builtin_filesystem_extension(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_exists",
-        func: builtin_filesystem_exists,
+        func: |vm, args| builtin_filesystem_exists(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_stat",
-        func: builtin_filesystem_stat,
+        func: |vm, args| builtin_filesystem_stat(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_ls",
-        func: builtin_filesystem_ls,
+        func: |vm, args| builtin_filesystem_ls(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_tree_depth",
-        func: builtin_filesystem_tree_depth,
+        func: |vm, args| builtin_filesystem_tree_depth(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_mkdir",
-        func: builtin_filesystem_mkdir,
+        func: |vm, args| builtin_filesystem_mkdir(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_mkdir_all",
-        func: builtin_filesystem_mkdir_all,
+        func: |vm, args| builtin_filesystem_mkdir_all(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_rm",
-        func: builtin_filesystem_rm,
+        func: |vm, args| builtin_filesystem_rm(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_mv",
-        func: builtin_filesystem_mv,
+        func: |vm, args| builtin_filesystem_mv(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "filesystem_cp",
-        func: builtin_filesystem_cp,
+        func: |vm, args| builtin_filesystem_cp(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "shell_pwd",
-        func: builtin_shell_pwd,
+        func: |vm, args| builtin_shell_pwd(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "shell_cd",
-        func: builtin_shell_cd,
+        func: |vm, args| builtin_shell_cd(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "shell_exec",
-        func: builtin_shell_exec,
+        func: |vm, args| builtin_shell_exec(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "seed",
-        func: builtin_random_seed,
+        func: |vm, args| builtin_random_seed(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "int_until",
-        func: builtin_random_int_until,
+        func: |vm, args| builtin_random_int_until(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "int_range",
-        func: builtin_random_int_range,
+        func: |vm, args| builtin_random_int_range(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "next_int_until",
-        func: builtin_random_next_int_until,
+        func: |vm, args| builtin_random_next_int_until(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "next_int_range",
-        func: builtin_random_next_int_range,
+        func: |vm, args| builtin_random_next_int_range(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "kind",
-        func: builtin_error_kind,
+        func: |vm, args| builtin_error_kind(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "same_kind",
-        func: builtin_error_same_kind,
+        func: |vm, args| builtin_error_same_kind(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "message",
-        func: builtin_error_message,
+        func: |vm, args| builtin_error_message(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "format",
-        func: builtin_error_format,
+        func: |vm, args| builtin_error_format(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__process_pid",
@@ -519,11 +593,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__dynamic_supervisor_adopt",
-        func: builtin_dynamic_supervisor_adopt,
+        func: |vm, args| builtin_dynamic_supervisor_adopt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__dynamic_supervisor_status",
-        func: builtin_dynamic_supervisor_status,
+        func: |vm, args| builtin_dynamic_supervisor_status(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__supervisor_spawn",
@@ -531,11 +605,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__supervisor_adopt",
-        func: builtin_supervisor_adopt,
+        func: |vm, args| builtin_supervisor_adopt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__supervisor_status",
-        func: builtin_supervisor_status,
+        func: |vm, args| builtin_supervisor_status(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__supervisor_workers",
@@ -543,67 +617,67 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__process_state",
-        func: builtin_process_state,
+        func: |vm, args| builtin_process_state(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__process_store",
-        func: builtin_process_store,
+        func: |vm, args| builtin_process_store(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__genserver_call_reply",
-        func: builtin_genserver_call_reply,
+        func: |vm, args| builtin_genserver_call_reply(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__genserver_call_reply_later",
-        func: builtin_genserver_call_reply_later,
+        func: |vm, args| builtin_genserver_call_reply_later(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__genserver_call_stop_normal",
-        func: builtin_genserver_call_stop_normal,
+        func: |vm, args| builtin_genserver_call_stop_normal(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__genserver_call_stop_error",
-        func: builtin_genserver_call_stop_error,
+        func: |vm, args| builtin_genserver_call_stop_error(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__genserver_cast_next",
-        func: builtin_genserver_cast_next,
+        func: |vm, args| builtin_genserver_cast_next(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__genserver_cast_stop_normal",
-        func: builtin_genserver_cast_stop_normal,
+        func: |vm, args| builtin_genserver_cast_stop_normal(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__genserver_cast_stop_error",
-        func: builtin_genserver_cast_stop_error,
+        func: |vm, args| builtin_genserver_cast_stop_error(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__process_self",
-        func: builtin_process_self,
+        func: |vm, args| builtin_process_self(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__process_context_handler",
-        func: builtin_process_context_handler,
+        func: |vm, args| builtin_process_context_handler(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__out_handler_write",
-        func: builtin_out_handler_write,
+        func: |vm, args| builtin_out_handler_write(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__process_sleep",
-        func: builtin_process_sleep,
+        func: |vm, args| builtin_process_sleep(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "Pending",
-        func: builtin_process_init_pending,
+        func: |vm, args| builtin_process_init_pending(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "PendingAfter",
-        func: builtin_process_init_pending_after,
+        func: |vm, args| builtin_process_init_pending_after(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "Ready",
-        func: builtin_process_init_ready,
+        func: |vm, args| builtin_process_init_ready(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__task_call",
@@ -663,207 +737,211 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__workers_reserve",
-        func: builtin_workers_reserve,
+        func: |vm, args| builtin_workers_reserve(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__workers_size",
-        func: builtin_workers_size,
+        func: |vm, args| builtin_workers_size(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_add",
-        func: builtin_operator_int_add,
+        func: |vm, args| builtin_operator_int_add(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_sub",
-        func: builtin_operator_int_sub,
+        func: |vm, args| builtin_operator_int_sub(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_mul",
-        func: builtin_operator_int_mul,
+        func: |vm, args| builtin_operator_int_mul(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_add",
-        func: builtin_operator_float_add,
+        func: |vm, args| builtin_operator_float_add(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_sub",
-        func: builtin_operator_float_sub,
+        func: |vm, args| builtin_operator_float_sub(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_mul",
-        func: builtin_operator_float_mul,
+        func: |vm, args| builtin_operator_float_mul(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "floor",
-        func: builtin_float_floor,
+        func: |vm, args| builtin_float_floor(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "ceil",
-        func: builtin_float_ceil,
+        func: |vm, args| builtin_float_ceil(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "round",
-        func: builtin_float_round,
+        func: |vm, args| builtin_float_round(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "trunc",
-        func: builtin_float_trunc,
+        func: |vm, args| builtin_float_trunc(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "pi",
-        func: builtin_float_pi,
+        func: |vm, args| builtin_float_pi(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "e",
-        func: builtin_float_e,
+        func: |vm, args| builtin_float_e(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_eq",
-        func: builtin_operator_int_eq,
+        func: |vm, args| builtin_operator_int_eq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_neq",
-        func: builtin_operator_int_neq,
+        func: |vm, args| builtin_operator_int_neq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_lt",
-        func: builtin_operator_int_lt,
+        func: |vm, args| builtin_operator_int_lt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_lte",
-        func: builtin_operator_int_lte,
+        func: |vm, args| builtin_operator_int_lte(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_gt",
-        func: builtin_operator_int_gt,
+        func: |vm, args| builtin_operator_int_gt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_int_gte",
-        func: builtin_operator_int_gte,
+        func: |vm, args| builtin_operator_int_gte(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_eq",
-        func: builtin_operator_float_eq,
+        func: |vm, args| builtin_operator_float_eq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_neq",
-        func: builtin_operator_float_neq,
+        func: |vm, args| builtin_operator_float_neq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_lt",
-        func: builtin_operator_float_lt,
+        func: |vm, args| builtin_operator_float_lt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_lte",
-        func: builtin_operator_float_lte,
+        func: |vm, args| builtin_operator_float_lte(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_gt",
-        func: builtin_operator_float_gt,
+        func: |vm, args| builtin_operator_float_gt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_float_gte",
-        func: builtin_operator_float_gte,
+        func: |vm, args| builtin_operator_float_gte(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__compare_int",
-        func: builtin_compare_int,
+        func: |vm, args| builtin_compare_int(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__compare_float",
-        func: builtin_compare_float,
+        func: |vm, args| builtin_compare_float(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__ordering_is_lt",
-        func: builtin_ordering_is_lt,
+        func: |vm, args| builtin_ordering_is_lt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__ordering_is_lte",
-        func: builtin_ordering_is_lte,
+        func: |vm, args| builtin_ordering_is_lte(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__ordering_is_gt",
-        func: builtin_ordering_is_gt,
+        func: |vm, args| builtin_ordering_is_gt(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__ordering_is_gte",
-        func: builtin_ordering_is_gte,
+        func: |vm, args| builtin_ordering_is_gte(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_string_eq",
-        func: builtin_operator_string_eq,
+        func: |vm, args| builtin_operator_string_eq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_string_neq",
-        func: builtin_operator_string_neq,
+        func: |vm, args| builtin_operator_string_neq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_boolean_eq",
-        func: builtin_operator_boolean_eq,
+        func: |vm, args| builtin_operator_boolean_eq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_boolean_neq",
-        func: builtin_operator_boolean_neq,
+        func: |vm, args| builtin_operator_boolean_neq(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__operator_string_concat",
-        func: builtin_operator_string_concat,
+        func: |vm, args| builtin_operator_string_concat(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "json_parse",
-        func: builtin_json_parse,
+        func: |vm, args| builtin_json_parse(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "json_stringify",
-        func: builtin_json_stringify,
+        func: |vm, args| builtin_json_stringify(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "string_len",
-        func: builtin_string_len,
+        func: |vm, args| builtin_string_len(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "string_contains",
-        func: builtin_string_contains,
+        func: |vm, args| builtin_string_contains(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "string_starts_with",
-        func: builtin_string_starts_with,
+        func: |vm, args| builtin_string_starts_with(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "string_ends_with",
-        func: builtin_string_ends_with,
+        func: |vm, args| builtin_string_ends_with(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "string_split",
-        func: builtin_string_split,
+        func: |vm, args| builtin_string_split(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "string_replace",
-        func: builtin_string_replace,
+        func: |vm, args| builtin_string_replace(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "curry",
-        func: builtin_curry_unreachable,
+        func: |vm, args| builtin_curry_unreachable(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "uncons",
-        func: builtin_uncons,
+        func: |vm, args| builtin_uncons(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__flow_pipe_apply",
-        func: builtin_flow_operator_unreachable,
+        func: |vm, args| builtin_flow_operator_unreachable(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__flow_compose",
-        func: builtin_flow_operator_unreachable,
+        func: |vm, args| builtin_flow_operator_unreachable(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__flow_lift_compose",
-        func: builtin_flow_operator_unreachable,
+        func: |vm, args| builtin_flow_operator_unreachable(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "__flow_kleisli_compose",
-        func: builtin_flow_operator_unreachable,
+        func: |vm, args| builtin_flow_operator_unreachable(vm, args).map(BuiltinOutcome::Complete),
+    },
+    BuiltinImpl {
+        name: "list_flat_map",
+        func: builtin_list_flat_map,
     },
 ];
 
@@ -875,7 +953,7 @@ pub(crate) fn call_builtin(
     vm: &mut VM,
     builtin_id: u16,
     args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
+) -> Result<BuiltinOutcome, RuntimeError> {
     let meta = builtin_meta_by_id(builtin_id)
         .ok_or_else(|| RuntimeError::new(format!("Unknown builtin id: {}", builtin_id)))?;
     let expected_arity = expected_builtin_arity(meta.name, meta.runtime_arity());
@@ -970,19 +1048,19 @@ fn builtin_error_format(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     Ok(Value::Str(rich.to_eprint_lines().join("\n")))
 }
 
-fn builtin_process_pid(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_process_pid(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Str(process_name) = &args[0] else {
         return Err(RuntimeError::new("__process_pid expects String as name"));
     };
-    let Value::Callable(init) = args[1].clone() else {
+    let Value::Callable(_init) = args[1].clone() else {
         return Err(RuntimeError::new(
             "__process_pid expects callable init handler",
         ));
     };
-    vm.process_singleton_pid(process_name.clone(), init)
+    vm.start_singleton(process_name.clone(), None)
 }
 
-fn builtin_process_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_process_spawn(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Str(process_name) = &args[0] else {
         return Err(RuntimeError::new("__process_spawn expects String as name"));
     };
@@ -991,16 +1069,19 @@ fn builtin_process_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
             "__process_spawn expects callable init handler",
         ));
     };
-    vm.process_spawn(process_name.clone(), init)
+    vm.start_process_spawn(process_name.clone(), init)
 }
 
-fn builtin_dynamic_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_dynamic_supervisor_spawn(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Callable(init) = args[0].clone() else {
         return Err(RuntimeError::new(
             "__dynamic_supervisor_spawn expects callable init handler",
         ));
     };
-    vm.dynamic_supervisor_spawn(init)
+    vm.start_supervisor_spawn("DynamicSupervisor".into(), None, init)
 }
 
 fn builtin_dynamic_supervisor_adopt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1017,7 +1098,7 @@ fn builtin_dynamic_supervisor_status(
     vm.supervisor_status("DynamicSupervisor".into())
 }
 
-fn builtin_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Str(supervisor_name) = &args[0] else {
         return Err(RuntimeError::new(
             "__supervisor_spawn expects String as supervisor name",
@@ -1025,9 +1106,9 @@ fn builtin_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     };
     match args.as_slice() {
         [_, Value::Callable(init)] => {
-            vm.supervisor_spawn(supervisor_name.clone(), None, init.clone())
+            vm.start_supervisor_spawn(supervisor_name.clone(), None, init.clone())
         }
-        [_, Value::Str(worker_name), Value::Callable(init)] => vm.supervisor_spawn(
+        [_, Value::Str(worker_name), Value::Callable(init)] => vm.start_supervisor_spawn(
             supervisor_name.clone(),
             Some(worker_name.clone()),
             init.clone(),
@@ -1065,7 +1146,10 @@ fn builtin_supervisor_status(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     vm.supervisor_status(supervisor_name.clone())
 }
 
-fn builtin_supervisor_workers(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_supervisor_workers(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Str(supervisor_name) = &args[0] else {
         return Err(RuntimeError::new(
             "__supervisor_workers expects String as supervisor name",
@@ -1078,7 +1162,7 @@ fn builtin_supervisor_workers(vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
                     "__supervisor_workers could not infer worker process from init callable",
                 ));
             };
-            vm.supervisor_workers(
+            vm.start_supervisor_workers(
                 supervisor_name.clone(),
                 worker_name,
                 init.clone(),
@@ -1086,7 +1170,7 @@ fn builtin_supervisor_workers(vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
             )
         }
         [_, Value::Str(worker_name), Value::Callable(init), strategy] => {
-            vm.supervisor_workers(
+            vm.start_supervisor_workers(
                 supervisor_name.clone(),
                 worker_name.clone(),
                 init.clone(),
@@ -1242,27 +1326,30 @@ fn builtin_process_init_ready(_vm: &mut VM, args: Vec<Value>) -> Result<Value, R
     })
 }
 
-fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body(vm, &args[0], "__task_call", TaskMode::Call)
 }
 
-fn builtin_task_async(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_async(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body(vm, &args[0], "__task_async", TaskMode::Async)
 }
 
-fn builtin_task_await(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    vm.await_task_handle(&args[0], None)
+fn builtin_task_await(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    vm.start_await_task(&args[0], None)
 }
 
-fn builtin_task_launch(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_launch(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body(vm, &args[0], "__task_launch", TaskMode::Launch)
 }
 
-fn builtin_task_cast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_cast(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body(vm, &args[0], "__task_cast", TaskMode::Cast)
 }
 
-fn builtin_task_call_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_call_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body_with_timeout(
         vm,
         &args[1],
@@ -1272,7 +1359,10 @@ fn builtin_task_call_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     )
 }
 
-fn builtin_task_async_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_async_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body_with_timeout(
         vm,
         &args[1],
@@ -1282,12 +1372,18 @@ fn builtin_task_async_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
     )
 }
 
-fn builtin_task_await_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_await_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let timeout_ms = duration_to_u64(vm, &args[0], "__task_await_timeout", "timeout")?;
-    vm.await_task_handle(&args[1], Some(timeout_ms))
+    vm.start_await_task(&args[1], Some(timeout_ms))
 }
 
-fn builtin_task_launch_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_launch_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body_with_timeout(
         vm,
         &args[1],
@@ -1297,7 +1393,10 @@ fn builtin_task_launch_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, R
     )
 }
 
-fn builtin_task_cast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_task_cast_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     invoke_task_body_with_timeout(
         vm,
         &args[1],
@@ -1307,42 +1406,51 @@ fn builtin_task_cast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     )
 }
 
-fn builtin_workers_submit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_workers_submit(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let [Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
         return Err(RuntimeError::new(
             "__workers_submit expects Workers handle and callable template",
         ));
     };
-    vm.workers_submit(handle, message.clone())
+    vm.start_workers_submit(handle, message.clone(), None)
 }
 
-fn builtin_workers_submit_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_workers_submit_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let [timeout, Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
         return Err(RuntimeError::new(
             "__workers_submit_timeout expects Duration, Workers handle, and callable template",
         ));
     };
     let timeout_ms = duration_to_u64(vm, timeout, "__workers_submit_timeout", "timeout")?;
-    vm.workers_submit_with_timeout(handle, message.clone(), timeout_ms)
+    vm.start_workers_submit(handle, message.clone(), Some(timeout_ms))
 }
 
-fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_workers_broadcast(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let [Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
         return Err(RuntimeError::new(
             "__workers_broadcast expects Workers handle and callable template",
         ));
     };
-    vm.workers_broadcast(handle, message.clone())
+    vm.start_workers_broadcast(handle, message.clone(), None)
 }
 
-fn builtin_workers_broadcast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_workers_broadcast_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let [timeout, Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
         return Err(RuntimeError::new(
             "__workers_broadcast_timeout expects Duration, Workers handle, and callable template",
         ));
     };
     let timeout_ms = duration_to_u64(vm, timeout, "__workers_broadcast_timeout", "timeout")?;
-    vm.workers_broadcast_with_timeout(handle, message.clone(), timeout_ms)
+    vm.start_workers_broadcast(handle, message.clone(), Some(timeout_ms))
 }
 
 fn builtin_workers_reserve(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1366,11 +1474,11 @@ fn invoke_task_body(
     value: &Value,
     name: &str,
     mode: TaskMode,
-) -> Result<Value, RuntimeError> {
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Callable(body) = value.clone() else {
         return Err(RuntimeError::new(format!("{name} expects callable body")));
     };
-    vm.invoke_task(body, mode)
+    vm.start_task(body, mode, None)
 }
 
 fn invoke_task_body_with_timeout(
@@ -1379,12 +1487,12 @@ fn invoke_task_body_with_timeout(
     timeout: &Value,
     name: &str,
     mode: TaskMode,
-) -> Result<Value, RuntimeError> {
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Callable(body) = value.clone() else {
         return Err(RuntimeError::new(format!("{name} expects callable body")));
     };
     let timeout_ms = duration_to_u64(vm, timeout, name, "timeout")?;
-    vm.invoke_task_with_timeout(body, mode, Some(timeout_ms))
+    vm.start_task(body, mode, Some(timeout_ms))
 }
 
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1844,7 +1952,7 @@ fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     let Value::List(list) = &args[0] else {
         return Err(RuntimeError::new("len expects List as first argument"));
     };
-    Ok(Value::Int(list.len.into()))
+    Ok(Value::Int(list.len().into()))
 }
 
 fn builtin_string_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2060,7 +2168,7 @@ fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
         ));
     };
     let encoding = decode_string_encoding(vm, &args[1])?;
-    let mut bytes = Vec::with_capacity(values.len);
+    let mut bytes = Vec::with_capacity(values.len());
     for (idx, value) in values.iter().enumerate() {
         let Value::Int(code) = value else {
             return Err(RuntimeError::new("from_codepoints expects List<Int>"));
@@ -2148,7 +2256,10 @@ fn builtin_result_chain(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     })
 }
 
-fn builtin_result_recover_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_result_recover_kind(
+    _vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let result = decode_result_arg(&args[0], "__recover_kind", "value")?;
     let Value::Str(expected_kind) = &args[1] else {
         return Err(RuntimeError::new(
@@ -2156,18 +2267,15 @@ fn builtin_result_recover_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, R
         ));
     };
     let handler = decode_callable_arg(&args[2], "__recover_kind", "handler")?;
-
-    match result {
-        Ok(value) => Ok(ok_result(value)),
-        Err(err) if err.kind == expected_kind.as_ref() => {
-            let handler_result = vm.invoke_callable_sync(handler, vec![err_value(err.clone())])?;
-            match decode_result_arg(&handler_result, "__recover_kind", "handler result")? {
-                Ok(value) => Ok(ok_result(value)),
-                Err(rich) => Ok(err_result_from_rich_error(rich)),
-            }
-        }
-        Err(err) => Ok(err_result_from_rich_error(err)),
-    }
+    Ok(match result {
+        Ok(value) => BuiltinOutcome::Complete(ok_result(value)),
+        Err(err) if err.kind == expected_kind.as_ref() => BuiltinOutcome::Call {
+            callable: handler,
+            args: vec![err_value(err)],
+            continuation: BuiltinContinuation::RecoverKind,
+        },
+        Err(err) => BuiltinOutcome::Complete(err_result_from_rich_error(err)),
+    })
 }
 
 fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2452,7 +2560,7 @@ fn builtin_facet_list_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let Value::Int(index) = &args[1] else {
         return Err(RuntimeError::new("__facet_list_get expects Int index"));
     };
-    let index = match facet_index_to_usize(vm, index, list.len)? {
+    let index = match facet_index_to_usize(vm, index, list.len())? {
         Ok(index) => index,
         Err(err) => return Ok(err),
     };
@@ -2470,7 +2578,7 @@ fn builtin_facet_list_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let Value::Int(index) = &args[1] else {
         return Err(RuntimeError::new("__facet_list_set expects Int index"));
     };
-    let index = match facet_index_to_usize(vm, index, list.len)? {
+    let index = match facet_index_to_usize(vm, index, list.len())? {
         Ok(index) => index,
         Err(err) => return Ok(err),
     };
@@ -2491,7 +2599,7 @@ fn builtin_facet_list_slice_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
     let Value::Int(end) = &args[2] else {
         return Err(RuntimeError::new("__facet_list_slice_get expects Int end"));
     };
-    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len())? {
         Ok(bounds) => bounds,
         Err(err) => return Ok(err),
     };
@@ -2520,7 +2628,7 @@ fn builtin_facet_list_slice_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
             "__facet_list_slice_set expects List replacement",
         ));
     };
-    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len())? {
         Ok(bounds) => bounds,
         Err(err) => return Ok(err),
     };
@@ -2922,30 +3030,28 @@ fn builtin_file_delete(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
     }
 }
 
-fn builtin_file_with_open(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_file_with_open(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_string_arg(&args[0], "file_with_open", "path")?;
     let mode = decode_file_mode(vm, &args[1], "file_with_open", "mode")?;
     let body = decode_callable_arg(&args[2], "file_with_open", "body")?;
     let handle = match vm.open_file_resource(path, mode) {
         Ok(handle) => handle,
-        Err(err) => return Ok(file_handle_error_result(vm, Some(path), err)),
+        Err(err) => {
+            return Ok(BuiltinOutcome::Complete(file_handle_error_result(
+                vm,
+                Some(path),
+                err,
+            )))
+        }
     };
-
-    let call_result = vm.invoke_callable_sync(body, vec![Value::FileHandle(handle.clone())]);
-    let flush_result = vm.flush_file_resource(handle.id);
-    let close_result = vm.close_file_resource(handle.id);
-
-    if let Err(err) = flush_result {
-        return Ok(file_handle_error_result(vm, Some(path), err));
-    }
-    if let Err(err) = close_result {
-        return Ok(file_handle_error_result(vm, Some(path), err));
-    }
-
-    match call_result {
-        Ok(value) => Ok(value),
-        Err(err) => Err(err),
-    }
+    Ok(BuiltinOutcome::Call {
+        callable: body,
+        args: vec![Value::FileHandle(handle.clone())],
+        continuation: BuiltinContinuation::FileWithOpen {
+            path: path.to_string(),
+            handle,
+        },
+    })
 }
 
 fn builtin_file_read_chunk(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -4715,8 +4821,7 @@ fn none_result(vm: &VM) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        call_builtin, err_result_from_rich_error, inspect_value, json_variant, ok_result,
-        BUILTIN_IMPLS,
+        err_result_from_rich_error, inspect_value, json_variant, ok_result, BUILTIN_IMPLS,
     };
     use crate::vm::VM;
     use sindr::builtin::{builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name};
@@ -4730,6 +4835,17 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+
+    fn call_builtin(
+        vm: &mut VM,
+        id: u16,
+        args: Vec<Value>,
+    ) -> Result<Value, crate::error::RuntimeError> {
+        match super::call_builtin(vm, id, args)? {
+            super::BuiltinOutcome::Complete(value) => Ok(value),
+            outcome => vm.drive_builtin_outcome(outcome),
+        }
+    }
 
     fn test_vm() -> VM {
         let mut registry = TypeRegistry::new();

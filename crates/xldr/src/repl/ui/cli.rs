@@ -494,8 +494,9 @@ fn run_terminal_repl(
         }
 
         let elapsed = last_background_progress.elapsed();
-        last_background_progress = Instant::now();
         let background = engine.advance_background_time(elapsed);
+        // The VM accounts for CPU time while it pumps runnable tasks.
+        last_background_progress = Instant::now();
         if repl_result_has_visible_output(&background, color) {
             print_terminal_result(
                 &mut stdout,

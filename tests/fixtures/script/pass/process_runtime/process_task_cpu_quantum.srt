@@ -1,0 +1,15 @@
+def countdown(remaining: Int) -> Int {
+  if(remaining == 0, 0, countdown(remaining - 1))
+}
+
+slow = Task::async({||
+  result = countdown(10000)
+  print("slow")
+  Ok(result)
+})
+fast = Task::async({||
+  print("fast")
+  Ok(1)
+})
+print(inspect(Task::await(slow)))
+print(inspect(Task::await(fast)))

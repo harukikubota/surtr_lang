@@ -1,0 +1,32 @@
+def pair(value: Int) -> List<Int> { [value, value + 10] }
+
+defagent Lists {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: List<Int>
+  }
+
+  @init
+  def init() -> Result<List<Int>> { Ok([]) }
+
+  @get
+  def fetch(state: List<Int>) -> Result<List<Int>> { Ok(state) }
+
+  @set
+  def replace(_state: List<Int>, next: List<Int>) -> Result<List<Int>> { Ok(next) }
+}
+
+captured: (List<Int>, (Int -> List<Int>) -> List<Int>) = &List::flat_map
+partial: (List<Int> -> List<Int>) = &List::flat_map(&1, &pair)
+composed: (List<Int> -> List<Int>) = partial >> partial
+packed = captured([1, 2], &pair)
+mixed = List::cons(0, packed)
+print(inspect(packed))
+print(inspect(partial([3])))
+print(inspect([4] |> List::flat_map(&pair)))
+print(inspect(composed([5])))
+print(inspect(Lists::replace(mixed)))
+print(inspect(Lists::fetch()))
+future = Task::async({|| Ok(List::flat_map(mixed, {|value| [value]})) })
+print(inspect(Task::await(future)))

@@ -1,7 +1,9 @@
 @doc """
 Standard `List` type declaration.
 `List` is the homogeneous sequence type used by list literals and list
-patterns.
+patterns. It is immutable: cons and tail preserve the original list.
+Length, cons, head, tail, and list uncons take O(1) logical element operations.
+These costs exclude physical element cloning, deallocation, and allocation.
 The canonical builtin head is `List<$A>`, and the compiler validates that exact
 shape at this file's top level.
 
@@ -110,13 +112,6 @@ impl List {
     match values {
       [] => acc,
       [head, ..tail] => _list_reverse_go(tail, cons(head, acc)),
-    }
-  }
-
-  defp _append_reverse(values: List<$A>, acc: List<$A>) -> List<$A> {
-    match values {
-      [] => acc,
-      [head, ..tail] => _append_reverse(tail, cons(head, acc)),
     }
   }
 
@@ -258,6 +253,7 @@ impl List {
   @doc """
   Append `right` after `left`.
   This keeps the left-to-right order of both lists.
+  The number of logical element operations is O(length(left)).
   ## REPL
   xldr(1)> List::append([1], [2, 3])
   [1, 2, 3]
@@ -271,17 +267,14 @@ impl List {
 
   @doc """
   Map each element to a list and concatenate the results.
+  Call `f` once per input, from left to right, and preserve each result's order.
+  With N inputs and M output elements, the cost is O(N + M) plus callback work.
+  The result is a completed immutable list; callbacks may yield or wait.
   ## REPL
   xldr(1)> List::flat_map([1, 2], {|n| [n, n + 10]})
   [1, 11, 2, 12]
   """
-  def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
-    reverse(
-      reduce(values, [], {|acc, x|
-        _append_reverse(f(x), acc)
-      }),
-    )
-  }
+  @builtin def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B>
 
   @doc """
   Concatenate a list of lists into one list.
