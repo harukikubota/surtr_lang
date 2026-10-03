@@ -39,7 +39,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node -e \"console.log('surtr-language-support: no automated test runner configured yet')\"",
+    "test": "node --test tests/*.test.cjs",
     "package": "vsce package --no-dependencies"
   }
 }

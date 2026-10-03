@@ -2,16 +2,12 @@
   "name": "Surtr",
   "scopeName": "source.surtr",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#docStrings" },
-    { "include": "#strings" },
-    { "include": "#annotators" },
-    { "include": "#keywords" },
-    { "include": "#constants" },
-    { "include": "#numbers" },
-    { "include": "#operators" },
-    { "include": "#types" },
-    { "include": "#functions" }
+    {
+      "include": "#annotations"
+    },
+    {
+      "include": "#expression"
+    }
   ],
   "repository": {
     "comments": {
@@ -22,30 +18,125 @@
         }
       ]
     },
-    "docStrings": {
+    "escapedInterpolation": {
       "patterns": [
         {
-          "name": "string.quoted.triple.surtr",
-          "begin": "\"\"\"",
-          "end": "\"\"\""
+          "name": "constant.character.escape.surtr",
+          "match": "\\\\#\\{"
+        }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        {
+          "include": "#escapedInterpolation"
+        },
+        {
+          "name": "constant.character.escape.surtr",
+          "match": "\\\\[nt\\\\\"']"
+        }
+      ]
+    },
+    "interpolation": {
+      "patterns": [
+        {
+          "name": "meta.interpolation.surtr",
+          "contentName": "meta.embedded.line.surtr",
+          "begin": "(?<!\\\\)#\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.surtr"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#interpolationBraces"
+            },
+            {
+              "include": "#expression"
+            }
+          ]
+        }
+      ]
+    },
+    "interpolationBraces": {
+      "patterns": [
+        {
+          "name": "meta.braces.surtr",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.block.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.block.end.surtr"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#interpolationBraces"
+            },
+            {
+              "include": "#expression"
+            }
+          ]
         }
       ]
     },
     "strings": {
       "patterns": [
         {
+          "name": "string.quoted.triple.surtr",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.surtr"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escapedInterpolation"
+            },
+            {
+              "include": "#interpolation"
+            }
+          ]
+        },
+        {
           "name": "string.quoted.double.surtr",
           "begin": "\"",
           "end": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.surtr"
+            }
+          },
           "patterns": [
             {
-              "name": "constant.character.escape.surtr",
-              "match": "\\\\."
+              "include": "#escapes"
             },
             {
-              "name": "meta.interpolation.surtr",
-              "begin": "#\\{",
-              "end": "\\}"
+              "include": "#interpolation"
             }
           ]
         },
@@ -53,28 +144,138 @@
           "name": "string.quoted.single.surtr",
           "begin": "'",
           "end": "'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.surtr"
+            }
+          },
           "patterns": [
             {
-              "name": "constant.character.escape.surtr",
-              "match": "\\\\."
+              "include": "#escapes"
+            },
+            {
+              "include": "#interpolation"
             }
           ]
         }
       ]
     },
-    "annotators": {
+    "regexStrings": {
       "patterns": [
         {
-          "name": "storage.modifier.annotation.surtr",
-          "match": "@@[A-Za-z_][A-Za-z0-9_]*"
+          "name": "string.regexp.surtr",
+          "begin": "(?<![A-Za-z0-9_])(re)(\")",
+          "end": "\"",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.surtr"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.surtr"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escapes"
+            },
+            {
+              "include": "#interpolation"
+            }
+          ]
+        },
+        {
+          "name": "string.regexp.surtr",
+          "begin": "(?<![A-Za-z0-9_])(re)(')",
+          "end": "'",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.surtr"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.surtr"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#escapes"
+            },
+            {
+              "include": "#interpolation"
+            }
+          ]
         }
       ]
     },
-    "keywords": {
+    "functionLiterals": {
       "patterns": [
         {
+          "name": "meta.function-literal.surtr",
+          "contentName": "entity.name.function.surtr",
+          "begin": "`",
+          "end": "`",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.function.begin.surtr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.function.end.surtr"
+            }
+          }
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(def|defp|defextractor)\\b([ \\t]+)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.surtr"
+            },
+            "3": {
+              "name": "entity.name.function.surtr"
+            }
+          }
+        },
+        {
+          "match": "\\b(const)\\b([ \\t]+)([A-Z][A-Z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.surtr"
+            },
+            "3": {
+              "name": "variable.other.constant.surtr"
+            }
+          }
+        },
+        {
+          "name": "keyword.declaration.surtr",
+          "match": "\\b(?:def|defp|defagent|defgenserver|defsupervisor|defdynamic_supervisor|supervisor_init|defmod|namespace|deftrait|import|include|defstruct|defrecord|deferror|defenum|defextractor|impl|for|const|type|Type|where)\\b"
+        },
+        {
+          "name": "storage.modifier.surtr",
+          "match": "\\b(?:private|public|readonly)\\b"
+        },
+        {
           "name": "keyword.control.surtr",
-          "match": "\\b(def|defmod|impl|match|if|cond|import|type|defstruct|defrecord|deferror|defenum)\\b"
+          "match": "\\b(?:match|do|when|cond)\\b"
         }
       ]
     },
@@ -82,15 +283,91 @@
       "patterns": [
         {
           "name": "constant.language.boolean.surtr",
-          "match": "\\b(True|False|Ok|Err)\\b"
+          "match": "\\b(?:True|False)\\b"
+        },
+        {
+          "name": "support.function.constructor.surtr",
+          "match": "\\b(?:Ok|Err)\\b"
+        },
+        {
+          "name": "constant.language.unit.surtr",
+          "match": "\\(\\)"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "entity.name.type.parameter.surtr",
+          "match": "\\$[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.surtr"
+            },
+            "2": {
+              "name": "variable.other.member.surtr"
+            }
+          }
+        },
+        {
+          "name": "variable.parameter.capture.surtr",
+          "match": "(?<!&)&(?:1[0-6]|[1-9])(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "variable.language.placeholder.surtr",
+          "match": "\\b_[0-9]+\\b"
+        },
+        {
+          "name": "variable.language.surtr",
+          "match": "\\bself\\b"
+        },
+        {
+          "name": "variable.language.wildcard.surtr",
+          "match": "\\b_\\b"
+        }
+      ]
+    },
+    "reservedCalls": {
+      "patterns": [
+        {
+          "match": "(?<![A-Za-z0-9_:])(?:(Kernel)(::))?(if_let_then|if_let|is_match|apply_pattern)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.surtr"
+            },
+            "2": {
+              "name": "punctuation.accessor.surtr"
+            },
+            "3": {
+              "name": "support.function.pattern.surtr"
+            }
+          }
+        },
+        {
+          "name": "keyword.operator.word.surtr",
+          "match": "(?<![A-Za-z0-9_:])\\b(?:on|and|or|eq|neq|lt|lte|gt|gte)\\b(?!::)"
         }
       ]
     },
     "numbers": {
       "patterns": [
         {
+          "match": "(?<![A-Za-z0-9_])((?:0b[01]+|0o[0-7]+|0d[0-9]+|0x[0-9a-fA-F]+|[0-9]+))(ms)\\b",
+          "captures": {
+            "1": {
+              "name": "constant.numeric.surtr"
+            },
+            "2": {
+              "name": "keyword.other.unit.surtr"
+            }
+          }
+        },
+        {
           "name": "constant.numeric.surtr",
-          "match": "\\b-?\\d+(?:\\.\\d+)?\\b"
+          "match": "(?<![A-Za-z0-9_])(?:0b[01]+|0o[0-7]+|0d[0-9]+|0x[0-9a-fA-F]+|[0-9]+\\.[0-9]+|[0-9]+)(?![A-Za-z0-9_])"
         }
       ]
     },
@@ -98,7 +375,43 @@
       "patterns": [
         {
           "name": "keyword.operator.surtr",
-          "match": "\\|=>|\\|>=|\\|\\*>|\\|>|>>|==|!=|<=|>=|\\+\\+|[+\\-*/<>=]"
+          "match": "\\|\\*>|\\|>=|\\|\\*\\||<\\|>|>=>|\\+\\+|=\\?|==|!=|<=|>=|<-|&&|\\|\\||\\.\\.|=>|->|\\|>|>>|>\\*|[+*/%!=<>\\-&~^|?]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.accessor.surtr",
+          "match": "::|\\."
+        },
+        {
+          "name": "punctuation.separator.surtr",
+          "match": "[,:;]"
+        },
+        {
+          "name": "punctuation.section.brackets.surtr",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.section.parens.surtr",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.section.block.surtr",
+          "match": "[{}]"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.surtr",
+          "match": "\\b[a-z_][A-Za-z0-9_]*\\b(?=[ \\t]*(?:\\(|::<))"
+        },
+        {
+          "name": "entity.name.function.surtr",
+          "match": "(?<=&)[a-z_][A-Za-z0-9_]*\\b|(?<=::)[a-z_][A-Za-z0-9_]*\\b"
         }
       ]
     },
@@ -110,11 +423,69 @@
         }
       ]
     },
-    "functions": {
+    "identifiers": {
       "patterns": [
         {
-          "name": "entity.name.function.surtr",
-          "match": "\\b[a-z_][A-Za-z0-9_]*\\s*(?=\\()"
+          "name": "variable.other.surtr",
+          "match": "\\b[a-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "expression": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#regexStrings"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#functionLiterals"
+        },
+        {
+          "include": "#declarations"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#variables"
+        },
+        {
+          "include": "#reservedCalls"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#functions"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#identifiers"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "match": "^[ \\t]*(@[A-Za-z][A-Za-z_0-9]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.annotation.surtr"
+            }
+          }
         }
       ]
     }
