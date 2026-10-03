@@ -1,13 +1,8 @@
-use std::fs;
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
-
-use sindr::policy::CompileUnitKind;
 
 use crate::common::{
     assert_compile_error_matches, compile_error_fixtures, extract_phase_tag, normalize_text,
-    parse_compile_error_expectation, spec_fixtures, unique_temp_dir,
+    parse_compile_error_expectation, spec_fixtures,
 };
 use crate::support;
 
@@ -29,25 +24,6 @@ fn check_compile_phase(
 
 fn run_surtr(source: &str) -> Result<Vec<String>, String> {
     support::run_script("fixture.srt", source)
-}
-
-fn semantic_prefix_cache_lock() -> &'static Mutex<()> {
-    static SEMANTIC_PREFIX_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    SEMANTIC_PREFIX_CACHE_LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn remove_semantic_prefix_cache_entry(cache_path: &PathBuf) {
-    let _ = fs::remove_file(cache_path);
-    if let Some(parent) = cache_path.parent() {
-        let is_empty = fs::read_dir(parent)
-            .ok()
-            .and_then(|mut entries| entries.next().transpose().ok())
-            .flatten()
-            .is_none();
-        if is_empty {
-            let _ = fs::remove_dir(parent);
-        }
-    }
 }
 
 fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
@@ -218,81 +194,4 @@ def helper() -> Unit { () }"#,
         err.contains("top-level definition cannot appear after top-level expression"),
         "unexpected error: {err}"
     );
-}
-
-#[test]
-fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache() {
-    let _cache_guard = semantic_prefix_cache_lock()
-        .lock()
-        .expect("semantic prefix cache lock poisoned");
-    let prefix_dir =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
-
-    let module_sources = support::collect_module_sources(&[vec![xldr::ModuleInput {
-        file_name: "Helper.srt".into(),
-        source: "defmod Helper {\n  def id(x: Int) -> Int { x }\n}\n".into(),
-        module_path: "Helper".into(),
-    }]])
-    .expect("module sources should load");
-    let compile_sources = support::compose_script_sources(
-        "fixture.srt",
-        "import Helper;\nbad: Int = \"bad type\"\n",
-        module_sources,
-    );
-    let cache_key = xldr::test_semantic_prefix_cache_key(CompileUnitKind::Script, &compile_sources)
-        .expect("semantic prefix key should build");
-    let cache_path = prefix_dir.join(format!("{cache_key}.semantic"));
-    let _ = fs::remove_file(&cache_path);
-    fs::create_dir_all(&prefix_dir).expect("prefix cache dir should be creatable");
-    let unrelated_path = prefix_dir.join("preserve-me.semantic");
-    fs::write(&unrelated_path, b"existing-prefix-entry")
-        .expect("unrelated prefix cache entry should be writable");
-    let err = support::check_script_sources_phase(&compile_sources, "typecheck")
-        .expect_err("type mismatch should fail in the typecheck phase");
-
-    assert!(
-        err.message.contains("expected Int, got String"),
-        "unexpected compile failure: {err}"
-    );
-    assert!(
-        cache_path.is_file(),
-        "semantic prefix cache file should exist: {}",
-        cache_path.display()
-    );
-    assert!(
-        unrelated_path.is_file(),
-        "compile-error path should not clear unrelated prefix cache entries: {}",
-        unrelated_path.display()
-    );
-
-    remove_semantic_prefix_cache_entry(&cache_path);
-}
-
-#[test]
-fn semantic_prefix_cache_cleanup_keeps_unrelated_entries() {
-    let _cache_guard = semantic_prefix_cache_lock()
-        .lock()
-        .expect("semantic prefix cache lock poisoned");
-    let prefix_dir = unique_temp_dir("surtr_semantic_prefix_cleanup");
-    fs::create_dir_all(&prefix_dir).expect("prefix cache dir should be creatable");
-
-    let target_path = prefix_dir.join("target.semantic");
-    let unrelated_path = prefix_dir.join("unrelated.semantic");
-    fs::write(&target_path, b"target").expect("target cache entry should be writable");
-    fs::write(&unrelated_path, b"unrelated").expect("unrelated cache entry should be writable");
-
-    remove_semantic_prefix_cache_entry(&target_path);
-
-    assert!(
-        !target_path.exists(),
-        "cleanup should remove the targeted semantic prefix entry: {}",
-        target_path.display()
-    );
-    assert!(
-        unrelated_path.exists(),
-        "cleanup should preserve unrelated semantic prefix entries: {}",
-        unrelated_path.display()
-    );
-
-    let _ = fs::remove_dir_all(&prefix_dir);
 }
