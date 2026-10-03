@@ -944,15 +944,31 @@ pub fn target_root_from_current_exe() -> Option<PathBuf> {
 }
 
 fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
-    stable_hash_hex(&stdlib_semantic_cache_material(module_sources))
+    stdlib_semantic_cache_key_for_compiler(module_sources, env!("XLDR_COMPILER_BUILD_KEY"))
 }
 
-fn stdlib_semantic_cache_material(module_sources: &ModuleSources) -> String {
+fn stdlib_semantic_cache_key_for_compiler(
+    module_sources: &ModuleSources,
+    compiler_fingerprint: &str,
+) -> String {
+    stable_hash_hex(&stdlib_semantic_cache_material(
+        module_sources,
+        compiler_fingerprint,
+    ))
+}
+
+fn stdlib_semantic_cache_material(
+    module_sources: &ModuleSources,
+    compiler_fingerprint: &str,
+) -> String {
     let mut key = String::new();
     key.push_str("surtr-stdlib-semantic-cache-v");
     key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
     key.push('\x1f');
     key.push_str(env!("CARGO_PKG_VERSION"));
+    key.push('\x1f');
+    key.push_str("compiler=");
+    key.push_str(compiler_fingerprint);
     key.push('\x1f');
     key.push_str("source-policy-schema-v");
     key.push_str(&SOURCE_POLICY_SCHEMA_VERSION.to_string());
@@ -1207,6 +1223,41 @@ defmod B {
     }
 
     #[test]
+    fn stdlib_semantic_cache_rejects_a_different_compiler_with_identical_sources() {
+        let sources = collect_module_sources_with_module_stages(&[]).expect("stdlib sources");
+        let first = stdlib_semantic_cache_key_for_compiler(&sources, "compiler-a");
+        let second = stdlib_semantic_cache_key_for_compiler(&sources, "compiler-b");
+        assert_eq!(
+            first,
+            stdlib_semantic_cache_key_for_compiler(&sources, "compiler-a")
+        );
+        assert_ne!(
+            first, second,
+            "compiled declaration identities belong to one compiler"
+        );
+        let cache_path = std::env::temp_dir().join(format!(
+            "surtr-compiler-identity-cache-{}.semantic",
+            std::process::id()
+        ));
+        let payload = CachedStdlibSemanticPayload {
+            compile_prefix: CompilationPrefixSnapshot::from_parts(
+                sigil::DeclarationIndex::new(),
+                sigil::ResolveResumeState { next_local_id: 7 },
+                scar::ScarSession::new().checkpoint(),
+                forge::bytecode::Bytecode::default(),
+            ),
+            docs: Vec::new(),
+            signatures: Vec::new(),
+            auto_import_modules: BTreeSet::new(),
+            default_stage_count: 0,
+        };
+        store_cached_stdlib_semantic_snapshot(&cache_path, &first, payload);
+        assert!(load_cached_stdlib_semantic_snapshot(&cache_path, &first).is_some());
+        assert!(load_cached_stdlib_semantic_snapshot(&cache_path, &second).is_none());
+        std::fs::remove_file(cache_path).expect("remove test cache");
+    }
+
+    #[test]
     fn stdlib_semantic_cache_key_tracks_stdlib_module_spec_variant() {
         let default_sources =
             collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
@@ -1228,7 +1279,7 @@ defmod B {
         let module_sources =
             collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
 
-        let material = stdlib_semantic_cache_material(&module_sources);
+        let material = stdlib_semantic_cache_material(&module_sources, "test-compiler");
 
         assert!(material.contains(&format!(
             "source-policy-schema-v{}",

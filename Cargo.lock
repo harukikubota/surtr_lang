@@ -1498,6 +1498,7 @@ dependencies = [
  "scar",
  "serde",
  "serde_yaml",
+ "sha2",
  "sigil",
  "sindr",
  "spire",
