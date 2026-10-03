@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Type constructor family mismatch: expected Result<$A, Error>, got Int
+contains: Type constructor family mismatch: expected Result<$A>, got Int

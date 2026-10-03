@@ -1,1 +1,1 @@
-ext: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = {|value: Int| Ok(value)}
+ext: ExtractorClosure<(Int -> MatchResult<Int>)> = {|value: Int| Ok(value)}

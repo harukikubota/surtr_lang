@@ -1054,7 +1054,7 @@ mod tests {
             &diagnostic.spec,
         );
         assert!(human.contains("do_return_mismatch.srt:4:5"), "{human}");
-        assert!(human.contains("Result<Int, Error>"), "{human}");
+        assert!(human.contains("Result<Int>"), "{human}");
         let report = error.to_serializable_report();
         let json = &report.errors[0];
         assert_eq!(json.reason.as_deref(), Some("ReturnTypeMismatch"));
@@ -1063,7 +1063,7 @@ mod tests {
         assert!(
             json.related.iter().any(|fact| {
                 fact.span == [return_start as u32, return_end as u32]
-                    && fact.ty.as_deref() == Some("Result<String, Error>")
+                    && fact.ty.as_deref() == Some("Result<String>")
                     && fact.source_id == diagnostic.source_id.0
             }),
             "{json:?}"

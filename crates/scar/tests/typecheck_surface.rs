@@ -1290,6 +1290,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(extractor_closure_inference_and_callable_boundaries),
     surface_case!(extractor_closure_direct_argument_uses_expected_type),
     surface_case!(apply_pattern_projection_types_and_boundaries),
+    surface_case!(error_contract_surface_is_restricted_to_direct_definition_returns),
 ];
 
 #[test]
@@ -2795,9 +2796,7 @@ updated: Result<User> = Facet::put(User.name, User("alice"), "bob")"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("Facet::put should explain Result annotation mismatch");
-    assert!(err
-        .message
-        .contains("expected Result<User, Error>, got User"));
+    assert!(err.message.contains("expected Result<User>, got User"));
 }
 
 fn facet_put_rejects_result_return_context() {
@@ -2809,9 +2808,7 @@ def rename() -> Result<User> {
         RuntimeSourcePolicy::script(),
     )
     .expect_err("Facet::put should explain Result return mismatch");
-    assert!(err
-        .message
-        .contains("expected Result<User, Error>, got User"));
+    assert!(err.message.contains("expected Result<User>, got User"));
 }
 
 fn facet_over_requires_unary_result_callable() {
@@ -2866,7 +2863,7 @@ boxed = Boxed(Ok(1))"#,
     );
     assert!(
         err.message
-            .contains("expected Option<Int>, got Result<Int, Error>"),
+            .contains("expected Option<Int>, got Result<Int>"),
         "{err:?}"
     );
 }
@@ -6745,7 +6742,7 @@ fn do_safebind_return_mismatch_points_to_the_final_expression() {
     );
     assert!(
         structured.related.iter().any(|fact| {
-            fact.ty.as_deref() == Some("Result<String, Error>")
+            fact.ty.as_deref() == Some("Result<String>")
                 && fact.span.start == return_start
                 && fact.span.end == return_start + "Result<String>".len()
         }),
@@ -11263,7 +11260,7 @@ match 5 { pick(value: Int) => value, _ => 0 }
     typecheck(resolve_with_builtin_prelude(source))
         .expect("ExtractorClosure literal and local head");
     for source in [
-        r#"typed: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = *{|value| MatchResult::Ok(value)}
+        r#"typed: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::Ok(value)}
 match 1 { typed(n) => n, _ => 0 }"#,
         r#"def make(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
   *{|value| True =? value > limit; MatchResult::Ok(value)}
@@ -11281,6 +11278,19 @@ match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
     ] {
         typecheck(resolve_with_builtin_prelude(source))
             .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
+    }
+    for source in [
+        r#"typed: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = *{|value| MatchResult::Ok(value)}"#,
+        r#"typed: ExtractorClosure<(Int -> MatchResult<Int, NoneError>)> = *{|value| MatchResult::Ok(value)}"#,
+    ] {
+        let error = typecheck(resolve_with_builtin_prelude(source))
+            .expect_err("ExtractorClosure annotations must not name an Error type argument");
+        assert!(
+            error
+                .message
+                .contains("only allowed in defextractor return signatures"),
+            "{source}\n{error:?}"
+        );
     }
     for source in [
         r#"ext = *{|value: Int| MatchResult::Ok(value)}; ext(1)"#,
@@ -11587,4 +11597,49 @@ fn recover_kind_rejects_invalid_handlers() {
         "def call1(f: ($A -> $B), value: $A) -> $B { f(value) }\nvalue = call1(&Result::recover_kind(&1, NoneError, &1), Ok(1))",
     );
     typecheck(resolved).expect_err("one placeholder cannot be both Result value and handler");
+}
+
+fn error_contract_surface_is_restricted_to_direct_definition_returns() {
+    for source in [
+        "ret: Result<Int> = Ok(1)",
+        "f: (Int -> (_ -> Int)) = {|value: Int| always(value)}",
+        "def make() -> (Int -> (_ -> Int)) { {|value: Int| always(value)} }",
+        "def read(value: Result<Int>) -> Result<Int, NoneError> { value }",
+        "def read(value: Result<$T>) -> Result<$T, NoneError> { value }",
+        "def make() -> (Int -> Result<Int>) { {|value: Int| Ok(value)} }",
+        "impl Int { defextractor read(value: Int) -> MatchResult<Int, Error> { MatchResult::Ok(value) } }",
+        "def use(ext: ExtractorClosure<(Int -> MatchResult<Int>)>) -> Boolean { is_match(1, ext(_)) }",
+    ] {
+        typecheck(resolve_with_builtin_prelude(source))
+            .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
+    }
+    for source in [
+        "ret: Result<Int, NoneError> = Ok(1)",
+        "ret: Result<Int, Error> = Ok(1)",
+        "ret: List<Result<Int, NoneError>> = [Ok(1)]",
+        "defstruct Invalid { value: Result<Int, NoneError> }",
+        "f: (Int -> Result<Int, NoneError>) = {|value: Int| Ok(value)}",
+        "def read(value: Result<Int, NoneError>) -> Result<Int> { value }",
+        "def read(value: Result<$T, NoneError>) -> Result<$T> { value }",
+        "def make() -> (Int -> Result<Int, NoneError>) { {|value: Int| Ok(value)} }",
+        "def make() -> List<Result<Int, NoneError>> { [Ok(1)] }",
+        "def make() -> ExtractorClosure<(Int -> MatchResult<Int, Error>)> { *{|value: Int| MatchResult::Ok(value)} }",
+    ] {
+        typecheck(resolve_with_builtin_prelude(source))
+            .expect_err(&format!("Error position must be rejected: {source}"));
+    }
+    let error = typecheck(resolve_with_builtin_prelude(
+        "ext: ExtractorClosure<(Int -> MatchResult<Int>)> = {|value: Int| Ok(value)}",
+    ))
+    .expect_err("ordinary closure cannot implement an ExtractorClosure");
+    assert!(
+        error
+            .message
+            .contains("ExtractorClosure<(Int -> MatchResult<Int>)>"),
+        "{error:?}"
+    );
+    assert!(
+        !error.message.contains("MatchResult<Int, Error>"),
+        "{error:?}"
+    );
 }

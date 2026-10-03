@@ -1,2 +1,2 @@
 phase: typecheck
-contains: closure does not match expected type ExtractorClosure<(Int -> MatchResult<Int, Error>)>
+contains: closure does not match expected type ExtractorClosure<(Int -> MatchResult<Int>)>

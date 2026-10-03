@@ -1,2 +1,2 @@
 phase: typecheck
-contains: expects a plain function return, got Result<Int, Error>
+contains: expects a plain function return, got Result<Int>

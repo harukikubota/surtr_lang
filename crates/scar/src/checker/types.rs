@@ -480,7 +480,8 @@ impl Checker {
             message: "Seq is not a surface type in this version of Surtr".into(),
             span: span.clone(),
             hint: Some(
-                "Use tuple payloads for extractor success values, such as MatchResult<(A, B), Error>.".into(),
+                "Use tuple payloads for extractor success values, such as MatchResult<(A, B)>."
+                    .into(),
             ),
         }
     }
@@ -685,15 +686,6 @@ impl Checker {
             "TaskHandle".to_string(),
             vec![self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?],
         ))
-    }
-
-    fn ast_ty_is_none_error_marker(ast_ty: &AstTy) -> bool {
-        match ast_ty {
-            AstTy::Named(_, name) | AstTy::Generic(_, name, _) => {
-                Self::surface_name(name) == "NoneError"
-            }
-            _ => false,
-        }
     }
 
     fn pid_marker_from_ast(&self, ast_ty: &AstTy) -> Result<String, TypeError> {
@@ -1232,16 +1224,27 @@ impl Checker {
                     let [AstTy::Func(_, params, ret)] = args.as_slice() else { return Err(TypeError::new("ExtractorClosure requires exactly one function signature", span.clone())); };
                     if params.is_empty() { return Err(TypeError::new("ExtractorClosure requires at least one input", span.clone())); }
                     let params = params.iter().map(|ty| self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::General)).collect::<Result<Vec<_>, _>>()?;
-                    let ret = self.resolve_ast_ty_in_context(ret, TypeSyntaxContext::ExtractorReturn)?;
+                    let ret = self.resolve_ast_ty_in_context(
+                        ret,
+                        TypeSyntaxContext::ExtractorClosureReturn,
+                    )?;
                     if !matches!(ret, Ty::MatchResult(_)) { return Err(TypeError::new("ExtractorClosure must return MatchResult", span.clone())); }
                     Ok(Ty::ExtractorClosure(Box::new(Ty::Func(params, Box::new(ret)))))
                 }
                 "MatchResult" => {
-                    if context != TypeSyntaxContext::ExtractorReturn {
+                    if context != TypeSyntaxContext::ExtractorReturn
+                        && context != TypeSyntaxContext::ExtractorClosureReturn
+                    {
                         return Err(TypeError::new("MatchResult is only allowed as an Extractor return type", span.clone()));
                     }
                     if !(1..=2).contains(&args.len()) {
                         return Err(TypeError::new("MatchResult<P, Error> requires 1 or 2 type arguments", span.clone()));
+                    }
+                    if args.len() == 2 && context == TypeSyntaxContext::ExtractorClosureReturn {
+                        return Err(TypeError::new(
+                            "MatchResult<P, Error> is only allowed in defextractor return signatures",
+                            Self::ast_ty_span(&args[1]).clone(),
+                        ));
                     }
                     if args.len() == 2 && !matches!(&args[1], AstTy::Named(_, name) if name == "Error") {
                         return Err(TypeError::new("MatchResult second type argument must be canonical Error", Self::ast_ty_span(&args[1]).clone()));
@@ -1262,10 +1265,7 @@ impl Checker {
                     let ok =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let err = if args.len() == 2 {
-                        let allow_none_error_surface = context != TypeSyntaxContext::FunctionReturn
-                            && Self::ast_ty_is_none_error_marker(&args[1]);
-                        if context != TypeSyntaxContext::FunctionReturn && !allow_none_error_surface
-                        {
+                        if context != TypeSyntaxContext::FunctionReturn {
                             return Err(TypeError {
                                 structured: None,
                                 message:
@@ -1394,7 +1394,7 @@ impl Checker {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_ast_ty_in_context(ret, context)?;
+                let ret = self.resolve_ast_ty_in_context(ret, Self::function_type_return_context(context))?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             AstTy::ImplTrait(span, name) => Err(TypeError {
@@ -1996,6 +1996,18 @@ impl Checker {
         }
     }
 
+    fn function_type_return_context(context: TypeSyntaxContext) -> TypeSyntaxContext {
+        match context {
+            // Retain nested ignored-input callable syntax, without propagating
+            // the error-contract permission of a definition's direct return.
+            TypeSyntaxContext::FunctionReturn => TypeSyntaxContext::BindingAnnotation,
+            TypeSyntaxContext::ExtractorReturn | TypeSyntaxContext::ExtractorClosureReturn => {
+                TypeSyntaxContext::General
+            }
+            context => context,
+        }
+    }
+
     fn signature_like_param_context(context: TypeSyntaxContext) -> TypeSyntaxContext {
         match context {
             TypeSyntaxContext::BindingAnnotation
@@ -2443,16 +2455,24 @@ impl Checker {
                     let [AstTy::Func(_, params, ret)] = args.as_slice() else { return Err(TypeError::new("ExtractorClosure requires exactly one function signature", span.clone())); };
                     if params.is_empty() { return Err(TypeError::new("ExtractorClosure requires at least one input", span.clone())); }
                     let params = params.iter().map(|ty| self.resolve_signature_like_ast_ty_in_context(ty, TypeSyntaxContext::General, tyvars, mode)).collect::<Result<Vec<_>, _>>()?;
-                    let ret = self.resolve_signature_like_ast_ty_in_context(ret, TypeSyntaxContext::ExtractorReturn, tyvars, mode)?;
+                    let ret = self.resolve_signature_like_ast_ty_in_context(ret, TypeSyntaxContext::ExtractorClosureReturn, tyvars, mode)?;
                     if !matches!(ret, Ty::MatchResult(_)) { return Err(TypeError::new("ExtractorClosure must return MatchResult", span.clone())); }
                     Ok(Ty::ExtractorClosure(Box::new(Ty::Func(params, Box::new(ret)))))
                 }
                 "MatchResult" => {
-                    if context != TypeSyntaxContext::ExtractorReturn {
+                    if context != TypeSyntaxContext::ExtractorReturn
+                        && context != TypeSyntaxContext::ExtractorClosureReturn
+                    {
                         return Err(TypeError::new("MatchResult is only allowed as an Extractor return type", span.clone()));
                     }
                     if !(1..=2).contains(&args.len()) {
                         return Err(TypeError::new("MatchResult<P, Error> requires 1 or 2 type arguments", span.clone()));
+                    }
+                    if args.len() == 2 && context == TypeSyntaxContext::ExtractorClosureReturn {
+                        return Err(TypeError::new(
+                            "MatchResult<P, Error> is only allowed in defextractor return signatures",
+                            Self::ast_ty_span(&args[1]).clone(),
+                        ));
                     }
                     if args.len() == 2 && !matches!(&args[1], AstTy::Named(_, name) if name == "Error") {
                         return Err(TypeError::new("MatchResult second type argument must be canonical Error", Self::ast_ty_span(&args[1]).clone()));
@@ -2618,7 +2638,7 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let ret =
-                    self.resolve_signature_like_ast_ty_in_context(ret, context, tyvars, mode)?;
+                    self.resolve_signature_like_ast_ty_in_context(ret, Self::function_type_return_context(context), tyvars, mode)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),
@@ -3885,7 +3905,7 @@ impl Checker {
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
             ),
             Ty::MatchResult(inner) => format!(
-                "MatchResult<{}, Error>",
+                "MatchResult<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
             ),
             Ty::List(inner) => format!(
@@ -3915,10 +3935,9 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Ty::Result(ok, err) => format!(
-                "Result<{}, {}>",
-                self.diagnostic_ty_name_with_state(ok, tyvars, next_tyvar_index),
-                self.diagnostic_ty_name_with_state(err, tyvars, next_tyvar_index)
+            Ty::Result(ok, _) => format!(
+                "Result<{}>",
+                self.diagnostic_ty_name_with_state(ok, tyvars, next_tyvar_index)
             ),
             Ty::Var(var) => tyvars
                 .entry(*var)
@@ -4018,7 +4037,7 @@ impl Checker {
                     .join(", ")
             ),
             Ty::ExtractorClosure(inner) => format!("ExtractorClosure<{}>", self.ty_name(inner)),
-            Ty::MatchResult(inner) => format!("MatchResult<{}, Error>", self.ty_name(inner)),
+            Ty::MatchResult(inner) => format!("MatchResult<{}>", self.ty_name(inner)),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),

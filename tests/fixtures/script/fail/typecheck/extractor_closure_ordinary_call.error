@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Not a function: ExtractorClosure<(Int -> MatchResult<Int, Error>)>
+contains: Not a function: ExtractorClosure<(Int -> MatchResult<Int>)>

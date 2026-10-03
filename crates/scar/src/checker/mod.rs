@@ -428,6 +428,7 @@ enum TypeSyntaxContext {
     HoleClosureParam,
     FacetDeferredSlot,
     ExtractorReturn,
+    ExtractorClosureReturn,
     ExtractorBody,
     ErrorMarker,
 }

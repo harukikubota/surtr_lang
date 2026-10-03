@@ -87,7 +87,7 @@ defmod ExtractorSchema {
     if(value >= min, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError))
   }
 
-  def adapt_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)> {
+  def adapt_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B>)> {
     Extractor::from_result(f)
   }
 

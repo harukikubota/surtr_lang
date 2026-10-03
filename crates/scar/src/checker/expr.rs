@@ -7712,7 +7712,7 @@ impl Checker {
             other => Err(TypeError {
                 structured: None,
                 message: format!(
-                    "{} must return MatchResult<T, Error>, got {}",
+                    "{} must return MatchResult<T>, got {}",
                     context,
                     self.ty_name(&other)
                 ),

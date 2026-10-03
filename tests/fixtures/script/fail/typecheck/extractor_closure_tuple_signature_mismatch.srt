@@ -1,1 +1,1 @@
-ext: ExtractorClosure<((Int, Int) -> MatchResult<Int, Error>)> = *{|left: Int, right: Int| MatchResult::Ok(left + right)}
+ext: ExtractorClosure<((Int, Int) -> MatchResult<Int>)> = *{|left: Int, right: Int| MatchResult::Ok(left + right)}
