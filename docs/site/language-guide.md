@@ -799,12 +799,12 @@ not_fn = &`Boolean::not`
 - `print(String) -> Unit`
 - `to_string(A) -> String`
 - `inspect(A) -> String`
-- `safe_div(A, A) -> Result<A, ZeroDivisionError>` (`Int::safe_div` / `Float::safe_div` の runtime target)
-- `safe_mod(Int, Int) -> Result<Int, ZeroDivisionError>`
+- `Div::safe_div(Self, Self) -> Result<Self>` (`Int` / `Float` の標準実装は `ZeroDivisionError` 契約)
+- `Mod::safe_mod(Self, Self) -> Result<Self>` (`Int` の標準実装は `ZeroDivisionError` 契約)
 - `eprint(Error) -> Unit`
 - `set_exit_code(Int) -> Unit`
 
-`safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。  
+`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` を呼び、`Result` を返します。標準数値実装のゼロ除算は `Err(ZeroDivisionError)` です。ユーザー型の実装は独自のエラー契約を持てます。
 `+`, `-`, `*` は内部では `Add` / `Sub` / `Mul` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
 ## 12. 標準定義ソースの前提

@@ -8,7 +8,7 @@ language surface に持ち込むことではありません。
 ## 契約
 
 - `Float` literal は有限値だけを受け入れます
-- `Float::safe_div(left, right)` は `right == 0.0` のとき `Err(ZeroDivisionError)` を返します
+- `Div::safe_div(left, right)` は `right == 0.0` のとき `Err(ZeroDivisionError)` を返します
 - builtin constant と runtime arithmetic も non-finite value を返しません
 - 表示は通常の `f64` 表示を基礎にし、整数値に見える場合は `.0` を補います
 
@@ -19,7 +19,7 @@ left = 1.5
 right = 2.0
 
 print(to_string(left + right))
-print(inspect(Float::safe_div(3.0, 2.0)))
+print(inspect(Div::safe_div(3.0, 2.0)))
 ```
 
 ```text
@@ -27,12 +27,13 @@ print(inspect(Float::safe_div(3.0, 2.0)))
 Ok(1.5)
 ```
 
+`left / right` も `Div::safe_div(left, right)` と同じ結果を返します。標準の `Float` に `Mod` 実装はなく、`%` は使えません。
+
 ## helper
 
 `Float` には次の helper があります。
 
 - `Float::abs(value)`
-- `Float::safe_div(left, right)`
 - `Float::min(a, b)`
 - `Float::max(a, b)`
 - `Float::floor(value)`

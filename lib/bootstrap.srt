@@ -348,7 +348,10 @@ deferror NoneError { "None Value." }
 
 @doc """
 Concrete bootstrap error for division or modulo by zero.
-`safe_div` and `safe_mod` return this through `Err(...)` instead of trapping.
+The standard `Div` implementations for `Int` and `Float`, and `Mod` for `Int`,
+return this through `Err(...)` instead of trapping.
+The traits do not fix their error contract; user implementations may declare
+their own errors.
 """
 deferror ZeroDivisionError { "division by zero" }
 

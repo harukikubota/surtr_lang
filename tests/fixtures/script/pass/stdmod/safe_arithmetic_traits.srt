@@ -1,0 +1,37 @@
+deferror DomainDivisionError { "domain division rejected" }
+defrecord Metric(value: Int)
+impl Div for Metric {
+  def safe_div(self: Self, rhs: Self) -> Result<Self, DomainDivisionError> {
+    if(rhs.value == 0, Err(DomainDivisionError), Ok(Metric(self.value - rhs.value)))
+  }
+}
+impl Mod for Metric {
+  def safe_mod(self: Self, rhs: Self) -> Result<Self> { Ok(Metric(self.value + rhs.value)) }
+}
+def quotient(left: $T, right: $T) -> Result<$T> where $T: Div { left / right }
+def remainder(left: $T, right: $T) -> Result<$T> where $T: Mod { left % right }
+quot: (Int, Int -> Result<Int>) = &`/`
+rem: (Int, Int -> Result<Int>) = &`%`
+partial: (Int -> Result<Int>) = &`%`(&1, 3)
+print(inspect(8 / 2))
+print(inspect(8 % 3))
+print(inspect(8.0 / 2.0))
+print(inspect(-8 / 3))
+print(inspect(-8 % 3))
+print(inspect(8 `/` 2))
+print(inspect(8 `%` 3))
+print(inspect(quot(8, 2)))
+print(inspect(rem(8, 3)))
+print(inspect(partial(8)))
+print(inspect(1 / 0))
+print(inspect(1.0 / 0.0))
+print(inspect(1 % 0))
+a =? quotient(Metric(9), Metric(2))
+b =? remainder(Metric(9), Metric(2))
+c =? Div::safe_div(Metric(9), Metric(2))
+d =? Mod::safe_mod(Metric(9), Metric(2))
+print(to_string(a.value))
+print(to_string(b.value))
+print(to_string(c.value))
+print(to_string(d.value))
+print(inspect(Metric(9) / Metric(0)))

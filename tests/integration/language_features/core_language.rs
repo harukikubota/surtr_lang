@@ -184,21 +184,21 @@ fn range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range()
 
 fn arithmetic_int_ops() {
     assert_output(
-        "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(inspect(safe_div(10, 3)))\nprint(inspect(safe_mod(10, 3)))",
+        "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(inspect(Div::safe_div(10, 3)))\nprint(inspect(Mod::safe_mod(10, 3)))",
         &["15", "7", "12", "Ok(3)", "Ok(1)"],
     );
 }
 
 fn arithmetic_float_ops() {
     assert_output(
-        "print(to_string(1.5 + 2.5))\nprint(inspect(safe_div(10.0, 3.0)))",
+        "print(to_string(1.5 + 2.5))\nprint(inspect(Div::safe_div(10.0, 3.0)))",
         &["4.0", "Ok(3.3333333333333335)"],
     );
 }
 
 fn safe_xxx_zero_returns_zero_division_error_display() {
     assert_output(
-        "print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))",
+        "print(inspect(Div::safe_div(1, 0)))\nprint(inspect(Mod::safe_mod(1, 0)))",
         &[
             "Err(ZeroDivisionError(\"division by zero\"))",
             "Err(ZeroDivisionError(\"division by zero\"))",

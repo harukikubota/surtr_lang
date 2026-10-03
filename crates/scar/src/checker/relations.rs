@@ -273,12 +273,20 @@ impl Checker {
                 actual_type: Some(types[1].clone()),
             })
         };
+        let mut related = vec![expected_fact.clone()];
+        for span in [&expected_fact.span, &actual_fact.span] {
+            if let Some(signature) = self.safe_operator_results.get(&(span.start, span.end)) {
+                if !related.contains(signature) {
+                    related.push(signature.clone());
+                }
+            }
+        }
         TypeError::from_structured(StructuredDiagnostic {
             reason: reason.into(),
             origin,
             data,
             primary: actual_fact,
-            related: vec![expected_fact],
+            related,
             remediation: None,
         })
     }
@@ -880,7 +888,12 @@ impl Checker {
             origin,
             data,
             primary: self.type_fact(SourceRole::Value, span, subject),
-            related: vec![],
+            related: self
+                .safe_operator_results
+                .get(&(span.start, span.end))
+                .cloned()
+                .into_iter()
+                .collect(),
             remediation,
         })
     }

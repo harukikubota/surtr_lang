@@ -251,7 +251,9 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
-    Slash,
+    /// Safe arithmetic preserves its source token for result diagnostics.
+    Div(Span),
+    Mod(Span),
     /// Fixed Facet path composition; never dispatched through a user trait.
     FacetChain,
     Eq,

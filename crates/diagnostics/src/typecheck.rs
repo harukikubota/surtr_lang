@@ -624,9 +624,16 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
 }
 
 fn source_fact_label(fact: &SourceFact) -> DiagnosticLabel {
-    let message = match fact.ty.as_deref() {
-        Some(ty) => format!("{}: {}", fact.role.as_str(), ty),
-        None => fact.role.as_str().to_string(),
+    let message = match (fact.role, fact.ty.as_deref()) {
+        (crate::SourceRole::OperatorSignature, Some(signature)) => format!(
+            "`{}`: {signature}",
+            fact.declaration_identity
+                .as_ref()
+                .expect("operator signature carries declaration identity")
+                .name
+        ),
+        (_, Some(ty)) => format!("{}: {}", fact.role.as_str(), ty),
+        (_, None) => fact.role.as_str().to_string(),
     };
     DiagnosticLabel {
         source_id: Some(fact.source_id),

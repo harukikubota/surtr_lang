@@ -135,6 +135,7 @@ impl BuiltinMeta {
             "__operator_int_add" => Opcode::AddInt,
             "__operator_int_sub" => Opcode::SubInt,
             "__operator_int_mul" => Opcode::MulInt,
+            "safe_mod" => Opcode::SafeModInt,
             "__operator_float_add" => Opcode::AddFloat,
             "__operator_float_sub" => Opcode::SubFloat,
             "__operator_float_mul" => Opcode::MulFloat,
@@ -180,6 +181,8 @@ impl BuiltinMeta {
             "__operator_float_sub" => ("Sub", "sub", &[TypeName::Float]),
             "__operator_int_mul" => ("Mul", "mul", &[TypeName::Int]),
             "__operator_float_mul" => ("Mul", "mul", &[TypeName::Float]),
+            "safe_div" => ("Div", "safe_div", &[TypeName::Int, TypeName::Float]),
+            "safe_mod" => ("Mod", "safe_mod", &[TypeName::Int]),
             "__operator_int_eq" => ("Eq", "eq", &[TypeName::Int]),
             "__operator_float_eq" => ("Eq", "eq", &[TypeName::Float]),
             "__operator_string_eq" => ("Eq", "eq", &[TypeName::String]),
@@ -490,49 +493,14 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "($A, $A) -> Result<$A, ZeroDivisionError>",
         compiler_generated_surfaces: &[],
-        surfaces: &[
-            builtin_surface_spec(
-                Some("Int"),
-                "safe_div",
-                &[],
-                &[
-                    builtin_surface_parameter("a", "Int"),
-                    builtin_surface_parameter("b", "Int"),
-                ],
-                "Result<Int, ZeroDivisionError>",
-                &[],
-            ),
-            builtin_surface_spec(
-                Some("Float"),
-                "safe_div",
-                &[],
-                &[
-                    builtin_surface_parameter("a", "Float"),
-                    builtin_surface_parameter("b", "Float"),
-                ],
-                "Result<Float, ZeroDivisionError>",
-                &[],
-            ),
-        ],
+        surfaces: &[],
     },
     BuiltinMeta {
         name: "safe_mod",
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, ZeroDivisionError>",
         compiler_generated_surfaces: &[],
-        surfaces: &[
-            builtin_surface_spec(
-                Some("Int"),
-                "safe_mod",
-                &[],
-                &[
-                    builtin_surface_parameter("a", "Int"),
-                    builtin_surface_parameter("b", "Int"),
-                ],
-                "Result<Int, ZeroDivisionError>",
-                &[],
-            ),
-        ],
+        surfaces: &[],
     },
     BuiltinMeta {
         name: "eprint",
@@ -3911,7 +3879,7 @@ pub fn builtin_meta_by_runtime_name(name: &str) -> Option<&'static BuiltinMeta> 
     builtin_meta_by_name(name)
 }
 
-/// Resolve the surface variant for a declaration such as `Int::safe_div`.
+/// Resolve the surface variant for a declaration such as `Int::bit_and`.
 /// The owner is taken from the qualified source identity and is not inferred
 /// from the order of declarations in the standard library.
 pub fn builtin_surface_variant_for_decl(
@@ -4104,6 +4072,26 @@ mod tests {
     }
 
     #[test]
+    fn safe_arithmetic_runtime_entries_are_trait_implementations() {
+        for (name, owner, targets) in [
+            ("safe_div", "Div", vec![TypeName::Int, TypeName::Float]),
+            ("safe_mod", "Mod", vec![TypeName::Int]),
+        ] {
+            let meta = builtin_meta_by_name(name).expect("runtime entry retained");
+            let implementation = meta
+                .trait_method()
+                .expect("safe arithmetic uses trait dispatch");
+            assert_eq!(implementation.trait_name, owner);
+            assert_eq!(implementation.method_name, name);
+            assert_eq!(implementation.targets, targets);
+            assert!(
+                meta.surfaces.is_empty(),
+                "old inherent helper surface is removed"
+            );
+        }
+    }
+
+    #[test]
     fn standard_owner_identity_metadata_marks_option_as_type_constructor() {
         assert_eq!(
             standard_owner_identity_by_name("Option"),
@@ -4126,39 +4114,26 @@ mod tests {
     }
 
     #[test]
-    fn surface_variants_keep_distinct_identities_and_shared_runtime_target() {
-        let meta = builtin_meta_by_runtime_name("safe_div").expect("safe_div metadata");
-        let int = meta
-            .surface_variant("Int", "safe_div")
-            .expect("Int::safe_div surface variant");
-        let float = meta
-            .surface_variant("Float", "safe_div")
-            .expect("Float::safe_div surface variant");
-
-        let int_names = int
-            .value_parameters
-            .iter()
-            .map(|parameter| parameter.name.as_str())
-            .collect::<Vec<_>>();
-        let float_names = float
-            .value_parameters
-            .iter()
-            .map(|parameter| parameter.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(int_names, ["a", "b"]);
-        assert_eq!(float_names, ["a", "b"]);
-        assert_eq!(int.value_parameters.len(), meta.runtime_arity() as usize);
-        assert_eq!(float.value_parameters.len(), meta.runtime_arity() as usize);
-        assert_eq!(int.runtime_target, float.runtime_target);
-        assert_ne!(int.identity, float.identity);
+    fn safe_arithmetic_has_no_legacy_inherent_surface() {
+        for (owner, method) in [
+            ("Int", "safe_div"),
+            ("Float", "safe_div"),
+            ("Int", "safe_mod"),
+        ] {
+            assert!(builtin_surface_variant_for_decl(
+                method,
+                Some(&format!("Global::{owner}::{method}"))
+            )
+            .is_none());
+        }
     }
 
     #[test]
     fn declaration_lookup_uses_canonical_owner_and_name() {
-        let variant = builtin_surface_variant_for_decl("safe_div", Some("Global::Int::safe_div"))
+        let variant = builtin_surface_variant_for_decl("bit_and", Some("Global::Int::bit_and"))
             .expect("qualified builtin declaration should resolve");
         assert_eq!(variant.identity.owner.as_deref(), Some("Int"));
-        assert_eq!(variant.identity.name, "safe_div");
+        assert_eq!(variant.identity.name, "bit_and");
     }
 
     #[test]

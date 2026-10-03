@@ -45,9 +45,9 @@ test("Int") {
       assert_eq(
         ("Ok(4)", "Ok(1)", "Err(ZeroDivisionError(\"division by zero\"))"),
         (
-          inspect(Int::safe_div(8, 2)),
-          inspect(Int::safe_mod(7, 3)),
-          inspect(Int::safe_div(8, 0))
+          inspect(Div::safe_div(8, 2)),
+          inspect(Mod::safe_mod(7, 3)),
+          inspect(Div::safe_div(8, 0))
         ),
       )
     }

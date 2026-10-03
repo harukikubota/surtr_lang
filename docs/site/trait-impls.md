@@ -10,7 +10,7 @@ Surtr の trait system は V1 です。
 - capability trait
   - `Show`, `Compare`, `Default`, `Convert`, `TryConvert`
 - operator dispatch trait
-  - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
+  - `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Eq`, `Neq`, `Concat`
   - `Functor`, `Applicative`, `Monad`
 
 `->` は `Facet::chain` に対応する固定構文です。`|>`、`>>`、`>*`、`>=>` は関数演算子の固定規則であり、関数型への trait impl を要求しません。
@@ -37,7 +37,7 @@ Surtr の trait system は V1 です。
 `Error`、関数値、Facet path、構文・プロトコル用 marker、比較仕様が未確定の opaque 型や handle 型には、ユーザーの trait impl を作れません。PID に許される compiler 所有の能力は上記の `Eq` だけです。比較したい情報は通常の値として取り出してください。
 
 `Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
-数値 helper は generic trait ではなく、`Int::abs` / `Float::safe_div` のような concrete type owner surface として提供します。
+`Int::abs` や `Float::abs` などの数値 helper は concrete type owner surface として提供します。除算と剰余は、次の `Div` / `Mod` トレイトを使います。
 
 `Default::default::<T>() -> T` は runtime value parameter を取らず、expected return type または明示型引数から target type を決めます。`@derive Default` は field / payload の default 値を使う実装を生成しますが、constructor の検証処理や型固有の不変条件を代替しません。
 
@@ -210,3 +210,25 @@ xldr(2)>
 - `|*|` は未カリー化 callable を暗黙変換しません。複数引数では `curry()` を明示します。
 - `Convert` / `TryConvert` の呼び出し surface は簡潔でも、coherence 自体は trait 実装側で管理されています。
 - 1 つの `defmod` / `impl` block に同名 method を複数定義できません。signature や `def` / `defp` を変えても overload にはなりません。
+
+## 除算と剰余
+
+`/` は `Div::safe_div`、`%` は `Mod::safe_mod` を呼び出します。両トレイトの引数は同じ `Self`、成功型も `Self` です。
+
+```surtr
+deftrait Div {
+  def safe_div(self: Self, rhs: Self) -> Result<Self>
+}
+
+deftrait Mod {
+  def safe_mod(self: Self, rhs: Self) -> Result<Self>
+}
+```
+
+標準では `Div for Int`、`Div for Float`、`Mod for Int` を提供します。各標準実装は `Result<Self, ZeroDivisionError>` のエラー契約を持ち、ゼロ除算は `Err(ZeroDivisionError)` です。整数除算・剰余の符号規則と Float の有限値制約は、各標準実装に従います。標準の `Mod for Float` はありません。
+
+通常のトレイト実装規則に従い、ユーザー型も `Div` / `Mod` を実装できます。型変数に `where $A: Div` や `where $A: Mod` を付ければ、その型の演算子とトレイトメソッドを使えます。異種数値の暗黙変換や `Result` の自動 unwrap は行いません。
+
+トレイト定義の `Result<Self>` はエラー契約を固定しません。実装は `Result<Self, DomainDivisionError>` のような独自の `deferror`、抽象 `Error`、エラー位置の省略を既存規則に従って指定できます。`Div` と `Mod` で同じエラーを返す必要はありません。値の型はどちらも `Result<Self>` であり、エラー契約は定義の metadata として保持します。引数と成功型の一致は通常どおり検査します。
+
+`/` と `%` は `+`, `-`, `*` と同じ Expr グループで左結合です。例えば `8 / 2 * 3` は除算結果の `Result<Int>` と `Int` の乗算になるため拒否されます。その型不一致診断には、原因となった演算子の具体的なシグネチャが補助ラベルで表示されます。

@@ -3926,7 +3926,7 @@ fn core_result_error_reports_diagnostic_without_exiting() {
     assert!(matches!(result_err.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&result_err).contains("None Value."));
 
-    let safe_mod = engine.handle_line("safe_mod(10, 0)");
+    let safe_mod = engine.handle_line("Mod::safe_mod(10, 0)");
     assert!(!safe_mod.should_exit);
     assert!(matches!(safe_mod.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&safe_mod).contains("division by zero"));
@@ -3947,7 +3947,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
         "stacktrace must default to off:\n{hidden_text}"
     );
 
-    let hidden_runtime = engine.handle_line("safe_mod(10, 0)");
+    let hidden_runtime = engine.handle_line("Mod::safe_mod(10, 0)");
     assert!(matches!(
         hidden_runtime.output,
         ReplOutput::EvalError { .. }
@@ -3977,7 +3977,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
     );
     assert!(shown_text.contains("fail at"), "{shown_text}");
 
-    let shown_runtime = engine.handle_line("safe_mod(10, 0)");
+    let shown_runtime = engine.handle_line("Mod::safe_mod(10, 0)");
     assert!(matches!(shown_runtime.output, ReplOutput::EvalError { .. }));
     let shown_runtime_text = rendered_text(&shown_runtime);
     let runtime_message_idx = shown_runtime_text
@@ -5218,6 +5218,22 @@ fn core_process_type_and_info_support_singletons_and_worker_pids() {
 
 fn core_sig_expression_queries_support_operator_forms() {
     let mut engine = engine();
+
+    for (operator, trait_name, method) in [("/", "Div", "safe_div"), ("%", "Mod", "safe_mod")] {
+        let doc = doc_text(&engine.handle_line(&format!(":doc {operator}")));
+        assert!(doc.contains(&format!("{trait_name}::{method}")), "{doc}");
+        let sig = signature_text(&engine.handle_line(&format!(":sig {operator} Int")));
+        assert!(
+            sig.contains(&format!("impl {trait_name} for Int::{method}")),
+            "{sig}"
+        );
+        assert!(sig.contains("ZeroDivisionError"), "{sig}");
+    }
+    let float_sig = signature_text(&engine.handle_line(":sig / Float"));
+    assert!(
+        float_sig.contains("impl Div for Float::safe_div"),
+        "{float_sig}"
+    );
 
     let map_sig = engine.handle_line(":sig |*> Option");
     let map_sig = signature_text(&map_sig);

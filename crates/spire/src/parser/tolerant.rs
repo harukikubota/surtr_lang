@@ -478,6 +478,7 @@ fn scan_tolerant(source: &str) -> TolerantScan {
             '-' => Some((Token::Minus, SyntaxTokenKind::Operator)),
             '*' => Some((Token::Star, SyntaxTokenKind::Operator)),
             '/' => Some((Token::Slash, SyntaxTokenKind::Operator)),
+            '%' => Some((Token::Percent, SyntaxTokenKind::Operator)),
             '!' => Some((Token::Bang, SyntaxTokenKind::Operator)),
             '=' => Some((Token::Bind, SyntaxTokenKind::Operator)),
             '<' => Some((Token::Lt, SyntaxTokenKind::Operator)),

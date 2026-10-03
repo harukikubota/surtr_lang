@@ -1,0 +1,16 @@
+@doc """
+Standard `Mod` operator trait declaration.
+`left % right` calls `Mod::safe_mod(left, right)` and returns `Result<Self>`.
+The operands and success value have the same type. Each implementation may
+specify its own error contract; the trait does not fix an error type.
+This trait is not auto-imported. Use `Mod::safe_mod` or an explicit import
+for direct calls. User types may implement the same operator contract.
+
+## REPL
+xldr(1)> Mod::safe_mod(7, 3)
+Ok(1)
+"""
+deftrait Mod {
+  # The error contract belongs to the implementation, not the trait value type.
+  def safe_mod(self: Self, rhs: Self) -> Result<Self>
+}

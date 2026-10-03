@@ -678,7 +678,7 @@ mod tests {
         let err = eldr::RuntimeError::new("division by zero");
         let text = runtime_error_text(
             &err,
-            Some("safe_mod(10, 0)"),
+            Some("Mod::safe_mod(10, 0)"),
             Some("main.srt"),
             Some(Location {
                 file: "main.srt".into(),

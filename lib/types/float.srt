@@ -13,14 +13,6 @@ impl Default for Float {
 
 impl Float {
   @doc """
-  Divide two float values and return `Err(ZeroDivisionError)` instead of trapping.
-  ## REPL
-  xldr(1)> Float::safe_div(3.0, 2.0)
-  Ok(1.5)
-  """
-  @builtin def safe_div(a: Float, b: Float) -> Result<Float, ZeroDivisionError>
-
-  @doc """
   Return the absolute value of `value`.
   ## REPL
   xldr(1)> Float::abs(-1.5)
@@ -127,6 +119,16 @@ impl Mul for Float {
   3.0
   """
   @builtin def mul(self: Self, rhs: Self) -> Self
+}
+
+impl Div for Float {
+  @doc """
+  Divide two float values and return `Err(ZeroDivisionError)` instead of trapping.
+  ## REPL
+  xldr(1)> Div::safe_div(3.0, 2.0)
+  Ok(1.5)
+  """
+  @builtin def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError>
 }
 
 impl Show for Float {

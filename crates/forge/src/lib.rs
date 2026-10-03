@@ -81,6 +81,8 @@ mod tests {
     const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/add.srt");
     const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/sub.srt");
     const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mul.srt");
+    const DIV_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/div.srt");
+    const MOD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mod.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/traits/show.srt");
     const DEFAULT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/default.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
@@ -284,6 +286,8 @@ mod tests {
                 ("Add", ADD_MODULE_SOURCE),
                 ("Sub", SUB_MODULE_SOURCE),
                 ("Mul", MUL_MODULE_SOURCE),
+                ("Div", DIV_MODULE_SOURCE),
+                ("Mod", MOD_MODULE_SOURCE),
                 ("Eq", EQ_MODULE_SOURCE),
                 ("Compare", COMPARE_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
@@ -1501,12 +1505,8 @@ print("ok")"#,
     }
 
     #[test]
-    fn direct_safe_mod_builtin_call_lowers_to_specialized_opcode() {
-        let bytecode = codegen_typed(vec![builtin_app(
-            "safe_mod",
-            vec![int_lit(7), int_lit(3)],
-            Ty::Int,
-        )]);
+    fn safe_mod_trait_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source("remainder = Mod::safe_mod(7, 3)");
 
         assert!(bytecode
             .opcodes
@@ -1630,7 +1630,7 @@ print("ok")"#,
     fn concrete_numeric_helpers_lower_to_existing_targets() {
         let bytecode = codegen_source(
             r#"sum = 1 + 2
-quot = Float::safe_div(8.0, 2.0)
+quot = Div::safe_div(8.0, 2.0)
 largest = Float::max(1.5, 2.5)"#,
         );
 

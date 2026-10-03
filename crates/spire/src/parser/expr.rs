@@ -299,12 +299,13 @@ impl Parser<'_> {
 
     // ── Infix operators grouped by OpKind ──
 
-    pub(super) fn expr_binop(tok: &Token) -> Option<BinOp> {
+    pub(super) fn expr_binop(tok: &Token, operator_span: Span) -> Option<BinOp> {
         match tok {
             Token::Plus => Some(BinOp::Add),
             Token::Minus => Some(BinOp::Sub),
             Token::Star => Some(BinOp::Mul),
-            Token::Slash => Some(BinOp::Slash),
+            Token::Slash => Some(BinOp::Div(operator_span)),
+            Token::Percent => Some(BinOp::Mod(operator_span)),
             Token::Concat => Some(BinOp::Concat),
             _ => None,
         }
@@ -332,10 +333,16 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn expr_binop_from_func_literal(body: &str) -> Option<BinOp> {
+    pub(super) fn expr_binop_from_func_literal(body: &str, operator_span: Span) -> Option<BinOp> {
         let operator = func_literal_operator(body)?;
         match (operator.tier, operator.kind) {
             (FuncLiteralOperatorTier::Expr, FuncLiteralOperatorKind::BinOp(op)) => Some(op),
+            (FuncLiteralOperatorTier::Expr, FuncLiteralOperatorKind::SafeDivision) => {
+                Some(BinOp::Div(operator_span))
+            }
+            (FuncLiteralOperatorTier::Expr, FuncLiteralOperatorKind::SafeModulo) => {
+                Some(BinOp::Mod(operator_span))
+            }
             _ => None,
         }
     }
@@ -438,7 +445,7 @@ impl Parser<'_> {
         let mut left = self.parse_facet_chain()?;
 
         loop {
-            if let Some(op) = Self::expr_binop(self.peek()) {
+            if let Some(op) = Self::expr_binop(self.peek(), self.peek_span()) {
                 self.advance();
                 let right = self.parse_facet_chain()?;
                 left = Self::lower_binop(left, op, right);
@@ -499,7 +506,8 @@ impl Parser<'_> {
             let right = self.parse_facet_chain()?;
             match func_kind {
                 FuncLiteralBodyKind::Operator(op_body) => {
-                    let Some(op) = Self::expr_binop_from_func_literal(&op_body) else {
+                    let Some(op) = Self::expr_binop_from_func_literal(&op_body, func_span.clone())
+                    else {
                         return Err(ParseError::syntax(
                             crate::error::ParseErrorReason::ExpressionSyntax,
                             format!("Unsupported FuncLiteral body: `{}`", op_body),
@@ -1440,7 +1448,8 @@ impl Parser<'_> {
                         },
                     ));
                 };
-                let Some(op) = Self::expr_binop_from_func_literal(&op_body) else {
+                let Some(op) = Self::expr_binop_from_func_literal(&op_body, func_span.clone())
+                else {
                     return Err(ParseError::syntax(
                         crate::error::ParseErrorReason::ExpressionSyntax,
                         format!("quoted operator call `{}` is not supported", op_body),
@@ -1762,7 +1771,7 @@ impl Parser<'_> {
         let Some(next) = self.tokens.get(next_index) else {
             return Ok(true);
         };
-        if Self::expr_binop(&next.token).is_some()
+        if Self::expr_binop(&next.token, next.span.clone()).is_some()
             || Self::logical_binop(&next.token).is_some()
             || Self::and_or_name(&next.token).is_some()
             || matches!(next.token, Token::Dot)

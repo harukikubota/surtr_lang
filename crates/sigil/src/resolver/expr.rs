@@ -426,6 +426,8 @@ impl Resolver {
             "+" => BinOp::Add,
             "-" => BinOp::Sub,
             "*" => BinOp::Mul,
+            "/" => BinOp::Div(span.clone()),
+            "%" => BinOp::Mod(span.clone()),
             "++" => BinOp::Concat,
             "==" => BinOp::Eq,
             "!=" => BinOp::Neq,

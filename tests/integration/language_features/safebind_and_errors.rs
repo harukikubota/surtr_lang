@@ -758,12 +758,12 @@ match ret {
 
 fn builtin_safe_xxx_zero_error_can_be_matched_and_eprinted() {
     let (stdout, stderr) = run_surtr_with_stderr(
-        r#"match safe_div(1, 0) {
+        r#"match Div::safe_div(1, 0) {
   Ok(val) => print(to_string(val)),
   Err(e)  => eprint(e),
 }
 
-match safe_mod(1, 0) {
+match Mod::safe_mod(1, 0) {
   Ok(val) => print(to_string(val)),
   Err(e)  => eprint(e),
 }"#,

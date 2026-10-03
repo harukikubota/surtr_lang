@@ -455,6 +455,8 @@ pub enum BranchForm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceRole {
+    /// Signature of the resolved implementation that produced this value.
+    OperatorSignature,
     Value,
     ReturnTypeArgument,
     Annotation,
@@ -475,6 +477,7 @@ pub enum SourceRole {
 impl SourceRole {
     pub const fn json_name(self) -> &'static str {
         match self {
+            Self::OperatorSignature => "operator_signature",
             Self::Value => "value",
             Self::ReturnTypeArgument => "return_type_argument",
             Self::Annotation => "annotation",
@@ -495,6 +498,7 @@ impl SourceRole {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::OperatorSignature => "OperatorSignature",
             Self::Value => "Value",
             Self::ReturnTypeArgument => "ReturnTypeArgument",
             Self::Annotation => "Annotation",

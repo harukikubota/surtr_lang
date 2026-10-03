@@ -761,7 +761,7 @@ top()
 fn run_error_context_verbose_adds_stack_trace_for_builtin_err() {
     let temp = unique_temp_dir("surtr_error_context_builtin_trace");
     let source_path = temp.join("sample.srt");
-    write_source(&source_path, "safe_div(1, 0)\n");
+    write_source(&source_path, "Div::safe_div(1, 0)\n");
 
     let output = surtr_command()
         .args([
@@ -1399,7 +1399,7 @@ main()"#,
 fn run_source_safe_div_zero_returns_err_value() {
     let temp = unique_temp_dir("surtr_safe_div_zero");
     let source_path = temp.join("sample.srt");
-    write_source(&source_path, r#"print(inspect(safe_div(1, 0)))"#);
+    write_source(&source_path, r#"print(inspect(Div::safe_div(1, 0)))"#);
     let output = surtr_command()
         .args([
             "run",
@@ -1436,7 +1436,7 @@ fn run_source_safe_div_zero_returns_err_value() {
 fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
     let temp = unique_temp_dir("surtr_safe_mod_zero");
     let source_path = temp.join("sample.srt");
-    write_source(&source_path, r#"print(inspect(safe_mod(1, 0)))"#);
+    write_source(&source_path, r#"print(inspect(Mod::safe_mod(1, 0)))"#);
     let output = surtr_command()
         .env("SURTR_VERBOSE_RUNTIME_ERROR", "1")
         .args([

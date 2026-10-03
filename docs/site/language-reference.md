@@ -161,7 +161,7 @@ do::<Carrier> {
 - `Self: Type<...>` は trait definition where の `Self` だけ、`Trait.$Slot` は TypeConstructor trait impl の slot map だけで受理する
 - constructor application は通常関数／trait method signature の direct parameter・return、またはTypeCtorTrait constraintを持つnominal field/payloadに限る。通常型注釈での部分適用は拒否するが、call-site RTAのcarrier型applicationは許可する。`Self::...` / `Type::...` は value owner path として不正
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
-- 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
+- `Int::abs` / `Float::abs` などの数値 helper は concrete type owner surface として提供する。除算と剰余は `Div::safe_div` / `Mod::safe_mod` のトレイトメソッドを使う
 - `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
 - `Hole` は compiler-reserved な ignored-input callable marker
 - 通常型注釈の `_` は `Hole` の surface 表記だが、call-site ReturnTypeArgumentの`_`は別の推論穴である
@@ -249,6 +249,10 @@ doc 本文での interpolation は parse error です。
 - `+`
 - `-`
 - `*`
+- `/`: `Div::safe_div`
+- `%`: `Mod::safe_mod`
+
+`/` と `%` は同じ型の値同士を受け、`Result` を返します。標準では `Int` と `Float` が `Div`、`Int` が `Mod` を実装します。ユーザー型への実装と bounded generic での利用もできます。暗黙の数値変換や Result の unwrap は行いません。
 
 ### 比較
 
@@ -484,7 +488,7 @@ result: Option<Int> = do::<Option> {
 - 裸の比較関数6名の中置Callは比較演算子と同じ `Compare` 層・左結合。修飾中置Callは既存の `Function::on`・`Kernel::and`・`Kernel::or` を除き通常の `Expr` 層
 - `compare`、`pipe` / `fmap` / `bind`、関数合成の関数インターフェースは予約せず、名前付き中置Callは通常の2引数Call
 - pair constructor `(,)` は右結合で、`left (,) right` を nested pair に lower する
-- `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
+- `Expr` クラスの `+`, `-`, `*`, `/`, `%`, `++` は同列・左結合
 - `FacetChain` の `->` は Facet path 合成に限定した固定構文で、左結合。各オペランドのドット・呼び出しは `Postfix` で先に結合する
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
 - ``left `on` right`` は scope に見えている `on` ではなく、常に `Function::on(left, right)` として解釈される
@@ -565,8 +569,8 @@ private field と property access を含む構造体全体の契約は `./struct
 | `print` | `(String) -> Unit` |
 | `to_string` | `($A) -> String` |
 | `inspect` | `($A) -> String` |
-| `safe_div` | `($A, $A) -> Result<$A>` |
-| `safe_mod` | `(Int, Int) -> Result<Int>` |
+| `Div::safe_div` | `(Self, Self) -> Result<Self>` |
+| `Mod::safe_mod` | `(Self, Self) -> Result<Self>` |
 | `eprint` | `(Error) -> Unit` |
 | `set_exit_code` | `(Int) -> Unit` |
 
@@ -580,7 +584,7 @@ private field と property access を含む構造体全体の契約は `./struct
 - `eq` / `neq` は call-style helper で、`==` / `!=` と同じ比較制約に従う
 - `<` / `<=` / `>` / `>=` は `Compare` を満たす型に対してのみ使え、それぞれ `Compare::lt` / `Compare::lte` / `Compare::gt` / `Compare::gte` に対応する
 - `concat` は call-style helper で、`++` と同じく `String` 同士だけを受ける
-- `safe_div` / `safe_mod` は失敗時に `Err(ZeroDivisionError)` を返す
+- `Div` / `Mod` の標準数値実装はゼロ除算時に `Err(ZeroDivisionError)` を返す。トレイトはエラー契約を固定せず、ユーザー実装は独自エラーを指定できる
 - `set_exit_code` は処理系側で使用位置制約を持つ
 
 ## 8. 標準エラー

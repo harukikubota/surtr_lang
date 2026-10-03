@@ -32,7 +32,7 @@ test("Float") {
     it("supports safe division through Float") {
       assert_eq(
         ("Ok(1.5)", "Err(ZeroDivisionError(\"division by zero\"))"),
-        (inspect(Float::safe_div(3.0, 2.0)), inspect(Float::safe_div(3.0, 0.0))),
+        (inspect(Div::safe_div(3.0, 2.0)), inspect(Div::safe_div(3.0, 0.0))),
       )
     }
   }

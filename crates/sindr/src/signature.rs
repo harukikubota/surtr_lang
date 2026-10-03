@@ -101,7 +101,7 @@ pub enum CallableDeclarationKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CallableIdentity {
-    /// The canonical owner, such as `Int` in `Int::safe_div`.
+    /// The canonical owner, such as `Int` in `Int::bit_and`.
     pub owner: Option<String>,
     pub name: String,
     pub declaration_kind: CallableDeclarationKind,

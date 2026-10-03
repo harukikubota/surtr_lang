@@ -169,6 +169,7 @@ pub(super) struct CandidateProbeCheckpoint {
     active_capabilities: Vec<CapabilityUse>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     constructor_witness_traits: HashMap<u32, String>,
+    safe_operator_results: HashMap<(usize, usize), SourceFact>,
     warnings: WarningBuffer,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
 }
@@ -462,6 +463,7 @@ impl Checker {
             active_capabilities: self.active_capabilities.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            safe_operator_results: self.safe_operator_results.clone(),
             warnings: self.warnings.clone(),
             pattern_binding_aliases: self.pattern_binding_aliases.clone(),
         }
@@ -477,6 +479,7 @@ impl Checker {
         self.active_capabilities = checkpoint.active_capabilities;
         self.constructor_capabilities = checkpoint.constructor_capabilities;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
+        self.safe_operator_results = checkpoint.safe_operator_results;
         self.warnings = checkpoint.warnings;
         self.pattern_binding_aliases = checkpoint.pattern_binding_aliases;
     }
@@ -1857,6 +1860,7 @@ impl Checker {
             Resolved::TupleLiteral(span, elems) => self.check_tuple_literal(span, elems),
             Resolved::Grouped(span, inner) => {
                 let mut typed = self.check_node(inner)?;
+                self.propagate_safe_operator_result(&typed.span, span);
                 typed.span = span.clone();
                 Ok(typed)
             }
@@ -3241,6 +3245,7 @@ impl Checker {
                     Some(expected_ty),
                     expected_relation,
                 )?;
+                self.propagate_safe_operator_result(&typed.span, span);
                 typed.span = span.clone();
                 Ok(typed)
             }
@@ -3289,6 +3294,9 @@ impl Checker {
             };
             last_ty = typed.ty.clone();
             typed_stmts.push(typed);
+        }
+        if let Some(last) = typed_stmts.last() {
+            self.propagate_safe_operator_result(&last.span, span);
         }
         Ok(TypedNode {
             ty: last_ty,
@@ -5216,6 +5224,63 @@ impl Checker {
         }
     }
 
+    fn assert_trait_return_context(
+        &mut self,
+        expected: &Ty,
+        ret_ty: &Ty,
+        span: &Span,
+        trait_name: &str,
+        expected_ret_relation: Option<(&ExpectedTypeRelation, &Span)>,
+    ) -> Result<(), TypeError> {
+        let (expected_fact, actual_fact, reason, origin, callable, ordinal) =
+            match expected_ret_relation {
+                Some((relation, actual_span)) => (
+                    self.type_fact(relation.role, &relation.span, expected),
+                    self.type_fact(SourceRole::Value, actual_span, &ret_ty),
+                    relation.reason,
+                    relation.origin.clone(),
+                    relation.callable,
+                    relation.ordinal,
+                ),
+                None => (
+                    self.type_fact(SourceRole::Expected, span, expected),
+                    self.type_fact(SourceRole::Value, span, &ret_ty),
+                    TypeDiagnosticReason::ReturnTypeMismatch,
+                    DiagnosticOrigin::TraitCall,
+                    trait_name,
+                    0,
+                ),
+            };
+        let relation_result = self.assert_type_relation(
+            expected,
+            &ret_ty,
+            expected_fact,
+            actual_fact,
+            reason,
+            origin,
+            callable,
+            ordinal,
+        );
+        if relation_result.is_err() && reason == TypeDiagnosticReason::ReturnTypeArgumentMismatch {
+            let (_, actual_span) =
+                expected_ret_relation.expect("return-type-argument relation has source origins");
+            return Err(super::signatures::return_type_argument_mismatch_error(
+                callable,
+                ordinal,
+                &self.diagnostic_ty_name(&ret_ty),
+                &self.diagnostic_ty_name(expected),
+                &expected_ret_relation
+                    .expect("return-type-argument relation has explicit origin")
+                    .0
+                    .span,
+                SourceRole::Value,
+                actual_span,
+            ));
+        }
+        relation_result?;
+        Ok(())
+    }
+
     pub(super) fn check_trait_invocation(
         &mut self,
         span: &Span,
@@ -5230,6 +5295,39 @@ impl Checker {
         explicit_type_args: Option<&[AstTy]>,
         operator: Option<OperatorTraitOp>,
         receiver_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        self.check_trait_invocation_with_result_context(
+            span,
+            trait_name,
+            method_name,
+            args,
+            receiver_owner_hint,
+            expected_ret_ty,
+            expected_ret_relation,
+            argument_expected_relation,
+            constructor_failure_reason,
+            explicit_type_args,
+            operator,
+            receiver_hint,
+            false,
+        )
+    }
+
+    fn check_trait_invocation_with_result_context(
+        &mut self,
+        span: &Span,
+        trait_name: &str,
+        method_name: &str,
+        args: &[ResolvedRecordLitArg],
+        receiver_owner_hint: Option<&str>,
+        expected_ret_ty: Option<&Ty>,
+        expected_ret_relation: Option<(&ExpectedTypeRelation, &Span)>,
+        argument_expected_relation: Option<&ExpectedTypeRelation>,
+        constructor_failure_reason: Option<TypeDiagnosticReason>,
+        explicit_type_args: Option<&[AstTy]>,
+        operator: Option<OperatorTraitOp>,
+        receiver_hint: Option<&Ty>,
+        defer_incompatible_result_context: bool,
     ) -> Result<TypedNode, TypeError> {
         if args
             .iter()
@@ -5929,55 +6027,16 @@ impl Checker {
                 }
             }
         }
-        if let Some(expected) = expected_ret_ty {
-            let (expected_fact, actual_fact, reason, origin, callable, ordinal) =
-                match expected_ret_relation {
-                    Some((relation, actual_span)) => (
-                        self.type_fact(relation.role, &relation.span, expected),
-                        self.type_fact(SourceRole::Value, actual_span, &ret_ty),
-                        relation.reason,
-                        relation.origin.clone(),
-                        relation.callable,
-                        relation.ordinal,
-                    ),
-                    None => (
-                        self.type_fact(SourceRole::Expected, span, expected),
-                        self.type_fact(SourceRole::Value, span, &ret_ty),
-                        TypeDiagnosticReason::ReturnTypeMismatch,
-                        DiagnosticOrigin::TraitCall,
-                        trait_name,
-                        0,
-                    ),
-                };
-            let relation_result = self.assert_type_relation(
-                expected,
-                &ret_ty,
-                expected_fact,
-                actual_fact,
-                reason,
-                origin,
-                callable,
-                ordinal,
-            );
-            if relation_result.is_err()
-                && reason == TypeDiagnosticReason::ReturnTypeArgumentMismatch
-            {
-                let (_, actual_span) = expected_ret_relation
-                    .expect("return-type-argument relation has source origins");
-                return Err(super::signatures::return_type_argument_mismatch_error(
-                    callable,
-                    ordinal,
-                    &self.diagnostic_ty_name(&ret_ty),
-                    &self.diagnostic_ty_name(expected),
-                    &expected_ret_relation
-                        .expect("return-type-argument relation has explicit origin")
-                        .0
-                        .span,
-                    SourceRole::Value,
-                    actual_span,
-                ));
+        if !defer_incompatible_result_context {
+            if let Some(expected) = expected_ret_ty {
+                self.assert_trait_return_context(
+                    expected,
+                    &ret_ty,
+                    span,
+                    trait_name,
+                    expected_ret_relation,
+                )?;
             }
-            relation_result?;
         }
 
         let trait_display_name = self.trait_display_name(trait_name);
@@ -6141,6 +6200,27 @@ impl Checker {
                     &format!("{trait_name}::{method_name}"),
                     idx as u32,
                 )?;
+            }
+        }
+
+        if defer_incompatible_result_context {
+            if let Some(expected) = expected_ret_ty {
+                // A Result context may finish payload inference after the operands
+                // establish Self. Probe without committing failed substitutions.
+                // An incompatible context is necessarily rejected by the outside
+                // annotation, return, or argument relation; it is not accepted here.
+                let compatible = self.with_type_relation_probe(&[expected, &ret_ty], |checker| {
+                    checker.types_compatible(expected, &ret_ty)
+                });
+                if compatible {
+                    self.assert_trait_return_context(
+                        expected,
+                        &ret_ty,
+                        span,
+                        trait_name,
+                        expected_ret_relation,
+                    )?;
+                }
             }
         }
 
@@ -13090,6 +13170,8 @@ impl Checker {
             BinOp::Add => ("Add", "add", "+"),
             BinOp::Sub => ("Sub", "sub", "-"),
             BinOp::Mul => ("Mul", "mul", "*"),
+            BinOp::Div(_) => ("Div", "safe_div", "/"),
+            BinOp::Mod(_) => ("Mod", "safe_mod", "%"),
             BinOp::Eq => ("Eq", "eq", "=="),
             BinOp::Neq => ("Eq", "neq", "!="),
             BinOp::Lt => ("Compare", "lt", "<"),
@@ -13098,14 +13180,12 @@ impl Checker {
             BinOp::Gte => ("Compare", "gte", ">="),
             BinOp::Concat => ("Concat", "concat", "++"),
             BinOp::Choice => ("Alternative", "choose", "<|>"),
-            BinOp::Slash | BinOp::FacetChain => {
-                return Err(Self::unsupported_binop_type_error(op, span))
-            }
+            BinOp::FacetChain => return Err(Self::unsupported_binop_type_error(op, span)),
         };
         let trait_name = self
             .trait_key_by_short_name(trait_short)
             .ok_or_else(|| TypeError::new(format!("Unknown trait: {trait_short}"), span.clone()))?;
-        self.check_trait_method_call(
+        self.check_trait_invocation_with_result_context(
             span,
             &trait_name,
             method,
@@ -13114,10 +13194,23 @@ impl Checker {
                 ResolvedRecordLitArg::Positional(right.clone()),
             ],
             None,
-            expected,
+            // A plain outside expectation cannot determine the Self payload of
+            // a Result-producing operator. Preserve compatible Result context
+            // for generic payload inference; outer assertions report plain mismatch.
+            if matches!(op, BinOp::Div(_) | BinOp::Mod(_)) {
+                expected.filter(|ty| matches!(self.resolve_ty(ty), Ty::Result(..)))
+            } else {
+                expected
+            },
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            matches!(op, BinOp::Div(_) | BinOp::Mod(_)),
         )
-        .map(|mut typed| {
+        .and_then(|mut typed| {
             if let TypedInner::TraitCall { origin, args, .. } = &mut typed.node {
                 let comparison = match op {
                     BinOp::Lt => Some(ComparisonOperator::Lt),
@@ -13134,7 +13227,8 @@ impl Checker {
                     };
                 }
             }
-            typed
+            self.record_safe_operator_signature(op, &typed)?;
+            Ok(typed)
         })
         .map_err(|mut error| {
             if let Some(diagnostic) = &mut error.structured {
@@ -13156,6 +13250,126 @@ impl Checker {
             }
             error
         })
+    }
+
+    /// Attach provenance only after a concrete implementation was selected.
+    /// Declaration syntax preserves an authored error contract; value types
+    /// deliberately keep their normal Result<T> display.
+    fn record_safe_operator_signature(
+        &mut self,
+        op: &BinOp,
+        typed: &TypedNode,
+    ) -> Result<(), TypeError> {
+        let (symbol, operator_span) = match op {
+            BinOp::Div(span) => ("/", span),
+            BinOp::Mod(span) => ("%", span),
+            _ => return Ok(()),
+        };
+        let TypedInner::TraitCall {
+            dispatch,
+            args,
+            method_name,
+            obligation,
+            ..
+        } = &typed.node
+        else {
+            return Err(self.typecheck_invariant_error("safe operator trait call", operator_span));
+        };
+        let instantiation = match dispatch {
+            TraitDispatch::Selected(instantiation) => instantiation,
+            // Bounded generics are checked before a concrete implementation is known.
+            TraitDispatch::Pending => return Ok(()),
+            TraitDispatch::Static(_) => {
+                return Err(self.typecheck_invariant_error(
+                    "safe operator selected declaration",
+                    operator_span,
+                ))
+            }
+        };
+        let mut variables = Vec::new();
+        Self::collect_ty_vars(&self.resolve_ty(&typed.ty), &mut variables);
+        for argument in args {
+            Self::collect_ty_vars(&self.resolve_ty(&argument.ty), &mut variables);
+        }
+        if !variables.is_empty() {
+            // A selected generic implementation can still contain unresolved caller
+            // inputs; its signature is not a concrete diagnostic fact yet.
+            return Ok(());
+        }
+        let TraitImplementationId::Declared { declaration, .. } = &instantiation.implementation
+        else {
+            return Err(self.typecheck_invariant_error(
+                "safe operator implementation declaration",
+                operator_span,
+            ));
+        };
+        let implementation = self
+            .trait_impls
+            .values()
+            .find(|info| info.declaration_key == *declaration)
+            .ok_or_else(|| {
+                self.typecheck_invariant_error(
+                    "safe operator implementation metadata",
+                    operator_span,
+                )
+            })?;
+        let method = implementation.methods.get(method_name).ok_or_else(|| {
+            self.typecheck_invariant_error("safe operator method metadata", operator_span)
+        })?;
+        let mut result = self.diagnostic_ty_name(&self.resolve_ty(&typed.ty));
+        if let Some(return_syntax) = method.ret_ty.as_ref() {
+            if let AstTy::Generic(_, name, arguments) = return_syntax.syntax() {
+                if Self::surface_name(name) == "Result" && arguments.len() == 2 {
+                    self.resolve_error_marker_type(&arguments[1])?;
+                    let AstTy::Named(_, authored_error) = &arguments[1] else {
+                        return Err(self.typecheck_invariant_error(
+                            "safe operator authored error marker",
+                            operator_span,
+                        ));
+                    };
+                    let Ty::Result(ok, _) = self.resolve_ty(&typed.ty) else {
+                        return Err(self.typecheck_invariant_error(
+                            "safe operator Result signature",
+                            operator_span,
+                        ));
+                    };
+                    result = format!(
+                        "Result<{}, {}>",
+                        self.diagnostic_ty_name(&ok),
+                        Self::surface_name(authored_error)
+                    );
+                }
+            }
+        }
+        let params = args
+            .iter()
+            .map(|argument| self.diagnostic_ty_name(&self.resolve_ty(&argument.ty)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut fact = SourceFact::typed(
+            SourceRole::OperatorSignature,
+            diagnostics::SourceId(0),
+            operator_span.clone(),
+            format!("({params}) -> {result}"),
+        );
+        fact.declaration_identity = Some(diagnostics::DeclarationIdentity {
+            owner: obligation.trait_id.clone(),
+            name: symbol.into(),
+        });
+        self.safe_operator_results
+            .insert((typed.span.start, typed.span.end), fact);
+        Ok(())
+    }
+
+    /// Grouping and the final expression of a block preserve the produced value.
+    fn propagate_safe_operator_result(&mut self, from: &Span, to: &Span) {
+        if let Some(fact) = self
+            .safe_operator_results
+            .get(&(from.start, from.end))
+            .cloned()
+        {
+            self.safe_operator_results.insert((to.start, to.end), fact);
+        }
     }
 
     fn check_arrow_chain(
@@ -15856,5 +16070,28 @@ mod tests {
             )
             .expect_err("nested readonly type boundary should fail");
         assert!(err.message.contains("readonly type Profile"));
+    }
+}
+
+#[cfg(test)]
+mod safe_operator_provenance_tests {
+    use super::*;
+
+    #[test]
+    fn candidate_rollback_restores_only_committed_operator_provenance() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let fact = SourceFact::typed(
+            SourceRole::OperatorSignature,
+            diagnostics::SourceId(0),
+            Span { start: 2, end: 3 },
+            "(Int, Int) -> Result<Int>",
+        );
+        checker.safe_operator_results.insert((0, 5), fact.clone());
+        let checkpoint = checker.candidate_probe_checkpoint();
+        checker.safe_operator_results.clear();
+        checker.safe_operator_results.insert((8, 13), fact.clone());
+        checker.rollback_candidate_probe(checkpoint);
+        assert_eq!(checker.safe_operator_results.len(), 1);
+        assert_eq!(checker.safe_operator_results.get(&(0, 5)), Some(&fact));
     }
 }

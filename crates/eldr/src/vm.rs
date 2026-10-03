@@ -10853,7 +10853,7 @@ mod tests {
 
     #[test]
     fn builtin_result_error_uses_builtin_call_span_as_location() {
-        let source = "safe_mod(10, 0)\n".to_string();
+        let source = "Mod::safe_mod(10, 0)\n".to_string();
         let span_end = source.trim_end().len() as u32;
         let bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),

@@ -16,6 +16,6 @@ impl Score {
 
 defmod FloatSchema {
   def safe_ratio(left: Float, right: Float) -> Result<Float> {
-    Float::safe_div(left, right)
+    Div::safe_div(left, right)
   }
 }

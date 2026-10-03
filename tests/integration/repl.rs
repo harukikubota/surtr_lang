@@ -1057,7 +1057,7 @@ fn repl_error_summary_then_full_changes_diagnostic_detail() {
 }
 
 fn repl_runtime_diagnostic_points_at_the_full_call() {
-    let output = run_repl_session("safe_mod(10, 0)\n:quit\n");
+    let output = run_repl_session("Mod::safe_mod(10, 0)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -1068,7 +1068,7 @@ fn repl_runtime_diagnostic_points_at_the_full_call() {
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(stderr.contains("ZeroDivisionError"));
     assert!(stderr.contains("REPL:1:1"));
-    assert!(stderr.contains("safe_mod(10, 0)"));
+    assert!(stderr.contains("Mod::safe_mod(10, 0)"));
 }
 
 fn repl_human_diagnostic_stays_on_stderr() {

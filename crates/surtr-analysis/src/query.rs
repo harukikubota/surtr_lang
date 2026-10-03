@@ -3,7 +3,7 @@ use std::ops::{Deref, Range};
 
 const QUERY_OPERATORS: &[&str] = &[
     "|>=", "|*>", "|>", ">=>", ">*", ">>", "+", "-", "*", "&&", "||", "==", "!=", "<", "<=", ">",
-    ">=", "->", "++",
+    ">=", "->", "/", "%", "++",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -819,6 +819,18 @@ mod tests {
             })
             if callee == "User!" && args.is_empty()
         ));
+    }
+
+    #[test]
+    fn safe_arithmetic_operator_queries_parse_as_trait_queries() {
+        for operator in ["/", "%"] {
+            assert!(parse_command_query(operator).is_ok(), "{operator}");
+            let query =
+                parse_command_query(&format!("{operator} Int")).expect("operator target query");
+            assert!(
+                matches!(query, CommandQuery::OperatorTarget(ParsedOperatorTargetQuery { ref query, .. }) if query.operator == operator)
+            );
+        }
     }
 
     #[test]

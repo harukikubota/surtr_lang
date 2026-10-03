@@ -45,6 +45,8 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
+    surface_case!(trait_result_error_omission_allows_impl_contract),
+    surface_case!(trait_result_explicit_error_contract_is_declaration_metadata),
     (
         "process_stdlib_no_longer_declares_task_hidden_lower_helpers",
         process_stdlib_no_longer_declares_task_hidden_lower_helpers as fn(),
@@ -2639,10 +2641,7 @@ Profile.name -> User.profile"#,
         "defrecord Profile(name: String)\ndefrecord User(profile: Profile)\nUser.profile / Profile.name",
         RuntimeSourcePolicy::script(),
     ).expect_err("Facet slash has no compatibility route");
-    assert!(
-        old_slash.message.contains("Unsupported binary operator"),
-        "{old_slash:?}"
-    );
+    assert!(old_slash.message.contains("Facet values"), "{old_slash:?}");
 
     let declarations =
         "defrecord Profile(name: String)\ndefstruct User { private profile: Profile }\nimpl User { def new(profile: Profile) -> Self { User { profile: profile } } }\n";
@@ -3342,13 +3341,26 @@ const BAD = VALUE -> VALUE"#,
 }
 
 fn slash_operator_has_no_facet_fallback() {
-    let err = typecheck_with_rules(r#"print(to_string(10 / 3))"#, RuntimeSourcePolicy::script())
-        .expect_err("numeric infix slash should fail");
-    assert!(
-        err.message.contains("Unsupported binary operator"),
-        "{err:?}"
-    );
-    assert!(err.hint.is_none());
+    let typed = typecheck_with_builtin_prelude("value = 10 / 3");
+    assert!(matches!(typed.last().map(|node| &node.ty), Some(Ty::Unit)));
+    for (source, trait_name) in [
+        ("1 / 2.0", "expected Int"),
+        ("1.0 % 2.0", "Mod"),
+        ("True / False", "Div"),
+        ("True % False", "Mod"),
+    ] {
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+        assert!(error.message.contains(trait_name), "{source}: {error:?}");
+    }
+    for method in [
+        "def safe_div(self: Self, rhs: Int) -> Result<Self> { Ok(self) }",
+        "def safe_div(self: Self, rhs: Self) -> Result<Int> { Ok(1) }",
+    ] {
+        let source = format!("defrecord Metric(value: Int)\nimpl Div for Metric {{ {method} }}");
+        typecheck_with_rules(&source, RuntimeSourcePolicy::script()).expect_err(
+            "error contract flexibility does not relax argument or success type agreement",
+        );
+    }
 }
 
 fn facet_tuple_type_root_without_context_can_bind_as_deferred_path() {
@@ -8775,7 +8787,7 @@ fn deferror_show_type_mismatch_points_to_show_expression_span() {
 fn operator_traits_and_concrete_numeric_helpers_typecheck() {
     let typed = typecheck_with_builtin_prelude(
         r#"sum = 1 + 2
-quot = Float::safe_div(8.0, 2.0)
+quot = Div::safe_div(8.0, 2.0)
 largest = Float::max(1.5, 2.5)"#,
     );
 
@@ -8795,7 +8807,7 @@ largest = Float::max(1.5, 2.5)"#,
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(trait_calls.len(), 1);
+    assert_eq!(trait_calls.len(), 2);
     assert!(trait_calls
         .iter()
         .any(|(trait_name, method_name, dispatch)| {
@@ -11671,4 +11683,26 @@ fn error_contract_surface_is_restricted_to_direct_definition_returns() {
         !error.message.contains("MatchResult<Int, Error>"),
         "{error:?}"
     );
+}
+
+fn trait_result_error_omission_allows_impl_contract() {
+    let source = r#"deferror DomainFailure { "domain failure" }
+deftrait SafeArithmetic { def compute(self: Self, rhs: Self) -> Result<Self> }
+impl SafeArithmetic for Int {
+  def compute(self: Int, rhs: Int) -> Result<Int, DomainFailure> { Ok(self + rhs) }
+}
+SafeArithmetic::compute(1, 2)"#;
+    typecheck(resolve_with_builtin_prelude(source))
+        .expect("omitted trait error is not a fixed contract");
+}
+
+fn trait_result_explicit_error_contract_is_declaration_metadata() {
+    let source = r#"deferror DomainFailure { "domain failure" }
+deftrait SafeArithmetic { def compute(self: Self, rhs: Self) -> Result<Self, Error> }
+impl SafeArithmetic for Int {
+  def compute(self: Int, rhs: Int) -> Result<Int, DomainFailure> { Ok(self + rhs) }
+}
+SafeArithmetic::compute(1, 2)"#;
+    typecheck(resolve_with_builtin_prelude(source))
+        .expect("error marker does not become a value type argument");
 }

@@ -2819,6 +2819,8 @@ struct Checker {
     process_handler_dependencies: HashMap<String, HashMap<String, String>>,
     process_specs: Vec<TypedProcessSpec>,
     boot_plan: spire::ast::SupervisorInitSpec,
+    /// Exact expression-result provenance; never inferred from source text or type shape.
+    safe_operator_results: HashMap<(usize, usize), diagnostics::SourceFact>,
     warnings: WarningBuffer,
     #[cfg(test)]
     candidate_probe_checkpoint_count: Cell<usize>,
@@ -2961,6 +2963,7 @@ impl Checker {
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
             boot_plan: spire::ast::SupervisorInitSpec::default(),
+            safe_operator_results: HashMap::new(),
             warnings: WarningBuffer::default(),
             #[cfg(test)]
             candidate_probe_checkpoint_count: Cell::new(0),
@@ -2988,6 +2991,7 @@ impl Checker {
         checker.callable_context = self.callable_context;
         checker.closure_depth = self.closure_depth;
         checker.facet_bindings = self.facet_bindings.clone();
+        checker.safe_operator_results = self.safe_operator_results.clone();
         checker.lazy_capture_bindings = self.lazy_capture_bindings.clone();
         checker.active_lazy_capture = self.active_lazy_capture.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
@@ -4807,6 +4811,9 @@ impl Checker {
             let mut typed = Vec::new();
             let t = profile_enabled.then(Instant::now);
             for stmt in stmts {
+                // Source spans can repeat across definition sources and REPL inputs.
+                // Provenance belongs only to this expression checking tree.
+                self.safe_operator_results.clear();
                 stmt_count += 1;
                 // Inference substitutions are expression-local. Letting them leak
                 // across sibling top-level statements can accidentally monomorphize

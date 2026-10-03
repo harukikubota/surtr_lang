@@ -17,6 +17,8 @@ const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../../lib/kernel.srt");
 const ADD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/add.srt");
 const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/sub.srt");
 const MUL_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/mul.srt");
+const DIV_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/div.srt");
+const MOD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/mod.srt");
 const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/show.srt");
 const DEFAULT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/default.srt");
 const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
@@ -533,6 +535,8 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             ("Add", pick_override("Add", ADD_MODULE_SOURCE, overrides)),
             ("Sub", pick_override("Sub", SUB_MODULE_SOURCE, overrides)),
             ("Mul", pick_override("Mul", MUL_MODULE_SOURCE, overrides)),
+            ("Div", pick_override("Div", DIV_MODULE_SOURCE, overrides)),
+            ("Mod", pick_override("Mod", MOD_MODULE_SOURCE, overrides)),
             ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
             (
                 "Compare",

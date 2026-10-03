@@ -8085,3 +8085,39 @@ fn test_bulk_update_arrow_chain_parses_and_slash_is_rejected() {
     parse("Facet::bulk_update(user){User.profile / Profile.name <- set(\"bob\")}")
         .expect_err("old path chain is rejected");
 }
+
+#[test]
+fn safe_arithmetic_operators_share_expr_precedence() {
+    let ast = parse("value = 8 / 2 % 3 + 1").expect("safe division and modulo parse");
+    let Ast::Bind(_, _, value) = &ast[0] else {
+        panic!("binding")
+    };
+    let Ast::BinOp(_, BinOp::Add, left, _) = value.as_ref() else {
+        panic!("left associative Expr operators")
+    };
+    let Ast::BinOp(_, BinOp::Mod(mod_span), dividend, _) = left.as_ref() else {
+        panic!("modulo follows division in the Expr group")
+    };
+    assert_eq!(*mod_span, Span { start: 14, end: 15 });
+    let Ast::BinOp(_, BinOp::Div(div_span), _, _) = dividend.as_ref() else {
+        panic!("division is the leftmost operation")
+    };
+    assert_eq!(*div_span, Span { start: 10, end: 11 });
+}
+
+#[test]
+fn safe_arithmetic_quoted_calls_and_captures_parse() {
+    parse("quot = `/`(8, 2)\nrem = 7 `%` 3\nf = &`%`(&1, 3)")
+        .expect("quoted arithmetic uses the operator contract");
+}
+
+#[test]
+fn safe_arithmetic_preserves_quoted_operator_span() {
+    let ast = parse("value = 8 `%` 3").unwrap();
+    let Ast::Bind(_, _, value) = &ast[0] else {
+        panic!("binding")
+    };
+    assert!(
+        matches!(value.as_ref(), Ast::BinOp(_, BinOp::Mod(span), _, _) if *span == Span { start: 10, end: 13 })
+    );
+}

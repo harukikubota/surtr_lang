@@ -289,3 +289,13 @@ Closure / capture / ExtractorClosure を変数へ束縛するときに非 rigid 
 local head は選ばれた lexical identity の型を検査し、named Extractor へ探し直さない。
 引数の Expr / Pattern 候補は signature で選択し、未選択候補の診断を発行しない。
 選択された候補の Parse / Resolve 診断は元の phase、reason、span、cursor、関連ラベルを保持する。
+
+## Result を返す算術演算子の補助ラベル
+
+`/`・`%` の結果と外側の型要求が不一致になる場合、既存の型不一致 reason、primary span、主ラベル、期待型・実際型を維持する。同じ ariadne 診断に、原因となった演算子トークン位置の補助ラベルを追加する。外側の型表示は正規表記の `Result<T>` を使う。
+
+補助ラベルには解決済みの `Div::safe_div` / `Mod::safe_mod` 実装の具体的なシグネチャを表示する。例えば Int の除算は `` `/`: (Int, Int) -> Result<Int, ZeroDivisionError> ``、Float の除算は `` `/`: (Float, Float) -> Result<Float, ZeroDivisionError> ``、Int の剰余は `` `%`: (Int, Int) -> Result<Int, ZeroDivisionError> `` となる。ユーザー実装にも同じ規則を適用し、定義の独自エラー契約を保持する。省略されたエラー位置に `Error` を補わない。
+
+型検査側が演算子の由来、ソース位置、解決済みシグネチャを構造化データとして渡し、表示側が補助ラベルを生成する。表示側でエラー文、ソース文字列、Result 型の形から由来を推測しない。未確定シグネチャを具体化済みとして表示するフォールバックは設けない。
+
+外側の演算、関数引数、型注釈、戻り値などで、型不一致に関係する演算結果だけを表示する。同じ式にある無関係な演算子は列挙しない。通常の型検査順序とエラー優先順位を変えず、fmap、do、unwrap などへの誘導、修正例、Help は追加しない。

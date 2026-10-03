@@ -15,6 +15,8 @@ pub(crate) struct FuncLiteralOperator {
 pub(crate) enum FuncLiteralOperatorKind {
     BinOp(BinOp),
     PairConstructor,
+    SafeDivision,
+    SafeModulo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +44,12 @@ const FUNC_LITERAL_OPERATORS: &[FuncLiteralOperator] = &[
     },
     FuncLiteralOperator {
         body: "/",
-        kind: FuncLiteralOperatorKind::BinOp(BinOp::Slash),
+        kind: FuncLiteralOperatorKind::SafeDivision,
+        tier: FuncLiteralOperatorTier::Expr,
+    },
+    FuncLiteralOperator {
+        body: "%",
+        kind: FuncLiteralOperatorKind::SafeModulo,
         tier: FuncLiteralOperatorTier::Expr,
     },
     FuncLiteralOperator {
@@ -102,6 +109,7 @@ pub(crate) fn func_literal_operator_token(token: &Token) -> Option<&'static str>
         Token::Minus => "-",
         Token::Star => "*",
         Token::Slash => "/",
+        Token::Percent => "%",
         Token::Concat => "++",
         Token::EqEq => "==",
         Token::BangEq => "!=",

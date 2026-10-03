@@ -36,7 +36,7 @@ pub(super) fn initialize_scope() -> Scope {
 fn is_global_runtime_builtin(name: &str) -> bool {
     matches!(
         name,
-        "print" | "to_string" | "inspect" | "safe_div" | "safe_mod" | "eprint" | "set_exit_code"
+        "print" | "to_string" | "inspect" | "eprint" | "set_exit_code"
     )
 }
 

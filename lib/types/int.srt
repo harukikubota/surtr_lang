@@ -124,25 +124,6 @@ impl IntBase {
 
 impl Int {
   @doc """
-  Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
-  The success case keeps the same value type as the inputs.
-  This follows the `Result`/`Either` style of representing failure as a value.
-  ## REPL
-  xldr(1)> Int::safe_div(8, 2)
-  Ok(4)
-  """
-  @builtin def safe_div(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
-
-  @doc """
-  Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
-  Failure stays on the value side rather than becoming an implicit exception.
-  ## REPL
-  xldr(1)> Int::safe_mod(7, 3)
-  Ok(1)
-  """
-  @builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
-
-  @doc """
   Return the bitwise AND of `a` and `b`.
   ## REPL
   xldr(1)> Int::bit_and(6, 3)
@@ -490,7 +471,7 @@ impl Int {
   }
 
   defp _positive_mod(value: Int, modulus: Int) -> Int {
-    match safe_mod(value, modulus) {
+    match Mod::safe_mod(value, modulus) {
       Ok(rem) => if(rem < 0, rem + modulus, rem),
       Err(_) => 0,
     }
@@ -520,7 +501,7 @@ impl Int {
     if(
       shift >= width_bits,
       0,
-      match Int::safe_div(value, _pow2(shift)) {
+      match Div::safe_div(value, _pow2(shift)) {
         Ok(quotient) => quotient,
         Err(_) => 0,
       },
@@ -787,7 +768,7 @@ impl Int {
   True
   """
   def is_even(value: Int) -> Boolean {
-    match safe_mod(value, 2) {
+    match Mod::safe_mod(value, 2) {
       Ok(rem) => rem == 0,
       Err(_) => False,
     }
@@ -800,7 +781,7 @@ impl Int {
   True
   """
   def is_odd(value: Int) -> Boolean {
-    match safe_mod(value, 2) {
+    match Mod::safe_mod(value, 2) {
       Ok(rem) => rem != 0,
       Err(_) => False,
     }
@@ -835,6 +816,29 @@ impl Mul for Int {
   12
   """
   @builtin def mul(self: Self, rhs: Self) -> Self
+}
+
+impl Div for Int {
+  @doc """
+  Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
+  The success case keeps the same value type as the inputs.
+  This follows the `Result`/`Either` style of representing failure as a value.
+  ## REPL
+  xldr(1)> Div::safe_div(8, 2)
+  Ok(4)
+  """
+  @builtin def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError>
+}
+
+impl Mod for Int {
+  @doc """
+  Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
+  Failure stays on the value side rather than becoming an implicit exception.
+  ## REPL
+  xldr(1)> Mod::safe_mod(7, 3)
+  Ok(1)
+  """
+  @builtin def safe_mod(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError>
 }
 
 impl Show for Int {

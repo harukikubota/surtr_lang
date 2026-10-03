@@ -86,11 +86,12 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
 `impl Type` や `impl Trait for Type` は、この module API とは別の型専用 namespace として並びます。
 
-数値 helper は共通 trait ではなく、`Int` / `Float` の type owner surface として置きます。
+`abs`, `min`, `max` などの数値 helper は `Int` / `Float` の type owner surface として置きます。除算と剰余はユーザー拡張可能なトレイトです。
 
-- `int.srt` の `impl Int` に `safe_div`, `safe_mod`, `abs`, `min`, `max` などを置く
-- `float.srt` の `impl Float` に `safe_div`, `abs`, `min`, `max` などを置く
-- `+`, `-`, `*` は `Add` / `Sub` / `Mul` dispatch を通るが、runtime には trait object を導入しない
+- `int.srt` の `impl Int` に `abs`, `min`, `max` などを置く
+- `float.srt` の `impl Float` に `abs`, `min`, `max` などを置く
+- `int.srt` / `float.srt` の `impl Div for Int` / `impl Div for Float` に `safe_div`、`int.srt` の `impl Mod for Int` に `safe_mod` を置く
+- `+`, `-`, `*`, `/`, `%` は `Add` / `Sub` / `Mul` / `Div` / `Mod` dispatch を通るが、runtime には trait object を導入しない
 
 ### 通常の source 型
 

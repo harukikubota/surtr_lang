@@ -26,11 +26,12 @@ pub enum Token {
     FuncLiteral(String),
 
     // ── Arithmetic operators ──
-    Plus,   // +
-    Minus,  // -
-    Star,   // *
-    Slash,  // /
-    Concat, // ++
+    Plus,    // +
+    Minus,   // -
+    Star,    // *
+    Slash,   // /
+    Percent, // %
+    Concat,  // ++
 
     // ── Comparison / equality ──
     EqEq,   // ==

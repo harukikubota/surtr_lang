@@ -404,6 +404,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             '-' => Token::Minus,
             '*' => Token::Star,
             '/' => Token::Slash,
+            '%' => Token::Percent,
             '!' => Token::Bang,
             '=' => Token::Bind,
             '<' => Token::Lt,
@@ -862,12 +863,38 @@ mod tests {
     }
 
     #[test]
+    fn safe_arithmetic_tokens_and_quoted_descriptors_are_registered() {
+        for (source, token, kind) in [
+            (
+                "/",
+                Token::Slash,
+                crate::func_literal::FuncLiteralOperatorKind::SafeDivision,
+            ),
+            (
+                "%",
+                Token::Percent,
+                crate::func_literal::FuncLiteralOperatorKind::SafeModulo,
+            ),
+        ] {
+            assert_eq!(tokenize(source).unwrap()[0].token, token);
+            assert_eq!(
+                crate::func_literal::func_literal_operator(source)
+                    .unwrap()
+                    .kind,
+                kind
+            );
+            assert!(
+                matches!(&tokenize(&format!("`{source}`")).unwrap()[0].token, Token::FuncLiteral(body) if body == source)
+            );
+        }
+    }
+
+    #[test]
     fn test_func_literal_operator_table_covers_lexer_and_parser_operators() {
         let cases = [
             ("+", BinOp::Add),
             ("-", BinOp::Sub),
             ("*", BinOp::Mul),
-            ("/", BinOp::Slash),
             ("++", BinOp::Concat),
             ("==", BinOp::Eq),
             ("!=", BinOp::Neq),

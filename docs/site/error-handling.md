@@ -147,7 +147,7 @@ SafeBind は複数段にも使えます。
 def load_pair(a: String, b: String) -> Result<Int> {
   left: Int =? try_to::<Int>(a)
   right: Int =? try_to::<Int>(b)
-  Int::safe_div(left + right, 2)
+  Div::safe_div(left + right, 2)
 }
 ```
 
@@ -191,7 +191,7 @@ def load_pair(a: String, b: String) -> Result<Int> {
     Ok(left) => {
       right_result = try_to::<Int>(b)
       match right_result {
-      Ok(right) => Int::safe_div(left + right, 2),
+      Ok(right) => Div::safe_div(left + right, 2),
       _ => right_result,
     }
     },

@@ -771,3 +771,11 @@ fixture は既存 bucket に集約する。
 V1 の非目標は runtime trait object/dictionary dispatch、specialization/priority dispatch、negative trait bound、
 closed-world proof、coinductive solving、任意 local value の全面的 let-polymorphism、effectful callable の自動
 generalization である。
+
+## Div / Mod の演算子契約
+
+`/` は `Div::safe_div`、`%` は `Mod::safe_mod` の通常の operator dispatch に接続する。数値型専用 dispatch、旧 concrete owner helper 宣言、互換 wrapper は持たない。ユーザー実装と bounded generic は通常のトレイト規則に従う。両引数と成功型は同じ `Self` であり、暗黙の数値変換や Result unwrap は行わない。
+
+トレイトメソッドは `(Self, Self) -> Result<Self>` と宣言し、エラー位置を固定しない。実装の `Result<Self, E>` は値の型として `Result<Self>` と照合し、`E` は既存のエラー契約 metadata として保持する。トレイト定義の省略を実装のエラー指定禁止として扱わない。ユーザー実装は具体的な `deferror`、抽象 `Error`、エラー位置の省略を指定できる。引数・成功型・通常の impl 制約の照合は緩めない。
+
+標準実装は `Div for Int`、`Div for Float`、`Mod for Int` で、エラー契約は `ZeroDivisionError` に固定する。標準の `Mod for Float` は提供しない。runtime の整数除算・符号・Float finite-only 制約は既存 builtin の契約を維持する。Facet の `->` は固定構文であり、このユーザー拡張経路に接続しない。
