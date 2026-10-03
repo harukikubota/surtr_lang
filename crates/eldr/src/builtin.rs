@@ -3462,6 +3462,7 @@ fn inspect_callable(_vm: &VM, callable: &Callable) -> Option<String> {
             surface_rendered_name(name),
             sig
         )),
+        CallableDisplayOrigin::Closure if sig.starts_with("ExtractorClosure<") => Some(sig),
         CallableDisplayOrigin::Closure => Some(format!("Closure{sig}")),
     }
 }

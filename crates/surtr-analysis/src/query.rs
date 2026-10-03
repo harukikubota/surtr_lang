@@ -555,9 +555,8 @@ fn validate_user_query_type(ty: &AstTy) -> Result<(), String> {
             "Command queries require a concrete type; `impl Trait` is not supported."
                 .to_string(),
         ),
-        AstTy::Generic(_, name, args) if name == "Result" && args.len() == 2 => Err(
-            "Typed query `Result` should be written as `Result<T>`; do not specify the `Error` parameter."
-                .to_string(),
+        AstTy::Generic(_, name, args) if matches!(name.as_str(), "Result" | "MatchResult") && args.len() == 2 => Err(
+            format!("Typed query `{name}` should be written as `{name}<T>`; do not specify the `Error` parameter."),
         ),
         AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
             for arg in args {
@@ -598,6 +597,62 @@ fn normalize_binding_query_type(ty: &AstTy) -> AstTy {
             Box::new(normalize_binding_query_type(ret)),
         ),
     }
+}
+
+/// Render completion signatures without declaration-only error contracts.
+/// The stored declaration text remains available to REPL commands.
+pub fn format_completion_signature(signature: &str) -> String {
+    let chars = signature.chars().collect::<Vec<_>>();
+    let mut hidden = vec![false; chars.len()];
+    let mut delimiters: Vec<(char, bool, Option<usize>)> = Vec::new();
+    for (index, &ch) in chars.iter().enumerate() {
+        match ch {
+            '<' => {
+                let mut end = index;
+                while end > 0 && chars[end - 1].is_whitespace() {
+                    end -= 1;
+                }
+                let mut start = end;
+                while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+                    start -= 1;
+                }
+                let name = chars[start..end].iter().collect::<String>();
+                delimiters.push(('<', matches!(name.as_str(), "Result" | "MatchResult"), None));
+            }
+            '(' | '[' | '{' => delimiters.push((ch, false, None)),
+            ',' => {
+                if let Some(('<', true, error_start)) = delimiters.last_mut() {
+                    error_start.get_or_insert(index);
+                }
+            }
+            '>' if index == 0 || chars[index - 1] != '-' => {
+                if matches!(delimiters.last(), Some(('<', _, _))) {
+                    if let Some(('<', true, Some(start))) = delimiters.pop() {
+                        hidden[start..index].fill(true);
+                    }
+                }
+            }
+            ')' | ']' | '}' => {
+                let opening = match ch {
+                    ')' => '(',
+                    ']' => '[',
+                    _ => '{',
+                };
+                if delimiters
+                    .last()
+                    .is_some_and(|(delimiter, _, _)| *delimiter == opening)
+                {
+                    delimiters.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    chars
+        .into_iter()
+        .zip(hidden)
+        .filter_map(|(ch, hidden)| (!hidden).then_some(ch))
+        .collect()
 }
 
 pub fn format_query_ty(ty: &AstTy) -> String {
@@ -703,6 +758,25 @@ fn is_callable_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_signature_normalizes_nested_carriers_without_changing_declarations() {
+        for (source, expected) in [
+            ("read(value: Int) -> Result<Int, NoneError>", "read(value: Int) -> Result<Int>"),
+            ("extract(value: Int) -> MatchResult<(Int, Int), Error>", "extract(value: Int) -> MatchResult<(Int, Int)>"),
+            ("make() -> Result<(Int -> Result<String, Error>), NoneError>", "make() -> Result<(Int -> Result<String>)>"),
+            ("型(value: List<Result<Int, Error>>) -> ExtractorClosure<(Int -> MatchResult<(Int, String), Error>)>", "型(value: List<Result<Int>>) -> ExtractorClosure<(Int -> MatchResult<(Int, String)>)>"),
+            ("OtherResult<Int, Error>", "OtherResult<Int, Error>"),
+        ] {
+            assert_eq!(format_completion_signature(source), expected);
+        }
+        for source in [
+            "Result<Int, Error>",
+            "ExtractorClosure<(Int -> MatchResult<Int, Error>)>",
+        ] {
+            assert!(parse_user_query_type_loose(source).is_err(), "{source}");
+        }
+    }
 
     #[test]
     fn parse_typed_call_query() {

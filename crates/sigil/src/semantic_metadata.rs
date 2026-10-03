@@ -12,9 +12,6 @@ fn format_ast_ty(ty: &AstTy) -> String {
         AstTy::Named(_, name) => surface_path_name(name).to_string(),
         AstTy::ImplTrait(_, name) => format!("impl {}", surface_path_name(name)),
         AstTy::Generic(_, name, args) => {
-            if surface_path_name(name) == "MatchResult" && args.len() == 1 {
-                return format!("MatchResult<{}, Error>", format_ast_ty(&args[0]));
-            }
             let args = args
                 .iter()
                 .map(format_ast_ty)
@@ -193,16 +190,16 @@ fn builtin_special_enum_variant_signature(
                 .first()
                 .map(format_ast_ty)
                 .unwrap_or_else(|| "$T".to_string());
-            Some(format!("Ok({ok_ty}) -> Result<{ok_ty}, Error>"))
+            Some(format!("Ok({ok_ty}) -> Result<{ok_ty}>"))
         }
-        ("Result", "Err") => Some("Err(Error) -> Result<$T, Error>".to_string()),
+        ("Result", "Err") => Some("Err(Error) -> Result<$T>".to_string()),
         ("MatchResult", "Ok") => {
             let [payload] = variant.payload.as_slice() else {
                 return None;
             };
             let payload = format_ast_ty(payload);
             Some(format!(
-                "MatchResult::Ok({payload}) -> MatchResult<{payload}, Error>"
+                "MatchResult::Ok({payload}) -> MatchResult<{payload}>"
             ))
         }
         ("MatchResult", "Err") => {
@@ -210,7 +207,7 @@ fn builtin_special_enum_variant_signature(
                 return None;
             };
             Some(format!(
-                "MatchResult::Err(Error) -> MatchResult<{}, Error>",
+                "MatchResult::Err(Error) -> MatchResult<{}>",
                 param.name
             ))
         }
@@ -541,13 +538,8 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     match method {
                         Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                let qualified_method_name =
+                                    format!("{}::{name}", surface_path_name(target));
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
@@ -565,13 +557,8 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         }
                         Ast::BuiltinDecl(_, name, _, params, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                let qualified_method_name =
+                                    format!("{}::{name}", surface_path_name(target));
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
@@ -589,13 +576,8 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         }
                         Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                let qualified_method_name =
+                                    format!("{}::{name}", surface_path_name(target));
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
@@ -613,13 +595,8 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         }
                         Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                let qualified_method_name =
+                                    format!("{}::{name}", surface_path_name(target));
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
@@ -902,11 +879,7 @@ fn collect_signature_entries_for_ast(
                     match method {
                         Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, _) => {
                             let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                format!("{}::{name}", surface_path_name(target));
                             push_signature_entry(
                                 out,
                                 module_path,
@@ -917,11 +890,7 @@ fn collect_signature_entries_for_ast(
                         }
                         Ast::BuiltinDecl(_, name, _, params, ret_ty, _, _) => {
                             let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                format!("{}::{name}", surface_path_name(target));
                             push_signature_entry(
                                 out,
                                 module_path,
@@ -932,11 +901,7 @@ fn collect_signature_entries_for_ast(
                         }
                         Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, _) => {
                             let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                format!("{}::{name}", surface_path_name(target));
                             push_signature_entry(
                                 out,
                                 module_path,
@@ -953,11 +918,7 @@ fn collect_signature_entries_for_ast(
                         }
                         Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
                             let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
+                                format!("{}::{name}", surface_path_name(target));
                             push_signature_entry(
                                 out,
                                 module_path,
@@ -1181,9 +1142,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extractor_signature_expands_match_result_error_parameter() {
+    fn extractor_signature_preserves_written_error_parameter() {
         let ast = spire::parse_with_context(
-            "defextractor identity(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+            "defextractor identity(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }\ndefextractor detailed(value: Int) -> MatchResult<Int, Error> { MatchResult::Ok(value) }",
             spire::ParserContext::module(0, Some("Checked".to_string()))
                 .with_rules(spire::ParseRules::permissive_for_tests()),
         )
@@ -1195,7 +1156,15 @@ mod tests {
             .expect("extractor signature");
         assert_eq!(
             extractor.signature,
-            "identity(value: Int) -> MatchResult<Int, Error>"
+            "identity(value: Int) -> MatchResult<Int>"
+        );
+        let detailed = signatures
+            .iter()
+            .find(|entry| entry.qualified_name.ends_with("detailed"))
+            .expect("explicit extractor signature");
+        assert_eq!(
+            detailed.signature,
+            "detailed(value: Int) -> MatchResult<Int, Error>"
         );
     }
 }

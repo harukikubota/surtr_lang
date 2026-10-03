@@ -5828,7 +5828,7 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             ty_to_string_with_type_params(signature, type_params)
         ),
         Ty::MatchResult(payload) => format!(
-            "MatchResult<{}, Error>",
+            "MatchResult<{}>",
             ty_to_string_with_type_params(payload, type_params)
         ),
         Ty::Result(ok, _) => format!("Result<{}>", ty_to_string_with_type_params(ok, type_params)),
@@ -7638,6 +7638,9 @@ impl Codegen {
 
             TypedInner::App(func, args) => {
                 self.emit_app(node.span.clone(), func, args)?;
+                if matches!(node.ty, Ty::ExtractorClosure(_)) {
+                    self.emit(Opcode::SetCallableSignature(ty_to_string(&node.ty)));
+                }
             }
 
             TypedInner::TraitCall {

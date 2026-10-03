@@ -419,7 +419,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             label: "Result::Ok".to_string(),
             replacement: "Result::Ok".to_string(),
             kind: CompletionKind::FunctionCall,
-            detail: Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            detail: Some("Result::Ok($T) -> Result<$T>".to_string()),
             documentation: None,
             sort_text: None,
             origin: None,
@@ -430,7 +430,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             label: "Ok".to_string(),
             replacement: "Ok".to_string(),
             kind: CompletionKind::FunctionCall,
-            detail: Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            detail: Some("Result::Ok($T) -> Result<$T>".to_string()),
             documentation: None,
             sort_text: None,
             origin: None,
@@ -441,7 +441,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             label: "Result::Err".to_string(),
             replacement: "Result::Err".to_string(),
             kind: CompletionKind::FunctionCall,
-            detail: Some("Result::Err(Error) -> Result<$T, Error>".to_string()),
+            detail: Some("Result::Err(Error) -> Result<$T>".to_string()),
             documentation: None,
             sort_text: None,
             origin: None,
@@ -452,7 +452,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             label: "Err".to_string(),
             replacement: "Err".to_string(),
             kind: CompletionKind::FunctionCall,
-            detail: Some("Result::Err(Error) -> Result<$T, Error>".to_string()),
+            detail: Some("Result::Err(Error) -> Result<$T>".to_string()),
             documentation: None,
             sort_text: None,
             origin: None,
@@ -521,7 +521,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
     assert_eq!(ok.candidates[0].replacement, "Ok");
     assert_eq!(
         ok.candidates[0].detail.as_deref(),
-        Some("Result::Ok($T) -> Result<$T, Error>")
+        Some("Result::Ok($T) -> Result<$T>")
     );
 
     let err = complete_prefix(CompletionRequest {
@@ -538,7 +538,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
     );
     assert_eq!(
         err.candidates[0].detail.as_deref(),
-        Some("Result::Err(Error) -> Result<$T, Error>")
+        Some("Result::Err(Error) -> Result<$T>")
     );
 
     let true_completion = complete_prefix(CompletionRequest {

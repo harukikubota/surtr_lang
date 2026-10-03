@@ -602,7 +602,11 @@ impl ReplCompletionContext {
                     .map(ReplEngine::repl_completion_candidate_from_analysis)
                     .collect::<Vec<_>>();
                 let signature = support.signature.map(|signature| ReplSignatureHelp {
-                    lines: signature.lines,
+                    lines: signature
+                        .lines
+                        .into_iter()
+                        .map(|line| surtr_analysis::query::format_completion_signature(&line))
+                        .collect(),
                     active_parameter: signature.active_parameter,
                 });
                 (candidates, signature)
@@ -1662,8 +1666,8 @@ impl ReplEngine {
 
     fn special_variant_completion_detail(entry: &sigil::DeclarationEntry) -> Option<String> {
         match crate::surface_path_name(&entry.fq_name) {
-            "Result::Ok" => Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
-            "Result::Err" => Some("Result::Err(Error) -> Result<$T, Error>".to_string()),
+            "Result::Ok" => Some("Result::Ok($T) -> Result<$T>".to_string()),
+            "Result::Err" => Some("Result::Err(Error) -> Result<$T>".to_string()),
             "Boolean::True" => Some("Boolean::True() -> Boolean".to_string()),
             "Boolean::False" => Some("Boolean::False() -> Boolean".to_string()),
             _ => None,
@@ -2328,7 +2332,9 @@ impl ReplEngine {
             label,
             replacement: candidate.replacement,
             kind,
-            detail: candidate.detail,
+            detail: candidate
+                .detail
+                .map(|detail| surtr_analysis::query::format_completion_signature(&detail)),
             documentation: candidate.documentation,
             replace_start: candidate.replace_start,
             replace_end: candidate.replace_end,
@@ -5751,7 +5757,7 @@ impl ReplEngine {
                 format!("ExtractorClosure<{}>", Self::ty_to_string(signature))
             }
             Ty::MatchResult(payload) => {
-                format!("MatchResult<{}, Error>", Self::ty_to_string(payload))
+                format!("MatchResult<{}>", Self::ty_to_string(payload))
             }
             Ty::Result(ok, _) => format!("Result<{}>", Self::ty_to_string(ok)),
             Ty::Struct(name, _) | Ty::Record(name, _) => crate::surface_path_name(name).to_string(),

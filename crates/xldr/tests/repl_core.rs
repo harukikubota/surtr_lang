@@ -1084,7 +1084,7 @@ fn core_completion_shows_bare_result_constructors_and_bool_variants() {
     assert_eq!(ok.replacement, "Ok");
     assert_eq!(
         ok.detail.as_deref(),
-        Some("Result::Ok($T) -> Result<$T, Error>"),
+        Some("Result::Ok($T) -> Result<$T>"),
         "Ok completion detail should expose the canonical Result surface: {ok:?}"
     );
 
@@ -1101,7 +1101,7 @@ fn core_completion_shows_bare_result_constructors_and_bool_variants() {
     assert_eq!(err.replacement, "Err");
     assert_eq!(
         err.detail.as_deref(),
-        Some("Result::Err(Error) -> Result<$T, Error>"),
+        Some("Result::Err(Error) -> Result<$T>"),
         "Err completion detail should expose the canonical Result surface: {err:?}"
     );
 
@@ -1313,7 +1313,7 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
         .expect("List::at should be suggested");
     assert_eq!(
         list_at_completion.detail.as_deref(),
-        Some("List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>")
+        Some("List::at(values: List<$A>, index: Int) -> Result<$A>")
     );
 
     let imported = rendered_text(&engine.handle_line("import List::{at}"));
@@ -1327,7 +1327,7 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
         .expect("imported at helper should be suggested");
     assert_eq!(
         at_completion.detail.as_deref(),
-        Some("List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>")
+        Some("List::at(values: List<$A>, index: Int) -> Result<$A>")
     );
 
     assert_eq!(
@@ -4326,20 +4326,19 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_doc = engine.handle_line(":doc Duration!()");
     let extractor_doc = doc_text(&extractor_doc);
     assert!(
-        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
+        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int>"),
         "{extractor_doc}"
     );
 
     let extractor_sig = engine.handle_line(":sig Duration!()");
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
-        extractor_sig.contains(
-            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
-        ),
+        extractor_sig
+            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int>"),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
+        extractor_sig.contains("specialized:\n  Duration!() -> MatchResult<Int>"),
         "{extractor_sig}"
     );
 
@@ -4350,14 +4349,13 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
-        extractor_sig_explicit_self.contains(
-            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
-        ),
+        extractor_sig_explicit_self
+            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int>"),
         "{extractor_sig_explicit_self}"
     );
     assert!(
         extractor_sig_explicit_self
-            .contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
+            .contains("specialized:\n  Duration!(Duration) -> MatchResult<Int>"),
         "{extractor_sig_explicit_self}"
     );
 
@@ -4901,19 +4899,18 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
         "{extractor_doc}"
     );
     assert!(
-        extractor_doc.contains("MatchResult<($A, $A), Error>"),
+        extractor_doc.contains("MatchResult<($A, $A)>"),
         "{extractor_doc}"
     );
 
     let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
     assert!(
-        extractor_sig.contains(
-            "defined:\n  Range::deconstruct(self: Range<$A>) -> MatchResult<($A, $A), Error>"
-        ),
+        extractor_sig
+            .contains("defined:\n  Range::deconstruct(self: Range<$A>) -> MatchResult<($A, $A)>"),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
+        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A)>"),
         "{extractor_sig}"
     );
 
@@ -5800,10 +5797,7 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     );
 
     let ok_sig = signature_text(&engine.handle_line(":sig Ok"));
-    assert!(
-        ok_sig.contains("Result::Ok($T) -> Result<$T, Error>"),
-        "{ok_sig}"
-    );
+    assert!(ok_sig.contains("Result::Ok($T) -> Result<$T>"), "{ok_sig}");
 
     let config_doc = engine.handle_line(":doc Config");
     let config_doc = doc_text(&config_doc);
@@ -6004,7 +5998,7 @@ fn core_extractor_closure_keeps_capture_signature_and_identity_across_chunks() {
     }
     let signature = signature_text(&engine.handle_line(":sig ext"));
     assert!(
-        signature.contains("ExtractorClosure<(Int -> MatchResult<Int, Error>)>"),
+        signature.contains("ExtractorClosure<(Int -> MatchResult<Int>)>"),
         "{signature}"
     );
     for (source, expected) in [
@@ -6113,9 +6107,22 @@ fn core_extractor_module_queries_and_from_result_work_across_chunks() {
         "{}",
         rendered_text(&created)
     );
+    assert!(
+        rendered_text(&created).contains(
+            "converted: ExtractorClosure<(String -> MatchResult<Int>)> = ExtractorClosure<(String -> MatchResult<Int>)>"
+        ),
+        "{}",
+        rendered_text(&created)
+    );
+    let display = "ExtractorClosure<(String -> MatchResult<Int>)>";
+    assert_eq!(rendered_text(&engine.handle_line("converted")), display);
+    assert_eq!(
+        rendered_text(&engine.handle_line("[converted]")),
+        format!("[{display}]")
+    );
     let signature = signature_text(&engine.handle_line(":sig converted"));
     assert!(
-        signature.contains("ExtractorClosure<(String -> MatchResult<Int, Error>)>"),
+        signature.contains("ExtractorClosure<(String -> MatchResult<Int>)>"),
         "{signature}"
     );
     let result = engine.handle_line("apply_pattern(\"42\", converted(_1: Int))");
@@ -6177,5 +6184,115 @@ fn lazy_capture_guidance_survives_repl_alias_and_failed_line() {
     assert!(
         !text.contains("Lazy capture") && !text.contains("{ ||"),
         "{text}"
+    );
+}
+
+#[test]
+fn error_contract_surface_and_extractor_inspection_share_value_rendering() {
+    let mut engine = ReplEngine::from_script_source(
+        "error_contracts.srt",
+        r#"impl Int {
+  defextractor plain(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }
+  defextractor detailed(value: Int) -> MatchResult<Int, Error> { MatchResult::Ok(value) }
+}
+deftrait ExtractorFactory<$A> {
+  def make(self: Self, seed: $A) -> ExtractorClosure<($A -> MatchResult<$A>)>
+}
+impl ExtractorFactory<$A> for Unit {
+  def make(self: Unit, seed: $A) -> ExtractorClosure<($A -> MatchResult<$A>)> {
+    *{|value: $A| MatchResult::Ok(value)}
+  }
+}"#,
+    )
+    .expect("extractor definitions should preload");
+    let short = "ExtractorClosure<(Int -> MatchResult<Int>)>";
+    let bound = engine.handle_line("ext = *{|value: Int| MatchResult::Ok(value)}");
+    assert_eq!(rendered_text(&bound), format!("ext: {short} = {short}"));
+    for (source, expected) in [
+        ("ext", short.to_string()),
+        ("[ext]", format!("[{short}]")),
+        ("inspect(ext)", format!("\"{short}\"")),
+    ] {
+        assert_eq!(
+            rendered_text(&engine.handle_line(source)),
+            expected,
+            "{source}"
+        );
+    }
+    let factory = engine.handle_line(
+        "factory: ExtractorClosure<(Int -> MatchResult<Int>)> = ExtractorFactory::make((), 1)",
+    );
+    assert_eq!(
+        rendered_text(&factory),
+        format!("factory: {short} = {short}")
+    );
+    assert_eq!(rendered_text(&engine.handle_line("factory")), short);
+    assert_eq!(
+        rendered_text(&engine.handle_line("[factory]")),
+        format!("[{short}]")
+    );
+    for source in [
+        "def plain() -> Result<Int> { Ok(1) }",
+        "def detailed() -> Result<Int, NoneError> { Ok(1) }",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    for (query, expected, forbidden) in [
+        (":sig plain", "Result<Int>", "Result<Int, Error>"),
+        (
+            ":sig detailed",
+            "Result<Int, NoneError>",
+            "Result<Int, Error>",
+        ),
+        (
+            ":sig Int::plain",
+            "MatchResult<Int>",
+            "MatchResult<Int, Error>",
+        ),
+        (":sig Int::detailed", "MatchResult<Int, Error>", "NoneError"),
+    ] {
+        let actual = signature_text(&engine.handle_line(query));
+        assert!(actual.contains(expected), "{query}: {actual}");
+        assert!(!actual.contains(forbidden), "{query}: {actual}");
+    }
+    let completion = engine.completions("detailed", "detailed".len());
+    let detail = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "detailed")
+        .and_then(|candidate| candidate.detail.as_deref())
+        .expect("function completion detail");
+    assert!(detail.contains("Result<Int>"), "{detail}");
+    assert!(!detail.contains("NoneError"), "{detail}");
+    let call = engine.completions("detailed(", "detailed(".len());
+    let help = call
+        .signature
+        .expect("function signature help")
+        .lines
+        .join("\n");
+    assert!(help.contains("Result<Int>"), "{help}");
+    assert!(!help.contains("NoneError"), "{help}");
+    let query = "String::strip_prefix";
+    let completion = engine.completions(query, query.len());
+    let detail = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.replacement == query)
+        .and_then(|candidate| candidate.detail.as_deref())
+        .expect("standard function completion detail");
+    assert!(detail.contains("Result<String>"), "{detail}");
+    assert!(!detail.contains("NoneError"), "{detail}");
+    let captured = rendered_text(&engine.handle_line("reader: (-> Result<Int>) = &detailed"));
+    assert!(captured.contains("sig: (-> Result<Int>)"), "{captured}");
+    assert!(!captured.contains("NoneError"), "{captured}");
+    let rejected = rendered_text(&engine.handle_line("ret: Result<Int, NoneError> = Ok(1)"));
+    assert!(
+        rejected.contains("only allowed in function return signatures"),
+        "{rejected}"
     );
 }
