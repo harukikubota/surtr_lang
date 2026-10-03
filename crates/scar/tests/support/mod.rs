@@ -1,3 +1,5 @@
+mod cache;
+
 use std::sync::OnceLock;
 
 use scar::typed::TypedNode;
@@ -317,6 +319,27 @@ struct CachedStdPrelude {
     checkpoint: ScarCheckpoint,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedStdSemantics {
+    process_specs: Vec<sigil::resolved::ResolvedProcessSpec>,
+    boot_plan: spire::ast::SupervisorInitSpec,
+    resolve_resume_state: sigil::ResolveResumeState,
+    checkpoint: ScarCheckpoint,
+}
+
+fn std_prefix_cache_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/scar-test-cache")
+        .join(format!("{}.prefix", scar_test_cache_key::KEY))
+}
+
+// Only the setup example calls this entry point.
+#[allow(dead_code)]
+pub(crate) fn prewarm_std_prefix() -> std::path::PathBuf {
+    let _ = cached_std_prelude();
+    std_prefix_cache_path()
+}
+
 fn cached_std_prelude() -> &'static CachedStdPrelude {
     static CACHE: OnceLock<CachedStdPrelude> = OnceLock::new();
 
@@ -324,37 +347,46 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
         let module_stages = build_std_module_stages(&[]);
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
-        let std_resolved = sigil::resolve_staged_program_with_state(
-            &module_stages,
-            Vec::new(),
-            &declaration_index,
-            None,
-        )
-        .expect("std modules should resolve");
-        let process_specs = std_resolved.process_specs.clone();
-        let boot_plan = std_resolved.boot_plan.clone();
-        let resolve_resume_state = std_resolved.resume_state.clone();
-        let mut session = ScarSession::new();
-        session
-            .typecheck_with_context(
-                std_resolved.resolved,
-                TypecheckContext {
-                    runtime_policy: RuntimeSourcePolicy::std_module(),
-                    enforce_builtin_type_contracts: true,
-                    allow_error_function_params: true,
-                    allow_private_facet_inspection: false,
-                },
+        let build = || {
+            let std_resolved = sigil::resolve_staged_program_with_state(
+                &module_stages,
+                Vec::new(),
+                &declaration_index,
+                None,
             )
-            .expect("std modules should typecheck");
-        let checkpoint = session.checkpoint();
-
+            .expect("std modules should resolve");
+            let mut session = ScarSession::new();
+            session
+                .typecheck_with_context(
+                    std_resolved.resolved,
+                    TypecheckContext {
+                        runtime_policy: RuntimeSourcePolicy::std_module(),
+                        enforce_builtin_type_contracts: true,
+                        allow_error_function_params: true,
+                        allow_private_facet_inspection: false,
+                    },
+                )
+                .expect("std modules should typecheck");
+            CachedStdSemantics {
+                process_specs: std_resolved.process_specs,
+                boot_plan: std_resolved.boot_plan,
+                resolve_resume_state: std_resolved.resume_state,
+                checkpoint: session.checkpoint(),
+            }
+        };
+        let semantics: CachedStdSemantics = match std::env::var_os("SURTR_SCAR_TEST_PREFIX") {
+            Some(path) => {
+                cache::load_prepared(std::path::Path::new(&path), scar_test_cache_key::KEY)
+            }
+            None => cache::load_or_build(&std_prefix_cache_path(), scar_test_cache_key::KEY, build),
+        };
         CachedStdPrelude {
             module_stages,
             declaration_index,
-            process_specs,
-            boot_plan,
-            resolve_resume_state,
-            checkpoint,
+            process_specs: semantics.process_specs,
+            boot_plan: semantics.boot_plan,
+            resolve_resume_state: semantics.resolve_resume_state,
+            checkpoint: semantics.checkpoint,
         }
     })
 }

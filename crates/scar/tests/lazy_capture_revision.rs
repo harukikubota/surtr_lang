@@ -266,6 +266,7 @@ fn direct_expression_requirement_survives_generic_forwarding_and_capture() {
     let header = "def build(value: $A) -> (Int, $A -> $A) { &if_let(&1, x, &2, value) }";
     for consumer in [
         "def forward(value: $A) -> (Int, $A -> $A) { build(value) }\nresult = forward({|| 1})",
+        "def forward(value: $A) -> (Int, $A -> $A) { build(value) }\ndef outer(value: $B) -> (Int, $B -> $B) { forward(value) }\nresult = outer({|| 1})",
         "build_fn: ((-> Int) -> (Int, (-> Int) -> (-> Int))) = &build",
     ] {
         let source = format!("{header}\n{consumer}");
@@ -273,4 +274,11 @@ fn direct_expression_requirement_survives_generic_forwarding_and_capture() {
             .expect_err("external thunk through generic forwarding");
         assert!(error.message.contains("DirectExpression"), "{error:?}");
     }
+    let forwarded = format!(
+        "{header}\ndef forward(value: $A) -> (Int, $A -> $A) {{ build(value) }}\ndef outer(value: $B) -> (Int, $B -> $B) {{ forward(value) }}\nresult = outer(0)"
+    );
+    assert_eq!(
+        ty(&forwarded, "result"),
+        Ty::Func(vec![Ty::Int, Ty::Int], Box::new(Ty::Int))
+    );
 }

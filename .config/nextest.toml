@@ -27,6 +27,10 @@ setup = "ci-stdlib-prewarm"
 [profile.cold]
 default-filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 
+[[profile.cold.scripts]]
+filter = "all()"
+setup = "ci-stdlib-prewarm"
+
 [[profile.default.overrides]]
 filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 threads-required = 2

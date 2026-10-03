@@ -1,0 +1,8 @@
+[package]
+name = "scar-test-cache-key"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+sha2 = "0.10"

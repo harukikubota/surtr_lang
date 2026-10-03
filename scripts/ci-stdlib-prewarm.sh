@@ -8,3 +8,5 @@ else
   printf '%s\n' "$check_output" >&2
   exit "$check_status"
 fi
+
+cargo run --quiet -p scar --example scar-test-prewarm

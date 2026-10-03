@@ -160,36 +160,50 @@ impl Checker {
             }
             signatures.insert(*index, signature);
         }
+        if requirements.is_empty() {
+            return Ok(requirements);
+        }
+
+        // Definitions and substitutions do not change during propagation.
+        // Collect their forwarding edges once, then iterate only those edges.
+        let mut forwarding = HashMap::new();
+        for (index, definition) in definitions {
+            let calls = RefCell::new(Vec::new());
+            self.find_typed_node(definition, &|_, node| {
+                if let Ty::UserFunc {
+                    fun_idx,
+                    call_substitution,
+                    ..
+                } = &node.ty
+                {
+                    calls.borrow_mut().push((*fun_idx, call_substitution));
+                }
+                None::<()>
+            });
+            forwarding.insert(*index, calls.into_inner());
+        }
+
         // Forwarding a generic callable forwards its deferred Pattern contract.
         // Add only declaration-owned slots, using each resolved call substitution.
         loop {
             let mut changed = false;
-            for (index, definition) in definitions {
-                let found = RefCell::new(requirements.get(index).cloned().unwrap_or_default());
-                self.find_typed_node(definition, &|_, node| {
-                    if let Ty::UserFunc {
-                        fun_idx,
-                        call_substitution,
-                        ..
-                    } = &node.ty
-                    {
-                        if let Some(required) = requirements.get(fun_idx) {
-                            for variable in required {
-                                if let Some((_, Ty::Var(forwarded))) =
-                                    call_substitution.iter().find(|(slot, _)| slot == variable)
+            for (index, calls) in &forwarding {
+                let mut found = requirements.get(index).cloned().unwrap_or_default();
+                for (fun_idx, call_substitution) in calls {
+                    if let Some(required) = requirements.get(fun_idx) {
+                        for variable in required {
+                            if let Some((_, Ty::Var(forwarded))) =
+                                call_substitution.iter().find(|(slot, _)| slot == variable)
+                            {
+                                if signatures[index].contains(forwarded)
+                                    && !found.contains(forwarded)
                                 {
-                                    if signatures[index].contains(forwarded)
-                                        && !found.borrow().contains(forwarded)
-                                    {
-                                        found.borrow_mut().push(*forwarded);
-                                    }
+                                    found.push(*forwarded);
                                 }
                             }
                         }
                     }
-                    None::<()>
-                });
-                let mut found = found.into_inner();
+                }
                 found.sort_unstable();
                 if !found.is_empty() && requirements.get(index) != Some(&found) {
                     requirements.insert(*index, found);
