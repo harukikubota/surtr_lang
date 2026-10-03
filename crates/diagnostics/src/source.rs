@@ -115,6 +115,7 @@ pub struct SourceEntry {
 #[derive(Debug, Default, Clone)]
 pub struct SourceRegistry {
     entries: Vec<SourceEntry>,
+    next_id: u32,
 }
 
 impl SourceRegistry {
@@ -127,7 +128,8 @@ impl SourceRegistry {
         file_name: impl Into<String>,
         source: impl Into<String>,
     ) -> SourceId {
-        let id = SourceId(self.entries.len() as u32);
+        let id = SourceId(self.next_id);
+        self.next_id = self.next_id.checked_add(1).expect("source ID overflow");
         self.entries.push(SourceEntry {
             id,
             file_name: file_name.into(),
@@ -137,7 +139,10 @@ impl SourceRegistry {
     }
 
     pub fn get(&self, source_id: SourceId) -> Option<&SourceEntry> {
-        self.entries.get(source_id.0 as usize)
+        self.entries
+            .binary_search_by_key(&source_id.0, |entry| entry.id.0)
+            .ok()
+            .map(|index| &self.entries[index])
     }
 
     pub fn file_name(&self, source_id: SourceId) -> Option<&str> {
@@ -149,7 +154,11 @@ impl SourceRegistry {
     }
 
     pub fn update_source(&mut self, source_id: SourceId, source: impl Into<String>) -> bool {
-        if let Some(entry) = self.entries.get_mut(source_id.0 as usize) {
+        if let Ok(index) = self
+            .entries
+            .binary_search_by_key(&source_id.0, |entry| entry.id.0)
+        {
+            let entry = &mut self.entries[index];
             entry.source = source.into();
             true
         } else {
@@ -164,5 +173,31 @@ impl SourceRegistry {
 
     pub fn entries(&self) -> &[SourceEntry] {
         &self.entries
+    }
+
+    /// Keep future compiler IDs distinct from sources in an already loaded VM image.
+    pub fn reserve_ids_before(&mut self, next_id: u32) {
+        self.next_id = self.next_id.max(next_id);
+    }
+
+    /// Restore a source under its original ID. Occupied IDs are never overwritten.
+    pub fn restore(&mut self, entry: SourceEntry) -> bool {
+        let Some(next_id) = entry.id.0.checked_add(1) else {
+            return false;
+        };
+        match self
+            .entries
+            .binary_search_by_key(&entry.id.0, |source| source.id.0)
+        {
+            Ok(index) => {
+                let existing = &self.entries[index];
+                existing.file_name == entry.file_name && existing.source == entry.source
+            }
+            Err(index) => {
+                self.next_id = self.next_id.max(next_id);
+                self.entries.insert(index, entry);
+                true
+            }
+        }
     }
 }

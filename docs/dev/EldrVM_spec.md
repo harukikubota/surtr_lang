@@ -507,8 +507,11 @@ Eldr は解決済みの bytecode を受け取り、VM 内で追加の import 解
 
 module の span は登録済み source ID ごとの範囲へ符号化する。VM は符号化した ID と
 `SrcP` の `source_id` を厳密に照合し、該当ファイルのローカル span と行・列へ変換する。
-script、include、標準定義を呼出し側の単一 source へ割り当て直さない。
+script、include、標準定義、REPL の入力単位を呼出し側の単一 source へ割り当て直さない。
 `.eldr` の encode / decode は元の source ID を維持し、ID の欠番を詰めない。
+対話 VM はソースを不変の ID で追加登録し、同一 ID の別ファイル・本文への置換を拒否する。
+入力の失敗後も診断用ソースを保持し、現在入力の更新で以前の定義位置を変更しない。
+`dbg!` は式と各引数の source ID を照合し、該当ソース内のローカル span で描画する。
 
 現行の符号化では、各 source の Unicode scalar value 数を `MODULE_SPAN_STRIDE`（1,000,000）未満に
 制限する。CLI は script と include module を含む各 source をコンパイル前に検査し、

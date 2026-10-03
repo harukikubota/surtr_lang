@@ -306,6 +306,10 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `Bootstrap` / `Kernel` の明示 import や、user chunk での `@builtin` 利用禁止も通常の compile error と同じ診断経路で表示する
 - `:error summary` では診断の 1 行目のみ表示し、`:error full` では source snippet を含む詳細を表示する
 - REPL 診断の span / line / column は compiler 正本と同じく character offset 契約に従い、表示直前にだけ byte range へ変換する
+- 入力単位のソースを不変の source ID と表示名で保持し、AST 全体の span に source ID を付けて VM へ渡す。現在入力への上書きで、以前の関数・Extractor の生成位置を変更しない
+- Error の主キャプションは script と同じく生成位置を使い、伝播と cause の位置を保持する。`eprint` と `dbg!` も元入力内の行・列を使う
+- 保存した `.eldr` は入力ソースを保持する。再開後の入力は、保存済み source ID と表示名に衝突させない
+- 入力長が source span の区画幅以上、または source ID を付けた span が runtime の `u32` 範囲を超える場合は、実行前に診断で拒否する
 
 ---
 

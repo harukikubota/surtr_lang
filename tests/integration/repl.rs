@@ -311,6 +311,7 @@ const REPL_CASES: &[(&str, fn())] = &[
     repl_case!(repl_rejects_function_on_inferred_facet_capture_without_source_evidence),
     repl_case!(repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evidence),
     repl_case!(repl_eprint_reports_generation_site_line),
+    repl_case!(repl_error_generation_site_survives_function_and_extractor_calls),
 ];
 
 fn repl_quotes_terminal_controls_without_interfering_with_cli_color() {
@@ -1759,5 +1760,40 @@ fn repl_eprint_reports_generation_site_line() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("REPL:2:"));
+    assert!(stderr.contains(":1:31\n"), "{stderr}");
+}
+
+fn repl_error_generation_site_survives_function_and_extractor_calls() {
+    let output = run_repl_session(
+        "Err(NoneError)\ndef source_error(_value: Int) -> Result<Int> {\n  Err(NoneError)\n}\ndef relay_error() -> Result<Int> {\n  found =? source_error(2)\n  Ok(found)\n}\nrelay_error()\ninner = Extractor::from_result(&source_error)\nouter = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}\nouter(found) =? Ok(2)\n2 + 3\n:quit\n",
+    );
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let captions: Vec<_> = stderr.lines().filter(|line| line.contains("╭─[")).collect();
+    assert_eq!(captions.len(), 3, "{stderr}");
+    for (caption, line, column) in [
+        (captions[0], 1, 5),
+        (captions[1], 2, 7),
+        (captions[2], 2, 7),
+    ] {
+        assert!(caption.contains(&format!(":{line}:{column} ")), "{stderr}");
+    }
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("Error: NoneError: None Value."))
+            .count(),
+        3,
+        "{stderr}"
+    );
+    assert!(stderr.contains("Err(NoneError)"), "{stderr}");
+    assert!(!stdout.contains("Error:"), "{stdout}");
+    assert!(
+        stdout.contains("5"),
+        "session must continue after propagation: {stdout}"
+    );
 }

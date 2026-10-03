@@ -123,6 +123,13 @@ impl InteractiveVm {
         self.vm.set_source(source, file);
     }
 
+    pub fn register_source(
+        &mut self,
+        entry: sindr::ir::SourceFileEntry,
+    ) -> Result<(), RuntimeError> {
+        self.vm.register_source(entry)
+    }
+
     pub fn source(&self) -> Option<&str> {
         self.vm.source()
     }
