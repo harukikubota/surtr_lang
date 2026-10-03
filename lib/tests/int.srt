@@ -1,6 +1,7 @@
 include "./schema/int_schema.srt"
 
 import Int::{
+  div_mod,
   abs,
   min,
   max,
@@ -40,6 +41,46 @@ import Int::{
 import Test;
 
 test("Int") {
+  describe("div_mod") {
+    it("returns the quotient and remainder") {
+      assert_ok_eq((2, 1), Int::div_mod(7, 3))
+    }
+
+    it("truncates toward zero for every sign combination") {
+      assert_ok_eq((-2, -1), Int::div_mod(-7, 3))
+      assert_ok_eq((-2, 1), Int::div_mod(7, -3))
+      assert_ok_eq((2, -1), Int::div_mod(-7, -3))
+    }
+
+    it("handles zero dividends exact division and smaller dividends") {
+      assert_ok_eq((0, 0), Int::div_mod(0, 3))
+      assert_ok_eq((0, 0), Int::div_mod(0, -3))
+      assert_ok_eq((3, 0), Int::div_mod(9, 3))
+      assert_ok_eq((0, -2), Int::div_mod(-2, 3))
+    }
+
+    it("preserves arbitrary precision and the division identity") {
+      value = 10000000000000000000000000000000000000001
+      divisor = 100000000000000000000
+      (quotient, remainder) =? Int::div_mod(value, divisor)
+      assert_eq((100000000000000000000, 1), (quotient, remainder))
+      assert_eq(value, quotient * divisor + remainder)
+      assert_ok_eq((-100000000000000000000, -1), Int::div_mod(0 - value, divisor))
+    }
+
+    it("supports an imported callable with a concrete signature") {
+      divide: (Int, Int -> Result<(Int, Int)>) = &div_mod(&1, &2)
+      assert_ok_eq((2, 1), divide(7, 3))
+    }
+
+    it("returns ZeroDivisionError for zero divisors") {
+      expected: Result<(Int, Int)> = Err(ZeroDivisionError)
+      assert_eq(expected, Int::div_mod(7, 0))
+      assert_eq(expected, Int::div_mod(-7, 0))
+      assert_eq(expected, Int::div_mod(0, 0))
+    }
+  }
+
   describe("numeric helpers") {
     it("supports safe division and modulo") {
       assert_eq(

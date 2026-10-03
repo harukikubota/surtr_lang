@@ -124,6 +124,22 @@ impl IntBase {
 
 impl Int {
   @doc """
+  Return the integer quotient and remainder of `a` divided by `b`.
+  The quotient truncates toward zero; a nonzero remainder has the sign of `a`.
+  A zero divisor returns `Err(ZeroDivisionError)`.
+  ## REPL
+  xldr(1)> Int::div_mod(7, 3)
+  Ok((2, 1))
+  xldr(2)> Int::div_mod(-7, 3)
+  Ok((-2, -1))
+  """
+  def div_mod(a: Int, b: Int) -> Result<(Int, Int), ZeroDivisionError> {
+    quotient =? Div::safe_div(a, b)
+    remainder =? Mod::safe_mod(a, b)
+    Ok((quotient, remainder))
+  }
+
+  @doc """
   Return the bitwise AND of `a` and `b`.
   ## REPL
   xldr(1)> Int::bit_and(6, 3)
