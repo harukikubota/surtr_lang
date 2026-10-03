@@ -320,24 +320,30 @@ pub struct HashMapHandle {
     pub entries: HashMap<String, Value>,
 }
 
-pub type ListRef = Option<Rc<ListNode>>;
-
-/// Shared runtime handle for persistent cons-list values.
-///
-/// Invariant:
-/// - `len == 0` if and only if `head == None`
-/// - `len > 0` if and only if `head` points at the first cons cell
-#[derive(Debug, Clone, PartialEq)]
+/// Immutable persistent sequence with a cached logical length.
+/// Empty is canonical; Cons and Packed always contain at least one element.
+#[derive(Clone)]
 pub struct ListHandle {
-    pub head: ListRef,
-    pub len: usize,
+    repr: ListRepr,
+    len: usize,
 }
 
-/// Persistent list node for O(1) cons/uncons sharing.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ListNode {
-    pub value: Value,
-    pub next: ListRef,
+#[derive(Clone)]
+enum ListRepr {
+    Empty,
+    Cons(Rc<ListConsNode>),
+    Packed(PackedList),
+}
+
+struct ListConsNode {
+    value: Value,
+    tail: ListHandle,
+}
+
+#[derive(Clone)]
+struct PackedList {
+    items: Rc<Vec<Value>>,
+    offset: usize,
 }
 
 /// Callable runtime value.
@@ -659,66 +665,124 @@ impl HashMapHandle {
 
 impl ListHandle {
     pub fn empty() -> Self {
-        Self { head: None, len: 0 }
+        Self {
+            repr: ListRepr::Empty,
+            len: 0,
+        }
     }
 
     pub fn cons(head: Value, tail: &ListHandle) -> Self {
+        let len = tail.len.checked_add(1).expect("List length overflow");
         Self {
-            head: Some(Rc::new(ListNode {
+            repr: ListRepr::Cons(Rc::new(ListConsNode {
                 value: head,
-                next: tail.head.clone(),
+                tail: tail.clone(),
             })),
-            len: tail.len + 1,
+            len,
         }
     }
 
+    /// Move the buffer into immutable storage without rebuilding its elements.
     pub fn from_items(items: Vec<Value>) -> Self {
-        let mut list = Self::empty();
-        for item in items.into_iter().rev() {
-            list = Self::cons(item, &list);
+        let len = items.len();
+        if len == 0 {
+            Self::empty()
+        } else {
+            Self {
+                repr: ListRepr::Packed(PackedList {
+                    items: Rc::new(items),
+                    offset: 0,
+                }),
+                len,
+            }
         }
-        list
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    fn non_empty_head(&self) -> Option<&Rc<ListNode>> {
-        self.head.as_ref()
-    }
-
     pub fn head_value(&self) -> Option<Value> {
-        self.non_empty_head().map(|node| node.value.clone())
+        match &self.repr {
+            ListRepr::Empty => None,
+            ListRepr::Cons(node) => Some(node.value.clone()),
+            ListRepr::Packed(packed) => Some(packed.items[packed.offset].clone()),
+        }
     }
 
     pub fn tail_handle(&self) -> Option<Self> {
-        self.non_empty_head().map(|node| Self {
-            head: node.next.clone(),
-            len: self.len.saturating_sub(1),
-        })
+        match &self.repr {
+            ListRepr::Empty => None,
+            ListRepr::Cons(node) => Some(node.tail.clone()),
+            ListRepr::Packed(packed) => {
+                let len = self
+                    .len
+                    .checked_sub(1)
+                    .expect("nonempty Packed List length");
+                Some(if len == 0 {
+                    Self::empty()
+                } else {
+                    Self {
+                        repr: ListRepr::Packed(PackedList {
+                            items: Rc::clone(&packed.items),
+                            offset: packed
+                                .offset
+                                .checked_add(1)
+                                .expect("Packed List offset overflow"),
+                        }),
+                        len,
+                    }
+                })
+            }
+        }
     }
 
     pub fn iter(&self) -> ListIter {
         ListIter {
-            next: self.head.clone(),
+            remaining: self.clone(),
         }
     }
 }
 
+impl PartialEq for ListHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.iter().eq(other.iter())
+    }
+}
+
+impl fmt::Debug for ListHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
 pub struct ListIter {
-    next: ListRef,
+    remaining: ListHandle,
 }
 
 impl Iterator for ListIter {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let current = self.next.clone()?;
-        self.next = current.next.clone();
-        Some(current.value.clone())
+        let value = self.remaining.head_value()?;
+        self.remaining = self
+            .remaining
+            .tail_handle()
+            .expect("nonempty List has a tail");
+        Some(value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining.len, Some(self.remaining.len))
     }
 }
+
+impl ExactSizeIterator for ListIter {}
+impl std::iter::FusedIterator for ListIter {}
 
 /// Rich error value produced by `deferror`.
 #[derive(Debug, Clone, PartialEq)]
@@ -1227,6 +1291,106 @@ mod tests {
     }
 
     #[test]
+    fn packed_lists_move_and_share_the_original_buffer_at_every_length() {
+        for len in [1, 8, 1024] {
+            let items = (0..len).map(|n| Value::Int(int(n))).collect::<Vec<_>>();
+            let allocation = items.as_ptr();
+            let packed = ListHandle::from_items(items);
+            let super::ListRepr::Packed(storage) = &packed.repr else {
+                panic!("nonempty from_items must be Packed")
+            };
+            assert_eq!(storage.items.as_ptr(), allocation);
+            assert_eq!(storage.offset, 0);
+            assert_eq!(packed.len(), len as usize);
+            let with_head = ListHandle::cons(Value::Unit, &packed);
+            let super::ListRepr::Cons(node) = &with_head.repr else {
+                panic!("cons must allocate one Cons")
+            };
+            let super::ListRepr::Packed(shared_tail) = &node.tail.repr else {
+                panic!("cons must preserve Packed tail")
+            };
+            assert!(std::rc::Rc::ptr_eq(&storage.items, &shared_tail.items));
+            let mut cursor = packed.clone();
+            for offset in 0..len {
+                let super::ListRepr::Packed(current) = &cursor.repr else {
+                    panic!("tail must stay Packed")
+                };
+                assert!(std::rc::Rc::ptr_eq(&storage.items, &current.items));
+                assert_eq!(current.offset, offset as usize);
+                assert_eq!(cursor.len(), (len - offset) as usize);
+                assert_eq!(cursor.head_value(), Some(Value::Int(int(offset))));
+                cursor = cursor.tail_handle().unwrap();
+            }
+            assert!(matches!(cursor.repr, super::ListRepr::Empty));
+            assert_eq!(cursor.len(), 0);
+            assert!(matches!(
+                ListHandle::from_items(vec![]).repr,
+                super::ListRepr::Empty
+            ));
+        }
+    }
+
+    #[test]
+    fn mixed_list_iteration_is_ordered_and_persistent() {
+        let packed = ListHandle::from_items(vec![Value::Bool(true), Value::Bool(false)]);
+        let cons = ListHandle::cons(Value::Unit, &packed);
+        let shared = cons.clone();
+        let mut iter = cons.iter();
+        assert_eq!(iter.len(), 3);
+        assert_eq!(iter.next(), Some(Value::Unit));
+        assert_eq!(iter.len(), 2);
+        assert_eq!(iter.collect::<Vec<_>>(), packed.iter().collect::<Vec<_>>());
+        assert_eq!(shared, cons);
+        assert_ne!(cons, packed);
+        let different = ListHandle::from_items(vec![Value::Bool(false), Value::Bool(true)]);
+        assert_ne!(packed, different);
+    }
+
+    #[test]
+    #[should_panic(expected = "List length overflow")]
+    fn cons_rejects_length_overflow_before_allocating() {
+        // An impossible public value isolates the checked arithmetic boundary.
+        let tail = ListHandle {
+            repr: super::ListRepr::Empty,
+            len: usize::MAX,
+        };
+        ListHandle::cons(Value::Unit, &tail);
+    }
+
+    #[test]
+    fn list_debug_reports_logical_elements_only() {
+        let packed = ListHandle::from_items(vec![Value::Bool(true), Value::Bool(false)]);
+        let cons = ListHandle::cons(
+            Value::Bool(true),
+            &ListHandle::cons(Value::Bool(false), &ListHandle::empty()),
+        );
+        assert_eq!(format!("{packed:?}"), "[Bool(true), Bool(false)]");
+        assert_eq!(format!("{cons:?}"), format!("{packed:?}"));
+        assert_eq!(format!("{:?}", ListHandle::empty()), "[]");
+    }
+
+    #[test]
+    fn list_representations_have_equal_nested_values_and_display() {
+        let packed = ListHandle::from_items(vec![Value::Int(int(1)), Value::Int(int(2))]);
+        let cons = ListHandle::cons(
+            Value::Int(int(1)),
+            &ListHandle::cons(Value::Int(int(2)), &ListHandle::empty()),
+        );
+        let mixed = ListHandle::cons(Value::Int(int(1)), &packed.tail_handle().unwrap());
+        assert_eq!(packed, cons);
+        assert_eq!(packed, mixed);
+        let nested = |list| Value::Tagged {
+            tag: 12,
+            fields: vec![Value::Tuple(vec![Value::List(list)])],
+        };
+        assert_eq!(nested(packed.clone()), nested(cons.clone()));
+        let registry = TypeRegistry::new();
+        for list in [packed, cons, mixed] {
+            assert_eq!(Value::List(list).to_display_string(&registry), "[1, 2]");
+        }
+    }
+
+    #[test]
     fn empty_list_head_and_tail_return_none() {
         let list = ListHandle::empty();
         assert_eq!(list.head_value(), None);
@@ -1237,11 +1401,11 @@ mod tests {
     fn single_item_list_head_and_tail_preserve_non_empty_contract() {
         let list = ListHandle::from_items(vec![Value::Int(int(7))]);
 
-        assert_eq!(list.len, 1);
+        assert_eq!(list.len(), 1);
         assert_eq!(list.head_value(), Some(Value::Int(int(7))));
 
         let tail = list.tail_handle().expect("single-item list has empty tail");
-        assert_eq!(tail.len, 0);
+        assert_eq!(tail.len(), 0);
         assert_eq!(tail.head_value(), None);
         assert!(tail.is_empty());
     }
@@ -1254,15 +1418,15 @@ mod tests {
             Value::Int(int(3)),
         ]);
 
-        assert_eq!(list.len, 3);
+        assert_eq!(list.len(), 3);
         assert_eq!(list.head_value(), Some(Value::Int(int(1))));
 
         let tail = list.tail_handle().expect("non-empty list has tail handle");
-        assert_eq!(tail.len, 2);
+        assert_eq!(tail.len(), 2);
         assert_eq!(tail.head_value(), Some(Value::Int(int(2))));
 
         let tail_tail = tail.tail_handle().expect("tail stays non-empty");
-        assert_eq!(tail_tail.len, 1);
+        assert_eq!(tail_tail.len(), 1);
         assert_eq!(tail_tail.head_value(), Some(Value::Int(int(3))));
     }
 
@@ -1271,14 +1435,14 @@ mod tests {
         let tail = ListHandle::from_items(vec![Value::Int(int(2)), Value::Int(int(3))]);
         let list = ListHandle::cons(Value::Int(int(1)), &tail);
 
-        assert_eq!(list.len, 3);
+        assert_eq!(list.len(), 3);
         assert_eq!(list.head_value(), Some(Value::Int(int(1))));
 
         let derived_tail = list.tail_handle().expect("cons list has tail");
-        assert_eq!(derived_tail.len, 2);
+        assert_eq!(derived_tail.len(), 2);
         assert_eq!(derived_tail.head_value(), Some(Value::Int(int(2))));
 
-        assert_eq!(tail.len, 2);
+        assert_eq!(tail.len(), 2);
         assert_eq!(tail.head_value(), Some(Value::Int(int(2))));
     }
 

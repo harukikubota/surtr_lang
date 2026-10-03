@@ -1,6 +1,10 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
+mod list_flat_map;
+use list_flat_map::{builtin_list_flat_map, FlatMapContinuation};
+#[cfg(test)]
+pub(crate) use list_flat_map::{flat_map_metrics, reset_flat_map_metrics};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{
@@ -44,6 +48,7 @@ pub(crate) enum BuiltinOutcome {
 
 #[derive(Debug, Clone)]
 pub(crate) enum BuiltinContinuation {
+    FlatMap(FlatMapContinuation),
     Runtime(crate::vm::RuntimeContinuation),
     Identity,
     RecoverKind,
@@ -63,6 +68,7 @@ impl BuiltinContinuation {
         result: Result<Value, RuntimeError>,
     ) -> Result<BuiltinOutcome, RuntimeError> {
         let value = match self {
+            Self::FlatMap(continuation) => return continuation.resume(result),
             Self::Runtime(continuation) => return continuation.resume(vm, result),
             Self::Identity => result?,
             Self::RecoverKind => {
@@ -932,6 +938,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "__flow_kleisli_compose",
         func: |vm, args| builtin_flow_operator_unreachable(vm, args).map(BuiltinOutcome::Complete),
+    },
+    BuiltinImpl {
+        name: "list_flat_map",
+        func: builtin_list_flat_map,
     },
 ];
 
@@ -1942,7 +1952,7 @@ fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     let Value::List(list) = &args[0] else {
         return Err(RuntimeError::new("len expects List as first argument"));
     };
-    Ok(Value::Int(list.len.into()))
+    Ok(Value::Int(list.len().into()))
 }
 
 fn builtin_string_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2158,7 +2168,7 @@ fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
         ));
     };
     let encoding = decode_string_encoding(vm, &args[1])?;
-    let mut bytes = Vec::with_capacity(values.len);
+    let mut bytes = Vec::with_capacity(values.len());
     for (idx, value) in values.iter().enumerate() {
         let Value::Int(code) = value else {
             return Err(RuntimeError::new("from_codepoints expects List<Int>"));
@@ -2550,7 +2560,7 @@ fn builtin_facet_list_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let Value::Int(index) = &args[1] else {
         return Err(RuntimeError::new("__facet_list_get expects Int index"));
     };
-    let index = match facet_index_to_usize(vm, index, list.len)? {
+    let index = match facet_index_to_usize(vm, index, list.len())? {
         Ok(index) => index,
         Err(err) => return Ok(err),
     };
@@ -2568,7 +2578,7 @@ fn builtin_facet_list_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let Value::Int(index) = &args[1] else {
         return Err(RuntimeError::new("__facet_list_set expects Int index"));
     };
-    let index = match facet_index_to_usize(vm, index, list.len)? {
+    let index = match facet_index_to_usize(vm, index, list.len())? {
         Ok(index) => index,
         Err(err) => return Ok(err),
     };
@@ -2589,7 +2599,7 @@ fn builtin_facet_list_slice_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
     let Value::Int(end) = &args[2] else {
         return Err(RuntimeError::new("__facet_list_slice_get expects Int end"));
     };
-    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len())? {
         Ok(bounds) => bounds,
         Err(err) => return Ok(err),
     };
@@ -2618,7 +2628,7 @@ fn builtin_facet_list_slice_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
             "__facet_list_slice_set expects List replacement",
         ));
     };
-    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len())? {
         Ok(bounds) => bounds,
         Err(err) => return Ok(err),
     };

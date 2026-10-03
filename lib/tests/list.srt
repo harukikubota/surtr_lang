@@ -3,8 +3,100 @@ include "./schema/list_schema.srt"
 import ListSchema::{add_one, list_pure, list_step1, list_step2, list_step3};
 import Test;
 
+def list_ordered_step(value: Int) -> List<Int> {
+  print("step=#{value}")
+  [value, value + 10]
+}
+
 test("List") {
   describe("helpers") {
+    it("flat_map, bind, do, pipe, and Kleisli preserve callback effects") {
+      capture_stdout()
+      values = List::cons(1, [2])
+      direct = List::flat_map(values, &list_ordered_step)
+      bound: List<Int> = Monad::bind(values, &list_ordered_step)
+      piped: List<Int> = values |>= list_ordered_step()
+      computed: List<Int> = do::<List> {
+        value <- values
+        expanded <- list_ordered_step(value)
+        Monad::return(expanded)
+      }
+      composed = &list_pure >=> &list_ordered_step
+      combined = List::flat_map(values, composed)
+      assert_eq([1, 11, 2, 12], direct)
+      assert_eq(direct, bound)
+      assert_eq(direct, piped)
+      assert_eq(direct, computed)
+      assert_eq(direct, combined)
+      assert_stdout_eq([
+        "step=1", "step=2", "step=1", "step=2", "step=1", "step=2",
+        "step=1", "step=2", "step=1", "step=2",
+      ])
+    }
+
+    it("mixed lists preserve decomposition, display, and algebraic laws") {
+      packed = [2, 3]
+      mixed = List::cons(1, packed)
+      uncons(head, tail) =? mixed
+      assert_eq(1, head)
+      assert_eq([2, 3], tail)
+      assert_eq([2, 3], packed)
+      assert_eq(3, List::len(mixed))
+      assert_eq("[1, 2, 3]", inspect(mixed))
+      assert_eq(mixed, List::append([], mixed))
+      assert_eq(mixed, List::append(mixed, []))
+      assert_eq(mixed, List::reverse(List::reverse(mixed)))
+      assert_eq(mixed, List::map(mixed, {|value| value}))
+      assert_eq(mixed, List::flat_map(mixed, {|value| [value]}))
+      assert_eq(
+        List::append(List::append(mixed, [4]), [5]),
+        List::append(mixed, List::append([4], [5])),
+      )
+    }
+
+    it("flat_map visits each input once and preserves result order") {
+      capture_stdout()
+      values = List::cons(0, [1, 2, 3])
+      actual = List::flat_map(values: values, f: {|value|
+        print("visit=#{value}")
+        match value {
+          0 => [],
+          1 => [value],
+          _ => List::cons(value, [value + 10]),
+        }
+      })
+      assert_eq([1, 2, 12, 3, 13], actual)
+      assert_eq([0, 1, 2, 3], values)
+      assert_stdout_eq(["visit=0", "visit=1", "visit=2", "visit=3"])
+    }
+
+    it("flat_map skips callbacks for empty input") {
+      capture_stdout()
+      values: List<Int> = []
+      actual = List::flat_map(values, {|value|
+        print("visit=#{value}")
+        [value]
+      })
+      assert_eq(values, actual)
+      assert_stdout_eq([])
+    }
+
+    it("nested flat_map completes inner results in input order") {
+      capture_stdout()
+      actual = List::flat_map([1, 2], {|outer|
+        print("outer=#{outer}")
+        List::flat_map([3, 4], {|inner|
+          print("inner=#{outer}:#{inner}")
+          [outer * 10 + inner]
+        })
+      })
+      assert_eq([13, 14, 23, 24], actual)
+      assert_stdout_eq([
+        "outer=1", "inner=1:3", "inner=1:4",
+        "outer=2", "inner=2:3", "inner=2:4",
+      ])
+    }
+
     it("concatenates lists with Alternative choice") {
       assert_eq([1, 2, 3], [1, 2] <|> [3])
     }

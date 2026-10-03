@@ -3687,6 +3687,23 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
             &[],
         )],
     },
+    BuiltinMeta {
+        name: "list_flat_map",
+        arity: 2,
+        sig_str: "(List<$A>, ($A -> List<$B>)) -> List<$B>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("List"),
+            "flat_map",
+            &[],
+            &[
+                builtin_surface_parameter("values", "List<$A>"),
+                builtin_surface_parameter("f", "($A -> List<$B>)"),
+            ],
+            "List<$B>",
+            &[],
+        )],
+    },
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime
@@ -4024,6 +4041,27 @@ mod tests {
         BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
     };
     use crate::names::{TypeIdentity, TypeName};
+
+    #[test]
+    fn list_flat_map_surface_preserves_signature_names_and_existing_ids() {
+        let meta = builtin_meta_by_runtime_name("list_flat_map").expect("flat_map metadata");
+        assert_eq!(
+            meta.builtin_id().0,
+            builtin_id_by_name("__flow_kleisli_compose").unwrap() + 1
+        );
+        assert_eq!(BUILTIN_METAS.last().unwrap().name, "list_flat_map");
+        assert_eq!(meta.runtime_arity(), 2);
+        assert_eq!(meta.sig_str, "(List<$A>, ($A -> List<$B>)) -> List<$B>");
+        assert_eq!(meta.primitive_opcode(), None);
+        let surface = meta
+            .surface_variant("List", "flat_map")
+            .expect("List surface");
+        assert_eq!(surface.value_parameters[0].name, "values");
+        assert_eq!(surface.value_parameters[1].name, "f");
+        assert_eq!(surface.value_parameters[0].ty, "List<$A>");
+        assert_eq!(surface.value_parameters[1].ty, "($A -> List<$B>)");
+        assert_eq!(surface.return_type.ty, "List<$B>");
+    }
 
     #[test]
     fn builtin_ids_match_definition_order() {

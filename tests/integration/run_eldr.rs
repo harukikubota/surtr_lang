@@ -66,6 +66,39 @@ fn run_eldr_keeps_cpu_tasks_resumable_after_roundtrip() {
 }
 
 #[test]
+fn run_eldr_preserves_flat_map_callable_templates_and_list_payloads() {
+    let temp = unique_temp_dir("surtr_flat_map_callable_roundtrip");
+    let source = repo_root()
+        .join("tests/fixtures/script/pass/process_runtime/list_flat_map_callable_payloads.srt");
+    let expected = fs::read_to_string(source.with_extension("expected")).unwrap();
+    let bytecode = temp.join("flat_map.eldr");
+    let build = surtr_command()
+        .arg("build")
+        .arg(&source)
+        .arg(&bytecode)
+        .output()
+        .expect("flat_map fixture must build");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = surtr_command()
+        .arg("run")
+        .arg(&bytecode)
+        .output()
+        .expect("compiled flat_map fixture must run");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    assert!(run.stderr.is_empty(), "{:?}", run.stderr);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
 fn run_eldr_matches_run_srt_output() {
     let temp = unique_temp_dir("surtr_step1_roundtrip");
     let source_path = temp.join("sample.srt");

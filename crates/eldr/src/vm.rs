@@ -25,6 +25,8 @@ use std::rc::Rc;
 
 use crate::builtin::{call_builtin, BuiltinOutcome};
 mod continuation;
+#[cfg(test)]
+mod list_flat_map_tests;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
 use continuation::{ContinuationFrame, Invocation};
@@ -4983,7 +4985,7 @@ impl VM {
             Opcode::ListLen => {
                 let list = self.pop_stack()?;
                 match list {
-                    Value::List(handle) => self.stack.push(Value::Int(handle.len.into())),
+                    Value::List(handle) => self.stack.push(Value::Int(handle.len().into())),
                     other => {
                         return Err(RuntimeError::new(format!(
                             "ListLen expects List, got {:?}",

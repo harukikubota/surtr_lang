@@ -49,6 +49,16 @@ def option_t_result_safebind_failure() -> OptionT<Result, Int> {
   OptionT::some::<Result>(value + 1)
 }
 
+def do_list_three_binds() -> List<Int> {
+  do::<List> {
+    first <- [1, 2]
+    second <- [10, 20]
+    third <- [100, 200]
+    traced = print("#{first}:#{second}:#{third}")
+    [first + second + third]
+  }
+}
+
 test("do carrier integration") {
   describe("standard carriers") {
     it("matches the Option pipeline") {
@@ -79,6 +89,49 @@ test("do carrier integration") {
         [value + 1]
       }
       assert_eq(pipeline, sequenced)
+    }
+
+    it("keeps three List binds in depth-first order") {
+      capture_stdout()
+      actual = do_list_three_binds()
+      assert_eq([111, 211, 121, 221, 112, 212, 122, 222], actual)
+      assert_stdout_eq([
+        "1:10:100", "1:10:200", "1:20:100", "1:20:200",
+        "2:10:100", "2:10:200", "2:20:100", "2:20:200",
+      ])
+    }
+
+    it("completes nested List do results before the outer bind") {
+      actual: List<Int> = do::<List> {
+        first <- [1, 2]
+        inner = do::<List> {
+          second <- [10, 20]
+          [first + second]
+        }
+        value <- inner
+        [value, value + 100]
+      }
+      assert_eq([11, 111, 21, 121, 12, 112, 22, 122], actual)
+    }
+
+    it("skips later List do effects after guard and pattern failures") {
+      capture_stdout()
+      checked: List<Int> = do::<List> {
+        value <- [1, 2, 3]
+        allowed: List<Int> = List::map(guard::<List>(value > 1), {|_| value})
+        _ <- allowed
+        result =? if(value == 2, Ok(value), Err(NoneError))
+        traced = print("safe=#{result}")
+        [result]
+      }
+      partial: List<Int> = do::<List> {
+        2 <- [1, 2, 3]
+        traced = print("matched")
+        [9]
+      }
+      assert_eq([2], checked)
+      assert_eq([9], partial)
+      assert_stdout_eq(["safe=2", "matched"])
     }
 
     it("keeps Either captured arguments fixed") {

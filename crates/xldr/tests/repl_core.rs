@@ -263,6 +263,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_routes_background_prints_into_pump_result_lines),
     repl_core_case!(core_chunk_shares_cpu_budget_with_background_tasks),
     repl_core_case!(core_cpu_background_work_requests_immediate_pump),
+    repl_core_case!(core_flat_map_builder_survives_runtime_error_rollback),
     repl_core_case!(core_from_script_source_exposes_preloaded_docs_and_keeps_repl_policy),
     repl_core_case!(core_from_script_file_resolves_include_and_executes_preload_before_repl),
     repl_core_case!(core_from_module_source_exposes_preloaded_module_definitions),
@@ -3028,6 +3029,62 @@ print(inspect(Task::await(fast)))"#,
         output.contains("Ok(0)") && output.contains("Ok(1)"),
         "{output}"
     );
+}
+
+fn core_flat_map_builder_survives_runtime_error_rollback() {
+    let mut engine = engine();
+    let stable = engine.handle_line("stable = List::flat_map([7, 8], {|value| [value, value]})");
+    assert!(
+        matches!(stable.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        visible_text(&stable)
+    );
+    let pending = engine.handle_line(
+        r#"pending = Task::async({||
+  values = List::flat_map([1, 2, 3], {|value|
+    if(value == 2, { Process::sleep(10ms); () }, ())
+    [value]
+  })
+  print("flat_map complete")
+  Ok(values)
+})"#,
+    );
+    assert!(
+        matches!(pending.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        visible_text(&pending)
+    );
+    assert!(!visible_text(&pending).contains("flat_map complete"));
+    assert!(engine.has_pending_background_work());
+
+    // The checkpoint now holds a Builder containing [1]. Let the live copy
+    // finish before failing, then resume the checkpoint after rollback.
+    let failed = engine.handle_line("Task::await(pending)\nProcess::self()");
+    assert!(
+        matches!(failed.output, ReplOutput::EvalError { .. }),
+        "{}",
+        visible_text(&failed)
+    );
+    assert!(visible_text(&failed).contains("Process::self"));
+    assert_eq!(
+        visible_text(&failed).matches("flat_map complete").count(),
+        0
+    );
+    assert!(engine.has_pending_background_work());
+
+    let resumed = engine.handle_line("Task::await(pending)");
+    let text = visible_text(&resumed);
+    assert!(
+        matches!(resumed.output, ReplOutput::EvalSuccess { .. }),
+        "{text}"
+    );
+    assert!(text.contains("Ok([1, 2, 3])"), "{text}");
+    assert_eq!(text.matches("flat_map complete").count(), 1, "{text}");
+    let preserved = engine.handle_line("stable");
+    assert!(visible_text(&preserved).contains("[7, 7, 8, 8]"));
+    assert!(!engine.has_pending_background_work());
+    let idle = engine.pump_background_to_next_deadline();
+    assert!(!visible_text(&idle).contains("flat_map complete"));
 }
 
 fn core_cpu_background_work_requests_immediate_pump() {
