@@ -23,6 +23,7 @@ Surtr は、全仕様を一枚の集約文書へ複製しません。現行挙�
 | 標準定義の stage・ロード順 | `../../crates/xldr/src/loader.rs` の `STDLIB_MODULE_SPECS` |
 | source kind と compile policy | `../../crates/sindr/src/policy.rs` |
 | 診断構造と span | [`diagnostics.md`](./diagnostics.md) |
+| エラー表示・実行時オプション・REPL の表示レベル | [`display_error.md`](./display_error.md) |
 | 未確定事項 | `../../doc/open-issues.md` |
 
 API 一覧、builtin 一覧、標準モジュールの完全なロード順など、ソースから機械的に分かる情報を
@@ -43,6 +44,7 @@ API 一覧、builtin 一覧、標準モジュールの完全なロード順な�
 - [Trait system implementation spec](./Trait_system_spec.md)
 - [do intrinsic contract](./Do_intrinsic_spec.md)
 - [Diagnostics contract](./diagnostics.md)
+- [エラー表示](./display_error.md)
 - [Xldr spec](./Xldr_spec.md)
 - [テスト方針](./テスト方針.md)
 

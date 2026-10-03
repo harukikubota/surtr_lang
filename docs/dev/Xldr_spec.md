@@ -301,6 +301,8 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 
 ## 7. 診断表示
 
+表示レベル、stack trace、Error の生成位置の契約は [display_error.md](display_error.md) を参照する。
+
 - 対話モードでは ariadne ベースの人間向け診断を標準とする
 - 型エラーでは、可能な範囲で関数宣言や `if` / `match` の分岐位置に補助ラベルを付ける
 - REPL 診断は入力継続よりも「その入力単位で失敗してロールバックする」ことを優先する

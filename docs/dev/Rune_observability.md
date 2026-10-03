@@ -197,6 +197,8 @@ JSON の `cache` には stdlib (`cold` / `process_hit` / `disk_hit`) と final a
 
 ### 3.7 `--error-context verbose`
 
+エラー表示、stack trace、環境変数との関係は [display_error.md](display_error.md) を参照する。
+
 runtime error または `run` entrypoint が返した `Err(...)` の表示に以下を追加する。
 
 - `pc`
