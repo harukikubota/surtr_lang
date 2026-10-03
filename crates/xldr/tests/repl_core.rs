@@ -1374,15 +1374,15 @@ fn core_completion_only_shows_unqualified_importable_functions_after_import() {
 fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
     let mut engine = engine();
 
-    let with_completion = engine
-        .completions("wi", 2)
+    let then_completion = engine
+        .completions("th", 2)
         .candidates
         .into_iter()
-        .find(|candidate| candidate.label == "with")
-        .expect("Result::with should be suggested");
+        .find(|candidate| candidate.label == "then")
+        .expect("Result::then should be suggested");
     assert_eq!(
-        with_completion.detail.as_deref(),
-        Some("Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>")
+        then_completion.detail.as_deref(),
+        Some("Result::then(value: Result<$A>, next: (-> Result<$B>)) -> Result<$B>")
     );
 
     let list_at_completion = engine
@@ -1415,16 +1415,16 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
         "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
     );
     assert_eq!(
-        signature_text(&engine.handle_line(":sig with")).trim(),
-        "Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>"
+        signature_text(&engine.handle_line(":sig then")).trim(),
+        "Result::then(value: Result<$A>, next: (-> Result<$B>)) -> Result<$B>"
     );
     assert_eq!(
         signature_text(&engine.handle_line(":sig List::at")).trim(),
         "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
     );
     assert_eq!(
-        signature_text(&engine.handle_line(":sig Result::with")).trim(),
-        "Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>"
+        signature_text(&engine.handle_line(":sig Result::then")).trim(),
+        "Result::then(value: Result<$A>, next: (-> Result<$B>)) -> Result<$B>"
     );
 }
 
