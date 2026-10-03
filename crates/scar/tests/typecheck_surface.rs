@@ -3592,7 +3592,7 @@ Single { value: value }
   }
 
   defextractor deconstruct(self: Self) -> MatchResult<Int> {
-MatchResult::OK(self.value)
+MatchResult::Ok(self.value)
   }
 }
 
@@ -3661,7 +3661,7 @@ fn enum_impl_extractor_can_be_used_in_matchblock() {
 impl Light {
   defextractor stop_code(self: Self) -> MatchResult<Int> {
 match self {
-  Light::Red => MatchResult::OK(1),
+  Light::Red => MatchResult::Ok(1),
   _ => MatchResult::Err(NoneError),
 }
   }
@@ -11097,8 +11097,8 @@ value: (String, Int) = reversed("ok", 1)"#,
 
 fn match_result_extractor_contract_boundaries() {
     let source = r#"impl Int {
-  defextractor value(value: Int) -> MatchResult<Int, Error> { MatchResult::OK(value) }
-  defextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }
+  defextractor value(value: Int) -> MatchResult<Int, Error> { MatchResult::Ok(value) }
+  defextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::Ok(()) }
 }
 match 1 { Int::value(value) => value, _ => 0 }
 match 1 { Int::unit(value: Unit) => value, _ => () }
@@ -11111,16 +11111,16 @@ match 1 { Int::unit() => 1, _ => 0 }
 fn match_result_extractor_rejects_ordinary_value_uses() {
     for source in [
         "impl Int { defextractor invalid(v: Int) -> Option<Int> { Option::Some(v) } }",
-        "def invalid(v: Int) -> MatchResult<Int> { MatchResult::OK(v) }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { saved = MatchResult::OK(v)\n saved } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::OK(MatchResult::OK(v)) } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match MatchResult::OK(v) { _ => MatchResult::OK(v) } } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { f = {|x| MatchResult::OK(x)}\n MatchResult::OK(v) } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int, Int> { MatchResult::OK(v) } }",
+        "def invalid(v: Int) -> MatchResult<Int> { MatchResult::Ok(v) }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { saved = MatchResult::Ok(v)\n saved } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::Ok(MatchResult::Ok(v)) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match MatchResult::Ok(v) { _ => MatchResult::Ok(v) } } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { f = {|x| MatchResult::Ok(x)}\n MatchResult::Ok(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int, Int> { MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::Err(v) } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::OK(v) } } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::OK(v))\n MatchResult::OK(v) } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::OK(v), _), MatchResult::OK(v), MatchResult::OK(v)) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::Ok(v) } } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::Ok(v))\n MatchResult::Ok(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::Ok(v), _), MatchResult::Ok(v), MatchResult::Ok(v)) } }",
     ] {
         let result = resolve_with_builtin_prelude_result(source)
             .map(|resolved| typecheck(resolved));
@@ -11130,7 +11130,7 @@ fn match_result_extractor_rejects_ordinary_value_uses() {
         );
     }
 
-    let resolve_error = resolve_with_builtin_prelude_result("captured = &MatchResult::OK")
+    let resolve_error = resolve_with_builtin_prelude_result("captured = &MatchResult::Ok")
         .expect_err("compiler-managed constructor capture must be rejected during resolution");
     assert_eq!(
         resolve_error.diagnostic.reason,
@@ -11142,7 +11142,7 @@ fn match_result_extractor_uses_own_safebind_target() {
     let source = r#"impl Int {
   defextractor checked(v: Int) -> MatchResult<Int> {
     accepted =? Ok(v)
-    MatchResult::OK(accepted)
+    MatchResult::Ok(accepted)
   }
 }
 match 1 { Int::checked(value) => value, _ => 0 }
@@ -11167,13 +11167,13 @@ match 1 { Int::checked(value) => value, _ => 0 }
 
 fn match_result_unitonly_rejects_wrong_child_shapes() {
     let prefix =
-        "impl Int { defextractor unit(v: Int) -> MatchResult<Unit> { MatchResult::OK(()) } }\n";
+        "impl Int { defextractor unit(v: Int) -> MatchResult<Unit> { MatchResult::Ok(()) } }\n";
     for pattern in ["Int::unit(x: Int)", "Int::unit(_: Int)", "Int::unit(x, y)"] {
         let source = format!("{prefix}match 1 {{ {pattern} => 1, _ => 0 }}");
         typecheck(resolve_with_builtin_prelude(&source))
             .expect_err("wrong Unit child must be rejected");
     }
-    let source = "impl Int { defextractor pair(v: Int) -> MatchResult<(Int, Unit)> { MatchResult::OK((v, ())) } }\nmatch 1 { Int::pair(x) => x, _ => 0 }";
+    let source = "impl Int { defextractor pair(v: Int) -> MatchResult<(Int, Unit)> { MatchResult::Ok((v, ())) } }\nmatch 1 { Int::pair(x) => x, _ => 0 }";
     typecheck(resolve_with_builtin_prelude(source)).expect_err("tuple Unit slot cannot be omitted");
 }
 
@@ -11189,7 +11189,7 @@ fn match_result_payload_shape_must_be_resolved_before_execution() {
     for source in [
         "def wrapping(v: List<$A>) -> Boolean { is_match(v, uncons(_, _)) }",
         "impl Int { defextractor pair(v: List<$A>) -> MatchResult<($A, Int)> { MatchResult::Err(NoneError) } }\ndef wrapping_pair(v: List<$A>) -> Boolean { is_match(v, Int::pair(_, _)) }",
-        "impl Int { defextractor list(v: List<$A>) -> MatchResult<List<$A>> { MatchResult::OK(v) } }\ndef wrapping_list(v: List<$A>) -> Boolean { is_match(v, Int::list(_)) }",
+        "impl Int { defextractor list(v: List<$A>) -> MatchResult<List<$A>> { MatchResult::Ok(v) } }\ndef wrapping_list(v: List<$A>) -> Boolean { is_match(v, Int::list(_)) }",
     ] {
         typecheck(resolve_with_builtin_prelude(source)).expect("fixed payload shape permits generic children");
     }
@@ -11197,8 +11197,8 @@ fn match_result_payload_shape_must_be_resolved_before_execution() {
 
 fn extractor_prearguments_follow_signature_and_infer_payload_shape() {
     let source = r#"impl Int {
-  defextractor choose(left: $A, right: Int, value: Int) -> MatchResult<$A> { MatchResult::OK(left) }
-  defextractor check(limit: Int, value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }
+  defextractor choose(left: $A, right: Int, value: Int) -> MatchResult<$A> { MatchResult::Ok(left) }
+  defextractor check(limit: Int, value: Int) -> MatchResult<Unit> { MatchResult::Ok(()) }
 }
 limit = 10
 match 5 { Int::choose((1, "one"), limit + 1, number: Int, text: String) => text, _ => "miss" }
@@ -11209,7 +11209,7 @@ match 5 { Int::check(limit, _: Unit) => 1, _ => 0 }
         .expect("preargument types determine payload shape");
 
     let source = r#"impl Int {
-  defextractor accept(pre: $A, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }
+  defextractor accept(pre: $A, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }
 }
 def doubled(value: $N) -> Boolean where $N: Add {
   is_match(1, Int::accept(value + value, _))
@@ -11232,7 +11232,7 @@ doubled(1.5)
 fn extractor_target_requires_concrete_type_head() {
     let resolved = resolve_with_builtin_prelude(
         r#"impl Int {
-  defextractor identity(value: $T) -> MatchResult<$T> { MatchResult::OK(value) }
+  defextractor identity(value: $T) -> MatchResult<$T> { MatchResult::Ok(value) }
 }"#,
     );
     let error = typecheck(resolved)
@@ -11257,38 +11257,38 @@ fn extractor_target_accepts_generic_arguments_under_concrete_head() {
 
 fn extractor_closure_inference_and_callable_boundaries() {
     let source = r#"limit = 2
-pick = *{|value: Int| True =? value > limit; MatchResult::OK(value) }
+pick = *{|value: Int| True =? value > limit; MatchResult::Ok(value) }
 match 5 { pick(value: Int) => value, _ => 0 }
 "#;
     typecheck(resolve_with_builtin_prelude(source))
         .expect("ExtractorClosure literal and local head");
     for source in [
-        r#"typed: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = *{|value| MatchResult::OK(value)}
+        r#"typed: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = *{|value| MatchResult::Ok(value)}
 match 1 { typed(n) => n, _ => 0 }"#,
         r#"def make(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
-  *{|value| True =? value > limit; MatchResult::OK(value)}
+  *{|value| True =? value > limit; MatchResult::Ok(value)}
 }
 def use(ext: ExtractorClosure<(Int -> MatchResult<Int>)>, value: Int) -> Int {
   match value { ext(n) => n, _ => 0 }
 }
 use(make(2), 3)"#,
         r#"value = 9
-ext = *{|pre: Int, input: Int| MatchResult::OK(input)}
+ext = *{|pre: Int, input: Int| MatchResult::Ok(input)}
 match 5 { ext(value, n) => value + n, _ => 0 }
 is_match(5, ext(value, _))"#,
-        r#"ext = *{|input: Int| MatchResult::OK(input)}
+        r#"ext = *{|input: Int| MatchResult::Ok(input)}
 match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
     ] {
         typecheck(resolve_with_builtin_prelude(source))
             .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
     }
     for source in [
-        r#"ext = *{|value: Int| MatchResult::OK(value)}; ext(1)"#,
-        r#"ext = *{|value: Int| MatchResult::OK(value)}; is_match(1, ext(bound))"#,
-        r#"ext = *{|value: Int| MatchResult::OK(value)}; match 1 { ext(a) | ext(b) => 0, _ => 1 }"#,
-        r#"ext = *{|value: (Int, Int)| MatchResult::OK(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
-        r#"ext = *{|value: Int| f = {|nested: Int| MatchResult::OK(nested)}; MatchResult::OK(value)}"#,
-        r#"ext = *{|value: Int| f = {|nested: Int| True =? nested > 0; nested}; MatchResult::OK(value)}"#,
+        r#"ext = *{|value: Int| MatchResult::Ok(value)}; ext(1)"#,
+        r#"ext = *{|value: Int| MatchResult::Ok(value)}; is_match(1, ext(bound))"#,
+        r#"ext = *{|value: Int| MatchResult::Ok(value)}; match 1 { ext(a) | ext(b) => 0, _ => 1 }"#,
+        r#"ext = *{|value: (Int, Int)| MatchResult::Ok(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
+        r#"ext = *{|value: Int| f = {|nested: Int| MatchResult::Ok(nested)}; MatchResult::Ok(value)}"#,
+        r#"ext = *{|value: Int| f = {|nested: Int| True =? nested > 0; nested}; MatchResult::Ok(value)}"#,
         r#"ext = *{|value: Int| Ok(value)}"#,
         r#"ext = {|value: Int| value}; match 1 { ext(bound) => bound, _ => 0 }"#,
     ] {
@@ -11304,17 +11304,17 @@ fn extractor_closure_direct_argument_uses_expected_type() {
         r#"def accepts(value: Int, ext: ExtractorClosure<(Int -> MatchResult<Int>)>) -> Boolean {
   is_match(value, ext(_))
 }
-accepted: Boolean = accepts(1, *{|value| MatchResult::OK(value)})"#,
+accepted: Boolean = accepts(1, *{|value| MatchResult::Ok(value)})"#,
     ))
     .expect("a direct ExtractorClosure argument must use the higher-order expected type");
 
     typecheck(resolve_with_builtin_prelude(
         r#"def retain(value: $A, ext: ExtractorClosure<($A -> MatchResult<$A>)>) -> $A { value }
-accepted: Int = retain(1, *{|value| MatchResult::OK(value)})"#,
+accepted: Int = retain(1, *{|value| MatchResult::Ok(value)})"#,
     ))
     .expect("a preceding argument may concretize a direct generic ExtractorClosure argument");
 
-    let resolved = resolve_with_builtin_prelude(r#"identity = *{|value| MatchResult::OK(value)}"#);
+    let resolved = resolve_with_builtin_prelude(r#"identity = *{|value| MatchResult::Ok(value)}"#);
     let error = typecheck(resolved)
         .expect_err("an untyped ExtractorClosure must not become a polymorphic local value");
     assert!(
@@ -11350,7 +11350,7 @@ fn apply_pattern_projection_types_and_boundaries() {
 payload: Result<Int> = apply_pattern(Ok(1), Ok(_1))
 failed: Result<Result<Int>> = apply_pattern(Err(NoneError), _1)
 constrained: Result<Int> = apply_pattern(Err(NoneError), Ok(_1: Int))"#,
-        r#"ext: ExtractorClosure<((Int, String) -> MatchResult<(Int, String)>)> = *{|value| MatchResult::OK(value)}
+        r#"ext: ExtractorClosure<((Int, String) -> MatchResult<(Int, String)>)> = *{|value| MatchResult::Ok(value)}
 result: Result<(String, Int)> = apply_pattern((3, "text"), ext(_2, _1))"#,
         r#"unknown: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(NoneError)}
 result: Result<Int> = apply_pattern(1, unknown(_1))"#,

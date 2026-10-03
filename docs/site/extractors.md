@@ -45,7 +45,7 @@ print(match 1 {
 この例では `never(...)` が常に `MatchResult::Err(Rejected)` を返すため、fallback 側に流れます。
 
 Extractor は `MatchResult<$A, Error>` を返します（`MatchResult<$A>` も可）。
-`MatchResult::OK(payload)` は子 pattern の照合へ進み、`MatchResult::Err(error)` は
+`MatchResult::Ok(payload)` は子 pattern の照合へ進み、`MatchResult::Err(error)` は
 不一致になります。各 occurrence は到達時に一度だけ評価され、成功結果を再利用します。
 `match` / `if_let` / `is_match` は Error を破棄します。SafeBind `=?` は元 Error の
 kind / message / location / cause を保持して現在の failure target へ渡し、
@@ -55,7 +55,7 @@ do の Alternative route は破棄して `empty` へ進みます。
 `check(value: Unit)` や `check(_)` と明示することもできます。
 単値は子 Pattern 1個、tuple は要素数と同じ個数が必要です。
 Extractor 本文でも SafeBind を使えます。失敗は本文自身の MatchResult::Err となり、
-成功終端には明示的な MatchResult::OK が必要です。
+成功終端には明示的な MatchResult::Ok が必要です。
 MatchResult は通常の変数・引数・field に保持できず、通常 Closure へ利用権限は継承されません。
 
 Extractor 本文の計算量や Effect は制限しません。Process messaging や IO handler も、通常の型付き API を通して呼び出せます。型を介した値の受け渡しと immutable な値は保証しますが、純粋性、実行コスト、zero-cost abstraction は保証対象ではありません。高コストな Extractor の実行コストは定義者の責任です。
@@ -68,7 +68,7 @@ Extractor 本文の計算量や Effect は制限しません。Process messaging
 deferror Outside { "outside range" }
 defmod Bounds {
   defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
-    if(and(min <= value, value <= max), MatchResult::OK(value), MatchResult::Err(Outside))
+    if(and(min <= value, value <= max), MatchResult::Ok(value), MatchResult::Err(Outside))
   }
 }
 # 利用側
@@ -89,7 +89,7 @@ REPL では `*{|value| ...}` で、capture を持つ ExtractorClosure を作れ�
 limit = 10
 greater = *{|value: Int|
   True =? value > limit
-  MatchResult::OK(value)
+  MatchResult::Ok(value)
 }
 if_let(12, greater(accepted), accepted, 0)
 # 12

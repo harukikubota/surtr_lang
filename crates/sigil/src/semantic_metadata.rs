@@ -196,13 +196,13 @@ fn builtin_special_enum_variant_signature(
             Some(format!("Ok({ok_ty}) -> Result<{ok_ty}, Error>"))
         }
         ("Result", "Err") => Some("Err(Error) -> Result<$T, Error>".to_string()),
-        ("MatchResult", "OK") => {
+        ("MatchResult", "Ok") => {
             let [payload] = variant.payload.as_slice() else {
                 return None;
             };
             let payload = format_ast_ty(payload);
             Some(format!(
-                "MatchResult::OK({payload}) -> MatchResult<{payload}, Error>"
+                "MatchResult::Ok({payload}) -> MatchResult<{payload}, Error>"
             ))
         }
         ("MatchResult", "Err") => {
@@ -1183,7 +1183,7 @@ mod tests {
     #[test]
     fn extractor_signature_expands_match_result_error_parameter() {
         let ast = spire::parse_with_context(
-            "defextractor identity(value: Int) -> MatchResult<Int> { MatchResult::OK(value) }",
+            "defextractor identity(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
             spire::ParserContext::module(0, Some("Checked".to_string()))
                 .with_rules(spire::ParseRules::permissive_for_tests()),
         )

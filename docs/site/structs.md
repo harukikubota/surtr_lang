@@ -145,7 +145,7 @@ impl User {
   }
 
   defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
-    MatchResult::OK((self.name, self.age))
+    MatchResult::Ok((self.name, self.age))
   }
 }
 

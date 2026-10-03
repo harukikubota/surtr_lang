@@ -18,8 +18,8 @@ auth_user: Auth::User = Auth::User(name: "Lin")
 Auth::User(auth_name) = auth_user
 print(auth_name)
 
-name_probe = *{|value: String| print("name"); MatchResult::OK(value)}
-age_probe = *{|value: Int| print("age"); MatchResult::OK(value)}
+name_probe = *{|value: String| print("name"); MatchResult::Ok(value)}
+age_probe = *{|value: Int| print("age"); MatchResult::Ok(value)}
 print(inspect(match user {
   User(age: age_probe(_), name: name_probe(_)) => 1,
   _ => 0,

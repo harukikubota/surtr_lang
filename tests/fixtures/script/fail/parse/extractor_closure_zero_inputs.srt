@@ -1,1 +1,1 @@
-ext = *{|| MatchResult::OK(())}
+ext = *{|| MatchResult::Ok(())}

@@ -11634,14 +11634,14 @@ mod tests {
     #[test]
     fn match_result_access_rejects_malformed_carriers() {
         let malformed = [
-            ("MatchResult::OK", vec![Value::Int(int(0))]),
+            ("MatchResult::Ok", vec![Value::Int(int(0))]),
             (
-                "MatchResult::OK",
+                "MatchResult::Ok",
                 vec![Value::Int(int(0)), Value::Unit, Value::Unit],
             ),
-            ("MatchResult::OK", vec![Value::Int(int(1)), Value::Unit]),
-            ("MatchResult::OK", vec![Value::Unit, Value::Unit]),
-            ("Global::MatchResult::OK", vec![Value::Unit, Value::Unit]),
+            ("MatchResult::Ok", vec![Value::Int(int(1)), Value::Unit]),
+            ("MatchResult::Ok", vec![Value::Unit, Value::Unit]),
+            ("Global::MatchResult::Ok", vec![Value::Unit, Value::Unit]),
             ("MatchResult::Err", vec![Value::Int(int(1)), Value::Unit]),
         ];
         for (name, fields) in malformed {

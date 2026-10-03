@@ -10,7 +10,7 @@ test("ExtractorClosure contract") {
     capture_stdout()
     ext = *{|value: Int|
       print("body")
-      MatchResult::OK(value)
+      MatchResult::Ok(value)
     }
     empty_output: List<String> = []
     assert_eq(empty_output, capture_stdout())
@@ -51,7 +51,7 @@ test("ExtractorClosure contract") {
     ceiling = 8
     high = *{|value: Int|
       True =? and(value > floor, value > ceiling)
-      MatchResult::OK(value)
+      MatchResult::Ok(value)
     }
     from_if = if(True, low, high)
     from_match = match False { True => low, False => high }
@@ -62,7 +62,7 @@ test("ExtractorClosure contract") {
 
   it("keeps pre-argument references in the outer Pattern scope") {
     amount = 10
-    ext = *{|offset: Int, value: Int| MatchResult::OK(value + offset)}
+    ext = *{|offset: Int, value: Int| MatchResult::Ok(value + offset)}
     assert_eq((10, 13), if_let(3, ext(amount, accepted), (amount, accepted), (0, 0)))
     assert_eq((2, 13), match (2, 3) {
       (amount, ext(amount, accepted)) => (amount, accepted),
@@ -75,7 +75,7 @@ test("ExtractorClosure contract") {
     ext = *{|min: Int, max: Int, value: Int|
       print("body")
       True =? and(value >= min, value <= max)
-      MatchResult::OK(value)
+      MatchResult::Ok(value)
     }
     capture_stdout()
     assert_eq(5, match note("input", 5) {
@@ -91,26 +91,26 @@ test("ExtractorClosure contract") {
   it("distinguishes a tuple input from two inputs and expands tuple payloads") {
     tuple_input = *{|pair: (Int, Int)|
       (left, right) = pair
-      MatchResult::OK(left + right)
+      MatchResult::Ok(left + right)
     }
-    two_inputs = *{|left: Int, right: Int| MatchResult::OK(left + right)}
+    two_inputs = *{|left: Int, right: Int| MatchResult::Ok(left + right)}
     assert_eq(5, run_tuple(tuple_input))
     assert_eq(5, run_two(two_inputs))
-    tuple_output = *{|value: Int| MatchResult::OK((value, value + 1))}
+    tuple_output = *{|value: Int| MatchResult::Ok((value, value + 1))}
     assert_eq((3, 4), if_let(3, tuple_output(first, second), (first, second), (0, 0)))
   }
 
   it("uses concrete literal signatures from binding annotations") {
-    int_ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::OK(value)}
-    string_ext: ExtractorClosure<(String -> MatchResult<String>)> = *{|value| MatchResult::OK(value)}
-    tuple_ext: ExtractorClosure<((Int, Int) -> MatchResult<(Int, Int)>)> = *{|value| MatchResult::OK(value)}
+    int_ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::Ok(value)}
+    string_ext: ExtractorClosure<(String -> MatchResult<String>)> = *{|value| MatchResult::Ok(value)}
+    tuple_ext: ExtractorClosure<((Int, Int) -> MatchResult<(Int, Int)>)> = *{|value| MatchResult::Ok(value)}
     assert_eq(7, if_let(7, int_ext(fresh_binding), fresh_binding, 0))
     assert_eq("text", if_let("text", string_ext(text), text, ""))
     assert_eq((2, 3), if_let((2, 3), tuple_ext(first, second), (first, second), (0, 0)))
   }
 
   it("passes ExtractorClosure values through generic trait calls") {
-    ext = *{|value: Int| MatchResult::OK(value + 1)}
+    ext = *{|value: Int| MatchResult::Ok(value + 1)}
     wrapped = Option::Some(ext)
     mapped = Functor::fmap(wrapped, {|value| value})
     selected = if_let(mapped, Option::Some(value), value, ext)
@@ -122,7 +122,7 @@ test("ExtractorClosure contract") {
 
   it("supports omitted wildcard and annotated Unit children") {
     ext = *{|value: Int|
-      if(value > 0, MatchResult::OK(()), MatchResult::Err(ExtractorSourceError))
+      if(value > 0, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError))
     }
     assert_true(is_match(1, ext()))
     assert_true(is_match(1, ext(_)))
@@ -131,7 +131,7 @@ test("ExtractorClosure contract") {
   }
 
   it("shadows named Extractors while preserving qualified identity") {
-    positive = *{|value: Int| MatchResult::OK(value + 10)}
+    positive = *{|value: Int| MatchResult::Ok(value + 10)}
     assert_eq(9, if_let(-1, positive(fresh_binding), fresh_binding, 0))
     assert_false(is_match(-1, ExtractorSchema::positive()))
     assert_true(is_match(1, ExtractorSchema::positive()))
@@ -164,7 +164,7 @@ test("ExtractorClosure contract") {
         Ok(accepted)
       }
       failure = inner(0)
-      MatchResult::OK(if_let(failure, Err(_), value + 1, 0))
+      MatchResult::Ok(if_let(failure, Err(_), value + 1, 0))
     }
     assert_eq(4, if_let(3, outer(result), result, 0))
   }
@@ -173,9 +173,9 @@ test("ExtractorClosure contract") {
     outer = *{|value: Int|
       inner = *{|input: Int|
         accepted =? ExtractorSchema::source(input)
-        MatchResult::OK(accepted)
+        MatchResult::Ok(accepted)
       }
-      MatchResult::OK(if_let(0, inner(_), 0, value + 2))
+      MatchResult::Ok(if_let(0, inner(_), 0, value + 2))
     }
     assert_eq(5, if_let(3, outer(result), result, 0))
   }
@@ -190,7 +190,7 @@ test("ExtractorClosure contract") {
         True =? False
         Option::Some(1)
       }
-      MatchResult::OK(if(and(is_match(failure, Err(_)), is_match(absent, Option::None)), value + 3, 0))
+      MatchResult::Ok(if(and(is_match(failure, Err(_)), is_match(absent, Option::None)), value + 3, 0))
     }
     assert_eq(6, if_let(3, outer(result), result, 0))
   }

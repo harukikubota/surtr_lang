@@ -7486,7 +7486,7 @@ impl Checker {
         let mut err_tag = None;
         for variant in variants {
             match variant.short_name.as_str() {
-                "OK" => ok_tag = Some(variant.tag),
+                "Ok" => ok_tag = Some(variant.tag),
                 "Err" => err_tag = Some(variant.tag),
                 _ => {}
             }
@@ -7495,7 +7495,7 @@ impl Checker {
             (Some(ok), Some(err)) => Ok((ok, err)),
             _ => Err(TypeError {
                 structured: None,
-                message: "MatchResult enum must define OK and Err variants".into(),
+                message: "MatchResult enum must define Ok and Err variants".into(),
                 span: span.clone(),
                 hint: None,
             }),

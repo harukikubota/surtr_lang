@@ -1,2 +1,2 @@
-ext = *{|min: Int, value: Int| MatchResult::OK(value + min)}
+ext = *{|min: Int, value: Int| MatchResult::Ok(value + min)}
 print(is_match(1, ext()))

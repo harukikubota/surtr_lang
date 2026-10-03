@@ -3325,7 +3325,7 @@ mod tests {
     }
 
     fn seed_match_result_registry(gene: &mut Codegen) {
-        for (tag, name) in [(100, "MatchResult::OK"), (101, "MatchResult::Err")] {
+        for (tag, name) in [(100, "MatchResult::Ok"), (101, "MatchResult::Err")] {
             gene.state
                 .type_registry
                 .try_register(TypeEntry {

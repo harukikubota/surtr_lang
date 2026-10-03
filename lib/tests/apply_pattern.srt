@@ -62,7 +62,7 @@ test("apply_pattern projection contract") {
     assert_eq("Ok(3)", inspect(apply_pattern(3, ext(_1: Int))))
     assert_true(is_match(apply_pattern(1, ext(_1)), Err(_)))
     shift = 10
-    multiple = *{|amount: Int, value: Int| MatchResult::OK((value + amount + shift, value))}
+    multiple = *{|amount: Int, value: Int| MatchResult::Ok((value + amount + shift, value))}
     assert_eq("Ok((3, 15))", inspect(apply_pattern(3, multiple(2, _2, _1))))
   }
 

@@ -6,6 +6,6 @@ defmod Matchers {
 
   defextractor once(term: Int) -> MatchResult<Int> {
     print("extractor")
-    MatchResult::OK(term)
+    MatchResult::Ok(term)
   }
 }

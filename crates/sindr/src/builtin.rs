@@ -399,7 +399,7 @@ pub struct MatchResultVariantMeta {
 }
 
 pub const MATCH_RESULT_OK_VARIANT: MatchResultVariantMeta = MatchResultVariantMeta {
-    qualified_name: "MatchResult::OK",
+    qualified_name: "MatchResult::Ok",
     discriminant: 0,
     carries_error: false,
 };

@@ -185,7 +185,7 @@ named Extractor と ExtractorClosure は、最後の入力へ照合対象を受�
 
 ```surtr
 base = 10
-shift = *{|amount: Int, value: Int| MatchResult::OK(value + amount + base)}
+shift = *{|amount: Int, value: Int| MatchResult::Ok(value + amount + base)}
 apply_pattern(3, shift(2, _1: Int)) # Ok(15)
 ```
 

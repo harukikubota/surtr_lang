@@ -111,7 +111,7 @@ fn ordinary_placeholders_in_consumers_and_constructors_keep_conflict_guidance() 
         "f = &and(is_match(&1, True), &1)",
         "f = &and(Result::is_ok(apply_pattern(&1, True)), &1)",
         "defrecord Flag(value: Boolean)\nf = &and(Flag(&1).value, &1)",
-        "impl Boolean { defextractor check(flag: Boolean, value: Boolean) -> MatchResult<Unit> { MatchResult::OK(()) } }\nf = &and(is_match(True, Boolean::check(&1)), &1)",
+        "impl Boolean { defextractor check(flag: Boolean, value: Boolean) -> MatchResult<Unit> { MatchResult::Ok(()) } }\nf = &and(is_match(True, Boolean::check(&1)), &1)",
         "defenum Flag<$A> { Item($A), Empty }\nf = &and(is_match(Flag<Boolean>::Item(&1), Flag::Item(True)), &1)",
     ] {
         let error = error(source);
@@ -121,7 +121,7 @@ fn ordinary_placeholders_in_consumers_and_constructors_keep_conflict_guidance() 
 
 #[test]
 fn extractor_preargument_variables_do_not_make_success_a_binding_branch() {
-    let prefix = "impl Boolean { defextractor check(flag: Boolean, value: Boolean) -> MatchResult<Unit> { MatchResult::OK(()) } }\nflag = True\n";
+    let prefix = "impl Boolean { defextractor check(flag: Boolean, value: Boolean) -> MatchResult<Unit> { MatchResult::Ok(()) } }\nflag = True\n";
     for (capture, call, function) in [
         (
             "&if_let(True, Boolean::check(flag), &1, 0)",

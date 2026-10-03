@@ -75,7 +75,7 @@ impl Range {
   (1, 3)
   """
   defextractor deconstruct(self: Range<$A>) -> MatchResult<($A, $A)> {
-    MatchResult::OK((self.min, self.max))
+    MatchResult::Ok((self.min, self.max))
   }
 }
 

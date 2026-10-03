@@ -2,7 +2,7 @@
 
 この文書は、現行の Pattern、named Extractor、ExtractorClosure、MatchResult、`Kernel::apply_pattern` の構文・型・評価・フェーズ間契約を定める。利用者向けの説明は [Pattern Matching](../site/pattern-matching.md) と [Extractors](../site/extractors.md)、標準 API の一次情報は [`lib/extractor.srt`](../../lib/extractor.srt) の `@doc` を参照する。SafeBind と do の詳細は [do intrinsic](./Do_intrinsic_spec.md)、診断の構造化契約は [diagnostics](./diagnostics.md) に従う。
 
-named Extractor と ExtractorClosure は入力を1個以上取り、最後の入力を照合対象とする。戻り値は `MatchResult<Payload, Error>` であり、`MatchResult::OK` と `MatchResult::Err` の二状態だけを持つ。`Option` 返却、旧 `Matcher` / `apply_matcher` 経路、暗黙変換は受理しない。Pattern AST は第一級の値ではなく、ExtractorClosure の値化と Pattern consumer は別の境界である。
+named Extractor と ExtractorClosure は入力を1個以上取り、最後の入力を照合対象とする。戻り値は `MatchResult<Payload, Error>` であり、`MatchResult::Ok` と `MatchResult::Err` の二状態だけを持つ。`Option` 返却、旧 `Matcher` / `apply_matcher` 経路、暗黙変換は受理しない。Pattern AST は第一級の値ではなく、ExtractorClosure の値化と Pattern consumer は別の境界である。
 
 ## Record の構造的 Pattern
 
@@ -20,7 +20,7 @@ Record の外枠は total である。子もすべて total の場合だけ通�
 deferror OutOfRange(value: Int) { "outside range" }
 defmod Bounds {
     defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
-        if(min <= value && value <= max, MatchResult::OK(value), MatchResult::Err(OutOfRange(value)))
+        if(min <= value && value <= max, MatchResult::Ok(value), MatchResult::Err(OutOfRange(value)))
     }
 }
 ```
@@ -38,7 +38,7 @@ Extractor 本体の計算量、Effect、Process messaging、IO handler 呼び出
 ```surtr
 @builtin
 defenum MatchResult<$Value> {
-    OK($Value),
+    Ok($Value),
     Err(Error),
 }
 ```
@@ -50,7 +50,7 @@ defenum MatchResult<$Value> {
 - 両表記を同一型へ正規化する。内部では成功 payload 型だけを型引数として保持してよい。
 - `NoMatch` variant / tag は設けない。不成功はすべて Err であり、Error を保持するか破棄するかは consumer が決める。
 - `Result` / `Option` と暗黙変換しない。variant 名や tag の類似を根拠に互換扱いしない。
-- constructor は常に qualified な `MatchResult::OK` / `MatchResult::Err` とする。通常 Result の bare `Ok` / `Err` sugar は拡張しない。
+- constructor は常に qualified な `MatchResult::Ok` / `MatchResult::Err` とする。通常 Result の bare `Ok` / `Err` sugar は拡張しない。
 
 手書きの `MatchResult::Err(...)` の引数は具象 `deferror` 値に限定する。抽象 Error の直接構築、観測済み abstract Error の手書き constructor への再投入、裸の Error 値の一般保持、String 等の任意値による代用は許可しない。SafeBind の compiler-owned な伝播では取得済みの Error をそのまま保持する。consumer が既存 Error を保持する内部経路と、利用者の明示 constructor の入力制約を区別する。
 
@@ -64,7 +64,7 @@ MatchResult は一般のユーザ値ではない。許可する型位置は次�
 - `ExtractorClosure<Signature>` 内の Signature の戻り型。
 - これらの本文で照合結果を返す経路を型検査するための型位置。これを通常 local binding / field / container への保持許可と解釈しない。
 
-`MatchResult::OK(...)` / `MatchResult::Err(...)` は Extractor / ExtractorClosure 自身の本文でのみ構築できる。`if` / `match` の各返却経路は同じ MatchResult expected type へ一致させる。
+`MatchResult::Ok(...)` / `MatchResult::Err(...)` は Extractor / ExtractorClosure 自身の本文でのみ構築できる。`if` / `match` の各返却経路は同じ MatchResult expected type へ一致させる。
 
 通常の変数、引数、field、collection 要素、通常関数 / 通常 Closure の戻り値として MatchResult を保持・受け渡しできない。MatchResult 自体を通常 Pattern で分解すること、constructor を capture すること、Trait / operator / Convert / TryConvert の対象にすることも禁止する。
 
@@ -80,7 +80,7 @@ literal は `*{|params...| body}` とし、入力は1個以上必要である。
 limit = 10
 greater_than = *{|value: Int|
     True =? value > limit
-    MatchResult::OK(value)
+    MatchResult::Ok(value)
 }
 ```
 
@@ -133,7 +133,7 @@ apply_pattern(value, selected(_1))
 # 以下は拒否
 apply_pattern(value, get_extractor_closure()(_1))
 apply_pattern(value, (get_extractor_closure())(_1))
-apply_pattern(value, *{|v: Int| MatchResult::OK(v)}(_1))
+apply_pattern(value, *{|v: Int| MatchResult::Ok(v)}(_1))
 ```
 
 `apply_pattern(value, get_extractor_closure())` の第2引数を通常 Expr とみなし、payload 全体を暗黙に返す別モードも追加しない。
@@ -151,7 +151,7 @@ defmod Extractor {
     def from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)> {
         *{|value: $A|
             converted =? f(value)
-            MatchResult::OK(converted)
+            MatchResult::Ok(converted)
         }
     }
 }
@@ -162,7 +162,7 @@ apply_pattern("123", decimal(_1: Int))
 ```
 
 - 生成時には callable 値を受け取って capture し、`f` の本体は実行しない。生成した ExtractorClosure の occurrence に到達した時点で、照合対象値を渡して `f` を一回実行する。
-- Result の外側一段だけを SafeBind で射影し、Ok payload をそのまま MatchResult::OK へ渡す。Err は kind / message / location / cause を保持して MatchResult::Err へ伝播する。payload 自体が Result でも再帰的に unwrap しない。
+- Result の外側一段だけを SafeBind で射影し、Ok payload をそのまま MatchResult::Ok へ渡す。Err は kind / message / location / cause を保持して MatchResult::Err へ伝播する。payload 自体が Result でも再帰的に unwrap しない。
 - `$A` / `$B` は入力 callable と通常推論から定まる。成功 payload を Unit や固定した共通型へ変更せず、単値 / tuple / Unit の子 Pattern 規則をそのまま適用する。
 - 生成結果は事前引数なしの ExtractorClosure であり、通常の変数または helper 引数へ束縛して Pattern head に使う。生成式を Pattern head に直接埋め込むことや、生成結果の通常 call は許可しない。
 - 複数入力の通常関数を使う場合、必要な値を capture した単一入力の通常 Closure を利用者が明示的に渡す。from_result に可変 arity や暗黙の partial application を追加しない。
@@ -338,7 +338,7 @@ defmod Bounds {
     defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
         if(
             min <= value && value <= max,
-            MatchResult::OK(value),
+            MatchResult::Ok(value),
             MatchResult::Err(OutOfRange(value))
         )
     }
@@ -348,7 +348,7 @@ defmod Bounds {
 checked = *{|source: (-> Result<Int>), value: Int|
     parsed =? source()
     accepted =? apply_pattern(parsed, Bounds::between(0, value, _1: Int))
-    MatchResult::OK(accepted)
+    MatchResult::Ok(accepted)
 }
 ```
 
@@ -357,11 +357,11 @@ checked = *{|source: (-> Result<Int>), value: Int|
 ```surtr
 direct = *{|value: Int|
     Bounds::between(0, 10, accepted) =? value
-    MatchResult::OK(accepted)
+    MatchResult::Ok(accepted)
 }
 ```
 
-成功終端は引き続き明示的な `MatchResult::OK(payload)`、明示失敗は `MatchResult::Err(error)` が基本である。raw payload、Option、Result を暗黙包装しない。MatchResult を SafeBind RHS の自動 unwrap 対象にする変更でもない。
+成功終端は引き続き明示的な `MatchResult::Ok(payload)`、明示失敗は `MatchResult::Err(error)` が基本である。raw payload、Option、Result を暗黙包装しない。MatchResult を SafeBind RHS の自動 unwrap 対象にする変更でもない。
 
 ### callable / do の境界
 
@@ -480,7 +480,7 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 ## 検証境界
 
 
-1. named / builtin Extractor と ExtractorClosure が MatchResult の OK / Err だけを返す。手書き Err の具象 deferror 引数を受理し、観測済み abstract Error の手書き再投入を拒否する。旧 Option、一般 Result、NoMatch、非 Error payload も拒否する。
+1. named / builtin Extractor と ExtractorClosure が MatchResult の Ok / Err だけを返す。手書き Err の具象 deferror 引数を受理し、観測済み abstract Error の手書き再投入を拒否する。旧 Option、一般 Result、NoMatch、非 Error payload も拒否する。
 2. 両者の事前引数0 / 1 / 複数が成立し、総 arity、事前引数型、末尾の consumer input 型、子 Pattern 型・arity の不一致を静的拒否する。
 3. 単値 / tuple / UnitOnly の shape が同じ規則で扱われる。UnitOnly の省略、通常 bind、wildcard、Unit projection、型注釈付き Unit projection が成功する。事前引数付き省略形と tuple の Unit slot も検証する。
 4. projection 0 / 1 / 複数、nested / root alias、list tail、番号と traversal 順が異なる例が所定の値・型になる。最大16、欠番、重複、_01 正規化、不正利用位置を検証する。

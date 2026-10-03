@@ -1,4 +1,4 @@
 ext = *{|value: Int|
-  inner = {|input: Int| MatchResult::OK(input)}
-  MatchResult::OK(value)
+  inner = {|input: Int| MatchResult::Ok(input)}
+  MatchResult::Ok(value)
 }

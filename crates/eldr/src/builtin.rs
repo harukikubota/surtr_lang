@@ -4762,7 +4762,7 @@ mod tests {
         test_vm_with_types(vec![
             TypeEntry {
                 tag: 41,
-                name: "MatchResult::OK".into(),
+                name: "MatchResult::Ok".into(),
                 kind: TypeKind::EnumVariant,
                 field_names: vec!["discriminant".into(), "value".into()],
                 private_flags: vec![false, false],
@@ -4844,7 +4844,7 @@ mod tests {
         .unwrap_err();
         assert!(error
             .message
-            .contains("missing runtime type MatchResult::OK"));
+            .contains("missing runtime type MatchResult::Ok"));
     }
 
     fn sample_error(kind: &str, message: &str) -> RichError {

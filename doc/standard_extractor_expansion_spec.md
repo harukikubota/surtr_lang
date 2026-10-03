@@ -103,18 +103,18 @@ impl Int {
 
     defextractor positive(self: Self) -> MatchResult<Unit, Error> {
         _ =? _check_positive(self)
-        MatchResult::OK(())
+        MatchResult::Ok(())
     }
 }
 
 impl String {
     defextractor prefix(prefix: String, self: Self) -> MatchResult<String, Error> {
         rest =? String::strip_prefix(self, prefix)
-        MatchResult::OK(rest)
+        MatchResult::Ok(rest)
     }
 
     defextractor separated(separator: String, self: Self) -> MatchResult<List<String>, Error> {
-        MatchResult::OK(String::split(self, separator))
+        MatchResult::Ok(String::split(self, separator))
     }
 }
 ```

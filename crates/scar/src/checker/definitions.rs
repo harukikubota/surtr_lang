@@ -2880,7 +2880,7 @@ impl Checker {
                 "MatchResult" => {
                     if type_params.len() != 1
                         || variants.len() != 2
-                        || variants[0].id.name.rsplit("::").next() != Some("OK")
+                        || variants[0].id.name.rsplit("::").next() != Some("Ok")
                         || variants[1].id.name.rsplit("::").next() != Some("Err")
                         || variants[0].payload.len() != 1
                         || variants[1].payload.len() != 1
@@ -2888,7 +2888,7 @@ impl Checker {
                         || !matches!(&variants[1].payload[0], AstTy::Named(_, name) if name == "Error")
                     {
                         return Err(TypeError::new(
-                            "Builtin MatchResult must define OK($Value) and Err(Error)",
+                            "Builtin MatchResult must define Ok($Value) and Err(Error)",
                             span.clone(),
                         ));
                     }
@@ -3358,7 +3358,7 @@ impl Checker {
                 });
                 let inner = self.check_node_with_expected(
                     expr,
-                    if variant.short_name == "OK" {
+                    if variant.short_name == "Ok" {
                         expected_payload.as_ref()
                     } else {
                         None
@@ -3371,7 +3371,7 @@ impl Checker {
                     "MatchResult constructor",
                 )?;
                 let payload = match variant.short_name.as_str() {
-                    "OK" => inner.ty.clone(),
+                    "Ok" => inner.ty.clone(),
                     "Err" => {
                         if !self.is_concrete_error_value(&inner) {
                             return Err(TypeError::new(

@@ -1002,7 +1002,7 @@ where
 @builtin type List<$A>
 @builtin defenum Option<$T> { Some($T), None }
 @builtin defenum Result<$T> { Ok($T), Err(Error) }
-@builtin defenum MatchResult<$T> { OK($T), Err(Error) }
+@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }
 @builtin defenum Boolean { True, False }"#,
         spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
     )
@@ -8487,7 +8487,7 @@ result = do::<Result> {
 
 #[test]
 fn match_result_owner_is_reserved_for_the_standard_definition() {
-    let error = parse_and_resolve("defenum MatchResult<$T> { OK($T), Err(String) }")
+    let error = parse_and_resolve("defenum MatchResult<$T> { Ok($T), Err(String) }")
         .expect_err("a user enum must not replace canonical MatchResult");
     assert!(error.message.contains("reserved"));
     assert!(error.message.contains("MatchResult"));
@@ -8496,7 +8496,7 @@ fn match_result_owner_is_reserved_for_the_standard_definition() {
 #[test]
 fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
     let ast = spire::parse_with_context(
-        "@builtin defenum MatchResult<$T> { OK($T), Err(Error) }",
+        "@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }",
         spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
     )
     .unwrap();
@@ -8506,8 +8506,8 @@ fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
         .expect("standard enum should resolve");
     let ok = resolver
         .scope
-        .lookup("MatchResult::OK")
-        .expect("qualified OK");
+        .lookup("MatchResult::Ok")
+        .expect("qualified Ok");
     let err = resolver
         .scope
         .lookup("MatchResult::Err")
@@ -8520,15 +8520,15 @@ fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
         resolver.declaration_uid_kinds.get(&err),
         Some(&DeclarationKind::EnumVariant)
     );
-    assert!(resolver.scope.lookup("OK").is_none());
+    assert_ne!(resolver.scope.lookup("Ok"), Some(ok));
     assert_ne!(resolver.scope.lookup("Err"), Some(err));
 }
 
 fn preargument_test_modules() -> Vec<Vec<StagedModuleAst>> {
     vec![vec![
         kernel_pattern_test_module(),
-        staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { OK($T), Err(Error) }", "")),
-        staged_module("Bounds", parse_module_ast("defextractor offset(amount: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }\ndefextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }", "Bounds")),
+        staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }", "")),
+        staged_module("Bounds", parse_module_ast("defextractor offset(amount: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }\ndefextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::Ok(()) }", "Bounds")),
     ]]
 }
 
@@ -8719,7 +8719,7 @@ fn if_let_eager_boundary_resolves_before_binding_scope() {
 #[test]
 fn lazy_eager_expression_rejects_capture_parameter_references() {
     let modules = vec![
-        staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { OK($T), Err(Error) }", "")),
+        staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }", "")),
         staged_auto_import_module("Kernel", parse_module_ast(
             "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def assert(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
         kernel_pattern_test_module(),
@@ -8744,8 +8744,8 @@ fn lazy_eager_expression_rejects_capture_parameter_references() {
         "f = &inspect(if(True, (1 + &1), 0))",
         "x = 10\nf = &inspect(if_let(Ok(1), Ok(x), (x + &1), 0))",
         "f = &if(&1, (if(True, &2, 0)), 0)",
-        "e = *{|limit: Int, value: Int| MatchResult::OK(value)}\nf = &if(&1, (is_match(1, e(&2, _))), False)",
-        "e = *{|limit: Int, value: Int| MatchResult::OK(value)}\nf = &if(&1, (if_let(1, e(&2, x), x, 0)), 0)",
+        "e = *{|limit: Int, value: Int| MatchResult::Ok(value)}\nf = &if(&1, (is_match(1, e(&2, _))), False)",
+        "e = *{|limit: Int, value: Int| MatchResult::Ok(value)}\nf = &if(&1, (if_let(1, e(&2, x), x, 0)), 0)",
     ] {
         let error = resolve_user_with_modules(source, &[modules.clone()])
             .err()
@@ -8782,13 +8782,13 @@ fn lazy_eager_scope_preserves_direct_parameters_and_ordinary_grouping() {
     parse_and_resolve("def add(x: Int, y: Int) -> Int { x + y }\nf = &add(&1, (1 + &2))")
         .expect("ordinary grouped argument keeps its capture placeholders");
     resolve_user_with_modules(
-        "e = *{|limit: Int, value: Int| MatchResult::OK(value)}\nf = &if_let(&1, e(&2, x), x, 0)",
+        "e = *{|limit: Int, value: Int| MatchResult::Ok(value)}\nf = &if_let(&1, e(&2, x), x, 0)",
         &[vec![
             kernel_pattern_test_module(),
             staged_module(
                 "",
                 parse_module_ast(
-                    "@builtin defenum MatchResult<$T> { OK($T), Err(Error) }",
+                    "@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }",
                     "",
                 ),
             ),

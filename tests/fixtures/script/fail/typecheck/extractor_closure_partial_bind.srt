@@ -1,2 +1,2 @@
-ext = *{|value: Int| MatchResult::OK(value)}
+ext = *{|value: Int| MatchResult::Ok(value)}
 ext(result) = 1

@@ -2024,7 +2024,7 @@ impl User {
 
   @doc """Deconstruct a user value for pattern matching."""
   defextractor deconstruct(self: Self) -> MatchResult<String, Error> {
-    MatchResult::OK(self.name)
+    MatchResult::Ok(self.name)
   }
 }
 

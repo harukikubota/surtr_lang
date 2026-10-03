@@ -7640,30 +7640,30 @@ fn left_arrow_remains_owned_by_enclosing_syntax() {
 
 #[test]
 fn extractor_accepts_multiple_inputs_and_expression_prearguments() {
-    parse_with_context("defmod Bounds { defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) } }", ParserContext::project(0)).expect("multiple Extractor inputs");
+    parse_with_context("defmod Bounds { defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) } }", ParserContext::project(0)).expect("multiple Extractor inputs");
     parse("match value { Bounds::between(1 + 2, limit(), item) => item, _ => 0 }")
         .expect("expression candidates in Pattern application");
 }
 
 #[test]
 fn extractor_inputs_require_unique_names_and_a_final_self() {
-    parse("impl Int { defextractor deconstruct(offset: Int, self: Int) -> MatchResult<Int> { MatchResult::OK(self) } }")
+    parse("impl Int { defextractor deconstruct(offset: Int, self: Int) -> MatchResult<Int> { MatchResult::Ok(self) } }")
         .expect("self is the final target input");
     for (source, message) in [
-        ("defextractor read(self: Int, offset: Int) -> MatchResult<Int> { MatchResult::OK(self) }", "self parameter must be the final input"),
-        ("defextractor read(value: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }", "Duplicate Extractor parameter"),
+        ("defextractor read(self: Int, offset: Int) -> MatchResult<Int> { MatchResult::Ok(self) }", "self parameter must be the final input"),
+        ("defextractor read(value: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }", "Duplicate Extractor parameter"),
     ] {
         let error = parse(source).expect_err(source);
         assert!(error.message().contains(message), "{error:?}");
     }
-    parse("defextractor read() -> MatchResult<Int> { MatchResult::OK(1) }")
+    parse("defextractor read() -> MatchResult<Int> { MatchResult::Ok(1) }")
         .expect_err("an Extractor must have a target input");
 }
 
 #[test]
 fn extractor_rejects_trait_where_generalization() {
     let error = parse(
-        "defmod Matchers { defextractor ext(value: $T) -> MatchResult<$T> where $T: Eq { MatchResult::OK(value) } }",
+        "defmod Matchers { defextractor ext(value: $T) -> MatchResult<$T> where $T: Eq { MatchResult::Ok(value) } }",
     )
     .expect_err("Extractor must not use a Trait constraint to generalize its target");
     assert!(
@@ -7676,13 +7676,13 @@ fn extractor_rejects_trait_where_generalization() {
 
 #[test]
 fn extractor_closure_literal_requires_explicit_nonempty_parameters() {
-    parse("extract = *{|value: Int| MatchResult::OK(value)}").expect("ExtractorClosure literal");
-    for source in ["*{1}", "*{|| MatchResult::OK(1)}"] {
+    parse("extract = *{|value: Int| MatchResult::Ok(value)}").expect("ExtractorClosure literal");
+    for source in ["*{1}", "*{|| MatchResult::Ok(1)}"] {
         parse(source).expect_err("ExtractorClosure needs at least one explicit parameter");
     }
     for source in [
-        "*{|value| MatchResult::OK(value)}(1)",
-        "match 1 { *{|value| MatchResult::OK(value)}(_) => 1, _ => 0 }",
+        "*{|value| MatchResult::Ok(value)}(1)",
+        "match 1 { *{|value| MatchResult::Ok(value)}(_) => 1, _ => 0 }",
         "match 1 { (make())(_) => 1, _ => 0 }",
     ] {
         parse(source)

@@ -872,7 +872,7 @@ pub enum Ast {
     /// Closure literal: `{|x, y| expr}` / `{|| expr}` / `{ expr }`
     Closure(Span, Vec<ClosureParam>, Box<Ast>),
 
-    /// First-class Pattern callable: `*{|value| MatchResult::OK(value)}`.
+    /// First-class Pattern callable: `*{|value| MatchResult::Ok(value)}`.
     ExtractorClosure(Span, Vec<ClosureParam>, Box<Ast>),
 
     /// Captured function / placeholder capture head: `&print` / `&print(&1)`

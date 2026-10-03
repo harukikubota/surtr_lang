@@ -1,2 +1,2 @@
-ext = *{|amount: Int, value: Int| MatchResult::OK(amount + value)}
+ext = *{|amount: Int, value: Int| MatchResult::Ok(amount + value)}
 print(apply_pattern((1, 2), (fresh, ext(fresh, _1))))

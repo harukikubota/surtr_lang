@@ -5986,9 +5986,9 @@ fn core_extractor_closure_keeps_capture_signature_and_identity_across_chunks() {
     let mut engine = engine();
     for source in [
         "limit = 10",
-        "ext = *{|value: Int| MatchResult::OK(value + limit)}",
+        "ext = *{|value: Int| MatchResult::Ok(value + limit)}",
         "limit = 20",
-        "other = *{|value: Int| MatchResult::OK(value + limit)}",
+        "other = *{|value: Int| MatchResult::Ok(value + limit)}",
         "unrelated = {|value: Int| value * 2}",
         "selected = if(True, ext, other)",
     ] {
@@ -6035,7 +6035,7 @@ fn core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries() {
     for source in [
         "temporary = 99",
         "offset = 10",
-        "ext = *{|value: Int| MatchResult::OK(value + offset)}",
+        "ext = *{|value: Int| MatchResult::Ok(value + offset)}",
         "offset = 20",
         "projected = apply_pattern((2, 3), (temporary, ext(_1)))",
     ] {

@@ -20,7 +20,7 @@ defmod MahjongExtractor {
   """
   defextractor sequence(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int)> {
     match meld.kind {
-      ExtractMeldKind::Sequence => MatchResult::OK((meld.tile_id, meld.suit_index, meld.rank)),
+      ExtractMeldKind::Sequence => MatchResult::Ok((meld.tile_id, meld.suit_index, meld.rank)),
       _ => MatchResult::Err(NoneError),
     }
   }
@@ -31,7 +31,7 @@ defmod MahjongExtractor {
   """
   defextractor triplet(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int)> {
     match meld.kind {
-      ExtractMeldKind::Triplet => MatchResult::OK((meld.tile_id, meld.suit_index, meld.rank)),
+      ExtractMeldKind::Triplet => MatchResult::Ok((meld.tile_id, meld.suit_index, meld.rank)),
       _ => MatchResult::Err(NoneError),
     }
   }

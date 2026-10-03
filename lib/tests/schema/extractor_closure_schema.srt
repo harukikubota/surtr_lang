@@ -2,7 +2,7 @@ defmod ExtractorClosureSchema {
   def make_threshold(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int, Error>)> {
     *{|value: Int|
       True =? value > limit
-      MatchResult::OK(value)
+      MatchResult::Ok(value)
     }
   }
 
@@ -23,7 +23,7 @@ defmod ExtractorClosureSchema {
     *{|value: Int|
       accepted =? ExtractorSchema::source(value)
       print("after-closure-result")
-      MatchResult::OK(accepted)
+      MatchResult::Ok(accepted)
     }
   }
 
@@ -31,7 +31,7 @@ defmod ExtractorClosureSchema {
     *{|value: Int|
       ExtractorSchema::result_checked(accepted) =? Ok(value)
       print("after-closure-extractor")
-      MatchResult::OK(accepted)
+      MatchResult::Ok(accepted)
     }
   }
 

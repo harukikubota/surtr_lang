@@ -1,1 +1,1 @@
-print(if_let(1, *{|value: Int| MatchResult::OK(value)}(result), result, 0))
+print(if_let(1, *{|value: Int| MatchResult::Ok(value)}(result), result, 0))

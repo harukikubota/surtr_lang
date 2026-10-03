@@ -64,7 +64,7 @@ impl Duration {
   20
   """
   defextractor deconstruct(self: Self) -> MatchResult<Int> {
-    MatchResult::OK(self.millis)
+    MatchResult::Ok(self.millis)
   }
 }
 

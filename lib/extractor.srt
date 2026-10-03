@@ -4,7 +4,7 @@ Extractor module: Pattern-based validation and decomposition.
 A named `defextractor` or builtin Extractor is used as a Pattern head.
 Its last declared input receives the value being matched. Earlier inputs are
 ordinary expressions supplied before the output child Patterns. The body returns
-`MatchResult::OK(payload)` on success or `MatchResult::Err(error)` on failure.
+`MatchResult::Ok(payload)` on success or `MatchResult::Err(error)` on failure.
 Named Extractors are declarations in modules or impls; they are not ordinary
 callable values. The auto-imported `uncons` is a ready-to-use named Extractor.
 
@@ -21,7 +21,7 @@ Declare a named Extractor inside a module or impl in a source file:
 defmod Checks {
   defextractor positive(value: Int) -> MatchResult<Unit, Error> {
     True =? value > 0
-    MatchResult::OK(())
+    MatchResult::Ok(())
   }
 }
 ```
@@ -47,7 +47,7 @@ the function's expected ExtractorClosure type may determine those types without
 extra annotations. Normal closures and captures use the same callable boundary.
 
 xldr(1)> base = 10
-xldr(2)> shift = *{|amount: Int, value: Int| MatchResult::OK(value + amount + base)}
+xldr(2)> shift = *{|amount: Int, value: Int| MatchResult::Ok(value + amount + base)}
 xldr(3)> apply_pattern(3, shift(2, _1: Int))
 Ok(15)
 xldr(4)> match 3 { shift(2, result) => result, _ => 0 }
@@ -67,7 +67,7 @@ values, not purity, execution cost, or zero-cost abstraction.
 A Unit success payload permits no child Pattern or one explicit child. The
 explicit child can be a binding, wildcard, or projection, with a Unit annotation.
 
-xldr(1)> positive = *{|value: Int| True =? value > 0; MatchResult::OK(())}
+xldr(1)> positive = *{|value: Int| True =? value > 0; MatchResult::Ok(())}
 xldr(2)> is_match(2, positive())
 True
 xldr(3)> is_match(0, positive(_: Unit))
@@ -112,7 +112,7 @@ Within a Result-returning callable, `=?` preserves the failing Error and stops
 the callable. In an Extractor body it instead returns `MatchResult::Err` with the
 same Error. A nested callable or `do` expression keeps its own failure target.
 
-xldr(1)> positive = *{|value: Int| True =? value > 0; MatchResult::OK(())}
+xldr(1)> positive = *{|value: Int| True =? value > 0; MatchResult::Ok(())}
 xldr(2)> checked: (Int -> Result<Int>) = {|value: Int| positive() =? Ok(value); Ok(value)}
 xldr(3)> checked(3)
 Ok(3)
@@ -168,10 +168,10 @@ defmod Extractor {
   xldr(13)> apply_pattern(3, shifted(_1))
   Ok(13)
   """
-  def from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)> {
+  def from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B>)> {
     *{|value: $A|
       converted =? f(value)
-      MatchResult::OK(converted)
+      MatchResult::Ok(converted)
     }
   }
 }
