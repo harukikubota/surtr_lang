@@ -109,6 +109,8 @@ adder: (Int, Int -> Int) = &`+`
 `&Either<_, Int>::Left` のように owner 型引数を明示できます。詳しい arity、推論、拒否規則は
 [capture 演算子の詳細](./capture-operator.md) を参照してください。
 
+関数値の推論型では `Result<T>` と表示します。宣言の戻り値にドキュメント用として書いた `Result<T, E>` は、宣言シグネチャの表示に残ります。
+
 読み方は次です。
 
 - `&add` は既存関数そのものを捕まえる

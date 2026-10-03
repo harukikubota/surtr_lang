@@ -4847,6 +4847,34 @@ impl ReplEngine {
             }
         }
 
+        // Declaration signatures preserve return-only documentation error markers.
+        // Runtime function types have already erased those markers.
+        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
+            qualified_lookup
+                && crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
+        }) {
+            return Some((entry.qualified_name.clone(), entry.signature.clone()));
+        }
+
+        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
+            if !Self::symbol_matches(&entry.qualified_name, &canonical) {
+                return false;
+            }
+            if qualified_lookup {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
+            } else if self.function_entry_is_top_level_repl_surface(&entry.qualified_name) {
+                true
+            } else if let Some(uid) = visible_uid {
+                self.sigil_session.lookup_uid(&entry.qualified_name) == Some(uid)
+            } else {
+                false
+            }
+        }) {
+            return Some((entry.qualified_name.clone(), entry.signature.clone()));
+        }
+
         if canonical == symbol {
             if let Some(found) = self
                 .vm
@@ -4908,30 +4936,6 @@ impl ReplEngine {
             })
         {
             return Some(found);
-        }
-
-        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
-            qualified_lookup
-                && crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(&canonical)
-        }) {
-            return Some((entry.qualified_name.clone(), entry.signature.clone()));
-        }
-
-        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
-            if !Self::symbol_matches(&entry.qualified_name, &canonical) {
-                return false;
-            }
-            if qualified_lookup {
-                crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(&canonical)
-            } else if let Some(uid) = visible_uid {
-                self.sigil_session.lookup_uid(&entry.qualified_name) == Some(uid)
-            } else {
-                false
-            }
-        }) {
-            return Some((entry.qualified_name.clone(), entry.signature.clone()));
         }
 
         None
@@ -5749,13 +5753,7 @@ impl ReplEngine {
             Ty::MatchResult(payload) => {
                 format!("MatchResult<{}, Error>", Self::ty_to_string(payload))
             }
-            Ty::Result(ok, err) => {
-                format!(
-                    "Result<{}, {}>",
-                    Self::ty_to_string(ok),
-                    Self::ty_to_string(err)
-                )
-            }
+            Ty::Result(ok, _) => format!("Result<{}>", Self::ty_to_string(ok)),
             Ty::Struct(name, _) | Ty::Record(name, _) => crate::surface_path_name(name).to_string(),
             Ty::Enum(name, args) => {
                 let name = crate::surface_path_name(name);

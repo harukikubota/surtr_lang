@@ -1019,7 +1019,7 @@ fn core_command_outputs_use_repl_scope_before_callable_families() {
     let mut engine = engine();
 
     let bound = rendered_text(&engine.handle_line("compare = Ok(1)"));
-    assert!(bound.contains("compare: Result<Int, Error>"), "{bound}");
+    assert!(bound.contains("compare: Result<Int>"), "{bound}");
 
     let sig = rendered_text(&engine.handle_line(":sig compare"));
     assert!(sig.contains("No signature found for compare"), "{sig}");
@@ -1034,10 +1034,10 @@ fn core_command_outputs_use_repl_scope_before_callable_families() {
 
     let info = rendered_text(&engine.handle_line(":info compare"));
     assert!(info.contains("kind: binding"), "{info}");
-    assert!(info.contains("type: Result<Int, Error>"), "{info}");
+    assert!(info.contains("type: Result<Int>"), "{info}");
 
     let ty = rendered_text(&engine.handle_line(":type compare"));
-    assert!(ty.contains("type: Result<Int, Error>"), "{ty}");
+    assert!(ty.contains("type: Result<Int>"), "{ty}");
 }
 
 fn core_completion_returns_type_constructors_and_type_paths() {
@@ -1767,7 +1767,7 @@ impl User {
         .expect("script preload constructor should show signature help");
     let rendered = signature.lines.join("\n");
     assert!(
-        rendered.contains("User::new(name: [String]) -> Result<User, Error>"),
+        rendered.contains("User::new(name: [String]) -> Result<User>"),
         "constructor signature should follow Result<Self> from new after type normalization: {rendered:?}"
     );
     assert!(
@@ -3487,7 +3487,7 @@ fn core_facet_command_inspects_operations_and_kind_queries() {
     );
     assert!(operation.contains("replacement: String"), "{operation}");
     assert!(
-        operation.contains("result: Result<(String, Boolean), Error>"),
+        operation.contains("result: Result<(String, Boolean)>"),
         "{operation}"
     );
 
@@ -4553,7 +4553,7 @@ fn core_standard_monad_transformer_smoke() {
         .handle_line("reader_t_lifted: ReaderT<String, Result, Int> = MonadT::lift(base_value)");
     assert!(
         rendered_text(&reader_t_lift)
-            .contains("ReaderT(run_reader: Closure(String -> Result<Int, Error>))"),
+            .contains("ReaderT(run_reader: Closure(String -> Result<Int>))"),
         "{}",
         rendered_text(&reader_t_lift)
     );
@@ -4588,7 +4588,7 @@ fn core_standard_monad_transformer_smoke() {
         engine.handle_line("state_t_lifted: StateT<Int, Result, Int> = MonadT::lift(base_value)");
     assert!(
         rendered_text(&state_t_lift)
-            .contains("StateT(run_state: Closure(Int -> Result<(Int, Int), Error>))"),
+            .contains("StateT(run_state: Closure(Int -> Result<(Int, Int)>))"),
         "{}",
         rendered_text(&state_t_lift)
     );
@@ -4986,7 +4986,7 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
     );
 
     let result_binding = engine.handle_line("ret = Ok(1)");
-    assert!(rendered_text(&result_binding).contains("ret: Result<Int, Error>"));
+    assert!(rendered_text(&result_binding).contains("ret: Result<Int>"));
     let result_binding_doc = engine.handle_line(":doc ret");
     assert_eq!(doc_target(&result_binding_doc).0, "Result");
 }
@@ -5021,7 +5021,7 @@ fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
 
     let concrete_sig = signature_text(&engine.handle_line(":sig MySup::status"));
     assert!(
-        concrete_sig.contains("MySup::status() -> Result<SupervisorStatus, Error>"),
+        concrete_sig.contains("MySup::status() -> Result<SupervisorStatus>"),
         "{concrete_sig}"
     );
 
@@ -5066,7 +5066,7 @@ fn core_process_public_surface_respects_annotations() {
 
     let public_sig = signature_text(&engine.handle_line(":sig MyServer::size"));
     assert!(
-        public_sig.contains("MyServer::size() -> Result<Int, Error>"),
+        public_sig.contains("MyServer::size() -> Result<Int>"),
         "{public_sig}"
     );
 
@@ -5116,7 +5116,7 @@ fn core_process_sig_owner_summary_includes_init_pid_and_messages() {
         "{owner_sig}"
     );
     assert!(
-        owner_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        owner_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int>"),
         "{owner_sig}"
     );
 }
@@ -5127,15 +5127,15 @@ fn core_process_sig_worker_owner_summary_includes_init_and_messages() {
     let owner_sig = signature_text(&engine.handle_line(":sig MyWorker"));
     assert!(owner_sig.contains("Agent MyWorker"), "{owner_sig}");
     assert!(
-        owner_sig.contains("@init init(seed: Int) -> Result<PID<MyWorker>, Error>"),
+        owner_sig.contains("@init init(seed: Int) -> Result<PID<MyWorker>>"),
         "{owner_sig}"
     );
     assert!(
-        owner_sig.contains("@get read(pid: PID<MyWorker>) -> Result<Int, Error>"),
+        owner_sig.contains("@get read(pid: PID<MyWorker>) -> Result<Int>"),
         "{owner_sig}"
     );
     assert!(
-        owner_sig.contains("@set write(pid: PID<MyWorker>, next: Int) -> Result<Unit, Error>"),
+        owner_sig.contains("@set write(pid: PID<MyWorker>, next: Int) -> Result<Unit>"),
         "{owner_sig}"
     );
     assert!(!owner_sig.contains("@pid"), "{owner_sig}");
@@ -5150,7 +5150,7 @@ fn core_process_sig_pid_binding_lists_available_messages() {
     let pid_sig = signature_text(&engine.handle_line(":sig server"));
     assert!(pid_sig.contains("PID<MyServer> messaging"), "{pid_sig}");
     assert!(
-        pid_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        pid_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int>"),
         "{pid_sig}"
     );
     assert!(!pid_sig.contains("@init"), "{pid_sig}");
@@ -5388,7 +5388,7 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let builtin_ref_text = rendered_text(&builtin_ref);
     assert!(
         builtin_ref_text
-            .contains("FnCapture(module: Int, name: shr, sig: (Int, Int -> Result<Int, Error>))"),
+            .contains("FnCapture(module: Int, name: shr, sig: (Int, Int -> Result<Int>))"),
         "{builtin_ref_text}"
     );
 
@@ -5427,6 +5427,24 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
 
 fn core_generic_callable_capture_uses_site_signature_inside_nested_values() {
     let mut engine = engine();
+
+    let rejected = rendered_text(&engine.handle_line("r: Result<Int, Error> = Ok(1)"));
+    assert!(
+        rejected.contains("Result<T, E> is only allowed in function return signatures"),
+        "{rejected}"
+    );
+    let declaration =
+        rendered_text(&engine.handle_line("def fetch() -> Result<Int, NoneError> { Ok(1) }"));
+    assert!(!declaration.contains("Error:"), "{declaration}");
+    let signature = signature_text(&engine.handle_line(":sig fetch"));
+    assert!(signature.contains("Result<Int, NoneError>"), "{signature}");
+    let captured = rendered_text(&engine.handle_line("fetcher: (-> Result<Int>) = &fetch"));
+    assert!(captured.contains("sig: (-> Result<Int>)"), "{captured}");
+
+    let result = rendered_text(&engine.handle_line("r = Ok(1)"));
+    assert_eq!(result, "r: Result<Int> = Ok(1)");
+    let nested = rendered_text(&engine.handle_line("nested = [Ok(1)]"));
+    assert!(nested.contains("nested: List<Result<Int>>"), "{nested}");
 
     let generic = engine.handle_line("def keep(value: $A) -> $A { value }");
     assert!(!generic.should_exit);

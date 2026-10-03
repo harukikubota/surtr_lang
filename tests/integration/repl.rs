@@ -697,10 +697,7 @@ fn repl_rejects_persisting_unresolved_result_callable_binding() {
         combined.contains("Add a concrete callable annotation"),
         "{combined}"
     );
-    assert!(
-        !combined.contains("todo: (-> Result<_, Error>)"),
-        "{combined}"
-    );
+    assert!(!combined.contains("todo: (-> Result<_>)"), "{combined}");
 }
 
 fn repl_rejects_persisting_unresolved_result_value_binding() {
@@ -714,7 +711,7 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
         "{combined}"
     );
     assert!(combined.contains("ret = todo()"), "{combined}");
-    assert!(!combined.contains("ret: Result<_, Error>"), "{combined}");
+    assert!(!combined.contains("ret: Result<_>"), "{combined}");
 }
 
 fn repl_rejects_direct_generator_bridge_builtin_call() {
@@ -766,10 +763,10 @@ fn repl_accepts_explicitly_constrained_result_binding() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("ret: Result<Int, Error> = Err(NoneError"),
+        stdout.contains("ret: Result<Int> = Err(NoneError"),
         "{stdout}"
     );
-    assert!(stdout.contains("type: Result<Int, Error>"), "{stdout}");
+    assert!(stdout.contains("type: Result<Int>"), "{stdout}");
 }
 
 fn repl_accepts_result_mapping_when_chunk_constrains_type() {
@@ -785,10 +782,10 @@ fn repl_accepts_result_mapping_when_chunk_constrains_type() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("mapped: Result<String, Error> = Err(NoneError"),
+        stdout.contains("mapped: Result<String> = Err(NoneError"),
         "{stdout}"
     );
-    assert!(stdout.contains("type: Result<String, Error>"), "{stdout}");
+    assert!(stdout.contains("type: Result<String>"), "{stdout}");
 }
 
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
@@ -1293,9 +1290,7 @@ supervisor_init {
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert_eq!(
-        stdout
-            .matches("MyServer::size() -> Result<Int, Error>")
-            .count(),
+        stdout.matches("MyServer::size() -> Result<Int>").count(),
         2,
         "{stdout}"
     );
@@ -1367,7 +1362,7 @@ supervisor_init {
     );
     assert!(stdout.contains("@pid pid() -> PID<MyServer>"), "{stdout}");
     assert!(
-        stdout.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        stdout.contains("@call size(pid: PID<MyServer>) -> Result<Int>"),
         "{stdout}"
     );
     assert!(stdout.contains("PID<MyServer> messaging"), "{stdout}");

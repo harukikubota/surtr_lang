@@ -192,6 +192,8 @@ Eldr が扱う値の概念カテゴリ:
 
 `inspect` / `to_string` における `Callable` 表示は runtime metadata に従い、closure は
 `Closure(sig)`、capture は `FnCapture(module: M, name: f, sig: sig)` を返す。
+callable 値の signature の `Result` は `Result<T>` と表示する。
+この表示規則はコンテナ内の callable にも再帰的に適用する。
 部分適用した capture とそれを変数経由で再 capture した callable は capture の由来を保ち、
 残りの引数 signature を表示する。signature は共有関数宣言ではなく、callable value の生成位置で
 解決済みの callable 型から得る。closure literal で包んだ callable は `Closure(sig)` とする。

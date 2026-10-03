@@ -2443,6 +2443,13 @@ mod tests {
 
         let pid_ty = Ty::Pid("Global::Worker".into());
         assert_eq!(ty_to_string(&pid_ty), "PID<Worker>");
+
+        let result = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
+        assert_eq!(ty_to_string(&result), "Result<Int>");
+        assert_eq!(
+            ty_to_string(&Ty::List(Box::new(result))),
+            "List<Result<Int>>"
+        );
     }
 
     #[test]
@@ -5165,7 +5172,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 update_focus_ty: ty_to_string(&path.update_focus_ty),
                 api_eligibility: facet_api_eligibility(path),
                 view_result_ty: if path_is_fallible || path.may_fail {
-                    format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
+                    format!("Result<{}>", ty_to_string(&path.focus_ty))
                 } else {
                     ty_to_string(&path.focus_ty)
                 },
@@ -5824,11 +5831,7 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             "MatchResult<{}, Error>",
             ty_to_string_with_type_params(payload, type_params)
         ),
-        Ty::Result(ok, err) => format!(
-            "Result<{}, {}>",
-            ty_to_string_with_type_params(ok, type_params),
-            ty_to_string_with_type_params(err, type_params)
-        ),
+        Ty::Result(ok, _) => format!("Result<{}>", ty_to_string_with_type_params(ok, type_params)),
         Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
             let name = surface_path_name(name);
             let args = nominal
