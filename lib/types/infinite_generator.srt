@@ -1,0 +1,103 @@
+@doc """
+Standard `InfiniteGenerator` type declaration.
+`InfiniteGenerator<$Item>` models a lazy sequence without normal termination
+and exposes only the item type.
+The step returns `(item, next_state)`, without an outer `Option` or `Result`.
+The state and callable are stored in an immutable value. Use `take` and its
+variants to collect items into a list, then use `List` for further operations.
+The compiler does not prove that `next` terminates.
+
+## REPL
+xldr(1)> InfiniteGenerator::unfold(1, {|n| (n, n + 1)})
+InfiniteGenerator(<opaque>)
+"""
+@builtin type InfiniteGenerator<$Item>
+
+impl InfiniteGenerator {
+  @doc """
+  Build an infinite sequence from a single state and a step returning a pair.
+  Construction does not evaluate the step.
+  ## REPL
+  xldr(1)> gen = InfiniteGenerator::unfold((0, 1), {|s| (s._0, (s._1, s._0 + s._1))})
+  xldr(2)> InfiniteGenerator::take(gen, 6)
+  ([0, 1, 1, 2, 3, 5], InfiniteGenerator(<opaque>))
+  """
+  @builtin def unfold(seed: $State, step: ($State -> ($Item, $State))) -> InfiniteGenerator<$Item>
+
+  @doc """
+  Generate one item and return `(item, next_gen)`.
+  The original generator is unchanged.
+  ## REPL
+  xldr(1)> InfiniteGenerator::next(InfiniteGenerator::unfold(1, {|n| (n, n + 1)}))
+  (1, InfiniteGenerator(<opaque>))
+  """
+  @builtin def next(gen: InfiniteGenerator<$Item>) -> ($Item, InfiniteGenerator<$Item>)
+
+  @doc """
+  Generate `count` items and return `(values, rest)`.
+  A non-positive count returns `([], gen)` without evaluation.
+  Reaching the requested count does not evaluate another step. There is no
+  normal termination or successful short list.
+  Collection completes only if each `next` call returns.
+  ## REPL
+  xldr(1)> InfiniteGenerator::take(InfiniteGenerator::unfold(1, {|n| (n, n + 1)}), 3)
+  ([1, 2, 3], InfiniteGenerator(<opaque>))
+  """
+  @builtin def take(gen: InfiniteGenerator<$Item>, count: Int) -> (List<$Item>, InfiniteGenerator<$Item>)
+
+  @doc """
+  Validate a positive count and collect that many items.
+  A non-positive count returns `InvalidGeneratorCount` before generation.
+  The collected length is also checked, but a normally returning infinite
+  `take` cannot produce too few items.
+  ## REPL
+  xldr(1)> InfiniteGenerator::take_exact(InfiniteGenerator::unfold(1, {|n| (n, n + 1)}), 2)
+  Ok(([1, 2], InfiniteGenerator(<opaque>)))
+  """
+  def take_exact(gen: InfiniteGenerator<$Item>, count: Int) -> Result<(List<$Item>, InfiniteGenerator<$Item>)> {
+    if(count <= 0, Err(InvalidGeneratorCount(count)), _take_exact_checked(take(gen, count), count))
+  }
+
+  defp _take_exact_checked(pair: (List<$Item>, InfiniteGenerator<$Item>), count: Int) -> Result<(List<$Item>, InfiniteGenerator<$Item>)> {
+    actual = List::len(pair._0)
+    if(actual == count, Ok(pair), Err(GeneratorShortage(count, actual)))
+  }
+
+  @doc """
+  Take items while the predicate is `True`, checking each item before adding
+  it to the list. The first `False` item remains at the start of the rest.
+  Collection does not complete if the predicate keeps returning `True`.
+  No separate stop reason is returned.
+  ## REPL
+  xldr(1)> InfiniteGenerator::take_while(InfiniteGenerator::unfold(1, {|n| (n, n + 1)}), {|n| n < 3})
+  ([1, 2], InfiniteGenerator(<opaque>))
+  """
+  @builtin def take_while(gen: InfiniteGenerator<$Item>, predicate: ($Item -> Boolean)) -> (List<$Item>, InfiniteGenerator<$Item>)
+
+  @doc """
+  Take items until the predicate first becomes `True`.
+  The stopping item is excluded and remains at the start of the rest.
+  ## REPL
+  xldr(1)> InfiniteGenerator::take_until(InfiniteGenerator::unfold(1, {|n| (n, n + 1)}), {|n| n >= 3})
+  ([1, 2], InfiniteGenerator(<opaque>))
+  """
+  def take_until(gen: InfiniteGenerator<$Item>, predicate: ($Item -> Boolean)) -> (List<$Item>, InfiniteGenerator<$Item>) {
+    take_while(gen, {|item| Boolean::not(predicate(item))})
+  }
+
+  @doc """
+  Return a list starting with `seed`, then apply `step` to each preceding item.
+  A non-positive count returns `[]` without calling the step. A positive count
+  calls the user step exactly `count - 1` times.
+  ## REPL
+  xldr(1)> InfiniteGenerator::iterate(1, 5, {|n| n * 2})
+  [1, 2, 4, 8, 16]
+  """
+  def iterate(seed: $Item, count: Int, step: ($Item -> $Item)) -> List<$Item> {
+    gen = unfold((True, seed), {|state|
+      value = if(state._0, state._1, step(state._1))
+      (value, (False, value))
+    })
+    take(gen, count)._0
+  }
+}

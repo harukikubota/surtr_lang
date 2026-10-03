@@ -26,6 +26,8 @@ use std::rc::Rc;
 use crate::builtin::{call_builtin, BuiltinOutcome};
 mod continuation;
 #[cfg(test)]
+mod generator_tests;
+#[cfg(test)]
 mod list_flat_map_tests;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
@@ -2128,12 +2130,18 @@ impl VM {
         &self,
         timeout_ms: Option<u64>,
     ) -> Result<Value, RuntimeError> {
-        let Some(none_tag) = self.type_registry().tag_by_name("Option::None") else {
+        let Some(none_tag) = self
+            .type_registry()
+            .tag_by_name(sindr::builtin::OPTION_NONE_VARIANT.qualified_name)
+        else {
             return Err(RuntimeError::new(
                 "Option::None type is not registered for SupervisorStatus",
             ));
         };
-        let Some(some_tag) = self.type_registry().tag_by_name("Option::Some") else {
+        let Some(some_tag) = self
+            .type_registry()
+            .tag_by_name(sindr::builtin::OPTION_SOME_VARIANT.qualified_name)
+        else {
             return Err(RuntimeError::new(
                 "Option::Some type is not registered for SupervisorStatus",
             ));
@@ -2148,7 +2156,7 @@ impl VM {
                 Ok(Value::Tagged {
                     tag: some_tag,
                     fields: vec![
-                        Value::Int(int(1)),
+                        Value::Int(int(sindr::builtin::OPTION_SOME_VARIANT.discriminant)),
                         Value::Tagged {
                             tag: duration_tag,
                             fields: vec![Value::Int(int(ms))],
@@ -2158,7 +2166,9 @@ impl VM {
             }
             None => Ok(Value::Tagged {
                 tag: none_tag,
-                fields: vec![Value::Int(int(0))],
+                fields: vec![Value::Int(int(
+                    sindr::builtin::OPTION_NONE_VARIANT.discriminant
+                ))],
             }),
         }
     }
@@ -8099,7 +8109,7 @@ mod tests {
                     fields.get(6),
                     Some(&Value::Tagged {
                         tag: 12,
-                        fields: vec![Value::Int(int(0))],
+                        fields: vec![Value::Int(int(1))],
                     })
                 );
             }
@@ -8144,7 +8154,7 @@ mod tests {
                     Some(&Value::Tagged {
                         tag: 13,
                         fields: vec![
-                            Value::Int(int(1)),
+                            Value::Int(int(0)),
                             Value::Tagged {
                                 tag: 11,
                                 fields: vec![Value::Int(int(250))],

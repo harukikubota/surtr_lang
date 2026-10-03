@@ -519,6 +519,7 @@ pub enum TypeName {
     MatchResult,
     ExtractorClosure,
     ErrorKind,
+    InfiniteGenerator,
 }
 
 impl TypeName {
@@ -545,6 +546,7 @@ impl TypeName {
             Self::List => "List",
             Self::HashMap => "HashMap",
             Self::Generator => "Generator",
+            Self::InfiniteGenerator => "InfiniteGenerator",
             Self::Result => "Result",
             Self::Duration => "Duration",
             Self::StandbyInit => "StandbyInit",
@@ -603,6 +605,7 @@ impl TypeName {
             | Self::RegexMatch
             | Self::RandomGenerator
             | Self::Generator
+            | Self::InfiniteGenerator
             | Self::StandbyInit
             | Self::Lazy
             | Self::ErrorKind
@@ -669,6 +672,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "List" => Some(TypeName::List),
         "HashMap" => Some(TypeName::HashMap),
         "Generator" => Some(TypeName::Generator),
+        "InfiniteGenerator" => Some(TypeName::InfiniteGenerator),
         "Result" => Some(TypeName::Result),
         "Duration" => Some(TypeName::Duration),
         "StandbyInit" => Some(TypeName::StandbyInit),
@@ -709,6 +713,7 @@ pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName)
             | TypeName::List
             | TypeName::HashMap
             | TypeName::Generator
+            | TypeName::InfiniteGenerator
             | TypeName::Result
             | TypeName::StandbyInit
             | TypeName::Lazy

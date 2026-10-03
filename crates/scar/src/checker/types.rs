@@ -1073,6 +1073,7 @@ impl Checker {
                                 TypeName::List
                                 | TypeName::HashMap
                                 | TypeName::Generator
+                                | TypeName::InfiniteGenerator
                                 | TypeName::Result
                                 | TypeName::ExtractorClosure | TypeName::MatchResult
                                 | TypeName::Duration
@@ -1142,18 +1143,13 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
                 }
-                "Generator" => {
+                name @ ("Generator" | "InfiniteGenerator") => {
                     let args = self.require_type_arg_count(
-                        span,
-                        args,
-                        2,
-                        "Generator<State, Item> requires exactly 2 type arguments",
+                        span, args, 1,
+                        if name == "Generator" { "Generator<Item> requires exactly 1 type argument" } else { "InfiniteGenerator<Item> requires exactly 1 type argument" },
                     )?;
-                    let state_ty =
-                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
-                    let item_ty =
-                        self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
-                    Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
+                    let item_ty = self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    Ok(Ty::Enum(name.into(), vec![item_ty]))
                 }
                 "StandbyInit" => {
                     let args = self.require_type_arg_count(
@@ -1520,17 +1516,14 @@ impl Checker {
                         };
                         Ok(Ty::Enum("HashMap".into(), vec![value.clone()]))
                     }
-                    "Generator" => {
-                        let [state, item] = resolved_arguments.as_slice() else {
+                    name @ ("Generator" | "InfiniteGenerator") => {
+                        let [item] = resolved_arguments.as_slice() else {
                             return Err(TypeError::new(
-                                "Generator<State, Item> requires exactly 2 type arguments",
+                                format!("{}<Item> requires exactly 1 type argument", name),
                                 span.clone(),
                             ));
                         };
-                        Ok(Ty::Enum(
-                            "Generator".into(),
-                            vec![state.clone(), item.clone()],
-                        ))
+                        Ok(Ty::Enum(name.into(), vec![item.clone()]))
                     }
                     "Result" => match resolved_arguments.as_slice() {
                         [ok] => Ok(Ty::Result(Box::new(ok.clone()), Box::new(Ty::Error))),
@@ -1665,8 +1658,8 @@ impl Checker {
             let builtin_head = match builtin_type_name(Self::surface_name(name)) {
                 Some(TypeName::List) => Some(Ty::List(Box::new(fresh()))),
                 Some(TypeName::HashMap) => Some(Ty::Enum("HashMap".into(), vec![fresh()])),
-                Some(TypeName::Generator) => {
-                    Some(Ty::Enum("Generator".into(), vec![fresh(), fresh()]))
+                Some(name @ (TypeName::Generator | TypeName::InfiniteGenerator)) => {
+                    Some(Ty::Enum(name.as_str().into(), vec![fresh()]))
                 }
                 Some(TypeName::Result) => Some(Ty::Result(Box::new(fresh()), Box::new(fresh()))),
                 Some(TypeName::StandbyInit) => Some(Ty::Enum("StandbyInit".into(), vec![fresh()])),
@@ -1727,9 +1720,11 @@ impl Checker {
                 | TypeName::HashMap
                 | TypeName::StandbyInit
                 | TypeName::Lazy
-                | TypeName::TaskHandle,
+                | TypeName::TaskHandle
+                | TypeName::Generator
+                | TypeName::InfiniteGenerator,
             ) => Some(1),
-            Some(TypeName::Generator | TypeName::Result) => Some(2),
+            Some(TypeName::Result) => Some(2),
             _ => None,
         }
     }
@@ -2340,26 +2335,15 @@ impl Checker {
                     )?;
                     Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
                 }
-                "Generator" => {
+                name @ ("Generator" | "InfiniteGenerator") => {
                     let args = self.require_type_arg_count(
-                        span,
-                        args,
-                        2,
-                        "Generator<State, Item> requires exactly 2 type arguments",
-                    )?;
-                    let state_ty = self.resolve_signature_like_ast_ty_in_context(
-                        &args[0],
-                        TypeSyntaxContext::General,
-                        tyvars,
-                        mode,
+                        span, args, 1,
+                        if name == "Generator" { "Generator<Item> requires exactly 1 type argument" } else { "InfiniteGenerator<Item> requires exactly 1 type argument" },
                     )?;
                     let item_ty = self.resolve_signature_like_ast_ty_in_context(
-                        &args[1],
-                        TypeSyntaxContext::General,
-                        tyvars,
-                        mode,
+                        &args[0], TypeSyntaxContext::General, tyvars, mode,
                     )?;
-                    Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
+                    Ok(Ty::Enum(name.into(), vec![item_ty]))
                 }
                 "StandbyInit" => {
                     let args = self.require_type_arg_count(

@@ -418,6 +418,21 @@ pub fn match_result_variant_meta(qualified_name: &str) -> Option<MatchResultVari
         .find(|meta| surface_path_eq(meta.qualified_name, qualified_name))
 }
 
+/// Canonical Option enum layout follows the standard declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptionVariantMeta {
+    pub qualified_name: &'static str,
+    pub discriminant: i64,
+}
+pub const OPTION_SOME_VARIANT: OptionVariantMeta = OptionVariantMeta {
+    qualified_name: "Option::Some",
+    discriminant: 0,
+};
+pub const OPTION_NONE_VARIANT: OptionVariantMeta = OptionVariantMeta {
+    qualified_name: "Option::None",
+    discriminant: 1,
+};
+
 /// Standard-library owners whose identities are not declared with `@builtin type`.
 ///
 /// This is separate from [`BUILTIN_TYPE_METAS`], which validates only compiler
@@ -595,59 +610,54 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
-        name: "gen_make",
+        name: "gen_unfold",
         arity: 2,
-        sig_str: "(Int, List<$Item>) -> Generator<$State, $Item>",
+        sig_str: "($State, ($State -> Option<($Item, $State)>)) -> Generator<$Item>",
         compiler_generated_surfaces: &[],
-        surfaces: &[
-            builtin_surface_spec(
-                Some("Generator"),
-                "gen_make",
-                &["$State"],
-                &[
-                    builtin_surface_parameter("idx", "Int"),
-                    builtin_surface_parameter("items", "List<$Item>"),
-                ],
-                "Generator<$State, $Item>",
-                &[],
-            ),
-        ],
+        surfaces: &[builtin_surface_spec(
+            Some("Generator"),
+            "unfold",
+            &[],
+            &[
+                builtin_surface_parameter("seed", "$State"),
+                builtin_surface_parameter("step", "($State -> Option<($Item, $State)>)"),
+            ],
+            "Generator<$Item>",
+            &[],
+        )],
     },
     BuiltinMeta {
-        name: "gen_idx",
+        name: "gen_step",
         arity: 1,
-        sig_str: "(Generator<$State, $Item>) -> Int",
+        sig_str: "(Generator<$Item>) -> Option<($Item, Generator<$Item>)>",
         compiler_generated_surfaces: &[],
-        surfaces: &[
-            builtin_surface_spec(
-                Some("Generator"),
-                "gen_idx",
-                &[],
-                &[
-                    builtin_surface_parameter("gen", "Generator<$State, $Item>"),
-                ],
-                "Int",
-                &[],
-            ),
-        ],
+        surfaces: &[builtin_surface_spec(
+            Some("Generator"),
+            "_step",
+            &[],
+            &[
+                builtin_surface_parameter("gen", "Generator<$Item>"),
+            ],
+            "Option<($Item, Generator<$Item>)>",
+            &[],
+        )],
     },
     BuiltinMeta {
-        name: "gen_items",
-        arity: 1,
-        sig_str: "(Generator<$State, $Item>) -> List<$Item>",
+        name: "gen_take",
+        arity: 2,
+        sig_str: "(Generator<$Item>, Int) -> (List<$Item>, Generator<$Item>)",
         compiler_generated_surfaces: &[],
-        surfaces: &[
-            builtin_surface_spec(
-                Some("Generator"),
-                "gen_items",
-                &[],
-                &[
-                    builtin_surface_parameter("gen", "Generator<$State, $Item>"),
-                ],
-                "List<$Item>",
-                &[],
-            ),
-        ],
+        surfaces: &[builtin_surface_spec(
+            Some("Generator"),
+            "take",
+            &[],
+            &[
+                builtin_surface_parameter("gen", "Generator<$Item>"),
+                builtin_surface_parameter("count", "Int"),
+            ],
+            "(List<$Item>, Generator<$Item>)",
+            &[],
+        )],
     },
     BuiltinMeta {
         name: "bit_and",
@@ -3704,6 +3714,142 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
             &[],
         )],
     },
+    BuiltinMeta {
+        name: "gen_take_while",
+        arity: 2,
+        sig_str: "(Generator<$Item>, ($Item -> Boolean)) -> (List<$Item>, Generator<$Item>)",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Generator"),
+            "take_while",
+            &[],
+            &[
+                builtin_surface_parameter("gen", "Generator<$Item>"),
+                builtin_surface_parameter("predicate", "($Item -> Boolean)"),
+            ],
+            "(List<$Item>, Generator<$Item>)",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "gen_to_list",
+        arity: 1,
+        sig_str: "(Generator<$Item>) -> List<$Item>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Generator"),
+            "to_list",
+            &[],
+            &[
+                builtin_surface_parameter("gen", "Generator<$Item>"),
+            ],
+            "List<$Item>",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "gen_range",
+        arity: 2,
+        sig_str: "(Int, Int) -> Generator<Int>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Generator"),
+            "range",
+            &[],
+            &[
+                builtin_surface_parameter("start", "Int"),
+                builtin_surface_parameter("stop", "Int"),
+            ],
+            "Generator<Int>",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "gen_range_char_validated",
+        arity: 3,
+        sig_str: "(Int, Int, Int) -> Generator<String>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Generator"),
+            "range_char_validated",
+            &[],
+            &[
+                builtin_surface_parameter("start", "Int"),
+                builtin_surface_parameter("stop", "Int"),
+                builtin_surface_parameter("step", "Int"),
+            ],
+            "Generator<String>",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "inf_gen_unfold",
+        arity: 2,
+        sig_str: "($State, ($State -> ($Item, $State))) -> InfiniteGenerator<$Item>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("InfiniteGenerator"),
+            "unfold",
+            &[],
+            &[
+                builtin_surface_parameter("seed", "$State"),
+                builtin_surface_parameter("step", "($State -> ($Item, $State))"),
+            ],
+            "InfiniteGenerator<$Item>",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "inf_gen_next",
+        arity: 1,
+        sig_str: "(InfiniteGenerator<$Item>) -> ($Item, InfiniteGenerator<$Item>)",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("InfiniteGenerator"),
+            "next",
+            &[],
+            &[
+                builtin_surface_parameter("gen", "InfiniteGenerator<$Item>"),
+            ],
+            "($Item, InfiniteGenerator<$Item>)",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "inf_gen_take",
+        arity: 2,
+        sig_str: "(InfiniteGenerator<$Item>, Int) -> (List<$Item>, InfiniteGenerator<$Item>)",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("InfiniteGenerator"),
+            "take",
+            &[],
+            &[
+                builtin_surface_parameter("gen", "InfiniteGenerator<$Item>"),
+                builtin_surface_parameter("count", "Int"),
+            ],
+            "(List<$Item>, InfiniteGenerator<$Item>)",
+            &[],
+        )],
+    },
+    BuiltinMeta {
+        name: "inf_gen_take_while",
+        arity: 2,
+        sig_str: "(InfiniteGenerator<$Item>, ($Item -> Boolean)) -> (List<$Item>, InfiniteGenerator<$Item>)",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("InfiniteGenerator"),
+            "take_while",
+            &[],
+            &[
+                builtin_surface_parameter("gen", "InfiniteGenerator<$Item>"),
+                builtin_surface_parameter("predicate", "($Item -> Boolean)"),
+            ],
+            "(List<$Item>, InfiniteGenerator<$Item>)",
+            &[],
+        )],
+    },
+
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime
@@ -3811,7 +3957,7 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     },
     BuiltinTypeMeta {
         name: TypeName::Generator.as_str(),
-        params: &["$State", "$Item"],
+        params: &["$Item"],
         identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
@@ -3822,6 +3968,11 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
         name: TypeName::MatchResult.as_str(),
         params: &["$Value"],
+        identity: TypeIdentity::TypeConstructor,
+    },
+    BuiltinTypeMeta {
+        name: TypeName::InfiniteGenerator.as_str(),
+        params: &["$Item"],
         identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
@@ -4049,7 +4200,6 @@ mod tests {
             meta.builtin_id().0,
             builtin_id_by_name("__flow_kleisli_compose").unwrap() + 1
         );
-        assert_eq!(BUILTIN_METAS.last().unwrap().name, "list_flat_map");
         assert_eq!(meta.runtime_arity(), 2);
         assert_eq!(meta.sig_str, "(List<$A>, ($A -> List<$B>)) -> List<$B>");
         assert_eq!(meta.primitive_opcode(), None);
@@ -4272,13 +4422,13 @@ mod tests {
 
     #[test]
     fn structured_surface_preserves_nested_type_commas() {
-        let meta = builtin_meta_by_name("gen_make").expect("gen_make metadata");
+        let meta = builtin_meta_by_name("zip").expect("zip metadata");
         let variant = meta
-            .surface_variant("Generator", "gen_make")
-            .expect("Generator::gen_make surface variant");
+            .surface_variant("List", "zip")
+            .expect("List::zip surface variant");
         assert_eq!(variant.value_parameters.len(), 2);
-        assert_eq!(variant.value_parameters[1].ty, "List<$Item>");
-        assert_eq!(variant.return_type.ty, "Generator<$State, $Item>");
+        assert_eq!(variant.value_parameters[1].ty, "List<$B>");
+        assert_eq!(variant.return_type.ty, "List<($A, $B)>");
     }
 
     #[test]

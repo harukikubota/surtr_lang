@@ -1,7 +1,11 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
+mod generator;
+mod list_builder;
 mod list_flat_map;
+#[cfg(test)]
+pub(crate) use list_builder::{list_builder_metrics, reset_list_builder_metrics};
 use list_flat_map::{builtin_list_flat_map, FlatMapContinuation};
 #[cfg(test)]
 pub(crate) use list_flat_map::{flat_map_metrics, reset_flat_map_metrics};
@@ -9,6 +13,7 @@ use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{
     builtin_meta_by_id, BUILTIN_METAS, MATCH_RESULT_ERR_VARIANT, MATCH_RESULT_OK_VARIANT,
+    OPTION_NONE_VARIANT, OPTION_SOME_VARIANT,
 };
 use sindr::names::{compiler_global_error_kind, surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
@@ -49,6 +54,7 @@ pub(crate) enum BuiltinOutcome {
 #[derive(Debug, Clone)]
 pub(crate) enum BuiltinContinuation {
     FlatMap(FlatMapContinuation),
+    Generator(generator::GeneratorContinuation),
     Runtime(crate::vm::RuntimeContinuation),
     Identity,
     RecoverKind,
@@ -69,6 +75,7 @@ impl BuiltinContinuation {
     ) -> Result<BuiltinOutcome, RuntimeError> {
         let value = match self {
             Self::FlatMap(continuation) => return continuation.resume(result),
+            Self::Generator(continuation) => return continuation.resume(vm, result),
             Self::Runtime(continuation) => return continuation.resume(vm, result),
             Self::Identity => result?,
             Self::RecoverKind => {
@@ -148,16 +155,16 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: |vm, args| builtin_list_len(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
-        name: "gen_make",
-        func: |vm, args| builtin_gen_make(vm, args).map(BuiltinOutcome::Complete),
+        name: "gen_unfold",
+        func: |vm, args| generator::unfold(vm, args, false),
     },
     BuiltinImpl {
-        name: "gen_idx",
-        func: |vm, args| builtin_gen_idx(vm, args).map(BuiltinOutcome::Complete),
+        name: "gen_step",
+        func: |vm, args| generator::step(vm, args, false),
     },
     BuiltinImpl {
-        name: "gen_items",
-        func: |vm, args| builtin_gen_items(vm, args).map(BuiltinOutcome::Complete),
+        name: "gen_take",
+        func: |vm, args| generator::materialize(vm, args, false, "take"),
     },
     BuiltinImpl {
         name: "bit_and",
@@ -942,6 +949,38 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "list_flat_map",
         func: builtin_list_flat_map,
+    },
+    BuiltinImpl {
+        name: "gen_take_while",
+        func: |vm, args| generator::materialize(vm, args, false, "take_while"),
+    },
+    BuiltinImpl {
+        name: "gen_to_list",
+        func: |vm, args| generator::materialize(vm, args, false, "to_list"),
+    },
+    BuiltinImpl {
+        name: "gen_range",
+        func: |vm, args| generator::range(vm, args, false),
+    },
+    BuiltinImpl {
+        name: "gen_range_char_validated",
+        func: |vm, args| generator::range(vm, args, true),
+    },
+    BuiltinImpl {
+        name: "inf_gen_unfold",
+        func: |vm, args| generator::unfold(vm, args, true),
+    },
+    BuiltinImpl {
+        name: "inf_gen_next",
+        func: |vm, args| generator::step(vm, args, true),
+    },
+    BuiltinImpl {
+        name: "inf_gen_take",
+        func: |vm, args| generator::materialize(vm, args, true, "take"),
+    },
+    BuiltinImpl {
+        name: "inf_gen_take_while",
+        func: |vm, args| generator::materialize(vm, args, true, "take_while"),
     },
 ];
 
@@ -2016,32 +2055,6 @@ fn builtin_string_replace(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
     } else {
         Ok(Value::Str(value.replace(from, to)))
     }
-}
-
-fn builtin_gen_make(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let Value::Int(idx) = &args[0] else {
-        return Err(RuntimeError::new("gen_make expects Int as first argument"));
-    };
-    let Value::List(items) = &args[1] else {
-        return Err(RuntimeError::new(
-            "gen_make expects List as second argument",
-        ));
-    };
-
-    Ok(Value::Tuple(vec![
-        Value::Int(idx.clone()),
-        Value::List(items.clone()),
-    ]))
-}
-
-fn builtin_gen_idx(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let (idx, _) = decode_generator_arg(&args[0], "gen_idx", "gen")?;
-    Ok(Value::Int(idx.clone()))
-}
-
-fn builtin_gen_items(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let (_, items) = decode_generator_arg(&args[0], "gen_items", "gen")?;
-    Ok(Value::List(items.clone()))
 }
 
 fn builtin_bit_and(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -3664,41 +3677,6 @@ fn decode_hash_map_arg<'a>(
     }
 }
 
-fn decode_generator_arg<'a>(
-    value: &'a Value,
-    builtin_name: &str,
-    arg_name: &str,
-) -> Result<(&'a SurtrInt, &'a ListHandle), RuntimeError> {
-    let Value::Tuple(items) = value else {
-        return Err(RuntimeError::new(format!(
-            "{builtin_name} expects Generator as {arg_name}, got {:?}",
-            value
-        )));
-    };
-
-    let [idx, tail] = items.as_slice() else {
-        return Err(RuntimeError::new(format!(
-            "{builtin_name} expects Generator tuple payload as {arg_name}, got arity {}",
-            items.len()
-        )));
-    };
-
-    let Value::Int(idx) = idx else {
-        return Err(RuntimeError::new(format!(
-            "{builtin_name} expects Generator idx as Int for {arg_name}, got {:?}",
-            idx
-        )));
-    };
-    let Value::List(tail) = tail else {
-        return Err(RuntimeError::new(format!(
-            "{builtin_name} expects Generator items as List for {arg_name}, got {:?}",
-            tail
-        )));
-    };
-
-    Ok((idx, tail))
-}
-
 fn decode_random_generator_arg(
     value: &Value,
     builtin_name: &str,
@@ -4463,11 +4441,21 @@ fn builtin_uncons(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
 }
 
 fn option_none(vm: &VM) -> Result<Value, RuntimeError> {
-    enum_variant_by_name(vm, "Option::None", 0, Vec::new())
+    enum_variant_by_name(
+        vm,
+        OPTION_NONE_VARIANT.qualified_name,
+        OPTION_NONE_VARIANT.discriminant,
+        Vec::new(),
+    )
 }
 
 fn option_some(vm: &VM, value: Value) -> Result<Value, RuntimeError> {
-    enum_variant_by_name(vm, "Option::Some", 1, vec![value])
+    enum_variant_by_name(
+        vm,
+        OPTION_SOME_VARIANT.qualified_name,
+        OPTION_SOME_VARIANT.discriminant,
+        vec![value],
+    )
 }
 
 fn option_int(vm: &VM, value: Option<i128>) -> Result<Value, RuntimeError> {

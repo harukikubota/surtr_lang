@@ -210,69 +210,6 @@ Counter::value()"#,
     );
 }
 
-fn generator_fibonacci_resume_consumer_uses_tail_calls() {
-    let observation = observe_surtr(
-        r#"def fib_step(state: (Int, Int), idx: Int, count: Int) -> Result<(Int, (Int, Int))> {
-  if(
-    idx < count,
-    fib_emit_next(state),
-    Err(NoneError),
-  )
-}
-
-def fib_emit_next(state: (Int, Int)) -> Result<(Int, (Int, Int))> {
-  (a, b) = state
-  Ok((a, (b, a + b)))
-}
-
-def fib_generator(count: Int) -> Generator<(Int, Int), Int> {
-  Generator::unfold((0, 1), {|state, idx|
-    fib_step(state, idx, count)
-  })
-}
-
-def take_and_resume(
-  gen: Generator<(Int, Int), Int>,
-  count: Int,
-  acc_rev: List<Int>,
-) -> (List<Int>, Generator<(Int, Int), Int>) {
-  if(
-    count <= 0,
-    (List::reverse(acc_rev), gen),
-    match Generator::next(gen) {
-      Ok(pair) => take_pair_and_resume(pair, count, acc_rev),
-      Err(_) => (List::reverse(acc_rev), gen),
-    },
-  )
-}
-
-def take_pair_and_resume(
-  pair: (Int, Generator<(Int, Int), Int>),
-  count: Int,
-  acc_rev: List<Int>,
-) -> (List<Int>, Generator<(Int, Int), Int>) {
-  (value, next_gen) = pair
-  take_and_resume(next_gen, count - 1, [value, ..acc_rev])
-}
-
-fib0 = fib_generator(240)
-pair = take_and_resume(fib0, 150, [])
-(_first, fib150) = pair
-Generator::idx(fib150)"#,
-    );
-
-    assert!(
-        observation.stats.max_frame_depth <= 8,
-        "expected frame depth to stay bounded in generator resume flow, stats={:?}",
-        observation.stats
-    );
-    assert!(
-        observation.stats.tail_calls_optimized >= 150,
-        "expected generator resume flow to use tail-call optimization, stats={:?}",
-        observation.stats
-    );
-}
-
 pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
         (
@@ -314,10 +251,6 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "process_handler_helper_tail_call_is_optimized",
             process_handler_helper_tail_call_is_optimized as fn(),
-        ),
-        (
-            "generator_fibonacci_resume_consumer_uses_tail_calls",
-            generator_fibonacci_resume_consumer_uses_tail_calls as fn(),
         ),
     ];
     super::run_bucket_cases("runtime_observation", cases, bucket, bucket_count)

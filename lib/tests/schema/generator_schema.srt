@@ -1,44 +1,18 @@
+defrecord GeneratorHolder(saved: Generator<Int>)
+
 defmod GeneratorSchema {
-  def fib_step(state: (Int, Int), idx: Int, count: Int) -> Result<(Int, (Int, Int))> {
-    if(
-      idx < count,
-      fib_emit_next(state),
-      Err(NoneError),
-    )
-  }
-
-  def fib_emit_next(state: (Int, Int)) -> Result<(Int, (Int, Int))> {
-    (a, b) = state
-    Ok((a, (b, a + b)))
-  }
-
-  def fib_generator(count: Int) -> Generator<(Int, Int), Int> {
-    Generator::unfold((0, 1), {|state, idx|
-      fib_step(state, idx, count)
+  def fibonacci(count: Int) -> Generator<Int> {
+    Generator::unfold((0, 1, count), {|state|
+      if(state._2 > 0,
+        Option::Some((state._0, (state._1, state._0 + state._1, state._2 - 1))),
+        Option::None)
     })
   }
 
-  def take_and_resume(
-    gen: Generator<(Int, Int), Int>,
-    count: Int,
-    acc_rev: List<Int>,
-  ) -> (List<Int>, Generator<(Int, Int), Int>) {
-    if(
-      count <= 0,
-      (List::reverse(acc_rev), gen),
-      match Generator::next(gen) {
-        Ok(pair) => take_pair_and_resume(pair, count, acc_rev),
-        Err(_) => (List::reverse(acc_rev), gen),
-      },
-    )
-  }
-
-  def take_pair_and_resume(
-    pair: (Int, Generator<(Int, Int), Int>),
-    count: Int,
-    acc_rev: List<Int>,
-  ) -> (List<Int>, Generator<(Int, Int), Int>) {
-    (value, next_gen) = pair
-    take_and_resume(next_gen, count - 1, [value, ..acc_rev])
+  def observed_sequence() -> Generator<Int> {
+    Generator::unfold(1, {|n|
+      print("step=#{n}")
+      if(n <= 2, Option::Some((n, n + 1)), Option::None)
+    })
   }
 }

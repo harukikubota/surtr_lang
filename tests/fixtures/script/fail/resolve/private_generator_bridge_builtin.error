@@ -1,3 +1,0 @@
-phase: resolve
-contains: Generator::gen_make/2
-contains: is private

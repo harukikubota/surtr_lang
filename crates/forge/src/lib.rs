@@ -113,6 +113,8 @@ mod tests {
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/types/list.srt");
     const TUPLE_MODULE_SOURCE: &str = include_str!("../../../lib/types/tuple.srt");
     const GENERATOR_MODULE_SOURCE: &str = include_str!("../../../lib/types/generator.srt");
+    const INFINITE_GENERATOR_MODULE_SOURCE: &str =
+        include_str!("../../../lib/types/infinite_generator.srt");
     const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/types/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/types/result.srt");
     const DURATION_MODULE_SOURCE: &str = include_str!("../../../lib/types/duration.srt");
@@ -316,6 +318,7 @@ mod tests {
                 ("List", LIST_MODULE_SOURCE),
                 ("Tuple", TUPLE_MODULE_SOURCE),
                 ("Generator", GENERATOR_MODULE_SOURCE),
+                ("InfiniteGenerator", INFINITE_GENERATOR_MODULE_SOURCE),
                 ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
                 ("Option", OPTION_MODULE_SOURCE),
