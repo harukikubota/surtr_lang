@@ -422,13 +422,25 @@ impl Parser<'_> {
         )
     }
 
-    pub(super) fn parse_expr_class_expr(&mut self) -> Result<Ast, ParseError> {
+    // Dot/call operands are completed before fixed, left-associative path
+    // composition. Capture keeps its existing postfix operand boundary.
+    fn parse_facet_chain(&mut self) -> Result<Ast, ParseError> {
         let mut left = self.parse_postfix()?;
+        while matches!(self.peek(), Token::Arrow) {
+            self.advance();
+            let right = self.parse_postfix()?;
+            left = Self::lower_binop(left, BinOp::FacetChain, right);
+        }
+        Ok(left)
+    }
+
+    pub(super) fn parse_expr_class_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_facet_chain()?;
 
         loop {
             if let Some(op) = Self::expr_binop(self.peek()) {
                 self.advance();
-                let right = self.parse_postfix()?;
+                let right = self.parse_facet_chain()?;
                 left = Self::lower_binop(left, op, right);
                 continue;
             }
@@ -484,7 +496,7 @@ impl Parser<'_> {
                     continue;
                 }
             }
-            let right = self.parse_postfix()?;
+            let right = self.parse_facet_chain()?;
             match func_kind {
                 FuncLiteralBodyKind::Operator(op_body) => {
                     let Some(op) = Self::expr_binop_from_func_literal(&op_body) else {
@@ -3067,7 +3079,7 @@ impl Parser<'_> {
 
     fn parse_bulk_update_path_chain(&mut self) -> Result<BulkUpdatePath, ParseError> {
         let mut path = self.parse_bulk_update_path_primary()?;
-        while matches!(self.peek(), Token::Slash) {
+        while matches!(self.peek(), Token::Arrow) {
             self.advance();
             self.skip_newlines();
             let right = self.parse_bulk_update_path_primary()?;

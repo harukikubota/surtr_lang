@@ -88,7 +88,7 @@ const OPERATOR_DOC_TARGETS: &[(&str, &str)] = &[
     ("<=", "Compare::lte"),
     (">", "Compare::gt"),
     (">=", "Compare::gte"),
-    ("/", "Facet::chain"),
+    ("->", "Facet::chain"),
     ("++", "Concat::concat"),
     ("|>", "Bootstrap::|>"),
     ("|*>", "Functor::fmap"),
@@ -3415,7 +3415,7 @@ impl ReplEngine {
             "<=" => "lte",
             ">" => "gt",
             ">=" => "gte",
-            "/" => "chain",
+            "->" => "chain",
             "++" => "concat",
             "|*>" => "fmap",
             "|>=" => "bind",
@@ -3431,7 +3431,7 @@ impl ReplEngine {
             "==" => "Eq",
             "!=" => "Eq",
             "<" | "<=" | ">" | ">=" => "Compare",
-            "/" => "Facet",
+            "->" => "Facet",
             "++" => "Concat",
             "|*>" => "Functor",
             "|>=" => "Monad",
@@ -6584,7 +6584,7 @@ impl ReplEngine {
                     result_ty,
                 ))
             }
-            "/" => match (&lhs_ty, &rhs_ty) {
+            "->" => match (&lhs_ty, &rhs_ty) {
                 (
                     AstTy::Generic(_, left_name, left_args),
                     AstTy::Generic(_, right_name, right_args),
@@ -6596,7 +6596,7 @@ impl ReplEngine {
                     Self::ensure_query_type_matches(
                         &left_args[1],
                         &right_args[0],
-                        "`/` requires the left focus type to match the right source type",
+                        "`->` requires the left focus type to match the right source type",
                     )?;
                     let result_ty = AstTy::Generic(
                         Span { start: 0, end: 0 },
@@ -6613,10 +6613,7 @@ impl ReplEngine {
                         result_ty,
                     ))
                 }
-                _ => Err(
-                    "`/` currently models Facet composition. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division."
-                        .to_string(),
-                ),
+                _ => Err("`->` requires Facet path operands.".to_string()),
             },
             ">>" => {
                 let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">>")?;

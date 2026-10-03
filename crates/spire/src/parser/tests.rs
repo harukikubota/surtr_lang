@@ -4084,15 +4084,15 @@ fn test_legacy_pipe_compose_operator_is_rejected() {
 }
 
 #[test]
-fn test_facet_slash_compose_expression_parses() {
-    parse(r#"value = Facet::view(User.profile / Profile.name, user)"#)
-        .expect("facet slash compose should parse");
+fn test_facet_arrow_chain_expression_parses() {
+    parse(r#"value = Facet::view(User.profile -> Profile.name, user)"#)
+        .expect("facet arrow chain should parse");
 }
 
 #[test]
-fn test_facet_slash_compose_chain_parses() {
-    parse(r#"value = Facet::view(Config.root / Project.current / Tuple._0, cfg)"#)
-        .expect("chained facet slash compose should parse");
+fn test_facet_arrow_chain_left_association_parses() {
+    parse(r#"value = Facet::view(Config.root -> Project.current -> Tuple._0, cfg)"#)
+        .expect("chained facet arrow chain should parse");
 }
 
 #[test]
@@ -8047,4 +8047,41 @@ fn consumer_pipe_context_respects_cond_and_match_delimiters() {
     }
     let error = parse("input |> is_match([_").expect_err("unfinished Pattern");
     assert!(error.is_incomplete());
+}
+
+#[test]
+fn test_facet_arrow_chain_precedence_and_left_association() {
+    let ast = parse("value = outer -> middle.field -> inner() + rhs").unwrap();
+    let Ast::Bind(_, _, value) = &ast[0] else {
+        panic!("expected binding")
+    };
+    let Ast::BinOp(_, BinOp::Add, left, _) = value.as_ref() else {
+        panic!("expected outer addition: {value:?}")
+    };
+    let Ast::BinOp(_, BinOp::FacetChain, first, inner) = left.as_ref() else {
+        panic!("expected outer chain")
+    };
+    assert!(
+        matches!(first.as_ref(), Ast::BinOp(_, BinOp::FacetChain, _, right) if matches!(right.as_ref(), Ast::FieldAccess(_, _, _)))
+    );
+    assert!(matches!(inner.as_ref(), Ast::App(_, _, _)));
+}
+
+#[test]
+fn test_facet_arrow_capture_keeps_operand_boundary() {
+    let ast = parse("value = &User.profile -> Profile.name").unwrap();
+    let Ast::Bind(_, _, value) = &ast[0] else {
+        panic!("expected binding")
+    };
+    assert!(
+        matches!(value.as_ref(), Ast::BinOp(_, BinOp::FacetChain, lhs, rhs) if matches!(lhs.as_ref(), Ast::Capture(_, target, args) if args.is_empty() && matches!(target.as_ref(), Ast::FieldAccess(_, _, field) if field == "profile")) && matches!(rhs.as_ref(), Ast::FieldAccess(_, _, field) if field == "name")),
+        "{value:?}"
+    );
+}
+
+#[test]
+fn test_bulk_update_arrow_chain_parses_and_slash_is_rejected() {
+    parse("Facet::bulk_update(user){User.profile -> Profile.name <- set(\"bob\")}").unwrap();
+    parse("Facet::bulk_update(user){User.profile / Profile.name <- set(\"bob\")}")
+        .expect_err("old path chain is rejected");
 }

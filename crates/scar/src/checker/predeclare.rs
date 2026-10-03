@@ -959,7 +959,7 @@ impl Checker {
                 self.const_has_dynamic_bracket_segment(inner)
                     || !self.const_facet_segment_is_allowed(segment)
             }
-            Resolved::BinOp(_, BinOp::Slash, left, right) => {
+            Resolved::BinOp(_, BinOp::FacetChain, left, right) => {
                 self.const_has_dynamic_bracket_segment(left)
                     || self.const_has_dynamic_bracket_segment(right)
             }
@@ -979,7 +979,7 @@ impl Checker {
                 self.const_surface_is_allowed(inner) && self.const_facet_segment_is_allowed(segment)
             }
             Resolved::InferredFacetCapture(_, _) => false,
-            Resolved::BinOp(_, BinOp::Slash, left, right) => {
+            Resolved::BinOp(_, BinOp::FacetChain, left, right) => {
                 self.const_surface_is_allowed(left) && self.const_surface_is_allowed(right)
             }
             _ => false,
@@ -1010,7 +1010,7 @@ impl Checker {
                     message: "const value must be a primitive literal or a facet path".into(),
                     span: span.clone(),
                     hint: Some(
-                        "V1 const supports literal values, facet paths, Facet const refs, and `/` composition of those facet values only.".into(),
+                        "V1 const supports literal values, facet paths, Facet const refs, and `->` composition of those facet values only.".into(),
                     ),
                 });
             }
@@ -1037,7 +1037,7 @@ impl Checker {
                         message: "const value must be a primitive literal or a facet path".into(),
                         span: span.clone(),
                         hint: Some(
-                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Facet consts with `/`.".into(),
+                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Facet consts with `->`.".into(),
                         ),
                     })
                 }

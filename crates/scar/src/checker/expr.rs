@@ -8384,7 +8384,7 @@ impl Checker {
             Resolved::Grouped(_, inner) => Self::looks_like_facet_path_expr(inner),
             Resolved::FacetCapture(_, _)
             | Resolved::InferredFacetCapture(_, _)
-            | Resolved::BinOp(_, BinOp::Slash, _, _) => true,
+            | Resolved::BinOp(_, BinOp::FacetChain, _, _) => true,
             _ => false,
         }
     }
@@ -13082,8 +13082,8 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        if matches!(op, BinOp::Slash) {
-            return self.check_slash_compose(span, left, right, expected);
+        if matches!(op, BinOp::FacetChain) {
+            return self.check_arrow_chain(span, left, right, expected);
         }
 
         let (trait_short, method, token) = match op {
@@ -13098,7 +13098,9 @@ impl Checker {
             BinOp::Gte => ("Compare", "gte", ">="),
             BinOp::Concat => ("Concat", "concat", "++"),
             BinOp::Choice => ("Alternative", "choose", "<|>"),
-            BinOp::Slash => return Err(Self::unsupported_binop_type_error(op, span)),
+            BinOp::Slash | BinOp::FacetChain => {
+                return Err(Self::unsupported_binop_type_error(op, span))
+            }
         };
         let trait_name = self
             .trait_key_by_short_name(trait_short)
@@ -13156,7 +13158,7 @@ impl Checker {
         })
     }
 
-    fn check_slash_compose(
+    fn check_arrow_chain(
         &mut self,
         span: &Span,
         left: &Resolved,
@@ -13170,9 +13172,6 @@ impl Checker {
                 ResolvedRecordLitArg::Positional(right.clone()),
             ],
         )
-            .map_err(|error| error.with_hint(
-                "Infix `/` composes Facet paths. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division.",
-            ))
     }
 
     pub(super) fn check_list_nil(&mut self, span: &Span) -> Result<TypedNode, TypeError> {

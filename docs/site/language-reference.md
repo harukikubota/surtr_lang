@@ -21,13 +21,13 @@ name =? expr
 
 ```surtr
 public const DEFAULT_PORT: Int = 8080
-private const PROFILE_NAME = User.profile / Profile.name
+private const PROFILE_NAME = User.profile -> Profile.name
 ```
 
 - file top-level にだけ宣言でき、visibility の既定は `public`
 - 名前は `[A-Z][A-Z0-9_]*`。先頭・末尾 `_` と `__` は使えない
 - public const は compile unit 全体、private const は宣言 file だけから参照できる
-- 値は primitive literal、Facet path、別の Facet const、またはそれらの `/` 合成に限定する
+- 値は primitive literal、Facet path、別の Facet const、またはそれらの `->` 合成に限定する
 - const Facet の bracket segment は literal `Int` / `String`、または両端が literal `Int` の range だけを受け付ける
 
 ### 関数
@@ -479,12 +479,13 @@ result: Option<Int> = do::<Option> {
 - `Result` と `List` を `|*>`, `|*|`, `|>=`, `>*`, `>=>` で混在させない
 - `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
-- 結合優先度は `Bind < StdOn < Apply=Compose < AndOr < Compare < Pair < Expr`
+- 結合優先度は `Bind < StdOn < Apply=Compose < AndOr < Compare < Pair < Expr < FacetChain < Postfix`
 - `on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名。変数・引数・Patternの束縛名・フィールド名には使えない。関数の宣言名には使え、import規則は変更しない
 - 裸の比較関数6名の中置Callは比較演算子と同じ `Compare` 層・左結合。修飾中置Callは既存の `Function::on`・`Kernel::and`・`Kernel::or` を除き通常の `Expr` 層
 - `compare`、`pipe` / `fmap` / `bind`、関数合成の関数インターフェースは予約せず、名前付き中置Callは通常の2引数Call
 - pair constructor `(,)` は右結合で、`left (,) right` を nested pair に lower する
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
+- `FacetChain` の `->` は Facet path 合成に限定した固定構文で、左結合。各オペランドのドット・呼び出しは `Postfix` で先に結合する
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
 - ``left `on` right`` は scope に見えている `on` ではなく、常に `Function::on(left, right)` として解釈される
 - ``left `Other::on` right`` はその qualified path を使い、通常の `Expr` クラスに留まる

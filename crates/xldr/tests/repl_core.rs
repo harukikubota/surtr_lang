@@ -3365,11 +3365,11 @@ fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     assert!(rendered_text(&enum_facet)
         .contains("ep: Facet<VariantPath, IntBase, Unit, _, _> = IntBase.Oct"));
 
-    let slash = engine.handle_line("a / ep");
-    let slash = rendered_text(&slash);
+    let arrow = engine.handle_line("a -> ep");
+    let arrow = rendered_text(&arrow);
     assert!(
-        slash.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
-        "{slash}"
+        arrow.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
+        "{arrow}"
     );
 
     let helper = engine.handle_line("Facet::chain(a, ep)");
@@ -4246,9 +4246,9 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "impl Monad for Result<$T>::bind(self: Result<$A>, mapper: ($A -> Result<$B>)) -> Result<$B>"
     );
 
-    let slash_doc = engine.handle_line(":doc /");
-    let slash_doc = doc_text(&slash_doc);
-    assert!(slash_doc.contains("Facet::chain"), "{slash_doc}");
+    let arrow_doc = engine.handle_line(":doc ->");
+    let arrow_doc = doc_text(&arrow_doc);
+    assert!(arrow_doc.contains("Facet::chain"), "{arrow_doc}");
 
     let bind_sig = engine.handle_line(":sig =");
     let bind_sig = signature_text(&bind_sig);
@@ -5887,12 +5887,12 @@ fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
         "{over_result_sig}"
     );
 
-    let slash_sig = engine.handle_line(":sig StyledDocSegment.style / StyledDocStyle.bold");
-    let slash_sig = rendered_text(&slash_sig);
+    let arrow_sig = engine.handle_line(":sig StyledDocSegment.style -> StyledDocStyle.bold");
+    let arrow_sig = rendered_text(&arrow_sig);
     assert!(
-        slash_sig.contains("Unsupported command query form")
-            || slash_sig.contains("Unsupported command query argument"),
-        "{slash_sig}"
+        arrow_sig.contains("Unsupported command query form")
+            || arrow_sig.contains("Unsupported command query argument"),
+        "{arrow_sig}"
     );
 }
 

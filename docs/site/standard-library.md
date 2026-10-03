@@ -472,15 +472,15 @@ Token.Ident
 - selector は PascalCase 固定
 - 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
 
-ネストした path は `/` または `Facet::chain` でつなぎます。
+ネストした path は `->` または `Facet::chain` でつなぎます。
 
 ```surtr
-User.profile / Profile.name
+User.profile -> Profile.name
 Facet::chain(User.profile, Profile.name)
 ```
 
 chain 後の表示は canonical path に正規化されます。
-`User.profile / Profile.name` は `User.profile.name` として扱われ、root path の
+`User.profile -> Profile.name` は `User.profile.name` として扱われ、root path の
 重複は表示に残りません。
 
 ### `value.segment` は read sugar
@@ -506,7 +506,7 @@ first = Facet::view(Tuple._0, pair)
 ```surtr
 name = Facet::view(User.name, user)
 first = Facet::view(Tuple._0, pair)
-profile_name = Facet::view(User.profile / Profile.name, user)
+profile_name = Facet::view(User.profile -> Profile.name, user)
 ```
 
 返り値は path と source に応じて変わります。
@@ -537,7 +537,7 @@ user3 =? Facet::set(~user.name, "carol")
 ネストした値も同じです。
 
 ```surtr
-profile_name = User.profile / Profile.name
+profile_name = User.profile -> Profile.name
 user2 =? Facet::set(profile_name, user, "bob")
 ```
 
@@ -602,7 +602,7 @@ updated =? Facet::bulk_update(user) {
 
 ### `Facet::chain`
 
-`Facet::chain(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
+`Facet::chain(outer, inner)` は 2 つの path を順につなぎます。`outer -> inner` は同じ意味の operator sugar です。
 
 ```surtr
 profile_name = Facet::chain(User.profile, Profile.name)

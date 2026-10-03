@@ -3,7 +3,7 @@ use std::ops::{Deref, Range};
 
 const QUERY_OPERATORS: &[&str] = &[
     "|>=", "|*>", "|>", ">=>", ">*", ">>", "+", "-", "*", "&&", "||", "==", "!=", "<", "<=", ">",
-    ">=", "/", "++",
+    ">=", "->", "++",
 ];
 
 #[derive(Debug, Clone, PartialEq)]

@@ -14,7 +14,7 @@ macro_rules! constructor_case {
 const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
     constructor_case!(constructor_invocations_propagate_expected_return),
     constructor_case!(callable_result_context_is_shared_by_helpers_and_operators),
-    constructor_case!(slash_uses_fixed_facet_path_contract),
+    constructor_case!(arrow_uses_fixed_facet_path_contract),
     constructor_case!(trait_result_conflict_preserves_expected_and_actual_direction),
     constructor_case!(custom_functor_returns_follow_the_shared_plain_inference_policy),
     constructor_case!(one_registered_carrier_is_not_constructor_inference_evidence),
@@ -89,18 +89,18 @@ fn callable_result_context_is_shared_by_helpers_and_operators() {
     }
 }
 
-fn slash_uses_fixed_facet_path_contract() {
+fn arrow_uses_fixed_facet_path_contract() {
     support::typecheck(support::resolve_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 user = User(Profile("alice"))
-Facet::view(User.profile / Profile.name, user)"#,
+Facet::view(User.profile -> Profile.name, user)"#,
     ))
-    .expect("Facet slash composition should follow Facet::chain");
+    .expect("Facet arrow composition should follow Facet::chain");
 
-    let source = "value = 1 / 2";
+    let source = "value = 1 -> 2";
     let err = support::typecheck(support::resolve_with_builtin_prelude(source))
-        .expect_err("non-Facet slash must fail");
+        .expect_err("non-Facet arrow must fail");
     assert!(err.message.contains("Expected Facet<...> value"), "{err:?}");
 }
 

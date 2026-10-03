@@ -18,7 +18,7 @@ print(inspect(map.["talk"]))
 print(inspect(Facet::view(ScoreBook.scores.[1], book)))
 print(inspect(Facet::view(ScoreBook.by_kind.["talk"], book)))
 print(inspect(Facet::view(~book.scores.[0])))
-print(inspect(Facet::view(ScoreBook.scores / List.[0], book)))
+print(inspect(Facet::view(ScoreBook.scores -> List.[0], book)))
 
 get_first: (List<Int> -> Result<Int>) = &List.[0]
 get_talk: (HashMap<Int> -> Result<Int>) = &HashMap.["talk"]

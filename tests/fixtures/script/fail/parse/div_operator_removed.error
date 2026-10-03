@@ -1,2 +1,2 @@
 phase: typecheck
-contains: safe_div
+contains: Unsupported binary operator

@@ -869,7 +869,7 @@ same =? Facet::bulk_update(updated) {
 }
 
 chained =? Facet::bulk_update(same) {
-  address / ^address_to_country_name <- set("Kyoto")
+  address -> ^address_to_country_name <- set("Kyoto")
 }
 
 print(updated.address.country.name)

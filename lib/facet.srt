@@ -47,7 +47,7 @@ Common path forms:
 - property map segment: `User.score.["talk"]`
 - dynamic property segment: `User.scores.[index]`, `User.score.[name]`
 - range property segment: `User.scores.[1..-1]`
-- nested path: `User.profile / Profile.name`, `User.profile.name`
+- nested path: `User.profile -> Profile.name`, `User.profile.name`
 - function-form nested path: `Facet::chain(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
 - value sugar: `value.segment`
@@ -396,7 +396,14 @@ impl Facet {
   @doc """
   Chain two facet paths in sequence.
   `chain(outer, inner)` focuses from `S` to `B` via `A`.
-  `outer / inner` is equivalent operator sugar.
+  `outer -> inner` is equivalent fixed syntax, also within `bulk_update`.
+  Both operands must be independent Facet paths. This syntax is not extensible
+  through user trait implementations.
+  Dot access and calls complete each operand first; `->` associates to the left
+  and binds more strongly than ordinary expression operators.
+  The arrow in function and return types keeps its existing meaning.
+  Capture boundaries are unchanged: use `&User.profile.name` to capture the
+  entire nested path, not `&User.profile -> Profile.name`.
 
   Use this for nested access and updates.
 
@@ -416,7 +423,7 @@ impl Facet {
   For a user-defined nested type, use the same shape as:
   outer = User.profile
   inner = Profile.name
-  path2 = outer / inner
+  path2 = outer -> inner
   path = Facet::chain(outer, inner)
   """
   @builtin def chain(outer: Facet<$K, $S, $A, _, _>, inner: Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>

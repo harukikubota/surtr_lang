@@ -249,8 +249,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     ),
     surface_case!(qualified_result_chain_is_not_facet_chain),
     (
-        "facet_slash_compose_typecheck_success_and_mismatch",
-        facet_slash_compose_typecheck_success_and_mismatch as fn(),
+        "facet_arrow_chain_typecheck_success_and_mismatch",
+        facet_arrow_chain_typecheck_success_and_mismatch as fn(),
     ),
     (
         "facet_set_returns_result_source",
@@ -383,20 +383,20 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_tuple_type_root_compose_works_as_inner_path as fn(),
     ),
     (
-        "facet_tuple_type_root_slash_compose_works_as_inner_path",
-        facet_tuple_type_root_slash_compose_works_as_inner_path as fn(),
+        "facet_tuple_type_root_arrow_chain_works_as_inner_path",
+        facet_tuple_type_root_arrow_chain_works_as_inner_path as fn(),
     ),
     (
-        "facet_const_slash_compose_allows_facet_consts",
-        facet_const_slash_compose_allows_facet_consts as fn(),
+        "facet_const_arrow_chain_allows_facet_consts",
+        facet_const_arrow_chain_allows_facet_consts as fn(),
     ),
     (
-        "facet_const_slash_compose_rejects_non_facet_const_refs",
-        facet_const_slash_compose_rejects_non_facet_const_refs as fn(),
+        "facet_const_arrow_chain_rejects_non_facet_const_refs",
+        facet_const_arrow_chain_rejects_non_facet_const_refs as fn(),
     ),
     (
-        "slash_operator_rejects_numeric_division_and_points_to_safe_div",
-        slash_operator_rejects_numeric_division_and_points_to_safe_div as fn(),
+        "slash_operator_has_no_facet_fallback",
+        slash_operator_has_no_facet_fallback as fn(),
     ),
     (
         "facet_tuple_type_root_without_context_can_bind_as_deferred_path",
@@ -2086,7 +2086,7 @@ fn facet_preview_requires_variant_path_and_records_path_kind() {
   Halt,
 }
 expr = Expr::Add(1, 2)
-Facet::preview(Expr.Add / Tuple._0, expr)"#,
+Facet::preview(Expr.Add -> Tuple._0, expr)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     let TypedInner::FacetView { path, .. } = &last.node else {
@@ -2614,12 +2614,12 @@ Result::chain(pair._0, Ok(()))"#,
     ));
 }
 
-fn facet_slash_compose_typecheck_success_and_mismatch() {
+fn facet_arrow_chain_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 user = User(Profile("alice"))
-Facet::view(User.profile / Profile.name, user)"#,
+Facet::view(User.profile -> Profile.name, user)"#,
     );
     assert!(matches!(
         typed.last().map(|node| &node.ty),
@@ -2629,11 +2629,40 @@ Facet::view(User.profile / Profile.name, user)"#,
     let err = typecheck_with_rules(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-Profile.name / User.profile"#,
+Profile.name -> User.profile"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("mismatched slash compose should fail");
+    .expect_err("mismatched arrow chain should fail");
     assert!(!err.message.is_empty());
+
+    let old_slash = typecheck_with_rules(
+        "defrecord Profile(name: String)\ndefrecord User(profile: Profile)\nUser.profile / Profile.name",
+        RuntimeSourcePolicy::script(),
+    ).expect_err("Facet slash has no compatibility route");
+    assert!(
+        old_slash.message.contains("Unsupported binary operator"),
+        "{old_slash:?}"
+    );
+
+    let declarations =
+        "defrecord Profile(name: String)\ndefstruct User { private profile: Profile }\nimpl User { def new(profile: Profile) -> Self { User { profile: profile } } }\n";
+    let arrow_error = typecheck_with_rules(
+        &format!("{declarations}User.profile -> Profile.name"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("arrow chain preserves private field rejection");
+    let call_error = typecheck_with_rules(
+        &format!("{declarations}Facet::chain(User.profile, Profile.name)"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("explicit chain preserves private field rejection");
+    assert!(
+        arrow_error
+            .message
+            .contains("Field 'User.profile' is private"),
+        "{arrow_error:?}"
+    );
+    assert_eq!(arrow_error.message, call_error.message);
 }
 
 fn facet_set_returns_result_source() {
@@ -2684,7 +2713,7 @@ put(User.name, user, "bob")"#,
   Halt,
 }
 expr = Expr::Add(1, 2)
-put(Expr.Add / Tuple._0, expr, 7)"#,
+put(Expr.Add -> Tuple._0, expr, 7)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("variant path should fail for Facet::put");
@@ -2753,7 +2782,7 @@ impl Pairish {
   }
 }
 pairish_source: Pairish<Int, Boolean> = Pairish((1, True), False)
-pairish: Pairish<String, Boolean> = Facet::put(Pairish.selected / Tuple._0, pairish_source, "one")"#,
+pairish: Pairish<String, Boolean> = Facet::put(Pairish.selected -> Tuple._0, pairish_source, "one")"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("Facet::put should rebuild a uniquely parameterized named type");
@@ -3258,7 +3287,7 @@ fn deferred_tuple_facet_binding_can_compose_before_consumption() {
         r#"defrecord Profile(name: String)
 pair = (Profile("alice"), 42)
 outer = Tuple._0
-path = outer / Profile.name
+path = outer -> Profile.name
 Facet::view(path, pair)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
@@ -3276,23 +3305,23 @@ Facet::view(Facet::chain(User.pair, Tuple._0), user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-fn facet_tuple_type_root_slash_compose_works_as_inner_path() {
+fn facet_tuple_type_root_arrow_chain_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
-Facet::view(User.pair / Tuple._0, user)"#,
+Facet::view(User.pair -> Tuple._0, user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-fn facet_const_slash_compose_allows_facet_consts() {
+fn facet_const_arrow_chain_allows_facet_consts() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 const USER_PROFILE: Facet<InfallibleStructural, User, Profile, _, _> = User.profile
 const PROFILE_NAME: Facet<InfallibleStructural, Profile, String, _, _> = Profile.name
-const FULL_NAME: Facet<InfallibleStructural, User, String, _, _> = USER_PROFILE / PROFILE_NAME
+const FULL_NAME: Facet<InfallibleStructural, User, String, _, _> = USER_PROFILE -> PROFILE_NAME
 user = User(Profile("alice"))
 Facet::view(FULL_NAME, user)"#,
     );
@@ -3300,10 +3329,10 @@ Facet::view(FULL_NAME, user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-fn facet_const_slash_compose_rejects_non_facet_const_refs() {
+fn facet_const_arrow_chain_rejects_non_facet_const_refs() {
     let err = typecheck_with_rules(
         r#"const VALUE = 1
-const BAD = VALUE / VALUE"#,
+const BAD = VALUE -> VALUE"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("non-facet const refs should fail");
@@ -3312,14 +3341,14 @@ const BAD = VALUE / VALUE"#,
         .contains("const value must be a primitive literal or a facet path"));
 }
 
-fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
+fn slash_operator_has_no_facet_fallback() {
     let err = typecheck_with_rules(r#"print(to_string(10 / 3))"#, RuntimeSourcePolicy::script())
         .expect_err("numeric infix slash should fail");
-    assert!(err.message.contains("Expected Facet<...> value"), "{err:?}");
-    assert!(err
-        .hint
-        .as_deref()
-        .is_some_and(|hint| hint.contains("Int::safe_div")));
+    assert!(
+        err.message.contains("Unsupported binary operator"),
+        "{err:?}"
+    );
+    assert!(err.hint.is_none());
 }
 
 fn facet_tuple_type_root_without_context_can_bind_as_deferred_path() {

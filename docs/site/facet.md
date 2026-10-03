@@ -13,7 +13,7 @@
 - `Facet::case_set(facet, source, value)`
 - `Facet::case_over(facet, source, update_fun)`
 - `Facet::bulk_update(source) { ... }`
-- `outer / inner`
+- `outer -> inner`
 - `Facet::chain(outer, inner)`
 
 `T?` は `Option<T>` に下がります。
@@ -33,7 +33,7 @@ tuple path は REPL でそのまま試しやすいです。
 
 `Tuple._N` は `Facet` 文脈の中だけでなく、同一スコープの一時 binding としても
 保持できます。binding は deferred path として扱われ、あとから
-`Facet::view/set/over/over_result` や `/` に渡した時点で concrete な
+`Facet::view/set/over/over_result` や `->` に渡した時点で concrete な
 `Facet<K, S, A, T, B>` に specialize されます。deferred binding の `T/B` は `_, _` のままです。
 
 ### get
@@ -309,7 +309,15 @@ updated =? Facet::bulk_update(user) {
 
 ## chain
 
-ネストした path は `outer / inner` でつなぎます。`/` は `Facet::chain(outer, inner)` に対応する固定構文で、同じ型の接続条件と可視性規則を使います。
+ネストした path は `outer -> inner` でつなぎます。`->` は `Facet::chain(outer, inner)` に対応する固定構文で、同じ型の接続条件と可視性規則を使います。
+
+`->` はユーザー型へのトレイト実装で拡張できません。右辺にも独立した Facet path を指定します。一般値のメンバーアクセスや関数合成には使えません。
+
+ドットと呼び出しは各オペランド内で先に結合し、`->` は通常の Expr 演算子より強く、左結合で処理されます。`a -> b -> c` は `(a -> b) -> c` です。型位置の `->` は、引き続き関数型や戻り値型の区切りです。
+
+`&User.profile -> Profile.name` は合成全体のキャプチャにはなりません。合成全体をキャプチャする場合は、連続した FacetPath の `&User.profile.name` を使います。
+
+`bulk_update` の相対 path でも `->` で合成できます。更新指定の `<-` とともに言語が意味を決める矢印構文であり、ユーザー拡張用の演算子ではありません。
 
 ```surtr
 defstruct Profile {
@@ -332,7 +340,7 @@ impl User {
   }
 }
 
-profile_name = User.profile / Profile.name
+profile_name = User.profile -> Profile.name
 # or
 profile_name = Facet::chain(User.profile, Profile.name)
 # or
@@ -340,7 +348,7 @@ profile_name = User.profile.name
 ```
 
 chain した path は REPL や inspect 表示で canonical path に圧縮されます。
-つまり `User.profile / Profile.name` と `User.profile.name` は同じ path として
+つまり `User.profile -> Profile.name` と `User.profile.name` は同じ path として
 扱われ、chain の履歴は表示に残りません。
 
 この canonical 化では、つなぎ目で root path が重複していたら落とします。
@@ -352,17 +360,17 @@ xldr(1)> outer = User.profile
 > outer: Facet<InfallibleStructural, _, _, _, _> = User.profile
 xldr(2)> inner = Profile.name
 > inner: Facet<InfallibleStructural, _, _, _, _> = Profile.name
-xldr(3)> path = outer / inner
+xldr(3)> path = outer -> inner
 > path: Facet<InfallibleStructural, _, _, _, _> = User.profile.name
 xldr(4)>
 ```
 
 同じ規則は tuple segment や variant segment を含む path にも適用されます。
 
-- `Config.entrypoint / Tuple._0` は `Config.entrypoint._0`
-- `Expr.Add / Tuple._1` は `Expr.Add._1`
+- `Config.entrypoint -> Tuple._0` は `Config.entrypoint._0`
+- `Expr.Add -> Tuple._1` は `Expr.Add._1`
 
-`/` は path を組み立てる surface であり、表示時には canonical path へ正規化されます。
+`->` は path を組み立てる surface であり、表示時には canonical path へ正規化されます。
 
 ## REPL で path を確認する
 
@@ -477,8 +485,8 @@ facet = User.password
 ## 躓きやすいポイント
 
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
-- `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `/` で同じスコープ内に消費してください。
-- chain した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
+- `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `->` で同じスコープ内に消費してください。
+- chain した path は canonical 表示へ圧縮されるので、`User.profile -> Profile.name` を inspect すると `User.profile.name` に見えます。`->` の組み立て履歴そのものは残りません。
 - variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|binding>` で確認するのが一番わかりやすいです。
 - スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。

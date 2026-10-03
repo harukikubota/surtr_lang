@@ -252,6 +252,8 @@ pub enum BinOp {
     Sub,
     Mul,
     Slash,
+    /// Fixed Facet path composition; never dispatched through a user trait.
+    FacetChain,
     Eq,
     Neq,
     Lt,
