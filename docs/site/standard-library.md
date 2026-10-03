@@ -356,7 +356,7 @@ ret = List::reverse(acc)
 - `map_insert` で duplicate key を更新すると、値のみ差し替える
 - `map_remove` は key が存在しない場合 no-op
 - `map_keys` / `map_values_list` はキー昇順 deterministic order を保つ
-- `inspect` / `to_string` は key を quoted string で表示し、空 map は `hash![]` と表示する
+- `inspect` / `to_string` はkeyをquoted stringで表示し、空mapは `hash![]` と表示する。keyの制御文字と文字としての `#{` は[文字列の共通引用規則](./strings.md#replとinspectの引用表示)でエスケープする
 
 `hash![key => value, ...]` は `HashMap::map_from_entries` へ lower される生成 literal で、key は `String` 型を得られる任意の式です。
 

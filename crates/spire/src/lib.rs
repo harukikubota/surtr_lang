@@ -3,6 +3,7 @@ pub mod error;
 mod func_literal;
 mod lexer;
 mod parser;
+mod string_literal;
 mod token;
 
 // Re-export the main entry point

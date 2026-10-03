@@ -398,14 +398,19 @@ defmod Kernel {
   @builtin def print(a: String) -> Unit
 
   @doc """
-  Produce a debug-oriented textual representation of a value.
-  Prefer this when structure is more important than presentation polish.
-  Bare callable values are shown with module/name/signature metadata when it is
-  available at runtime.
+  値の構造を確認するための文字列表現を返します。
+  Stringは引用符で囲み、制御文字と補間開始の文字列をエスケープします。
+  String単体の引用表示は、通常の文字列リテラルとして再入力すると元の値に戻ります。
+  LFとTABは `\n`・`\t`、ESCなどその他の制御文字は `\u{1b}` のように表示します。
+  `print`へ直接渡した文字列はエスケープされません。
+  構造体のprivate field省略などがあるため、inspect全体の再入力は保証しません。
+  bare callableは、runtime metadataがある場合にmodule・name・signatureを表示します。
 
   ## REPL
   xldr(1)> ("alice", 42)
   ("alice", 42)
+  xldr(2)> print(inspect("\u{1b}a"))
+  "\u{1b}a"
   """
   @builtin def inspect(a: $A) -> String
 

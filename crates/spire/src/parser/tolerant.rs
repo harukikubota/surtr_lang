@@ -227,41 +227,41 @@ fn scan_tolerant(source: &str) -> TolerantScan {
         }
 
         if c == '"' || c == '\'' {
-            let quote = c;
             let start = i;
-            i += 1;
-            let body_start = i;
-            let mut escaped = false;
-            while i < len {
-                if chars[i] == '\n' && !escaped {
-                    break;
+            match crate::string_literal::scan_string(&chars, start) {
+                Ok((literal, next)) => {
+                    i = next;
+                    push_both(
+                        &mut parser_tokens,
+                        &mut syntax_tokens,
+                        Token::Str(literal),
+                        SyntaxTokenKind::String,
+                        start,
+                        i,
+                    );
                 }
-                if escaped {
-                    escaped = false;
-                } else if chars[i] == '\\' {
-                    escaped = true;
-                } else if chars[i] == quote {
-                    break;
+                Err(error) => {
+                    diagnostics.push(parse_diag(error));
+                    // Preserve the invalid source range for highlighting, but never
+                    // manufacture a valid literal or feed its body to the parser.
+                    let quote = chars[start];
+                    i = start + 1;
+                    while i < len && chars[i] != '\n' {
+                        if chars[i] == '\\' {
+                            i = (i + 2).min(len);
+                        } else if chars[i] == quote {
+                            i += 1;
+                            break;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    syntax_tokens.push(SyntaxToken {
+                        kind: SyntaxTokenKind::String,
+                        span: Span { start, end: i },
+                    });
                 }
-                i += 1;
             }
-            if i >= len || chars[i] == '\n' {
-                diagnostics.push(parse_diag(ParseError::incomplete(
-                    quote.to_string(),
-                    Span { start, end: i },
-                )));
-                continue;
-            }
-            let text = chars[body_start..i].iter().collect::<String>();
-            i += 1;
-            push_both(
-                &mut parser_tokens,
-                &mut syntax_tokens,
-                Token::Str(text),
-                SyntaxTokenKind::String,
-                start,
-                i,
-            );
             continue;
         }
 

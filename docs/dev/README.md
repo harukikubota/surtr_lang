@@ -30,6 +30,7 @@ API 一覧、builtin 一覧、標準モジュールの完全なロード順な�
 
 ## 仕様書
 
+- [文字列リテラルの実装契約](./String_literal_spec.md)
 - [EldrVM spec](./EldrVM_spec.md)
 - [FS / Shell spec](./FS_Shell_spec.md)
 - [Json / Encode / Decode spec](./Json_spec.md)

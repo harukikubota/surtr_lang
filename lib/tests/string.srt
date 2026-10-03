@@ -138,7 +138,7 @@ test("String") {
   describe("lines") {
     it("returns no lines for empty input") { assert_eq("[]", inspect(lines(""))) }
     it("splits newline-terminated text") { assert_eq("[\"a\", \"b\"]", inspect(lines("a\nb\n"))) }
-    it("normalizes CRLF line endings") { assert_eq("[\"a\", \"b\"]", inspect(lines("a\r\nb\r\n"))) }
+    it("normalizes CRLF line endings") { assert_eq("[\"a\", \"b\"]", inspect(lines("a\u{d}\nb\u{d}\n"))) }
   }
 
   describe("chars") {
@@ -218,6 +218,8 @@ test("String") {
   }
 
   describe("trim") {
+    it("trims actual carriage returns") { assert_eq("core", trim("\u{d}core\u{d}")) }
+    it("preserves literal backslash-r text") { assert_eq("\\rcore\\r", trim("\\rcore\\r")) }
     it("trims leading whitespace") { assert_eq("core", trim_start(" \n\tcore")) }
     it("trims trailing whitespace") { assert_eq("core", trim_end("core \n\t")) }
     it("trims both sides") { assert_eq("core", trim(" \ncore\t ")) }

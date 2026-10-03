@@ -251,6 +251,7 @@ macro_rules! repl_case {
 }
 
 const REPL_CASES: &[(&str, fn())] = &[
+    repl_case!(repl_quotes_terminal_controls_without_interfering_with_cli_color),
     repl_case!(repl_quit_exits_cleanly),
     repl_case!(repl_exit_exits_cleanly),
     repl_case!(repl_fails_fast_when_additional_stdlib_bootstrap_fails),
@@ -311,6 +312,53 @@ const REPL_CASES: &[(&str, fn())] = &[
     repl_case!(repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evidence),
     repl_case!(repl_eprint_reports_generation_site_line),
 ];
+
+fn repl_quotes_terminal_controls_without_interfering_with_cli_color() {
+    let input = "s =? String::from_codepoints([27, 0, 13, 127, 194, 128], StringEncoding::Utf8)\ns ++ \"a\"\n:v 2\nString::codepoints(s, StringEncoding::Utf8)\n:quit\n";
+    let args = repl_args_with_default_no_local_config(&["--quiet"]);
+    let mut plain_command = surtr_command();
+    plain_command
+        .arg("repl")
+        .args(&args)
+        .env("SURTR_REPL_COLOR", "never")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let plain = run_repl_command(plain_command, input);
+    let colored = run_repl_session_with_color(input);
+    for output in [&plain, &colored] {
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout.clone()).expect("REPL emits UTF-8");
+        let visible = strip_ansi(&stdout);
+        assert!(
+            visible.contains(r#"s: String = "\u{1b}\u{0}\u{d}\u{7f}\u{80}""#),
+            "{visible}"
+        );
+        assert_eq!(
+            visible
+                .matches(r#""\u{1b}\u{0}\u{d}\u{7f}\u{80}a""#)
+                .count(),
+            2,
+            "{visible}"
+        );
+        assert!(
+            visible.contains("Ok([27, 0, 13, 127, 194, 128])"),
+            "{visible}"
+        );
+        assert!(
+            !visible
+                .chars()
+                .any(|ch| ch.is_control() && ch != '\n' && ch != '\t'),
+            "{visible:?}"
+        );
+    }
+    assert!(!plain.stdout.contains(&0x1b), "{plain:?}");
+    assert!(
+        colored.stdout.windows(2).any(|bytes| bytes == b"\x1b["),
+        "{colored:?}"
+    );
+}
 
 #[test]
 fn repl_case_inventory_has_unique_names_and_functions() {

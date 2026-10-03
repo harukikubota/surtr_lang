@@ -1,0 +1,2 @@
+phase: parse
+contains: String interpolation is not allowed

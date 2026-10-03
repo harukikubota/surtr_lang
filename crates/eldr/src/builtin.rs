@@ -6385,6 +6385,51 @@ mod tests {
     }
 
     #[test]
+    fn inspect_quotes_terminal_controls_and_interpolation_in_every_container() {
+        let vm = test_vm_with_types(vec![TypeEntry {
+            tag: 10,
+            name: "Message".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["body".into()],
+            private_flags: vec![false],
+        }]);
+        let text = Value::Str("\u{1b}a#{body}\u{85}".into());
+        let value = Value::Tuple(vec![
+            text.clone(),
+            Value::List(ListHandle::from_items(vec![text.clone()])),
+            Value::Tagged {
+                tag: 0,
+                fields: vec![text.clone()],
+            },
+            Value::Tagged {
+                tag: 10,
+                fields: vec![text.clone()],
+            },
+            Value::HashMap(HashMapHandle::from_entries(vec![("\0#{key}".into(), text)])),
+        ]);
+        assert_eq!(
+            inspect_value(&vm, &value),
+            r#"("\u{1b}a\#{body}\u{85}", ["\u{1b}a\#{body}\u{85}"], Ok("\u{1b}a\#{body}\u{85}"), Message(body: "\u{1b}a\#{body}\u{85}"), hash!["\u{0}\#{key}" => "\u{1b}a\#{body}\u{85}"])"#
+        );
+    }
+
+    #[test]
+    fn string_output_preserves_print_and_eprint_contracts() {
+        let text = "\u{1b}a\r\0#{body}";
+        let mut vm = test_vm().with_output_capture();
+        let value = Value::Str(text.into());
+        assert_eq!(super::to_string_display(&vm, &value), text);
+        call_builtin(&mut vm, builtin_id("print"), vec![value.clone()])
+            .expect("print should succeed");
+        call_builtin(&mut vm, builtin_id("eprint"), vec![value]).expect("eprint should succeed");
+        assert_eq!(vm.captured_stdout(), Some(&[text.to_string()][..]));
+        assert_eq!(
+            vm.error_output.as_deref(),
+            Some(&[r#""\u{1b}a\u{d}\u{0}\#{body}""#.to_string()][..])
+        );
+    }
+
+    #[test]
     fn io_get_line_reads_injected_input_and_strips_newline() {
         let mut vm = test_vm()
             .with_output_capture()

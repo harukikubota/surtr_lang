@@ -26,6 +26,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [Range](./range.md)
 - [Float](./float.md)
 - [Facet](./facet.md)
+- [文字列の入力と表示](./strings.md)
 - [Kernel](./kernel.md)
 - [Lazy evaluation と括弧](./lazy-evaluation.md)
 - [JSON](./json.md)

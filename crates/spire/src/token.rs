@@ -12,7 +12,7 @@ pub enum Token {
     // ── Literals ──
     Int(SurtrInt),
     Float(f64),
-    Str(String),
+    Str(crate::string_literal::StringLiteral),
     DocString(String),
     True,
     False,
