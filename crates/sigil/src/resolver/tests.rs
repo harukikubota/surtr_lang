@@ -4709,41 +4709,41 @@ fn test_backtick_qualified_capture_resolves_like_plain_capture() {
 }
 
 #[test]
-fn test_backtick_operator_capture_lowers_to_closure() {
+fn test_backtick_operator_capture_preserves_capture_origin() {
     let resolved =
         parse_and_resolve("inc = &`+`(&1, 1)\nadd = &`+`").expect("operator capture should lower");
 
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Closure(_, params, _, body) => {
+            Resolved::CaptureClosure(_, params, _, body) => {
                 assert_eq!(params.len(), 1);
                 assert!(matches!(
                     body.as_ref(),
                     Resolved::BinOp(_, BinOp::Add, _, _)
                 ));
             }
-            other => panic!("Expected lowered closure, got {:?}", other),
+            other => panic!("Expected capture closure, got {:?}", other),
         },
         other => panic!("Expected bind, got {:?}", other),
     }
 
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Closure(_, params, _, body) => {
+            Resolved::CaptureClosure(_, params, _, body) => {
                 assert_eq!(params.len(), 2);
                 assert!(matches!(
                     body.as_ref(),
                     Resolved::BinOp(_, BinOp::Add, _, _)
                 ));
             }
-            other => panic!("Expected lowered closure, got {:?}", other),
+            other => panic!("Expected capture closure, got {:?}", other),
         },
         other => panic!("Expected bind, got {:?}", other),
     }
 }
 
 #[test]
-fn test_backtick_pair_constructor_capture_and_pipeline_lower_to_tuple_closures() {
+fn test_backtick_pair_capture_preserves_origin_and_pipeline_remains_closure() {
     let resolved = parse_and_resolve(
         "pair = &`(,)`\npiped = 1 |> `(,)`(\"one\")\nmapped = [1] |*> `(,)`(\"tag\")\nbound = Ok(1) |>= `(,)`(\"tag\")",
     )
@@ -4751,13 +4751,13 @@ fn test_backtick_pair_constructor_capture_and_pipeline_lower_to_tuple_closures()
 
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Closure(_, params, _, body) => {
+            Resolved::CaptureClosure(_, params, _, body) => {
                 assert_eq!(params.len(), 2);
                 assert!(
                     matches!(body.as_ref(), Resolved::TupleLiteral(_, items) if items.len() == 2)
                 );
             }
-            other => panic!("Expected pair closure, got {other:?}"),
+            other => panic!("Expected pair capture closure, got {other:?}"),
         },
         other => panic!("Expected pair bind, got {other:?}"),
     }

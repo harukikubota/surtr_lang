@@ -353,6 +353,9 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_doc_typed_call_supports_qualified_inherent_impl_methods),
     repl_core_case!(core_sig_rejects_tuple_field_and_facet_expression_queries),
     repl_core_case!(core_inspects_facet_roots_and_private_paths_without_exposing_them_to_source),
+    repl_core_case!(core_operator_captures_display_trait_identity_and_execute),
+    repl_core_case!(core_operator_partial_captures_preserve_origin_and_placeholder_order),
+    repl_core_case!(core_pair_captures_display_bootstrap_identity_and_concrete_types),
 ];
 
 fn run_repl_core_bucket(bucket: usize) {
@@ -5317,6 +5320,145 @@ fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
         "{sig}"
     );
     assert!(sig.contains("specialized:\n  id(Int) -> Int"), "{sig}");
+}
+
+fn core_operator_captures_display_trait_identity_and_execute() {
+    let mut engine = engine();
+    for (operator, module, name, signature, args, result) in [
+        ("+", "Add", "add", "Int, Int -> Int", "8, 2", "10"),
+        ("-", "Sub", "sub", "Int, Int -> Int", "8, 2", "6"),
+        ("*", "Mul", "mul", "Int, Int -> Int", "8, 2", "16"),
+        (
+            "/",
+            "Div",
+            "safe_div",
+            "Int, Int -> Result<Int>",
+            "8, 2",
+            "Ok(4)",
+        ),
+        (
+            "%",
+            "Mod",
+            "safe_mod",
+            "Int, Int -> Result<Int>",
+            "8, 3",
+            "Ok(2)",
+        ),
+        (
+            "++",
+            "Concat",
+            "concat",
+            "String, String -> String",
+            "\"a\", \"b\"",
+            "\"ab\"",
+        ),
+        ("==", "Eq", "eq", "Int, Int -> Boolean", "8, 2", "False"),
+        ("!=", "Eq", "neq", "Int, Int -> Boolean", "8, 2", "True"),
+        ("<", "Compare", "lt", "Int, Int -> Boolean", "8, 2", "False"),
+        (">", "Compare", "gt", "Int, Int -> Boolean", "8, 2", "True"),
+        (
+            "<=",
+            "Compare",
+            "lte",
+            "Int, Int -> Boolean",
+            "8, 2",
+            "False",
+        ),
+        (
+            ">=",
+            "Compare",
+            "gte",
+            "Int, Int -> Boolean",
+            "8, 2",
+            "True",
+        ),
+    ] {
+        let source = format!("operator: ({signature}) = &`{operator}`");
+        let output = rendered_text(&engine.handle_line(&source));
+        let expected = format!("FnCapture(module: {module}, name: {name}, sig: ({signature}))");
+        assert!(output.contains(&expected), "{source}\n{output}");
+        let applied = rendered_text(&engine.handle_line(&format!("operator({args})")));
+        assert!(applied.trim() == result, "{operator}\n{applied}");
+    }
+
+    let closure = rendered_text(&engine.handle_line("literal = {|a: Int, b: Int| a + b}"));
+    assert!(closure.contains("Closure(Int, Int -> Int)"), "{closure}");
+}
+
+fn core_operator_partial_captures_preserve_origin_and_placeholder_order() {
+    let mut engine = engine();
+    let swapped = rendered_text(&engine.handle_line("swapped: (Int, Int -> Int) = &`-`(&2, &1)"));
+    assert!(
+        swapped.contains("FnCapture(module: Sub, name: sub, sig: (Int, Int -> Int))"),
+        "{swapped}"
+    );
+    let applied = rendered_text(&engine.handle_line("swapped(2, 8)"));
+    assert!(applied.trim() == "6", "{applied}");
+
+    let partial = rendered_text(&engine.handle_line("partial = &swapped(2, &1)"));
+    assert!(
+        partial.contains("FnCapture(module: Sub, name: sub, sig: (Int -> Int))"),
+        "{partial}"
+    );
+    let applied = rendered_text(&engine.handle_line("partial(8)"));
+    assert!(applied.trim() == "6", "{applied}");
+
+    let direct = rendered_text(&engine.handle_line("increment = &`+`(&1, 4)"));
+    assert!(
+        direct.contains("FnCapture(module: Add, name: add, sig: (Int -> Int))"),
+        "{direct}"
+    );
+    let nested = rendered_text(&engine.handle_line("Ok(increment)"));
+    assert!(
+        nested.contains("Ok(FnCapture(module: Add, name: add, sig: (Int -> Int)))"),
+        "{nested}"
+    );
+    let literal = rendered_text(&engine.handle_line("wrapped = {|n: Int| increment(n)}"));
+    assert!(literal.contains("Closure(Int -> Int)"), "{literal}");
+}
+
+fn core_pair_captures_display_bootstrap_identity_and_concrete_types() {
+    let mut engine = engine();
+    let pair = rendered_text(&engine.handle_line("pair: (Int, String -> (Int, String)) = &`(,)`"));
+    assert!(
+        pair.contains(
+            "FnCapture(module: Bootstrap, name: (,), sig: (Int, String -> (Int, String)))"
+        ),
+        "{pair}"
+    );
+    let applied = rendered_text(&engine.handle_line("pair(1, \"one\")"));
+    assert!(applied.trim() == "(1, \"one\")", "{applied}");
+
+    let swapped = rendered_text(
+        &engine.handle_line("swapped_pair: (String, Int -> (Int, String)) = &`(,)`(&2, &1)"),
+    );
+    assert!(
+        swapped.contains(
+            "FnCapture(module: Bootstrap, name: (,), sig: (String, Int -> (Int, String)))"
+        ),
+        "{swapped}"
+    );
+    let applied = rendered_text(&engine.handle_line("swapped_pair(\"one\", 1)"));
+    assert!(applied.trim() == "(1, \"one\")", "{applied}");
+
+    let partial =
+        rendered_text(&engine.handle_line("tagged: (Int -> (Int, String)) = &`(,)`(&1, \"tag\")"));
+    assert!(
+        partial.contains("FnCapture(module: Bootstrap, name: (,), sig: (Int -> (Int, String)))"),
+        "{partial}"
+    );
+    let recaptured = rendered_text(&engine.handle_line("again = &tagged(&1)"));
+    assert!(
+        recaptured.contains("FnCapture(module: Bootstrap, name: (,), sig: (Int -> (Int, String)))"),
+        "{recaptured}"
+    );
+    let nested = rendered_text(&engine.handle_line("Ok(again)"));
+    assert!(
+        nested.contains("Ok(FnCapture(module: Bootstrap, name: (,), sig: (Int -> (Int, String))))"),
+        "{nested}"
+    );
+    let applied = rendered_text(&engine.handle_line("again(2)"));
+    assert!(applied.trim() == "(2, \"tag\")", "{applied}");
 }
 
 fn core_sig_supports_closure_bindings_recapture_and_application() {

@@ -5742,12 +5742,14 @@ fn callable_head_for_invocation(node: &TypedNode) -> Option<(String, String)> {
         TypedInner::TraitCall {
             trait_name,
             method_name,
-            origin: TraitCallOrigin::Explicit,
             ..
         } => Some((
             trait_short_name(trait_name).to_string(),
             method_name.clone(),
         )),
+        TypedInner::TupleLiteral(items) if items.len() == 2 => {
+            Some(("Bootstrap".to_string(), "(,)".to_string()))
+        }
         _ => None,
     }
 }

@@ -204,6 +204,9 @@ capture から Capture / Closure origin を推測しない。metadata を復元�
 内部の function / template / builtin ID を出力しない。詳細な callable 生成契約と受入 inventory は
 [`callable-display-origin-spec.md`](../../doc/callable-display-origin-spec.md) を参照。
 直接 binding と nested value は同一の runtime metadata を使い、REPL binding metadata が表示 origin を上書きしない。
+演算子 capture は lower 後の対応 Trait method の module / name を表示する。二要素 tuple の ``&`(,)` `` は
+`Bootstrap` / `(,)` を表示し、どちらも capture 作成位置で解決した実際の callable signature を使う。
+Facet capture の表示 identity と、現行で capture できない演算子はこの規則の対象外とする。
 `to_string` は文字列値を引用せず、`inspect` は文字列 literal として引用する。
 
 ### 4.1 RichError

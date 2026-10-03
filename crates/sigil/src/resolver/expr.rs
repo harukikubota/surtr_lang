@@ -4275,8 +4275,6 @@ impl Resolver {
                         _ => unreachable!("capture lowering must resolve to a closure"),
                     };
                 }
-                let capture_uses_named_callable =
-                    !matches!(target.as_ref(), Ast::FuncLiteralRef(_, _));
                 if let Some((policy, constructor_name)) =
                     self.capture_policy_for_ast_target(target.as_ref())
                 {
@@ -4338,16 +4336,13 @@ impl Resolver {
                             resolved_args,
                         ))
                     }
-                    Ast::Closure(closure_span, params, body) if capture_uses_named_callable => {
+                    Ast::Closure(closure_span, params, body) => {
                         match self.resolve_literal_closure(closure_span, params, body, false, true)? {
                             Resolved::Closure(span, params, captures, body) => {
                                 Ok(Resolved::CaptureClosure(span, Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()), captures, body))
                             }
                             other => Ok(other),
                         }
-                    }
-                    Ast::Closure(closure_span, params, body) => {
-                        self.resolve_literal_closure(closure_span, params, body, false, true)
                     }
                     lowered => self.resolve_node(lowered),
                 }
