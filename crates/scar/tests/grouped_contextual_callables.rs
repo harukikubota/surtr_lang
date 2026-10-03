@@ -1,3 +1,5 @@
+// This test target uses only part of the helpers shared with the surface tests.
+#[allow(dead_code)]
 mod support;
 use support::{resolve_with_builtin_prelude, typecheck};
 
