@@ -2,6 +2,11 @@
 Standard `Result` type declaration.
 `Result` represents success-or-error control flow as a value.
 The canonical builtin enum surface is `Result<$T>`.
+Variable, parameter, field, and callable type annotations use one type argument.
+Only a function definition's direct return position may write `Result<$T, E>`
+to document its error contract. `NoneError` does not create an annotation exception.
+Value inspection uses `Result<$T>`; REPL declaration queries preserve a written
+error contract without adding one when it was omitted.
 This is the language's Either-oriented success/failure representation.
 Its runtime representation is enum-like, but the language treats `Result` as a
 dedicated built-in abstraction rather than exposing it as the future general

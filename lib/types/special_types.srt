@@ -13,9 +13,11 @@ return a meaningful value.
 The result carrier returned by an Extractor.
 `MatchResult::Ok(payload)` proceeds to the child patterns;
 `MatchResult::Err(error)` reports failure with a concrete Error.
-The canonical signature is `MatchResult<Value, Error>`; `MatchResult<Value>`
-is accepted as shorthand. This carrier is restricted to Extractor signatures
-and return paths and cannot be stored or called as an ordinary value.
+The canonical signature is `MatchResult<Value>`. A `defextractor` declaration may
+write `MatchResult<Value, Error>` in its return position. An `ExtractorClosure`
+type annotation uses `MatchResult<Value>` and omits the Error argument. This
+carrier is restricted to Extractor signatures and return paths and cannot be
+stored or called as an ordinary value.
 
 Branch consumers discard the Error, while failure-aware binding preserves it.
 Use a normal `Result`-returning function for a value-level API.
@@ -29,7 +31,9 @@ defenum MatchResult<$Value> {
 @doc """
 A first-class Extractor with a function signature and lexical captures.
 Create one with `*{|value: Int| MatchResult::Ok(value)}` and bind it to a name.
-Its signature is `ExtractorClosure<(Int -> MatchResult<Int, Error>)>`.
+Its signature is `ExtractorClosure<(Int -> MatchResult<Int>)>`.
+`defextractor` declarations may name the canonical `Error` in their
+return type; an `ExtractorClosure` type annotation uses `MatchResult<Int>`.
 The last input is the matched value; earlier inputs are pre-arguments.
 Invoke it in a Pattern, such as `if_let(3, extract(value), value, 0)`.
 Ordinary function calls and implicit conversions from normal closures are rejected.

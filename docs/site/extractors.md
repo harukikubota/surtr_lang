@@ -44,7 +44,7 @@ print(match 1 {
 
 この例では `never(...)` が常に `MatchResult::Err(Rejected)` を返すため、fallback 側に流れます。
 
-Extractor は `MatchResult<$A, Error>` を返します（`MatchResult<$A>` も可）。
+named `defextractor` の戻り値は `MatchResult<$A>` が正規表記です。戻り値位置では `MatchResult<$A, Error>` と Error を明記することもできます。ExtractorClosure の型注釈には第二型引数を書きません。
 `MatchResult::Ok(payload)` は子 pattern の照合へ進み、`MatchResult::Err(error)` は
 不一致になります。各 occurrence は到達時に一度だけ評価され、成功結果を再利用します。
 `match` / `if_let` / `is_match` は Error を破棄します。SafeBind `=?` は元 Error の
@@ -97,8 +97,9 @@ is_match(3, greater(_))
 # False
 ```
 
-型は `ExtractorClosure<(Int -> MatchResult<Int, Error>)>` です。通常の変数・引数・戻り値として
+型は `ExtractorClosure<(Int -> MatchResult<Int>)>` です。通常の変数・引数・戻り値として
 受け渡し、同じ signature の値を `if` や `match` で選択できます。引数の型注釈は推論できれば省略できます。
+named `defextractor` の戻り値では `MatchResult<Int, Error>` と書けます。ExtractorClosure の型注釈では `MatchResult<Int>` を使い、第二型引数は書きません。
 事前引数、payload の分解、Unit 子の省略、本文の SafeBind は named Extractor と同じ契約です。
 
 変数へ束縛するときは入力と payload を含む signature 全体が concrete である必要があります。高階関数へ literal を直接渡す場合は、受け取り側の expected type から一意に導出できれば注釈は不要です。後続の Pattern 適用ごとに未確定型を別々の型へ generalize することはありません。

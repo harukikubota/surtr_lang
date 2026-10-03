@@ -859,13 +859,12 @@ Surtr の builtin type として宣言されるのは `Result<T>` です。
 value: Result<Int> = Ok(42)
 ```
 
-一方で、関数の戻り値では `Result<T, E>` という書き方を使うことがあります。  
-これは「成功値 `T` に加えて、どの error 群を返す関数か」を Either の `Err` 側の契約として文書化するための表記で、型宣言そのものの head は `Result<T>` のままです。
+`Result<T>` が正規表記です。関数定義の直接の戻り値位置に限り、`Result<T, E>` と書いて Either の `Err` 側の error contract を文書化できます。値やその他の型注釈では `Result<T>` を使います。型宣言そのものの head も `Result<T>` です。
 
 利用者目線では次の理解で十分です。
 
 - 値として扱うときは `Result<T>`
-- 関数契約を詳しく見せたいときは `Result<T, E>` が現れることがある
+- 関数定義の戻り値契約を詳しく見せるときだけ `Result<T, E>` を使える
 - どちらも `Ok(...)` / `Err(...)` と `match` を中心に扱い、variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使える
 
 ## 15. 現時点のスコープ

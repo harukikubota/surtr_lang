@@ -186,8 +186,8 @@ deferror ShellIoError(detail: String) {
 }
 ```
 
-関数の詳細な戻り値表記では `Result<T, Error>` を使ってよいが、
-値として扱う型 head は既存方針どおり `Result<T>` である。
+関数定義の直接の戻り値位置に限り、詳細な error contract 表記として `Result<T, Error>` を使ってよい。
+値やその他の型注釈で使う型 head は既存方針どおり `Result<T>` である。
 
 ### 2.3 `FS` operations
 

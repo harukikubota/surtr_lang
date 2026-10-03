@@ -187,11 +187,12 @@ variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使�
 
 ### 戻り値位置の `Result<T, E>`
 
-関数シグネチャでは `Result<T, E>` という表記が現れることがあります。
+`Result<T>` が正規表記です。`Result<T, E>` は関数定義の直接の戻り値位置だけで使える補助表記です。
 
 - builtin type declaration の canonical head は `Result<T>`
 - `E` は `Err` 側の error contract を説明する補助表記
 - 値として保持される型の中心は引き続き `Result<T>`
+- 値や引数など、戻り値以外の型注釈では `Result<T>` を使う
 
 ### `Error`
 
@@ -763,7 +764,7 @@ defmod Bootstrap {
 
 ### Result callable の Extractor 変換
 
-`Extractor::from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)>` は通常SRTの標準APIです。単項callableをcaptureし、各Pattern occurrenceで1回実行します。外側Resultだけをunwrapし、成功payloadと元Errorを保持します。Option/raw/入力0個/複数入力の暗黙変換はありません。
+`Extractor::from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B>)>` は通常SRTの標準APIです。単項callableをcaptureし、各Pattern occurrenceで1回実行します。外側Resultだけをunwrapし、成功payloadと元Errorを保持します。Option/raw/入力0個/複数入力の暗黙変換はありません。
 
 詳しい使い方は [Pattern Matching](./pattern-matching.md) と [Extractors](./extractors.md)、実装契約は [Pattern / Extractor 実装契約](../dev/Pattern_spec.md) を参照してください。
 

@@ -109,7 +109,7 @@ adder: (Int, Int -> Int) = &`+`
 `&Either<_, Int>::Left` のように owner 型引数を明示できます。詳しい arity、推論、拒否規則は
 [capture 演算子の詳細](./capture-operator.md) を参照してください。
 
-関数値の推論型では `Result<T>` と表示します。宣言の戻り値にドキュメント用として書いた `Result<T, E>` は、宣言シグネチャの表示に残ります。
+関数値の推論型では `Result<T>` と表示します。`Result<T, E>` は関数定義の直接の戻り値位置だけに書ける補助的な error contract 表記です。ExtractorClosure の signature では `MatchResult<T>` と表示し、内部の `Error` は省きます。関数宣言の戻り値に明示した `Result<T, E>` と named `defextractor` の戻り値に明示した `MatchResult<T, Error>` は、`:sig` / `:doc` などの REPL コマンドで宣言シグネチャを照会したときに表示します。ExtractorClosure の型注釈では Error を指定できません。
 
 REPL では capture を `FnCapture(module: Function, name: id, sig: (Int -> Int))` のように表示します。module とトレイトの所属名前空間を保ち、暗黙の `Global::` は省略します。
 

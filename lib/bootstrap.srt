@@ -340,8 +340,9 @@ defmod Bootstrap {
 Concrete bootstrap error for "no value" situations.
 `NoneError` is the standard failure used by optional-style sugar such as `T?`.
 `T?` now lowers to `Option<T>`.
-Use `Result<T, NoneError>` explicitly when "missing value" should participate in
-Result-style failure propagation.
+Use `Result<T>` with `Err(NoneError)` when "missing value" should participate in
+Result-style failure propagation. A function definition may document this contract
+with `Result<T, NoneError>` in its direct return position.
 """
 deferror NoneError { "None Value." }
 

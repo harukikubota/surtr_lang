@@ -85,7 +85,15 @@ def parse_bool(text: String) -> Result<Boolean> {
 }
 ```
 
-補助表記として `Result<T, E>` が現れることがありますが、builtin type head の中心は `Result<T>` です。
+`Result<T>` が正規表記です。補助表記 `Result<T, E>` は関数定義の直接の戻り値位置だけに書け、関数が返すエラーの契約を示します。値、引数、field、関数型、入れ子の型注釈では `Result<T>` を使います。`NoneError` も例外にはなりません。
+
+```surtr
+def fetch() -> Result<Int, NoneError> { Ok(1) }
+ret: Result<Int> = Ok(1)
+reader: (-> Result<Int>) = &fetch
+```
+
+`ret: Result<Int, NoneError>` や `(Int -> Result<Int, Error>)` は拒否します。REPL の値表示、型エラー診断、補完候補とシグネチャヘルプは `Result<T>` を使います。`:sig` / `:doc` などのコマンドで定義を照会したときだけ、定義に書かれた Error 位置を表示します。
 
 ## Trait 制約
 

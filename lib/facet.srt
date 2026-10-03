@@ -24,7 +24,7 @@ look or update.
 `Option<T>` fields work naturally with enum-case Facet paths such as
 `Option.Some`, `case_set`, and `case_over`.
 When a field should participate in Result-style update flows, use
-`Result<T, NoneError>` explicitly.
+`Result<T>` explicitly. Represent a missing value with `Err(NoneError)`.
 
 - `Type.segment` builds a path itself
 - `value.segment` is sugar for applying the corresponding path to `value`

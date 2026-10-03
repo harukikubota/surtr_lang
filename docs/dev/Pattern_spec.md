@@ -2,7 +2,7 @@
 
 この文書は、現行の Pattern、named Extractor、ExtractorClosure、MatchResult、`Kernel::apply_pattern` の構文・型・評価・フェーズ間契約を定める。利用者向けの説明は [Pattern Matching](../site/pattern-matching.md) と [Extractors](../site/extractors.md)、標準 API の一次情報は [`lib/extractor.srt`](../../lib/extractor.srt) の `@doc` を参照する。SafeBind と do の詳細は [do intrinsic](./Do_intrinsic_spec.md)、診断の構造化契約は [diagnostics](./diagnostics.md) に従う。
 
-named Extractor と ExtractorClosure は入力を1個以上取り、最後の入力を照合対象とする。戻り値は `MatchResult<Payload, Error>` であり、`MatchResult::Ok` と `MatchResult::Err` の二状態だけを持つ。`Option` 返却、旧 `Matcher` / `apply_matcher` 経路、暗黙変換は受理しない。Pattern AST は第一級の値ではなく、ExtractorClosure の値化と Pattern consumer は別の境界である。
+named Extractor と ExtractorClosure は入力を1個以上取り、最後の入力を照合対象とする。戻り値の正規表記は `MatchResult<Payload>` であり、`MatchResult::Ok` と `MatchResult::Err` の二状態だけを持つ。named `defextractor` 定義の直接の戻り値位置に限り、`MatchResult<Payload, Error>` と Error を明記できる。`Option` 返却、旧 `Matcher` / `apply_matcher` 経路、暗黙変換は受理しない。Pattern AST は第一級の値ではなく、ExtractorClosure の値化と Pattern consumer は別の境界である。
 
 ## Record の構造的 Pattern
 
@@ -43,10 +43,10 @@ defenum MatchResult<$Value> {
 }
 ```
 
-ソース signature と表示の正規形は `MatchResult<P, Error>` とする。`MatchResult<P>` も短縮入力として受理する。これは通常 nominal 型に対する一般的な省略規則ではなく、MatchResult 固有の compiler-special 規則である。
+ソース上の正規表記は `MatchResult<P>` とする。named `defextractor` 定義の直接の戻り値位置に限り、error contract を明記する `MatchResult<P, Error>` も受理する。`ExtractorClosure` の型注釈は値の型なので、`MatchResult<P>` のみを受理する。値の型表示でも内部 Error 型を省いて `MatchResult<P>` と表示する。第二型引数は型定義の引数ではなく、定義の戻り値にだけ書ける補助表記である。
 
-- 型引数数は1または2だけを受理する。
-- 第二引数がある場合は canonical な abstract `Error` だけを受理する。`MatchResult<P, Int>` や具象 error 型を第二引数に指定する形は拒否する。
+- 型定義どおり型引数は1個とする。named `defextractor` 定義の直接の戻り値に限り、補助表記の第二引数を受理する。
+- 第二引数がある場合は named `defextractor` 定義の直接の戻り値位置でのみ受理し、canonical な abstract `Error` に限る。`ExtractorClosure` の型注釈に第二引数を書いた場合や、`MatchResult<P, Int>` / 具象 error 型を指定した場合は拒否する。
 - 両表記を同一型へ正規化する。内部では成功 payload 型だけを型引数として保持してよい。
 - `NoMatch` variant / tag は設けない。不成功はすべて Err であり、Error を保持するか破棄するかは consumer が決める。
 - `Result` / `Option` と暗黙変換しない。variant 名や tag の類似を根拠に互換扱いしない。
@@ -87,8 +87,8 @@ greater_than = *{|value: Int|
 ソース上の型注釈構文は次とする。
 
 ```surtr
-ExtractorClosure<(Int -> MatchResult<Int, Error>)>
-ExtractorClosure<(Int, Int, Int -> MatchResult<Int, Error>)>
+ExtractorClosure<(Int -> MatchResult<Int>)>
+ExtractorClosure<(Int, Int, Int -> MatchResult<Int>)>
 ```
 
 `ExtractorClosure` は1個の関数 signature 型引数を取る compiler-special 型である。signature 内部は既存の `(A, B -> R)` 関数型構文を利用し、入力数1以上、返却型 MatchResult という専用制約を検査する。一般の関数型への alias ではない。
@@ -97,10 +97,10 @@ ExtractorClosure<(Int, Int, Int -> MatchResult<Int, Error>)>
 
 ```surtr
 # 入力2個: 事前引数1個、照合対象値1個
-ExtractorClosure<(Int, Int -> MatchResult<Int, Error>)>
+ExtractorClosure<(Int, Int -> MatchResult<Int>)>
 
 # 入力1個: tuple 全体が照合対象値
-ExtractorClosure<((Int, Int) -> MatchResult<Int, Error>)>
+ExtractorClosure<((Int, Int) -> MatchResult<Int>)>
 ```
 
 `Matcher(...)`、`ExtractorClosure(...)`、`*{expr}`、`*{|| expr}` は採用しない。入力なしの ExtractorClosure、非 signature 型引数、Option / Result を返す signature は静的拒否とする。
@@ -144,11 +144,11 @@ Sigil は symbol / lexical binding の identity を解決し、Scar は local �
 
 ### 明示的な生成 API: Extractor::from_result
 
-`Extractor::from_result` は、単一入力の通常 callable `($A -> Result<$B>)` を受け取り、`ExtractorClosure<($A -> MatchResult<$B, Error>)>` を返す通常の標準関数である。専用 builtin、special form、暗黙変換は使わない。
+`Extractor::from_result` は、単一入力の通常 callable `($A -> Result<$B>)` を受け取り、`ExtractorClosure<($A -> MatchResult<$B>)>` を返す通常の標準関数である。専用 builtin、special form、暗黙変換は使わない。
 
 ```surtr
 defmod Extractor {
-    def from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)> {
+    def from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B>)> {
         *{|value: $A|
             converted =? f(value)
             MatchResult::Ok(converted)
@@ -449,7 +449,7 @@ Pattern 位置への explicit / implicit pipe 注入は禁止する。Pattern �
 get_extractor_closure() |> apply_pattern(value, _1)
 # 拒否: Pattern 位置へ pipe 注入できない
 
-def run_pattern(ext: ExtractorClosure<(Int -> MatchResult<Int, Error>)>, value: Int) -> Result<Int> {
+def run_pattern(ext: ExtractorClosure<(Int -> MatchResult<Int>)>, value: Int) -> Result<Int> {
     apply_pattern(value, ext(_1: Int))
 }
 get_extractor_closure() |> run_pattern(value)

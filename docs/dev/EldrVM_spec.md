@@ -192,7 +192,7 @@ Eldr が扱う値の概念カテゴリ:
 
 `inspect` / `to_string` における `Callable` 表示は runtime metadata に従い、closure は
 `Closure(sig)`、capture は `FnCapture(module: M, name: f, sig: sig)` を返す。
-callable 値の signature の `Result` は `Result<T>` と表示する。
+callable 値の signature の `Result` は `Result<T>`、ExtractorClosure 内の `MatchResult` は `MatchResult<T>` と表示する。Error 位置は値の表示に含めない。ExtractorClosure は `ExtractorClosure<(A -> MatchResult<P>)>` と表示する。REPL の束縛表示も同じ inspect 処理を使い、単独評価やコンテナ内の表示と揃える。定義に明記された Error 名を表示するのは、REPL コマンドによる定義シグネチャの照会である。
 所属 namespace を保ちながら暗黙の `Global::` を省略する。
 この表示規則はコンテナ内の callable にも再帰的に適用する。
 部分適用した capture とそれを変数経由で再 capture した callable は capture の由来を保ち、

@@ -259,9 +259,15 @@ cargo nextest run --workspace
 
 変更範囲に応じて focused test を先に実行し、最後に workspace 全体を実行する。失敗が既存か変更起因かを分けて記録する。
 
+### Result / MatchResult の型表示
+
+値の型名、期待型、実際の型、関連する source fact は `Result<T>` / `MatchResult<T>` を使い、内部の Error 型を第二型引数として表示しない。変数、引数、field、関数型、入れ子の型注釈でも型定義どおりの型引数数を受理する。`Result<T, NoneError>` の例外は設けない。
+
+第二引数の補助表記は、関数定義の直接の戻り値と named `defextractor` 定義の直接の戻り値に限る。REPL コマンドによる定義の照会では、定義に記載された Error 位置を保持する。省略された Error を補わない。補完候補とシグネチャヘルプには値の型と同じ正規表記を使う。
+
 ### MatchResult の Extractor 境界
 
-Extractor の戻り型は `MatchResult<P, Error>`（短縮 `MatchResult<P>`）だけを受理する。
+named `defextractor` の戻り型は `MatchResult<P>` を正規表記とし、`MatchResult<P, Error>` も受理する。ExtractorClosure の型注釈は `MatchResult<P>` のみを受理する。
 旧 Option / 通常 Result、第二型引数の非 abstract Error、一般の値位置、通常 Closure の
 返却・構築、abstract Error の手書き Err 再投入を静的拒否する。
 Unit payload の子 Pattern は0または1であり、arity / annotation 不一致は型エラーとする。

@@ -20,7 +20,7 @@
 optional enum selector は廃止され、`Option.Some` のような required selector を
 `Facet::case_set` / `Facet::case_over` で使います。selector mismatch は常に `Err` です。
 `Result` を返す helper と直接つなぎたい field では、
-`Result<T, NoneError>` を明示的に使います。
+`Result<T>` を使い、値がない場合は `Err(NoneError)` を返します。
 
 また、source を伴う API では `~source.path` shorthand が使えます。
 これは source 実体と structural path の組を compiler-managed に expand する sugar で、
@@ -169,7 +169,7 @@ name_facet = User.name
 - `Facet::over(User.nickname, user, normalize)`
 - `Facet::over_result(User.nickname, user, rewrite_result)`
 
-`nickname: Result<String, NoneError>` のような field を `Facet::set` で置換する場合は
+`nickname: Result<String>` のような field を `Facet::set` で置換する場合は
 `Ok("bob")` のような Result 値を渡します。plain payload の暗黙 `Ok` wrap はありません。
 
 generic nominal型を型変更しながら再構築する場合、更新fieldだけから一意に決まるpayload parameterだけを
@@ -427,7 +427,7 @@ full path: User.scores.[index + 1]
 
 ```surtr
 defstruct User {
-  nickname: Result<String, NoneError>,
+  nickname: Result<String>,
 }
 
 normalized =? Facet::over(User.nickname, user, {|name|

@@ -135,7 +135,7 @@ defmod Extractor {
   Adapt one Result-returning callable to an ExtractorClosure.
 
   `f: ($A -> Result<$B>)` becomes
-  `ExtractorClosure<($A -> MatchResult<$B, Error>)>`. Creating the value captures
+  `ExtractorClosure<($A -> MatchResult<$B>)>`. Creating the value captures
   `f` without calling it. Each reached Pattern occurrence calls it exactly once.
   `Ok(payload)` preserves the payload; `Err(error)` preserves the original Error
   and cause chain. Only the outer Result is unwrapped, even when its payload is
