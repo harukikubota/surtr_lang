@@ -68,7 +68,8 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 - `Boolean`
 - `Error`
 - `List`
-- `Generator`
+- `Generator`（有限列。step の終端検出は Option、`next` は Result、取得系は List と rest を返す）
+- `InfiniteGenerator`（正常終端のない列。生成と件数・条件指定による List の取得）
 - `HashMap`
 - `Result`
 - `Either`

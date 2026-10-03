@@ -17,7 +17,7 @@ Surtr の標準定義ソースは language surface の一部です。
   - capability: `Show`, `Compare`, `Convert`, `TryConvert`, `MonadT`
   - operator dispatch: `Div`, `Mod`, `Eq`, `Concat` など
 - type modules
-  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `HashMap`, `Result`, `Range`, `Option`, `OptionT`, `EitherT`, `ReaderT`, `StateT`, `Facet`, `Float`
+  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `InfiniteGenerator`, `HashMap`, `Result`, `Range`, `Option`, `OptionT`, `EitherT`, `ReaderT`, `StateT`, `Facet`, `Float`
 - effect / runtime-facing modules
   - `Process`, `IO`, `File`, `FS`, `Shell`, `Task`, `Random`, `Json`
 
@@ -62,6 +62,7 @@ xldr(2)>
 - trait 系を見たいなら `./trait-impls.md`
 - path 操作を見たいなら `./facet.md`
 - range の違いを整理したいなら `./range.md`
+- 有限列・無限列を遅延生成したいなら [Generator](./generator.md)
 - Monad Transformer を使いたいなら `./monad-transformers.md`
 
 ## 確認したソース

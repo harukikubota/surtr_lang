@@ -499,6 +499,8 @@ result: Option<Int> = do::<Option> {
 - `""` や `"ab"` のような不正な string endpoint は `Generator::range_char` と同じく runtime に `InvalidCharRange` になる
 - `[head, ..tail]` とは別構文で、range form は comma を持たない
 
+有限の range helper は `Generator<Item>` を返し、整数は `Generator::range` → `Generator::to_list`、文字は `Generator::range_char` の入力検証 → `Generator::to_list` で List 化します。構築時に全件生成せず、文字 endpoint の検証エラーは従来どおり `InvalidCharRange` です。
+
 #### 共通制約
 
 - 裸の関数参照は許可しない
