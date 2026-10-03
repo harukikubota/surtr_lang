@@ -1,17 +1,17 @@
 include './task_state_types.srt'
 
-def describe(result: Result<Task>) -> String {
+def describe(result: Result<WorkflowTask>) -> String {
   match result {
-    Ok(task) => Task::render(task),
+    Ok(task) => WorkflowTask::render(task),
     Err(err) => Error::message(err),
   }
 }
 
-draft = Task::start("write task-state sample")
-open = Task::open(draft)
-doing = open |>= Task::assign("haruca")
-done = doing |>= Task::complete()
-archived = done |>= Task::archive()
+draft = WorkflowTask::start("write task-state sample")
+open = WorkflowTask::open(draft)
+doing = open |>= WorkflowTask::assign("haruca")
+done = doing |>= WorkflowTask::complete()
+archived = done |>= WorkflowTask::archive()
 
 print(describe(archived))
-print(describe(Task::complete(Task::start("skip required states"))))
+print(describe(WorkflowTask::complete(WorkflowTask::start("skip required states"))))

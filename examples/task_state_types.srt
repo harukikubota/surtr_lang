@@ -2,7 +2,7 @@ deferror InvalidTaskTransition(reason: String) {
   "invalid task transition: #{reason}"
 }
 
-defenum Task {
+defenum WorkflowTask {
   Draft(String),
   Open(String),
   Doing(String, String),
@@ -10,60 +10,60 @@ defenum Task {
   Archived(String),
 }
 
-impl Task {
+impl WorkflowTask {
   def start(title: String) -> Self {
-    Task::Draft(title)
+    WorkflowTask::Draft(title)
   }
 
   def open(self: Self) -> Result<Self, InvalidTaskTransition> {
     match self {
-      Task::Draft(title) => Ok(Task::Open(title)),
+      WorkflowTask::Draft(title) => Ok(WorkflowTask::Open(title)),
       _ => Err(InvalidTaskTransition("only Draft tasks can be opened")),
     }
   }
 
   def assign(self: Self, assignee: String) -> Result<Self, InvalidTaskTransition> {
     match self {
-      Task::Open(title) => Ok(Task::Doing(title, assignee)),
+      WorkflowTask::Open(title) => Ok(WorkflowTask::Doing(title, assignee)),
       _ => Err(InvalidTaskTransition("only Open tasks can be assigned")),
     }
   }
 
   def complete(self: Self) -> Result<Self, InvalidTaskTransition> {
     match self {
-      Task::Doing(title, _) => Ok(Task::Done(title)),
+      WorkflowTask::Doing(title, _) => Ok(WorkflowTask::Done(title)),
       _ => Err(InvalidTaskTransition("only Doing tasks can be completed")),
     }
   }
 
   def archive(self: Self) -> Result<Self, InvalidTaskTransition> {
     match self {
-      Task::Done(title) => Ok(Task::Archived(title)),
+      WorkflowTask::Done(title) => Ok(WorkflowTask::Archived(title)),
       _ => Err(InvalidTaskTransition("only Done tasks can be archived")),
     }
   }
 
   def title(self: Self) -> String {
     match self {
-      Task::Draft(title) => title,
-      Task::Open(title) => title,
-      Task::Doing(title, _) => title,
-      Task::Done(title) => title,
-      Task::Archived(title) => title,
+      WorkflowTask::Draft(title) => title,
+      WorkflowTask::Open(title) => title,
+      WorkflowTask::Doing(title, _) => title,
+      WorkflowTask::Done(title) => title,
+      WorkflowTask::Archived(title) => title,
     }
   }
 
   def status(self: Self) -> String {
     match self {
-      Task::Draft(_) => "draft",
-      Task::Open(_) => "open",
-      Task::Doing(_, assignee) => "doing:" ++ assignee,
-      Task::Done(_) => "done",
-      Task::Archived(_) => "archived",
+      WorkflowTask::Draft(_) => "draft",
+      WorkflowTask::Open(_) => "open",
+      WorkflowTask::Doing(_, assignee) => "doing:" ++ assignee,
+      WorkflowTask::Done(_) => "done",
+      WorkflowTask::Archived(_) => "archived",
     }
   }
 
   def render(self: Self) -> String {
-    Task::title(self) ++ " [" ++ Task::status(self) ++ "]"
+    WorkflowTask::title(self) ++ " [" ++ WorkflowTask::status(self) ++ "]"
   }
 }
