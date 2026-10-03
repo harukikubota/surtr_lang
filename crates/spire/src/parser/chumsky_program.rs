@@ -37,12 +37,13 @@ pub(super) fn parse_program_with_chumsky_diagnostic(
             .expect("parser diagnostic capture poisoned")
             .take()
         {
-            diagnostic.error = error
-                .with_span(diagnostic.error.span().clone())
-                .with_parser_context(
-                    diagnostic.expected_tokens.clone(),
-                    diagnostic.cursor_span.clone(),
-                );
+            // The parser may identify an escape or expression inside a string
+            // token. Keep that source range instead of widening it to the token.
+            diagnostic.cursor_span = error.cursor_span().clone();
+            diagnostic.error = error.with_parser_context(
+                diagnostic.expected_tokens.clone(),
+                diagnostic.cursor_span.clone(),
+            );
             // The parser-produced error is authoritative for expected tokens
             // when it carries explicit expectations (for example, the
             // end-of-input parser path). Keep the separate convenience field

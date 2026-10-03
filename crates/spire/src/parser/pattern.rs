@@ -418,7 +418,8 @@ impl Parser<'_> {
             }
             Token::Str(s) => {
                 self.advance();
-                Ok(AstPattern::StrLit(sp, s))
+                let value = s.into_static(sp.clone())?;
+                Ok(AstPattern::StrLit(sp, value))
             }
             Token::True => {
                 self.advance();

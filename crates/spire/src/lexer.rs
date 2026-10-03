@@ -110,71 +110,13 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
-        // String — double quote
-        if c == '"' {
+        // Normal strings retain source expression ranges and decode text once.
+        if c == '"' || c == '\'' {
             let start = i;
-            i += 1;
-            let mut s = String::new();
-            while i < len && chars[i] != '"' {
-                if chars[i] == '\\' && i + 1 < len {
-                    i += 1;
-                    match chars[i] {
-                        'n' => s.push('\n'),
-                        't' => s.push('\t'),
-                        '\\' => s.push('\\'),
-                        '"' => s.push('"'),
-                        '\'' => s.push('\''),
-                        other => {
-                            s.push('\\');
-                            s.push(other);
-                        }
-                    }
-                } else {
-                    s.push(chars[i]);
-                }
-                i += 1;
-            }
-            if i >= len {
-                return Err(ParseError::incomplete("\"", Span { start, end: i }));
-            }
-            i += 1;
+            let (literal, next) = crate::string_literal::scan_string(&chars, start)?;
+            i = next;
             tokens.push(Spanned {
-                token: Token::Str(s),
-                span: Span { start, end: i },
-            });
-            continue;
-        }
-
-        // String — single quote
-        if c == '\'' {
-            let start = i;
-            i += 1;
-            let mut s = String::new();
-            while i < len && chars[i] != '\'' {
-                if chars[i] == '\\' && i + 1 < len {
-                    i += 1;
-                    match chars[i] {
-                        'n' => s.push('\n'),
-                        't' => s.push('\t'),
-                        '\\' => s.push('\\'),
-                        '\'' => s.push('\''),
-                        '"' => s.push('"'),
-                        other => {
-                            s.push('\\');
-                            s.push(other);
-                        }
-                    }
-                } else {
-                    s.push(chars[i]);
-                }
-                i += 1;
-            }
-            if i >= len {
-                return Err(ParseError::incomplete("'", Span { start, end: i }));
-            }
-            i += 1;
-            tokens.push(Spanned {
-                token: Token::Str(s),
+                token: Token::Str(literal),
                 span: Span { start, end: i },
             });
             continue;
@@ -555,7 +497,7 @@ fn is_valid_int_digit(ch: char, base: IntLiteralBase) -> bool {
     }
 }
 
-fn lex_raw_triple_quoted_string(
+pub(crate) fn lex_raw_triple_quoted_string(
     chars: &[char],
     start: usize,
     len: usize,
@@ -775,7 +717,9 @@ mod tests {
     #[test]
     fn test_string_escape() {
         let tokens = tokenize(r#""hello\nworld""#).unwrap();
-        assert!(matches!(tokens[0].token, Token::Str(ref s) if s == "hello\nworld"));
+        assert!(
+            matches!(tokens[0].token, Token::Str(crate::string_literal::StringLiteral::Plain(ref s)) if s == "hello\nworld")
+        );
     }
 
     #[test]
@@ -810,7 +754,7 @@ mod tests {
         let tokens = tokenize(r#""a\n\t\"\'\\z""#).unwrap();
         assert!(matches!(
             tokens[0].token,
-            Token::Str(ref s) if s == "a\n\t\"'\\z"
+            Token::Str(crate::string_literal::StringLiteral::Plain(ref s)) if s == "a\n\t\"'\\z"
         ));
     }
 
@@ -819,7 +763,7 @@ mod tests {
         let tokens = tokenize(r#"'a\n\t\"\'\\z'"#).unwrap();
         assert!(matches!(
             tokens[0].token,
-            Token::Str(ref s) if s == "a\n\t\"'\\z"
+            Token::Str(crate::string_literal::StringLiteral::Plain(ref s)) if s == "a\n\t\"'\\z"
         ));
     }
 

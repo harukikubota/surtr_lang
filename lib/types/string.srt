@@ -98,7 +98,7 @@ impl String {
     if(
       value == " ",
       True,
-      if(value == "\n", True, if(value == "\t", True, value == "\r")),
+      if(value == "\n", True, if(value == "\t", True, value == "\u{d}")),
     )
   }
 
@@ -138,7 +138,7 @@ impl String {
   }
 
   defp _strip_trailing_cr(value: String) -> String {
-    match strip_suffix(value, "\r") {
+    match strip_suffix(value, "\u{d}") {
       Ok(stripped) => stripped,
       Err(_) => value,
     }
@@ -380,7 +380,7 @@ impl String {
 
   @doc """
   Split `value` into lines.
-  Lines are separated by `\n`, and a trailing `\r` in each line is removed.
+  Lines are separated by `\n`, and a trailing CR (`\u{d}`) in each line is removed.
   A final empty line produced by a trailing newline is omitted.
   ## REPL
   xldr(1)> String::lines("a\nb")

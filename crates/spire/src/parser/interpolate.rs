@@ -19,9 +19,42 @@ impl Parser<'_> {
     pub(super) fn parse_string_or_interpolated(
         &mut self,
         span: Span,
-        raw: String,
+        literal: crate::string_literal::StringLiteral,
     ) -> Result<Ast, ParseError> {
-        self.parse_string_or_interpolated_with_offset(span, raw, 1)
+        use crate::string_literal::{StringLiteral, StringPart};
+        let source_parts = match literal {
+            StringLiteral::Plain(value) => return Ok(Ast::Lit(span, Lit::Str(value))),
+            StringLiteral::Interpolated(parts) => parts,
+        };
+        let mut parts = Vec::new();
+        for part in source_parts {
+            match part {
+                StringPart::Text(text) => parts.push(InterpolatedPart::Text(text)),
+                StringPart::Expr {
+                    source,
+                    span: expr_span,
+                } => {
+                    let parsed = super::parse(&source).map_err(|error| {
+                        error.map_spans(|span| Span {
+                            start: expr_span.start + span.start,
+                            end: expr_span.start + span.end,
+                        })
+                    })?;
+                    let [expr] = <[Ast; 1]>::try_from(parsed).map_err(|_| {
+                        ParseError::syntax(
+                            crate::error::ParseErrorReason::InterpolationSyntax,
+                            "Interpolation expression must contain exactly one expression",
+                            expr_span.clone(),
+                        )
+                    })?;
+                    parts.push(InterpolatedPart::Expr(Box::new(super::shift_ast_span(
+                        expr,
+                        expr_span.start,
+                    ))));
+                }
+            }
+        }
+        Ok(Ast::InterpolatedStr(span, parts))
     }
 
     pub(super) fn parse_triple_string_or_interpolated(
@@ -29,16 +62,8 @@ impl Parser<'_> {
         span: Span,
         raw: String,
     ) -> Result<Ast, ParseError> {
-        self.parse_string_or_interpolated_with_offset(span, raw, 3)
-    }
-
-    fn parse_string_or_interpolated_with_offset(
-        &mut self,
-        span: Span,
-        raw: String,
-        content_offset: usize,
-    ) -> Result<Ast, ParseError> {
-        let parts = self.parse_interpolated_parts(&raw, &span, content_offset)?;
+        // Raw text keeps its existing decoding and dedent contract.
+        let parts = self.parse_raw_interpolated_parts(&raw, &span, 3)?;
         if parts.is_empty() {
             Ok(Ast::Lit(span, Lit::Str(raw)))
         } else if let [InterpolatedPart::Text(_)] = parts.as_slice() {
@@ -61,7 +86,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_interpolated_parts(
+    fn parse_raw_interpolated_parts(
         &mut self,
         raw: &str,
         base_span: &Span,

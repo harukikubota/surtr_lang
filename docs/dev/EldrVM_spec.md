@@ -227,7 +227,14 @@ Facet API capture は module を `Facet`、name を対象 API 名、sig を型�
 `FnCapture(module: Facet, name: view, sig: (Duration -> Int))` と表示する。
 通常の closure literal は既存どおり `Closure(sig)` とする。capture できない `compose` や演算子を
 表示のために許可しない。
-`to_string` は文字列値を引用せず、`inspect` は文字列 literal として引用する。
+`to_string` は文字列値を引用せず、`inspect` は文字列literalとして引用する。
+Sindrの `quote_surtr_string_literal` を共通引用処理とし、`\\`・`\"`・`\n`・`\t`、
+その他のC0・DEL・C1制御文字の `\u{...}`、文字としての `#{` の `\#{` を使う。
+Unicodeエスケープは小文字16進数・不要な先頭ゼロなしとする。String単体の引用表示を通常式として
+再評価すると元の値になることを保証する。List・Tuple・Result・struct内のStringとHashMapキーにも
+同じ引用処理を適用する。private fieldの省略やError表示など、inspect全体のソース化は保証しない。
+`print(String)` の明示的な生出力は維持する。`eprint(String)` は `inspect` と同じ引用表示を使う。入力との対応は
+[文字列リテラルの実装契約](./String_literal_spec.md#共通の引用表示)を参照する。
 
 ### 4.1 RichError
 
@@ -388,7 +395,7 @@ Opcode は以下のカテゴリを持つ。
 - Facet API が `Result<S, E>` source を受ける場合、VM は `Err(E)` に対して traversal、rebuild、mapper を実行せず同じ error を返す。これは API-level lift であり Facet slot `S` を `Result<S, E>` に変更しない
 - Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list miss は `IndexOutOfBounds`、map miss は `KeyNotFound` を `Result` で返す
-- `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
+- `eprint` は `Error` 値を診断表示し、それ以外の値は `inspect` 経由で標準エラー出力へ書き出す
 - `Error::kind` / `Error::message` / `Error::format` / `Error::same_kind` は `Error` 値を introspection / 表示文字列化・kind 比較する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する

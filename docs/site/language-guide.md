@@ -100,7 +100,7 @@ print(to_string(score))
 
 ## 4. 文字列
 
-文字列は二重引用符で書きます。
+文字列は二重引用符または単一引用符で書きます。
 
 ```surtr
 name = "alice"
@@ -113,6 +113,9 @@ print("score=#{10 + 2}")
 ```surtr
 print("hello" ++ " world")
 ```
+
+ESCなどは `"\u{1b}"` のようにUnicodeエスケープで書けます。内容を観察するには `print(inspect(value))` を使います。
+入力できるエスケープ、補間の抑止、REPLの引用表示は[文字列の入力と表示](./strings.md)を参照してください。
 
 ## 5. 関数
 

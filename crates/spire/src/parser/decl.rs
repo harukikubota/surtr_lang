@@ -1698,7 +1698,7 @@ impl Parser<'_> {
         let (path, mut stmt_end) = match self.peek().clone() {
             Token::Str(path) => {
                 let str_span = self.advance().span.clone();
-                (path, str_span.end)
+                (path.into_static(str_span.clone())?, str_span.end)
             }
             _ => {
                 return Err(ParseError::syntax(
@@ -4789,7 +4789,7 @@ impl Parser<'_> {
         match self.peek().clone() {
             Token::Str(value) => {
                 self.advance();
-                Ok(value)
+                value.into_static(span)
             }
             Token::Int(value) => {
                 self.advance();

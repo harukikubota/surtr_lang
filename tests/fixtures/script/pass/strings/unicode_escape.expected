@@ -1,0 +1,7 @@
+True
+Ok([27, 97])
+"\u{1b}a"
+Ok([194, 128])
+"\#{missing}"
+True
+True

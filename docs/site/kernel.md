@@ -49,7 +49,8 @@ List と String は適用時に別々の concrete 静的契約として検査さ
 
 ## `inspect`
 
-debug-oriented な文字列表現が欲しいときは `inspect(...)` を使います。
+値の内容を確認する文字列表現が欲しいときは `inspect(...)` を使います。Stringは引用符で囲み、
+制御文字と文字としての補間開始をエスケープして表示します。入れ子のStringとHashMapキーにも同じ規則を使います。
 
 ```text
 xldr(1)> pair = ("alice", 42)
@@ -58,6 +59,25 @@ xldr(2)> print(inspect(pair))
 ("alice", 42)
 xldr(3)>
 ```
+
+```surtr
+print(inspect("\u{1b}" ++ "a"))
+print(inspect("\#{name}"))
+```
+
+```text
+"\u{1b}a"
+"\#{name}"
+```
+
+LFとタブは `\n` と `\t`、その他のC0・DEL・C1制御文字は `\u{...}` にします。
+Unicodeエスケープの表示は小文字・不要な先頭ゼロなしです。
+String単体の引用表示は、通常の文字列式として再入力すると元の値になります。
+ただし、private fieldの省略やError表示なども含む `inspect` 全体について、再入力できることは保証しません。
+
+`to_string` の生文字列と `print` による文字列の直接出力には、この引用処理を加えません。
+`eprint(String)` は同じ引用表示を標準エラー出力へ書き出します。
+詳しい規則は[文字列の入力と表示](./strings.md)を参照してください。
 
 ## `set_exit_code`
 

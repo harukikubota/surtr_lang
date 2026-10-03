@@ -21,7 +21,22 @@ rx =? re"(?<name>[A-Za-z]+)-(?<id>[0-9]+)"
 rx =? Regex::compile("(?<name>[A-Za-z]+)-(?<id>[0-9]+)")
 ```
 
-pattern が不正なら `Err(RegexCompileError(detail))` になります。
+文字列として成立したpatternが不正なら `Err(RegexCompileError(detail))` になります。
+
+### バックスラッシュの書き方
+
+regex sugarも[通常の文字列のエスケープ規則](./language-reference.md#文字列)を使います。
+正規表現の `\d` や `\s` を渡すには、Surtr文字列のバックスラッシュを `\\` と書きます。
+
+```surtr
+rx =? re"\\d+"
+print(to_string(Regex::is_match(rx, "123")))
+```
+
+`re"\d"` は未知のエスケープとして解析時に拒否します。従来の表記を使っていた場合は `re"\\d"` に書き換えてください。
+`re"\u{1b}"` はESC1文字を渡し、`re"\\u{1b}"` は文字としての `\u{1b}` を正規表現エンジンへ渡します。
+Surtrの文字列解析と正規表現エンジンの検証は別の段階です。
+`re"..."` / `re'...'` 内の補間は通常文字列と同じ元ソース上の規則で扱います。
 
 ## 主な API
 
@@ -88,6 +103,9 @@ print(inspect(Regex::group_names(rx)))
 
 ## エラーの読み方
 
+- 文字列の解析エラー
+  - `re"\d"` などの未知エスケープや、不正なUnicodeエスケープ
+  - 正規表現のコンパイル前に拒否する
 - `RegexCompileError`
   - pattern 自体が不正
 - `NoneError`

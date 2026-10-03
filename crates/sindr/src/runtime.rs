@@ -577,14 +577,21 @@ impl Value {
 }
 
 pub fn quote_surtr_string_literal(input: &str) -> String {
+    use std::fmt::Write;
+
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
-    for ch in input.chars() {
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
+            '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => {
+                write!(out, "\\u{{{:x}}}", ch as u32).expect("writing to String cannot fail");
+            }
+            '#' if chars.peek() == Some(&'{') => out.push_str("\\#"),
             _ => out.push(ch),
         }
     }
@@ -965,10 +972,37 @@ pub struct Location {
 #[cfg(test)]
 mod tests {
     use super::{
-        Callable, CallableMetadata, CallableTarget, HashMapHandle, ListHandle, Location, RichError,
-        RuntimeErrorDiagnostic, TypeEntry, TypeKind, TypeRegistry, Value,
+        quote_surtr_string_literal, Callable, CallableMetadata, CallableTarget, HashMapHandle,
+        ListHandle, Location, RichError, RuntimeErrorDiagnostic, TypeEntry, TypeKind, TypeRegistry,
+        Value,
     };
     use crate::primitives::int;
+
+    #[test]
+    fn string_literal_quote_canonicalizes_all_terminal_controls() {
+        // The expected source spelling is the language contract, independent of
+        // the implementation's control-character classification.
+        for (input, expected) in [
+            ("\0\u{1}\u{8}", r#""\u{0}\u{1}\u{8}""#),
+            ("\t\n\u{b}\u{c}\r", r#""\t\n\u{b}\u{c}\u{d}""#),
+            (
+                "\u{1b}a\u{1f}\u{7f}\u{80}\u{85}\u{9f}",
+                r#""\u{1b}a\u{1f}\u{7f}\u{80}\u{85}\u{9f}""#,
+            ),
+            ("\\\"'#{name}\\u{1b}あ😀", r#""\\\"'\#{name}\\u{1b}あ😀""#),
+            ("\\#{name}", r#""\\\#{name}""#),
+            ("# #{{ #{#{", r##""# \#{{ \#{\#{""##),
+        ] {
+            assert_eq!(quote_surtr_string_literal(input), expected);
+        }
+
+        let controls: String = (0..=0x1f)
+            .chain(0x7f..=0x9f)
+            .map(|code| char::from_u32(code).unwrap())
+            .collect();
+        let quoted = quote_surtr_string_literal(&controls);
+        assert!(!quoted.chars().any(char::is_control), "{quoted:?}");
+    }
 
     #[test]
     fn display_for_reserved_result_tags() {

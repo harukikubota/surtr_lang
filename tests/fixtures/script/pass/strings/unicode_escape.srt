@@ -1,0 +1,15 @@
+def main() -> Result<Unit> {
+  esc = "\u{1b}"
+  generated =? String::from_codepoints([27], StringEncoding::Utf8)
+  print(inspect(esc == generated))
+  print(inspect(String::codepoints(esc ++ "a", StringEncoding::Utf8)))
+  print(inspect(esc ++ "a"))
+  print(inspect(String::codepoints("\u{80}", StringEncoding::Utf8)))
+  print(inspect("\u{23}{missing}"))
+  print(inspect(match esc { '\u{001B}' => True, _ => False, }))
+  rx =? re"\\d+"
+  print(inspect(Regex::is_match(rx, "123")))
+  Ok(())
+}
+
+main()
