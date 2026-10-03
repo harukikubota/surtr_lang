@@ -1897,9 +1897,6 @@ fn error_display_site(rich: &RichError) -> Option<(String, u32, u32)> {
     if rich.location.line == 0 || rich.location.column == 0 {
         return None;
     }
-    if rich.location.file == "REPL" {
-        return Some((rich.location.file.clone(), rich.location.line + 1, 1));
-    }
     Some((
         rich.location.file.clone(),
         rich.location.line,

@@ -361,7 +361,324 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_operator_captures_display_trait_identity_and_execute),
     repl_core_case!(core_operator_partial_captures_preserve_origin_and_placeholder_order),
     repl_core_case!(core_pair_captures_display_bootstrap_identity_and_concrete_types),
+    repl_core_case!(core_error_generation_site_uses_direct_input_and_unicode_pattern_spans),
+    repl_core_case!(core_error_generation_site_survives_nested_function_calls_across_chunks),
+    repl_core_case!(core_error_generation_site_survives_nested_extractors_and_preserves_cause),
+    repl_core_case!(core_error_generation_site_survives_live_extractor_calls_across_chunks),
+    repl_core_case!(core_dbg_keeps_original_source_and_position_across_chunks),
+    repl_core_case!(core_error_generation_site_survives_static_diagnostic_rollback),
+    repl_core_case!(core_eldr_restore_preserves_error_sources_when_new_chunks_are_added),
+    repl_core_case!(core_script_preload_rejects_source_spans_outside_the_runtime_range),
 ];
+
+fn assert_repl_error_origin(result: &ReplResult, line: usize, column: usize, origin: &str) {
+    assert!(
+        !result.should_exit,
+        "language Error must keep the session alive"
+    );
+    assert!(matches!(result.output, ReplOutput::EvalError { .. }));
+    let text = strip_ansi(&rendered_text(result));
+    let caption = text
+        .lines()
+        .find(|line| line.contains("╭─["))
+        .expect("language Error must render a source caption");
+    assert!(caption.contains(&format!(":{line}:{column} ")), "{text}");
+    assert!(
+        text.contains(origin),
+        "generation source must render: {text}"
+    );
+}
+
+fn core_error_generation_site_uses_direct_input_and_unicode_pattern_spans() {
+    let mut engine = engine();
+    let direct = engine.handle_line("Err(NoneError)");
+    assert_repl_error_origin(&direct, 1, 5, "Err(NoneError)");
+
+    let multiline = engine.handle_line("def fail_unicode() -> Result<Int> {\n  (\"あ\", 11) =? (\"あ\", 2)\n  Ok(0)\n}\nfail_unicode()");
+    assert_repl_error_origin(&multiline, 2, 9, "(\"あ\", 11) =? (\"あ\", 2)");
+    assert!(rendered_text(&multiline).contains("PatternMismatch"));
+    assert_eq!(rendered_text(&engine.handle_line("2 + 3")), "5");
+}
+
+fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
+    let mut engine = engine();
+    for source in [
+        "def source_error() -> Result<Int> {\n  Err(NoneError)\n}",
+        "def relay_error() -> Result<Int> {\n  value =? source_error()\n  Ok(value)\n}",
+        "def outer_error() -> Result<Int> { relay_error() }",
+        "unrelated = \"あいう\"",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    let _ = engine.handle_line(":stacktrace verbose");
+    let result = engine.handle_line("outer_error()");
+    assert_repl_error_origin(&result, 2, 7, "Err(NoneError)");
+    let text = rendered_text(&result);
+    assert!(
+        text.contains("NoneError") && text.contains("None Value."),
+        "{text}"
+    );
+    assert!(
+        text.contains("Stack trace:") && text.contains("source_error at"),
+        "{text}"
+    );
+}
+
+fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
+    let mut engine = ReplEngine::from_module_source(
+        "extractor_origins.srt",
+        "deferror Inner { \"inner cause\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped origin\"))\n  }\n  defextractor inner(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    inner(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}",
+    ).expect("nested Extractor definitions must preload");
+    let _ = engine.handle_line("unrelated = \"あ\"");
+    for source in [
+        "E::outer(found) =? Ok(2)",
+        "do::<Result> {\n  E::outer(found) <- Ok(2)\n  Ok(found)\n}",
+    ] {
+        let result = engine.handle_line(source);
+        assert_repl_error_origin(&result, 5, 31, "Outer(\"wrapped origin\")");
+        let text = rendered_text(&result);
+        assert!(text.contains("extractor_origins.srt:5:31"), "{text}");
+        assert!(
+            text.contains("wrapped origin") && text.contains("inner cause"),
+            "{text}"
+        );
+    }
+}
+
+fn core_error_generation_site_survives_live_extractor_calls_across_chunks() {
+    let mut engine = engine();
+    for source in [
+        "def source_error(_value: Int) -> Result<Int> {\n  Err(NoneError)\n}",
+        "inner = Extractor::from_result(&source_error)",
+        "outer = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}",
+        "unrelated = \"あいう\"",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    for source in [
+        "outer(found) =? Ok(2)",
+        "do::<Result> {\n  outer(found) <- Ok(2)\n  Ok(found)\n}",
+    ] {
+        let result = engine.handle_line(source);
+        assert_repl_error_origin(&result, 2, 7, "Err(NoneError)");
+        assert!(rendered_text(&result).contains("None Value."));
+    }
+}
+
+fn core_dbg_keeps_original_source_and_position_across_chunks() {
+    let mut engine = engine();
+    let direct = engine.handle_line("dbg!(1)");
+    assert!(matches!(direct.output, ReplOutput::EvalSuccess { .. }));
+    let text = strip_ansi(&direct.stderr.join("\n"));
+    assert!(
+        text.contains(":1:1 ") && text.contains("dbg!(1)") && text.contains("Int: 1"),
+        "{text}"
+    );
+
+    let definition = engine.handle_line("def log() -> Unit {\n  dbg!(42)\n}");
+    assert!(matches!(definition.output, ReplOutput::EvalSuccess { .. }));
+    let _ = engine.handle_line("unrelated = \"あいう\"");
+    let call = engine.handle_line("log()");
+    assert!(
+        matches!(call.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&call)
+    );
+    let text = strip_ansi(&call.stderr.join("\n"));
+    assert!(
+        text.contains(":2:3 ") && text.contains("dbg!(42)") && text.contains("Int: 42"),
+        "{text}"
+    );
+}
+
+fn core_error_generation_site_survives_static_diagnostic_rollback() {
+    let mut engine = engine();
+    for (source, expected, chunk, column) in [
+        ("unknown = &compare", "needs expected callable type", 1, 11),
+        ("wrong: Int = \"あ\"", "TypeError", 3, 14),
+    ] {
+        let rejected = engine.handle_line(source);
+        let text = strip_ansi(&rendered_text(&rejected));
+        assert!(text.contains(expected), "{text}");
+        assert!(text.contains(source), "{text}");
+        let caption = text
+            .lines()
+            .find(|line| line.contains("╭─["))
+            .expect("static diagnostic must render a caption");
+        assert!(
+            caption.contains(&format!("REPL:{chunk}:1:{column} ")),
+            "{text}"
+        );
+        let next = engine.handle_line("Err(NoneError)");
+        assert_repl_error_origin(&next, 1, 5, "Err(NoneError)");
+    }
+}
+
+fn core_script_preload_rejects_source_spans_outside_the_runtime_range() {
+    let source = format!(
+        "{}\ndef source_error() -> Result<Int> {{ Err(NoneError) }}\n",
+        "#".repeat(sindr::ir::MODULE_SPAN_STRIDE)
+    );
+    let Err(xldr::repl::logic::core::ReplLoadError::Diagnostic {
+        sources,
+        source_id,
+        spec,
+        ..
+    }) = ReplEngine::from_script_source("oversized_preload.srt", &source)
+    else {
+        panic!("oversized preload must be rejected with a source diagnostic")
+    };
+    assert_eq!(spec.kind, "SourceError");
+    assert_eq!(
+        spec.message,
+        "REPL source span exceeds the runtime source range"
+    );
+    assert_eq!(
+        sources
+            .get(source_id)
+            .expect("diagnostic source must exist")
+            .file_name,
+        "oversized_preload.srt"
+    );
+}
+
+fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
+    let mut engine = engine();
+    let definition = engine.handle_line("def saved_error() -> Result<Int> {\n  Err(NoneError)\n}");
+    assert!(matches!(definition.output, ReplOutput::EvalSuccess { .. }));
+    let original_error = engine.handle_line("saved_error()");
+    assert_repl_error_origin(&original_error, 2, 7, "Err(NoneError)");
+    let dir = tempfile_dir("xldr-repl-error-source-restore");
+    let first_path = dir.join("before.eldr");
+    let second_path = dir.join("after.eldr");
+    let saved = engine.handle_line(&format!(":save {}", first_path.display()));
+    assert!(rendered_text(&saved).contains("saved to"));
+    let bytes = fs::read(&first_path).expect("initial snapshot must exist");
+    let initial = sindr::ir::Bytecode::decode(&bytes).expect("initial snapshot must decode");
+    let saved_source = initial
+        .sources
+        .iter()
+        .find(|source| {
+            source
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("def saved_error()"))
+        })
+        .expect("saved definition source must exist")
+        .clone();
+    let mut restored = ReplEngine::from_eldr(&bytes).expect("snapshot must restore");
+    let fresh = restored.handle_line("Err(EmptyList)");
+    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyList)");
+    let saved = restored.handle_line(&format!(":save {}", second_path.display()));
+    assert!(rendered_text(&saved).contains("saved to"));
+    let updated =
+        sindr::ir::Bytecode::decode(&fs::read(&second_path).expect("updated snapshot must exist"))
+            .expect("updated snapshot must decode");
+    assert!(
+        updated.sources.contains(&saved_source),
+        "saved source identity must survive restore and append"
+    );
+    let fresh_source = updated
+        .sources
+        .iter()
+        .find(|source| source.text.as_deref() == Some("Err(EmptyList)\n"))
+        .expect("new input source must exist");
+    assert_ne!(fresh_source.source_id, saved_source.source_id);
+    assert_ne!(fresh_source.path, saved_source.path);
+    let source_identities: Vec<_> = updated
+        .sources
+        .iter()
+        .map(|source| (source.source_id, source.path.clone()))
+        .collect();
+    // .eldr restore intentionally omits user compile-time scope. Invoke the saved
+    // function through the public interactive VM boundary to verify its old code.
+    let saved_function = updated
+        .functions
+        .iter()
+        .find(|function| {
+            function
+                .qualified_name
+                .as_deref()
+                .is_some_and(|name| name.ends_with("::saved_error"))
+        })
+        .expect("saved function must remain in bytecode");
+    let call = sindr::ir::BytecodeChunk {
+        opcodes: vec![
+            sindr::ir::Opcode::Call {
+                fun_idx: saved_function.fun_idx,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            sindr::ir::Opcode::Halt,
+        ],
+        source_map: None,
+        const_base: updated.constants.len() as u32,
+        constants: Vec::new(),
+        new_locals: 0,
+        type_registry_base: updated.type_registry.entries().len() as u32,
+        type_entries: Vec::new(),
+        error_template_base: updated.error_templates.len() as u32,
+        error_templates: Vec::new(),
+        dbg_template_base: updated.dbg_templates.len() as u32,
+        dbg_templates: Vec::new(),
+        callable_templates: Vec::new(),
+        functions: Vec::new(),
+        docs: Vec::new(),
+        signatures: Vec::new(),
+        runtime_process_specs: Vec::new(),
+        runtime_boot_plan: Default::default(),
+    };
+    let mut vm = eldr::InteractiveVm::from_bytecode(updated);
+    let result = vm
+        .push_chunk(
+            call,
+            eldr::interactive::InteractiveChunkPolicy::ReplAppendOnly,
+        )
+        .expect("saved function must execute");
+    let sindr::runtime::Value::Tagged { tag: 1, fields } = result.value else {
+        panic!("saved function must return Err")
+    };
+    let sindr::runtime::Value::Error(error) = fields.first().expect("Err must contain Error")
+    else {
+        panic!("Err must retain rich Error")
+    };
+    assert_eq!(error.location.file, saved_source.path);
+    assert_eq!((error.location.line, error.location.column), (2, 7));
+    let text = strip_ansi(&xldr::error_display::runtime_value_error_text_from_vm(
+        vm.as_vm(),
+        &fields[0],
+    ));
+    assert!(
+        text.contains("Err(NoneError)") && text.contains(":2:7 "),
+        "{text}"
+    );
+    let mut source_ids = HashSet::new();
+    let mut source_names = HashSet::new();
+    for (source_id, path) in source_identities {
+        assert!(
+            source_ids.insert(source_id),
+            "duplicate source ID: {source_id}: {path}"
+        );
+        if path.starts_with("REPL:") {
+            assert!(
+                source_names.insert(path.clone()),
+                "duplicate REPL source name: {source_id}: {path}"
+            );
+        }
+    }
+    fs::remove_dir_all(dir).expect("snapshot directory must be removable");
+}
 
 fn core_string_quote_preserves_controls_across_bindings_values_and_recall() {
     let mut engine = engine();

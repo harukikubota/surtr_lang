@@ -15,7 +15,6 @@ use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
 use eldr::interactive::InteractiveChunkPolicy;
 use eldr::value::{TypeKind, Value};
-use forge::bytecode::populate_error_template_lines;
 use scar::typed::{TypedInner, TypedNode, TypedPattern};
 use scar::types::Ty;
 use serde::{Deserialize, Serialize};
@@ -59,6 +58,8 @@ fn type_error_spec_from_scar(
             diagnostics::structured_compile_error_spec(source, &diagnostic)
         })
         .unwrap_or_else(|| {
+            let (source_id, span) =
+                crate::decode_rebased_module_span(&span).unwrap_or((source_id, span));
             diagnostics::typecheck_invariant_spec_with_display(
                 source_id,
                 span,
@@ -733,12 +734,79 @@ pub struct ReplEngine {
     stack_trace_display_mode: StackTraceDisplayMode,
 }
 
+fn repl_source_span_fits(source_id: SourceId, source_len: usize) -> bool {
+    source_len < sindr::ir::MODULE_SPAN_STRIDE
+        && crate::module_span_base_for_source(source_id)
+            .checked_add(source_len)
+            .is_some_and(|end| end <= u32::MAX as usize)
+}
+
+fn runtime_source_entries(
+    sources: &SourceRegistry,
+    repl_source_id: SourceId,
+) -> Vec<sindr::ir::SourceFileEntry> {
+    sources
+        .entries()
+        .iter()
+        .filter(|entry| entry.id != repl_source_id)
+        .map(|entry| sindr::ir::SourceFileEntry {
+            source_id: entry.id.0,
+            path: entry.file_name.clone(),
+            normalized_path: Some(entry.file_name.clone()),
+            content_hash: Some(sindr::ir::stable_hash_hex(&entry.source)),
+            text: Some(entry.source.clone()),
+        })
+        .collect()
+}
+
+fn register_runtime_sources(
+    vm: &mut eldr::InteractiveVm,
+    sources: &SourceRegistry,
+    repl_source_id: SourceId,
+) -> Result<(), eldr::RuntimeError> {
+    for entry in sources
+        .entries()
+        .iter()
+        .filter(|entry| entry.id != repl_source_id)
+    {
+        if let Some(existing) = vm
+            .bytecode()
+            .sources
+            .iter()
+            .find(|source| source.source_id == entry.id.0)
+        {
+            if existing
+                .normalized_path
+                .as_deref()
+                .unwrap_or(&existing.path)
+                != entry.file_name
+            {
+                return Err(eldr::RuntimeError::new(format!(
+                    "Source ID {} already belongs to another file",
+                    entry.id.0
+                )));
+            }
+            // A loaded image owns its existing sources, including intentionally omitted text.
+            continue;
+        }
+        vm.register_source(sindr::ir::SourceFileEntry {
+            source_id: entry.id.0,
+            path: entry.file_name.clone(),
+            normalized_path: Some(entry.file_name.clone()),
+            content_hash: Some(sindr::ir::stable_hash_hex(&entry.source)),
+            text: Some(entry.source.clone()),
+        })?;
+    }
+    Ok(())
+}
+
 impl ReplEngine {
     fn execute_vm_chunk(
         &mut self,
         chunk: sindr::ir::BytecodeChunk,
         phase: ReplSessionPhase,
     ) -> Result<eldr::interactive::ChunkExecution, eldr::RuntimeError> {
+        register_runtime_sources(&mut self.vm, &self.sources, self.repl_source_id)?;
         self.vm.push_chunk(chunk, phase.execution_policy())
     }
 
@@ -768,8 +836,52 @@ impl ReplEngine {
 
         let std_module_inputs =
             collect_additional_default_std_module_inputs().map_err(EldrLoadError::Load)?;
-        let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])
-            .map_err(EldrLoadError::Load)?;
+        let mut repl_sources =
+            loader::collect_repl_sources_with_module_stages(&[std_module_inputs])
+                .map_err(EldrLoadError::Load)?;
+
+        let mut sources = SourceRegistry::new();
+        for entry in repl_sources
+            .sources
+            .entries()
+            .iter()
+            .filter(|entry| entry.id != repl_sources.repl_source_id)
+        {
+            assert!(sources.restore(entry.clone()), "unique compiler source IDs");
+        }
+        if let Some(last_id) = bytecode.sources.iter().map(|source| source.source_id).max() {
+            sources.reserve_ids_before(last_id.checked_add(1).ok_or_else(|| {
+                EldrLoadError::Load(LoadError::BootstrapFailed {
+                    phase: "source registration".into(),
+                    file_name: "<eldr>".into(),
+                    message: "loaded source ID overflow".into(),
+                })
+            })?);
+        }
+        for source in &bytecode.sources {
+            if let Some(text) = &source.text {
+                let file = source.normalized_path.as_deref().unwrap_or(&source.path);
+                let id = SourceId(source.source_id);
+                if let Some(existing) = sources.get(id) {
+                    if existing.file_name != file {
+                        return Err(EldrLoadError::Load(LoadError::ConflictingSource {
+                            file_name: file.into(),
+                        }));
+                    }
+                    sources.update_source(id, text.clone());
+                } else if !sources.restore(diagnostics::SourceEntry {
+                    id,
+                    file_name: file.into(),
+                    source: text.clone(),
+                }) {
+                    return Err(EldrLoadError::Load(LoadError::ConflictingSource {
+                        file_name: file.into(),
+                    }));
+                }
+            }
+        }
+        repl_sources.repl_source_id = sources.register("REPL", "");
+        repl_sources.sources = sources;
 
         let docs = bytecode.docs.clone();
         let signatures = bytecode.signatures.clone();
@@ -7806,9 +7918,53 @@ impl ReplEngine {
             return Self::plain(vec![]);
         }
 
-        let owner_source_id = self
-            .sources
-            .register(format!("REPL:{committed_line}"), self.pending.clone());
+        let mut source_number = committed_line;
+        let owner_file =
+            loop {
+                let file = format!("REPL:{source_number}");
+                if !self
+                    .sources
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.file_name == file)
+                    && !self.vm.bytecode().sources.iter().any(|entry| {
+                        entry.normalized_path.as_deref().unwrap_or(&entry.path) == file
+                    })
+                {
+                    break file;
+                }
+                source_number += 1;
+            };
+        let owner_source_id = self.sources.register(owner_file, self.pending.clone());
+        let source_len = self.pending.chars().count();
+        if !repl_source_span_fits(owner_source_id, source_len) {
+            let spec = diagnostics::simple_error(
+                "ReplSourceError",
+                "REPL source span exceeds the runtime source range",
+                Span {
+                    start: 0,
+                    end: source_len.min(1),
+                },
+                None,
+            );
+            let rendered = error_display::diagnostic_lines_by_id(
+                &self.sources,
+                owner_source_id,
+                &spec,
+                self.error_display_mode,
+            );
+            self.history_entries.push(ReplHistoryEntry {
+                line: committed_line,
+                source: self.pending.clone(),
+            });
+            self.pending.clear();
+            self.bump_line(None, None);
+            return ReplResult::ok(ReplOutput::EvalError {
+                idx,
+                source,
+                rendered,
+            });
+        }
 
         let import_only = ast.iter().all(|stmt| matches!(stmt, Ast::Import(_, _, _)));
         let sigil_cp = self.sigil_session.checkpoint();
@@ -7844,10 +8000,10 @@ impl ReplEngine {
         let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
         let signatures =
             crate::collect_signature_entries(&[], &ast, Some(self.repl_module_path.as_str()));
-        let resolved = match self.sigil_session.resolve_with_owner_span_base(
-            ast.clone(),
-            crate::module_span_base_for_source(owner_source_id),
-        ) {
+        let resolved = match self
+            .sigil_session
+            .resolve(crate::rebase_module_ast_spans(ast.clone(), owner_source_id))
+        {
             Ok(r) => r,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
@@ -7883,15 +8039,12 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let spec = type_error_spec_from_scar(
-                    &self.sources,
-                    self.repl_source_id,
-                    &e,
-                    e.span.clone(),
-                );
+                let (source_id, span) = crate::decode_rebased_module_span(&e.span)
+                    .unwrap_or((owner_source_id, e.span.clone()));
+                let spec = type_error_spec_from_scar(&self.sources, source_id, &e, span);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
-                    self.repl_source_id,
+                    source_id,
                     &spec,
                     self.error_display_mode,
                 );
@@ -7922,6 +8075,8 @@ impl ReplEngine {
                     names.join(", ")
                 )
             };
+            let (source_id, span) =
+                crate::decode_rebased_module_span(&span).unwrap_or((owner_source_id, span));
             let spec = diagnostics::simple_error(
                 "ReplQueryError",
                 REPL_UNRESOLVED_TYPE_MESSAGE,
@@ -7930,7 +8085,7 @@ impl ReplEngine {
             );
             let rendered = error_display::diagnostic_lines_by_id(
                 &self.sources,
-                self.repl_source_id,
+                source_id,
                 &spec,
                 self.error_display_mode,
             );
@@ -7953,11 +8108,12 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let spec =
-                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None);
+                let (source_id, span) = crate::decode_rebased_module_span(&e.span)
+                    .unwrap_or((owner_source_id, e.span.clone()));
+                let spec = diagnostics::simple_error("CodegenError", &e.message, span, None);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
-                    self.repl_source_id,
+                    source_id,
                     &spec,
                     self.error_display_mode,
                 );
@@ -7978,10 +8134,7 @@ impl ReplEngine {
         meta.docs = docs.clone();
         chunk.docs = docs.clone();
 
-        if let Some(repl_source) = self.sources.source(self.repl_source_id) {
-            populate_error_template_lines(&mut chunk.error_templates, repl_source);
-        }
-        if let Some((source_str, file_name)) = self.sources.owned_context(self.repl_source_id) {
+        if let Some((source_str, file_name)) = self.sources.owned_context(owner_source_id) {
             self.vm.set_source(source_str, file_name);
         }
 
@@ -8118,10 +8271,10 @@ impl ReplEngine {
                     .call_site
                     .clone()
                     .or_else(|| self.vm.runtime_error_location());
-                let rendered = error_display::runtime_error_lines_with_stack_trace(
+                let rendered = error_display::runtime_error_lines_with_registry_and_stack_trace(
                     &err,
-                    self.vm.source(),
-                    self.vm.source_file(),
+                    &self.sources,
+                    self.repl_source_id,
                     location,
                     self.error_display_mode,
                     self.stack_trace_display_mode,
@@ -8150,10 +8303,10 @@ impl ReplEngine {
                     .call_site
                     .clone()
                     .or_else(|| self.vm.runtime_error_location());
-                let rendered = error_display::runtime_error_lines_with_stack_trace(
+                let rendered = error_display::runtime_error_lines_with_registry_and_stack_trace(
                     &err,
-                    self.vm.source(),
-                    self.vm.source_file(),
+                    &self.sources,
+                    self.repl_source_id,
                     location,
                     self.error_display_mode,
                     self.stack_trace_display_mode,
@@ -8179,10 +8332,10 @@ impl ReplEngine {
                     .call_site
                     .clone()
                     .or_else(|| self.vm.runtime_error_location());
-                let rendered = error_display::runtime_error_lines_with_stack_trace(
+                let rendered = error_display::runtime_error_lines_with_registry_and_stack_trace(
                     &err,
-                    self.vm.source(),
-                    self.vm.source_file(),
+                    &self.sources,
+                    self.repl_source_id,
                     location,
                     self.error_display_mode,
                     self.stack_trace_display_mode,
@@ -8440,6 +8593,26 @@ fn compile_repl_preload_from_module_stages(
 
     let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
+        let source = compile_sources
+            .sources
+            .source(user_source_id)
+            .expect("preload source");
+        if !repl_source_span_fits(user_source_id, source.chars().count()) {
+            return Err(ReplLoadError::Diagnostic {
+                phase: "parse".into(),
+                sources: compile_sources.sources.clone(),
+                source_id: user_source_id,
+                spec: diagnostics::simple_error(
+                    "SourceError",
+                    "REPL source span exceeds the runtime source range",
+                    Span {
+                        start: 0,
+                        end: source.chars().count().min(1),
+                    },
+                    None,
+                ),
+            });
+        }
         preload_imported = apply_preload_imports(
             &mut sigil_session,
             &declaration_index,
@@ -8449,10 +8622,10 @@ fn compile_repl_preload_from_module_stages(
             &snapshot.auto_import_modules,
         )?;
         let user_resolved = sigil_session
-            .resolve_with_owner_span_base(
+            .resolve(crate::rebase_module_ast_spans(
                 user_ast.clone(),
-                crate::module_span_base_for_source(user_source_id),
-            )
+                user_source_id,
+            ))
             .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
         bind_preload_script_qualified_names(
             &mut sigil_session,
@@ -8506,16 +8679,6 @@ fn compile_repl_preload_from_module_stages(
         })?;
     chunk.docs = docs.clone();
     chunk.signatures = signatures.clone();
-    for stage in &raw_module_stages {
-        for module in stage {
-            if let Some(source) = compile_sources.sources.source(module.source_id) {
-                populate_error_template_lines(&mut chunk.error_templates, source);
-            }
-        }
-    }
-    if let Some(source) = compile_sources.sources.source(user_source_id) {
-        populate_error_template_lines(&mut chunk.error_templates, source);
-    }
 
     let source_context = compile_sources
         .sources
@@ -8534,6 +8697,15 @@ fn compile_repl_preload_from_module_stages(
                 }
                 None => session::bytecode_interactive_vm(snapshot.bytecode().clone()),
             };
+            register_runtime_sources(
+                &mut vm,
+                &compile_sources.sources,
+                repl_sources.repl_source_id,
+            )
+            .map_err(|e| ReplLoadError::Runtime {
+                file_name: "<repl-preload>".into(),
+                message: e.to_string(),
+            })?;
             record_repl_runtime_boot_call();
             vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
                 .map_err(|e| ReplLoadError::Runtime {
@@ -8547,18 +8719,22 @@ fn compile_repl_preload_from_module_stages(
             vm
         }
         PreloadRuntimeExecution::Defer => {
-            let bytecode = forge::compose_bytecode_with_chunk(snapshot.bytecode().clone(), chunk)
-                .map_err(|e| ReplLoadError::Diagnostic {
-                phase: "codegen".to_string(),
-                sources: compile_sources.sources.clone(),
-                source_id: diagnostic_source_id(&compile_sources, &e.span),
-                spec: diagnostics::simple_error(
-                    "CodegenError",
-                    &e.message,
-                    local_diagnostic_span(&compile_sources, &e.span),
-                    None,
-                ),
-            })?;
+            let mut bytecode =
+                forge::compose_bytecode_with_chunk(snapshot.bytecode().clone(), chunk).map_err(
+                    |e| ReplLoadError::Diagnostic {
+                        phase: "codegen".to_string(),
+                        sources: compile_sources.sources.clone(),
+                        source_id: diagnostic_source_id(&compile_sources, &e.span),
+                        spec: diagnostics::simple_error(
+                            "CodegenError",
+                            &e.message,
+                            local_diagnostic_span(&compile_sources, &e.span),
+                            None,
+                        ),
+                    },
+                )?;
+            bytecode.sources =
+                runtime_source_entries(&compile_sources.sources, repl_sources.repl_source_id);
             match source_context {
                 Some((source, file_name)) => {
                     session::bytecode_interactive_vm(bytecode).with_source(source, file_name)
@@ -9737,6 +9913,16 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn repl_source_spans_reject_overlapping_and_unrepresentable_offsets() {
+        use diagnostics::SourceId;
+        assert!(super::repl_source_span_fits(SourceId(0), 999_999));
+        assert!(!super::repl_source_span_fits(SourceId(0), 1_000_000));
+        assert!(super::repl_source_span_fits(SourceId(4293), 967_295));
+        assert!(!super::repl_source_span_fits(SourceId(4293), 967_296));
+        assert!(!super::repl_source_span_fits(SourceId(4294), 1));
+    }
+
     use super::*;
     use eldr::interactive::InteractiveChunkPolicy;
     use eldr::value::CallableTarget;
@@ -10315,20 +10501,20 @@ supervisor_init {
         let first_source_id = engine.sources.register("REPL:1", first_source);
         engine
             .sigil_session
-            .resolve_with_owner_span_base(
+            .resolve(crate::rebase_module_ast_spans(
                 spire::parse(first_source).expect("first owner chunk should parse"),
-                crate::module_span_base_for_source(first_source_id),
-            )
+                first_source_id,
+            ))
             .expect("first owner declaration should resolve");
 
         let later_source = "defstruct SessionOwner { later_value: String }";
         let later_source_id = engine.sources.register("REPL:2", later_source);
         let err = engine
             .sigil_session
-            .resolve_with_owner_span_base(
+            .resolve(crate::rebase_module_ast_spans(
                 spire::parse(later_source).expect("later owner chunk should parse"),
-                crate::module_span_base_for_source(later_source_id),
-            )
+                later_source_id,
+            ))
             .expect_err("later owner declaration must collide");
         let (source_id, spec) = engine.resolve_diagnostic_for_repl(&err, later_source_id);
         let rendered = strip_ansi(&error_display::diagnostic_text_by_id(
@@ -10358,10 +10544,10 @@ supervisor_init {
         let later_source_id = engine.sources.register("REPL:1", later_source);
         let err = engine
             .sigil_session
-            .resolve_with_owner_span_base(
+            .resolve(crate::rebase_module_ast_spans(
                 spire::parse(later_source).expect("later owner chunk should parse"),
-                crate::module_span_base_for_source(later_source_id),
-            )
+                later_source_id,
+            ))
             .expect_err("later owner declaration must collide");
         let (source_id, spec) = engine.resolve_diagnostic_for_repl(&err, later_source_id);
         let rendered = strip_ansi(&error_display::diagnostic_text_by_id(

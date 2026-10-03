@@ -66,6 +66,91 @@ fn source_registry_registers_and_updates_entries() {
 }
 
 #[test]
+fn source_registry_reserves_loaded_ids_without_losing_sparse_entries() {
+    let mut sources = SourceRegistry::new();
+    let original = sources.register("main.srt", "original");
+    sources.reserve_ids_before(40);
+    let live = sources.register("REPL:1", "live");
+
+    assert_eq!(original, SourceId(0));
+    assert_eq!(live, SourceId(40));
+    assert_eq!(sources.entries().len(), 2);
+    assert_eq!(sources.get(original).unwrap().file_name, "main.srt");
+    assert_eq!(sources.get(live).unwrap().file_name, "REPL:1");
+    assert!(sources.get(SourceId(1)).is_none());
+    assert!(sources.get(SourceId(39)).is_none());
+    assert!(!sources.update_source(SourceId(39), "must not replace live source"));
+    assert!(sources.update_source(live, "updated live"));
+    assert_eq!(sources.source(original), Some("original"));
+    assert_eq!(sources.source(live), Some("updated live"));
+    assert_eq!(
+        sources.owned_context(live),
+        Some(("updated live".into(), "REPL:1".into()))
+    );
+
+    sources.reserve_ids_before(3);
+    let next = sources.register("REPL:2", "next");
+    assert_eq!(next, SourceId(41));
+    assert_eq!(sources.source(next), Some("next"));
+    assert_eq!(sources.source(live), Some("updated live"));
+}
+
+#[test]
+fn source_registry_restores_original_ids_in_any_order_without_replacing_sources() {
+    let mut sources = SourceRegistry::new();
+    for id in [40, 3, 19] {
+        assert!(sources.restore(SourceEntry {
+            id: SourceId(id),
+            file_name: format!("loaded:{id}"),
+            source: format!("source {id}"),
+        }));
+    }
+    assert_eq!(
+        sources
+            .entries()
+            .iter()
+            .map(|entry| entry.id.0)
+            .collect::<Vec<_>>(),
+        vec![3, 19, 40]
+    );
+    for id in [3, 19, 40] {
+        let entry = sources.get(SourceId(id)).expect("restored ID must exist");
+        assert_eq!(entry.file_name, format!("loaded:{id}"));
+        assert_eq!(entry.source, format!("source {id}"));
+    }
+    assert!(sources.get(SourceId(18)).is_none());
+
+    let original = sources.get(SourceId(19)).unwrap().clone();
+    assert!(sources.restore(original.clone()));
+    let mut other_path = original.clone();
+    other_path.file_name = "replacement.srt".into();
+    let mut other_text = original.clone();
+    other_text.source = "replacement source".into();
+    assert!(!sources.restore(other_path));
+    assert!(!sources.restore(other_text));
+    assert_eq!(sources.get(SourceId(19)), Some(&original));
+    assert_eq!(sources.entries().len(), 3);
+
+    let next = sources.register("REPL:1", "next source");
+    assert_eq!(next, SourceId(41));
+    assert_eq!(sources.source(next), Some("next source"));
+    assert_eq!(sources.get(SourceId(19)), Some(&original));
+}
+
+#[test]
+fn source_registry_rejects_unallocatable_restored_id_without_advancing_registration() {
+    let mut sources = SourceRegistry::new();
+    assert!(!sources.restore(SourceEntry {
+        id: SourceId(u32::MAX),
+        file_name: "invalid.srt".into(),
+        source: "invalid".into(),
+    }));
+    assert!(sources.entries().is_empty());
+    assert!(sources.get(SourceId(u32::MAX)).is_none());
+    assert_eq!(sources.register("valid.srt", "valid"), SourceId(0));
+}
+
+#[test]
 fn source_registry_returns_owned_context() {
     let mut sources = SourceRegistry::new();
     let src_id = sources.register("script.srt", "print(\"ok\")");

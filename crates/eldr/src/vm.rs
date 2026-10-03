@@ -935,6 +935,35 @@ impl VM {
         self.source_file = Some(file);
     }
 
+    /// Retain an immutable source for encoded compiler spans and saved images.
+    pub fn register_source(
+        &mut self,
+        entry: sindr::ir::SourceFileEntry,
+    ) -> Result<(), RuntimeError> {
+        if let Some(existing) = self
+            .bytecode
+            .sources
+            .iter()
+            .find(|source| source.source_id == entry.source_id)
+        {
+            if existing
+                .normalized_path
+                .as_deref()
+                .unwrap_or(&existing.path)
+                != entry.normalized_path.as_deref().unwrap_or(&entry.path)
+                || existing.text != entry.text
+            {
+                return Err(RuntimeError::new(format!(
+                    "Source ID {} already has different source metadata",
+                    entry.source_id
+                )));
+            }
+        } else {
+            self.bytecode.sources.push(entry);
+        }
+        Ok(())
+    }
+
     pub fn with_cli_args(mut self, cli_args: Vec<String>) -> Self {
         self.cli_args = cli_args;
         self
@@ -4572,12 +4601,57 @@ impl VM {
             )));
         }
 
-        let file = template
-            .source_name
-            .clone()
-            .or_else(|| self.source_file.clone())
-            .unwrap_or_else(|| "<unknown>".into());
-        let source = self.source.as_deref().unwrap_or_default();
+        let mut template = template.clone();
+        let (file, source) = match sindr::ir::decode_module_source_span(
+            template.span_start as usize,
+            template.span_end as usize,
+        ) {
+            Some((source_id, start, end)) => {
+                let entry = self
+                    .bytecode
+                    .sources
+                    .iter()
+                    .find(|entry| entry.source_id == source_id)
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!("dbg source {source_id} not found"))
+                    })?;
+                let source = entry.text.as_deref().ok_or_else(|| {
+                    RuntimeError::new(format!("dbg source {source_id} has no text"))
+                })?;
+                template.span_start = start as u32;
+                template.span_end = end as u32;
+                for arg in &mut template.args {
+                    let (arg_source_id, start, end) = sindr::ir::decode_module_source_span(
+                        arg.span_start as usize,
+                        arg.span_end as usize,
+                    )
+                    .ok_or_else(|| RuntimeError::new("dbg argument has no encoded source"))?;
+                    if arg_source_id != source_id {
+                        return Err(RuntimeError::new(
+                            "dbg argument source differs from its expression",
+                        ));
+                    }
+                    arg.span_start = start as u32;
+                    arg.span_end = end as u32;
+                }
+                (
+                    entry
+                        .normalized_path
+                        .as_deref()
+                        .unwrap_or(&entry.path)
+                        .to_string(),
+                    source,
+                )
+            }
+            None => (
+                template
+                    .source_name
+                    .clone()
+                    .or_else(|| self.source_file.clone())
+                    .unwrap_or_else(|| "<unknown>".into()),
+                self.source.as_deref().unwrap_or_default(),
+            ),
+        };
         let args = template
             .args
             .iter()
@@ -4593,7 +4667,7 @@ impl VM {
             })
             .collect::<Vec<_>>();
 
-        Ok(render_dbg_report(&file, source, template, &args))
+        Ok(render_dbg_report(&file, source, &template, &args))
     }
 
     fn validate_match_result_representation(
@@ -9694,6 +9768,42 @@ mod tests {
             }
             other => panic!("expected Value::Error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn registered_sources_remain_immutable_and_survive_saved_snapshots() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let original = sindr::ir::SourceFileEntry {
+            source_id: 17,
+            path: "REPL:1".into(),
+            normalized_path: Some("REPL:1".into()),
+            content_hash: None,
+            text: Some("Err(NoneError)\n".into()),
+        };
+        vm.register_source(original.clone())
+            .expect("new source must register");
+        vm.register_source(original.clone())
+            .expect("registering the same source again must be idempotent");
+
+        let mut other_path = original.clone();
+        other_path.path = "REPL:2".into();
+        other_path.normalized_path = Some("REPL:2".into());
+        let mut other_text = original.clone();
+        other_text.text = Some("Ok(1)\n".into());
+        for conflicting in [other_path, other_text] {
+            let error = vm
+                .register_source(conflicting)
+                .expect_err("a source ID must retain its original path and text");
+            assert!(error.message.contains("Source ID 17"), "{error}");
+        }
+
+        vm.set_source("later()\n".into(), "REPL".into());
+        assert_eq!(vm.bytecode().sources, vec![original.clone()]);
+        let snapshot = vm.snapshot_bytecode();
+        assert_eq!(snapshot.sources, vec![original.clone()]);
+        let bytes = snapshot.encode().expect("snapshot must encode");
+        let restored = Bytecode::decode(&bytes).expect("snapshot must decode");
+        assert_eq!(restored.sources, vec![original]);
     }
 
     #[test]
