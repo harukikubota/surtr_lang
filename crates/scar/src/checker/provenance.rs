@@ -593,7 +593,7 @@ impl Checker {
                         return (Provenance::ConstructorApplication(outcome), actual.clone());
                     }
                 };
-                let return_type =
+                let mut return_type =
                     match self.trait_provenance_template(&signature.return_type.ty, context) {
                         Ok(return_type) => return_type,
                         Err(outcome) => {
@@ -616,6 +616,25 @@ impl Checker {
                     call_substitution, ..
                 } = &function.1
                 {
+                    let mut value_inputs = Vec::new();
+                    for parameter in &signature.value_parameters {
+                        Self::collect_ty_vars(&parameter.ty, &mut value_inputs);
+                    }
+                    // Only constructor identities supplied without a value
+                    // source are concrete here. Payload variables and returned
+                    // callable inputs must retain their source projections.
+                    let return_only_mapping: HashMap<_, _> = call_substitution
+                        .iter()
+                        .filter(|(variable, _)| {
+                            self.constructor_witness_traits.contains_key(variable)
+                                && !value_inputs.contains(variable)
+                        })
+                        .cloned()
+                        .collect();
+                    if !return_only_mapping.is_empty() {
+                        return_type =
+                            self.substitute_type_def_ty(&return_type, &return_only_mapping);
+                    }
                     for (variable, ty) in call_substitution {
                         variables.entry(*variable).or_insert_with(|| {
                             vec![(

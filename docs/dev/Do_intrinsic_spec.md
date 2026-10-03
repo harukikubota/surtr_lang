@@ -41,6 +41,11 @@ payload型は文ごとに変化できる。family所属だけからcarrier同一
 `=?` RHSはpattern inputであり、do carrierの推論元ではない。
 普通の`=`はpayloadを取り出さず、bare Monad式はpayloadを捨ててsequenceする。
 `pure` / `return` / `guard`は通常callとして検査し、名前でcheckerの分岐を作らない。
+
+返り値にだけ現れるconstructor入力は、通常callの型引数の具体化結果を使ってcapabilityを検査する。
+たとえば`guard::<List>(...)`の返り値は`List<Unit>`としてMonadの実装を確認できる。
+値引数から受け継いだcapabilityは、同じnominal型へ具体化されても強めない。
+`List<Unit>`のbare式と`_ <- rhs`は通常の`Monad::bind`でsequenceし、空Listでは後続文を評価しない。
 impl数・順序・表示名・field探索による逆推論、暗黙lift、runtime Trait dictionaryを認めない。
 未確定obligationは`Deferred`を保持し、実行境界では構造化ambiguity等として拒否する。
 
@@ -107,11 +112,10 @@ JSON schemaはdiagnostics正本の閉じたvariantを使い、未採用のdo専�
 
 ## 現行実装で確認した制限
 
-List runtime の改修時に、改修前の compiler でも次の2件を確認した。原因は未特定であり、
+List runtime の改修時に、改修前の compiler でも次の問題を確認した。原因は未特定であり、
 上記の generic do 契約に対する調査項目として扱う。
 
-- `guard::<List>(...)` の `List<Unit>` を do で直接 sequence するケースで、`Type constructor occurrence requires Monad` が出る。現在の回帰テストでは `List::map` で具体的な payload へ写してから sequence する。
 - 三段の List do を Test DSL の `it` closure 内に直接置くケースで、compiler が stack overflow する。現在の回帰テストでは `do_list_three_binds` のようなトップレベル関数へ切り出す。
 
 観測条件、回避形、修正時の受け入れ条件は
-[List / VM の残課題](../../doc/list_runtime_followups.md) の C-1 / C-2 に記載する。
+[List / VM の残課題](../../doc/list_runtime_followups.md) の C-2 に記載する。

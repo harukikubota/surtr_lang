@@ -584,6 +584,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(do_uses_generic_monad_capability_without_binding_rigid_carrier),
     surface_case!(do_extract_lowers_to_concrete_monad_dispatch),
     surface_case!(do_total_extract_allows_mapped_payload_changes),
+    surface_case!(do_sequences_unit_payloads),
     surface_case!(do_partial_extract_requires_alternative),
     surface_case!(do_rigid_monad_requires_explicit_alternative_bound),
     surface_case!(do_ordinary_binding_is_not_a_monadic_origin),
@@ -6381,6 +6382,22 @@ fn do_total_extract_allows_mapped_payload_changes() {
 }"#,
     ))
     .expect("captured Either argument stays fixed while mapped payloads change");
+}
+
+fn do_sequences_unit_payloads() {
+    for source in [
+        "f: (Unit -> List<Int>) = {|_| do::<List> { value <- [1, 2]; guard::<List>(value > 1); [value] }}",
+        "result: List<Int> = do::<List> { value <- [1, 2]; guard::<List>(value > 1); [value] }",
+        "result: List<Int> = do::<List> { guard::<List>(True); [1] }",
+        "source: List<Unit> = [()]; result: List<Int> = do::<List> { _ <- source; [1] }",
+        "result: List<Int> = Monad::bind([()], {|_| [1]})",
+        "result: Option<Int> = do::<Option> { guard::<Option>(True); Option::Some(1) }",
+    ] {
+        typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .unwrap_or_else(|error| panic!("Unit payload must sequence: {source}: {error:?}"));
+        typecheck_module_source_result(&format!("defmod GuardProbe {{ def probe() -> Unit {{ {source}; () }} }}"))
+            .unwrap_or_else(|error| panic!("staged Unit payload must sequence: {source}: {error}"));
+    }
 }
 
 fn do_partial_extract_requires_alternative() {

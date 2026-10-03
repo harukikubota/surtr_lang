@@ -118,8 +118,7 @@ test("do carrier integration") {
       capture_stdout()
       checked: List<Int> = do::<List> {
         value <- [1, 2, 3]
-        allowed: List<Int> = List::map(guard::<List>(value > 1), {|_| value})
-        _ <- allowed
+        guard::<List>(value > 1)
         result =? if(value == 2, Ok(value), Err(NoneError))
         traced = print("safe=#{result}")
         [result]
@@ -132,6 +131,26 @@ test("do carrier integration") {
       assert_eq([2], checked)
       assert_eq([9], partial)
       assert_stdout_eq(["safe=2", "matched"])
+    }
+
+    it("sequences bound List Unit values and skips blocked continuations") {
+      capture_stdout()
+      allowed: List<Unit> = guard::<List>(True)
+      blocked: List<Unit> = guard::<List>(False)
+      accepted: List<Int> = do::<List> {
+        _ <- allowed
+        traced = print("accepted")
+        [7]
+      }
+      rejected: List<Int> = do::<List> {
+        blocked
+        traced = print("unreachable")
+        [8]
+      }
+      assert_eq([7], accepted)
+      empty: List<Int> = []
+      assert_eq(empty, rejected)
+      assert_stdout_eq(["accepted"])
     }
 
     it("keeps Either captured arguments fixed") {

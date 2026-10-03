@@ -135,6 +135,18 @@ OptionT::run(blocked) # Ok(Option::None)
 ```
 
 `guard`は通常のAlternative関数で、Result effectを参照しません。
+`guard::<List>(condition)`が返す`List<Unit>`も、そのまま途中の式としてsequenceできます。
+`True`なら後続文へ進み、`False`ならその経路の後続文を評価せず空Listを返します。
+
+```surtr
+selected: List<Int> = do::<List> {
+  value <- [1, 2, 3]
+  guard::<List>(value > 1)
+  [value]
+}
+selected # [2, 3]
+```
+
 liftしたbaseのErrをtotal `<-`でsequenceする場合も、通常のTransformer Monad実装がそのErrを保持します。
 
 標準型でResult effectが付くのはOptionTだけです。
