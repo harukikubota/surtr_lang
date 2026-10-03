@@ -1020,7 +1020,7 @@ impl Checker {
                 .map(|ty| self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::BindingAnnotation))
                 .transpose()?;
             let checked = self.check_node_with_expected(value, expected_ty.as_ref())?;
-            let typed = self.resolve_typed_node(checked);
+            let typed = *self.resolve_typed_node(checked);
 
             let (kind, stored) = match &typed.node {
                 TypedInner::Lit(lit) => (

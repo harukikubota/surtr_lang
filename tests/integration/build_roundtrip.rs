@@ -8,6 +8,60 @@ use sindr::ir::Opcode;
 use std::fs;
 
 #[test]
+fn nested_blocks_and_do_check_without_stack_abort() {
+    let temp = unique_temp_dir("surtr_nested_compiler_stack");
+    let mut match_blocks = "1".to_owned();
+    for _ in 0..16 {
+        match_blocks = format!("match 1 {{ _ => {{ marker = 0; {match_blocks} }} }}");
+    }
+    let mut closure_blocks = "1".to_owned();
+    for _ in 0..31 {
+        closure_blocks = format!("layer() {{ marker = 0; {closure_blocks} }}");
+    }
+    let mut list_do = r##"do::<List> {
+  first <- [1, 2]
+  second <- [10, 20]
+  third <- [100, 200]
+  traced = print("#{first}:#{second}:#{third}")
+  [first + second + third]
+}"##
+    .to_owned();
+    for _ in 0..3 {
+        list_do = format!("layer() {{ marker = 0; {list_do} }}");
+    }
+    for (name, source) in [
+        ("match_blocks", format!("actual: Int = {match_blocks}")),
+        (
+            "closure_blocks",
+            format!(
+                "def layer(body: (-> Int)) -> Int {{ body() }}\nactual: Int = {closure_blocks}"
+            ),
+        ),
+        (
+            "list_do",
+            format!(
+                "def layer(body: (-> List<Int>)) -> List<Int> {{ body() }}\nactual: List<Int> = {list_do}"
+            ),
+        ),
+    ] {
+        let source_path = temp.join(format!("{name}.srt"));
+        write_source(&source_path, &source);
+        let output = surtr_command()
+            .args(["check", source_path.to_str().expect("source path must be utf-8")])
+            .output()
+            .expect("failed to run check command");
+        assert!(
+            output.status.success(),
+            "{name} failed: {:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fs::remove_dir_all(temp).expect("failed to remove nested compiler test sources");
+}
+
+#[test]
 fn build_uses_default_eldr_output_path() {
     let temp = unique_temp_dir("surtr_step1_default_path");
     let source_path = temp.join("default_out.srt");

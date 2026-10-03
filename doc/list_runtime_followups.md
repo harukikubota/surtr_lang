@@ -65,19 +65,6 @@
 - 次の作業: RT-3 の測定を基に対象を選び、generic do と通常の Monad dispatch を基準に評価順・失敗・待機を比較する仕様を作る。
 - 受け入れ条件: 副作用を持つ mapper、空結果、部分 pattern、SafeBind、nested do で値・順序・呼出し回数・失敗後の未評価が一致する。未完成 Builder を公開型、process payload、完成結果へ出さない。
 
-## List do の既存コンパイル問題
-
-以下の問題は runtime 改修前の `6ba63acd` でも観測した。runtime の改修では型検査・lowering を変更していない。
-現在の回帰テストでは回避形を使っている。修正着手時に最小再現を作り、原因の compiler phase を特定する。
-
-### C-2 Test DSL の closure 内に三段の List do を置くと compiler が stack overflow
-
-- 観測: 三段の do を `it` の closure 内へ直接置いたケースで compiler の stack overflow を確認した。VM 実行前の問題であり、最小条件と原因 phase は未特定。
-- 現行の回避形: [do テスト](../lib/tests/do.srt) の `do_list_three_binds` のように、計算をトップレベル関数へ切り出す。
-- 次の作業: トップレベル関数版と closure 内の直接記述を比較し、段数・capture・Test DSL 展開をそれぞれ削って再現を絞る。compiler の再帰経路と深さを確認する。
-- 受け入れ条件: 同じ型・意味の正常な式を abort せず処理し、拒否が必要な入力は元の source location を持つ診断にする。専用 List do lowering や無制限の再帰を隠す fallback を加えない。
-- 検証: 原因 phase の回帰テストに加え、process を分けたコンパイル試験で abort しないことを確認する。
-
 ## 今後の検証と文書更新
 
 着手する項目の契約を直接検証するテストから始め、影響範囲に応じて

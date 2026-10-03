@@ -4848,7 +4848,7 @@ impl Checker {
                     )?;
                     typed.extend(nodes.into_iter().map(|node| {
                         let profile = self.profiler.start();
-                        let node = self.resolve_typed_node(node);
+                        let node = *self.resolve_typed_node(node);
                         self.profiler
                             .finish(ProfileEvent::ResolveTypedNode, profile);
                         node
@@ -4865,7 +4865,7 @@ impl Checker {
                 }
                 let node = self.check_node(&stmt)?;
                 let profile = self.profiler.start();
-                let node = self.resolve_typed_node(node);
+                let node = *self.resolve_typed_node(node);
                 self.profiler
                     .finish(ProfileEvent::ResolveTypedNode, profile);
                 typed.push(node);

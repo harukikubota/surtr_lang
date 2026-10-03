@@ -898,7 +898,7 @@ impl Checker {
             ));
         }
         failure_arm.body = replacement;
-        Ok(self.resolve_typed_node(checked))
+        Ok(*self.resolve_typed_node(checked))
     }
 
     fn do_safebind_failure_method(
@@ -982,7 +982,7 @@ impl Checker {
         let mut checked = self.check_safebind_input(statement_span, pattern, rhs)?;
         checked.typed_pattern = self.resolve_typed_pattern(checked.typed_pattern);
         checked.pattern_ty = self.resolve_ty(&checked.pattern_ty);
-        checked.typed_rhs = self.resolve_typed_node(checked.typed_rhs);
+        checked.typed_rhs = *self.resolve_typed_node(checked.typed_rhs);
         checked.projection = match checked.projection {
             SafeBindRhsProjection::CanonicalResultOnce {
                 payload_ty,
