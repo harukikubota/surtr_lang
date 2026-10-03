@@ -2,6 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::names::{surface_path_eq, surface_path_name};
 use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
@@ -259,6 +260,8 @@ pub enum Value {
     RegexCaptures(RegexCapturesHandle),
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
+    Generator(GeneratorHandle),
+    InfiniteGenerator(InfiniteGeneratorHandle),
     Pid(PidHandle),
     FileHandle(FileHandleValue),
     Workers(WorkersHandle),
@@ -289,6 +292,38 @@ pub struct RegexMatchHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RandomGeneratorHandle {
     pub state: u64,
+}
+
+/// Immutable finite producer. Advancing creates a new handle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneratorHandle(pub Arc<GeneratorProducer>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GeneratorProducer {
+    Unfold {
+        state: Value,
+        step: Callable,
+    },
+    Range {
+        current: SurtrInt,
+        stop: SurtrInt,
+        step: SurtrInt,
+    },
+    RangeChar {
+        current: SurtrInt,
+        stop: SurtrInt,
+        step: SurtrInt,
+    },
+    Terminal,
+}
+
+/// Immutable infinite producer with an erased internal state type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InfiniteGeneratorHandle(pub Arc<InfiniteGeneratorProducer>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InfiniteGeneratorProducer {
+    Unfold { state: Value, step: Callable },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -560,6 +595,8 @@ impl Value {
             }
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
+            Value::Generator(_) => "Generator(<opaque>)".to_string(),
+            Value::InfiniteGenerator(_) => "InfiniteGenerator(<opaque>)".to_string(),
             Value::Pid(handle) => format!(
                 "PID({}#{})",
                 surface_path_name(&handle.process_name),

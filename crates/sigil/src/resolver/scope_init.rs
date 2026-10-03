@@ -24,12 +24,11 @@ pub(super) fn initialize_scope() -> Scope {
             scope.define_with_id(meta.name, builtin_uid(idx as u16));
         }
     }
-    if let Some(hidden_boundary_idx) = builtin_function_metas()
-        .iter()
-        .position(|meta| meta.name == "__workers_broadcast_timeout")
-    {
-        scope.advance_next_id_to(builtin_uid((hidden_boundary_idx + 1) as u16));
-    }
+    // Every runtime builtin owns a UID, including members with no global binding.
+    // Ordinary declarations start after the complete metadata range.
+    scope.advance_next_id_to(
+        sindr::builtin::BUILTIN_UID_BASE + builtin_function_metas().len() as u32,
+    );
     scope
 }
 

@@ -55,9 +55,12 @@ const TUPLE_MODULE_SOURCE: &str = include_str!("../../../../lib/types/tuple.srt"
 const ERROR_MODULE_SOURCE: &str = include_str!("../../../../lib/types/error.srt");
 const LIST_MODULE_SOURCE: &str = include_str!("../../../../lib/types/list.srt");
 const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/option.srt");
-const GENERATOR_MODULE_SOURCE: &str = r#"@builtin type Generator<$State, $Item>
+const GENERATOR_MODULE_SOURCE: &str = r#"@builtin type Generator<$Item>
 
 impl Generator {}"#;
+const INFINITE_GENERATOR_MODULE_SOURCE: &str = r#"@builtin type InfiniteGenerator<$Item>
+
+impl InfiniteGenerator {}"#;
 const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/types/hash_map.srt");
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
 const EITHER_MODULE_SOURCE: &str = include_str!("../../../../lib/types/either.srt");
@@ -640,6 +643,14 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Generator",
                 pick_override("Generator", GENERATOR_MODULE_SOURCE, overrides),
+            ),
+            (
+                "InfiniteGenerator",
+                pick_override(
+                    "InfiniteGenerator",
+                    INFINITE_GENERATOR_MODULE_SOURCE,
+                    overrides,
+                ),
             ),
             (
                 "HashMap",

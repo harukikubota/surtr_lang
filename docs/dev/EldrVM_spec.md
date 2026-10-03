@@ -198,7 +198,7 @@ Eldr が扱う値の概念カテゴリ:
 
 - プリミティブ: `Int`, `Float`, `String`, `Boolean`, `Unit`
 - コンテナ: `List`, `HashMap`
-- opaque runtime 値: `Regex`, `RegexCaptures`, `RegexMatch`, `RandomGenerator`
+- opaque runtime 値: `Regex`, `RegexCaptures`, `RegexMatch`, `RandomGenerator`, `Generator`, `InfiniteGenerator`
 - opaque runtime 値として見える `Duration` は source 上では private field を持つ struct として扱い、表示は `100ms` 形式にする
 - タグ付き値: `Tagged { tag, fields }`
 - runtime 内部 tag 値: `Tag(u32)`（user-visible `Int` と分離）
@@ -323,6 +323,26 @@ k 個の bind が末尾の M 要素を順に平坦化して返す場合、E = kM
 Packed の tail は参照中の buffer 全体を保持し、処理済みの先頭部分を自動で縮めない。
 最後の参照の破棄では元の buffer 全体を解放し得る。Cons の長い鎖の反復解放と、
 checkpoint の一般的なコピー削減も未実装である。
+
+---
+
+### 4.3 Generator と InfiniteGenerator
+
+公開型は `Generator<Item>` と `InfiniteGenerator<Item>` とし、内部 state の型を公開型引数に含めない。
+有限の producer は `Unfold { state, step }`、整数・文字の range、`Terminal` を持つ。
+無限の producer は `Unfold { state, step }` を持つ。両方とも生成と List の取得を担当し、取得後の変換・選別・集計は List モジュールに任せる。
+
+- 有限の unfold step は `State -> Option<(Item, State)>`。`None` だけが正常終端で、item 自体の `Result` / `Option` はデータとして保つ。
+- private な有限 pull builtin `gen_step` は `Option<(Item, Generator<Item>)>` を返す。公開 `Generator::next` は標準定義でこれを `Ok((item, rest))` / `Err(NoneError)` に変換する。step の終端 protocol と公開 API の戻り値は別の契約とする。
+- 無限の unfold step は `State -> (Item, State)`。`InfiniteGenerator::next` は `(Item, InfiniteGenerator<Item>)` を直接返す。
+- handle は不変で、構築や opaque 表示では step を呼ばない。進行は返された rest を使う。同じ handle を新しい呼出しで再利用すると、保存 state から再評価する。
+- take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `Err(NoneError)` を返す。
+- 条件停止した item は List に含めず、その生成前の handle を rest とする。再利用ではその位置を再評価する。step の RuntimeError や不正 carrier を終端や途中までの成功 List に変換しない。
+- callback、条件判定、List への一件追加は共通の builtin continuation と VM 予算で進める。一回の取得の中断・再開で callback を重複実行しない。通常の切替えでは状態を移動し、checkpoint は独立した状態を保持する。
+- materialize は flat_map と同じ private `ListBuilder` を使い、完了時だけ buffer を ListHandle に移す。非空は既存の Packed、空は Empty になる。巨大な count の初期予約容量を制限しても、BigInt の要求件数と結果は切り詰めない。
+
+公開 API、生成・取得、入力検証エラーの契約は `lib/types/generator.srt` と `lib/types/infinite_generator.srt` の `@doc`、
+利用例は [Generator](../site/generator.md) を参照する。専用 Opcode、公開 mutable cursor、新しい serialization / equality 契約は追加しない。
 
 ---
 

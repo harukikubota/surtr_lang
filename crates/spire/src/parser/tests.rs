@@ -2158,16 +2158,16 @@ fn test_hidden_builtin_impl_member_parses() {
 #[test]
 fn test_private_builtin_impl_member_parses() {
     let ast = parse_with_context(
-        r#"impl Generator {
-  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+        r#"impl List {
+  @builtin defp zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
 }"#,
-        ParserContext::module(1, Some("Generator".into())).with_rules(ParseRules::std_module()),
+        ParserContext::module(1, Some("List".into())).with_rules(ParseRules::std_module()),
     )
     .expect("private builtin impl member should parse");
 
     match &ast[0] {
         Ast::ImplDef(_, target, _, body, _) => {
-            assert_eq!(target, "Global::Generator");
+            assert_eq!(target, "Global::List");
             assert!(matches!(
                 &body[0],
                 Ast::BuiltinDecl(
@@ -2182,7 +2182,7 @@ fn test_private_builtin_impl_member_parses() {
                         visibility: Visibility::Private,
                         ..
                     },
-                ) if name == "gen_make"
+                ) if name == "zip"
             ));
         }
         other => panic!("expected impl, got {:?}", other),

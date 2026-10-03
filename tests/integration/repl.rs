@@ -273,8 +273,6 @@ const REPL_CASES: &[(&str, fn())] = &[
     repl_case!(repl_sig_expression_query_flows_through_cli_presentation),
     repl_case!(repl_rejects_persisting_unresolved_result_callable_binding),
     repl_case!(repl_rejects_persisting_unresolved_result_value_binding),
-    repl_case!(repl_rejects_direct_generator_bridge_builtin_call),
-    repl_case!(repl_persists_public_generator_bindings),
     repl_case!(repl_accepts_explicitly_constrained_result_binding),
     repl_case!(repl_accepts_result_mapping_when_chunk_constrains_type),
     repl_case!(repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli),
@@ -660,7 +658,7 @@ fn repl_explicit_config_applies_completion_candidate_limit() {
 
 fn repl_static_impl_methods_keep_declared_arity() {
     let output = run_repl_session(
-        "print(inspect(Generator::to_list(Generator::range(1, 3))))\nprint(inspect(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",
+        "print(inspect(List::zip([1, 2], [3, 4])))\nprint(inspect(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -670,7 +668,7 @@ fn repl_static_impl_methods_keep_declared_arity() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("[1, 2, 3]"), "{stdout}");
+    assert!(stdout.contains("[(1, 3), (2, 4)]"), "{stdout}");
     assert!(stdout.contains("Ok([97])"), "{stdout}");
     assert!(!stdout.contains("Call arity mismatch"), "{stdout}");
 }
@@ -761,44 +759,6 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
     );
     assert!(combined.contains("ret = todo()"), "{combined}");
     assert!(!combined.contains("ret: Result<_>"), "{combined}");
-}
-
-fn repl_rejects_direct_generator_bridge_builtin_call() {
-    let output = run_repl_session("Generator::gen_make(3, [1, 2])\n:quit\n");
-    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
-    let combined = format!("{stdout}\n{stderr}");
-
-    assert!(combined.contains("Generator::gen_make/2"), "{combined}");
-    assert!(combined.contains("is private"), "{combined}");
-    assert!(
-        !combined.contains("Cannot persist binding with unresolved type variable."),
-        "{combined}"
-    );
-}
-
-fn repl_persists_public_generator_bindings() {
-    let output = run_repl_session(
-        "g = Generator::range(1, 3)\n:type g\nGenerator::idx(g)\nGenerator::to_list(g)\n:quit\n",
-    );
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(
-        stdout.contains("g: Generator<Int, Int> = (0, [1, 2, 3])"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("type: Generator<Int, Int>"), "{stdout}");
-    assert!(
-        stdout.contains("\n0\n") || stdout.contains("> 0"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("[1, 2, 3]"), "{stdout}");
 }
 
 fn repl_accepts_explicitly_constrained_result_binding() {

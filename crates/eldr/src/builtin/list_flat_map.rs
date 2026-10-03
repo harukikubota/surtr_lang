@@ -1,41 +1,6 @@
+use super::list_builder::ListBuilder;
 use super::{decode_callable_arg, BuiltinContinuation, BuiltinOutcome, RuntimeError, Value, VM};
 use sindr::runtime::{Callable, ListHandle};
-
-/// Mutable construction state stays inside its owning VM continuation.
-#[derive(Debug, Default)]
-struct ListBuilder {
-    items: Vec<Value>,
-}
-
-impl Clone for ListBuilder {
-    fn clone(&self) -> Self {
-        // Cloning is used by transaction checkpoints, never by ordinary switching.
-        #[cfg(test)]
-        record(|metrics| metrics.builder_clones += 1);
-        Self {
-            items: self.items.clone(),
-        }
-    }
-}
-
-impl ListBuilder {
-    fn push(&mut self, value: Value) -> Result<(), RuntimeError> {
-        self.items
-            .len()
-            .checked_add(1)
-            .ok_or_else(|| RuntimeError::new("List builder length overflow"))?;
-        self.items.push(value);
-        #[cfg(test)]
-        record(|metrics| metrics.builder_pushes += 1);
-        Ok(())
-    }
-
-    fn finish(self) -> ListHandle {
-        #[cfg(test)]
-        record(|metrics| metrics.builder_finishes += 1);
-        ListHandle::from_items(self.items)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct FlatMapContinuation {
@@ -146,10 +111,16 @@ fn record(update: impl FnOnce(&mut FlatMapMetrics)) {
 
 #[cfg(test)]
 pub(crate) fn flat_map_metrics() -> FlatMapMetrics {
-    METRICS.with(std::cell::Cell::get)
+    let mut value = METRICS.with(std::cell::Cell::get);
+    let builder = super::list_builder::list_builder_metrics();
+    value.builder_pushes = builder.pushes;
+    value.builder_clones = builder.clones;
+    value.builder_finishes = builder.finishes;
+    value
 }
 
 #[cfg(test)]
 pub(crate) fn reset_flat_map_metrics() {
     METRICS.with(|cell| cell.set(FlatMapMetrics::default()));
+    super::list_builder::reset_list_builder_metrics();
 }

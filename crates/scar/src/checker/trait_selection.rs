@@ -514,6 +514,7 @@ impl Checker {
                 | TypeName::FileHandle
                 | TypeName::HashMap
                 | TypeName::Generator
+                | TypeName::InfiniteGenerator
                 | TypeName::StandbyInit
                 | TypeName::TaskHandle
                 | TypeName::Workers
@@ -2014,14 +2015,13 @@ impl Checker {
             ) if args.is_empty() => Ty::Enum(name.as_str().into(), args),
             CanonicalTypeHead::Builtin(
                 name @ (TypeName::HashMap
+                | TypeName::Generator
+                | TypeName::InfiniteGenerator
                 | TypeName::StandbyInit
                 | TypeName::TaskHandle
                 | TypeName::Workers
                 | TypeName::WorkerLease),
             ) if args.len() == 1 => Ty::Enum(name.as_str().into(), args),
-            CanonicalTypeHead::Builtin(TypeName::Generator) if args.len() == 2 => {
-                Ty::Enum(TypeName::Generator.as_str().into(), args)
-            }
             CanonicalTypeHead::Builtin(name) => nominal(
                 self.env
                     .lookup_type_def(name.as_str())

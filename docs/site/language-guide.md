@@ -592,6 +592,8 @@ chars = ["a".."c"]     # => Ok([a, b, c])
 `Int` range はそのまま `List<Int>` になり、`String` range は char validation を伴うので `Result<List<String>, Error>` になります。
 constant literal は compile-time に畳まれますが、surface 契約は変わりません。`String` endpoint が不正な場合は literal でも変数でも `Generator::range_char` と同じ `InvalidCharRange` が runtime に返ります。
 
+有限の range helper は `Generator<Item>` を返し、整数は `Generator::range` → `Generator::to_list`、文字は `Generator::range_char` の入力検証 → `Generator::to_list` で List 化します。構築時に全件生成せず、文字 endpoint の検証エラーは従来どおり `InvalidCharRange` です。
+
 ここでの単位元は `[]` です。  
 Surtr は一般化された `pure` を置かず、`[]` と `List::cons` / `[x]` をはっきり分けています。
 `[head, ..tail]` の分解は pattern 位置専用で、`List` と `String` のどちらにも使えます。

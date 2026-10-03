@@ -1,64 +1,168 @@
 @doc """
 Standard `Generator` type declaration.
-`Generator<$State, $Item>` models a finite pull-based sequence whose cursor is
-tracked by `idx`.
-The concrete runtime representation is intentionally opaque to user code. Use
-the public helpers such as `unfold`, `iterate`, `range`, `next`, `take`, and
-`to_list`; the `gen_*` runtime bridge helpers are private standard-library
-implementation details.
+`Generator<$Item>` models a finite lazy sequence and exposes only the item type.
+`unfold` stores the state and callable; `next` evaluates the step on demand.
+The finite step reports normal termination with `Option::None`.
+The public `next` returns `Ok((item, rest))` or `Err(NoneError)` at the end.
+`Result` and `Option` items remain ordinary data.
+The original value is immutable. Pass the returned rest to the next call to
+advance the sequence.
+Provide a step that eventually returns `None`. The compiler does not prove
+termination for an arbitrary step.
+
+## REPL
+xldr(1)> Generator::range(1, 3)
+Generator(<opaque>)
 """
-@builtin type Generator<$State, $Item>
+@builtin type Generator<$Item>
 
 @doc """
-Concrete generator-module error for invalid step values.
+Error for a zero step in an integer or character range.
 """
-deferror InvalidRangeStep(message: String) {
-  "#{message}"
-}
+deferror InvalidRangeStep(message: String) { "#{message}" }
 
 @doc """
-Concrete generator-module error for invalid character range inputs.
+Error for a character range endpoint that is not a single ASCII character.
 """
-deferror InvalidCharRange(message: String) {
-  "#{message}"
-}
+deferror InvalidCharRange(message: String) { "#{message}" }
+
+@doc """
+Argument error for a non-positive `take_exact` count.
+The count is checked before generating any items.
+"""
+deferror InvalidGeneratorCount(requested: Int) { "count must be positive: #{requested}" }
+
+@doc """
+Error for too few items returned by `take_exact`.
+The message preserves the requested and actual counts.
+"""
+deferror GeneratorShortage(requested: Int, actual: Int) { "requested #{requested} items, got #{actual}" }
 
 impl Generator {
-  @builtin defp gen_make::<$State>(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+  # The shared runtime pull protocol uses Option for normal termination.
+  # Only the public next API converts that protocol to Result.
+  @builtin defp _step(gen: Generator<$Item>) -> Option<($Item, Generator<$Item>)>
 
-  @builtin defp gen_idx(gen: Generator<$State, $Item>) -> Int
+  @doc """
+  Build a finite sequence from a state and a step returning
+  `Some((item, next_state))` or `None`.
+  Construction does not evaluate the step. The next state must have the same
+  type as the seed.
+  ## REPL
+  xldr(1)> gen = Generator::unfold(1, {|n| if(n <= 3, Option::Some((n, n + 1)), Option::None)})
+  xldr(2)> Generator::to_list(gen)
+  [1, 2, 3]
+  """
+  @builtin def unfold(seed: $State, step: ($State -> Option<($Item, $State)>)) -> Generator<$Item>
 
-  @builtin defp gen_items(gen: Generator<$State, $Item>) -> List<$Item>
-
-  defp _unfold_rev(
-    state: $UState,
-    next_idx: Int,
-    step: ($UState, Int -> Result<($UItem, $UState)>),
-    acc_rev: List<$UItem>,
-  ) -> List<$UItem> {
-    step_result = step(state, next_idx)
-    match step_result {
-      Ok(pair) => _unfold_rev(pair._1, next_idx + 1, step, [pair._0, ..acc_rev]),
-      Err(_) => acc_rev,
+  @doc """
+  Generate one item and return `Ok((item, rest))`.
+  Return `Err(NoneError)` on normal termination.
+  The original generator is unchanged. A separate call on the same value
+  reevaluates the step from its saved state.
+  ## REPL
+  xldr(1)> Generator::next(Generator::range(10, 12))
+  Ok((10, Generator(<opaque>)))
+  """
+  def next(gen: Generator<$Item>) -> Result<($Item, Generator<$Item>), NoneError> {
+    match _step(gen) {
+      Option::Some(pair) => Ok(pair),
+      Option::None => Err(NoneError),
     }
   }
 
-  defp _with_index_rev(
-    values: List<$Item>,
-    next_idx: Int,
-    acc: List<(Int, $Item)>,
-  ) -> List<(Int, $Item)> {
-    match values {
-      [] => acc,
-      [head, ..tail] => _with_index_rev(tail, next_idx + 1, [(next_idx, head), ..acc]),
-    }
+  @doc """
+  Generate up to `count` items and return `(values, rest)`.
+  A shorter finite sequence is a normal result.
+  `count <= 0` returns `([], gen)` without evaluation. Reaching the requested
+  count does not evaluate another step.
+  After normal termination has been observed, the rest is terminal: its `next`
+  returns `Err(NoneError)` without calling the step.
+  ## REPL
+  xldr(1)> Generator::take(Generator::range(1, 5), 3)
+  ([1, 2, 3], Generator(<opaque>))
+  """
+  @builtin def take(gen: Generator<$Item>, count: Int) -> (List<$Item>, Generator<$Item>)
+
+  @doc """
+  Check that a positive `count` of items was obtained.
+  A non-positive count returns `InvalidGeneratorCount` before generation.
+  If too few items are available, return `GeneratorShortage` without a list
+  or rest. The original generator is unchanged.
+  Success does not guarantee that the rest is terminal.
+  ## REPL
+  xldr(1)> Generator::take_exact(Generator::range(1, 3), 2)
+  Ok(([1, 2], Generator(<opaque>)))
+  """
+  def take_exact(gen: Generator<$Item>, count: Int) -> Result<(List<$Item>, Generator<$Item>)> {
+    if(count <= 0,
+      Err(InvalidGeneratorCount(count)),
+      _take_exact_checked(take(gen, count), count))
   }
 
-  defp _reverse_indexed(values: List<(Int, $Item)>, acc: List<(Int, $Item)>) -> List<(Int, $Item)> {
-    match values {
-      [] => acc,
-      [head, ..tail] => _reverse_indexed(tail, [head, ..acc]),
-    }
+  defp _take_exact_checked(pair: (List<$Item>, Generator<$Item>), count: Int) -> Result<(List<$Item>, Generator<$Item>)> {
+    actual = List::len(pair._0)
+    if(actual == count, Ok(pair), Err(GeneratorShortage(count, actual)))
+  }
+
+  @doc """
+  Take items while the predicate is `True`, checking each item before adding
+  it to the list. The first `False` item is excluded.
+  When the predicate returns `False`, the rest starts before that item was generated.
+  Reusing the rest reevaluates that position.
+  Normal termination returns a terminal rest. No separate stop reason is returned.
+  ## REPL
+  xldr(1)> Generator::take_while(Generator::range(1, 4), {|n| n < 3})
+  ([1, 2], Generator(<opaque>))
+  """
+  @builtin def take_while(gen: Generator<$Item>, predicate: ($Item -> Boolean)) -> (List<$Item>, Generator<$Item>)
+
+  @doc """
+  Take items until the predicate first becomes `True`.
+  The stopping item is excluded and remains at the start of the rest.
+  ## REPL
+  xldr(1)> Generator::take_until(Generator::range(1, 4), {|n| n >= 3})
+  ([1, 2], Generator(<opaque>))
+  """
+  def take_until(gen: Generator<$Item>, predicate: ($Item -> Boolean)) -> (List<$Item>, Generator<$Item>) {
+    take_while(gen, {|item| Boolean::not(predicate(item))})
+  }
+
+  @doc """
+  Generate all remaining items up to normal termination and return a list.
+  An empty sequence returns `[]`.
+  A runtime failure in the step is not converted to termination or a partial
+  successful list. `InfiniteGenerator` is not accepted.
+  ## REPL
+  xldr(1)> Generator::to_list(Generator::range(1, 3))
+  [1, 2, 3]
+  """
+  @builtin def to_list(gen: Generator<$Item>) -> List<$Item>
+
+  @doc """
+  Build an inclusive ascending integer range with unit step.
+  `start > stop` produces an empty sequence.
+  ## REPL
+  xldr(1)> Generator::to_list(Generator::range(1, 3))
+  [1, 2, 3]
+  """
+  @builtin def range(start: Int, stop: Int) -> Generator<Int>
+
+  @doc """
+  Build an inclusive integer range with an explicit step.
+  A positive step is ascending, a negative step is descending, and zero is an
+  argument error. Construction does not generate the sequence.
+  ## REPL
+  xldr(1)> gen =? Generator::range_step(7, 1, -2)
+  xldr(2)> Generator::to_list(gen)
+  [7, 5, 3, 1]
+  """
+  def range_step(start: Int, stop: Int, step: Int) -> Result<Generator<Int>, Error> {
+    if(step == 0, Err(InvalidRangeStep("step must not be 0")),
+      Ok(unfold(start, {|current|
+        if(if(step > 0, current <= stop, current >= stop),
+          Option::Some((current, current + step)), Option::None)
+      })))
   }
 
   defp _single_ascii_codepoint(value: String, label: String) -> Result<Int, InvalidCharRange> {
@@ -74,220 +178,38 @@ impl Generator {
     }
   }
 
-  defp _ascii_codepoint_to_char(cp: Int) -> Result<String, InvalidCharRange> {
-    match String::from_codepoints([cp], StringEncoding::Ascii) {
-      Ok(value) => Ok(value),
-      Err(_) => Err(InvalidCharRange("codepoint out of ASCII range")),
-    }
-  }
-
-  defp _codepoints_to_chars(values: List<Int>) -> Result<List<String>, InvalidCharRange> {
-    match values {
-      [] => Ok([]),
-      [head, ..tail] => _codepoint_cons_to_chars(head, tail),
-    }
-  }
-
-  defp _codepoint_cons_to_chars(head: Int, tail: List<Int>) -> Result<List<String>, InvalidCharRange> {
-    head_char =? _ascii_codepoint_to_char(head)
-    tail_chars =? _codepoints_to_chars(tail)
-    Ok([head_char, ..tail_chars])
-  }
+  @builtin defp range_char_validated(start: Int, stop: Int, step: Int) -> Generator<String>
 
   @doc """
-  Build a generator from an initial state and step function.
-  `step(state, idx)` returns:
-  - `Ok((item, next_state))` to emit one value and continue
-  - `Err(NoneError)` to stop
+  Build an inclusive ascending ASCII character range.
+  Endpoints are validated as single ASCII characters before construction.
+  The outer `Result` reports input validation; it is not the step protocol.
   ## REPL
-  xldr(1)> gen = Generator::unfold(1, {|current, idx| if(idx < 3, Ok((current, current * 2)), Err(NoneError)) })
+  xldr(1)> gen =? Generator::range_char("a", "c")
   xldr(2)> Generator::to_list(gen)
-  [1, 2, 4]
+  ["a", "b", "c"]
   """
-  def unfold(
-    state: $UState,
-    step: ($UState, Int -> Result<($UItem, $UState)>),
-  ) -> Generator<$UState, $UItem> {
-    gen_make(0, List::reverse(_unfold_rev(state, 0, step, [])))
-  }
-
-  @doc """
-  Consume one item and return `(item, next_generator)`.
-  ## REPL
-  xldr(1)> g0 = Generator::range(10, 12)
-  xldr(2)> Generator::next(g0)
-  Ok((10, (1, [11, 12])))
-  """
-  def next(
-    gen: Generator<$State, $Item>,
-  ) -> Result<($Item, Generator<$State, $Item>), NoneError> {
-    current_idx = idx(gen)
-    match to_list(gen) {
-      [] => Err(NoneError),
-      [head, ..tail] => Ok((head, gen_make(current_idx + 1, tail))),
-    }
-  }
-
-  @doc """
-  Return the index of the next element to be emitted.
-  ## REPL
-  xldr(1)> g0 = Generator::range(10, 12)
-  xldr(2)> (_, g1) =? Generator::next(g0)
-  xldr(3)> Generator::idx(g1)
-  1
-  """
-  def idx(gen: Generator<$State, $Item>) -> Int {
-    gen_idx(gen)
-  }
-
-  @doc """
-  Attach an index to each remaining element.
-  ## REPL
-  xldr(1)> Generator::to_list(Generator::with_index(Generator::range(5, 7)))
-  [(0, 5), (1, 6), (2, 7)]
-  """
-  def with_index(
-    gen: Generator<$State, $Item>,
-  ) -> Generator<$State, (Int, $Item)> {
-    start_idx = idx(gen)
-    indexed_rev = _with_index_rev(to_list(gen), start_idx, [])
-    gen_make(start_idx, _reverse_indexed(indexed_rev, []))
-  }
-
-  @doc """
-  Transform only the item values while preserving generator progress.
-  ## REPL
-  xldr(1)> mapped = Generator::map(Generator::range(1, 3), {|n| "n=" ++ to_string(n) })
-  xldr(2)> Generator::to_list(mapped)
-  ["n=1", "n=2", "n=3"]
-  """
-  def map(
-    gen: Generator<$State, $A>,
-    f: ($A -> $B),
-  ) -> Generator<$State, $B> {
-    gen_make(idx(gen), List::map(to_list(gen), f))
-  }
-
-  @doc """
-  Take up to `count` items from the current generator position.
-  `count <= 0` returns `[]`.
-  ## REPL
-  xldr(1)> Generator::take(Generator::range(1, 5), 3)
-  [1, 2, 3]
-  xldr(2)> Generator::take(Generator::range(1, 5), 0)
-  []
-  """
-  def take(gen: Generator<$State, $Item>, count: Int) -> List<$Item> {
-    List::take(to_list(gen), count)
-  }
-
-  @doc """
-  Materialize all remaining items as a list.
-  ## REPL
-  xldr(1)> Generator::to_list(Generator::range(1, 3))
-  [1, 2, 3]
-  """
-  def to_list(gen: Generator<$State, $Item>) -> List<$Item> {
-    gen_items(gen)
-  }
-
-  @doc """
-  Build a finite generator by repeatedly applying `step` to the previous value.
-  The first emitted value is `seed`.
-  ## REPL
-  xldr(1)> Generator::to_list(Generator::iterate(1, 5, {|x| x * 2}))
-  [1, 2, 4, 8, 16]
-  """
-  def iterate(seed: $A, count: Int, step: ($A -> $A)) -> Generator<$A, $A> {
-    unfold(seed, {|current, emitted|
-      if(emitted < count, Ok((current, step(current))), Err(NoneError))
-    })
-  }
-
-  @doc """
-  Inclusive ascending integer range with unit step.
-  ## REPL
-  xldr(1)> Generator::to_list(Generator::range(1, 3))
-  [1, 2, 3]
-  """
-  def range(start: Int, stop: Int) -> Generator<Int, Int> {
-    unfold(start, {|current, _idx|
-      if(current <= stop, Ok((current, current + 1)), Err(NoneError))
-    })
-  }
-
-  @doc """
-  Inclusive integer range with explicit step.
-  - `step > 0`: ascending
-  - `step < 0`: descending
-  - `step == 0`: `Err(InvalidRangeStep(...))`
-  ## REPL
-  xldr(1)> Generator::range_step(1, 5, 2)
-  Ok((0, [1, 3, 5]))
-  xldr(2)> Generator::range_step(5, 1, -2)
-  Ok((0, [5, 3, 1]))
-  xldr(3)> Generator::range_step(1, 5, 0)
-  Err(InvalidRangeStep(message: "step must not be 0"))
-  """
-  def range_step(start: Int, stop: Int, step: Int) -> Result<Generator<Int, Int>, Error> {
-    if(
-      step == 0,
-      Err(InvalidRangeStep("step must not be 0")),
-      Ok(
-        unfold(start, {|current, _idx|
-          if(
-            step > 0,
-            if(current <= stop, Ok((current, current + step)), Err(NoneError)),
-            if(current >= stop, Ok((current, current + step)), Err(NoneError)),
-          )
-        }),
-      ),
-    )
-  }
-
-  @doc """
-  Inclusive character range helper.
-  Characters are validated as single ASCII chars for now.
-  ## REPL
-  xldr(1)> Generator::range_char("a", "c")
-  Ok((0, ["a", "b", "c"]))
-  xldr(2)> Generator::range_char("ab", "d")
-  Err(InvalidCharRange(message: "start must be a single char"))
-  """
-  def range_char(start: String, stop: String) -> Result<Generator<String, String>, Error> {
+  def range_char(start: String, stop: String) -> Result<Generator<String>, Error> {
     range_char_step(start, stop, 1)
   }
 
-  defp _range_char_step_checked(
-    start: String,
-    stop: String,
-    step: Int,
-  ) -> Result<Generator<String, String>, Error> {
+  defp _range_char_step_checked(start: String, stop: String, step: Int) -> Result<Generator<String>, Error> {
     start_cp =? _single_ascii_codepoint(start, "start")
     stop_cp =? _single_ascii_codepoint(stop, "stop")
-    base =? range_step(start_cp, stop_cp, step)
-    chars =? _codepoints_to_chars(to_list(base))
-    Ok(gen_make(idx(base), chars))
+    Ok(range_char_validated(start_cp, stop_cp, step))
   }
 
   @doc """
-  Inclusive character range with explicit step.
-  `step == 0` returns `Err(InvalidRangeStep(...))`.
+  Build an inclusive ASCII character range with an explicit step.
+  A positive step is ascending and a negative step is descending. Zero is an
+  argument error, checked before endpoint validation.
+  Validated endpoints are stored; each character is generated when requested.
   ## REPL
-  xldr(1)> Generator::range_char_step("a", "e", 2)
-  Ok((0, ["a", "c", "e"]))
-  xldr(2)> Generator::range_char_step("e", "a", -2)
-  Ok((0, ["e", "c", "a"]))
+  xldr(1)> gen =? Generator::range_char_step("e", "a", -2)
+  xldr(2)> Generator::to_list(gen)
+  ["e", "c", "a"]
   """
-  def range_char_step(
-    start: String,
-    stop: String,
-    step: Int,
-  ) -> Result<Generator<String, String>, Error> {
-    if(
-      step == 0,
-      Err(InvalidRangeStep("step must not be 0")),
-      _range_char_step_checked(start, stop, step),
-    )
+  def range_char_step(start: String, stop: String, step: Int) -> Result<Generator<String>, Error> {
+    if(step == 0, Err(InvalidRangeStep("step must not be 0")), _range_char_step_checked(start, stop, step))
   }
 }

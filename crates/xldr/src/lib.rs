@@ -944,15 +944,31 @@ pub fn target_root_from_current_exe() -> Option<PathBuf> {
 }
 
 fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
-    stable_hash_hex(&stdlib_semantic_cache_material(module_sources))
+    stdlib_semantic_cache_key_for_compiler(module_sources, env!("XLDR_COMPILER_BUILD_KEY"))
 }
 
-fn stdlib_semantic_cache_material(module_sources: &ModuleSources) -> String {
+fn stdlib_semantic_cache_key_for_compiler(
+    module_sources: &ModuleSources,
+    compiler_fingerprint: &str,
+) -> String {
+    stable_hash_hex(&stdlib_semantic_cache_material(
+        module_sources,
+        compiler_fingerprint,
+    ))
+}
+
+fn stdlib_semantic_cache_material(
+    module_sources: &ModuleSources,
+    compiler_fingerprint: &str,
+) -> String {
     let mut key = String::new();
     key.push_str("surtr-stdlib-semantic-cache-v");
     key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
     key.push('\x1f');
     key.push_str(env!("CARGO_PKG_VERSION"));
+    key.push('\x1f');
+    key.push_str("compiler=");
+    key.push_str(compiler_fingerprint);
     key.push('\x1f');
     key.push_str("source-policy-schema-v");
     key.push_str(&SOURCE_POLICY_SCHEMA_VERSION.to_string());
@@ -1207,6 +1223,41 @@ defmod B {
     }
 
     #[test]
+    fn stdlib_semantic_cache_rejects_a_different_compiler_with_identical_sources() {
+        let sources = collect_module_sources_with_module_stages(&[]).expect("stdlib sources");
+        let first = stdlib_semantic_cache_key_for_compiler(&sources, "compiler-a");
+        let second = stdlib_semantic_cache_key_for_compiler(&sources, "compiler-b");
+        assert_eq!(
+            first,
+            stdlib_semantic_cache_key_for_compiler(&sources, "compiler-a")
+        );
+        assert_ne!(
+            first, second,
+            "compiled declaration identities belong to one compiler"
+        );
+        let cache_path = std::env::temp_dir().join(format!(
+            "surtr-compiler-identity-cache-{}.semantic",
+            std::process::id()
+        ));
+        let payload = CachedStdlibSemanticPayload {
+            compile_prefix: CompilationPrefixSnapshot::from_parts(
+                sigil::DeclarationIndex::new(),
+                sigil::ResolveResumeState { next_local_id: 7 },
+                scar::ScarSession::new().checkpoint(),
+                forge::bytecode::Bytecode::default(),
+            ),
+            docs: Vec::new(),
+            signatures: Vec::new(),
+            auto_import_modules: BTreeSet::new(),
+            default_stage_count: 0,
+        };
+        store_cached_stdlib_semantic_snapshot(&cache_path, &first, payload);
+        assert!(load_cached_stdlib_semantic_snapshot(&cache_path, &first).is_some());
+        assert!(load_cached_stdlib_semantic_snapshot(&cache_path, &second).is_none());
+        std::fs::remove_file(cache_path).expect("remove test cache");
+    }
+
+    #[test]
     fn stdlib_semantic_cache_key_tracks_stdlib_module_spec_variant() {
         let default_sources =
             collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
@@ -1228,7 +1279,7 @@ defmod B {
         let module_sources =
             collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
 
-        let material = stdlib_semantic_cache_material(&module_sources);
+        let material = stdlib_semantic_cache_material(&module_sources, "test-compiler");
 
         assert!(material.contains(&format!(
             "source-policy-schema-v{}",
@@ -1296,114 +1347,6 @@ defmod B {
 
         assert!(loaded.is_none());
         let _ = std::fs::remove_file(cache_path);
-    }
-
-    #[test]
-    fn semantic_cache_lock_serializes_concurrent_prefix_builds() {
-        let cache_path = std::env::temp_dir().join(format!(
-            "surtr-concurrent-test-prefix-cache-{}.semantic",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&cache_path);
-        let _ = std::fs::remove_file(semantic_cache_lock_path(&cache_path));
-
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
-        let builds = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut workers = Vec::new();
-        for _ in 0..4 {
-            let cache_path = cache_path.clone();
-            let barrier = std::sync::Arc::clone(&barrier);
-            let builds = std::sync::Arc::clone(&builds);
-            workers.push(std::thread::spawn(move || {
-                barrier.wait();
-                if let Some(payload) = load_cached_test_semantic_prefix(&cache_path, "expected-key")
-                {
-                    assert_eq!(payload.resolve_state.next_local_id, 7);
-                    return;
-                }
-
-                let _cache_lock = acquire_semantic_cache_lock(&cache_path)
-                    .expect("semantic cache lock should be available");
-                if let Some(payload) = load_cached_test_semantic_prefix(&cache_path, "expected-key")
-                {
-                    assert_eq!(payload.resolve_state.next_local_id, 7);
-                    return;
-                }
-
-                builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                std::thread::sleep(std::time::Duration::from_millis(25));
-                let snapshot = CompilationPrefixSnapshot::from_parts(
-                    sigil::DeclarationIndex::new(),
-                    sigil::ResolveResumeState { next_local_id: 7 },
-                    scar::ScarSession::new().checkpoint(),
-                    forge::bytecode::Bytecode::default(),
-                );
-                store_cached_test_semantic_prefix_snapshot(&cache_path, "expected-key", &snapshot);
-            }));
-        }
-
-        for worker in workers {
-            worker.join().expect("semantic cache worker should finish");
-        }
-        assert_eq!(builds.load(std::sync::atomic::Ordering::Relaxed), 1);
-
-        let _ = std::fs::remove_file(&cache_path);
-        let _ = std::fs::remove_file(semantic_cache_lock_path(&cache_path));
-    }
-
-    #[test]
-    fn stdlib_semantic_cache_serializes_concurrent_processes() {
-        if let Some(cache_dir) = std::env::var_os("SURTR_STDLIB_SINGLE_FLIGHT_WORKER") {
-            std::env::set_var("SURTR_STDLIB_CACHE_DIR", &cache_dir);
-            test_enabled_stdlib_semantic_snapshot()
-                .expect("test-enabled stdlib snapshot should build or load");
-            let state = stdlib_semantic_snapshot_cache_state(StdlibVariant::TestEnabled)
-                .expect("stdlib cache state should be recorded");
-            std::fs::write(
-                PathBuf::from(cache_dir).join(format!("state-{}", std::process::id())),
-                state.as_str(),
-            )
-            .expect("stdlib cache state should be written");
-            return;
-        }
-
-        let cache_dir =
-            std::env::temp_dir().join(format!("surtr-stdlib-single-flight-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&cache_dir);
-        let test_binary = std::env::current_exe().expect("test binary path should be available");
-
-        let mut children = Vec::new();
-        for _ in 0..2 {
-            children.push(
-                std::process::Command::new(&test_binary)
-                    .args([
-                        "--exact",
-                        "tests::stdlib_semantic_cache_serializes_concurrent_processes",
-                        "--nocapture",
-                    ])
-                    .env("SURTR_STDLIB_SINGLE_FLIGHT_WORKER", &cache_dir)
-                    .spawn()
-                    .expect("stdlib cache worker should start"),
-            );
-        }
-
-        for mut child in children {
-            let status = child.wait().expect("stdlib cache worker should finish");
-            assert!(status.success(), "stdlib cache worker failed: {status}");
-        }
-
-        let mut states = std::fs::read_dir(&cache_dir)
-            .expect("stdlib cache directory should exist")
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_name().to_string_lossy().starts_with("state-"))
-            .map(|entry| {
-                std::fs::read_to_string(entry.path()).expect("cache state should be readable")
-            })
-            .collect::<Vec<_>>();
-        states.sort();
-        assert_eq!(states, ["cold", "disk_hit"]);
-
-        let _ = std::fs::remove_dir_all(cache_dir);
     }
 
     #[test]

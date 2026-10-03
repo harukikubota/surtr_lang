@@ -1,0 +1,18 @@
+defmod InfiniteGeneratorSchema {
+  def fibonacci() -> InfiniteGenerator<Int> {
+    InfiniteGenerator::unfold((0, 1), {|state|
+      (state._0, (state._1, state._0 + state._1))
+    })
+  }
+
+  def natural_numbers() -> InfiniteGenerator<Int> {
+    InfiniteGenerator::unfold(1, {|n| (n, n + 1)})
+  }
+
+  def observed_sequence() -> InfiniteGenerator<Int> {
+    InfiniteGenerator::unfold(1, {|n|
+      print("step=#{n}")
+      (n, n + 1)
+    })
+  }
+}

@@ -1444,10 +1444,7 @@ fn lower_impl_member_name(
     target: &str,
     method_name: &str,
 ) -> String {
-    if current_module_path
-        .map(surface_path_name)
-        .is_some_and(|module_path| module_path == surface_path_name(target))
-    {
+    if current_module_path == Some(target) {
         method_name.to_string()
     } else {
         normalize_impl_method_name(target, method_name)
@@ -3572,11 +3569,10 @@ impl Resolver {
                             stmt.span(),
                         ));
                     }
-                    // Builtins are keyed by fixed IDs from builtin metadata.
-                    // Re-declarations should keep that identity stable.
-                    let uid = self.reserve_scope_uid(name);
+                    let qualified_name = self.qualify_current_declaration_name(name);
+                    let uid = self.reserve_declaration_uid(&qualified_name);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Def);
-                    self.predeclare_scope_binding(name, uid, Some(name));
+                    self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
                 Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
@@ -3586,9 +3582,8 @@ impl Resolver {
                             stmt.span(),
                         ));
                     }
-                    let uid = self.reserve_scope_uid(name);
                     let qualified_name = self.qualify_current_declaration_name(name);
-                    self.declaration_uids.insert(qualified_name.clone(), uid);
+                    let uid = self.reserve_declaration_uid(&qualified_name);
                     let mut entry = self
                         .declaration_entries
                         .get(&qualified_name)
@@ -3611,7 +3606,7 @@ impl Resolver {
                     self.declaration_entries
                         .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
-                    self.predeclare_scope_binding(name, uid, None);
+                    self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
                 Ast::ResultCtorDecl(span, name, _, _, _) => {
                     self.reject_duplicate_top_level_declaration(
