@@ -473,14 +473,14 @@ Token.Ident
 - selector は PascalCase 固定
 - 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
 
-ネストした path は `->` または `Facet::chain` でつなぎます。
+ネストした path は `->` または `Facet::compose` でつなぎます。
 
 ```surtr
 User.profile -> Profile.name
-Facet::chain(User.profile, Profile.name)
+Facet::compose(User.profile, Profile.name)
 ```
 
-chain 後の表示は canonical path に正規化されます。
+合成後の表示は canonical path に正規化されます。
 `User.profile -> Profile.name` は `User.profile.name` として扱われ、root path の
 重複は表示に残りません。
 
@@ -601,12 +601,12 @@ updated =? Facet::bulk_update(user) {
 }
 ```
 
-### `Facet::chain`
+### `Facet::compose`
 
-`Facet::chain(outer, inner)` は 2 つの path を順につなぎます。`outer -> inner` は同じ意味の operator sugar です。
+`Facet::compose(outer, inner)` は 2 つの path を順につなぎます。`outer -> inner` は同じ意味の operator sugar です。
 
 ```surtr
-profile_name = Facet::chain(User.profile, Profile.name)
+profile_name = Facet::compose(User.profile, Profile.name)
 name = Facet::view(profile_name, user)
 ```
 

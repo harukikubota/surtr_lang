@@ -14,7 +14,7 @@
 - `Facet::case_over(facet, source, update_fun)`
 - `Facet::bulk_update(source) { ... }`
 - `outer -> inner`
-- `Facet::chain(outer, inner)`
+- `Facet::compose(outer, inner)`
 
 `T?` は `Option<T>` に下がります。
 optional enum selector は廃止され、`Option.Some` のような required selector を
@@ -315,9 +315,9 @@ updated =? Facet::bulk_update(user) {
 }
 ```
 
-## chain
+## 合成
 
-ネストした path は `outer -> inner` でつなぎます。`->` は `Facet::chain(outer, inner)` に対応する固定構文で、同じ型の接続条件と可視性規則を使います。
+ネストした path は `outer -> inner` でつなぎます。`->` は `Facet::compose(outer, inner)` に対応する固定構文で、同じ型の接続条件と可視性規則を使います。
 
 `->` はユーザー型へのトレイト実装で拡張できません。右辺にも独立した Facet path を指定します。一般値のメンバーアクセスや関数合成には使えません。
 
@@ -350,17 +350,17 @@ impl User {
 
 profile_name = User.profile -> Profile.name
 # or
-profile_name = Facet::chain(User.profile, Profile.name)
+profile_name = Facet::compose(User.profile, Profile.name)
 # or
 profile_name = User.profile.name
 ```
 
-chain した path は REPL や inspect 表示で canonical path に圧縮されます。
+合成した path は REPL や inspect 表示で canonical path に圧縮されます。
 つまり `User.profile -> Profile.name` と `User.profile.name` は同じ path として
-扱われ、chain の履歴は表示に残りません。
+扱われ、合成の履歴は表示に残りません。
 
 この canonical 化では、つなぎ目で root path が重複していたら落とします。
-たとえば `outer = User.profile` と `inner = Profile.name` を chain した結果は
+たとえば `outer = User.profile` と `inner = Profile.name` を合成した結果は
 `User.profile.Profile.name` ではなく `User.profile.name` です。
 
 ```text
@@ -494,7 +494,7 @@ facet = User.password
 
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
 - `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。同じレキシカルスコープと内側のクロージャで、`Facet::view(...)` や `->` に使えます。
-- chain した path は canonical 表示へ圧縮されるので、`User.profile -> Profile.name` を inspect すると `User.profile.name` に見えます。`->` の組み立て履歴そのものは残りません。
+- 合成した path は canonical 表示へ圧縮されるので、`User.profile -> Profile.name` を inspect すると `User.profile.name` に見えます。`->` の組み立て履歴そのものは残りません。
 - variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|binding>` で確認するのが一番わかりやすいです。
 - 関数へ渡す値には、path を消費した読み取り関数や `Facet::view(...)` の結果を使います。
 - `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。

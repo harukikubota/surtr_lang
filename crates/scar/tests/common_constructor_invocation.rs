@@ -96,7 +96,7 @@ defrecord User(profile: Profile)
 user = User(Profile("alice"))
 Facet::view(User.profile -> Profile.name, user)"#,
     ))
-    .expect("Facet arrow composition should follow Facet::chain");
+    .expect("Facet arrow composition should follow Facet::compose");
 
     let source = "value = 1 -> 2";
     let err = support::typecheck(support::resolve_with_builtin_prelude(source))

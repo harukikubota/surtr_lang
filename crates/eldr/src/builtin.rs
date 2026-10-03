@@ -218,7 +218,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_facet_preview,
     },
     BuiltinImpl {
-        name: "__facet_chain",
+        name: "__facet_compose",
         func: builtin_facet_compose,
     },
     BuiltinImpl {
@@ -2563,7 +2563,7 @@ fn builtin_facet_preview(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runti
 
 fn builtin_facet_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Facet::chain should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 

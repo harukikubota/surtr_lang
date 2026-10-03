@@ -249,13 +249,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_surface_resolves_after_facet_rename as fn(),
     ),
     (
-        "facet_chain_typecheck_success_and_mismatch",
-        facet_chain_typecheck_success_and_mismatch as fn(),
+        "facet_compose_typecheck_success_and_mismatch",
+        facet_compose_typecheck_success_and_mismatch as fn(),
     ),
-    surface_case!(qualified_result_chain_is_not_facet_chain),
+    surface_case!(result_chain_field_access_is_not_facet_compose),
+    surface_case!(facet_compose_and_result_chain_have_separate_identities),
     (
-        "facet_arrow_chain_typecheck_success_and_mismatch",
-        facet_arrow_chain_typecheck_success_and_mismatch as fn(),
+        "facet_arrow_compose_typecheck_success_and_mismatch",
+        facet_arrow_compose_typecheck_success_and_mismatch as fn(),
     ),
     (
         "facet_set_returns_result_source",
@@ -388,16 +389,16 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_tuple_type_root_compose_works_as_inner_path as fn(),
     ),
     (
-        "facet_tuple_type_root_arrow_chain_works_as_inner_path",
-        facet_tuple_type_root_arrow_chain_works_as_inner_path as fn(),
+        "facet_tuple_type_root_arrow_compose_works_as_inner_path",
+        facet_tuple_type_root_arrow_compose_works_as_inner_path as fn(),
     ),
     (
-        "facet_const_arrow_chain_allows_facet_consts",
-        facet_const_arrow_chain_allows_facet_consts as fn(),
+        "facet_const_arrow_compose_allows_facet_consts",
+        facet_const_arrow_compose_allows_facet_consts as fn(),
     ),
     (
-        "facet_const_arrow_chain_rejects_non_facet_const_refs",
-        facet_const_arrow_chain_rejects_non_facet_const_refs as fn(),
+        "facet_const_arrow_compose_rejects_non_facet_const_refs",
+        facet_const_arrow_compose_rejects_non_facet_const_refs as fn(),
     ),
     (
         "slash_operator_has_no_facet_fallback",
@@ -2586,12 +2587,12 @@ Facet::view(User.name, user)"#,
     assert!(!resolved.is_empty());
 }
 
-fn facet_chain_typecheck_success_and_mismatch() {
+fn facet_compose_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 user = User(Profile("alice"))
-Facet::view(chain(User.profile, Profile.name), user)"#,
+Facet::view(compose(User.profile, Profile.name), user)"#,
     );
     assert!(matches!(
         typed.last().map(|node| &node.ty),
@@ -2601,17 +2602,16 @@ Facet::view(chain(User.profile, Profile.name), user)"#,
     let err = typecheck_with_rules(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-chain(Profile.name, User.profile)"#,
+compose(Profile.name, User.profile)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("mismatched chain should fail");
-    assert!(!err.message.is_empty());
+    .expect_err("mismatched compose should fail");
+    assert!(err.message.contains("mismatch"), "{}", err.message);
 }
 
-fn qualified_result_chain_is_not_facet_chain() {
+fn result_chain_field_access_is_not_facet_compose() {
     let typed = typecheck_with_builtin_prelude(
-        r#"pair: (Result<Int>, Int) = (Ok(1), 2)
-Result::chain(pair._0, Ok(()))"#,
+        "pair: (Result<Int>, Int) = (Ok(1), 2)\nResult::chain(pair._0, Ok(()))",
     );
     assert!(matches!(
         typed.last().map(|node| &node.ty),
@@ -2619,7 +2619,17 @@ Result::chain(pair._0, Ok(()))"#,
     ));
 }
 
-fn facet_arrow_chain_typecheck_success_and_mismatch() {
+fn facet_compose_and_result_chain_have_separate_identities() {
+    let typed = typecheck_with_builtin_prelude(
+        "pair: (Result<Int>, Int) = (Ok(1), 2)\nchain(pair._0, Ok(()))",
+    );
+    assert!(matches!(
+        typed.last().map(|node| &node.ty),
+        Some(Ty::Result(inner, _)) if matches!(inner.as_ref(), Ty::Int)
+    ));
+}
+
+fn facet_arrow_compose_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
@@ -2637,7 +2647,7 @@ defrecord User(profile: Profile)
 Profile.name -> User.profile"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("mismatched arrow chain should fail");
+    .expect_err("mismatched arrow composition should fail");
     assert!(!err.message.is_empty());
 
     let old_slash = typecheck_with_rules(
@@ -2652,12 +2662,12 @@ Profile.name -> User.profile"#,
         &format!("{declarations}User.profile -> Profile.name"),
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("arrow chain preserves private field rejection");
+    .expect_err("arrow composition preserves private field rejection");
     let call_error = typecheck_with_rules(
-        &format!("{declarations}Facet::chain(User.profile, Profile.name)"),
+        &format!("{declarations}Facet::compose(User.profile, Profile.name)"),
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("explicit chain preserves private field rejection");
+    .expect_err("explicit compose preserves private field rejection");
     assert!(
         arrow_error
             .message
@@ -3301,13 +3311,13 @@ fn facet_tuple_type_root_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
-Facet::view(Facet::chain(User.pair, Tuple._0), user)"#,
+Facet::view(Facet::compose(User.pair, Tuple._0), user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-fn facet_tuple_type_root_arrow_chain_works_as_inner_path() {
+fn facet_tuple_type_root_arrow_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
@@ -3317,7 +3327,7 @@ Facet::view(User.pair -> Tuple._0, user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-fn facet_const_arrow_chain_allows_facet_consts() {
+fn facet_const_arrow_compose_allows_facet_consts() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
@@ -3331,7 +3341,7 @@ Facet::view(FULL_NAME, user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-fn facet_const_arrow_chain_rejects_non_facet_const_refs() {
+fn facet_const_arrow_compose_rejects_non_facet_const_refs() {
     let err = typecheck_with_rules(
         r#"const VALUE = 1
 const BAD = VALUE -> VALUE"#,
@@ -11740,19 +11750,24 @@ fn facet_view_capture_preserves_constraints() {
 }
 
 fn facet_capture_compile_time_scope_boundaries() {
-    let bracket_chain = typecheck_with_rules(
-        "defrecord Container(values: List<Int>)\nf = &Facet::chain(Container.values, List.[&1])",
+    let bracket_compose = typecheck_with_rules(
+        "defrecord Container(values: List<Int>)\nf = &Facet::compose(Container.values, List.[&1])",
         RuntimeSourcePolicy::script(),
     )
     .expect_err("bracket data does not permit returning a FacetPath from a capture");
     assert!(
-        bracket_chain
+        bracket_compose
             .message
             .contains("cannot be returned from closures"),
         "{}",
-        bracket_chain.message
+        bracket_compose.message
     );
-    for capture in ["&Facet::chain", "{|x: User| Facet::chain(p, q)}"] {
+    for capture in [
+        "&Facet::compose",
+        "&compose",
+        "{|x: User| Facet::compose(p, q)}",
+        "{|x: User| compose(p, q)}",
+    ] {
         let source = format!("defrecord Inner(name: String)\ndefrecord User(inner: Inner)\np = User.inner\nq = Inner.name\nf = {capture}");
         typecheck_with_rules(&source, RuntimeSourcePolicy::script())
             .expect_err("path transport/return and fixed partial captures stay forbidden");

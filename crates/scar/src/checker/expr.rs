@@ -8440,7 +8440,7 @@ impl Checker {
             return match Self::surface_name(qualified_name) {
                 "Facet::view" => Some("view"),
                 "Facet::preview" => Some("preview"),
-                "Facet::chain" => Some("chain"),
+                "Facet::compose" => Some("compose"),
                 "Facet::put" => Some("put"),
                 "Facet::set" => Some("set"),
                 "Facet::over" => Some("over"),
@@ -8451,37 +8451,6 @@ impl Checker {
             };
         }
         None
-    }
-
-    fn is_bare_result_chain_alias(func: &Resolved) -> bool {
-        let Resolved::Var(_, id) = func else {
-            return false;
-        };
-        id.name == "chain"
-            && id
-                .qualified_name
-                .as_deref()
-                .is_some_and(|qualified| Self::surface_name(qualified) == "Result::chain")
-    }
-
-    fn looks_like_facet_path_expr(expr: &Resolved) -> bool {
-        match expr {
-            Resolved::FieldAccess(_, _, _) | Resolved::FacetSegmentAccess(_, _, _) => true,
-            Resolved::Grouped(_, inner) => Self::looks_like_facet_path_expr(inner),
-            Resolved::FacetCapture(_, _)
-            | Resolved::InferredFacetCapture(_, _)
-            | Resolved::BinOp(_, BinOp::FacetChain, _, _) => true,
-            _ => false,
-        }
-    }
-
-    fn facet_chain_candidate_args(args: &[ResolvedRecordLitArg]) -> bool {
-        args.iter()
-            .all(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)))
-            && args.iter().any(|arg| match arg {
-                ResolvedRecordLitArg::Positional(expr) => Self::looks_like_facet_path_expr(expr),
-                ResolvedRecordLitArg::Named(_, _) => false,
-            })
     }
 
     fn pending_segment_from_typed(segment: &TypedFacetSegment) -> PendingFacetSegment {
@@ -8851,7 +8820,7 @@ impl Checker {
         if args.len() != 2 {
             return Err(TypeError {
                 structured: None,
-                message: format!("Facet::chain expects 2 argument(s), got {}", args.len()),
+                message: format!("Facet::compose expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
             });
@@ -8862,7 +8831,7 @@ impl Checker {
         {
             return Err(TypeError {
                 structured: None,
-                message: "Facet::chain does not accept named arguments".into(),
+                message: "Facet::compose does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -8877,18 +8846,18 @@ impl Checker {
 
         if let Resolved::FacetCapture(capture_span, expr) = left_expr {
             let (source_expr, pending_path) =
-                self.expand_facet_capture_path("Facet::chain", capture_span, expr)?;
+                self.expand_facet_capture_path("Facet::compose", capture_span, expr)?;
             let (_, _, source_value_ty) =
-                self.check_facet_source_value("Facet::chain", &source_expr)?;
+                self.check_facet_source_value("Facet::compose", &source_expr)?;
             let left_path =
                 self.specialize_pending_facet_path(pending_path, span, Some(&source_value_ty))?;
-            return self.compose_facet_paths(span, left_path, right_expr, "Facet::chain");
+            return self.compose_facet_paths(span, left_path, right_expr, "Facet::compose");
         }
 
         let left = self.check_node(left_expr)?;
         match left.node {
             TypedInner::FacetPath(path) => {
-                self.compose_facet_paths(span, path, right_expr, "Facet::chain")
+                self.compose_facet_paths(span, path, right_expr, "Facet::compose")
             }
             TypedInner::PendingFacetPath(path) => {
                 self.compose_pending_facet_paths(span, path, right_expr)
@@ -8960,7 +8929,7 @@ impl Checker {
                 message: format!("{op_name} shorthand requires a field or tuple path").into(),
                 span: span.clone(),
                 hint: Some(
-                    "Write `~source.field` or `~source._0`. Use canonical `Facet::chain(...)` or a type-root path when you need a standalone Facet path."
+                    "Write `~source.field` or `~source._0`. Use canonical `Facet::compose(...)` or a type-root path when you need a standalone Facet path."
                         .into(),
                 ),
             });
@@ -10654,17 +10623,10 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<Option<TypedNode>, TypeError> {
-        if Self::is_bare_result_chain_alias(func) && args.len() == 2 {
-            match self.check_facet_compose_intrinsic(span, args) {
-                Ok(node) => return Ok(Some(node)),
-                Err(err) if Self::facet_chain_candidate_args(args) => return Err(err),
-                Err(_) => {}
-            }
-        }
         match self.facet_intrinsic_kind(func) {
             Some("view") => Ok(Some(self.check_facet_view_intrinsic(span, args)?)),
             Some("preview") => Ok(Some(self.check_facet_preview_intrinsic(span, args)?)),
-            Some("chain") => Ok(Some(self.check_facet_compose_intrinsic(span, args)?)),
+            Some("compose") => Ok(Some(self.check_facet_compose_intrinsic(span, args)?)),
             Some("put") => Ok(Some(self.check_facet_put_intrinsic(span, args)?)),
             Some("set") => Ok(Some(self.check_facet_set_intrinsic(span, args)?)),
             Some("over") => Ok(Some(self.check_facet_over_intrinsic(span, args)?)),

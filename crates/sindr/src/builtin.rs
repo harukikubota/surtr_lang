@@ -1230,14 +1230,14 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
-        name: "__facet_chain",
+        name: "__facet_compose",
         arity: 2,
         sig_str: "(Facet<$K, $S, $A, _, _>, Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
                 Some("Facet"),
-                "chain",
+                "compose",
                 &[],
                 &[
                     builtin_surface_parameter("outer", "Facet<$K, $S, $A, _, _>"),
@@ -4308,13 +4308,13 @@ mod tests {
 
     #[test]
     fn qualified_put_builtins_resolve_to_distinct_runtime_names() {
-        assert!(builtin_meta_by_name("__facet_chain")
-            .expect("facet chain builtin metadata")
+        assert!(builtin_meta_by_name("__facet_compose")
+            .expect("facet compose builtin metadata")
             .trait_method()
             .is_none());
         assert_eq!(
-            builtin_runtime_name("chain", Some("Facet::chain")),
-            "__facet_chain"
+            builtin_runtime_name("compose", Some("Facet::compose")),
+            "__facet_compose"
         );
         assert_eq!(
             builtin_runtime_name("replace", Some("String::replace")),

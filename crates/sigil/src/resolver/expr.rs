@@ -1675,7 +1675,7 @@ impl Resolver {
             return Ok(());
         };
         let count = match surface_path_name(qualified) {
-            "Facet::chain" => 2,
+            "Facet::compose" => 2,
             "Facet::view" | "Facet::preview" | "Facet::put" | "Facet::set" | "Facet::over"
             | "Facet::over_result" | "Facet::case_set" | "Facet::case_over" => 1,
             _ => return Ok(()),
@@ -2786,7 +2786,7 @@ impl Resolver {
                         chain_span.clone(),
                         AstPath {
                             span: chain_span.clone(),
-                            segments: vec!["Facet".into(), "chain".into()],
+                            segments: vec!["Facet".into(), "compose".into()],
                         },
                     )),
                     vec![

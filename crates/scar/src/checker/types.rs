@@ -419,7 +419,7 @@ impl Checker {
             unreachable!("validated Facet kind is named")
         };
         if Self::surface_name(name).starts_with('$') {
-            // Generic kind variables occur only in builtin chain signatures.
+            // Generic kind variables occur only in builtin compose signatures.
             // They are a constraint placeholder until a concrete path is built.
             return Ok(crate::types::FacetKind::ReadablePath);
         }

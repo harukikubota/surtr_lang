@@ -5,9 +5,9 @@ import Test;
 
 test("Facet") {
   describe("view and sugar") {
-    it("views nested fields through chain and arrow syntax") {
+    it("views nested fields through compose and arrow syntax") {
       fixture = demo_fixture()
-      outer = Facet::chain(Tuple._0, Tuple._0)
+      outer = Facet::compose(Tuple._0, Tuple._0)
       path = outer -> Config.entrypoint
       arrow = Tuple._0 -> Tuple._0 -> Config.entrypoint
       assert_eq("Main::main", Facet::view(path, fixture))

@@ -90,7 +90,7 @@ const OPERATOR_DOC_TARGETS: &[(&str, &str)] = &[
     ("<=", "Compare::lte"),
     (">", "Compare::gt"),
     (">=", "Compare::gte"),
-    ("->", "Facet::chain"),
+    ("->", "Facet::compose"),
     ("++", "Concat::concat"),
     ("|>", "Bootstrap::|>"),
     ("|*>", "Functor::fmap"),
@@ -3423,7 +3423,7 @@ impl ReplEngine {
             "<=" => "lte",
             ">" => "gt",
             ">=" => "gte",
-            "->" => "chain",
+            "->" => "compose",
             "++" => "concat",
             "|*>" => "fmap",
             "|>=" => "bind",
@@ -6615,7 +6615,7 @@ impl ReplEngine {
                     );
                     Ok((
                         format!(
-                            "Facet::chain(lhs: {}, rhs: {}) -> {}",
+                            "Facet::compose(lhs: {}, rhs: {}) -> {}",
                             format_query_ty(&lhs_ty),
                             format_query_ty(&rhs_ty),
                             format_query_ty(&result_ty)

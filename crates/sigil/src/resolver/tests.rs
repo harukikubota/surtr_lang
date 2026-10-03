@@ -8979,14 +8979,13 @@ fn facet_path_capture_arguments_allow_bracket_data_but_reject_path_placeholders(
     .into_iter()
     .map(|name| format!("@builtin def {name}(facet: $P, source: $S, value: $A) -> $S"))
     .chain(std::iter::once(
-        "@builtin def chain(outer: $P, inner: $Q) -> $R".into(),
+        "@builtin def compose(outer: $P, inner: $Q) -> $R".into(),
     ))
     .collect::<Vec<_>>()
     .join("\n");
     let facet = staged_auto_import_module("Facet", parse_module_ast(&declarations, "Facet"));
     for call in [
         "Facet::view(&1, 0)",
-        "view(&1, 0)",
         "Facet::view(&1 -> p, &2)",
         "Facet::view(p -> &1, &2)",
         "Facet::put((&1), &2, &3)",
@@ -8994,8 +8993,8 @@ fn facet_path_capture_arguments_allow_bracket_data_but_reject_path_placeholders(
         "Facet::over(p -> &1, &2, &3)",
         "Facet::case_set(&1, &2, &3)",
         "Facet::case_over(&1, &2, &3)",
-        "Facet::chain(&1, p)",
-        "Facet::chain(p, &1)",
+        "Facet::compose(&1, p)",
+        "Facet::compose(p, &1)",
         "Facet::view((&1).name, &2)",
         "Facet::view((&1).[0], &2)",
         "Facet::view((&1).[&1], &2)",
@@ -9033,10 +9032,11 @@ fn facet_path_capture_arguments_allow_bracket_data_but_reject_path_placeholders(
         "f = &Facet::preview(List.[&1], &2)",
         "f = &Facet::put(List.[&1], &2, &3)",
         "f = &Facet::over_result(List.[&1], &2, &3)",
-        "p = Tuple._0\nf = &Facet::view(Facet::chain(p, List.[&1]), &2)",
-        "p = Tuple._0\nf = &Facet::chain(p, List.[&1])",
+        "p = Tuple._0\nf = &Facet::view(Facet::compose(p, List.[&1]), &2)",
+        "p = Tuple._0\nf = &Facet::compose(p, List.[&1])",
         "p = Tuple._0\nf = &Facet::put(p, &1, &2)",
         "def view(path: Int, source: Int) -> Int { path }\nf = &view(&1, &2)",
+        "def compose(outer: Int, inner: Int) -> Int { outer }\nf = &compose(&1, &2)",
     ] {
         resolve_user_with_modules(source, &[vec![facet.clone()]]).expect(
             "bracket data, source/value placeholders and shadowed ordinary callables remain valid",

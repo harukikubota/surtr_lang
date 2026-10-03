@@ -276,7 +276,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync),
     repl_core_case!(core_range_generic_helpers_survive_sig_doc_interleaving),
     repl_core_case!(core_range_generic_helpers_survive_runtime_error_rollback),
-    repl_core_case!(core_renders_top_level_facet_chain_expressions_without_codegen_leak),
+    repl_core_case!(core_renders_top_level_facet_composition_expressions_without_codegen_leak),
     repl_core_case!(core_facet_command_reports_kind_apis_segments_and_stop_points),
     repl_core_case!(core_facet_record_positional_origin_remains_visible),
     repl_core_case!(core_record_constructor_capture_keeps_local_display_name),
@@ -3357,7 +3357,7 @@ fn core_range_generic_helpers_survive_runtime_error_rollback() {
     assert!(!text.contains("Call arity mismatch"), "{text}");
 }
 
-fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
+fn core_renders_top_level_facet_composition_expressions_without_codegen_leak() {
     let mut engine = engine();
 
     let tuple_facet = engine.handle_line("a = Tuple._1");
@@ -3375,7 +3375,7 @@ fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
         "{arrow}"
     );
 
-    let helper = engine.handle_line("Facet::chain(a, ep)");
+    let helper = engine.handle_line("Facet::compose(a, ep)");
     let helper = rendered_text(&helper);
     assert!(
         helper.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
@@ -4251,7 +4251,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let arrow_doc = engine.handle_line(":doc ->");
     let arrow_doc = doc_text(&arrow_doc);
-    assert!(arrow_doc.contains("Facet::chain"), "{arrow_doc}");
+    assert!(arrow_doc.contains("Facet::compose"), "{arrow_doc}");
 
     let bind_sig = engine.handle_line(":sig =");
     let bind_sig = signature_text(&bind_sig);
@@ -6024,13 +6024,13 @@ fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
         "{result_pair_text}"
     );
 
-    let chain_sig =
-        engine.handle_line(":sig Facet::chain(StyledDocSegment.style, StyledDocStyle.bold)");
-    let chain_sig = rendered_text(&chain_sig);
+    let compose_sig =
+        engine.handle_line(":sig Facet::compose(StyledDocSegment.style, StyledDocStyle.bold)");
+    let compose_sig = rendered_text(&compose_sig);
     assert!(
-        chain_sig.contains("Unsupported command query argument `StyledDocSegment.style`")
-            || chain_sig.contains("No signature found for Facet::chain"),
-        "{chain_sig}"
+        compose_sig.contains("Unsupported command query argument `StyledDocSegment.style`")
+            || compose_sig.contains("No signature found for Facet::compose"),
+        "{compose_sig}"
     );
 
     let over_result_sig = engine.handle_line(

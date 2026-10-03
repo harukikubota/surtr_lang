@@ -70,22 +70,6 @@ fn auto_import_trait_names(
         .collect()
 }
 
-fn is_result_facet_chain_conflict(
-    existing_name: &str,
-    incoming_name: &str,
-    short_name: &str,
-) -> bool {
-    if short_name != "chain" {
-        return false;
-    }
-    let existing = global_surface_name(existing_name);
-    let incoming = global_surface_name(incoming_name);
-    matches!(
-        (existing, incoming),
-        ("Result::chain", "Facet::chain") | ("Facet::chain", "Result::chain")
-    )
-}
-
 fn declaration_is_auto_imported(import_context: &ImportContext<'_>, fq_name: &str) -> bool {
     import_context
         .declaration_index
@@ -1116,11 +1100,6 @@ fn bind_import_name(
                 .find_map(|(fq_name, known_uid)| (*known_uid == uid).then_some(fq_name))
                 .cloned()
                 .unwrap_or_else(|| format!("{}::{}", module_name, short_name));
-            if is_result_facet_chain_conflict(&existing_name, &incoming_name, short_name) {
-                // Keep bare `chain` bound to Result::chain and let Scar reinterpret
-                // Facet-shaped `chain(...)` calls as Facet::chain.
-                return Ok(());
-            }
             return Err(ResolveError {
                 message: format!(
                     "Auto-import conflict for `{}` between `{}` and `{}`",

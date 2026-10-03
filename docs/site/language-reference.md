@@ -643,8 +643,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 - `import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書ける
 - `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
 - 別モジュールからの明示 import は同名の auto-import surface を shadow できる。auto import済みのモジュール自体を再importすることはできない
-- 明示 import 同士、または auto-import 同士が同じ unqualified 名を導入する場合は原則 compile error
-- 現行実装では `Result::chain` / `Facet::chain` だけが例外であるため、この名前は qualified call を使う
+- 明示 import 同士、または auto-import 同士が同じ unqualified 名を導入する場合は compile error
 
 ### user namespace
 

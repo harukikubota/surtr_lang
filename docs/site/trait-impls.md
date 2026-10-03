@@ -13,7 +13,7 @@ Surtr の trait system は V1 です。
   - `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Eq`, `Neq`, `Concat`
   - `Functor`, `Applicative`, `Monad`
 
-`->` は `Facet::chain` に対応する固定構文です。`|>`、`>>`、`>*`、`>=>` は関数演算子の固定規則であり、関数型への trait impl を要求しません。
+`->` は `Facet::compose` に対応する固定構文です。`|>`、`>>`、`>*`、`>=>` は関数演算子の固定規則であり、関数型への trait impl を要求しません。
 
 ### `Eq` と比較できる型
 

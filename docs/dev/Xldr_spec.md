@@ -228,7 +228,7 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `:doc` は value binding で型 doc fallback を行う。`ret = Ok(1)` のあと `:doc ret` は `Result` 側 doc を返す
 - `:sig` は callable / family / owner / process surface を対象にし、non-callable value binding を拒否する
 - retained operator forms は bare operator token (`:sig |*>`, `:doc |*>`) と operator + target (`:sig |*> Option`, `:doc |*> Option`, `:info |*> Option`) だけである
-- 固定関数演算子 `|>` / `>>` / `>*` / `>=>` は `Bootstrap` の builtin 宣言を bare token の `:doc` / `:sig` から引く。`->` は `Facet::chain` の doc / signature に接続する。`/` / `%` は `Div::safe_div` / `Mod::safe_mod` の operator family と具体的な実装 target の doc / signature に接続する。削除済みの関数型 trait や `Compose` の lookup へ戻さない
+- 固定関数演算子 `|>` / `>>` / `>*` / `>=>` は `Bootstrap` の builtin 宣言を bare token の `:doc` / `:sig` から引く。`->` は `Facet::compose` の doc / signature に接続する。`/` / `%` は `Div::safe_div` / `Mod::safe_mod` の operator family と具体的な実装 target の doc / signature に接続する。削除済みの関数型 trait や `Compose` の lookup へ戻さない
 - facet path / facet API lookup は `:sig` に含めず、completion と `:facet` に委譲する
 - 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で concrete type / binding 解決後の置換結果を表示する
 - `:doc` / `:sig` は public declaration を主 query surface とし、private hit を認識できた場合は private-surface guidance を返す

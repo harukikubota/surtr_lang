@@ -307,7 +307,7 @@ capture 型推論に従う。FacetPath 自体を placeholder 仮引数で受け�
 直接の置換や合成の path 部分の置換も対象とし、違反式の span を指す。
 一方、`[expr]` 内の placeholder は index / key / range endpoint の通常データを埋め込むため許可する。
 これらの要求型は通常の bracket 規則に従い、FacetPath の runtime transport にはならない。
-`chain` 自体の capture は FacetPath の返却禁止により拒否する。bracket に placeholder を含む path の
+`compose` 自体の capture は FacetPath の返却禁止により拒否する。bracket に placeholder を含む path の
 合成結果を Facet API で消費する capture は許可する。
 
 FacetPath は compile-time capability のまま、外側の local binding を capture / closure literal の

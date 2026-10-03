@@ -22,7 +22,7 @@ second = Tuple._1
 update: ((Int, String) -> (Int, String)) = &Facet::put(first, &1, 3)
 update_direct: ((Int, String) -> (Int, String)) = &Facet::put(Tuple._0, &1, 3)
 update_literal: ((Int, String) -> (Int, String)) = {|pair| Facet::put(first, pair, 3)}
-composed: (((Int, String), Int) -> String) = {|pair| Facet::view(Facet::chain(first, second), pair)}
+composed: (((Int, String), Int) -> String) = {|pair| Facet::view(Facet::compose(first, second), pair)}
 composed_direct: (((Int, String), Int) -> String) = {|pair| Facet::view(Tuple._0 -> Tuple._1, pair)}
 print(inspect(update))
 print(inspect(update_direct))

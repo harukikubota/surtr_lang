@@ -287,7 +287,7 @@ Lazy位置を直接プレースホルダにすると、通常の呼び出しで�
 FacetPath 自体をプレースホルダ仮引数で受け取ることは禁止します。直接の置換や、合成の path 部分の置換もできません。
 `[expr]` 内のプレースホルダは、index / key などの通常データを受け取って埋め込むため、使用できます。
 外側の path binding はキャプチャ内で参照でき、source・更新値・更新関数には通常のプレースホルダを使えます。
-`chain` は FacetPath を返すため、キャプチャできません。合成した path を Facet API で消費することはできます。
+`compose` は FacetPath を返すため、キャプチャできません。合成した path を Facet API で消費することはできます。
 
 ```surtr
 p = Duration.millis
