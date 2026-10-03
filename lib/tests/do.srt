@@ -49,16 +49,6 @@ def option_t_result_safebind_failure() -> OptionT<Result, Int> {
   OptionT::some::<Result>(value + 1)
 }
 
-def do_list_three_binds() -> List<Int> {
-  do::<List> {
-    first <- [1, 2]
-    second <- [10, 20]
-    third <- [100, 200]
-    traced = print("#{first}:#{second}:#{third}")
-    [first + second + third]
-  }
-}
-
 test("do carrier integration") {
   describe("standard carriers") {
     it("matches the Option pipeline") {
@@ -93,7 +83,13 @@ test("do carrier integration") {
 
     it("keeps three List binds in depth-first order") {
       capture_stdout()
-      actual = do_list_three_binds()
+      actual: List<Int> = do::<List> {
+        first <- [1, 2]
+        second <- [10, 20]
+        third <- [100, 200]
+        traced = print("#{first}:#{second}:#{third}")
+        [first + second + third]
+      }
       assert_eq([111, 211, 121, 221, 112, 212, 122, 222], actual)
       assert_stdout_eq([
         "1:10:100", "1:10:200", "1:20:100", "1:20:200",

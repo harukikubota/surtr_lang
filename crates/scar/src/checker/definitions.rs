@@ -1785,7 +1785,9 @@ impl Checker {
             }
         }
 
-        let typed_body = self.concretize_pending_trait_calls(typed_body)?;
+        let typed_body = *self
+            .concretize_pending_trait_calls(typed_body)
+            .map_err(|error| *error)?;
         let signature_inputs = local_bindings
             .iter()
             .map(|(_, ty)| ty.clone())
@@ -1986,7 +1988,9 @@ impl Checker {
             });
         }
 
-        let typed_body = self.concretize_pending_trait_calls(typed_body)?;
+        let typed_body = *self
+            .concretize_pending_trait_calls(typed_body)
+            .map_err(|error| *error)?;
         let signature_inputs = local_bindings
             .iter()
             .map(|(_, ty)| ty.clone())
@@ -2612,7 +2616,9 @@ impl Checker {
             self.rigid_tyvars = saved_rigid;
             relation?;
 
-            let typed_body = self.concretize_pending_trait_calls(typed_body)?;
+            let typed_body = *self
+                .concretize_pending_trait_calls(typed_body)
+                .map_err(|error| *error)?;
             let signature_inputs = local_bindings
                 .iter()
                 .map(|(_, ty)| ty.clone())
@@ -4131,7 +4137,7 @@ impl Checker {
                 span: err.span,
                 hint: err.hint,
             })?;
-        let typed_show = show_checker.resolve_typed_node(typed_show);
+        let typed_show = *show_checker.resolve_typed_node(typed_show);
         self.absorb_child_progress(&show_checker);
         if !self.types_compatible(&Ty::Str, &typed_show.ty) {
             return Err(TypeError {

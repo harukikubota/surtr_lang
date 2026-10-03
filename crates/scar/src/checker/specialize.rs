@@ -814,10 +814,118 @@ impl Checker {
         }))
     }
 
-    // Keep both sides of the recursive result pointer-sized. In an unoptimized
-    // build this match has many `?` sites; returning TypedNode/TypeError by
-    // value makes rustc reserve every large result temporary in one frame.
+    // Retain a small dispatcher while descending structural expression trees.
+    // Specialization temporaries belong to separate helper frames; both sides
+    // of the recursive result remain pointer-sized.
     fn rewrite_specializations_in_node(
+        &mut self,
+        node: TypedNode,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
+        match &node.node {
+            TypedInner::App(..) => self.rewrite_app_specializations_in_node(
+                node,
+                defs_by_fun_idx,
+                bound_tyvars_by_fun_idx,
+                needs_specialization,
+                specialization_fun_idxs,
+                generated_defs,
+            ),
+            TypedInner::Block(..) => self.rewrite_block_specializations_in_node(
+                node,
+                defs_by_fun_idx,
+                bound_tyvars_by_fun_idx,
+                needs_specialization,
+                specialization_fun_idxs,
+                generated_defs,
+            ),
+            TypedInner::Match(..) => self.rewrite_match_specializations_in_node(
+                node,
+                defs_by_fun_idx,
+                bound_tyvars_by_fun_idx,
+                needs_specialization,
+                specialization_fun_idxs,
+                generated_defs,
+            ),
+            TypedInner::Closure(..)
+            | TypedInner::ExtractorClosure(..)
+            | TypedInner::CaptureClosure(..)
+            | TypedInner::CaptureConstructorClosure(..) => self
+                .rewrite_closure_specializations_in_node(
+                    node,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                ),
+            TypedInner::Lit(..)
+            | TypedInner::Var(..)
+            | TypedInner::ResultEffectFailure(..)
+            | TypedInner::DeferredDoFailure(..)
+            | TypedInner::SupervisorSpawn { .. }
+            | TypedInner::SupervisorAdopt { .. }
+            | TypedInner::SupervisorStatus { .. }
+            | TypedInner::SupervisorWorkers { .. }
+            | TypedInner::TraitCall { .. }
+            | TypedInner::InjectCall(..)
+            | TypedInner::Bind(..)
+            | TypedInner::ApplyPattern { .. }
+            | TypedInner::SafeBind(..)
+            | TypedInner::DoSafeBind(..)
+            | TypedInner::BinOp(..)
+            | TypedInner::Pipe(..)
+            | TypedInner::Compose(..)
+            | TypedInner::ListNil
+            | TypedInner::ListCons(..)
+            | TypedInner::ListLiteral(..)
+            | TypedInner::HashMapLiteral(..)
+            | TypedInner::TupleLiteral(..)
+            | TypedInner::InterpolatedStr(..)
+            | TypedInner::Dbg(..)
+            | TypedInner::EagerBoundary(..)
+            | TypedInner::If(..)
+            | TypedInner::Assert(..)
+            | TypedInner::Ensure(..)
+            | TypedInner::MapErr(..)
+            | TypedInner::Cause(..)
+            | TypedInner::RecoverKind(..)
+            | TypedInner::FieldAccess(..)
+            | TypedInner::ProcessContextHandler { .. }
+            | TypedInner::FacetPath(..)
+            | TypedInner::PendingFacetPath(..)
+            | TypedInner::FacetView { .. }
+            | TypedInner::FacetSet { .. }
+            | TypedInner::FacetOver { .. }
+            | TypedInner::StructLit(..)
+            | TypedInner::ConstructorCall(..)
+            | TypedInner::DeferrorDef(..)
+            | TypedInner::Def(..)
+            | TypedInner::ExtractorDef(..)
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::Capture(..)
+            | TypedInner::StructDef(..)
+            | TypedInner::RecordDef(..)
+            | TypedInner::EnumDef(..)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
+            | TypedInner::Semi(..) => self.rewrite_other_specializations_in_node(
+                node,
+                defs_by_fun_idx,
+                bound_tyvars_by_fun_idx,
+                needs_specialization,
+                specialization_fun_idxs,
+                generated_defs,
+            ),
+        }
+    }
+
+    #[inline(never)]
+    fn rewrite_app_specializations_in_node(
         &mut self,
         node: TypedNode,
         defs_by_fun_idx: &HashMap<u32, TypedNode>,
@@ -829,96 +937,6 @@ impl Checker {
         let span = node.span.clone();
         let mut ty = node.ty.clone();
         let node = match node.node {
-            TypedInner::Lit(lit) => TypedInner::Lit(lit),
-            TypedInner::Var(id) => TypedInner::Var(id),
-            TypedInner::ResultEffectFailure(target) => TypedInner::ResultEffectFailure(target),
-            TypedInner::DeferredDoFailure(deferred) => {
-                let deferred = DeferredDoFailureTarget {
-                    carrier_ty: deferred.carrier_ty,
-                    alternative_trait_key: deferred.alternative_trait_key,
-                    alternative_method_name: deferred.alternative_method_name,
-                    propagated_error_tys: deferred.propagated_error_tys,
-                    failure_span: deferred.failure_span,
-                };
-                match self.resolve_deferred_do_failure(deferred)? {
-                    ResolvedDeferredDoFailure::Result(target) => {
-                        ty = target.carrier_ty.clone();
-                        TypedInner::ResultEffectFailure(Box::new(target))
-                    }
-                    ResolvedDeferredDoFailure::Alternative(empty) => {
-                        let empty = self.rewrite_specializations_in_node(
-                            empty,
-                            defs_by_fun_idx,
-                            bound_tyvars_by_fun_idx,
-                            needs_specialization,
-                            specialization_fun_idxs,
-                            generated_defs,
-                        )?;
-                        ty = empty.ty.clone();
-                        empty.node
-                    }
-                }
-            }
-            TypedInner::SupervisorSpawn {
-                supervisor_process,
-                worker_process,
-                init,
-            } => TypedInner::SupervisorSpawn {
-                supervisor_process,
-                worker_process,
-                init: self.rewrite_specializations_in_node(
-                    *init,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            },
-            TypedInner::SupervisorAdopt {
-                supervisor_process,
-                worker_process,
-                pid,
-            } => TypedInner::SupervisorAdopt {
-                supervisor_process,
-                worker_process,
-                pid: self.rewrite_specializations_in_node(
-                    *pid,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            },
-            TypedInner::SupervisorStatus { supervisor_process } => {
-                TypedInner::SupervisorStatus { supervisor_process }
-            }
-            TypedInner::SupervisorWorkers {
-                supervisor_process,
-                worker_process,
-                init,
-                strategy,
-            } => TypedInner::SupervisorWorkers {
-                supervisor_process,
-                worker_process,
-                init: self.rewrite_specializations_in_node(
-                    *init,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                strategy: self.rewrite_specializations_in_node(
-                    *strategy,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            },
             TypedInner::App(func, args) => {
                 let func = *self.rewrite_specializations_in_node(
                     *func,
@@ -1090,6 +1108,293 @@ impl Checker {
                     TypedInner::App(Box::new(func), args)
                 }
             }
+            _ => unreachable!("specialization dispatcher selected a non-app node"),
+        };
+
+        Ok(Box::new(TypedNode { ty, span, node }))
+    }
+
+    #[inline(never)]
+    fn rewrite_block_specializations_in_node(
+        &mut self,
+        node: TypedNode,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
+        let span = node.span.clone();
+        let mut ty = node.ty.clone();
+        let node = match node.node {
+            TypedInner::Block(stmts) => {
+                let stmts = stmts
+                    .into_iter()
+                    .map(|stmt| {
+                        self.rewrite_specializations_in_node(
+                            stmt,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )
+                        .map(|node| *node)
+                    })
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?;
+                if let Some(last) = stmts.last() {
+                    ty = last.ty.clone();
+                }
+                TypedInner::Block(stmts)
+            }
+            _ => unreachable!("specialization dispatcher selected a non-block node"),
+        };
+
+        Ok(Box::new(TypedNode { ty, span, node }))
+    }
+
+    #[inline(never)]
+    fn rewrite_match_specializations_in_node(
+        &mut self,
+        node: TypedNode,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
+        let span = node.span.clone();
+        let ty = node.ty.clone();
+        let node = match node.node {
+            TypedInner::Match(scrutinee, arms) => TypedInner::Match(
+                self.rewrite_specializations_in_node(
+                    *scrutinee,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+                arms.into_iter()
+                    .map(|arm| {
+                        Ok(TypedMatchArm {
+                            direct_expression: arm.direct_expression,
+                            pattern: self.concretize_specialized_match_pattern(
+                                arm.pattern,
+                                &span,
+                                &mut SpecializationContext {
+                                    defs_by_fun_idx,
+                                    bound_tyvars_by_fun_idx,
+                                    needs_specialization,
+                                    specialization_fun_idxs,
+                                    generated_defs,
+                                },
+                            )?,
+                            guard: arm
+                                .guard
+                                .map(|guard| {
+                                    self.rewrite_specializations_in_node(
+                                        guard,
+                                        defs_by_fun_idx,
+                                        bound_tyvars_by_fun_idx,
+                                        needs_specialization,
+                                        specialization_fun_idxs,
+                                        generated_defs,
+                                    )
+                                })
+                                .transpose()?
+                                .map(|node| *node),
+                            body: *self.rewrite_specializations_in_node(
+                                arm.body,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
+            ),
+            _ => unreachable!("specialization dispatcher selected a non-match node"),
+        };
+
+        Ok(Box::new(TypedNode { ty, span, node }))
+    }
+
+    #[inline(never)]
+    fn rewrite_closure_specializations_in_node(
+        &mut self,
+        node: TypedNode,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
+        let span = node.span.clone();
+        let ty = node.ty.clone();
+        let node = match node.node {
+            TypedInner::Closure(params, captures, body) => TypedInner::Closure(
+                params,
+                captures,
+                self.rewrite_specializations_in_node(
+                    *body,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ),
+            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
+                params,
+                captures,
+                self.rewrite_specializations_in_node(
+                    *body,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ),
+            TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
+                params,
+                captures,
+                self.rewrite_specializations_in_node(
+                    *body,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ),
+            TypedInner::CaptureConstructorClosure(id, params, captures, body) => {
+                TypedInner::CaptureConstructorClosure(
+                    id,
+                    params,
+                    captures,
+                    self.rewrite_specializations_in_node(
+                        *body,
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    )?,
+                )
+            }
+            _ => unreachable!("specialization dispatcher selected a non-closure node"),
+        };
+
+        Ok(Box::new(TypedNode { ty, span, node }))
+    }
+
+    #[inline(never)]
+    fn rewrite_other_specializations_in_node(
+        &mut self,
+        node: TypedNode,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
+        let span = node.span.clone();
+        let mut ty = node.ty.clone();
+        let node = match node.node {
+            TypedInner::Lit(lit) => TypedInner::Lit(lit),
+            TypedInner::Var(id) => TypedInner::Var(id),
+            TypedInner::ResultEffectFailure(target) => TypedInner::ResultEffectFailure(target),
+            TypedInner::DeferredDoFailure(deferred) => {
+                let deferred = DeferredDoFailureTarget {
+                    carrier_ty: deferred.carrier_ty,
+                    alternative_trait_key: deferred.alternative_trait_key,
+                    alternative_method_name: deferred.alternative_method_name,
+                    propagated_error_tys: deferred.propagated_error_tys,
+                    failure_span: deferred.failure_span,
+                };
+                match self.resolve_deferred_do_failure(deferred)? {
+                    ResolvedDeferredDoFailure::Result(target) => {
+                        ty = target.carrier_ty.clone();
+                        TypedInner::ResultEffectFailure(Box::new(target))
+                    }
+                    ResolvedDeferredDoFailure::Alternative(empty) => {
+                        let empty = self.rewrite_specializations_in_node(
+                            empty,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )?;
+                        ty = empty.ty.clone();
+                        empty.node
+                    }
+                }
+            }
+            TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init,
+            } => TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init: self.rewrite_specializations_in_node(
+                    *init,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            },
+            TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid,
+            } => TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid: self.rewrite_specializations_in_node(
+                    *pid,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            },
+            TypedInner::SupervisorStatus { supervisor_process } => {
+                TypedInner::SupervisorStatus { supervisor_process }
+            }
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                strategy,
+            } => TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: self.rewrite_specializations_in_node(
+                    *init,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+                strategy: self.rewrite_specializations_in_node(
+                    *strategy,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            },
             TypedInner::TraitCall {
                 trait_name,
                 method_name,
@@ -1241,26 +1546,6 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
-            TypedInner::Block(stmts) => {
-                let stmts = stmts
-                    .into_iter()
-                    .map(|stmt| {
-                        self.rewrite_specializations_in_node(
-                            stmt,
-                            defs_by_fun_idx,
-                            bound_tyvars_by_fun_idx,
-                            needs_specialization,
-                            specialization_fun_idxs,
-                            generated_defs,
-                        )
-                        .map(|node| *node)
-                    })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?;
-                if let Some(last) = stmts.last() {
-                    ty = last.ty.clone();
-                }
-                TypedInner::Block(stmts)
-            }
             TypedInner::Bind(pattern, rhs) => *self.rewrite_bind_specializations(
                 pattern,
                 rhs,
@@ -1639,56 +1924,6 @@ impl Checker {
                     generated_defs,
                 )?,
             ),
-            TypedInner::Match(scrutinee, arms) => TypedInner::Match(
-                self.rewrite_specializations_in_node(
-                    *scrutinee,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                arms.into_iter()
-                    .map(|arm| {
-                        Ok(TypedMatchArm {
-                            direct_expression: arm.direct_expression,
-                            pattern: self.concretize_specialized_match_pattern(
-                                arm.pattern,
-                                &span,
-                                &mut SpecializationContext {
-                                    defs_by_fun_idx,
-                                    bound_tyvars_by_fun_idx,
-                                    needs_specialization,
-                                    specialization_fun_idxs,
-                                    generated_defs,
-                                },
-                            )?,
-                            guard: arm
-                                .guard
-                                .map(|guard| {
-                                    self.rewrite_specializations_in_node(
-                                        guard,
-                                        defs_by_fun_idx,
-                                        bound_tyvars_by_fun_idx,
-                                        needs_specialization,
-                                        specialization_fun_idxs,
-                                        generated_defs,
-                                    )
-                                })
-                                .transpose()?
-                                .map(|node| *node),
-                            body: *self.rewrite_specializations_in_node(
-                                arm.body,
-                                defs_by_fun_idx,
-                                bound_tyvars_by_fun_idx,
-                                needs_specialization,
-                                specialization_fun_idxs,
-                                generated_defs,
-                            )?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
             TypedInner::FieldAccess(expr, index) => TypedInner::FieldAccess(
                 self.rewrite_specializations_in_node(
                     *expr,
@@ -1915,57 +2150,6 @@ impl Checker {
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty)
             }
-            TypedInner::Closure(params, captures, body) => TypedInner::Closure(
-                params,
-                captures,
-                self.rewrite_specializations_in_node(
-                    *body,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
-                params,
-                captures,
-                self.rewrite_specializations_in_node(
-                    *body,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
-                params,
-                captures,
-                self.rewrite_specializations_in_node(
-                    *body,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::CaptureConstructorClosure(id, params, captures, body) => {
-                TypedInner::CaptureConstructorClosure(
-                    id,
-                    params,
-                    captures,
-                    self.rewrite_specializations_in_node(
-                        *body,
-                        defs_by_fun_idx,
-                        bound_tyvars_by_fun_idx,
-                        needs_specialization,
-                        specialization_fun_idxs,
-                        generated_defs,
-                    )?,
-                )
-            }
             TypedInner::Capture(target, args) => {
                 let mut target = *self.rewrite_specializations_in_node(
                     *target,
@@ -2082,6 +2266,7 @@ impl Checker {
                 specialization_fun_idxs,
                 generated_defs,
             )?),
+            _ => unreachable!("specialization dispatcher selected a non-other node"),
         };
 
         Ok(Box::new(TypedNode { ty, span, node }))

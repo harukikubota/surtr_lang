@@ -2985,7 +2985,104 @@ impl Resolver {
         })
     }
 
+    // Keep declaration temporaries out of recursive expression frames. The
+    // exhaustive dispatch also requires every new Ast variant to choose a path.
     pub(super) fn resolve_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
+        match node {
+            node @ (Ast::PatternConsumerCall(..)
+            | Ast::NumberedPlaceholder(..)
+            | Ast::Lit(..)
+            | Ast::Var(..)
+            | Ast::InternalVar(..)
+            | Ast::Path(..)
+            | Ast::FuncLiteralRef(..)
+            | Ast::ReturnTypeArgumentApply(..)
+            | Ast::App(..)
+            | Ast::Bind(..)
+            | Ast::SafeBind(..)
+            | Ast::Do(..)
+            | Ast::BinOp(..)
+            | Ast::Pipe(..)
+            | Ast::ContextMap(..)
+            | Ast::ContextApply(..)
+            | Ast::ContextBind(..)
+            | Ast::Compose(..)
+            | Ast::LiftedCompose(..)
+            | Ast::KleisliCompose(..)
+            | Ast::ListNil(..)
+            | Ast::ListCons(..)
+            | Ast::ListLiteral(..)
+            | Ast::HashMapLiteral(..)
+            | Ast::RangeLiteral(..)
+            | Ast::TupleLiteral(..)
+            | Ast::Grouped(..)
+            | Ast::InterpolatedStr(..)
+            | Ast::Dbg(..)
+            | Ast::BulkUpdate(..)
+            | Ast::FieldAccess(..)
+            | Ast::FacetSegmentAccess(..)
+            | Ast::FacetCapture(..)
+            | Ast::Semi(..)
+            | Ast::Cond(..)
+            | Ast::Match(..)
+            | Ast::Namespace(..)
+            | Ast::SupervisorInit(..)) => self.resolve_expression_node(node),
+            node @ (Ast::StructDef(..)
+            | Ast::RecordDef(..)
+            | Ast::DeferrorDef(..)
+            | Ast::EnumDef(..)
+            | Ast::Def(..)
+            | Ast::ConstDef(..)
+            | Ast::ExtractorDef(..)
+            | Ast::TraitDef(..)
+            | Ast::TraitImplDef(..)
+            | Ast::BuiltinDecl(..)
+            | Ast::IntrinsicDecl(..)
+            | Ast::BuiltinExtractorDecl(..)
+            | Ast::BuiltinTypeDecl(..)
+            | Ast::TypeAlias(..)
+            | Ast::ResultCtorDecl(..)
+            | Ast::Defmod(..)
+            | Ast::Defagent(..)
+            | Ast::Defgenserver(..)
+            | Ast::Defsupervisor(..)
+            | Ast::DefdynamicSupervisor(..)
+            | Ast::Import(..)
+            | Ast::Include(..)
+            | Ast::ImplDef(..)) => self.resolve_declaration_node(node),
+            node @ (Ast::Capture(..)
+            | Ast::CapturePlaceholder(..)
+            | Ast::StructLit(..)
+            | Ast::InternalStructLit(..)
+            | Ast::ConstructorCall(..)
+            | Ast::EnumConstructorCall(..)) => self.resolve_callable_node(node),
+            Ast::Block(span, statements) => self.resolve_block(span, statements),
+            Ast::Closure(span, params, body) => {
+                self.resolve_literal_closure(span, params, body, false, false)
+            }
+            Ast::ExtractorClosure(span, params, body) => {
+                self.resolve_literal_closure(span, params, body, true, false)
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn resolve_block(
+        &mut self,
+        span: Span,
+        statements: Vec<Ast>,
+    ) -> Result<Resolved, ResolveError> {
+        let resolved = self.with_child_scope(|child| {
+            statements
+                .into_iter()
+                .map(|statement| child.resolve_node(statement))
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        Ok(Resolved::Block(span, resolved))
+    }
+
+    #[inline(never)]
+    fn resolve_expression_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
         match node {
             Ast::PatternConsumerCall(span, callee, args) => self.resolve_pattern_consumer_call(span, callee, args),
             Ast::NumberedPlaceholder(span, _) => Err(ResolveError {
@@ -3331,21 +3428,57 @@ impl Resolver {
                 Ok(Resolved::FacetCapture(span, Box::new(resolved_expr)))
             }
 
-            Ast::Block(span, stmts) => {
-                let resolved = self.with_child_scope(|child| {
-                    stmts
-                        .into_iter()
-                        .map(|s| child.resolve_node(s))
-                        .collect::<Result<Vec<_>, _>>()
-                })?;
-                Ok(Resolved::Block(span, resolved))
-            }
-
             Ast::Semi(span, inner) => {
                 let resolved = self.resolve_node(*inner)?;
                 Ok(Resolved::Semi(span, Box::new(resolved)))
             }
 
+            Ast::Cond(span, clauses) => Ok(Resolved::Cond(
+                span,
+                clauses
+                    .into_iter()
+                    .map(|(condition, body)| {
+                        Ok((self.resolve_node(condition)?, self.resolve_node(body)?))
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
+            Ast::Match(span, scrutinee, arms) => {
+                let resolved_scrut = self.resolve_node(*scrutinee)?;
+                let resolved_arms = arms
+                    .into_iter()
+                    .map(|arm| self.resolve_match_arm(arm))
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                Ok(Resolved::Match(
+                    span,
+                    Box::new(resolved_scrut),
+                    resolved_arms,
+                ))
+            }
+            Ast::Namespace(span, _, _) => Err(ResolveError {
+                message: "namespace declarations must be lowered before name resolution".into(),
+                span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
+            }),
+            Ast::SupervisorInit(span, _) => Err(ResolveError {
+                message: "supervisor_init must be collected before name resolution".into(),
+                span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
+            }),
+            _ => unreachable!("resolve_node dispatched a non-expression node"),
+        }
+    }
+
+    #[inline(never)]
+    fn resolve_declaration_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
+        match node {
             // Struct/Record/Deferror definitions — reuse predeclared IDs
             Ast::StructDef(span, name, type_params, fields, attrs) => {
                 let uid = self
@@ -4346,25 +4479,43 @@ impl Resolver {
                 related_labels: Vec::new(),
             }),
 
-            Ast::Closure(span, params, body) => {
-                self.resolve_literal_closure(span, params, body, false, false)
-            }
-            Ast::ExtractorClosure(span, params, body) => {
-                self.resolve_literal_closure(span, params, body, true, false)
-            }
+            _ => unreachable!("resolve_node dispatched a non-declaration node"),
+        }
+    }
 
+    #[inline(never)]
+    fn resolve_callable_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
+        match node {
             Ast::Capture(span, target, args) => {
                 let lazy_capture = self.lazy_capture_source(&target, &args)?;
                 if matches!(target.as_ref(), Ast::PatternConsumerCall(..)) {
-                    let max_index = self.validate_capture_placeholders(&span, std::slice::from_ref(target.as_ref()))?;
+                    let max_index = self.validate_capture_placeholders(
+                        &span,
+                        std::slice::from_ref(target.as_ref()),
+                    )?;
                     let body = self.rewrite_capture_placeholders(*target, &span, true, true)?;
-                    let params = (1..=max_index).map(|index| ClosureParam {
-                        name: Self::capture_placeholder_param_name(&span, index),
-                        ty: None, span: span.clone(),
-                    }).collect();
-                    return match self.resolve_literal_closure(span, params, Box::new(body), false, true)? {
-                        Resolved::Closure(span, params, captures, body) =>
-                            Ok(Resolved::CaptureClosure(span, Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()), captures, body)),
+                    let params = (1..=max_index)
+                        .map(|index| ClosureParam {
+                            name: Self::capture_placeholder_param_name(&span, index),
+                            ty: None,
+                            span: span.clone(),
+                        })
+                        .collect();
+                    return match self.resolve_literal_closure(
+                        span,
+                        params,
+                        Box::new(body),
+                        false,
+                        true,
+                    )? {
+                        Resolved::Closure(span, params, captures, body) => {
+                            Ok(Resolved::CaptureClosure(
+                                span,
+                                Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()),
+                                captures,
+                                body,
+                            ))
+                        }
                         _ => unreachable!("capture lowering must resolve to a closure"),
                     };
                 }
@@ -4386,23 +4537,21 @@ impl Resolver {
                             });
                         }
                         ConstructorCapturePolicy::Ordinary if !args.is_empty() => {
-                            let lowered = self.lower_constructor_capture_expr(
-                                span.clone(),
-                                *target,
-                                args,
-                            )?;
+                            let lowered =
+                                self.lower_constructor_capture_expr(span.clone(), *target, args)?;
                             let Ast::Closure(closure_span, params, body) = lowered else {
                                 unreachable!("constructor capture lowering must produce a closure")
                             };
-                            return match self.resolve_literal_closure(closure_span, params, body, false, true)? {
-                                Resolved::Closure(closure_span, params, captures, body) => {
-                                    Ok(Resolved::CaptureClosure(
-                                        closure_span,
-                                        params,
-                                        captures,
-                                        body,
-                                    ))
-                                }
+                            return match self.resolve_literal_closure(
+                                closure_span,
+                                params,
+                                body,
+                                false,
+                                true,
+                            )? {
+                                Resolved::Closure(closure_span, params, captures, body) => Ok(
+                                    Resolved::CaptureClosure(closure_span, params, captures, body),
+                                ),
                                 other => Ok(other),
                             };
                         }
@@ -4413,7 +4562,11 @@ impl Resolver {
                 match self.lower_capture_expr(span.clone(), *target, args)? {
                     Ast::Capture(_, target, args) => {
                         let resolved_target = match *target {
-                            Ast::Path(path_span, path) => self.resolve_value_var_like(path_span, path.segments.join("::"), false)?,
+                            Ast::Path(path_span, path) => self.resolve_value_var_like(
+                                path_span,
+                                path.segments.join("::"),
+                                false,
+                            )?,
                             target => self.resolve_node(target)?,
                         };
                         if args.is_empty() {
@@ -4430,9 +4583,23 @@ impl Resolver {
                         ))
                     }
                     Ast::Closure(closure_span, params, body) => {
-                        match self.resolve_literal_closure(closure_span, params, body, false, true)? {
+                        match self.resolve_literal_closure(
+                            closure_span,
+                            params,
+                            body,
+                            false,
+                            true,
+                        )? {
                             Resolved::Closure(span, params, captures, body) => {
-                                Ok(Resolved::CaptureClosure(span, Self::annotate_lazy_capture_params(params, lazy_capture.as_ref()), captures, body))
+                                Ok(Resolved::CaptureClosure(
+                                    span,
+                                    Self::annotate_lazy_capture_params(
+                                        params,
+                                        lazy_capture.as_ref(),
+                                    ),
+                                    captures,
+                                    body,
+                                ))
                             }
                             other => Ok(other),
                         }
@@ -4719,45 +4886,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::Cond(span, clauses) => Ok(Resolved::Cond(
-                span,
-                clauses
-                    .into_iter()
-                    .map(|(condition, body)| {
-                        Ok((self.resolve_node(condition)?, self.resolve_node(body)?))
-                    })
-                    .collect::<Result<Vec<_>, ResolveError>>()?,
-            )),
-            Ast::Match(span, scrutinee, arms) => {
-                let resolved_scrut = self.resolve_node(*scrutinee)?;
-                let resolved_arms = arms
-                    .into_iter()
-                    .map(|arm| self.resolve_match_arm(arm))
-                    .collect::<Result<Vec<_>, ResolveError>>()?;
-                Ok(Resolved::Match(
-                    span,
-                    Box::new(resolved_scrut),
-                    resolved_arms,
-                ))
-            }
-            Ast::Namespace(span, _, _) => Err(ResolveError {
-                message: "namespace declarations must be lowered before name resolution".into(),
-                span,
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            }),
-            Ast::SupervisorInit(span, _) => Err(ResolveError {
-                message: "supervisor_init must be collected before name resolution".into(),
-                span,
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            }),
+            _ => unreachable!("resolve_node dispatched a non-callable node"),
         }
     }
 

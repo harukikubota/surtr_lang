@@ -5,6 +5,49 @@ use sindr::warning::WarningKind;
 use spire::ast::{AstTy, BinOp, Lit};
 use spire::parse;
 
+fn resolve_on_cli_sized_stack(source: String) -> Vec<Resolved> {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || parse_and_resolve(&source).expect("nested source should resolve"))
+        .expect("resolver worker should start")
+        .join()
+        .expect("resolver worker should finish")
+}
+
+#[test]
+fn deep_nested_closure_bodies_resolve_on_cli_sized_stack() {
+    let depth = 31;
+    let source = format!(
+        "outer = 7\nbody = {}outer{}",
+        "{ marker = 0\n".repeat(depth),
+        "\n}".repeat(depth),
+    );
+    let resolved = resolve_on_cli_sized_stack(source);
+    let Resolved::Bind(_, _, body) = &resolved[1] else {
+        panic!("expected outer closure binding");
+    };
+    let Resolved::Closure(_, _, captures, _) = body.as_ref() else {
+        panic!("expected closure body");
+    };
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0].name, "outer");
+}
+
+#[test]
+fn deep_nested_match_blocks_resolve_on_cli_sized_stack() {
+    let depth = 16;
+    let source = format!(
+        "outer = 7\nactual = {}outer{}",
+        "match 1 { _ => { marker = 0\n".repeat(depth),
+        "\n} }".repeat(depth),
+    );
+    let resolved = resolve_on_cli_sized_stack(source);
+    let Resolved::Bind(_, _, body) = &resolved[1] else {
+        panic!("expected nested match binding");
+    };
+    assert!(matches!(body.as_ref(), Resolved::Match(..)));
+}
+
 #[test]
 fn bare_lazy_special_form_captures_reject_before_runtime_with_individual_guidance() {
     let modules = vec![

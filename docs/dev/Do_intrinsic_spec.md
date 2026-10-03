@@ -83,6 +83,11 @@ synthetic closureの暗黙return先へ依存せず、現在のdo continuationの
 Forge前にpending carrier、dispatch、未具体化callableを拒否する。
 do専用opcode、runtime候補探索、旧failure経路、compatibility fallbackを残さない。
 
+生成したcontinuationは通常のBlock / Closure / TraitCallとして検査する。
+共通visitorの再帰フレームへ宣言処理や大きな値・診断の一時領域を積み重ねず、
+外側の通常blockやclosureを含む正常な多段の式を処理する。
+Test DSLやListだけの特例、compilerのstack増量による再試行は設けない。
+
 ## 診断と検証配置
 
 通常のuser match/if内部のbranch mismatchは固有診断を優先する。
@@ -107,11 +112,10 @@ JSON schemaはdiagnostics正本の閉じたvariantを使い、未採用のdo専�
 
 ## 現行実装で確認した制限
 
-List runtime の改修時に、改修前の compiler でも次の2件を確認した。原因は未特定であり、
+List runtime の改修時に、改修前の compiler でも次の問題を確認した。原因は未特定であり、
 上記の generic do 契約に対する調査項目として扱う。
 
 - `guard::<List>(...)` の `List<Unit>` を do で直接 sequence するケースで、`Type constructor occurrence requires Monad` が出る。現在の回帰テストでは `List::map` で具体的な payload へ写してから sequence する。
-- 三段の List do を Test DSL の `it` closure 内に直接置くケースで、compiler が stack overflow する。現在の回帰テストでは `do_list_three_binds` のようなトップレベル関数へ切り出す。
 
 観測条件、回避形、修正時の受け入れ条件は
-[List / VM の残課題](../../doc/list_runtime_followups.md) の C-1 / C-2 に記載する。
+[List / VM の残課題](../../doc/list_runtime_followups.md) の C-1 に記載する。

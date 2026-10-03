@@ -1058,12 +1058,14 @@ impl Checker {
         obligations
     }
 
+    // Keep recursive results pointer-sized: large by-value success/error
+    // temporaries otherwise accumulate in this visitor's debug stack frame.
     pub(super) fn concretize_pending_trait_calls(
         &mut self,
         mut node: TypedNode,
-    ) -> Result<TypedNode, TypeError> {
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
         for expr in Self::pattern_expression_nodes_mut(&mut node) {
-            *expr = self.concretize_pending_trait_calls(expr.clone())?;
+            *expr = *self.concretize_pending_trait_calls(expr.clone())?;
         }
         let span = node.span.clone();
         let ty = self.resolve_ty(&node.ty);
@@ -1089,7 +1091,7 @@ impl Checker {
                 };
                 let args = args
                     .into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg))
+                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?;
                 let abstract_constructor_receiver = match &obligation.receiver {
                     Ty::SelfApp(items) => Self::constructor_application_parts(items)
@@ -1129,13 +1131,13 @@ impl Checker {
                             }
                             CandidateApplicability::Deferred(_) => TraitDispatch::Pending,
                             CandidateApplicability::Rejected(_) => {
-                                return Err(self.trait_failure(
+                                return Err(Box::new(self.trait_failure(
                                     TypeDiagnosticReason::NoApplicableTraitImplementation,
                                     &obligation.trait_id,
                                     &obligation.receiver,
                                     &span,
                                     DiagnosticOrigin::TraitCall,
-                                ));
+                                )));
                             }
                         }
                     }
@@ -1161,45 +1163,44 @@ impl Checker {
                 TypedInner::DeferredDoFailure(deferred)
             }
             TypedInner::App(func, args) => TypedInner::App(
-                Box::new(self.concretize_pending_trait_calls(*func)?),
+                self.concretize_pending_trait_calls(*func)?,
                 args.into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg))
+                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
-                Box::new(self.concretize_pending_trait_calls(*func)?),
+                self.concretize_pending_trait_calls(*func)?,
                 args.into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg))
+                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::Capture(func, args) => TypedInner::Capture(
-                Box::new(self.concretize_pending_trait_calls(*func)?),
+                self.concretize_pending_trait_calls(*func)?,
                 args.into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg))
+                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::Block(stmts) => TypedInner::Block(
                 stmts
                     .into_iter()
-                    .map(|stmt| self.concretize_pending_trait_calls(stmt))
+                    .map(|stmt| self.concretize_pending_trait_calls(stmt).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
-            TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
-                pattern,
-                Box::new(self.concretize_pending_trait_calls(*rhs)?),
-            ),
+            TypedInner::Bind(pattern, rhs) => {
+                TypedInner::Bind(pattern, self.concretize_pending_trait_calls(*rhs)?)
+            }
             TypedInner::ApplyPattern {
                 value,
                 pattern,
                 projections,
             } => TypedInner::ApplyPattern {
-                value: Box::new(self.concretize_pending_trait_calls(*value)?),
+                value: self.concretize_pending_trait_calls(*value)?,
                 pattern,
                 projections,
             },
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 pattern,
-                Box::new(self.concretize_pending_trait_calls(*rhs)?),
+                self.concretize_pending_trait_calls(*rhs)?,
                 projection,
                 failure_target,
             ),
@@ -1214,12 +1215,12 @@ impl Checker {
                 } = *control;
                 TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
                     pattern,
-                    rhs: Box::new(self.concretize_pending_trait_calls(*rhs)?),
+                    rhs: self.concretize_pending_trait_calls(*rhs)?,
                     projection,
                     failure_target: match failure_target {
                         SafeBindFailureTarget::DoAlternative { empty } => {
                             SafeBindFailureTarget::DoAlternative {
-                                empty: Box::new(self.concretize_pending_trait_calls(*empty)?),
+                                empty: self.concretize_pending_trait_calls(*empty)?,
                             }
                         }
                         SafeBindFailureTarget::Deferred(mut deferred) => {
@@ -1233,38 +1234,38 @@ impl Checker {
                         }
                         other => other,
                     },
-                    continuation: Box::new(self.concretize_pending_trait_calls(*continuation)?),
+                    continuation: self.concretize_pending_trait_calls(*continuation)?,
                     origins,
                 }))
             }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
-                Box::new(self.concretize_pending_trait_calls(*left)?),
-                Box::new(self.concretize_pending_trait_calls(*right)?),
+                self.concretize_pending_trait_calls(*left)?,
+                self.concretize_pending_trait_calls(*right)?,
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.concretize_pending_trait_calls(*left)?),
-                Box::new(self.concretize_pending_trait_calls(*right)?),
+                self.concretize_pending_trait_calls(*left)?,
+                self.concretize_pending_trait_calls(*right)?,
             ),
             TypedInner::Compose(flavor, left, right) => TypedInner::Compose(
                 flavor,
-                Box::new(self.concretize_pending_trait_calls(*left)?),
-                Box::new(self.concretize_pending_trait_calls(*right)?),
+                self.concretize_pending_trait_calls(*left)?,
+                self.concretize_pending_trait_calls(*right)?,
             ),
             TypedInner::ListCons(head, tail) => TypedInner::ListCons(
-                Box::new(self.concretize_pending_trait_calls(*head)?),
-                Box::new(self.concretize_pending_trait_calls(*tail)?),
+                self.concretize_pending_trait_calls(*head)?,
+                self.concretize_pending_trait_calls(*tail)?,
             ),
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
                     .into_iter()
-                    .map(|item| self.concretize_pending_trait_calls(item))
+                    .map(|item| self.concretize_pending_trait_calls(item).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::ListLiteral(items) => TypedInner::ListLiteral(
                 items
                     .into_iter()
-                    .map(|item| self.concretize_pending_trait_calls(item))
+                    .map(|item| self.concretize_pending_trait_calls(item).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
@@ -1272,11 +1273,11 @@ impl Checker {
                     .into_iter()
                     .map(|(key, value)| {
                         Ok((
-                            self.concretize_pending_trait_calls(key)?,
-                            self.concretize_pending_trait_calls(value)?,
+                            *self.concretize_pending_trait_calls(key)?,
+                            *self.concretize_pending_trait_calls(value)?,
                         ))
                     })
-                    .collect::<Result<Vec<_>, TypeError>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::InterpolatedStr(parts) => TypedInner::InterpolatedStr(
                 parts
@@ -1286,12 +1287,12 @@ impl Checker {
                             Ok(crate::typed::TypedInterpolatedPart::Text(text))
                         }
                         crate::typed::TypedInterpolatedPart::Expr(expr) => {
-                            Ok(crate::typed::TypedInterpolatedPart::Expr(Box::new(
+                            Ok(crate::typed::TypedInterpolatedPart::Expr(
                                 self.concretize_pending_trait_calls(*expr)?,
-                            )))
+                            ))
                         }
                     })
-                    .collect::<Result<Vec<_>, TypeError>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::Dbg(args) => TypedInner::Dbg(
                 args.into_iter()
@@ -1299,46 +1300,49 @@ impl Checker {
                         Ok(crate::typed::TypedDbgArg {
                             span: arg.span,
                             ty_name: arg.ty_name,
-                            expr: self.concretize_pending_trait_calls(arg.expr)?,
+                            expr: *self.concretize_pending_trait_calls(arg.expr)?,
                         })
                     })
-                    .collect::<Result<Vec<_>, TypeError>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::EagerBoundary(inner) => {
-                TypedInner::EagerBoundary(Box::new(self.concretize_pending_trait_calls(*inner)?))
+                TypedInner::EagerBoundary(self.concretize_pending_trait_calls(*inner)?)
             }
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
-                Box::new(self.concretize_pending_trait_calls(*cond)?),
-                Box::new(self.concretize_pending_trait_calls(*then_branch)?),
+                self.concretize_pending_trait_calls(*cond)?,
+                self.concretize_pending_trait_calls(*then_branch)?,
                 else_branch
-                    .map(|branch| self.concretize_pending_trait_calls(*branch))
+                    .map(|branch| {
+                        self.concretize_pending_trait_calls(*branch)
+                            .map(|node| *node)
+                    })
                     .transpose()?
                     .map(Box::new),
             ),
             TypedInner::Assert(cond, err) => TypedInner::Assert(
-                Box::new(self.concretize_pending_trait_calls(*cond)?),
-                Box::new(self.concretize_pending_trait_calls(*err)?),
+                self.concretize_pending_trait_calls(*cond)?,
+                self.concretize_pending_trait_calls(*err)?,
             ),
             TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                Box::new(self.concretize_pending_trait_calls(*value)?),
-                Box::new(self.concretize_pending_trait_calls(*pred)?),
-                Box::new(self.concretize_pending_trait_calls(*err)?),
+                self.concretize_pending_trait_calls(*value)?,
+                self.concretize_pending_trait_calls(*pred)?,
+                self.concretize_pending_trait_calls(*err)?,
             ),
             TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                Box::new(self.concretize_pending_trait_calls(*value)?),
-                Box::new(self.concretize_pending_trait_calls(*err)?),
+                self.concretize_pending_trait_calls(*value)?,
+                self.concretize_pending_trait_calls(*err)?,
             ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
-                Box::new(self.concretize_pending_trait_calls(*value)?),
-                Box::new(self.concretize_pending_trait_calls(*err)?),
+                self.concretize_pending_trait_calls(*value)?,
+                self.concretize_pending_trait_calls(*err)?,
             ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                Box::new(self.concretize_pending_trait_calls(*value)?),
+                self.concretize_pending_trait_calls(*value)?,
                 marker,
-                Box::new(self.concretize_pending_trait_calls(*handler)?),
+                self.concretize_pending_trait_calls(*handler)?,
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
-                Box::new(self.concretize_pending_trait_calls(*scrutinee)?),
+                self.concretize_pending_trait_calls(*scrutinee)?,
                 arms.into_iter()
                     .map(|arm| {
                         Ok(crate::typed::TypedMatchArm {
@@ -1346,20 +1350,19 @@ impl Checker {
                             pattern: arm.pattern,
                             guard: arm
                                 .guard
-                                .map(|guard| self.concretize_pending_trait_calls(guard))
+                                .map(|guard| {
+                                    self.concretize_pending_trait_calls(guard).map(|node| *node)
+                                })
                                 .transpose()?,
-                            body: self.concretize_pending_trait_calls(arm.body)?,
+                            body: *self.concretize_pending_trait_calls(arm.body)?,
                         })
                     })
-                    .collect::<Result<Vec<_>, TypeError>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
-            TypedInner::FieldAccess(expr, index) => TypedInner::FieldAccess(
-                Box::new(self.concretize_pending_trait_calls(*expr)?),
-                index,
-            ),
-            TypedInner::Semi(expr) => {
-                TypedInner::Semi(Box::new(self.concretize_pending_trait_calls(*expr)?))
+            TypedInner::FieldAccess(expr, index) => {
+                TypedInner::FieldAccess(self.concretize_pending_trait_calls(*expr)?, index)
             }
+            TypedInner::Semi(expr) => TypedInner::Semi(self.concretize_pending_trait_calls(*expr)?),
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -1367,7 +1370,7 @@ impl Checker {
             } => TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
-                init: Box::new(self.concretize_pending_trait_calls(*init)?),
+                init: self.concretize_pending_trait_calls(*init)?,
             },
             TypedInner::SupervisorAdopt {
                 supervisor_process,
@@ -1376,7 +1379,7 @@ impl Checker {
             } => TypedInner::SupervisorAdopt {
                 supervisor_process,
                 worker_process,
-                pid: Box::new(self.concretize_pending_trait_calls(*pid)?),
+                pid: self.concretize_pending_trait_calls(*pid)?,
             },
             TypedInner::SupervisorWorkers {
                 supervisor_process,
@@ -1386,8 +1389,8 @@ impl Checker {
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
-                init: Box::new(self.concretize_pending_trait_calls(*init)?),
-                strategy: Box::new(self.concretize_pending_trait_calls(*strategy)?),
+                init: self.concretize_pending_trait_calls(*init)?,
+                strategy: self.concretize_pending_trait_calls(*strategy)?,
             },
             TypedInner::FacetView {
                 api,
@@ -1396,7 +1399,7 @@ impl Checker {
                 source_is_result,
             } => TypedInner::FacetView {
                 api,
-                source: Box::new(self.concretize_pending_trait_calls(*source)?),
+                source: self.concretize_pending_trait_calls(*source)?,
                 path,
                 source_is_result,
             },
@@ -1409,9 +1412,9 @@ impl Checker {
                 mode,
             } => TypedInner::FacetSet {
                 api,
-                source: Box::new(self.concretize_pending_trait_calls(*source)?),
+                source: self.concretize_pending_trait_calls(*source)?,
                 path,
-                value: Box::new(self.concretize_pending_trait_calls(*value)?),
+                value: self.concretize_pending_trait_calls(*value)?,
                 source_is_result,
                 mode,
             },
@@ -1424,9 +1427,9 @@ impl Checker {
                 mode,
             } => TypedInner::FacetOver {
                 api,
-                source: Box::new(self.concretize_pending_trait_calls(*source)?),
+                source: self.concretize_pending_trait_calls(*source)?,
                 path,
-                update_fun: Box::new(self.concretize_pending_trait_calls(*update_fun)?),
+                update_fun: self.concretize_pending_trait_calls(*update_fun)?,
                 source_is_result,
                 mode,
             },
@@ -1434,37 +1437,37 @@ impl Checker {
                 tag,
                 fields
                     .into_iter()
-                    .map(|field| self.concretize_pending_trait_calls(field))
+                    .map(|field| self.concretize_pending_trait_calls(field).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::StructLit(name, fields) => TypedInner::StructLit(
                 name,
                 fields
                     .into_iter()
-                    .map(|field| self.concretize_pending_trait_calls(field))
+                    .map(|field| self.concretize_pending_trait_calls(field).map(|node| *node))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::Closure(params, captures, body) => TypedInner::Closure(
                 params,
                 captures,
-                Box::new(self.concretize_pending_trait_calls(*body)?),
+                self.concretize_pending_trait_calls(*body)?,
             ),
             TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
                 params,
                 captures,
-                Box::new(self.concretize_pending_trait_calls(*body)?),
+                self.concretize_pending_trait_calls(*body)?,
             ),
             TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params,
                 captures,
-                Box::new(self.concretize_pending_trait_calls(*body)?),
+                self.concretize_pending_trait_calls(*body)?,
             ),
             TypedInner::DeferrorDef(tag, fun_idx, id, params, body) => TypedInner::DeferrorDef(
                 tag,
                 fun_idx,
                 id,
                 params,
-                Box::new(self.concretize_pending_trait_calls(*body)?),
+                self.concretize_pending_trait_calls(*body)?,
             ),
             TypedInner::Def(
                 fun_idx,
@@ -1482,7 +1485,7 @@ impl Checker {
                 params,
                 ret_ty,
                 where_clause,
-                Box::new(self.concretize_pending_trait_calls(*body)?),
+                self.concretize_pending_trait_calls(*body)?,
                 attrs,
             ),
             TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, attrs) => {
@@ -1492,16 +1495,49 @@ impl Checker {
                     type_params,
                     param,
                     ret_ty,
-                    Box::new(self.concretize_pending_trait_calls(*body)?),
+                    self.concretize_pending_trait_calls(*body)?,
                     attrs,
                 )
             }
             other => other,
         };
-        Ok(TypedNode { ty, span, node })
+        Ok(Box::new(TypedNode { ty, span, node }))
     }
 
+    // Recursive block/callable traversal must not retain the large temporary
+    // frame used to check declarations and other individual expressions.
     pub(super) fn check_node(&mut self, node: &Resolved) -> Result<TypedNode, TypeError> {
+        match node {
+            Resolved::Block(span, stmts) => self.check_block(span, stmts, None, None),
+            Resolved::ExtractorClosure(span, params, captures, body) => {
+                self.check_extractor_closure(span, params, captures, body, None, None)
+            }
+            Resolved::Closure(span, params, captures, body) => {
+                self.check_closure(span, params, captures, body, None, None)
+            }
+            Resolved::CaptureClosure(span, params, captures, body) => {
+                self.check_capture_closure(span, params, captures, body, None)
+            }
+            Resolved::Do(span, intrinsic, contract, return_type_arguments, statements) => self
+                .check_do(
+                    span,
+                    *intrinsic,
+                    contract,
+                    return_type_arguments,
+                    statements,
+                    None,
+                    None,
+                ),
+            Resolved::App(span, func, args) => self.check_app(span, func, args),
+            Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms) => {
+                self.check_match(span, scrutinee, arms, None, None)
+            }
+            _ => self.check_non_structural_node(node),
+        }
+    }
+
+    #[inline(never)]
+    fn check_non_structural_node(&mut self, node: &Resolved) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Lit(span, lit) => {
                 let ty = self.lit_type(lit);
@@ -1763,7 +1799,7 @@ impl Checker {
                 } else {
                     self.check_node(rhs)?
                 };
-                let typed_rhs = self.concretize_pending_trait_calls(typed_rhs)?;
+                let typed_rhs = *self.concretize_pending_trait_calls(typed_rhs).map_err(|error| *error)?;
                 if self.current_function_symbol.is_none() {
                     let can_instantiate = match self.resolve_ty(&typed_rhs.ty) {
                         Ty::Func(inputs, _) => self.local_callable_obligations_depend_on(&typed_rhs, &inputs),
@@ -1829,17 +1865,6 @@ impl Checker {
 
             Resolved::ApplyPattern(span, value, pattern) => self.check_apply_pattern(span, value, pattern, None),
             Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs),
-            Resolved::Do(span, intrinsic, contract, return_type_arguments, statements) => self.check_do(
-                span,
-                *intrinsic,
-                contract,
-                return_type_arguments,
-                statements,
-                None,
-                None,
-            ),
-
-            Resolved::App(span, func, args) => self.check_app(span, func, args),
 
             Resolved::BinOp(span, op, left, right) => self.check_binop(span, op, left, right),
             Resolved::Pipe(span, left, right) => self.check_pipe(span, left, right),
@@ -1884,9 +1909,6 @@ impl Checker {
                 self.check_recover_kind(span, value, marker, handler)
             }
 
-            Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms) => {
-                self.check_match(span, scrutinee, arms, None, None)
-            }
             Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, None, *then_only)
             }
@@ -1919,8 +1941,6 @@ impl Checker {
             Resolved::ProcessContextHandler(span, slot) => {
                 self.check_process_context_handler(span, slot)
             }
-
-            Resolved::Block(span, stmts) => self.check_block(span, stmts, None, None),
 
             Resolved::Semi(span, inner) => {
                 let typed_inner = self.check_node(inner)?;
@@ -2114,16 +2134,16 @@ impl Checker {
             Resolved::ResultCtorDecl(span, id, param_ty, ret_ty, attrs) => {
                 self.check_result_ctor_decl(span, id, param_ty, ret_ty, attrs)
             }
-            Resolved::ExtractorClosure(span, params, captures, body) => {
-                self.check_extractor_closure(span, params, captures, body, None, None)
-            }
-            Resolved::Closure(span, params, captures, body) => {
-                self.check_closure(span, params, captures, body, None, None)
-            }
-            Resolved::CaptureClosure(span, params, captures, body) => {
-                self.check_capture_closure(span, params, captures, body, None)
-            }
+
             Resolved::Capture(span, target, args) => self.check_capture(span, target, args, None),
+            Resolved::Block(..)
+            | Resolved::ExtractorClosure(..)
+            | Resolved::Closure(..)
+            | Resolved::CaptureClosure(..)
+            | Resolved::Do(..)
+            | Resolved::App(..)
+            | Resolved::Match(..)
+            | Resolved::IsMatch(..) => unreachable!("structural expressions are dispatched by check_node"),
         }
     }
 
@@ -2991,6 +3011,8 @@ impl Checker {
         self.check_node_with_expected_relation(node, Some(expected), Some(&relation))
     }
 
+    // Recursive structural nodes must not retain the temporary frame used by
+    // contextual collection inference and the other individual expressions.
     pub(super) fn check_node_with_expected_relation(
         &mut self,
         node: &Resolved,
@@ -3001,9 +3023,6 @@ impl Checker {
             (Resolved::Block(span, stmts), expected) => {
                 self.check_block(span, stmts, expected, expected_relation)
             }
-            (Resolved::ApplyPattern(span, value, pattern), Some(expected_ty)) => {
-                self.check_apply_pattern(span, value, pattern, Some(expected_ty))
-            }
             (Resolved::ExtractorClosure(span, params, captures, body), Some(expected_ty)) => self
                 .check_extractor_closure(
                     span,
@@ -3013,55 +3032,201 @@ impl Checker {
                     Some(expected_ty),
                     expected_relation,
                 ),
-            (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
-                let expected_ty = self.resolve_ty(expected_ty);
-                if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
-                    let typed = self.check_closure(span, params, captures, body, None, None)?;
-                    self.assert_type_relation(
-                        &expected_ty,
-                        &typed.ty,
-                        self.type_fact(SourceRole::Expected, span, &expected_ty),
-                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
-                        TypeDiagnosticReason::ArgumentTypeMismatch,
-                        DiagnosticOrigin::Call,
-                        "closure",
-                        0,
-                    )?;
-                    Ok(typed)
-                } else {
-                    self.check_closure(
-                        span,
-                        params,
-                        captures,
-                        body,
-                        Some(&expected_ty),
-                        expected_relation,
-                    )
-                }
+            (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => self
+                .check_literal_closure_with_expected_relation(
+                    span,
+                    params,
+                    captures,
+                    body,
+                    expected_ty,
+                    expected_relation,
+                ),
+            (Resolved::CaptureClosure(span, params, captures, body), Some(expected_ty)) => self
+                .check_capture_closure_with_expected_type(
+                    span,
+                    params,
+                    captures,
+                    body,
+                    expected_ty,
+                ),
+            (
+                Resolved::Do(span, intrinsic, contract, return_type_arguments, statements),
+                expected,
+            ) => self.check_do(
+                span,
+                *intrinsic,
+                contract,
+                return_type_arguments,
+                statements,
+                expected,
+                expected_relation,
+            ),
+            (Resolved::App(span, func, args), Some(expected_ty)) => {
+                self.check_application_with_expected_type(span, func, args, expected_ty)
             }
-            (Resolved::CaptureClosure(span, params, captures, body), Some(expected_ty)) => {
-                let expected_ty = self.resolve_ty(expected_ty);
-                if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
-                    let typed = self.check_capture_closure(span, params, captures, body, None)?;
-                    self.assert_type_relation(
-                        &expected_ty,
-                        &typed.ty,
-                        self.type_fact(SourceRole::Expected, span, &expected_ty),
-                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
-                        TypeDiagnosticReason::ArgumentTypeMismatch,
-                        DiagnosticOrigin::Call,
-                        "closure",
-                        0,
-                    )?;
-                    Ok(typed)
-                } else {
-                    self.check_capture_closure(span, params, captures, body, Some(&expected_ty))
-                }
+            (Resolved::FieldAccess(span, expr, field), expected_ty) => {
+                self.check_field_access_with_expected(span, expr, field, expected_ty)
             }
-            (Resolved::Capture(span, target, args), Some(expected_ty)) => {
+            (Resolved::FacetSegmentAccess(span, expr, segment), expected_ty) => {
+                self.check_facet_segment_access_with_expected(span, expr, segment, expected_ty)
+            }
+            (Resolved::Grouped(span, inner), Some(expected_ty)) => {
+                let mut typed = self.check_node_with_expected_relation(
+                    inner,
+                    Some(expected_ty),
+                    expected_relation,
+                )?;
+                self.propagate_safe_operator_result(&typed.span, span);
+                typed.span = span.clone();
+                Ok(typed)
+            }
+            (
+                Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms),
+                Some(expected_ty),
+            ) => {
+                let branch_relation = expected_relation
+                    .filter(|relation| relation.synthetic_do_match_pending)
+                    .map(ExpectedTypeRelation::after_synthetic_do_match);
+                self.check_match(
+                    span,
+                    scrutinee,
+                    arms,
+                    Some(expected_ty),
+                    branch_relation.as_ref(),
+                )
+            }
+            (Resolved::ProcessContextHandler(span, slot), _) => {
+                self.check_process_context_handler(span, slot)
+            }
+            (_, None) => self.check_node(node),
+            (_, Some(expected_ty)) => {
+                self.check_non_structural_node_with_expected(node, expected_ty)
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn check_literal_closure_with_expected_relation(
+        &mut self,
+        span: &Span,
+        params: &[ResolvedClosureParam],
+        captures: &[ResolvedId],
+        body: &Resolved,
+        expected_ty: &Ty,
+        expected_relation: Option<&ExpectedTypeRelation>,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_ty = self.resolve_ty(expected_ty);
+        if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
+            let typed = self.check_closure(span, params, captures, body, None, None)?;
+            self.assert_type_relation(
+                &expected_ty,
+                &typed.ty,
+                self.type_fact(SourceRole::Expected, span, &expected_ty),
+                self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                "closure",
+                0,
+            )?;
+            Ok(typed)
+        } else {
+            self.check_closure(
+                span,
+                params,
+                captures,
+                body,
+                Some(&expected_ty),
+                expected_relation,
+            )
+        }
+    }
+
+    #[inline(never)]
+    fn check_capture_closure_with_expected_type(
+        &mut self,
+        span: &Span,
+        params: &[ResolvedClosureParam],
+        captures: &[ResolvedId],
+        body: &Resolved,
+        expected_ty: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_ty = self.resolve_ty(expected_ty);
+        if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
+            let typed = self.check_capture_closure(span, params, captures, body, None)?;
+            self.assert_type_relation(
+                &expected_ty,
+                &typed.ty,
+                self.type_fact(SourceRole::Expected, span, &expected_ty),
+                self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                "closure",
+                0,
+            )?;
+            Ok(typed)
+        } else {
+            self.check_capture_closure(span, params, captures, body, Some(&expected_ty))
+        }
+    }
+
+    #[inline(never)]
+    fn check_application_with_expected_type(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+        expected_ty: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        // Keep the original contextual dispatch priority: constructors,
+        // trait helpers, Function on calls, and then ordinary applications.
+        if matches!(func, Resolved::Var(_, id)
+            if id.name == "Ok"
+                || id.name == "Err"
+                || self.lookup_enum_variant_by_constructor_id(id.unique_id).is_some())
+        {
+            let Resolved::Var(_, id) = func else {
+                unreachable!("constructor guard requires a variable callee")
+            };
+            self.check_constructor_call(span, id, args, Some(expected_ty))
+        } else if self.trait_method_ref(func).is_some() {
+            let (id, trait_name, method_name) = self
+                .trait_method_ref(func)
+                .expect("guard established a trait method reference");
+            let receiver_owner_hint = id
+                .name
+                .strip_suffix(&format!("::{}", method_name))
+                .filter(|owner| *owner == "JsonValue");
+            let explicit_type_arguments = Self::explicit_type_args(func);
+            self.check_trait_method_call(
+                span,
+                &trait_name,
+                &method_name,
+                args,
+                receiver_owner_hint,
+                Some(expected_ty),
+                explicit_type_arguments.as_deref(),
+            )
+        } else if self.is_function_on_callee(func) {
+            self.check_function_on_with_expected(span, func, args, expected_ty)
+        } else {
+            self.check_app_with_expected(span, func, args, Some(expected_ty))
+        }
+    }
+
+    #[inline(never)]
+    fn check_non_structural_node_with_expected(
+        &mut self,
+        node: &Resolved,
+        expected_ty: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        match node {
+            Resolved::ApplyPattern(span, value, pattern) => {
+                self.check_apply_pattern(span, value, pattern, Some(expected_ty))
+            }
+            Resolved::Capture(span, target, args) => {
                 self.check_capture(span, target, args, Some(expected_ty))
             }
-            (Resolved::ListLiteral(span, elems), Some(expected_ty)) => {
+            Resolved::ListLiteral(span, elems) => {
                 let expected_ty = self.resolve_ty(expected_ty);
                 let Ty::List(element_ty) = expected_ty else {
                     return self.check_list_literal(span, elems);
@@ -3092,7 +3257,7 @@ impl Checker {
                     node: TypedInner::ListLiteral(typed_elems),
                 })
             }
-            (Resolved::TupleLiteral(span, elems), Some(expected_ty)) => {
+            Resolved::TupleLiteral(span, elems) => {
                 let expected_ty = self.resolve_ty(expected_ty);
                 let Ty::Tuple(item_tys) = expected_ty else {
                     return self.check_tuple_literal(span, elems);
@@ -3124,141 +3289,46 @@ impl Checker {
                     node: TypedInner::TupleLiteral(typed_elems),
                 })
             }
-            (Resolved::InferredFacetCapture(span, segments), Some(expected_ty)) => {
+            Resolved::InferredFacetCapture(span, segments) => {
                 self.check_inferred_facet_capture(span, segments, expected_ty)
             }
-            (Resolved::Pipe(span, left, right), Some(expected_ty)) => {
+            Resolved::Pipe(span, left, right) => {
                 self.check_pipe_with_expected(span, left, right, Some(expected_ty))
             }
-            (Resolved::ContextMap(span, left, right), Some(expected_ty)) => {
+            Resolved::ContextMap(span, left, right) => {
                 self.check_context_map_with_expected(span, left, right, Some(expected_ty))
             }
-            (Resolved::ContextApply(span, left, right), Some(expected_ty)) => {
+            Resolved::ContextApply(span, left, right) => {
                 self.check_context_apply_with_expected(span, left, right, Some(expected_ty))
             }
-            (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
+            Resolved::ContextBind(span, left, right) => {
                 self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
             }
-            (Resolved::Cond(span, clauses), Some(expected_ty)) => {
-                self.check_cond(span, clauses, Some(expected_ty))
-            }
-            (Resolved::If(span, cond, then, else_opt), Some(expected_ty)) => {
+            Resolved::Cond(span, clauses) => self.check_cond(span, clauses, Some(expected_ty)),
+            Resolved::If(span, cond, then, else_opt) => {
                 self.check_if_with_expected(span, cond, then, else_opt, expected_ty)
             }
-            (Resolved::IfLet(span, scrutinee, arms, then_only), Some(expected_ty)) => {
+            Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, Some(expected_ty), *then_only)
             }
-            (
-                Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms),
-                Some(expected_ty),
-            ) => {
-                let branch_relation = expected_relation
-                    .filter(|relation| relation.synthetic_do_match_pending)
-                    .map(ExpectedTypeRelation::after_synthetic_do_match);
-                self.check_match(
-                    span,
-                    scrutinee,
-                    arms,
-                    Some(expected_ty),
-                    branch_relation.as_ref(),
-                )
-            }
-            (
-                Resolved::Do(span, intrinsic, contract, return_type_arguments, statements),
-                expected,
-            ) => self.check_do(
-                span,
-                *intrinsic,
-                contract,
-                return_type_arguments,
-                statements,
-                expected,
-                expected_relation,
-            ),
-            // Constructor applications are normally handled by `check_app`
-            // after resolving the callee as a value.  When an enclosing
-            // expression supplies an expected type (notably the mapper side
-            // of `|*|`), route enum constructors directly so their payload
-            // receives that context.  Without this, nested closures are
-            // inferred in isolation and callable type variables remain
-            // unconstrained until a later application.
-            (Resolved::App(span, func, args), Some(expected_ty))
-                if matches!(func.as_ref(), Resolved::Var(_, id)
-                    if id.name == "Ok"
-                        || id.name == "Err"
-                        || self.lookup_enum_variant_by_constructor_id(id.unique_id).is_some()) =>
-            {
-                let Resolved::Var(_, id) = func.as_ref() else {
-                    unreachable!("constructor guard requires a variable callee")
-                };
-                self.check_constructor_call(span, id, args, Some(expected_ty))
-            }
-            (Resolved::BinOp(span, op, left, right), Some(expected_ty)) => {
+            Resolved::BinOp(span, op, left, right) => {
                 self.check_binop_with_expected(span, op, left, right, Some(expected_ty))
             }
-            (Resolved::Compose(span, left, right), Some(expected_ty)) => {
+            Resolved::Compose(span, left, right) => {
                 self.check_compose_with_expected(span, left, right, Some(expected_ty))
             }
-            (Resolved::LiftedCompose(span, left, right), Some(expected_ty)) => {
+            Resolved::LiftedCompose(span, left, right) => {
                 self.check_lifted_compose_with_expected(span, left, right, Some(expected_ty))
             }
-            (Resolved::KleisliCompose(span, left, right), Some(expected_ty)) => {
+            Resolved::KleisliCompose(span, left, right) => {
                 self.check_kleisli_compose_with_expected(span, left, right, Some(expected_ty))
             }
-            (Resolved::App(span, func, args), Some(expected_ty))
-                if self.trait_method_ref(func).is_some() =>
-            {
-                let (id, trait_name, method_name) = self
-                    .trait_method_ref(func)
-                    .expect("guard established a trait method reference");
-                let receiver_owner_hint = id
-                    .name
-                    .strip_suffix(&format!("::{}", method_name))
-                    .filter(|owner| *owner == "JsonValue");
-                let explicit_type_arguments = Self::explicit_type_args(func);
-                self.check_trait_method_call(
-                    span,
-                    &trait_name,
-                    &method_name,
-                    args,
-                    receiver_owner_hint,
-                    Some(expected_ty),
-                    explicit_type_arguments.as_deref(),
-                )
-            }
-            (Resolved::App(span, func, args), Some(expected_ty))
-                if self.is_function_on_callee(func) =>
-            {
-                self.check_function_on_with_expected(span, func, args, expected_ty)
-            }
-            (Resolved::App(span, func, args), Some(expected_ty)) => {
-                self.check_app_with_expected(span, func, args, Some(expected_ty))
-            }
-            (Resolved::ConstructorCall(span, id, args), Some(expected_ty)) => {
+            Resolved::ConstructorCall(span, id, args) => {
                 self.check_constructor_call(span, id, args, Some(expected_ty))
             }
-            (Resolved::EnumConstructorCall(span, id, type_args, args), Some(expected_ty)) => self
+            Resolved::EnumConstructorCall(span, id, type_args, args) => self
                 .check_explicit_enum_constructor_call(span, id, type_args, args, Some(expected_ty)),
-            (Resolved::FieldAccess(span, expr, field), expected_ty) => {
-                self.check_field_access_with_expected(span, expr, field, expected_ty)
-            }
-            (Resolved::FacetSegmentAccess(span, expr, segment), expected_ty) => {
-                self.check_facet_segment_access_with_expected(span, expr, segment, expected_ty)
-            }
-            (Resolved::Grouped(span, inner), Some(expected_ty)) => {
-                let mut typed = self.check_node_with_expected_relation(
-                    inner,
-                    Some(expected_ty),
-                    expected_relation,
-                )?;
-                self.propagate_safe_operator_result(&typed.span, span);
-                typed.span = span.clone();
-                Ok(typed)
-            }
-            (Resolved::ProcessContextHandler(span, slot), _) => {
-                self.check_process_context_handler(span, slot)
-            }
-            (_, Some(expected_ty)) => {
+            _ => {
                 let typed = self.check_node(node)?;
                 if matches!(expected_ty, Ty::Error) && self.is_concrete_error_value(&typed) {
                     let call_span = typed.span.clone();
@@ -3266,7 +3336,6 @@ impl Checker {
                 }
                 Ok(typed)
             }
-            _ => self.check_node(node),
         }
     }
 
@@ -11107,7 +11176,11 @@ impl Checker {
                         };
                         let typed_args = typed_args
                             .into_iter()
-                            .map(|arg| self.concretize_pending_trait_calls(arg))
+                            .map(|arg| {
+                                self.concretize_pending_trait_calls(arg)
+                                    .map(|node| *node)
+                                    .map_err(|error| *error)
+                            })
                             .collect::<Result<Vec<_>, _>>()?;
                         self.ensure_no_runtime_facet_args(&typed_args, span, "Function call")?;
                         let application_signature = match application_constraints {
@@ -11291,7 +11364,11 @@ impl Checker {
 
         typed_args
             .into_iter()
-            .map(|arg| self.concretize_pending_trait_calls(arg))
+            .map(|arg| {
+                self.concretize_pending_trait_calls(arg)
+                    .map(|node| *node)
+                    .map_err(|error| *error)
+            })
             .collect::<Result<Vec<_>, _>>()
     }
 
@@ -12391,7 +12468,9 @@ impl Checker {
                 self.check_node(body)?
             };
             self.profiler.finish(ProfileEvent::ClosureBody, profile);
-            let typed_body = self.concretize_pending_trait_calls(typed_body)?;
+            let typed_body = *self
+                .concretize_pending_trait_calls(typed_body)
+                .map_err(|error| *error)?;
             if expected.is_none()
                 && self.current_function_symbol.is_none()
                 && !self.local_callable_obligations_depend_on(&typed_body, &param_tys)
@@ -14579,7 +14658,7 @@ impl Checker {
         if let PendingFacetSegment::Bracket { expr, display } = segment {
             let typed_expr = match expr {
                 PendingFacetExpr::Resolved(expr) => self.check_node(expr)?,
-                PendingFacetExpr::Typed(expr) => self.resolve_typed_node((**expr).clone()),
+                PendingFacetExpr::Typed(expr) => *self.resolve_typed_node((**expr).clone()),
             };
             return match self.resolve_ty(source_ty) {
                 Ty::List(inner) => {
@@ -14682,11 +14761,11 @@ impl Checker {
         {
             let typed_start = match start {
                 PendingFacetExpr::Resolved(expr) => self.check_node(expr)?,
-                PendingFacetExpr::Typed(expr) => self.resolve_typed_node((**expr).clone()),
+                PendingFacetExpr::Typed(expr) => *self.resolve_typed_node((**expr).clone()),
             };
             let typed_end = match end {
                 PendingFacetExpr::Resolved(expr) => self.check_node(expr)?,
-                PendingFacetExpr::Typed(expr) => self.resolve_typed_node((**expr).clone()),
+                PendingFacetExpr::Typed(expr) => *self.resolve_typed_node((**expr).clone()),
             };
             return match self.resolve_ty(source_ty) {
                 Ty::List(inner) => {

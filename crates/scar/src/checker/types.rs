@@ -4166,7 +4166,7 @@ impl Checker {
                 focus_readonly_root,
                 focus_type_name,
             } => TypedFacetSegment::ListIndex {
-                index: Box::new(self.resolve_typed_node(*index)),
+                index: self.resolve_typed_node(*index),
                 display,
                 literal_index,
                 focus_readonly_root,
@@ -4181,8 +4181,8 @@ impl Checker {
                 focus_readonly_root,
                 focus_type_name,
             } => TypedFacetSegment::ListRange {
-                start: Box::new(self.resolve_typed_node(*start)),
-                end: Box::new(self.resolve_typed_node(*end)),
+                start: self.resolve_typed_node(*start),
+                end: self.resolve_typed_node(*end),
                 display,
                 literal_start,
                 literal_end,
@@ -4196,7 +4196,7 @@ impl Checker {
                 focus_readonly_root,
                 focus_type_name,
             } => TypedFacetSegment::MapKey {
-                key: Box::new(self.resolve_typed_node(*key)),
+                key: self.resolve_typed_node(*key),
                 display,
                 literal_key,
                 focus_readonly_root,
@@ -4222,7 +4222,7 @@ impl Checker {
         let resolve_expr = |expr| match expr {
             PendingFacetExpr::Resolved(expr) => PendingFacetExpr::Resolved(expr),
             PendingFacetExpr::Typed(expr) => {
-                PendingFacetExpr::Typed(Box::new(self.resolve_typed_node(*expr)))
+                PendingFacetExpr::Typed(self.resolve_typed_node(*expr))
             }
         };
         match segment {
@@ -4259,7 +4259,9 @@ impl Checker {
         }
     }
 
-    pub(super) fn resolve_typed_node(&self, node: TypedNode) -> TypedNode {
+    // Keep recursive results off the visitor's stack frame. The returned box
+    // is used directly by child fields that already store boxed nodes.
+    pub(super) fn resolve_typed_node(&self, node: TypedNode) -> Box<TypedNode> {
         let span = node.span.clone();
         let ty = self.resolve_ty(&node.ty);
         let node = match node.node {
@@ -4286,7 +4288,7 @@ impl Checker {
             } => TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
-                init: Box::new(self.resolve_typed_node(*init)),
+                init: self.resolve_typed_node(*init),
             },
             TypedInner::SupervisorAdopt {
                 supervisor_process,
@@ -4295,7 +4297,7 @@ impl Checker {
             } => TypedInner::SupervisorAdopt {
                 supervisor_process,
                 worker_process,
-                pid: Box::new(self.resolve_typed_node(*pid)),
+                pid: self.resolve_typed_node(*pid),
             },
             TypedInner::SupervisorStatus { supervisor_process } => {
                 TypedInner::SupervisorStatus { supervisor_process }
@@ -4308,13 +4310,13 @@ impl Checker {
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
-                init: Box::new(self.resolve_typed_node(*init)),
-                strategy: Box::new(self.resolve_typed_node(*strategy)),
+                init: self.resolve_typed_node(*init),
+                strategy: self.resolve_typed_node(*strategy),
             },
             TypedInner::App(func, args) => TypedInner::App(
-                Box::new(self.resolve_typed_node(*func)),
+                self.resolve_typed_node(*func),
                 args.into_iter()
-                    .map(|arg| self.resolve_typed_node(arg))
+                    .map(|arg| *self.resolve_typed_node(arg))
                     .collect(),
             ),
             TypedInner::TraitCall {
@@ -4342,31 +4344,31 @@ impl Checker {
                 origin: self.resolve_trait_call_origin(origin),
                 args: args
                     .into_iter()
-                    .map(|arg| self.resolve_typed_node(arg))
+                    .map(|arg| *self.resolve_typed_node(arg))
                     .collect(),
             },
             TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
-                Box::new(self.resolve_typed_node(*func)),
+                self.resolve_typed_node(*func),
                 args.into_iter()
-                    .map(|arg| self.resolve_typed_node(arg))
+                    .map(|arg| *self.resolve_typed_node(arg))
                     .collect(),
             ),
             TypedInner::Block(stmts) => TypedInner::Block(
                 stmts
                     .into_iter()
-                    .map(|stmt| self.resolve_typed_node(stmt))
+                    .map(|stmt| *self.resolve_typed_node(stmt))
                     .collect(),
             ),
             TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
                 self.resolve_typed_pattern(pattern),
-                Box::new(self.resolve_typed_node(*rhs)),
+                self.resolve_typed_node(*rhs),
             ),
             TypedInner::ApplyPattern {
                 value,
                 pattern,
                 projections,
             } => TypedInner::ApplyPattern {
-                value: Box::new(self.resolve_typed_node(*value)),
+                value: self.resolve_typed_node(*value),
                 pattern: self.resolve_typed_pattern(pattern),
                 projections: projections
                     .into_iter()
@@ -4375,7 +4377,7 @@ impl Checker {
             },
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 self.resolve_typed_pattern(pattern),
-                Box::new(self.resolve_typed_node(*rhs)),
+                self.resolve_typed_node(*rhs),
                 match projection {
                     SafeBindRhsProjection::CanonicalResultOnce {
                         payload_ty,
@@ -4407,7 +4409,7 @@ impl Checker {
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         SafeBindFailureTarget::DoAlternative {
-                            empty: Box::new(self.resolve_typed_node(*empty)),
+                            empty: self.resolve_typed_node(*empty),
                         }
                     }
                     SafeBindFailureTarget::Deferred(mut deferred) => {
@@ -4432,7 +4434,7 @@ impl Checker {
                 } = *control;
                 TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
                     pattern: self.resolve_typed_pattern(pattern),
-                    rhs: Box::new(self.resolve_typed_node(*rhs)),
+                    rhs: self.resolve_typed_node(*rhs),
                     projection: match projection {
                         SafeBindRhsProjection::CanonicalResultOnce {
                             payload_ty,
@@ -4455,7 +4457,7 @@ impl Checker {
                         }
                         SafeBindFailureTarget::DoAlternative { empty } => {
                             SafeBindFailureTarget::DoAlternative {
-                                empty: Box::new(self.resolve_typed_node(*empty)),
+                                empty: self.resolve_typed_node(*empty),
                             }
                         }
                         SafeBindFailureTarget::Deferred(mut deferred) => {
@@ -4469,47 +4471,50 @@ impl Checker {
                         }
                         other => other,
                     },
-                    continuation: Box::new(self.resolve_typed_node(*continuation)),
+                    continuation: self.resolve_typed_node(*continuation),
                     origins,
                 }))
             }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
-                Box::new(self.resolve_typed_node(*left)),
-                Box::new(self.resolve_typed_node(*right)),
+                self.resolve_typed_node(*left),
+                self.resolve_typed_node(*right),
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.resolve_typed_node(*left)),
-                Box::new(self.resolve_typed_node(*right)),
+                self.resolve_typed_node(*left),
+                self.resolve_typed_node(*right),
             ),
             TypedInner::Compose(flavor, left, right) => TypedInner::Compose(
                 flavor,
-                Box::new(self.resolve_typed_node(*left)),
-                Box::new(self.resolve_typed_node(*right)),
+                self.resolve_typed_node(*left),
+                self.resolve_typed_node(*right),
             ),
             TypedInner::ListNil => TypedInner::ListNil,
             TypedInner::ListCons(head, tail) => TypedInner::ListCons(
-                Box::new(self.resolve_typed_node(*head)),
-                Box::new(self.resolve_typed_node(*tail)),
+                self.resolve_typed_node(*head),
+                self.resolve_typed_node(*tail),
             ),
             TypedInner::ListLiteral(elems) => TypedInner::ListLiteral(
                 elems
                     .into_iter()
-                    .map(|elem| self.resolve_typed_node(elem))
+                    .map(|elem| *self.resolve_typed_node(elem))
                     .collect(),
             ),
             TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
                 entries
                     .into_iter()
                     .map(|(key, value)| {
-                        (self.resolve_typed_node(key), self.resolve_typed_node(value))
+                        (
+                            *self.resolve_typed_node(key),
+                            *self.resolve_typed_node(value),
+                        )
                     })
                     .collect(),
             ),
             TypedInner::TupleLiteral(elems) => TypedInner::TupleLiteral(
                 elems
                     .into_iter()
-                    .map(|elem| self.resolve_typed_node(elem))
+                    .map(|elem| *self.resolve_typed_node(elem))
                     .collect(),
             ),
             TypedInner::InterpolatedStr(parts) => TypedInner::InterpolatedStr(
@@ -4518,7 +4523,7 @@ impl Checker {
                     .map(|part| match part {
                         TypedInterpolatedPart::Text(text) => TypedInterpolatedPart::Text(text),
                         TypedInterpolatedPart::Expr(expr) => {
-                            TypedInterpolatedPart::Expr(Box::new(self.resolve_typed_node(*expr)))
+                            TypedInterpolatedPart::Expr(self.resolve_typed_node(*expr))
                         }
                     })
                     .collect(),
@@ -4528,53 +4533,53 @@ impl Checker {
                     .map(|arg| TypedDbgArg {
                         span: arg.span,
                         ty_name: arg.ty_name,
-                        expr: self.resolve_typed_node(arg.expr),
+                        expr: *self.resolve_typed_node(arg.expr),
                     })
                     .collect(),
             ),
             TypedInner::EagerBoundary(inner) => {
-                TypedInner::EagerBoundary(Box::new(self.resolve_typed_node(*inner)))
+                TypedInner::EagerBoundary(self.resolve_typed_node(*inner))
             }
             TypedInner::If(cond, then, else_opt) => TypedInner::If(
-                Box::new(self.resolve_typed_node(*cond)),
-                Box::new(self.resolve_typed_node(*then)),
-                else_opt.map(|node| Box::new(self.resolve_typed_node(*node))),
+                self.resolve_typed_node(*cond),
+                self.resolve_typed_node(*then),
+                else_opt.map(|node| self.resolve_typed_node(*node)),
             ),
             TypedInner::Assert(cond, err) => TypedInner::Assert(
-                Box::new(self.resolve_typed_node(*cond)),
-                Box::new(self.resolve_typed_node(*err)),
+                self.resolve_typed_node(*cond),
+                self.resolve_typed_node(*err),
             ),
             TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                Box::new(self.resolve_typed_node(*value)),
-                Box::new(self.resolve_typed_node(*pred)),
-                Box::new(self.resolve_typed_node(*err)),
+                self.resolve_typed_node(*value),
+                self.resolve_typed_node(*pred),
+                self.resolve_typed_node(*err),
             ),
             TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                Box::new(self.resolve_typed_node(*value)),
-                Box::new(self.resolve_typed_node(*err)),
+                self.resolve_typed_node(*value),
+                self.resolve_typed_node(*err),
             ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
-                Box::new(self.resolve_typed_node(*value)),
-                Box::new(self.resolve_typed_node(*err)),
+                self.resolve_typed_node(*value),
+                self.resolve_typed_node(*err),
             ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                Box::new(self.resolve_typed_node(*value)),
+                self.resolve_typed_node(*value),
                 marker,
-                Box::new(self.resolve_typed_node(*handler)),
+                self.resolve_typed_node(*handler),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
-                Box::new(self.resolve_typed_node(*scrutinee)),
+                self.resolve_typed_node(*scrutinee),
                 arms.into_iter()
                     .map(|arm| TypedMatchArm {
                         direct_expression: arm.direct_expression,
                         pattern: self.resolve_typed_match_pattern(arm.pattern),
-                        guard: arm.guard.map(|guard| self.resolve_typed_node(guard)),
-                        body: self.resolve_typed_node(arm.body),
+                        guard: arm.guard.map(|guard| *self.resolve_typed_node(guard)),
+                        body: *self.resolve_typed_node(arm.body),
                     })
                     .collect(),
             ),
             TypedInner::FieldAccess(expr, idx) => {
-                TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
+                TypedInner::FieldAccess(self.resolve_typed_node(*expr), idx)
             }
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
@@ -4592,7 +4597,7 @@ impl Checker {
                 source_is_result,
             } => TypedInner::FacetView {
                 api,
-                source: Box::new(self.resolve_typed_node(*source)),
+                source: self.resolve_typed_node(*source),
                 path: self.resolve_typed_facet_path(path),
                 source_is_result,
             },
@@ -4605,9 +4610,9 @@ impl Checker {
                 mode,
             } => TypedInner::FacetSet {
                 api,
-                source: Box::new(self.resolve_typed_node(*source)),
+                source: self.resolve_typed_node(*source),
                 path: self.resolve_typed_facet_path(path),
-                value: Box::new(self.resolve_typed_node(*value)),
+                value: self.resolve_typed_node(*value),
                 source_is_result,
                 mode,
             },
@@ -4620,9 +4625,9 @@ impl Checker {
                 mode,
             } => TypedInner::FacetOver {
                 api,
-                source: Box::new(self.resolve_typed_node(*source)),
+                source: self.resolve_typed_node(*source),
                 path: self.resolve_typed_facet_path(path),
-                update_fun: Box::new(self.resolve_typed_node(*update_fun)),
+                update_fun: self.resolve_typed_node(*update_fun),
                 source_is_result,
                 mode,
             },
@@ -4630,14 +4635,14 @@ impl Checker {
                 tag,
                 fields
                     .into_iter()
-                    .map(|field| self.resolve_typed_node(field))
+                    .map(|field| *self.resolve_typed_node(field))
                     .collect(),
             ),
             TypedInner::ConstructorCall(tag, fields) => TypedInner::ConstructorCall(
                 tag,
                 fields
                     .into_iter()
-                    .map(|field| self.resolve_typed_node(field))
+                    .map(|field| *self.resolve_typed_node(field))
                     .collect(),
             ),
             TypedInner::DeferrorDef(tag, binding, id, params, show) => TypedInner::DeferrorDef(
@@ -4653,7 +4658,7 @@ impl Checker {
                         span: param.span,
                     })
                     .collect(),
-                Box::new(self.resolve_typed_node(*show)),
+                self.resolve_typed_node(*show),
             ),
             TypedInner::Def(
                 fun_idx,
@@ -4686,7 +4691,7 @@ impl Checker {
                     .collect(),
                 self.resolve_ty(&ret_ty),
                 where_clause,
-                Box::new(self.resolve_typed_node(*body)),
+                self.resolve_typed_node(*body),
                 visibility,
             ),
             TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
@@ -4711,7 +4716,7 @@ impl Checker {
                         })
                         .collect(),
                     self.resolve_ty(&ret_ty),
-                    Box::new(self.resolve_typed_node(*body)),
+                    self.resolve_typed_node(*body),
                     visibility,
                 )
             }
@@ -4731,7 +4736,7 @@ impl Checker {
                     })
                     .collect(),
                 captures,
-                Box::new(self.resolve_typed_node(*body)),
+                self.resolve_typed_node(*body),
             ),
             TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
                 params
@@ -4742,7 +4747,7 @@ impl Checker {
                     })
                     .collect(),
                 captures,
-                Box::new(self.resolve_typed_node(*body)),
+                self.resolve_typed_node(*body),
             ),
             TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params
@@ -4753,7 +4758,7 @@ impl Checker {
                     })
                     .collect(),
                 captures,
-                Box::new(self.resolve_typed_node(*body)),
+                self.resolve_typed_node(*body),
             ),
             TypedInner::CaptureConstructorClosure(id, params, captures, body) => {
                 TypedInner::CaptureConstructorClosure(
@@ -4766,13 +4771,13 @@ impl Checker {
                         })
                         .collect(),
                     captures,
-                    Box::new(self.resolve_typed_node(*body)),
+                    self.resolve_typed_node(*body),
                 )
             }
             TypedInner::Capture(target, args) => TypedInner::Capture(
-                Box::new(self.resolve_typed_node(*target)),
+                self.resolve_typed_node(*target),
                 args.into_iter()
-                    .map(|arg| self.resolve_typed_node(arg))
+                    .map(|arg| *self.resolve_typed_node(arg))
                     .collect(),
             ),
             TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
@@ -4788,10 +4793,10 @@ impl Checker {
             TypedInner::TraitImplDef(trait_name, target_name, where_clause) => {
                 TypedInner::TraitImplDef(trait_name, target_name, where_clause)
             }
-            TypedInner::Semi(inner) => TypedInner::Semi(Box::new(self.resolve_typed_node(*inner))),
+            TypedInner::Semi(inner) => TypedInner::Semi(self.resolve_typed_node(*inner)),
         };
 
-        TypedNode { ty, span, node }
+        Box::new(TypedNode { ty, span, node })
     }
 
     pub(super) fn resolve_typed_pattern(&self, pattern: TypedPattern) -> TypedPattern {
@@ -4857,7 +4862,7 @@ impl Checker {
                 extractor_ty: self.resolve_ty(&extractor_ty),
                 pre_args: pre_args
                     .into_iter()
-                    .map(|arg| self.resolve_typed_node(arg))
+                    .map(|arg| *self.resolve_typed_node(arg))
                     .collect(),
                 success_tag,
                 err_tag,
@@ -4940,7 +4945,7 @@ impl Checker {
                 extractor_ty: self.resolve_ty(&extractor_ty),
                 pre_args: pre_args
                     .into_iter()
-                    .map(|arg| self.resolve_typed_node(arg))
+                    .map(|arg| *self.resolve_typed_node(arg))
                     .collect(),
                 success_tag,
                 err_tag,

@@ -1297,6 +1297,9 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(extractor_closure_direct_argument_uses_expected_type),
     surface_case!(apply_pattern_projection_types_and_boundaries),
     surface_case!(error_contract_surface_is_restricted_to_direct_definition_returns),
+    surface_case!(nested_ordinary_match_blocks_typecheck),
+    surface_case!(nested_user_closures_typecheck_do_binds_and_captures),
+    surface_case!(nested_do_closure_mismatch_keeps_original_source_facts),
 ];
 
 #[test]
@@ -6273,6 +6276,176 @@ fn do_generated_bind_closure_preserves_expected_relation_owner() {
                         end: partial_return_start + "Option<String>".len(),
                     }
         }));
+}
+
+fn on_cli_compiler_stack(name: &str, case: impl FnOnce() + Send + 'static) {
+    // The test configuration raises RUST_MIN_STACK to 32 MiB. Use the CLI's
+    // 8 MiB budget so that the inherited worker stack cannot hide regressions.
+    std::thread::Builder::new()
+        .name(name.into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(case)
+        .expect("compiler stack regression thread should spawn")
+        .join()
+        .expect("compiler regression must fit the CLI stack budget");
+}
+
+fn nested_ordinary_match_blocks_typecheck() {
+    on_cli_compiler_stack("scar-nested-ordinary-blocks", || {
+        // Each level uses the match and arm delimiters, reaching the parser's
+        // existing 32-delimiter boundary without any Test DSL or do.
+        let mut expression = "1".to_owned();
+        for _ in 0..16 {
+            expression = format!("match 1 {{ _ => {{ {expression} }} }}");
+        }
+        let source = format!("value = {expression}");
+        let typed = typecheck_without_std_prelude(&source)
+            .expect("legal nested ordinary blocks must typecheck on the CLI stack budget");
+        assert_eq!(typed_bind_rhs(&typed, "value").ty, Ty::Int);
+
+        let mut expression = "1".to_owned();
+        for _ in 0..31 {
+            expression = format!("layer() {{ marker = 0; {expression} }}");
+        }
+        let source =
+            format!("def layer(body: (-> Int)) -> Int {{ body() }}\nvalue: Int = {expression}");
+        let typed = typecheck_without_std_prelude(&source)
+            .expect("legal nested closure blocks must fit the CLI compiler stack");
+        assert_eq!(typed_bind_rhs(&typed, "value").ty, Ty::Int);
+    });
+}
+
+fn nested_user_closures_typecheck_do_binds_and_captures() {
+    on_cli_compiler_stack("scar-nested-do-closures", || {
+        for (carrier, result_ty, first, second, third, output, expected_ty) in [
+            (
+                "List",
+                "List<Int>",
+                "[1]",
+                "[2]",
+                "[3]",
+                "[first + second + third + offset]",
+                Ty::List(Box::new(Ty::Int)),
+            ),
+            (
+                "Option",
+                "Option<Int>",
+                "Option::Some(1)",
+                "Option::Some(2)",
+                "Option::Some(3)",
+                "Option::Some(first + second + third + offset)",
+                Ty::Enum("Global::Option".into(), vec![Ty::Int]),
+            ),
+            (
+                "Result",
+                "Result<Int>",
+                "Result::Ok(1)",
+                "Result::Ok(2)",
+                "Result::Ok(3)",
+                "Result::Ok(first + second + third + offset)",
+                Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            ),
+        ] {
+            let mut expression = format!(
+                r#"do::<{carrier}> {{
+first <- {first}
+second <- {second}
+third <- {third}
+{output}
+}}"#
+            );
+            for _ in 0..12 {
+                expression = format!("layer() {{\n{expression}\n}}");
+            }
+            let source = format!(
+                r#"def layer(body: (-> {result_ty})) -> {result_ty} {{ body() }}
+offset = 7
+actual: {result_ty} = {expression}"#
+            );
+            let typed = typecheck_with_builtin_prelude_in_script_module(&source);
+            let actual = typed_bind_rhs(&typed, "actual");
+            assert_eq!(actual.ty, expected_ty, "{carrier}");
+            let TypedInner::App(_, args) = &actual.node else {
+                panic!("expected ordinary layer call for {carrier}: {actual:?}");
+            };
+            let [TypedNode {
+                node: TypedInner::Closure(_, captures, _),
+                ..
+            }] = args.as_slice()
+            else {
+                panic!("expected one closure argument for {carrier}: {args:?}");
+            };
+            assert!(
+                captures.iter().any(|capture| capture.name == "offset"),
+                "the nested continuation must retain its outer capture for {carrier}"
+            );
+        }
+
+        let mut expression = "do::<List> {\n".to_owned();
+        for index in 0..6 {
+            expression.push_str(&format!("v{index} <- [{index}]\n"));
+        }
+        expression.push_str("[v0 + v1 + v2 + v3 + v4 + v5]\n}");
+        for _ in 0..12 {
+            expression = format!("layer() {{ marker = 0; {expression} }}");
+        }
+        let source = format!(
+            "def layer(body: (-> List<Int>)) -> List<Int> {{ body() }}\nactual: List<Int> = {expression}"
+        );
+        let typed = typecheck_with_builtin_prelude_in_script_module(&source);
+        assert_eq!(
+            typed_bind_rhs(&typed, "actual").ty,
+            Ty::List(Box::new(Ty::Int))
+        );
+    });
+}
+
+fn nested_do_closure_mismatch_keeps_original_source_facts() {
+    on_cli_compiler_stack("scar-nested-do-diagnostic", || {
+        let source = r#"def layer(body: (-> List<Int>)) -> List<Int> { body() }
+actual: List<Int> = layer() {
+  layer() {
+    layer() {
+      do::<List> {
+        first <- [1]
+        second <- [2]
+        third <- [3]
+        bad: String = first
+        [third]
+      }
+    }
+  }
+}"#;
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("a nested continuation's invalid annotation must remain a type error");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch),
+            "{error:?}"
+        );
+        let value_start = source.find("= first").unwrap() + "= ".len();
+        let value_span = Span {
+            start: value_start,
+            end: value_start + "first".len(),
+        };
+        let annotation_start = source.find("String").unwrap();
+        let annotation_span = Span {
+            start: annotation_start,
+            end: annotation_start + "String".len(),
+        };
+        assert_eq!(error.span, value_span, "{error:?}");
+        let structured = error
+            .structured
+            .as_ref()
+            .expect("structured annotation error");
+        assert_eq!(structured.primary.span, value_span);
+        assert!(
+            structured.related.iter().any(|fact| {
+                fact.role == diagnostics::SourceRole::Annotation && fact.span == annotation_span
+            }),
+            "{structured:?}"
+        );
+    });
 }
 
 fn do_expected_relation_does_not_override_user_branch_mismatch() {
