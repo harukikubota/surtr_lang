@@ -6,7 +6,7 @@ use regex::Regex;
 use sindr::builtin::{
     builtin_meta_by_id, BUILTIN_METAS, MATCH_RESULT_ERR_VARIANT, MATCH_RESULT_OK_VARIANT,
 };
-use sindr::names::{compiler_global_error_kind, surface_path_name};
+use sindr::names::{compiler_global_error_kind, surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     quote_surtr_string_literal, Callable, CallableTarget, FileHandleValue, HashMapHandle,
@@ -3454,7 +3454,13 @@ fn inspect_callable(_vm: &VM, callable: &Callable) -> Option<String> {
     match callable_display_origin(callable)? {
         CallableDisplayOrigin::Capture { module, name } => Some(format!(
             "FnCapture(module: {}, name: {}, sig: {})",
-            module, name, sig
+            if module == "Global" {
+                "<local>".to_string()
+            } else {
+                surface_rendered_name(module)
+            },
+            surface_rendered_name(name),
+            sig
         )),
         CallableDisplayOrigin::Closure => Some(format!("Closure{sig}")),
     }
@@ -6900,6 +6906,34 @@ mod tests {
             inspect_value(&vm, &value),
             "FnCapture(module: Int, name: shr, sig: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
         );
+    }
+
+    #[test]
+    fn inspect_capture_hides_global_and_preserves_explicit_namespace() {
+        let vm = VM::new(Bytecode::default());
+        for (canonical, visible) in [
+            ("Global", "<local>"),
+            ("Global::Function", "Function"),
+            ("Global::Add", "Add"),
+            ("Math::Add", "Math::Add"),
+        ] {
+            let value = Value::Callable(Callable {
+                target: CallableTarget::Function(0),
+                lexical_captures: Vec::new(),
+                metadata: CallableMetadata {
+                    origin: CallableOrigin::Capture,
+                    module: Some(canonical.into()),
+                    name: Some("apply".into()),
+                    full_signature: Some("(Int -> Int)".into()),
+                    ..CallableMetadata::default()
+                },
+            });
+            let nested = Value::List(ListHandle::from_items(vec![value]));
+            assert_eq!(
+                inspect_value(&vm, &nested),
+                format!("[FnCapture(module: {visible}, name: apply, sig: (Int -> Int))]")
+            );
+        }
     }
 
     #[test]

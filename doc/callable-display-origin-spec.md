@@ -32,13 +32,13 @@ f: (Int, Int -> Int) = &Add::add
 f: (Int, Int -> Int) = FnCapture(module: Add, name: add, sig: (Int, Int -> Int))
 
 identity_int: (Int -> Int) = &id
-identity_int: (Int -> Int) = FnCapture(module: Global::Function, name: id, sig: (Int -> Int))
+identity_int: (Int -> Int) = FnCapture(module: Function, name: id, sig: (Int -> Int))
 
 identity_string: (String -> String) = &id
-identity_string: (String -> String) = FnCapture(module: Global::Function, name: id, sig: (String -> String))
+identity_string: (String -> String) = FnCapture(module: Function, name: id, sig: (String -> String))
 
 identity_result: Result<(Int -> Int)> = Ok(&id)
-Ok(FnCapture(module: Global::Function, name: id, sig: (Int -> Int)))
+Ok(FnCapture(module: Function, name: id, sig: (Int -> Int)))
 
 zero_arg: (-> Int) = {|| Add::add(1, 2)}
 zero_arg: (-> Int) = Closure(-> Int)

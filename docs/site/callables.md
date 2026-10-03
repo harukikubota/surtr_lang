@@ -111,6 +111,8 @@ adder: (Int, Int -> Int) = &`+`
 
 関数値の推論型では `Result<T>` と表示します。宣言の戻り値にドキュメント用として書いた `Result<T, E>` は、宣言シグネチャの表示に残ります。
 
+REPL では capture を `FnCapture(module: Function, name: id, sig: (Int -> Int))` のように表示します。module とトレイトの所属名前空間を保ち、暗黙の `Global::` は省略します。
+
 読み方は次です。
 
 - `&add` は既存関数そのものを捕まえる

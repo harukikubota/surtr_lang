@@ -5460,7 +5460,7 @@ fn core_generic_callable_capture_uses_site_signature_inside_nested_values() {
     let identity_int_text = rendered_text(&identity_int);
     assert!(
         identity_int_text.contains(
-            "identity_int: (Int -> Int) = FnCapture(module: Global::Function, name: id, sig: (Int -> Int))"
+            "identity_int: (Int -> Int) = FnCapture(module: Function, name: id, sig: (Int -> Int))"
         ),
         "{identity_int_text}"
     );
@@ -5469,7 +5469,7 @@ fn core_generic_callable_capture_uses_site_signature_inside_nested_values() {
     let identity_string_text = rendered_text(&identity_string);
     assert!(
         identity_string_text.contains(
-            "identity_string: (String -> String) = FnCapture(module: Global::Function, name: id, sig: (String -> String))"
+            "identity_string: (String -> String) = FnCapture(module: Function, name: id, sig: (String -> String))"
         ),
         "{identity_string_text}"
     );
@@ -5478,7 +5478,7 @@ fn core_generic_callable_capture_uses_site_signature_inside_nested_values() {
     let identity_result_text = rendered_text(&identity_result);
     assert!(
         identity_result_text
-            .contains("Ok(FnCapture(module: Global::Function, name: id, sig: (Int -> Int)))"),
+            .contains("Ok(FnCapture(module: Function, name: id, sig: (Int -> Int)))"),
         "{identity_result_text}"
     );
 }

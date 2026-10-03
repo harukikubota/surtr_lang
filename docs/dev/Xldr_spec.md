@@ -85,6 +85,7 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - qualified `defmod A::B` と `namespace A { defmod B { ... } }` は同じ canonical module path `A::B` として扱う
 - 通常 module source 同士の同一 canonical module path は常に compile error とする。`impl` owner module は既存通常 module への拡張としてのみ同一 path を許可し、`normal A -> impl A -> normal A` のような通常 module 再定義は拒否する
 - internal module path は `Global::Name` または `Namespace::Name` の canonical string を使うが、user-facing 表示では `Global::` を省略する
+- Trait も所属 namespace の canonical identity を保持する。callable の表示では所属 path を保ち、暗黙の `Global::` を省略する。`Global::Function` は `Function`、`Global::Add` は `Add`、`Math::Add` は `Math::Add` と表示する
 - 値の推論型と callable 値の signature では `Result<T>` と表示し、内部のエラー型を第2型引数として表示しない。束縛、型照会と入れ子の型にも適用する。宣言シグネチャの表示では、戻り値にドキュメント用として明示した `Result<T, E>` のエラー名を保持する。`MatchResult` は Extractor の許可位置と専用表示規則に従う
 - constructor capture は `Capture` origin、canonical constructor 名、capture site で具体化した signature を保持し、bare capture と partial capture、再 capture、nominal/container 内の表示で同じ metadata を使う
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
