@@ -13,6 +13,8 @@ pub use codegen::{
 
 #[cfg(test)]
 mod tests {
+    #![deny(dead_code)]
+
     use std::collections::HashSet;
     use std::sync::OnceLock;
 
@@ -607,6 +609,8 @@ mod tests {
         };
     }
 
+    const SEMANTIC_PREFIX_BUCKET_COUNT: usize = 4;
+
     const SEMANTIC_PREFIX_CASES: &[(&str, fn())] = &[
         semantic_prefix_case!(function_table_preserves_fun_idx_index_invariant),
         semantic_prefix_case!(field_access_emits_getfield_with_resolved_index),
@@ -627,6 +631,13 @@ mod tests {
 
     #[test]
     fn semantic_prefix_case_inventory_is_complete() {
+        for bucket in 0..SEMANTIC_PREFIX_BUCKET_COUNT {
+            assert!(
+                SEMANTIC_PREFIX_CASES.get(bucket).is_some(),
+                "empty semantic prefix bucket: {bucket}"
+            );
+        }
+
         let source = include_str!("lib.rs");
         let mut names = HashSet::new();
         let mut functions = HashSet::new();
@@ -648,7 +659,11 @@ mod tests {
         ($name:ident, $bucket:expr) => {
             #[test]
             fn $name() {
-                for &(case_name, case) in SEMANTIC_PREFIX_CASES.iter().skip($bucket).step_by(4) {
+                for &(case_name, case) in SEMANTIC_PREFIX_CASES
+                    .iter()
+                    .skip($bucket)
+                    .step_by(SEMANTIC_PREFIX_BUCKET_COUNT)
+                {
                     eprintln!("Forge semantic prefix case: {case_name}");
                     case();
                 }
