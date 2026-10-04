@@ -18,7 +18,7 @@ Spireは元ソース上の文字列区間、補間式区間、位置情報を保
 - 単一・二重引用符、regex sugar、静的文字列で復号規則を共有し、各consumerに複製しない。
 - 復号済みの文字列を元ソースとして再解析・再復号しない。補間抑止のためのダミー文字や特殊なUnicode文字も使わない。
 
-補間式の既存の評価順序とShow契約は維持する。
+補間式は左から一度ずつ評価し、通常の `Show::to_string` 解決を通して String に変換する。Scar は変換済みの String 式を typed interpolation に格納し、Forge はその式を評価して連結する。builtin `to_string` への直接変換や `inspect` の暗黙代用は行わない。Show のない型は型検査で拒否する。Result は従来どおり補間時の専用診断で拒否し、match 等で中身を取り出す必要がある。
 
 ### 補間開始の境界
 
@@ -94,7 +94,7 @@ Sindrの `quote_surtr_string_literal` は二重引用符で囲み、以下を適
 
 EldrのString `inspect`、List・Tuple・Result・構造体の入れ子、HashMapキーと引用される値、Xldrの束縛・単独評価・履歴値表示はこの共通処理を使う。ESCと `a` を持つStringは `"\u{1b}a"` と表示し、色なしCLI出力の引用部分に値由来の生のESCを残さない。CLIの色付け用ANSI列は別に維持する。表示層で端末別の回避策を追加しない。
 
-往復保証はString単体に限る。private field省略やError表示などを含む `inspect` 全体のソース化は保証しない。`to_string(String)` と `print(String)` は生文字列を扱う既存の契約を保つ。`eprint` はErrorを診断表示し、それ以外の値は `inspect` 経由で出力するため、`eprint(String)` には共通引用処理を適用する。HashMapキーなどの既存の引用箇所には共通規則を適用する。
+往復保証はString単体に限る。構造体の構築経路やError表示などを含む `inspect` 全体のソース化は保証しない。構造体のprivateフィールドも表示し、その中のStringに同じ引用処理を適用する。`to_string(String)` と `print(String)` は生文字列を扱う既存の契約を保つ。`eprint` はErrorを診断表示し、それ以外の値は `inspect` 経由で出力するため、`eprint(String)` には共通引用処理を適用する。HashMapキーなどの既存の引用箇所には共通規則を適用する。
 
 VM命令、文字列の実データ、型規則は変更しない。Unicode双方向制御文字・ゼロ幅文字・行区切り文字の一般的な可視化、Errorの非引用メッセージや診断全体の端末制御文字対策は本契約の対象外である。
 

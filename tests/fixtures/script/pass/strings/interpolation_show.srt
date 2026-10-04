@@ -1,0 +1,28 @@
+defstruct Custom { value: Int }
+impl Custom {
+  def new(value: Int) -> Self { Custom { value } }
+}
+impl Show for Custom {
+  def to_string(self: Self) -> String { "custom" }
+}
+
+@derive Show
+defstruct Derived { inner: Custom }
+impl Derived {
+  def new(inner: Custom) -> Self { Derived { inner } }
+}
+
+def next(label: String) -> Custom {
+  print(label)
+  Custom(1)
+}
+
+def render(value: $T) -> String
+where
+  $T: Show
+{ "generic=#{value}" }
+
+print("duration=#{250ms}")
+print("custom=#{Custom(1)};derived=#{Derived(Custom(2))}")
+print("#{next("first")}:#{next("second")}")
+print(render(Custom(3)))

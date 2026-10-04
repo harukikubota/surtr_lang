@@ -227,7 +227,7 @@ Eldr が扱う値の概念カテゴリ:
 - 言語エラー値: `Error(RichError)`
 - process capability: `PID`（runtime が発行する opaque handle）
 
-`inspect` / `to_string` における `Callable` 表示は runtime metadata に従い、closure は
+`inspect` における `Callable` 表示は runtime metadata に従い、closure は
 `Closure(sig)`、capture は `FnCapture(module: M, name: f, sig: sig)` を返す。
 callable 値の signature の `Result` は `Result<T>`、ExtractorClosure 内の `MatchResult` は `MatchResult<T>` と表示する。Error 位置は値の表示に含めない。ExtractorClosure は `ExtractorClosure<(A -> MatchResult<P>)>` と表示する。REPL の束縛表示も同じ inspect 処理を使い、単独評価やコンテナ内の表示と揃える。定義に明記された Error 名を表示するのは、REPL コマンドによる定義シグネチャの照会である。
 所属 namespace を保ちながら暗黙の `Global::` を省略する。
@@ -253,7 +253,7 @@ Sindrの `quote_surtr_string_literal` を共通引用処理とし、`\\`・`\"`�
 その他のC0・DEL・C1制御文字の `\u{...}`、文字としての `#{` の `\#{` を使う。
 Unicodeエスケープは小文字16進数・不要な先頭ゼロなしとする。String単体の引用表示を通常式として
 再評価すると元の値になることを保証する。List・Tuple・Result・struct内のStringとHashMapキーにも
-同じ引用処理を適用する。private fieldの省略やError表示など、inspect全体のソース化は保証しない。
+同じ引用処理を適用する。構造体の構築経路やError表示など、inspect全体のソース化は保証しない。
 `print(String)` の明示的な生出力は維持する。`eprint(String)` は `inspect` と同じ引用表示を使う。入力との対応は
 [文字列リテラルの実装契約](./String_literal_spec.md#共通の引用表示)を参照する。
 
@@ -293,15 +293,17 @@ compile / surface 契約との対応は次のとおり。
 
 表示契約は次で固定する。
 
-- `inspect(Error)` / `to_string(Error)` は head-first tree 表示を返す
+- `inspect(Error)` は head-first tree 表示を返す。Error 自体には Show を提供せず、`to_string(Error)` は許可しない
 - 先頭行は `Kind("message")`
 - cause がある場合、次行以降を `|_ ...` でネスト表示する
 - `inspect(Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
-- `inspect(Struct)` / `to_string(Struct)` は `Type(field: value, ...)` を返し、内部専用の `Type { ... }` 構造体リテラルは表示しない
-- `inspect` は再帰的に string literal を quote し、`to_string` は素の string 値を使う
-- private field を含む named-field 値は公開 field のみを表示し、hidden 部分を `..private` として要約する
-- `inspect(HashMap)` / `to_string(HashMap)` は生成可能な literal 形式 `hash!["key" => value, ...]` で、空 map は `hash![]`、key は `String` literal と同じ escaping で表示する
-- `inspect(HashMap)` / `to_string(HashMap)` / `map_keys` / `map_values_list` はキー昇順の deterministic order を使う
+- `inspect(Struct)` は `Type(field: value, ...)` を返し、内部専用の `Type { ... }` 構造体リテラルは表示しない。`to_string(Struct)` はその型の明示的な Show または derive の契約に従う
+- `inspect` は再帰的に string literal を quote し、標準の `Show for String` は素の string 値を返す
+- 構造体の inspect は private を含む全フィールドの名前と値を定義順に表示し、入れ子でも同じ規則を使う。呼び出し側のスコープや Show の有無で分岐せず、Show を自動で呼び出さない
+- `private_flags` はアクセス検査用の可視性情報として保持し、表示の省略判定には使わない。private は値の秘匿を保証せず、inspect の String はフィールドへの操作権限を含まない
+- `to_string` は Show の契約に従う。Show 不足は型検査で拒否し、型検査後の不正な内部状態も inspect や汎用表示へのフォールバックで隠さない。標準型の明示的な Show と契約を保つ最適化は維持し、手書きの Show が明示的に inspect を呼ぶことは許可する
+- `inspect(HashMap)` は生成可能な literal 形式 `hash!["key" => value, ...]` で、空 map は `hash![]`、key は `String` literal と同じ escaping で表示する
+- `inspect(HashMap)` / `map_keys` / `map_values_list` はキー昇順の deterministic order を使う
 - `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
 - `Error::kind(Error)` は `RichError.kind`、`Error::message(Error)` は `RichError.message` を `String` として返す
 - `Error::same_kind(Error, Error)` は先頭の具象 `RichError.kind` だけを比較する。`Result` の `Err` 同士の `Eq` が利用し、message・cause・location・診断情報は判定に含めない。壊れた Error 表現や非 Error 値を `False` にせず runtime invariant failure とする

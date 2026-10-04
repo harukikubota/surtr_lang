@@ -1,0 +1,2 @@
+def render(value: $T) -> String { "#{value}" }
+print(render(1))

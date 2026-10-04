@@ -56,6 +56,7 @@ mod contextual_capability_tests {
                 &span,
                 "unused".into(),
                 None,
+                None,
                 false,
                 &Resolved::Lit(span.clone(), Lit::Unit),
             )
@@ -1270,6 +1271,7 @@ impl Checker {
         function_return_span: &Span,
         function_symbol: String,
         impl_target: Option<String>,
+        private_field_owner: Option<String>,
         in_extractor_body: bool,
         body: &Resolved,
     ) -> Result<TypedNode, TypeError> {
@@ -1278,6 +1280,7 @@ impl Checker {
         let saved_rigid_tyvars = self.rigid_tyvars.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
+        let saved_current_private_field_owner = self.current_private_field_owner.clone();
         let saved_callable_context = self.callable_context;
         let saved_closure_depth = self.closure_depth;
         let saved_facet_bindings = self.facet_bindings.clone();
@@ -1301,6 +1304,7 @@ impl Checker {
         }
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
+        self.current_private_field_owner = private_field_owner;
         self.callable_context = if in_extractor_body {
             CallableContext::Extractor
         } else {
@@ -1350,6 +1354,7 @@ impl Checker {
         self.rigid_tyvars = saved_rigid_tyvars;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
+        self.current_private_field_owner = saved_current_private_field_owner;
         self.callable_context = saved_callable_context;
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
@@ -1701,6 +1706,7 @@ impl Checker {
                 .map(|ty| Self::ast_ty_span(ty.syntax()))
                 .unwrap_or(span),
             current_symbol,
+            impl_target.clone(),
             impl_target,
             false,
             body,
@@ -1950,6 +1956,7 @@ impl Checker {
             expected_ret.clone(),
             Self::ast_ty_span(ret_ty),
             current_symbol,
+            impl_target.clone(),
             impl_target,
             true,
             body,
@@ -2523,6 +2530,12 @@ impl Checker {
                 .lookup_type_def(&target_name)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
                 .then_some(Self::surface_name(&target_name).to_string());
+            // Derive bodies originate in the owning type declaration. A
+            // handwritten trait implementation does not have owner authority.
+            let private_field_owner = impl_info
+                .generated_derive
+                .then(|| impl_target.clone())
+                .flatten();
             let typed_body = self
                 .check_body_in_isolated_scope(
                     &local_bindings,
@@ -2539,6 +2552,7 @@ impl Checker {
                         .unwrap_or_else(|| Self::ast_ty_span(trait_method.ret_ty.syntax())),
                     method.function_id.name.clone(),
                     impl_target,
+                    private_field_owner,
                     false,
                     &method.body,
                 )

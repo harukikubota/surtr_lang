@@ -1,0 +1,11 @@
+Secret(password: "a\"b\nc\\d", count: 7)
+User(name: "alice", secret: Secret(password: "a\"b\nc\\d", count: 7), active: True)
+[User(name: "alice", secret: Secret(password: "a\"b\nc\\d", count: 7), active: True)]
+(User(name: "alice", secret: Secret(password: "a\"b\nc\\d", count: 7), active: True), 1)
+Ok(User(name: "alice", secret: Secret(password: "a\"b\nc\\d", count: 7), active: True))
+Display(value: 5)
+custom
+Explicit(value: 8)
+Derived(value: 9)
+True
+True

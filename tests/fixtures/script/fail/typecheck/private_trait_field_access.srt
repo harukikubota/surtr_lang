@@ -1,0 +1,11 @@
+defstruct Secret { private value: Int }
+
+impl Secret {
+  def new(value: Int) -> Self { Secret { value } }
+}
+
+impl Show for Secret {
+  def to_string(self: Self) -> String { Show::to_string(self.value) }
+}
+
+print(to_string(Secret(1)))

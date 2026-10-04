@@ -1871,6 +1871,7 @@ impl Checker {
                             Self::ast_ty_span(method.ret_ty.syntax()),
                             method.id.name.clone(),
                             None,
+                            None,
                             false,
                             body,
                         )?;
@@ -8142,7 +8143,8 @@ impl Checker {
                     .env
                     .field_policy(owner, field_name)
                     .is_some_and(|policy| policy.private)
-                    && self.current_impl_struct_target.as_deref() != Some(Self::surface_name(owner))
+                    && self.current_private_field_owner.as_deref()
+                        != Some(Self::surface_name(owner))
                     && !self.allow_private_facet_inspection
                 {
                     return None;
@@ -12280,6 +12282,7 @@ impl Checker {
         let saved_function_return_ty = self.function_return_ty.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
+        let saved_current_private_field_owner = self.current_private_field_owner.clone();
         let saved_callable_context = self.callable_context;
         self.callable_context = kind;
         self.function_return_ty = Some(match expected {
@@ -12506,6 +12509,7 @@ impl Checker {
         self.function_return_ty = saved_function_return_ty;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
+        self.current_private_field_owner = saved_current_private_field_owner;
         self.callable_context = saved_callable_context;
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
@@ -13856,9 +13860,38 @@ impl Checker {
                     typed_parts.push(TypedInterpolatedPart::Text(s.clone()));
                 }
                 ResolvedInterpolatedPart::Expr(expr) => {
-                    let typed_expr = self.check_node(expr)?;
-                    self.ensure_no_runtime_facet_value(&typed_expr, "String interpolation")?;
-                    if matches!(typed_expr.ty, Ty::Result(_, _)) {
+                    let show = self.trait_key_by_short_name("Show").ok_or_else(|| {
+                        TypeError::new("Missing canonical Show trait", span.clone())
+                    })?;
+                    let args = [ResolvedRecordLitArg::Positional(expr.as_ref().clone())];
+                    let call = TraitInvocationContext {
+                        span: self.resolved_span(expr),
+                        trait_name: &show,
+                        method_name: "to_string",
+                        args: &args,
+                        receiver_owner_hint: None,
+                        expected_ret_ty: Some(&Ty::Str),
+                        expected_ret_relation: None,
+                        argument_expected_relation: None,
+                        constructor_failure_reason: None,
+                        explicit_type_args: None,
+                        operator: None,
+                        receiver_hint: None,
+                        defer_incompatible_result_context: false,
+                    };
+                    let mut prepared = match self.prepare_trait_invocation(&call)? {
+                        TraitInvocationPreparation::Arguments(prepared) => prepared,
+                        TraitInvocationPreparation::Complete(_) => {
+                            return Err(TypeError::new(
+                                "Show interpolation unexpectedly completed without checking its argument",
+                                self.resolved_span(expr).clone(),
+                            ));
+                        }
+                    };
+                    let typed_args = self.check_prepared_trait_arguments(&call, &mut prepared)?;
+                    let typed_expr = &typed_args[0];
+                    self.ensure_no_runtime_facet_value(typed_expr, "String interpolation")?;
+                    if matches!(self.resolve_ty(&typed_expr.ty), Ty::Result(_, _)) {
                         return Err(TypeError {
                             structured: None,
                             message: "Interpolation does not allow Result type".into(),
@@ -13869,7 +13902,8 @@ impl Checker {
                             ),
                         });
                     }
-                    typed_parts.push(TypedInterpolatedPart::Expr(Box::new(typed_expr)));
+                    let conversion = self.finish_trait_invocation(&call, prepared, typed_args)?;
+                    typed_parts.push(TypedInterpolatedPart::Expr(Box::new(conversion)));
                 }
             }
         }
@@ -14937,7 +14971,7 @@ impl Checker {
                 if field_policy.is_some_and(|policy| policy.private) {
                     let display_name = Self::surface_name(&name);
                     let outside_impl =
-                        self.current_impl_struct_target.as_deref() != Some(display_name);
+                        self.current_private_field_owner.as_deref() != Some(display_name);
                     if outside_impl && !self.allow_private_facet_inspection {
                         return Err(TypeError {
                             structured: None,

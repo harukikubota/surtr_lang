@@ -96,7 +96,7 @@ print(to_string(user))
 # => "User(name: alice, age: 30)"
 ```
 
-内側の型に手書きの `Show` があれば、その表示が使われます。`inspect` は `Show` の有無と独立した観測関数です。quote を含む表示など、`inspect` の形式は [`structs.md`](./structs.md) を参照してください。
+内側の型に手書きの `Show` があれば、その表示が使われます。`inspect` は `Show` の有無と独立した観測関数であり、private フィールドも含めて表示します。`to_string` 全般にこの表示規則を適用するものではありません。手書きの `Show` が明示的に `inspect(self)` を呼ぶことはできます。quote を含む表示など、`inspect` の形式は [`structs.md`](./structs.md) を参照してください。
 
 ### `Default`
 
@@ -126,6 +126,8 @@ Config {
 record も各 public field の default 値から直接構築されます。
 
 構造体リテラルは `impl Config` の同型メソッド本体内だけで許可されるため、derive は型所有者側の自動生成としてこの構築を行います。derive しない型に default 構築経路は追加されません。
+
+生成された実装は型宣言に由来するため、private フィールドも処理します。手書きの `impl Trait for Type` には private フィールドへの直接アクセス権限がありません。必要な操作は所有者の `impl Type` で公開し、トレイト実装から委譲します。
 
 ただし、`Default` は型固有の不変条件を検査しません。たとえば `new(value) -> Result<Self, Error>` が `value > 0` を検証していても、`Int` の default が `0` なら、その型に `@derive Default` を付けるのは不適切です。default 値自体が妥当な型だけに指定してください。
 

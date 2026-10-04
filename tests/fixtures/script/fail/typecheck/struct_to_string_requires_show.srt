@@ -1,0 +1,7 @@
+defstruct Secret { private value: Int }
+
+impl Secret {
+  def new(value: Int) -> Self { Secret { value } }
+}
+
+print(to_string(Secret(1)))

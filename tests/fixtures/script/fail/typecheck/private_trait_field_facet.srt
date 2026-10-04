@@ -1,0 +1,14 @@
+defstruct Secret { private value: Int }
+
+impl Secret {
+  def new(value: Int) -> Self { Secret { value } }
+}
+
+impl Show for Secret {
+  def to_string(self: Self) -> String {
+    field = Secret.value
+    "unused"
+  }
+}
+
+print(to_string(Secret(1)))

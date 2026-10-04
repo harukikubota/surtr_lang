@@ -1071,7 +1071,15 @@ fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
 }
 
 fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    Ok(Value::Str(to_string_display(vm, &args[0])))
+    let value = &args[0];
+    match value {
+        Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_) | Value::Unit => {
+            Ok(Value::Str(value.to_display_string(vm.type_registry())))
+        }
+        _ => Err(RuntimeError::new(
+            "builtin to_string expects Int, Float, String, Boolean, or Unit; other Show implementations must use their own method",
+        )),
+    }
 }
 
 fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -3517,17 +3525,12 @@ fn input_error(vm: &VM, detail: &str) -> Value {
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
-    render_value(vm, value, true)
+    render_value(vm, value)
 }
 
-fn to_string_display(vm: &VM, value: &Value) -> String {
-    render_value(vm, value, false)
-}
-
-fn render_value(vm: &VM, value: &Value, quote_strings: bool) -> String {
+fn render_value(vm: &VM, value: &Value) -> String {
     match value {
-        Value::Str(text) if quote_strings => quote_surtr_string_literal(text),
-        Value::Str(text) => text.clone(),
+        Value::Str(text) => quote_surtr_string_literal(text),
         Value::Callable(callable) => {
             inspect_callable(vm, callable).unwrap_or_else(|| match callable.target {
                 CallableTarget::Builtin(_)
@@ -3538,7 +3541,7 @@ fn render_value(vm: &VM, value: &Value, quote_strings: bool) -> String {
         Value::List(handle) => {
             let inner = handle
                 .iter()
-                .map(|item| render_value(vm, &item, quote_strings))
+                .map(|item| render_value(vm, &item))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{inner}]")
@@ -3555,7 +3558,7 @@ fn render_value(vm: &VM, value: &Value, quote_strings: bool) -> String {
                     format!(
                         "{} => {}",
                         quote_surtr_string_literal(&key),
-                        render_value(vm, &value, quote_strings)
+                        render_value(vm, &value)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3565,17 +3568,17 @@ fn render_value(vm: &VM, value: &Value, quote_strings: bool) -> String {
         Value::Tuple(items) => {
             let inner = items
                 .iter()
-                .map(|item| render_value(vm, item, quote_strings))
+                .map(|item| render_value(vm, item))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("({inner})")
         }
-        Value::Tagged { tag, fields } => render_tagged_value(vm, *tag, fields, quote_strings),
+        Value::Tagged { tag, fields } => render_tagged_value(vm, *tag, fields),
         _ => value.to_display_string(vm.type_registry()),
     }
 }
 
-fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value], quote_strings: bool) -> String {
+fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
         if is_duration_type_name(&entry.name) {
             if let Some(Value::Int(ms)) = fields.first() {
@@ -3584,26 +3587,12 @@ fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value], quote_strings: bool)
         }
         let render_named_value = || {
             let display_name = surface_path_name(&entry.name);
-            let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
-            let mut parts = entry
+            let parts = entry
                 .field_names
                 .iter()
-                .zip(
-                    entry
-                        .private_flags
-                        .iter()
-                        .copied()
-                        .chain(std::iter::repeat(false)),
-                )
                 .zip(fields.iter())
-                .filter_map(|((name, is_private), val)| {
-                    (!is_private)
-                        .then(|| format!("{name}: {}", render_value(vm, val, quote_strings)))
-                })
+                .map(|(name, val)| format!("{name}: {}", render_value(vm, val)))
                 .collect::<Vec<_>>();
-            if hidden_field_count > 0 {
-                parts.push("..private".to_string());
-            }
             format!("{}({})", display_name, parts.join(", "))
         };
 
@@ -3615,7 +3604,7 @@ fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value], quote_strings: bool)
                 let payload = fields
                     .iter()
                     .skip(1)
-                    .map(|val| render_value(vm, val, quote_strings))
+                    .map(|val| render_value(vm, val))
                     .collect::<Vec<_>>()
                     .join(", ");
                 if payload.is_empty() {
@@ -3632,7 +3621,7 @@ fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value], quote_strings: bool)
             "Ok({})",
             fields
                 .first()
-                .map(|v| render_value(vm, v, quote_strings))
+                .map(|v| render_value(vm, v))
                 .unwrap_or_default()
         ),
         1 => format!(
@@ -3641,7 +3630,7 @@ fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value], quote_strings: bool)
                 .first()
                 .map(|v| match v {
                     Value::Error(rich) => rich.to_result_display_string(),
-                    _ => format!("Err({})", render_value(vm, v, quote_strings)),
+                    _ => format!("Err({})", render_value(vm, v)),
                 })
                 .unwrap_or_default()
         ),
@@ -3650,7 +3639,7 @@ fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value], quote_strings: bool)
             tag,
             fields
                 .iter()
-                .map(|value| render_value(vm, value, quote_strings))
+                .map(|value| render_value(vm, value))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -6462,6 +6451,62 @@ mod tests {
     }
 
     #[test]
+    fn inspect_displays_all_private_struct_fields_recursively_in_definition_order() {
+        let vm = test_vm_with_types(vec![
+            TypeEntry {
+                tag: 10,
+                name: "User".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["name".into(), "password".into(), "count".into()],
+                private_flags: vec![false, true, false],
+            },
+            TypeEntry {
+                tag: 11,
+                name: "Vault".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["user".into(), "secret".into()],
+                private_flags: vec![true, true],
+            },
+        ]);
+        let user = Value::Tagged {
+            tag: 10,
+            fields: vec![
+                Value::Str("alice".into()),
+                Value::Str("line\n\"secret\"\\#{value}".into()),
+                Value::Int(int(7)),
+            ],
+        };
+        let vault = Value::Tagged {
+            tag: 11,
+            fields: vec![user.clone(), Value::Str("token".into())],
+        };
+        let user_display =
+            r#"User(name: "alice", password: "line\n\"secret\"\\\#{value}", count: 7)"#;
+        let vault_display = format!(r#"Vault(user: {user_display}, secret: "token")"#);
+        let value = Value::Tuple(vec![
+            user.clone(),
+            vault.clone(),
+            Value::List(ListHandle::from_items(vec![user.clone()])),
+            ok_result(vault),
+            Value::HashMap(HashMapHandle::from_entries(vec![("user".into(), user)])),
+        ]);
+        assert_eq!(
+            inspect_value(&vm, &value),
+            format!(
+                r#"({user_display}, {vault_display}, [{user_display}], Ok({vault_display}), hash!["user" => {user_display}])"#
+            )
+        );
+        assert_eq!(
+            vm.type_registry().lookup(10).unwrap().private_flags,
+            vec![false, true, false]
+        );
+        assert_eq!(
+            vm.type_registry().lookup(11).unwrap().private_flags,
+            vec![true, true]
+        );
+    }
+
+    #[test]
     fn inspect_quotes_terminal_controls_and_interpolation_in_every_container() {
         let vm = test_vm_with_types(vec![TypeEntry {
             tag: 10,
@@ -6495,7 +6540,10 @@ mod tests {
         let text = "\u{1b}a\r\0#{body}";
         let mut vm = test_vm().with_output_capture();
         let value = Value::Str(text.into());
-        assert_eq!(super::to_string_display(&vm, &value), text);
+        assert_eq!(
+            super::builtin_to_string(&mut vm, vec![value.clone()]).unwrap(),
+            Value::Str(text.into())
+        );
         call_builtin(&mut vm, builtin_id("print"), vec![value.clone()])
             .expect("print should succeed");
         call_builtin(&mut vm, builtin_id("eprint"), vec![value]).expect("eprint should succeed");
@@ -7344,7 +7392,50 @@ mod tests {
     }
 
     #[test]
-    fn to_string_recursively_formats_callables_without_quoting_strings() {
+    fn to_string_accepts_only_explicit_builtin_show_values() {
+        let mut vm = test_vm();
+        for (value, expected) in [
+            (Value::Int(int(42)), "42"),
+            (Value::Float(1.5), "1.5"),
+            (Value::Str("raw".into()), "raw"),
+            (Value::Bool(true), "True"),
+            (Value::Unit, "()"),
+        ] {
+            assert_eq!(
+                call_builtin(&mut vm, builtin_id("to_string"), vec![value]).unwrap(),
+                Value::Str(expected.into())
+            );
+        }
+        for value in [
+            Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(250))],
+            },
+            Value::List(ListHandle::empty()),
+            Value::Tuple(vec![]),
+            Value::HashMap(HashMapHandle::from_entries(vec![])),
+            Value::Error(Box::new(sindr::runtime::RichError::new(
+                "Boom",
+                "broken",
+                sindr::runtime::Location {
+                    file: "test.srt".into(),
+                    func: "Boom".into(),
+                    line: 1,
+                    column: 1,
+                    span_start: 0,
+                    span_end: 1,
+                },
+                None,
+            ))),
+        ] {
+            let error = call_builtin(&mut vm, builtin_id("to_string"), vec![value])
+                .expect_err("unsupported builtin Show value must fail");
+            assert!(error.message.contains("builtin to_string expects"));
+        }
+    }
+
+    #[test]
+    fn to_string_rejects_container_with_callable_payloads() {
         let mut vm = test_vm();
         let callable = Value::Callable(Callable {
             target: CallableTarget::Function(7),
@@ -7373,16 +7464,9 @@ mod tests {
             Value::Str("raw".into()),
         ]));
 
-        let rendered = call_builtin(&mut vm, builtin_id("to_string"), vec![value])
-            .expect("to_string should render callable payloads");
-
-        assert_eq!(
-            rendered,
-            Value::Str(
-                "Ok((Closure(Int -> Int), FnCapture(module: Add, name: add, sig: (Int -> Int)), raw))"
-                    .into()
-            )
-        );
+        let error = call_builtin(&mut vm, builtin_id("to_string"), vec![value])
+            .expect_err("builtin to_string must reject values outside builtin Show targets");
+        assert!(error.message.contains("builtin to_string expects"));
     }
 
     #[test]
@@ -7399,11 +7483,10 @@ mod tests {
                 metadata: CallableMetadata::default(),
             });
             assert_eq!(inspect_value(&vm, &value), "<callable>");
-            assert_eq!(
-                call_builtin(&mut vm, builtin_id("to_string"), vec![value])
-                    .expect("to_string should render callable fallback"),
-                Value::Str("<callable>".into())
-            );
+            assert!(call_builtin(&mut vm, builtin_id("to_string"), vec![value])
+                .expect_err("builtin to_string must reject callable values")
+                .message
+                .contains("builtin to_string expects"));
         }
     }
 

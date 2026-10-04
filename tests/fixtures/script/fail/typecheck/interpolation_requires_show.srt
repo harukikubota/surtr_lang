@@ -1,0 +1,5 @@
+defstruct NoShow { value: Int }
+impl NoShow {
+  def new(value: Int) -> Self { NoShow { value } }
+}
+print("#{NoShow(1)}")

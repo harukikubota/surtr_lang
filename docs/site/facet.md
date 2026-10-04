@@ -480,7 +480,7 @@ facet = User.password
 
 これは `User.password` が private のとき、外側スコープでは compile error です。  
 同様に `Facet::view(User.password, user)` のような参照も拒否されます。  
-また `user.password` のような value access も同じ field access lowering を通るため、owner の `impl Type` / `impl Trait for Type` の外では拒否されます。
+また `user.password` のような value access も同じ field access lowering を通るため、所有者の `impl Type` の外では拒否されます。`impl Trait for Type` も外側スコープとして扱い、private フィールドを使う操作は `impl Type` の公開関数へ委譲します。
 
 詳しい外部契約は `../../lib/facet.srt` と `./standard-library.md` の `Facet` 節を参照してください。
 

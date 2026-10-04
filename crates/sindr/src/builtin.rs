@@ -172,7 +172,6 @@ impl BuiltinMeta {
                     TypeName::String,
                     TypeName::Boolean,
                     TypeName::Unit,
-                    TypeName::Error,
                 ],
             ),
             "__operator_int_add" => ("Add", "add", &[TypeName::Int]),
@@ -4251,7 +4250,6 @@ mod tests {
                 TypeName::String,
                 TypeName::Boolean,
                 TypeName::Unit,
-                TypeName::Error,
             ]
         );
         assert_eq!(
