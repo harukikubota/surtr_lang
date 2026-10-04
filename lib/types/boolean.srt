@@ -1,6 +1,12 @@
 @doc """
 Standard `Boolean` type declaration.
 Represents `True` and `False`, the values used by `if` and boolean `match`.
+`True` and `False` use ordinary enum variant resolution and pattern rules.
+A constructor capture is a nullary callable.
+## REPL
+xldr(1)> yes: (-> Boolean) = &True
+xldr(2)> yes()
+True
 This exact top-level declaration is part of the compiler-checked builtin type
 contract.
 """

@@ -159,7 +159,7 @@ none: Option<Int> = Option<_>::None
 `Enum<...>::Variant(...)` の型引数列だけで許可され、通常の型注釈には使えません。
 callable の ReturnTypeArgument を指定する `::<...>` とも別の構文です。
 TypeConstructor trait や abstract `Error` など、通常の値型位置で禁止される型も指定できません。
-`Err(NoneError)` の成功型が外から決まらない場合は、`Result<Int>::Err(NoneError)` のように指定します。
+`Err(NoneError)` の成功型を固定したい場合は、`failed: Result<Int> = Err(NoneError)` のように型注釈を付けます。
 
 ## 空リスト
 

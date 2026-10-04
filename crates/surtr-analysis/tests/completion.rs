@@ -1437,6 +1437,7 @@ fn declaration_entry(
     user_callable: bool,
 ) -> DeclarationEntry {
     DeclarationEntry {
+        registration_order: 0,
         value_parameter_count: None,
         module_path: module_path.to_string(),
         name: name.to_string(),
@@ -2436,4 +2437,24 @@ fn completion_candidate(label: &str, ty: &str) -> CompletionCandidate {
         replace_start: 0,
         replace_end: 0,
     }
+}
+
+#[test]
+fn reserved_variant_alias_lookup_requires_its_canonical_declaration() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "Other::Ok".to_string(),
+        replacement: "Other::Ok".to_string(),
+        kind: CompletionKind::TypeConstructor,
+        detail: None,
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: None,
+    }]);
+    assert!(index.find_symbol("Other::Ok").is_some());
+    assert!(
+        index.find_symbol("Ok").is_none(),
+        "reserved alias must not use a tail fallback"
+    );
 }

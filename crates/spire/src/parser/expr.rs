@@ -794,7 +794,7 @@ impl Parser<'_> {
         }
         self.expect_type_gt()?;
         self.consume_path_separator()?;
-        let (variant_name, variant_span) = self.expect_ident()?;
+        let (variant_name, variant_span) = self.expect_member_ident()?;
 
         let (args, end) = if matches!(self.peek(), Token::LParen) {
             self.advance();
@@ -852,7 +852,7 @@ impl Parser<'_> {
         }
         let end = self.expect_type_gt()?.end;
         self.consume_path_separator()?;
-        let (variant_name, variant_span) = self.expect_ident()?;
+        let (variant_name, variant_span) = self.expect_member_ident()?;
         Ok(Ast::EnumConstructorCall(
             Span {
                 start,
@@ -996,11 +996,11 @@ impl Parser<'_> {
             }
             Token::True => {
                 self.advance();
-                Ok(Ast::Lit(sp, Lit::Bool(true)))
+                self.parse_ident_continuation("True".into(), sp, pipe_outer_call)
             }
             Token::False => {
                 self.advance();
-                Ok(Ast::Lit(sp, Lit::Bool(false)))
+                self.parse_ident_continuation("False".into(), sp, pipe_outer_call)
             }
             Token::Unit => {
                 self.advance();
@@ -1886,13 +1886,33 @@ impl Parser<'_> {
         while self.has_path_separator()
             && matches!(
                 self.peek_n(2),
-                Some(Token::Ident(_) | Token::PatternConsumer(_) | Token::ReservedCallName(_))
+                Some(
+                    Token::Ident(_)
+                        | Token::PatternConsumer(_)
+                        | Token::ReservedCallName(_)
+                        | Token::True
+                        | Token::False
+                )
             )
         {
             self.consume_path_separator()?;
             let (seg, seg_span) = self.expect_member_ident()?;
             path_end = seg_span.end;
             path_segments.push(seg);
+        }
+
+        if let Some(meta) =
+            sindr::names::special_enum_variant_surface_meta(&path_segments.join("::"))
+        {
+            debug_assert_eq!(
+                meta.identity(),
+                sindr::names::TypeIdentity::SpecialEnumVariant
+            );
+            path_segments = meta
+                .qualified_name
+                .split("::")
+                .map(str::to_string)
+                .collect();
         }
 
         let path_ast = if path_segments.len() > 1 {
@@ -2021,6 +2041,16 @@ impl Parser<'_> {
                     end: call_end,
                 };
                 return Ok(Ast::App(span, Box::new(path_expr), args));
+            }
+
+            if sindr::names::special_enum_variant_meta(&path_name)
+                .is_some_and(|meta| meta.payload_arity == 0)
+            {
+                return Ok(Ast::ConstructorCall(
+                    path_expr.span().clone(),
+                    path_name,
+                    Vec::new(),
+                ));
             }
 
             // Keep a bare qualified name distinct from an explicit constructor call.
@@ -2771,7 +2801,11 @@ impl Parser<'_> {
             )));
         }
         let (mut target, mut end) = match self.peek().clone() {
-            Token::Ident(_) | Token::PatternConsumer(_) | Token::ReservedCallName(_) => {
+            Token::Ident(_)
+            | Token::PatternConsumer(_)
+            | Token::ReservedCallName(_)
+            | Token::True
+            | Token::False => {
                 let (name, name_span) = self.expect_member_ident()?;
                 let mut path_segments = vec![name.clone()];
                 let mut path_end = name_span.end;
@@ -2782,6 +2816,8 @@ impl Parser<'_> {
                             Token::Ident(_)
                                 | Token::PatternConsumer(_)
                                 | Token::ReservedCallName(_)
+                                | Token::True
+                                | Token::False
                         )
                     )
                 {
@@ -2853,6 +2889,32 @@ impl Parser<'_> {
                 ));
             }
         };
+
+        let special_variant = match &target {
+            Ast::Var(_, name) => sindr::names::special_enum_variant_surface_meta(name),
+            Ast::Path(_, path) => {
+                sindr::names::special_enum_variant_surface_meta(&path.segments.join("::"))
+            }
+            _ => None,
+        };
+        if let Some(meta) = special_variant {
+            debug_assert_eq!(
+                meta.identity(),
+                sindr::names::TypeIdentity::SpecialEnumVariant
+            );
+            let span = target.span().clone();
+            target = Ast::Path(
+                span.clone(),
+                AstPath {
+                    span,
+                    segments: meta
+                        .qualified_name
+                        .split("::")
+                        .map(str::to_string)
+                        .collect(),
+                },
+            );
+        }
 
         while matches!(self.peek(), Token::Dot) {
             self.advance();
@@ -3367,7 +3429,9 @@ impl Parser<'_> {
 
     /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
     pub(super) fn is_true_literal(expr: &Ast) -> bool {
-        matches!(expr, Ast::Lit(_, Lit::Bool(true)))
+        matches!(expr, Ast::ConstructorCall(_, name, args)
+            if args.is_empty() && sindr::names::special_enum_variant_meta(name)
+                .is_some_and(|meta| meta.lowering == sindr::names::SpecialEnumVariantLowering::Boolean(true)))
     }
 }
 
@@ -3522,7 +3586,6 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         | Ast::BuiltinExtractorDecl(..)
         | Ast::BuiltinTypeDecl(..)
         | Ast::TypeAlias(..)
-        | Ast::ResultCtorDecl(..)
         | Ast::Def(..)
         | Ast::DeferrorDef(..)
         | Ast::ExtractorDef(..)

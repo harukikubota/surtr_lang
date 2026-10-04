@@ -1475,7 +1475,7 @@ impl Checker {
 
                 if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
                     let variant = self.instantiate_enum_variant(&variant);
-                    if Self::surface_name(&variant.enum_name) == "Boolean" {
+                    if let Some(sindr::names::SpecialEnumVariantLowering::Boolean(value)) = variant.special_variant {
                         if !variant.payload.is_empty() {
                             return Err(TypeError {
                                 structured: None,
@@ -1487,21 +1487,6 @@ impl Checker {
                                 hint: None,
                             });
                         }
-                        let value = match variant.short_name.as_str() {
-                            "True" => true,
-                            "False" => false,
-                            _ => {
-                                return Err(TypeError {
-                                    structured: None,
-                                    message: format!(
-                                        "Unknown builtin Boolean variant: {}",
-                                        variant.short_name
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            }
-                        };
                         return Ok(TypedNode {
                             ty: Ty::Bool,
                             span: span.clone(),
@@ -1965,9 +1950,6 @@ impl Checker {
                 span: span.clone(),
                 node: TypedInner::Lit(Lit::Unit),
             }),
-            Resolved::ResultCtorDecl(span, id, param_ty, ret_ty, attrs) => {
-                self.check_result_ctor_decl(span, id, param_ty, ret_ty, attrs)
-            }
 
             Resolved::Capture(span, target, args) => self.check_capture(span, target, args, None),
             Resolved::Block(..)
@@ -3014,9 +2996,7 @@ impl Checker {
         // Keep the original contextual dispatch priority: constructors,
         // trait helpers, Function on calls, and then ordinary applications.
         if matches!(func, Resolved::Var(_, id)
-            if id.name == "Ok"
-                || id.name == "Err"
-                || self.lookup_enum_variant_by_constructor_id(id.unique_id).is_some())
+            if self.lookup_enum_variant_by_constructor_id(id.unique_id).is_some())
         {
             let Resolved::Var(_, id) = func else {
                 unreachable!("constructor guard requires a variable callee")
@@ -4307,7 +4287,6 @@ impl Checker {
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::TypeAlias(span, _, _, _, _)
-            | Resolved::ResultCtorDecl(span, _, _, _, _)
             | Resolved::TraitDef(span, _, _, _, _, _)
             | Resolved::TraitImplDef(span, _, _, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
@@ -12419,7 +12398,7 @@ impl Checker {
                     true
                 }
                 Resolved::App(_, func, _) => {
-                    matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "Ok" || id.name == "Err")
+                    matches!(func.as_ref(), Resolved::Var(_, id) if self.lookup_enum_variant_by_constructor_id(id.unique_id).is_some())
                 }
                 _ => false,
             };
@@ -13696,6 +13675,31 @@ impl Checker {
         Some(ch as u8)
     }
 
+    fn canonical_enum_constructor_id(
+        &self,
+        name: &str,
+        span: &Span,
+    ) -> Result<ResolvedId, TypeError> {
+        let meta = sindr::names::special_enum_variant_meta(name)
+            .ok_or_else(|| TypeError::new("invalid canonical variant", span.clone()))?;
+        let (unique_id, variant) = self
+            .env
+            .enum_constructor_ids
+            .iter()
+            .find(|(_, variant)| variant.special_variant == Some(meta.lowering))
+            .ok_or_else(|| {
+                TypeError::new(format!("missing canonical variant `{name}`"), span.clone())
+            })?;
+        Ok(ResolvedId {
+            name: variant.constructor_name.clone(),
+            qualified_name: Some(variant.constructor_name.clone()),
+            symbol_info: None,
+            unique_id: *unique_id,
+            compiler_generated: true,
+            span: span.clone(),
+        })
+    }
+
     fn runtime_helper_id(
         &self,
         qualified_name: &str,
@@ -13795,14 +13799,7 @@ impl Checker {
                 ),
                 Resolved::ConstructorCall(
                     span.clone(),
-                    ResolvedId {
-                        name: "Ok".into(),
-                        qualified_name: None,
-                        symbol_info: None,
-                        unique_id: 0,
-                        compiler_generated: true,
-                        span: span.clone(),
-                    },
+                    self.canonical_enum_constructor_id("Result::Ok", span)?,
                     vec![ResolvedRecordLitArg::Positional(Resolved::App(
                         span.clone(),
                         Box::new(Resolved::Var(span.clone(), to_list_id)),

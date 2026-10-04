@@ -8,9 +8,15 @@ to document its error contract. `NoneError` does not create an annotation except
 Value inspection uses `Result<$T>`; REPL declaration queries preserve a written
 error contract without adding one when it was omitted.
 This is the language's Either-oriented success/failure representation.
-Its runtime representation is enum-like, but the language treats `Result` as a
-dedicated built-in abstraction rather than exposing it as the future general
-`Enum` surface.
+`Ok` and `Err` use the ordinary enum constructor, capture, and pattern rules.
+The success type is inferred from the payload and expected type.
+`Err` requires a concrete `deferror`. A failure value keeps a polymorphic
+success slot, but callable bindings require a concrete signature.
+Constructor captures cannot expose Error as an ordinary callable input.
+## REPL
+xldr(1)> wrap: (Int -> Result<Int>) = &Ok
+xldr(2)> wrap(1)
+Ok(1)
 `Result<$T>` supports `Eq` when `$T: Eq`. `Ok` values compare their contents;
 an `Ok` and an `Err` differ; two `Err` values compare only the first concrete
 error kind, regardless of message or cause.

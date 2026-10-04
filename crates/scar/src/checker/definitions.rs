@@ -691,74 +691,6 @@ impl Checker {
         })
     }
 
-    pub(super) fn check_result_ctor_decl(
-        &mut self,
-        span: &Span,
-        id: &ResolvedId,
-        param_ty: &AstTy,
-        ret_ty: &AstTy,
-        _attrs: &ResolvedDeclAttrs,
-    ) -> Result<TypedNode, TypeError> {
-        let expected_qname = match id.name.as_str() {
-            "Ok" => "Result::Ok",
-            "Err" => "Result::Err",
-            other => {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Unknown Result constructor declaration: {}. Only Ok and Err are supported.",
-                        other
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-        };
-
-        if Self::surface_qualified_name(id.qualified_name.as_deref()) != Some(expected_qname) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "Result constructor declaration `{}` is only allowed in std module `Result`.",
-                    id.name
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-
-        let shape_ok = match id.name.as_str() {
-            "Ok" => Self::is_named_type(param_ty, "$T") && Self::is_result_of_named(ret_ty, "$T"),
-            "Err" => {
-                Self::is_named_type(param_ty, "Error") && Self::is_result_of_named(ret_ty, "$T")
-            }
-            _ => false,
-        };
-
-        if !shape_ok {
-            let expected = match id.name.as_str() {
-                "Ok" => "@builtin type Ok($T) -> Result<$T>",
-                "Err" => "@builtin type Err(Error) -> Result<$T>",
-                _ => unreachable!(),
-            };
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "Result constructor declaration must match the canonical contract: {}",
-                    expected
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-
-        Ok(TypedNode {
-            ty: Ty::Unit,
-            span: span.clone(),
-            node: TypedInner::Lit(Lit::Unit),
-        })
-    }
-
     pub(super) fn is_named_type(ast_ty: &AstTy, expected_name: &str) -> bool {
         matches!(ast_ty, AstTy::Named(_, name) if name == expected_name)
     }
@@ -2444,7 +2376,7 @@ impl Checker {
         }];
 
         let mut methods = impl_info.methods.into_values().collect::<Vec<_>>();
-        methods.sort_by(|left, right| left.method_name.cmp(&right.method_name));
+        methods.sort_by_key(|method| method.function_id.unique_id);
 
         for method in methods {
             let resolved_method = resolved_methods
@@ -2908,14 +2840,14 @@ impl Checker {
         })
     }
 
-    pub(super) fn check_enum_def(
+    pub(super) fn validate_builtin_enum_shape(
         &mut self,
         span: &Span,
         id: &ResolvedId,
         type_params: &[ResolvedTypeParam],
         variants: &[ResolvedEnumVariant],
         attrs: &ResolvedDeclAttrs,
-    ) -> Result<TypedNode, TypeError> {
+    ) -> Result<(), TypeError> {
         if attrs.builtin {
             match Self::surface_name(&id.name) {
                 "Result" => {
@@ -2981,6 +2913,19 @@ impl Checker {
             }
         }
 
+        Ok(())
+    }
+
+    pub(super) fn check_enum_def(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        type_params: &[ResolvedTypeParam],
+        variants: &[ResolvedEnumVariant],
+        attrs: &ResolvedDeclAttrs,
+    ) -> Result<TypedNode, TypeError> {
+        self.validate_builtin_enum_shape(span, id, type_params, variants, attrs)?;
+
         let enum_variants = self
             .lookup_enum_variants_of(&id.name)
             .ok_or_else(|| TypeError {
@@ -3003,6 +2948,7 @@ impl Checker {
             .iter()
             .map(|variant| TypedEnumVariantDef {
                 tag: variant.tag,
+                lowering: variant.special_variant,
                 constructor_name: variant.constructor_name.clone(),
                 field_names: variant
                     .payload
@@ -3247,116 +3193,12 @@ impl Checker {
         // success slot below is unified later by the surrounding expression
         // or by the function body's final return check.
         let expected = expected.cloned();
-        if id.name == "Ok" || id.name == "Err" {
-            if args.len() != 1 {
-                return Err(TypeError::from_structured(
-                    self.argument_contract_diagnostic(
-                        TypeDiagnosticReason::ArityMismatch,
-                        &id.name,
-                        None,
-                        1,
-                        args.len(),
-                        span,
-                        DiagnosticOrigin::Call,
-                    ),
-                ));
-            }
-            let inner = match &args[0] {
-                ResolvedRecordLitArg::Positional(expr) => {
-                    let inner_expected =
-                        expected
-                            .as_ref()
-                            .and_then(|expected| match self.resolve_ty(expected) {
-                                Ty::Result(ok, _) => Some(ok.as_ref().clone()),
-                                _ => None,
-                            });
-                    let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
-                    if self.ty_contains_facet(&typed.ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message:
-                                "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
-                                    .into(),
-                            span: typed.span.clone(),
-                            hint: Some(
-                                "Apply Facet::view/set/over before wrapping with Ok(...) or Err(...)."
-                                    .into(),
-                            ),
-                        });
-                    }
-                    self.maybe_call_zero_arg_function(typed, span.clone())
-                }
-                ResolvedRecordLitArg::Named(_, _) => {
-                    return Err(TypeError::from_structured(
-                        self.argument_contract_diagnostic(
-                            TypeDiagnosticReason::ArgumentModeMismatch,
-                            &id.name,
-                            None,
-                            1,
-                            args.len(),
-                            span,
-                            DiagnosticOrigin::Call,
-                        ),
-                    ));
-                }
-            };
-            if id.name == "Err" {
-                if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
-                        span: inner.span.clone(),
-                        hint: Some(
-                            "Err(...) is lifted to the expected Result nesting; do not write Err(Err(...)).".into(),
-                        ),
-                    });
-                }
-                if !matches!(inner.ty, Ty::Error) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Err(...) requires a concrete deferror value.".into(),
-                        span: inner.span.clone(),
-                        hint: Some(
-                            "Use a deferror-defined value in Err(...), not a plain value.".into(),
-                        ),
-                    });
-                }
-                if self.is_abstract_error_marker_value(&inner) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Error is abstract and cannot be constructed directly.".into(),
-                        span: inner.span.clone(),
-                        hint: Some("Use a concrete deferror value in Err(...).".into()),
-                    });
-                }
-            }
-            let (tag, result_ty) = if id.name == "Ok" {
-                (
-                    0u32,
-                    Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)),
-                )
-            } else {
-                let result_ty = expected
-                    .as_ref()
-                    .filter(|ty| matches!(self.resolve_ty(ty), Ty::Result(_, _)))
-                    .map(|ty| self.resolve_ty(ty))
-                    .unwrap_or_else(|| {
-                        let ok_var = self.env.fresh_tyvar();
-                        Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
-                    });
-                (1u32, result_ty)
-            };
-            return Ok(TypedNode {
-                ty: result_ty,
-                span: span.clone(),
-                node: TypedInner::ConstructorCall(tag, vec![inner]),
-            });
-        }
-
         if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
             let variant = self.instantiate_enum_variant(&variant);
             let enum_surface_name = Self::surface_name(&variant.enum_name);
-            if enum_surface_name == "Boolean" {
+            if let Some(sindr::names::SpecialEnumVariantLowering::Boolean(value)) =
+                variant.special_variant
+            {
                 if !args.is_empty() {
                     return Err(TypeError::from_structured(
                         self.argument_contract_diagnostic(
@@ -3370,21 +3212,6 @@ impl Checker {
                         ),
                     ));
                 }
-                let value = match variant.short_name.as_str() {
-                    "True" => true,
-                    "False" => false,
-                    _ => {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Unknown builtin Boolean variant: {}",
-                                variant.short_name
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                };
                 return Ok(TypedNode {
                     ty: Ty::Bool,
                     span: span.clone(),
@@ -3465,7 +3292,13 @@ impl Checker {
                     ),
                 });
             }
-            if enum_surface_name == "Result" {
+            if matches!(
+                variant.special_variant,
+                Some(
+                    sindr::names::SpecialEnumVariantLowering::ResultOk
+                        | sindr::names::SpecialEnumVariantLowering::ResultErr
+                )
+            ) {
                 if args.len() != 1 {
                     return Err(TypeError::from_structured(
                         self.argument_contract_diagnostic(
@@ -3481,18 +3314,19 @@ impl Checker {
                 }
                 let inner = match &args[0] {
                     ResolvedRecordLitArg::Positional(expr) => {
-                        // Preserve the expected Result payload when this
-                        // constructor was resolved through enum metadata
-                        // (the qualified `Result::Ok` path).  Applicative
-                        // chains rely on this context to infer nested
-                        // closures left-to-right: the first `|*|` fixes the
-                        // mapper input, which then constrains the next one.
-                        let inner_expected = expected.as_ref().and_then(|expected| {
-                            match self.resolve_ty(expected) {
-                                Ty::Result(ok, _) => Some(ok.as_ref().clone()),
-                                _ => None,
-                            }
-                        });
+                        // Only the success payload receives the owner's success
+                        // type. Err stores a concrete Error at the current layer.
+                        let inner_expected = (variant.special_variant
+                            == Some(sindr::names::SpecialEnumVariantLowering::ResultOk))
+                        .then(|| {
+                            expected
+                                .as_ref()
+                                .and_then(|expected| match self.resolve_ty(expected) {
+                                    Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+                                    _ => None,
+                                })
+                        })
+                        .flatten();
                         let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                         self.ensure_no_match_result_value(&typed.ty, &typed.span)?;
                         if self.ty_contains_facet(&typed.ty) {
@@ -3524,7 +3358,9 @@ impl Checker {
                         ));
                     }
                 };
-                if variant.short_name == "Err" {
+                if variant.special_variant
+                    == Some(sindr::names::SpecialEnumVariantLowering::ResultErr)
+                {
                     if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
                         return Err(TypeError {
                             structured: None,
@@ -3555,7 +3391,9 @@ impl Checker {
                         });
                     }
                 }
-                let result_ty = if variant.short_name == "Ok" {
+                let result_ty = if variant.special_variant
+                    == Some(sindr::names::SpecialEnumVariantLowering::ResultOk)
+                {
                     Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error))
                 } else {
                     expected
@@ -4005,6 +3843,8 @@ impl Checker {
         let declared_arguments = match &variant.enum_ty {
             Ty::Enum(_, arguments) => arguments.clone(),
             Ty::Result(ok, _) => vec![ok.as_ref().clone()],
+            Ty::Bool => Vec::new(),
+            Ty::MatchResult(payload) => vec![payload.as_ref().clone()],
             other => {
                 return Err(TypeError {
                     structured: None,
@@ -4066,11 +3906,19 @@ impl Checker {
             )?;
         }
 
-        if matches!(
-            Self::surface_name(&variant.enum_name),
-            "Result" | "MatchResult"
-        ) {
-            return self.check_constructor_call(span, id, args, Some(&enum_ty));
+        if variant.special_variant.is_some() || matches!(variant.enum_ty, Ty::MatchResult(_)) {
+            let typed = self.check_constructor_call(span, id, args, Some(&enum_ty))?;
+            self.assert_type_relation(
+                &enum_ty,
+                &typed.ty,
+                self.type_fact(SourceRole::Expected, span, &enum_ty),
+                self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                &id.name,
+                0,
+            )?;
+            return Ok(typed);
         }
 
         let payload_values = self.typecheck_positional_call_args(

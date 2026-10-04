@@ -820,16 +820,6 @@ pub enum Ast {
     /// Compile-time-only alias for a function signature.
     TypeAlias(Span, Symbol, Vec<TypeParam>, AstTy),
 
-    /// Declaration-only Result constructor contracts used by std modules.
-    ///
-    /// Surface syntax is intentionally special-cased:
-    /// `@builtin type Ok($T) -> Result<$T>`
-    /// `@builtin type Err(Error) -> Result<$T>`
-    ///
-    /// These are not real type declarations, but this syntax keeps them in the
-    /// same declaration layer as the other std-module builtin contracts.
-    ResultCtorDecl(Span, Symbol, AstTy, AstTy, DeclAttrs),
-
     /// Module declaration: `defmod Kernel { ... }`
     Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
 

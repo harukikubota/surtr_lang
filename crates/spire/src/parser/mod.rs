@@ -301,6 +301,18 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_member_ident(&mut self) -> Result<(Symbol, Span), ParseError> {
+        if matches!(self.peek(), Token::True | Token::False) {
+            let token = self.advance();
+            return Ok((
+                if matches!(token.token, Token::True) {
+                    "True"
+                } else {
+                    "False"
+                }
+                .into(),
+                token.span,
+            ));
+        }
         if let Token::PatternConsumer(kind) = self.peek().clone() {
             let span = self.advance().span;
             return Ok((kind.name().to_string(), span));
@@ -1406,13 +1418,6 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                     span: param.span,
                 })
                 .collect(),
-            rewrite_process_owner_ty(ret_ty, old_name, new_name),
-            attrs,
-        ),
-        Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
-            span,
-            name,
-            rewrite_process_owner_ty(param_ty, old_name, new_name),
             rewrite_process_owner_ty(ret_ty, old_name, new_name),
             attrs,
         ),
@@ -2676,13 +2681,6 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|stmt| shift_ast_span(stmt, delta))
                 .collect(),
         ),
-        Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
-            shift_span(span, delta),
-            name,
-            shift_ast_ty(param_ty, delta),
-            shift_ast_ty(ret_ty, delta),
-            shift_decl_attrs(attrs, delta),
-        ),
         Ast::Defmod(span, name, body, attrs) => Ast::Defmod(
             shift_span(span, delta),
             name,
@@ -2908,7 +2906,6 @@ impl Ast {
             | Ast::BuiltinTypeDecl(s, _, _)
             | Ast::TypeAlias(s, _, _, _)
             | Ast::Namespace(s, _, _)
-            | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
             | Ast::Defagent(s, _, _, _, _)
             | Ast::Defgenserver(s, _, _, _, _)

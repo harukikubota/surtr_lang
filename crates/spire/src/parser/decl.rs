@@ -4,7 +4,6 @@ use crate::token::Token;
 use sindr::names::reserved_owner_surface_name_constraint;
 
 use super::ast_ty_span;
-use super::context::{DeclLevel, TopLevelDeclKind};
 use super::ty::TypeParseContext;
 use super::Parser;
 
@@ -212,7 +211,6 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         | Ast::IntrinsicDecl(_, _, _, attrs)
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
-        | Ast::ResultCtorDecl(_, _, _, _, attrs)
         | Ast::StructDef(_, _, _, _, attrs)
         | Ast::RecordDef(_, _, _, attrs)
         | Ast::DeferrorDef(_, _, _, _, attrs)
@@ -1485,6 +1483,13 @@ impl Parser<'_> {
         span: Span,
         kind: &str,
     ) -> Result<(), ParseError> {
+        if sindr::names::special_enum_variant_alias_meta(name).is_some() {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                format!("{kind} `{name}` is reserved for canonical enum variant aliases"),
+                span,
+            ));
+        }
         if Self::is_cap_pattern(name) {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::DeclarationSyntax,
@@ -3154,20 +3159,16 @@ impl Parser<'_> {
             }
             self.skip_newlines();
             let variant_start = self.peek_span().start;
-            let (variant_name, _) = if attrs.builtin {
-                match self.peek() {
-                    Token::True => {
-                        let span = self.expect(&Token::True)?;
-                        ("True".to_string(), span)
-                    }
-                    Token::False => {
-                        let span = self.expect(&Token::False)?;
-                        ("False".to_string(), span)
-                    }
-                    _ => self.expect_ident()?,
+            let (variant_name, _) = match self.peek() {
+                Token::True => {
+                    let span = self.expect(&Token::True)?;
+                    ("True".to_string(), span)
                 }
-            } else {
-                self.expect_ident()?
+                Token::False => {
+                    let span = self.expect(&Token::False)?;
+                    ("False".to_string(), span)
+                }
+                _ => self.expect_ident()?,
             };
             let mut payload = Vec::new();
 
@@ -5982,14 +5983,6 @@ impl Parser<'_> {
         self.skip_newlines();
         let (name, name_span) = self.expect_ident()?;
 
-        // `Result` keeps `Ok` / `Err` as declaration-only constructor
-        // contracts. They intentionally live behind `@builtin type ...` so
-        // the std-module declaration layer stays visually uniform, even though
-        // the payload that follows is function-shaped rather than type-shaped.
-        if (name == "Ok" || name == "Err") && matches!(self.peek(), Token::LParen) {
-            return self.parse_result_ctor_builtin_type_decl(start, name, attrs);
-        }
-
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Lt) {
             self.advance();
@@ -6113,46 +6106,6 @@ impl Parser<'_> {
         ))
     }
 
-    pub(super) fn parse_result_ctor_builtin_type_decl(
-        &mut self,
-        start: usize,
-        name: Symbol,
-        attrs: DeclAttrs,
-    ) -> Result<Ast, ParseError> {
-        self.skip_newlines();
-        self.expect(&Token::LParen)?;
-        self.skip_newlines();
-        let param_ty = self.parse_type()?;
-        self.skip_newlines();
-        self.expect(&Token::RParen)?;
-        self.skip_newlines();
-        self.expect(&Token::Arrow)?;
-        self.skip_newlines();
-        let ret_ty = self.parse_direct_signature_return_type(None)?;
-
-        if matches!(self.peek(), Token::LBrace) {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::DeclarationSyntax,
-                "Result constructor builtin contracts in std modules must not have a function body",
-                self.peek_span(),
-            ));
-        }
-
-        let end = if self.pos > 0 {
-            self.tokens[self.pos - 1].span.end
-        } else {
-            start
-        };
-
-        Ok(Ast::ResultCtorDecl(
-            Span { start, end },
-            name,
-            param_ty,
-            ret_ty,
-            attrs,
-        ))
-    }
-
     /// `def name(arg: Type, ...) -> Type { expr }`
     pub(super) fn parse_def(&mut self) -> Result<Ast, ParseError> {
         self.parse_def_with_attrs(DeclAttrs::default(), None)
@@ -6212,10 +6165,6 @@ impl Parser<'_> {
         attrs: DeclAttrs,
         annotator_start: Option<usize>,
     ) -> Result<Ast, ParseError> {
-        if self.should_parse_result_ctor_decl() {
-            return self.parse_result_ctor_decl_with_attrs(attrs, annotator_start);
-        }
-
         let (sp, name, return_type_arguments, params, ret_ty, where_clause, visibility) =
             self.parse_def_signature()?;
         let mut attrs = attrs;
@@ -6299,75 +6248,6 @@ impl Parser<'_> {
             param,
             ret_ty,
             Box::new(body),
-            attrs,
-        ))
-    }
-
-    pub(super) fn should_parse_result_ctor_decl(&self) -> bool {
-        if self.context.level != DeclLevel::Top {
-            return false;
-        }
-        if self.context.module_path.is_some() {
-            return false;
-        }
-        if !self
-            .context
-            .parse_rules
-            .allowed_top_level_decl_kinds
-            .allows(TopLevelDeclKind::BuiltinDecl)
-        {
-            return false;
-        }
-        if !matches!(self.peek(), Token::Def) {
-            return false;
-        }
-        matches!(
-            self.tokens.get(self.pos + 1).map(|sp| &sp.token),
-            Some(Token::Ident(name)) if name == "Ok" || name == "Err"
-        )
-    }
-
-    pub(super) fn parse_result_ctor_decl_with_attrs(
-        &mut self,
-        attrs: DeclAttrs,
-        annotator_start: Option<usize>,
-    ) -> Result<Ast, ParseError> {
-        let sp = self.peek_span();
-        self.expect(&Token::Def)?;
-        let (name, _) = self.expect_ident()?;
-        self.skip_newlines();
-        self.expect(&Token::LParen)?;
-        self.skip_newlines();
-        let param_ty = self.parse_type()?;
-        self.skip_newlines();
-        self.expect(&Token::RParen)?;
-        self.skip_newlines();
-        self.expect(&Token::Arrow)?;
-        self.skip_newlines();
-        let ret_ty = self.parse_type()?;
-
-        if matches!(self.peek(), Token::LBrace) {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::DeclarationSyntax,
-                "Result constructor declarations in std modules must not have a function body",
-                self.peek_span(),
-            ));
-        }
-
-        let end = if self.pos > 0 {
-            self.tokens[self.pos - 1].span.end
-        } else {
-            sp.start
-        };
-
-        Ok(Ast::ResultCtorDecl(
-            Span {
-                start: annotator_start.unwrap_or(sp.start),
-                end,
-            },
-            name,
-            param_ty,
-            ret_ty,
             attrs,
         ))
     }

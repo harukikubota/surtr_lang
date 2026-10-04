@@ -349,7 +349,13 @@ impl Checker {
                     .collect(),
             )),
             ResolvedPattern::Constructor(id, items)
-                if matches!(id.name.as_str(), "Ok" | "Result::Ok") && items.len() == 1 =>
+                if self
+                    .lookup_enum_variant_by_constructor_id(id.unique_id)
+                    .is_some_and(|variant| {
+                        variant.special_variant
+                            == Some(sindr::names::SpecialEnumVariantLowering::ResultOk)
+                    })
+                    && items.len() == 1 =>
             {
                 Some(Ty::Result(
                     Box::new(
@@ -1346,7 +1352,10 @@ impl Checker {
                         })?
                         .clone();
                     let variant = self.instantiate_enum_variant(&variant);
-                    if Self::surface_name(&variant.enum_name) != "Boolean" {
+                    if !matches!(
+                        variant.special_variant,
+                        Some(sindr::names::SpecialEnumVariantLowering::Boolean(_))
+                    ) {
                         return Err(self.pattern_error(
                             TypeDiagnosticReason::PatternShapeMismatch,
                             PatternKind::Constructor,
@@ -1372,9 +1381,10 @@ impl Checker {
                             &ctor_id.span,
                         ));
                     }
-                    return match variant.short_name.as_str() {
-                        "True" => Ok((TypedPattern::BoolLit(Ty::Bool, true), Ty::Bool)),
-                        "False" => Ok((TypedPattern::BoolLit(Ty::Bool, false), Ty::Bool)),
+                    return match variant.special_variant {
+                        Some(sindr::names::SpecialEnumVariantLowering::Boolean(value)) => {
+                            Ok((TypedPattern::BoolLit(Ty::Bool, value), Ty::Bool))
+                        }
                         _ => Err(self.typecheck_invariant_error(
                             "resolved Boolean constructor variant",
                             &ctor_id.span,
@@ -1382,14 +1392,33 @@ impl Checker {
                     };
                 }
                 if let Ty::Result(ok_ty, err_ty) = &rhs_ty {
-                    let (tag, inner_ty) = match ctor_id.name.as_str() {
-                        "Ok" => (0, ok_ty.as_ref().clone()),
-                        "Err" => (1, err_ty.as_ref().clone()),
-                        _ => {
-                            return Err(self.typecheck_invariant_error(
-                                "Result pattern constructor",
+                    let variant = self
+                        .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                        .ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                "resolved Result pattern constructor",
                                 &ctor_id.span,
-                            ));
+                            )
+                        })?;
+                    let (tag, inner_ty) = match variant.special_variant {
+                        Some(sindr::names::SpecialEnumVariantLowering::ResultOk) => {
+                            (0, ok_ty.as_ref().clone())
+                        }
+                        Some(sindr::names::SpecialEnumVariantLowering::ResultErr) => {
+                            (1, err_ty.as_ref().clone())
+                        }
+                        _ => {
+                            return Err(self.pattern_error(
+                                TypeDiagnosticReason::PatternShapeMismatch,
+                                PatternKind::Constructor,
+                                Some(ctor_id.name.clone()),
+                                Some("constructor of Result".into()),
+                                Some(&rhs_ty),
+                                None,
+                                None,
+                                Vec::new(),
+                                &ctor_id.span,
+                            ))
                         }
                     };
                     if inners.len() != 1 {

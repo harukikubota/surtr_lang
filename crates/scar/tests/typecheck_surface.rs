@@ -7569,7 +7569,7 @@ defmod Kernel {
 fn special_form_builtin_decl_must_live_at_its_canonical_std_qname() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Boolean",
-        r#"@builtin type Boolean
+        r#"@builtin defenum Boolean { True, False }
 
 impl Boolean {
   def not(value: Boolean) -> Boolean {

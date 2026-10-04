@@ -1337,7 +1337,8 @@ impl Checker {
                         .map(|field| Self::ast_ty_span(&field.ty).clone())
                         .collect();
                 }
-                Resolved::EnumDef(_, id, type_params, variants, attrs) => {
+                Resolved::EnumDef(span, id, type_params, variants, attrs) => {
+                    self.validate_builtin_enum_shape(span, id, type_params, variants, attrs)?;
                     let mut sig_tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut sig_tyvars);
                     let enum_ty_args = type_params
@@ -1381,8 +1382,8 @@ impl Checker {
                     let enum_ty = if builtin_result_enum {
                         let ok_ty = enum_ty_args
                             .first()
-                            .cloned()
-                            .unwrap_or_else(|| self.env.fresh_tyvar());
+                            .expect("validated canonical Result has exactly one success slot")
+                            .clone();
                         Ty::Result(Box::new(ok_ty), Box::new(Ty::Error))
                     } else if builtin_match_result_enum {
                         Ty::MatchResult(Box::new(enum_ty_args[0].clone()))
@@ -1450,16 +1451,20 @@ impl Checker {
                             .next()
                             .unwrap_or(variant.id.name.as_str())
                             .to_string();
-                        let tag = if builtin_result_enum {
-                            match short_name.as_str() {
-                                "Ok" => 0,
-                                "Err" => 1,
-                                _ => self.env.reserve_tag(),
-                            }
+                        let special_variant = if attrs.builtin {
+                            sindr::names::special_enum_variant_meta(&variant.id.name)
+                                .filter(|meta| meta.owner == enum_surface_name)
+                                .map(|meta| meta.lowering)
                         } else {
-                            self.env.reserve_tag()
+                            None
+                        };
+                        let tag = match special_variant {
+                            Some(sindr::names::SpecialEnumVariantLowering::ResultOk) => 0,
+                            Some(sindr::names::SpecialEnumVariantLowering::ResultErr) => 1,
+                            _ => self.env.reserve_tag(),
                         };
                         let info = crate::env::EnumVariantInfo {
+                            special_variant,
                             constructor_name: variant.id.name.clone(),
                             short_name,
                             enum_name: id.name.clone(),
@@ -4856,7 +4861,6 @@ impl Checker {
                     fun_idx += 1;
                 }
                 Resolved::BuiltinTypeDecl(_, _, _, _) => {}
-                Resolved::ResultCtorDecl(_, _, _, _, _) => {}
                 _ => {}
             }
         }
@@ -4884,7 +4888,7 @@ impl Checker {
                     hint: None,
                 })?;
             let mut methods = trait_impl.methods.iter().collect::<Vec<_>>();
-            methods.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+            methods.sort_by_key(|(_, method)| method.function_id.unique_id);
 
             for (method_name, method) in methods {
                 if method.is_builtin {

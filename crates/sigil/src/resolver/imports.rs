@@ -47,13 +47,7 @@ fn builtin_special_variant_bare_alias(entry: &DeclarationEntry) -> Option<&'stat
     if entry.kind != DeclarationKind::EnumVariant {
         return None;
     }
-    match global_surface_name(&entry.fq_name) {
-        "Result::Ok" => Some("Ok"),
-        "Result::Err" => Some("Err"),
-        "Boolean::True" => Some("True"),
-        "Boolean::False" => Some("False"),
-        _ => None,
-    }
+    sindr::names::special_enum_variant_meta(&entry.fq_name).map(|meta| meta.bare_alias)
 }
 
 fn auto_import_trait_names(
@@ -1042,6 +1036,19 @@ fn bind_import_name(
     auto_import: bool,
     span: Span,
 ) -> Result<(), ResolveError> {
+    if let Some(meta) = sindr::names::special_enum_variant_alias_meta(short_name) {
+        let target = import_context
+            .declaration_uids
+            .iter()
+            .find_map(|(name, target)| {
+                sindr::names::special_enum_variant_meta(name)
+                    .is_some_and(|registered| registered.qualified_name == meta.qualified_name)
+                    .then_some(*target)
+            });
+        if target != Some(uid) {
+            reject_special_variant_binding(short_name, &span)?;
+        }
+    }
     if let Some(existing_uid) = scope.lookup(short_name) {
         if existing_uid == uid {
             if auto_import {
@@ -1050,17 +1057,6 @@ fn bind_import_name(
             return Ok(());
         }
         if auto_import
-            && !import_context
-                .declaration_uid_kinds
-                .contains_key(&existing_uid)
-        {
-            scope.define_with_id(short_name, uid);
-            record_effective_auto_import_binding(import_context, uid, short_name);
-            return Ok(());
-        }
-        if auto_import
-            && module_name == "Result"
-            && matches!(short_name, "Ok" | "Err")
             && !import_context
                 .declaration_uid_kinds
                 .contains_key(&existing_uid)

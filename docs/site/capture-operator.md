@@ -69,7 +69,8 @@ inc_from_value: (Int -> Int) = &by_add(&1, 1)
 
 ## データ型コンストラクタ capture
 
-ユーザ定義の Record、Struct、Enum のコンストラクタも関数値として capture できます。
+Record、Struct、Enum variant のコンストラクタも関数値として capture できます。
+標準の `Result` と `Boolean` も同じ規則を使います。
 
 ```surtr
 defrecord User(name: String, age: Int)
@@ -151,8 +152,30 @@ constructor capture の引数は位置指定だけです。通常の Record / St
 3 要素以上の tuple は literal で構築するため、nominal constructor capture の対象外です。2-tuple は
 既存の ``&`(,)` `` を使います。
 
-この節の通常 constructor 規則はユーザ定義の Record、Struct、Enum を対象にします。標準の
-`Result` と `Boolean` はコンパイラ管理の既存 surface に従い、この規則では変更しません。
+### Result と Boolean
+
+`Ok` / `Err` / `True` / `False` も、通常の Enum variant と同じ規則で capture できます。
+
+```surtr
+wrap: (Int -> Result<Int>) = &Ok
+wrap_placeholder: (Int -> Result<Int>) = &Ok(&1)
+yes: (-> Boolean) = &True
+no: (-> Boolean) = &False
+```
+
+成功型は payload や期待型から推論されます。`err = Err(NoneError)` の成功型は
+多相のまま保持できますが、capture の callable binding には具体的な signature が必要です。
+
+`Err` の payload は具象 `deferror` に限られます。`&Err` や `&Err(&1)` は
+通常 callable の引数へ `Error` を公開するため拒否されます。具象 error を生成する式を
+capture 内に固定し、通常の値だけを入力へ公開することはできます。
+
+```surtr
+deferror InvalidValue(value: Int) { to_string(value) }
+fail: (Int -> Result<Int>) = &Err(InvalidValue(&1))
+```
+
+`Result<T>` の失敗枝に収まる Error は、通常 callable の Error 入出力公開には該当しません。
 
 ## operator capture
 

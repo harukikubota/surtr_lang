@@ -3,6 +3,10 @@
 Surtr では例外機構を持ちません。  
 失敗は `raise` するものではなく、`Result` に乗った値として返し、必要ならその場で `match` して回復します。
 
+成功値を作る基本構文は `Result::Ok(value)` です。糖衣構文として `Ok(value)` とも書けます。
+失敗値も同様に、`Result::Err(error)` を `Err(error)` と書けます。どちらも同じ variant を参照します。
+以下の説明とコード例では、糖衣構文の `Ok` / `Err` を使います。
+
 process surface の `init` / `get` / `set` / `call` でも同じ流儀を使います。`PID<T>` や singleton / worker の全体像は `./process.md` を見てください。
 
 ## 基本方針
@@ -53,6 +57,21 @@ def parse_port(text: String) -> Result<Int> {
   }
 }
 ```
+
+## Result の variant と型推論
+
+`Ok` と `Err` は、標準 Enum `Result` の variant を参照する予約 alias です。
+通常の Enum と同じ呼び出し・capture・Pattern を使います。
+
+```surtr
+value: Result<Int> = Ok(1)
+failed: Result<Int> = Err(NoneError)
+wrap: (Int -> Result<Int>) = &Ok
+```
+
+成功型は payload と期待型から推論できます。`value: Result<Int> = Ok("text")` は型不一致で拒否されます。
+`err = Err(NoneError)` のような失敗値は成功型の多相性を保持します。
+Error の制約は capture でも変わりません。詳細は [constructor capture](./capture-operator.md#result-と-boolean) を参照してください。
 
 ## `Result` が標準、`Option` は別コンテナ
 
@@ -122,8 +141,8 @@ def render_bool(text: String) -> String {
 
 ```surtr
 def check_ready() -> Result<()> {
-  Result::Ok(())?
-  Result::Ok(
+  Ok(())?
+  Ok(
     (),
   )?
   Ok(())

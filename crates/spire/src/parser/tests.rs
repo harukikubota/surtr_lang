@@ -816,7 +816,7 @@ fn test_function_call_accepts_trailing_block_arg() {
             assert_eq!(args.len(), 2);
             assert!(matches!(
                 &args[0],
-                RecordLitArg::Positional(Ast::Lit(_, Lit::Bool(true)))
+                RecordLitArg::Positional(Ast::ConstructorCall(_, name, args)) if name == "Boolean::True" && args.is_empty()
             ));
             assert!(matches!(
                 &args[1],
@@ -1987,19 +1987,19 @@ fn test_defmod_rejects_builtin_special_variant_owner_name() {
         .expect_err("builtin-special variant alias should be reserved as an owner");
     assert!(err
         .message()
-        .contains("Module name `Ok` is reserved for builtin-special enum variant sugar"));
+        .contains("Module name `Ok` is reserved for canonical enum variant aliases"));
 
     let err = parse("defmod Auth::Err { def ok() -> Int { 1 } }")
         .expect_err("builtin-special variant alias should be reserved as a qualified owner tail");
     assert!(err
         .message()
-        .contains("Module name `Err` is reserved for builtin-special enum variant sugar"));
+        .contains("Module name `Err` is reserved for canonical enum variant aliases"));
 
     let err = parse("defmod True { def ok() -> Int { 1 } }")
         .expect_err("Boolean variant alias should be reserved as an owner");
     assert!(err
         .message()
-        .contains("Module name `True` is reserved for builtin-special enum variant sugar"));
+        .contains("Module name `True` is reserved for canonical enum variant aliases"));
 }
 
 #[test]
@@ -2281,64 +2281,6 @@ fn test_builtin_type_decl_preserves_generic_head() {
         ast.as_slice(),
         [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, _)]
             if name == "Result" && params.as_slice() == ["$T"]
-    ));
-}
-
-#[test]
-fn test_std_module_result_ctor_decls_are_accepted() {
-    let ast = parse_with_context(
-        r#"@doc """
-Construct the success branch.
-"""
-def Ok($T) -> Result<$T>
-
-@doc """
-Construct the error branch.
-"""
-def Err(Error) -> Result<$T>"#,
-        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
-    )
-    .expect("result constructor declarations should parse in std modules");
-
-    assert_eq!(ast.len(), 2);
-    assert!(matches!(
-        &ast[0],
-        Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
-            if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
-    ));
-    assert!(matches!(
-        &ast[1],
-        Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
-            if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
-    ));
-}
-
-#[test]
-fn test_std_module_result_ctor_builtin_type_contracts_are_accepted() {
-    let ast = parse_with_context(
-        r#"@doc """
-Construct the success branch.
-"""
-@builtin type Ok($T) -> Result<$T>
-
-@doc """
-Construct the error branch.
-"""
-@builtin type Err(Error) -> Result<$T>"#,
-        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
-    )
-    .expect("result constructor builtin contracts should parse in std modules");
-
-    assert_eq!(ast.len(), 2);
-    assert!(matches!(
-        &ast[0],
-        Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
-            if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
-    ));
-    assert!(matches!(
-        &ast[1],
-        Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
-            if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
     ));
 }
 
@@ -3391,7 +3333,7 @@ fn test_constructor_pattern_safebind() {
             assert!(matches!(
                 pattern,
                 AstPattern::Call(_, ctor, inner)
-                    if ctor == "Ok"
+                    if ctor == "Result::Ok"
                     && inner.len() == 1 && matches!(inner[0].pattern.as_deref(), Some(AstPattern::Var(_, name)) if name == "num")
             ));
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
@@ -3474,7 +3416,7 @@ fn test_list_pattern_with_nested_constructor_literals_safebind() {
                 AstPattern::ListCons(_, first, rest)
                     if matches!(first.as_ref(),
                         AstPattern::Call(_, ctor, inner)
-                        if ctor == "Ok" && inner.len() == 1 && matches!(inner[0].pattern.as_deref(), Some(AstPattern::IntLit(_, n)) if n == &int(1))
+                        if ctor == "Result::Ok" && inner.len() == 1 && matches!(inner[0].pattern.as_deref(), Some(AstPattern::IntLit(_, n)) if n == &int(1))
                     )
                     && matches!(rhs.as_ref(), Ast::Var(_, name) if name == "lr")
                     && matches!(rest.as_ref(), AstPattern::ListCons(_, _, _))
@@ -3984,7 +3926,7 @@ fn test_nested_generic_type_closes_without_confusing_compose() {
             ));
             assert!(matches!(
                 rhs.as_ref(),
-                Ast::ConstructorCall(_, ctor, args) if ctor == "Ok" && args.len() == 1
+                Ast::ConstructorCall(_, ctor, args) if ctor == "Result::Ok" && args.len() == 1
             ));
         }
         other => panic!("Expected annotated Result<List<Int>> bind, got {:?}", other),
@@ -8184,4 +8126,144 @@ fn statement_question_retains_optional_type_and_facet_suffixes() {
             FacetPathSegment::Field { optional: true, .. }
         ))
     ));
+}
+
+#[test]
+fn special_enum_aliases_normalize_to_canonical_constructor_calls() {
+    for (input, canonical) in [
+        ("Ok(1)", "Result::Ok"),
+        ("Err(NoneError)", "Result::Err"),
+        ("True", "Boolean::True"),
+        ("False", "Boolean::False"),
+        ("Boolean::True", "Boolean::True"),
+        ("Boolean::False", "Boolean::False"),
+    ] {
+        let ast = parse(input).unwrap();
+        assert!(
+            matches!(&ast[0], Ast::ConstructorCall(_, name, _) if name == canonical),
+            "{input}: {:?}",
+            ast[0]
+        );
+    }
+}
+
+#[test]
+fn special_enum_capture_aliases_normalize_to_canonical_paths() {
+    for (input, canonical) in [
+        ("&Ok", "Result::Ok"),
+        ("&`Ok`", "Result::Ok"),
+        ("&`True`", "Boolean::True"),
+        ("&Err", "Result::Err"),
+        ("&True", "Boolean::True"),
+        ("&False", "Boolean::False"),
+        ("&Boolean::True", "Boolean::True"),
+    ] {
+        let ast = parse(input).unwrap();
+        assert!(
+            matches!(&ast[0], Ast::Capture(_, target, _) if matches!(target.as_ref(), Ast::Path(_, path) if path.segments.join("::") == canonical)),
+            "{input}: {:?}",
+            ast[0]
+        );
+    }
+}
+
+#[test]
+fn old_result_constructor_contracts_are_rejected_independent_of_module_path() {
+    for module in [None, Some("Bootstrap".into())] {
+        for input in [
+            "def Ok($T) -> Result<$T>",
+            "@builtin type Ok($T) -> Result<$T>",
+        ] {
+            assert!(
+                parse_with_context(
+                    input,
+                    ParserContext::module(1, module.clone()).with_rules(ParseRules::std_module())
+                )
+                .is_err(),
+                "{input} must be rejected"
+            );
+        }
+    }
+}
+
+#[test]
+fn special_enum_pattern_aliases_normalize_without_confusing_other_owners() {
+    for (input, canonical) in [
+        ("Ok(value) = item", "Result::Ok"),
+        ("Err(error) = item", "Result::Err"),
+        ("True =? item", "Boolean::True"),
+        ("Boolean::False =? item", "Boolean::False"),
+        ("Other::Ok(value) = item", "Other::Ok"),
+        ("MatchResult::Err = item", "MatchResult::Err"),
+    ] {
+        let ast = parse(input).unwrap();
+        let (Ast::Bind(_, pattern, _) | Ast::SafeBind(_, pattern, _)) = &ast[0] else {
+            panic!("binding expected");
+        };
+        assert!(
+            matches!(pattern, AstPattern::Call(_, name, _) | AstPattern::Constructor(_, name, _) if name == canonical),
+            "{input}: {pattern:?}"
+        );
+    }
+}
+
+#[test]
+fn special_enum_bare_alias_bindings_and_arguments_are_reserved() {
+    for input in [
+        "Err: Int = 1",
+        "def helper(Ok: Int) -> Int { Ok }",
+        "def helper(Err: Int) -> Int { Err }",
+    ] {
+        assert!(
+            parse(input).is_err(),
+            "{input} must not shadow a canonical alias"
+        );
+    }
+}
+
+#[test]
+fn generic_enum_boolean_named_variants_use_the_ordinary_constructor_grammar() {
+    for (owner, variant) in [
+        ("Other", "True"),
+        ("Other", "False"),
+        ("Boolean", "True"),
+        ("Boolean", "False"),
+    ] {
+        let source = format!("{owner}<Int>::{variant}");
+        let ast = parse(&source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert!(
+            matches!(&ast[0], Ast::EnumConstructorCall(_, actual_owner, args, actual_variant, values) if actual_owner == owner && matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "Int") && actual_variant == variant && values.is_empty())
+        );
+        let source = format!("&{owner}<Int>::{variant}");
+        let ast = parse(&source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert!(
+            matches!(&ast[0], Ast::Capture(_, target, captures) if captures.is_empty() && matches!(target.as_ref(), Ast::EnumConstructorCall(_, actual_owner, args, actual_variant, values) if actual_owner == owner && matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "Int") && actual_variant == variant && values.is_empty()))
+        );
+    }
+}
+
+#[test]
+fn ordinary_enums_may_declare_qualified_boolean_named_variants() {
+    let declarations = parse("defenum Other<$T> { True($T), False }")
+        .expect("qualified variants do not redefine bare aliases");
+    assert!(
+        matches!(&declarations[0], Ast::EnumDef(_, owner, _, variants, _) if owner.ends_with("Other") && variants.iter().map(|variant| variant.name.as_str()).collect::<Vec<_>>() == ["True", "False"])
+    );
+    let direct = parse("Other::True(1)").unwrap();
+    assert!(
+        matches!(&direct[0], Ast::ConstructorCall(_, owner, values) if owner == "Other::True" && values.len() == 1)
+    );
+    let qualified = parse("Other::False").unwrap();
+    assert!(matches!(&qualified[0], Ast::Path(_, path) if path.segments == ["Other", "False"]));
+    let captures = parse("&Other::True(&1)\n&Other<Int>::True").unwrap();
+    assert!(
+        matches!(&captures[0], Ast::Capture(_, target, values) if matches!(target.as_ref(), Ast::Path(_, path) if path.segments == ["Other", "True"]) && values.len() == 1)
+    );
+    assert!(
+        matches!(&captures[1], Ast::Capture(_, target, _) if matches!(target.as_ref(), Ast::EnumConstructorCall(_, owner, args, variant, _) if owner == "Other" && args.len() == 1 && variant == "True"))
+    );
+    let patterns = parse("match value { Other::True(item) => item, Other::False => 0 }").unwrap();
+    assert!(
+        matches!(&patterns[0], Ast::Match(_, _, arms) if matches!(&arms[0].pattern, AstPattern::Call(_, owner, _) if owner == "Other::True") && matches!(&arms[1].pattern, AstPattern::Constructor(_, owner, _) if owner == "Other::False"))
+    );
 }

@@ -1375,27 +1375,30 @@ defmod B {
     }
 
     #[test]
-    fn lower_module_source_merges_result_ctors_into_single_impl_owner() {
+    fn lower_module_source_keeps_result_enum_in_global_declaration_stage() {
         let ast = spire::parse_with_context(
-            r#"@builtin type Ok($T) -> Result<$T>
-
-impl Result {
-  def dummy() { () }
-}"#,
+            r#"@builtin defenum Result<$T> { Ok($T), Err(Error) }
+impl Result { def dummy() { () } }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("standard definition source should parse");
-
         let lowered = lower_module_source_ast(ast, None);
-        assert_eq!(lowered.len(), 1);
-        assert_eq!(lowered[0].module_path, "Global::Result");
-        assert!(lowered[0].ast.iter().any(
-            |stmt| matches!(stmt, spire::ast::Ast::ResultCtorDecl(_, name, _, _, _) if name == "Ok")
+        assert_eq!(lowered.len(), 2);
+        let global = lowered
+            .iter()
+            .find(|module| module.module_path.is_empty())
+            .unwrap();
+        assert!(global.ast.iter().any(
+            |stmt| matches!(stmt, spire::ast::Ast::EnumDef(_, name, _, _, _) if name == "Global::Result")
         ));
-        assert!(lowered[0].ast.iter().any(
-            |stmt| matches!(stmt, spire::ast::Ast::ImplDef(_, target, _, methods, _) if target == "Global::Result"
-                && methods.iter().any(|method| matches!(method, spire::ast::Ast::Def(_, name, _, _, _, _, _, _) if name == "dummy")))
-        ));
+        let owner = lowered
+            .iter()
+            .find(|module| module.module_path == "Global::Result")
+            .unwrap();
+        assert!(owner
+            .ast
+            .iter()
+            .any(|stmt| matches!(stmt, spire::ast::Ast::ImplDef(..))));
     }
 
     #[test]

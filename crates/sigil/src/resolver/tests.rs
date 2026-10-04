@@ -2,7 +2,7 @@ use super::*;
 use sindr::names::{FacetRootKind, TypeIdentity};
 use sindr::primitives::int;
 use sindr::warning::WarningKind;
-use spire::ast::{AstTy, BinOp, Lit};
+use spire::ast::{AstPath, AstTy, BinOp, ImportSpec, Lit};
 use spire::parse;
 
 fn resolve_on_cli_sized_stack(source: String) -> Vec<Resolved> {
@@ -12,6 +12,296 @@ fn resolve_on_cli_sized_stack(source: String) -> Vec<Resolved> {
         .expect("resolver worker should start")
         .join()
         .expect("resolver worker should finish")
+}
+
+#[test]
+fn special_variants_require_a_real_enum_declaration() {
+    for source in ["Ok(1)", "Err(1)", "Result::Ok(1)", "Boolean::True"] {
+        let error = resolve(parse(source).expect("input parses"))
+            .expect_err("isolated resolver must not invent constructors");
+        assert!(
+            error.message.contains("Undefined"),
+            "{source}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn compiler_builtin_symbols_use_only_the_registered_allocator_slots() {
+    let scope = scope_init::initialize_scope();
+    let count = scope.bindings().count();
+    assert_eq!(scope.next_id() as usize, count);
+    for name in ["Ok", "Err", "True", "False", "Result::Ok", "Boolean::True"] {
+        assert_eq!(scope.lookup(name), None);
+    }
+}
+
+#[test]
+fn canonical_special_variants_share_alias_and_capture_targets() {
+    let mut session = SigilSession::new();
+    session
+        .resolve(canonical_test_enum_declarations())
+        .expect("real enum registration");
+    for meta in sindr::names::SPECIAL_ENUM_VARIANT_METAS {
+        assert_eq!(
+            session.lookup_uid(meta.bare_alias),
+            session.lookup_uid(meta.qualified_name)
+        );
+        let captures = session
+            .resolve(parse(&format!("&{}\n&{}", meta.bare_alias, meta.qualified_name)).unwrap())
+            .unwrap();
+        let targets = captures
+            .iter()
+            .map(|node| {
+                let Resolved::Capture(_, target, _) = node else {
+                    panic!("capture expected: {node:?}")
+                };
+                let Resolved::Var(_, id) = target.as_ref() else {
+                    panic!("variant identity expected")
+                };
+                id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(targets[0].unique_id, targets[1].unique_id);
+        assert_eq!(targets[0].name, meta.qualified_name);
+        assert_eq!(
+            targets[0]
+                .qualified_name
+                .as_deref()
+                .map(global_surface_name),
+            Some(meta.qualified_name)
+        );
+        assert_eq!(targets[0].symbol_info, targets[1].symbol_info);
+    }
+}
+
+#[test]
+fn reserved_special_variant_aliases_reject_programmatic_binding_and_argument_shadowing() {
+    for meta in sindr::names::SPECIAL_ENUM_VARIANT_METAS {
+        let span = Span { start: 0, end: 1 };
+        let binding = Ast::Bind(
+            span.clone(),
+            AstPattern::Var(span.clone(), meta.bare_alias.into()),
+            Box::new(Ast::Lit(span.clone(), Lit::Int(int(1)))),
+        );
+        let error = resolve(vec![binding]).expect_err("reserved binding must reject without std");
+        assert!(error.message.contains("reserved"));
+        let closure = Ast::Closure(
+            span.clone(),
+            vec![ClosureParam {
+                name: meta.bare_alias.into(),
+                ty: None,
+                span: span.clone(),
+            }],
+            Box::new(Ast::Lit(span, Lit::Int(int(1)))),
+        );
+        let error = resolve(vec![closure]).expect_err("reserved argument must reject without std");
+        assert!(error.message.contains("reserved"));
+    }
+}
+
+// Model an import surface with a bare alias while retaining the real Enum
+// declaration identity. Enum members normally live in the flat type namespace.
+fn variant_import_path(owner: &str) -> AstPath {
+    AstPath {
+        span: Span { start: 0, end: 1 },
+        segments: vec![owner.into()],
+    }
+}
+
+fn variant_import_registry(target: &str, include_canonical: bool) -> DeclarationIndex {
+    let mut ast = if include_canonical {
+        canonical_test_enum_declarations()
+    } else {
+        Vec::new()
+    };
+    ast.extend(parse_module_ast(
+        "defenum Other { Ok(Int), Err(Int), True, False }\n@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }", ""));
+    let mut index = precollect_declaration_index(&[vec![staged_module("", ast)]]).unwrap();
+    let (owner, alias) = target.rsplit_once("::").unwrap();
+    let entry = index
+        .values_mut()
+        .find(|entry| global_surface_name(&entry.fq_name) == target)
+        .unwrap();
+    entry.module_path = owner.into();
+    entry.name = alias.into();
+    index
+}
+
+#[test]
+fn special_variant_import_aliases_reject_foreign_enum_identity() {
+    for target in [
+        "Other::Ok",
+        "Other::Err",
+        "Other::True",
+        "Other::False",
+        "MatchResult::Ok",
+        "MatchResult::Err",
+    ] {
+        for include_canonical in [false, true] {
+            let index = variant_import_registry(target, include_canonical);
+            let uids = assign_declaration_uids(&index);
+            let kinds = declaration_uid_kind_map(&index, &uids);
+            let scope = build_global_scope(&index, &uids);
+            let (owner, alias) = target.rsplit_once("::").unwrap();
+            for spec in [
+                ImportSpec::Single(alias.into()),
+                ImportSpec::List(vec![alias.into()]),
+                ImportSpec::All,
+            ] {
+                let imports = [Ast::Import(
+                    Span { start: 0, end: 1 },
+                    variant_import_path(owner),
+                    spec,
+                )];
+                let error = build_module_scope_with_imports(
+                    &scope,
+                    &[],
+                    &index,
+                    &uids,
+                    &kinds,
+                    &imports,
+                    None,
+                    0,
+                )
+                .err()
+                .expect("foreign import cannot shadow a reserved variant alias");
+                assert_eq!(
+                    error.diagnostic.reason,
+                    crate::error::ResolveErrorReason::Declaration,
+                    "{target}: {error:?}"
+                );
+                let meta = sindr::names::special_enum_variant_alias_meta(alias).unwrap();
+                assert_eq!(
+                    error.diagnostic.subject.as_deref(),
+                    Some(meta.qualified_name)
+                );
+                assert!(error.message.contains("reserved"), "{target}: {error:?}");
+            }
+            let auto_imports = [AutoImportModule {
+                name: owner.into(),
+                stage_index: 0,
+            }];
+            let error = build_module_scope_with_imports(
+                &scope,
+                &auto_imports,
+                &index,
+                &uids,
+                &kinds,
+                &[],
+                None,
+                0,
+            )
+            .err()
+            .expect("foreign auto-import cannot shadow a reserved variant alias");
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Declaration,
+                "{target}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn special_variant_import_aliases_preserve_canonical_uid_and_duplicate_rule() {
+    let index = variant_import_registry("Result::Ok", true);
+    let uids = assign_declaration_uids(&index);
+    let kinds = declaration_uid_kind_map(&index, &uids);
+    let scope = build_global_scope(&index, &uids);
+    let uid = scope.lookup("Result::Ok").unwrap();
+    for spec in [
+        ImportSpec::Single("Ok".into()),
+        ImportSpec::List(vec!["Ok".into()]),
+        ImportSpec::All,
+    ] {
+        let imports = [Ast::Import(
+            Span { start: 0, end: 1 },
+            variant_import_path("Result"),
+            spec,
+        )];
+        let imported =
+            build_module_scope_with_imports(&scope, &[], &index, &uids, &kinds, &imports, None, 0)
+                .expect("canonical variant may retain its own alias");
+        assert_eq!(imported.scope.lookup("Ok"), Some(uid));
+        assert_eq!(imported.scope.lookup("Result::Ok"), Some(uid));
+        assert_eq!(imported.scope.next_id(), scope.next_id());
+    }
+    let imports = vec![
+        Ast::Import(
+            Span { start: 0, end: 1 },
+            variant_import_path("Result"),
+            ImportSpec::Single("Ok".into())
+        );
+        2
+    ];
+    let error =
+        build_module_scope_with_imports(&scope, &[], &index, &uids, &kinds, &imports, None, 0)
+            .err()
+            .expect("same target does not bypass explicit duplicate imports");
+    assert_eq!(
+        error.diagnostic.reason,
+        crate::error::ResolveErrorReason::Import
+    );
+    assert!(error.message.contains("Duplicate import"), "{error:?}");
+}
+
+#[test]
+fn session_variant_allocation_follows_declaration_order_and_rollback() {
+    let mut session = SigilSession::new();
+    let ordinary = parse("defenum First { Value }").unwrap();
+    session.resolve(ordinary).unwrap();
+    let first = session.lookup_uid("First::Value").unwrap();
+    let checkpoint = session.checkpoint();
+    session.resolve(canonical_test_enum_declarations()).unwrap();
+    let ok = session.lookup_uid("Result::Ok").unwrap();
+    assert!(ok > first);
+    session.rollback(checkpoint);
+    assert_eq!(session.lookup_uid("Ok"), None);
+    session.resolve(canonical_test_enum_declarations()).unwrap();
+    assert_eq!(session.lookup_uid("Result::Ok"), Some(ok));
+}
+
+#[test]
+fn boolean_owner_type_arguments_use_the_normal_enum_arity_diagnostic() {
+    for source in ["Boolean<Int>::True", "&Boolean<Int>::False"] {
+        let error = parse_and_resolve(source).expect_err("Boolean has no owner type arguments");
+        assert!(
+            error.message.contains("expects 0 type argument(s), got 1"),
+            "{source}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn compiler_registered_internal_builtins_resolve_only_generated_references() {
+    for name in [
+        "__genserver_call_reply",
+        "__task_call_timeout",
+        "__task_await_timeout",
+        "__workers_submit_timeout",
+        "__workers_broadcast_timeout",
+    ] {
+        let span = Span { start: 0, end: 1 };
+        let resolved = resolve(vec![Ast::InternalVar(span.clone(), name.into())])
+            .expect("parser-generated runtime helper must have an allocated binding");
+        let Resolved::Var(_, id) = &resolved[0] else {
+            panic!("expected runtime helper reference");
+        };
+        let registered = compiler_builtin_bindings()
+            .into_iter()
+            .find(|(_, meta)| meta.name == name)
+            .expect("registered metadata");
+        assert_eq!(id.unique_id, registered.0);
+        assert!(id.compiler_generated);
+        let error = resolve(vec![Ast::Var(span, name.into())])
+            .expect_err("generated runtime helper is private");
+        assert_eq!(
+            error.diagnostic.reason,
+            crate::error::ResolveErrorReason::Visibility
+        );
+    }
 }
 
 #[test]
@@ -69,14 +359,12 @@ fn staged_builtin_members_keep_their_canonical_declaration_uid() {
 }
 
 #[test]
-fn user_declarations_do_not_overlap_any_runtime_builtin_uid() {
+fn user_declarations_follow_registered_builtin_symbols() {
     let resolved = parse_and_resolve("user_binding = 1").expect("user binding should resolve");
     let Resolved::Bind(_, ResolvedPattern::Var(binding), _) = &resolved[0] else {
         panic!("expected user binding");
     };
-    for (index, _) in builtin_function_metas().iter().enumerate() {
-        assert_ne!(binding.unique_id, builtin_uid(index as u16));
-    }
+    assert!(binding.unique_id as usize >= compiler_builtin_bindings().len());
 }
 
 #[test]
@@ -174,10 +462,33 @@ fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
     ast
 }
 
+fn canonical_test_enum_declarations() -> Vec<Ast> {
+    spire::parse_with_context(
+        "@builtin defenum Result<$T> { Ok($T), Err(Error) }\n@builtin defenum Boolean { True, False }",
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    ).expect("canonical enum declarations parse")
+}
+
+fn add_test_enum_declarations(mut ast: Vec<Ast>) -> (Vec<Ast>, usize) {
+    let mut declarations = canonical_test_enum_declarations();
+    declarations.retain(|candidate| {
+        let Ast::EnumDef(_, candidate_name, ..) = candidate else {
+            unreachable!()
+        };
+        !ast.iter()
+            .any(|node| matches!(node, Ast::EnumDef(_, name, ..) if name == candidate_name))
+    });
+    let count = declarations.len();
+    declarations.append(&mut ast);
+    (declarations, count)
+}
+
 fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     let ast =
         spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
-    resolve(ast)
+    let (ast, count) = add_test_enum_declarations(ast);
+    let mut resolved = resolve(ast)?;
+    Ok(resolved.split_off(count))
 }
 
 fn kernel_pattern_test_module() -> StagedModuleAst {
@@ -198,7 +509,10 @@ fn parse_and_resolve_with_warnings(
 ) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
     let ast =
         spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
-    resolve_with_warnings(ast)
+    let (ast, count) = add_test_enum_declarations(ast);
+    let mut output = resolve_with_warnings(ast)?;
+    output.value = output.value.split_off(count);
+    Ok(output)
 }
 
 #[test]
@@ -550,10 +864,23 @@ fn resolve_user_with_modules(
 ) -> Result<Vec<Resolved>, ResolveError> {
     let user_ast = spire::parse_with_context(user_src, spire::ParserContext::project(0))
         .expect("user script should parse");
-    let mut full_stages = vec![vec![staged_module(
-        "Bootstrap",
-        parse_module_ast(
-            r#"@builtin def print(a: String) -> Unit
+    let mut canonical_declarations = canonical_test_enum_declarations();
+    canonical_declarations.retain(|candidate| {
+        let Ast::EnumDef(_, candidate_name, ..) = candidate else {
+            unreachable!()
+        };
+        !module_stages
+            .iter()
+            .flatten()
+            .flat_map(|module| &module.ast)
+            .any(|node| matches!(node, Ast::EnumDef(_, name, ..) if name == candidate_name))
+    });
+    let mut full_stages = vec![vec![
+        staged_module("", canonical_declarations),
+        staged_module(
+            "Bootstrap",
+            parse_module_ast(
+                r#"@builtin def print(a: String) -> Unit
 @builtin def to_string(a: $A) -> String
 @builtin def inspect(a: $A) -> String
 @builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
@@ -564,9 +891,10 @@ deferror NoneError { "none" }
 deferror ZeroDivisionError { "division by zero" }
 deferror EmptyList { "Empty List." }
 deferror IndexOutOfBounds(detail: String) { detail }"#,
-            "Bootstrap",
+                "Bootstrap",
+            ),
         ),
-    )]];
+    ]];
     full_stages.push(vec![
         staged_module(
             "Agent",
@@ -617,10 +945,23 @@ fn resolve_user_with_modules_with_warnings(
 ) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
     let user_ast = spire::parse_with_context(user_src, spire::ParserContext::project(0))
         .expect("user script should parse");
-    let mut full_stages = vec![vec![staged_module(
-        "Bootstrap",
-        parse_module_ast(
-            r#"@builtin def print(a: String) -> Unit
+    let mut canonical_declarations = canonical_test_enum_declarations();
+    canonical_declarations.retain(|candidate| {
+        let Ast::EnumDef(_, candidate_name, ..) = candidate else {
+            unreachable!()
+        };
+        !module_stages
+            .iter()
+            .flatten()
+            .flat_map(|module| &module.ast)
+            .any(|node| matches!(node, Ast::EnumDef(_, name, ..) if name == candidate_name))
+    });
+    let mut full_stages = vec![vec![
+        staged_module("", canonical_declarations),
+        staged_module(
+            "Bootstrap",
+            parse_module_ast(
+                r#"@builtin def print(a: String) -> Unit
 @builtin def to_string(a: $A) -> String
 @builtin def inspect(a: $A) -> String
 @builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
@@ -631,9 +972,10 @@ deferror NoneError { "none" }
 deferror ZeroDivisionError { "division by zero" }
 deferror EmptyList { "Empty List." }
 deferror IndexOutOfBounds(detail: String) { detail }"#,
-            "Bootstrap",
+                "Bootstrap",
+            ),
         ),
-    )]];
+    ]];
     full_stages.push(vec![
         staged_module(
             "Agent",
@@ -1285,7 +1627,7 @@ fn test_precollect_namespaced_duplicate_type_is_rejected() {
 }
 
 #[test]
-fn test_precollect_declaration_index_is_deterministic_when_stage_input_order_changes() {
+fn test_precollect_declaration_index_preserves_compiler_registration_order() {
     let mod_a = staged_module(
         "Std::A",
         parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::A"),
@@ -1299,7 +1641,22 @@ fn test_precollect_declaration_index_is_deterministic_when_stage_input_order_cha
     let index_swapped =
         precollect_declaration_index(&[vec![mod_b.clone(), mod_a.clone()]]).unwrap();
 
-    assert_eq!(index_first, index_swapped);
+    assert_eq!(
+        index_first.keys().collect::<Vec<_>>(),
+        index_swapped.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        declaration_uid_order(&index_first),
+        vec!["Std::A::same", "Std::B::same"]
+    );
+    assert_eq!(
+        declaration_uid_order(&index_swapped),
+        vec!["Std::B::same", "Std::A::same"]
+    );
+    assert_eq!(
+        index_first,
+        precollect_declaration_index(&[vec![mod_a, mod_b]]).unwrap()
+    );
     assert!(index_first.contains_key("Std::A::same"));
     assert!(index_first.contains_key("Std::B::same"));
 }
@@ -1355,7 +1712,7 @@ fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
 }
 
 #[test]
-fn declaration_uid_order_is_stage_then_fq_name() {
+fn declaration_uid_order_preserves_stage_registration_order() {
     let module_stages = vec![
         vec![staged_module(
             "User::B",
@@ -1379,8 +1736,8 @@ fn declaration_uid_order_is_stage_then_fq_name() {
         declaration_uid_order(&index),
         vec![
             "User::B::beta".to_string(),
-            "User::A::alpha".to_string(),
             "User::Z::zeta".to_string(),
+            "User::A::alpha".to_string(),
         ]
     );
 }
@@ -1416,11 +1773,11 @@ fn declaration_ordering_exposes_stage_metadata() {
             },
             StageOrderedDeclaration {
                 stage_index: 1,
-                fq_name: "User::A::alpha".to_string(),
+                fq_name: "User::Z::zeta".to_string(),
             },
             StageOrderedDeclaration {
                 stage_index: 1,
-                fq_name: "User::Z::zeta".to_string(),
+                fq_name: "User::A::alpha".to_string(),
             },
         ]
     );
@@ -1428,8 +1785,8 @@ fn declaration_ordering_exposes_stage_metadata() {
         ordering.fq_names(),
         vec![
             "User::B::beta".to_string(),
-            "User::A::alpha".to_string(),
             "User::Z::zeta".to_string(),
+            "User::A::alpha".to_string(),
         ]
     );
 }
@@ -3969,7 +4326,9 @@ x = and(False, rhs())"#,
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                assert!(
+                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::False" && args.is_empty())
+                );
                 assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
                 assert!(matches!(
                     else_branch.as_ref(),
@@ -3992,7 +4351,9 @@ x = or(True, rhs())"#,
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                assert!(
+                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::True" && args.is_empty())
+                );
                 assert!(matches!(
                     then_branch.as_ref(),
                     Resolved::Lit(_, Lit::Bool(true))
@@ -4015,7 +4376,9 @@ x = False && rhs()"#,
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                assert!(
+                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::False" && args.is_empty())
+                );
                 assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
                 assert!(matches!(
                     else_branch.as_ref(),
@@ -4038,7 +4401,9 @@ x = True || rhs()"#,
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                assert!(
+                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::True" && args.is_empty())
+                );
                 assert!(matches!(
                     then_branch.as_ref(),
                     Resolved::Lit(_, Lit::Bool(true))
@@ -4062,7 +4427,9 @@ x = False && rhs()"#,
     match &resolved[2] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                assert!(
+                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::False" && args.is_empty())
+                );
                 assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
                 assert!(matches!(
                     else_branch.as_ref(),
@@ -4086,7 +4453,9 @@ x = True || rhs()"#,
     match &resolved[2] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                assert!(
+                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::True" && args.is_empty())
+                );
                 assert!(matches!(
                     then_branch.as_ref(),
                     Resolved::Lit(_, Lit::Bool(true))
@@ -5007,7 +5376,7 @@ Ok(num) =? value"#,
     }
     match &resolved[1] {
         Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs) => {
-            assert_eq!(ctor.name, "Ok");
+            assert_eq!(ctor.name, "Result::Ok");
             assert!(matches!(inner.as_slice(), [ResolvedPattern::Var(id)] if id.name == "num"));
             assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
         }
@@ -5034,7 +5403,7 @@ fn test_safebind_list_with_constructor_literal_pattern_resolution() {
             assert!(matches!(
                 head.as_ref(),
                 ResolvedPattern::Constructor(ctor, inner)
-                    if ctor.name == "Ok"
+                    if ctor.name == "Result::Ok"
                     && matches!(inner.as_slice(), [ResolvedPattern::IntLit(_, n)] if n == &int(1))
             ));
             assert!(matches!(tail.as_ref(), ResolvedPattern::Var(id) if id.name == "tail"));
@@ -6301,6 +6670,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
     declaration_index.insert(
         "Global::Helper::helper".to_string(),
         DeclarationEntry {
+            registration_order: declaration_index.len(),
             value_parameter_count: None,
             module_path: "Global::Helper".to_string(),
             name: "helper".to_string(),
@@ -6317,6 +6687,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
     declaration_index.insert(
         "Global::Kernel::hidden_pid".to_string(),
         DeclarationEntry {
+            registration_order: declaration_index.len(),
             value_parameter_count: None,
             module_path: "Global::Kernel".to_string(),
             name: "hidden_pid".to_string(),
@@ -6600,7 +6971,7 @@ fn test_builtin_special_variant_aliases_cannot_be_declared_as_owners() {
             .expect_err("builtin-special variant alias should not be usable as a module owner");
         assert!(
             err.message
-                .contains("reserved for builtin-special enum variant sugar"),
+                .contains("reserved for canonical enum variant aliases"),
             "{alias}: {}",
             err.message
         );
@@ -6623,7 +6994,7 @@ fn test_builtin_special_variant_aliases_cannot_be_declared_as_owners() {
         .expect_err("builtin-special variant alias should not be usable as a type owner");
         assert!(
             err.message
-                .contains("reserved for builtin-special enum variant sugar"),
+                .contains("reserved for canonical enum variant aliases"),
             "{alias}: {}",
             err.message
         );
@@ -6977,7 +7348,7 @@ result = match value {
                     guard: None,
                     body,
                 } => {
-                    assert_eq!(ctor_id.name, "Ok");
+                    assert_eq!(ctor_id.name, "Result::Ok");
                     let binding_id = match inner.as_slice() {
                         [ResolvedPattern::Var(binding_id)] => binding_id,
                         _ => panic!("Expected constructor inner var binding"),
@@ -8609,7 +8980,7 @@ result = do::<Result> {
     let [ResolvedPattern::Var(extracted)] = extracted_items.as_slice() else {
         panic!("expected extractor payload binding: {extracted_items:?}");
     };
-    assert_eq!(constructor_id.name, "Ok");
+    assert_eq!(constructor_id.name, "Result::Ok");
     assert_eq!(extractor.name, "never");
     assert_eq!(pinned.unique_id, whole.unique_id);
     assert_eq!(final_id.unique_id, extracted.unique_id);

@@ -80,6 +80,12 @@ current working directory 基準で解決し、存在しない path や open/rea
 - 呼び出し元には返り値 1 つのみが push される
 - tail call が最適化された場合、途中フレームの `Return` は省略されうるが、観測上は最終返り値だけが呼び出し元へ渡る
 
+標準 `Result` / `Boolean` の constructor、capture、Pattern は通常 Enum の解決済み variant metadata を受け取る。
+Result の runtime tag は Ok=0 / Err=1、Boolean は既存の primitive Boolean 表現を維持する。
+これらの tag は compiler symbol UID や bytecode `fun_idx` の割り当てには使わない。
+compiler symbol と関数は各登録処理の追加順で採番し、builtin runtime ID は callable metadata から参照する。
+alias に追加の関数枠を作らず、生成する constructor capture / wrapper / closure も通常の関数 allocator を使う。
+
 Extractor の返却は canonical `MatchResult::Ok` / `MatchResult::Err` の enum 表現を使う。
 field 0 は variant discriminant、field 1 は payload とし、Err payload は runtime Error 値である。
 `GetTag` / `GetField` は canonical MatchResult の field 数・discriminant・Err payload を検査し、
@@ -290,7 +296,7 @@ compile / surface 契約との対応は次のとおり。
 - `inspect(Error)` / `to_string(Error)` は head-first tree 表示を返す
 - 先頭行は `Kind("message")`
 - cause がある場合、次行以降を `|_ ...` でネスト表示する
-- `inspect(Result::Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
+- `inspect(Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
 - `inspect(Struct)` / `to_string(Struct)` は `Type(field: value, ...)` を返し、内部専用の `Type { ... }` 構造体リテラルは表示しない
 - `inspect` は再帰的に string literal を quote し、`to_string` は素の string 値を使う
 - private field を含む named-field 値は公開 field のみを表示し、hidden 部分を `..private` として要約する

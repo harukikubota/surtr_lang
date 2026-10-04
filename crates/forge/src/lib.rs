@@ -151,7 +151,6 @@ mod tests {
             .collect::<Vec<_>>();
         let mut lowered = Vec::new();
         let mut shared_global_defs = Vec::new();
-        let mut shared_result_ctor_contracts = Vec::new();
 
         for stmt in ast {
             match stmt {
@@ -227,37 +226,8 @@ mod tests {
                     });
                 }
                 Ast::Import(_, _, _) => {}
-                Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
                 other => shared_global_defs.push(other),
             }
-        }
-
-        // Keep std-file organization from changing the user-visible global
-        // builtin surface in unit tests, while still letting `Result::Ok` /
-        // `Result::Err` attach to the `Result` module where the checker expects
-        // their canonical contract.
-        if !shared_result_ctor_contracts.is_empty() && lowered.len() == 1 {
-            let insert_at = lowered[0]
-                .ast
-                .iter()
-                .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
-                .count();
-            lowered[0]
-                .ast
-                .splice(insert_at..insert_at, shared_result_ctor_contracts);
-        } else if !shared_result_ctor_contracts.is_empty() {
-            let mut global_ast = shared_imports.clone();
-            global_ast.extend(shared_result_ctor_contracts);
-            lowered.push(sigil::StagedModuleAst {
-                source_index: 0,
-                module_path: String::new(),
-                doc_module_path: None,
-                ast: global_ast,
-                owner: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
         }
 
         if !shared_global_defs.is_empty() {
@@ -1505,6 +1475,26 @@ print("ok")"#,
             .any(|op| matches!(op, Opcode::ListLen)));
 
         assert_no_call_builtin(&bytecode, "len");
+    }
+
+    #[test]
+    fn special_enum_captures_use_normal_constructor_lowering() {
+        let bytecode = codegen_source(
+            "yes: (-> Boolean) = &True\nno: (-> Boolean) = &Boolean::False\nwrap: (Int -> Result<Int>) = &Result<_>::Ok\n(yes(), no(), wrap(3))",
+        );
+        assert!(bytecode.functions.iter().all(|entry| {
+            !matches!(
+                entry.qualified_name.as_deref(),
+                Some("Ok" | "Err" | "print")
+            )
+        }));
+        let mut ids = bytecode
+            .functions
+            .iter()
+            .map(|entry| entry.fun_idx)
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..ids.len() as u32).collect::<Vec<_>>());
     }
 
     #[test]

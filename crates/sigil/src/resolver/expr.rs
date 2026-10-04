@@ -937,7 +937,6 @@ impl Resolver {
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
             | Ast::TypeAlias(_, _, _, _)
-            | Ast::ResultCtorDecl(_, _, _, _, _)
             | Ast::Defmod(_, _, _, _)
             | Ast::Defagent(_, _, _, _, _)
             | Ast::Defgenserver(_, _, _, _, _)
@@ -2185,10 +2184,7 @@ impl Resolver {
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
-            declaration_uid_kinds: HashMap::from([
-                (0, DeclarationKind::ResultCtor),
-                (1, DeclarationKind::ResultCtor),
-            ]),
+            declaration_uid_kinds: HashMap::new(),
             declaration_hidden_by_uid: HashMap::new(),
             trait_constructor_slots: HashMap::new(),
             owner_registry: OwnerRegistry::default(),
@@ -2209,10 +2205,7 @@ impl Resolver {
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
-            declaration_uid_kinds: HashMap::from([
-                (0, DeclarationKind::ResultCtor),
-                (1, DeclarationKind::ResultCtor),
-            ]),
+            declaration_uid_kinds: HashMap::new(),
             declaration_hidden_by_uid: HashMap::new(),
             trait_constructor_slots: HashMap::new(),
             owner_registry: OwnerRegistry::default(),
@@ -2316,9 +2309,15 @@ impl Resolver {
     }
 
     fn top_level_value_bindings(&self) -> HashMap<u32, String> {
+        let builtin_ids = compiler_builtin_bindings()
+            .into_iter()
+            .map(|(uid, _)| uid)
+            .collect::<HashSet<_>>();
         self.scope
             .bindings()
-            .filter(|(_, uid)| !self.declaration_uid_kinds.contains_key(uid))
+            .filter(|(_, uid)| {
+                !self.declaration_uid_kinds.contains_key(uid) && !builtin_ids.contains(uid)
+            })
             .map(|(name, uid)| (uid, name.to_string()))
             .collect()
     }
@@ -2477,19 +2476,12 @@ impl Resolver {
         name: String,
         compiler_generated: bool,
     ) -> Result<Resolved, ResolveError> {
+        let name = sindr::names::special_enum_variant_surface_meta(&name)
+            .map(|meta| meta.qualified_name.to_string())
+            .unwrap_or(name);
         let uid = self
             .scope
             .lookup(&name)
-            .or_else(|| {
-                if compiler_generated && is_runtime_builtin_decl(&name) {
-                    builtin_function_metas()
-                        .iter()
-                        .position(|meta| meta.name == name)
-                        .map(|idx| builtin_uid(idx as u16))
-                } else {
-                    None
-                }
-            })
             .or_else(|| synthetic_facet_root_uid(&name))
             .ok_or_else(|| ResolveError {
                 message: format!("Undefined variable: {}", name),
@@ -2539,7 +2531,10 @@ impl Resolver {
                 related_labels: Vec::new(),
             });
         }
-        if !compiler_generated && self.declaration_hidden_by_uid.get(&uid) == Some(&true) {
+        if !compiler_generated
+            && (self.declaration_hidden_by_uid.get(&uid) == Some(&true)
+                || scope_init::is_compiler_runtime_builtin(&name))
+        {
             return Err(self.hidden_builtin_error(&name, span));
         }
         Ok(Resolved::Var(
@@ -2864,7 +2859,7 @@ impl Resolver {
 
         let mut expr = Ast::ConstructorCall(
             source.span().clone(),
-            "Ok".into(),
+            "Result::Ok".into(),
             vec![RecordLitArg::Positional(source)],
         );
 
@@ -2958,6 +2953,7 @@ impl Resolver {
         let mut closure_scope = self.scope.clone();
         let mut resolved_params = Vec::new();
         for param in params {
+            reject_special_variant_binding(&param.name, &param.span)?;
             let uid = closure_scope.define(&param.name, param.span.clone());
             resolved_params.push(ResolvedClosureParam {
                 lazy_capture: None,
@@ -3061,7 +3057,6 @@ impl Resolver {
             | Ast::BuiltinExtractorDecl(..)
             | Ast::BuiltinTypeDecl(..)
             | Ast::TypeAlias(..)
-            | Ast::ResultCtorDecl(..)
             | Ast::Defmod(..)
             | Ast::Defagent(..)
             | Ast::Defgenserver(..)
@@ -3606,6 +3601,7 @@ impl Resolver {
                 let mut error_scope = self.scope.clone();
                 let mut rfields = Vec::new();
                 for f in fields {
+                    reject_special_variant_binding(&f.name, &f.span)?;
                     let uid = error_scope.define(&f.name, f.span.clone());
                     rfields.push(ResolvedField {
                         id: Some(ResolvedId {
@@ -4422,39 +4418,6 @@ impl Resolver {
                     symbol_info,
                 ))
             }
-            Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => {
-                let uid = self
-                    .take_predeclared_id(&name)
-                    .or_else(|| self.scope.lookup(&name))
-                    .unwrap_or_else(|| self.scope.reserve_id());
-                self.scope.define_with_id(&name, uid);
-                define_global_surface_alias(&mut self.scope, &name, uid);
-                let qualified_name = self.qualify_current_declaration_name(&name);
-                let result_owner = name
-                    .rsplit_once("::")
-                    .map(|(owner, _)| owner)
-                    .unwrap_or("Result");
-                let symbol_info = self.symbol_info_for_declaration(
-                    &name,
-                    &DeclarationKind::ResultCtor,
-                    Some(result_owner),
-                );
-                let rid = ResolvedId {
-                    name,
-                    qualified_name: Some(qualified_name),
-                    unique_id: uid,
-                    compiler_generated: false,
-                    symbol_info,
-                    span: span.clone(),
-                };
-                Ok(Resolved::ResultCtorDecl(
-                    span,
-                    rid,
-                    param_ty,
-                    ret_ty,
-                    resolve_decl_attrs(&attrs),
-                ))
-            }
             Ast::Defmod(span, name, _, _) => Err(ResolveError {
                 message: format!("Module resolution is not implemented yet: {}", name),
                 span,
@@ -4715,6 +4678,9 @@ impl Resolver {
             }
 
             Ast::ConstructorCall(span, type_name, args) => {
+                let type_name = sindr::names::special_enum_variant_surface_meta(&type_name)
+                    .map(|meta| meta.qualified_name.to_string())
+                    .unwrap_or(type_name);
                 let normalized_name = {
                     // In ExprBlock, a struct head like `User(...)` dispatches to
                     // `User::new(...)` when that constructor exists.
@@ -4777,7 +4743,7 @@ impl Resolver {
                 let symbol_info = self.symbol_info_for_uid(&normalized_name, uid);
                 let rid = ResolvedId {
                     name: normalized_name,
-                    qualified_name: None,
+                    qualified_name: self.declaration_fq_name_for_uid(uid),
                     unique_id: uid,
                     compiler_generated: false,
                     symbol_info,
@@ -4882,7 +4848,7 @@ impl Resolver {
                 let symbol_info = self.symbol_info_for_uid(&constructor_name, constructor_uid);
                 let constructor_id = ResolvedId {
                     name: constructor_name,
-                    qualified_name: None,
+                    qualified_name: self.declaration_fq_name_for_uid(constructor_uid),
                     unique_id: constructor_uid,
                     compiler_generated: false,
                     symbol_info,
@@ -4923,6 +4889,9 @@ impl Resolver {
             .iter()
             .map(|param| self.resolve_signature_type(param.ty.clone()))
             .collect::<Result<Vec<_>, _>>()?;
+        for param in &params {
+            reject_special_variant_binding(&param.name, &param.span)?;
+        }
         Ok(params
             .into_iter()
             .zip(resolved_types)
@@ -4970,6 +4939,7 @@ impl Resolver {
         &mut self,
         param: ExtractorParam,
     ) -> Result<ResolvedExtractorParam, ResolveError> {
+        reject_special_variant_binding(&param.name, &param.span)?;
         let uid = self.scope.define(&param.name, param.span.clone());
         Ok(ResolvedExtractorParam {
             id: ResolvedId {

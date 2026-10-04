@@ -10,8 +10,8 @@ use sindr::intrinsic::{
     ReturnTypeArgumentRole,
 };
 use sindr::names::{
-    builtin_type_name, reserved_owner_surface_name_constraint, surface_path_name,
-    ReservedOwnerSurfaceNameKind, TypeIdentity, TypeName,
+    builtin_type_name, reserved_owner_surface_name_constraint, ReservedOwnerSurfaceNameKind,
+    TypeIdentity, TypeName,
 };
 use spire::ast::FacetPathSegment;
 
@@ -241,10 +241,7 @@ fn builtin_special_enum_surface_name(name: &str) -> bool {
 }
 
 fn builtin_special_enum_variant_alias(enum_name: &str, variant_name: &str) -> bool {
-    matches!(
-        (global_surface_name(enum_name), variant_name),
-        ("Result", "Ok" | "Err") | ("Boolean", "True" | "False")
-    )
+    sindr::names::special_enum_variant_meta(&format!("{enum_name}::{variant_name}")).is_some()
 }
 
 /// Reject overloads before an implementation body is lowered into the
@@ -464,7 +461,6 @@ pub fn lower_module_source_ast(
     let mut lowered = Vec::new();
     let mut shared_global_defs = Vec::new();
     let mut shared_namespace_consts = Vec::new();
-    let mut shared_result_ctor_contracts = Vec::new();
 
     for stmt in ast {
         match stmt {
@@ -627,9 +623,6 @@ pub fn lower_module_source_ast(
                 });
             }
             Ast::Import(_, _, _) => {}
-            Ast::ResultCtorDecl(_, _, _, _, _) => {
-                shared_result_ctor_contracts.push(stmt);
-            }
             Ast::ConstDef(_, _, _, _, _) => {
                 shared_namespace_consts.push(stmt);
             }
@@ -659,30 +652,6 @@ pub fn lower_module_source_ast(
         } else {
             let mut shared_ast = shared_imports.clone();
             shared_ast.extend(shared_namespace_consts);
-            lowered.push(LoweredModuleAst {
-                module_path: fallback_module_path.unwrap_or_default().to_string(),
-                doc_module_path: None,
-                ast: shared_ast,
-                declared_span: None,
-                owner: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-    }
-
-    if !shared_result_ctor_contracts.is_empty() {
-        if let Some(idx) =
-            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_result_ctor_contracts);
-        } else {
-            let mut shared_ast = shared_imports.clone();
-            shared_ast.extend(shared_result_ctor_contracts);
             lowered.push(LoweredModuleAst {
                 module_path: fallback_module_path.unwrap_or_default().to_string(),
                 doc_module_path: None,
@@ -880,19 +849,6 @@ fn first_non_import_index(ast: &[Ast]) -> usize {
         .count()
 }
 
-fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
-    lowered.iter().position(|module| {
-        surface_path_name(&module.module_path) == "Result"
-            && matches!(
-                module
-                    .ast
-                    .iter()
-                    .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-                Some(Ast::ImplDef(_, target, _, _, _)) if surface_path_name(target) == "Result"
-            )
-    })
-}
-
 fn find_fallback_namespace_module(
     lowered: &[LoweredModuleAst],
     fallback_module_path: Option<&str>,
@@ -915,7 +871,6 @@ pub enum DeclarationKind {
     Enum,
     EnumVariant,
     Const,
-    ResultCtor,
     ImplMethod,
     ImplCtorNew,
     BuiltinType,
@@ -928,6 +883,8 @@ pub struct DeclarationEntry {
     pub fq_name: String,
     pub kind: DeclarationKind,
     pub stage_index: usize,
+    /// Insertion order within the compiler declaration registry.
+    pub registration_order: usize,
     pub auto_import: bool,
     pub hidden: bool,
     pub visibility: Visibility,
@@ -1201,6 +1158,7 @@ fn type_identity_diagnostic_name(identity: TypeIdentity) -> &'static str {
         TypeIdentity::Struct => "Struct",
         TypeIdentity::Record => "Record",
         TypeIdentity::Enum => "Enum",
+        TypeIdentity::SpecialEnumVariant => "Enum variant",
         TypeIdentity::Error => "Error",
         TypeIdentity::Mod => "Mod",
         TypeIdentity::Supervisor => "Supervisor",
@@ -1273,6 +1231,7 @@ fn declaration_entry(
         fq_name: fq_name.into(),
         kind,
         stage_index,
+        registration_order: 0,
         auto_import,
         hidden,
         visibility,
@@ -1284,13 +1243,14 @@ fn declaration_entry(
 
 fn insert_declaration_entry(
     index: &mut DeclarationIndex,
-    entry: DeclarationEntry,
+    mut entry: DeclarationEntry,
     span: &Span,
 ) -> Result<(), ResolveError> {
     if let Some(prev) = index.get(&entry.fq_name) {
         return Err(duplicate_fq_declaration_error(&entry.fq_name, prev, span));
     }
 
+    entry.registration_order = index.len();
     index.insert(entry.fq_name.clone(), entry);
     Ok(())
 }
@@ -2083,13 +2043,6 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             },
             attrs,
         ),
-        Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
-            span,
-            name,
-            rewrite_self_type(param_ty, target),
-            rewrite_self_type(ret_ty, target),
-            attrs,
-        ),
         Ast::Closure(span, params, body) => Ast::Closure(
             span,
             params
@@ -2181,7 +2134,7 @@ pub fn declaration_stage_ordering(index: &DeclarationIndex) -> DeclarationOrderi
     entries.sort_by(|left, right| {
         left.stage_index
             .cmp(&right.stage_index)
-            .then_with(|| left.fq_name.cmp(&right.fq_name))
+            .then_with(|| left.registration_order.cmp(&right.registration_order))
     });
     DeclarationOrdering {
         entries: entries
@@ -2212,8 +2165,6 @@ pub(super) fn declaration_uid_kind_map(
     declaration_uids: &HashMap<String, u32>,
 ) -> HashMap<u32, DeclarationKind> {
     let mut out = HashMap::new();
-    out.insert(0, DeclarationKind::ResultCtor);
-    out.insert(1, DeclarationKind::ResultCtor);
     for (fq_name, entry) in index {
         if let Some(uid) = declaration_uids.get(fq_name) {
             out.insert(*uid, entry.kind.clone());
@@ -2901,15 +2852,6 @@ pub fn precollect_declarations(
                         Ast::ImplDef(_, _, _, _, _) | Ast::TraitDef(..) | Ast::TraitImplDef(..) => {
                             continue;
                         }
-                        Ast::ResultCtorDecl(span, name, _, _, attrs) => (
-                            span,
-                            name.as_str(),
-                            DeclarationKind::ResultCtor,
-                            Visibility::Public,
-                            attrs.hidden,
-                            entry_user_importable(attrs),
-                            entry_user_callable(attrs),
-                        ),
                         Ast::BuiltinTypeDecl(span, head, attrs) => (
                             span,
                             head.name.as_str(),
@@ -2963,6 +2905,7 @@ pub fn precollect_declarations(
                     reject_reserved_owner_name("Type name", name, span, false)?;
                 }
 
+                reject_special_variant_binding(name, span)?;
                 let fq_name = if kind == DeclarationKind::Const {
                     if visibility == Visibility::Public {
                         if let Some((prev_stage, prev_module)) =
@@ -3082,6 +3025,7 @@ impl Resolver {
         lookup_name: &str,
         span: &Span,
     ) -> Result<(), ResolveError> {
+        reject_special_variant_binding(surface, span)?;
         if !declared_in_batch.insert(surface.to_string()) {
             return Err(Self::duplicate_top_level_definition_error(surface, span));
         }
@@ -3101,12 +3045,6 @@ impl Resolver {
                     .insert(qualified_name.to_string(), fresh);
                 fresh
             })
-    }
-
-    fn reserve_scope_uid(&mut self, name: &str) -> u32 {
-        self.scope
-            .lookup(name)
-            .unwrap_or_else(|| self.scope.reserve_id())
     }
 
     fn record_predeclared_uid(&mut self, name: &str, uid: u32, kind: DeclarationKind) {
@@ -3566,6 +3504,7 @@ impl Resolver {
                     if is_doc_only_builtin_decl(name) {
                         continue;
                     }
+                    reject_special_variant_binding(name, stmt.span())?;
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(Self::duplicate_top_level_definition_error(
                             name,
@@ -3579,6 +3518,7 @@ impl Resolver {
                 }
                 Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
+                    reject_special_variant_binding(name, stmt.span())?;
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(Self::duplicate_top_level_definition_error(
                             name,
@@ -3610,17 +3550,6 @@ impl Resolver {
                         .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
-                }
-                Ast::ResultCtorDecl(span, name, _, _, _) => {
-                    self.reject_duplicate_top_level_declaration(
-                        &mut declared_in_batch,
-                        name,
-                        name,
-                        span,
-                    )?;
-                    let uid = self.reserve_scope_uid(name);
-                    self.record_predeclared_uid(name, uid, DeclarationKind::ResultCtor);
-                    self.predeclare_scope_binding(name, uid, Some(name));
                 }
                 Ast::BuiltinTypeDecl(span, head, _) => {
                     let surface = global_surface_name(&head.name).to_string();

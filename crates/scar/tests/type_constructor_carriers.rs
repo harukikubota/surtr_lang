@@ -1,5 +1,8 @@
+#[path = "support/special_enum_declarations.rs"]
+mod special_enum_declarations;
+
 fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
-    let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
+    let ast = special_enum_declarations::parse_with_canonical_special_enums(source).expect("parse");
     scar::typecheck(sigil::resolve(ast).expect("resolve"))
 }
 

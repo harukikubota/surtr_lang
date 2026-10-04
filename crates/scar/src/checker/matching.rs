@@ -226,19 +226,9 @@ impl Checker {
             // empty string and cons is string decomposition), so they are
             // ambiguous without a scrutinee hint.
             ResolvedPattern::ListNil(_) | ResolvedPattern::ListCons(_, _) => None,
-            ResolvedPattern::Constructor(id, _) => match id.name.as_str() {
-                "Ok" | "Result::Ok" => Some(Ty::Result(
-                    Box::new(self.env.fresh_tyvar()),
-                    Box::new(Ty::Error),
-                )),
-                "Err" | "Result::Err" => Some(Ty::Result(
-                    Box::new(self.env.fresh_tyvar()),
-                    Box::new(Ty::Error),
-                )),
-                _ => self
-                    .lookup_enum_variant_by_constructor_id(id.unique_id)
-                    .map(|variant| self.instantiate_enum_variant(&variant).enum_ty),
-            },
+            ResolvedPattern::Constructor(id, _) => self
+                .lookup_enum_variant_by_constructor_id(id.unique_id)
+                .map(|variant| self.instantiate_enum_variant(&variant).enum_ty),
             ResolvedPattern::Record(id, _) => self.env.lookup_type_def(&id.name).map(|def| {
                 Ty::Record(
                     def.name.clone(),
@@ -491,14 +481,15 @@ impl Checker {
     }
 
     fn match_arm_covers_enum_variant(
-        enum_name: &str,
+        _enum_name: &str,
         pattern: &TypedMatchPattern,
         variant: &crate::env::EnumVariantInfo,
     ) -> bool {
         Self::match_or_alternative_matches(pattern, &|pattern| match pattern {
             TypedMatchPattern::Constructor { tag, .. } => *tag == variant.tag,
-            TypedMatchPattern::BoolLit(value) if Self::surface_name(enum_name) == "Boolean" => {
-                variant.short_name == if *value { "True" } else { "False" }
+            TypedMatchPattern::BoolLit(value) => {
+                variant.special_variant
+                    == Some(sindr::names::SpecialEnumVariantLowering::Boolean(*value))
             }
             _ => false,
         })
@@ -911,7 +902,12 @@ impl Checker {
             }
             ResolvedPattern::Constructor(ctor_id, inner_pats) => {
                 if matches!(self.resolve_ty(expected_ty), Ty::Error)
-                    && matches!(ctor_id.name.as_str(), "Err" | "Result::Err")
+                    && self
+                        .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                        .is_some_and(|variant| {
+                            variant.special_variant
+                                == Some(sindr::names::SpecialEnumVariantLowering::ResultErr)
+                        })
                 {
                     return Err(self
                         .pattern_error(
@@ -963,7 +959,10 @@ impl Checker {
                         })?
                         .clone();
                     let variant = self.instantiate_enum_variant(&variant);
-                    if Self::surface_name(&variant.enum_name) != "Boolean" {
+                    if !matches!(
+                        variant.special_variant,
+                        Some(sindr::names::SpecialEnumVariantLowering::Boolean(_))
+                    ) {
                         return Err(self.pattern_error(
                             TypeDiagnosticReason::PatternShapeMismatch,
                             PatternKind::Constructor,
@@ -989,9 +988,10 @@ impl Checker {
                             &ctor_id.span,
                         ));
                     }
-                    return match variant.short_name.as_str() {
-                        "True" => Ok(TypedMatchPattern::BoolLit(true)),
-                        "False" => Ok(TypedMatchPattern::BoolLit(false)),
+                    return match variant.special_variant {
+                        Some(sindr::names::SpecialEnumVariantLowering::Boolean(value)) => {
+                            Ok(TypedMatchPattern::BoolLit(value))
+                        }
                         _ => Err(self.typecheck_invariant_error(
                             format!("unknown Boolean constructor `{}`", ctor_id.name),
                             &ctor_id.span,
@@ -999,17 +999,29 @@ impl Checker {
                     };
                 }
                 if let Ty::Result(ok_ty, err_ty) = expected_ty {
-                    let tag = match ctor_id.name.as_str() {
-                        "Ok" => 0u32,
-                        "Err" => 1u32,
-                        _ => {
-                            return Err(self.typecheck_invariant_error(
-                                format!(
-                                    "resolved Result constructor `{}` is unknown",
-                                    ctor_id.name
-                                ),
+                    let variant = self
+                        .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                        .ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                "resolved Result pattern constructor",
                                 &ctor_id.span,
-                            ));
+                            )
+                        })?;
+                    let tag = match variant.special_variant {
+                        Some(sindr::names::SpecialEnumVariantLowering::ResultOk) => 0,
+                        Some(sindr::names::SpecialEnumVariantLowering::ResultErr) => 1,
+                        _ => {
+                            return Err(self.pattern_error(
+                                TypeDiagnosticReason::PatternShapeMismatch,
+                                PatternKind::Constructor,
+                                Some(ctor_id.name.clone()),
+                                Some("constructor of Result".into()),
+                                Some(expected_ty),
+                                None,
+                                None,
+                                Vec::new(),
+                                &ctor_id.span,
+                            ))
                         }
                     };
                     if inner_pats.len() != 1 {

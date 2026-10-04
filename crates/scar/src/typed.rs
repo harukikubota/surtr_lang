@@ -819,6 +819,7 @@ pub struct TypedClosureParam {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedEnumVariantDef {
+    pub lowering: Option<sindr::names::SpecialEnumVariantLowering>,
     pub tag: u32,
     pub constructor_name: String,
     pub field_names: Vec<String>,

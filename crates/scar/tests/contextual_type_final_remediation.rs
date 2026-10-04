@@ -1,9 +1,12 @@
+#[path = "support/special_enum_declarations.rs"]
+mod special_enum_declarations;
+
 use scar::typed::TypedNode;
 use scar::ScarSession;
 use sigil::resolved::{Resolved, ResolvedWhereConstraintRhs};
 
 fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
-    let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+    let ast = special_enum_declarations::parse_with_canonical_special_enums(source)
         .expect("source should parse without the std prelude");
     sigil::resolve(ast).expect("source should resolve without the std prelude")
 }

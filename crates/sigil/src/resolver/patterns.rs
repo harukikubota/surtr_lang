@@ -28,7 +28,6 @@ impl Resolver {
                             | DeclarationKind::Enum
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
-                            | DeclarationKind::ResultCtor
                             | DeclarationKind::Record
                     )
                 ) || args
@@ -71,7 +70,6 @@ impl Resolver {
                             | DeclarationKind::Enum
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
-                            | DeclarationKind::ResultCtor
                             | DeclarationKind::Record
                     )
                 ) {
@@ -176,6 +174,7 @@ impl Resolver {
                 let outer_id = outer
                     .lookup(&name)
                     .map(|uid| self.pattern_id(name.clone(), uid, span.clone()));
+                reject_special_variant_binding(&name, &span)?;
                 let uid = self.scope.define(&name, span.clone());
                 let proxy = self.pattern_id(name.clone(), uid, span);
                 proxies.insert(name, proxy.clone());
@@ -206,6 +205,7 @@ impl Resolver {
         span: Span,
         seen: &mut HashMap<String, Span>,
     ) -> Result<ResolvedId, ResolveError> {
+        reject_special_variant_binding(&name, &span)?;
         if let Some(proxies) = &self.pattern_proxies {
             let mut id = proxies.get(&name).cloned().ok_or_else(|| {
                 let mut error =
@@ -329,7 +329,7 @@ impl Resolver {
                 Ok(ResolvedPattern::Constructor(
                     ResolvedId {
                         name: ctor_name,
-                        qualified_name: None,
+                        qualified_name: self.declaration_fq_name_for_uid(ctor_uid),
                         unique_id: ctor_uid,
                         compiler_generated: false,
                         symbol_info,
@@ -362,7 +362,6 @@ impl Resolver {
                             | DeclarationKind::Enum
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
-                            | DeclarationKind::ResultCtor
                             | DeclarationKind::Record
                     )
                 ) {
@@ -413,15 +412,6 @@ impl Resolver {
                     .declaration_uid_kinds
                     .get(&head_uid)
                     .cloned()
-                    .or_else(|| {
-                        if matches!(head_name.as_str(), "Ok" | "Err") {
-                            Some(DeclarationKind::ResultCtor)
-                        } else if head_name.contains("::") {
-                            Some(DeclarationKind::EnumVariant)
-                        } else {
-                            None
-                        }
-                    })
                     .ok_or_else(|| ResolveError {
                         message: format!("Unknown MatchBlock head: {}", head_name),
                         span: span.clone(),
@@ -433,7 +423,7 @@ impl Resolver {
                     })?;
                 let resolved_id = ResolvedId {
                     name: head_name.clone(),
-                    qualified_name: None,
+                    qualified_name: self.declaration_fq_name_for_uid(head_uid),
                     unique_id: head_uid,
                     compiler_generated: false,
                     symbol_info: self.symbol_info_for_uid(&head_name, head_uid),
@@ -509,7 +499,7 @@ impl Resolver {
                             resolved_inners,
                         ))
                     }
-                    DeclarationKind::EnumVariant | DeclarationKind::ResultCtor => {
+                    DeclarationKind::EnumVariant => {
                         Ok(ResolvedPattern::Constructor(resolved_id, resolved_inners))
                     }
                     DeclarationKind::Struct => {

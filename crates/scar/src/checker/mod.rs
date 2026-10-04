@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sigil::resolved::*;
 use sindr::builtin::{
-    builtin_function_metas, builtin_type_head_metas, builtin_type_meta_by_name, builtin_uid,
-    BuiltinMeta,
+    builtin_function_metas, builtin_type_head_metas, builtin_type_meta_by_name, BuiltinMeta,
 };
 use sindr::names::builtin_type_usage_policy;
 use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
@@ -840,32 +839,7 @@ fn initialize_env() -> TypeEnv {
         );
     }
 
-    // Ok constructor: ($A) -> Result<$A, $E>
-    let ok_a = env.fresh_tyvar();
-    let ok_e = env.fresh_tyvar();
-    env.bind_var(
-        0,
-        Ty::BuiltinFunc {
-            name: "Ok".into(),
-            params: vec![ok_a.clone()],
-            ret: Box::new(Ty::Result(Box::new(ok_a), Box::new(ok_e))),
-        },
-    );
-
-    // Err constructor: ($E) -> Result<$A, $E>
-    let err_a = env.fresh_tyvar();
-    let err_e = env.fresh_tyvar();
-    env.bind_var(
-        1,
-        Ty::BuiltinFunc {
-            name: "Err".into(),
-            params: vec![err_e.clone()],
-            ret: Box::new(Ty::Result(Box::new(err_a), Box::new(err_e))),
-        },
-    );
-
-    for (idx, meta) in builtin_function_metas().iter().enumerate() {
-        let uid = builtin_uid(idx as u16);
+    for (uid, meta) in sigil::resolver::compiler_builtin_bindings() {
         let ty = builtin_ty_from_meta(meta, &mut env);
         env.bind_var(uid, ty);
     }
@@ -1615,8 +1589,15 @@ impl ScarSession {
             .map(|(_, fun_idx)| *fun_idx)
             .collect::<HashSet<_>>();
         let function_indices = functions.into_iter().collect::<HashMap<_, _>>();
-        let mut function_id_entries = self.state.function_ids_by_name.iter().collect::<Vec<_>>();
-        function_id_entries.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+        let mut function_id_entries = self.state.function_ids_by_name.values().collect::<Vec<_>>();
+        function_id_entries.sort_by_key(|id| {
+            let registered_index = match self.state.env.vars.get(&id.unique_id) {
+                Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
+                _ => u32::MAX,
+            };
+            (registered_index, id.unique_id)
+        });
+        function_id_entries.dedup_by_key(|id| id.unique_id);
         let mut next_fun_idx = function_indices
             .values()
             .copied()
@@ -1626,7 +1607,8 @@ impl ScarSession {
             .max(self.state.env.next_fun_idx);
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
-        for (qualified_name, id) in function_id_entries {
+        for id in function_id_entries {
+            let qualified_name = id.qualified_name.as_deref().unwrap_or(&id.name);
             let old_fun_idx = match self.state.env.vars.get(&id.unique_id) {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
@@ -1652,7 +1634,7 @@ impl ScarSession {
                 specializable_rekeys.push((old_fun_idx, new_fun_idx));
                 fun_idx_rewrites.insert(old_fun_idx, new_fun_idx);
                 new_fun_idx
-            } else if let Some(fun_idx) = function_indices.get(qualified_name.as_str()) {
+            } else if let Some(fun_idx) = function_indices.get(qualified_name) {
                 *fun_idx
             } else {
                 continue;
@@ -2732,6 +2714,38 @@ mod specialization_state_tests {
             names_by_index.get(&453),
             Some(&"Global::b_compare".to_string())
         );
+    }
+
+    #[test]
+    fn reconcile_function_indices_preserves_registration_order_and_alias_identity() {
+        let mut session = ScarSession::new();
+        for (name, uid, index) in [("z_first", 10, 40), ("a_second", 11, 41)] {
+            let id = resolved_id(name, &format!("Global::{name}"), uid);
+            session
+                .state
+                .function_ids_by_name
+                .insert(format!("Global::{name}"), id.clone());
+            session
+                .state
+                .function_ids_by_name
+                .insert(name.into(), id.clone());
+            session.state.env.vars.insert(uid, user_func_ty(index));
+            session
+                .state
+                .specializable_defs
+                .insert(index, specializable_def(index, name, uid));
+        }
+        session.ensure_next_fun_idx_at_least(100);
+        session.reconcile_function_indices(std::iter::empty::<(&str, u32)>());
+        assert!(matches!(
+            session.state.env.vars.get(&10),
+            Some(Ty::UserFunc { fun_idx: 100, .. })
+        ));
+        assert!(matches!(
+            session.state.env.vars.get(&11),
+            Some(Ty::UserFunc { fun_idx: 101, .. })
+        ));
+        assert_eq!(session.state.env.next_fun_idx, 102);
     }
 
     #[test]
@@ -4643,8 +4657,7 @@ impl Checker {
             | Resolved::BuiltinDecl(..)
             | Resolved::BuiltinExtractorDecl(..)
             | Resolved::BuiltinTypeDecl(..)
-            | Resolved::TypeAlias(..)
-            | Resolved::ResultCtorDecl(..) => {}
+            | Resolved::TypeAlias(..) => {}
         }
         Ok(())
     }
@@ -5014,7 +5027,6 @@ impl Checker {
                 format!("BuiltinExtractorDecl {}", id.name)
             }
             Resolved::BuiltinTypeDecl(_, id, ..) => format!("BuiltinTypeDecl {}", id.name),
-            Resolved::ResultCtorDecl(_, id, ..) => format!("ResultCtorDecl {}", id.name),
             Resolved::StructDef(_, id, ..) => format!("StructDef {}", id.name),
             Resolved::RecordDef(_, id, ..) => format!("RecordDef {}", id.name),
             Resolved::DeferrorDef(_, id, ..) => format!("DeferrorDef {}", id.name),
@@ -5051,7 +5063,6 @@ impl Checker {
             Resolved::BuiltinDecl(..) => "BuiltinDecl",
             Resolved::BuiltinExtractorDecl(..) => "BuiltinExtractorDecl",
             Resolved::BuiltinTypeDecl(..) => "BuiltinTypeDecl",
-            Resolved::ResultCtorDecl(..) => "ResultCtorDecl",
             Resolved::StructDef(..) => "StructDef",
             Resolved::RecordDef(..) => "RecordDef",
             Resolved::DeferrorDef(..) => "DeferrorDef",
