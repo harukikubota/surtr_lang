@@ -47,6 +47,39 @@ struct PreparedFacetInput {
     path: TypedFacetPath,
 }
 
+#[derive(Clone)]
+struct TraitInvocationContext<'a> {
+    span: &'a Span,
+    trait_name: &'a str,
+    method_name: &'a str,
+    args: &'a [ResolvedRecordLitArg],
+    receiver_owner_hint: Option<&'a str>,
+    expected_ret_ty: Option<&'a Ty>,
+    expected_ret_relation: Option<(&'a ExpectedTypeRelation, &'a Span)>,
+    argument_expected_relation: Option<&'a ExpectedTypeRelation>,
+    constructor_failure_reason: Option<TypeDiagnosticReason>,
+    explicit_type_args: Option<&'a [AstTy]>,
+    operator: Option<OperatorTraitOp>,
+    receiver_hint: Option<&'a Ty>,
+    defer_incompatible_result_context: bool,
+}
+
+struct PreparedTraitInvocation {
+    param_tys: Vec<Ty>,
+    ret_ty: Ty,
+    trait_arg_tys: Vec<Ty>,
+    self_ty: Ty,
+    declared_param_tys: Vec<Ty>,
+    constructor_receiver_index: Option<usize>,
+    prepared_args: Vec<Option<TypedNode>>,
+    plain_output_parameters: Vec<bool>,
+}
+
+enum TraitInvocationPreparation {
+    Complete(TypedNode),
+    Arguments(PreparedTraitInvocation),
+}
+
 struct CheckedSafeBindInput {
     typed_pattern: TypedPattern,
     pattern_ty: Ty,
@@ -1062,453 +1095,240 @@ impl Checker {
         obligations
     }
 
-    // Keep recursive results pointer-sized: large by-value success/error
-    // temporaries otherwise accumulate in this visitor's debug stack frame.
     pub(super) fn concretize_pending_trait_calls(
         &mut self,
         mut node: TypedNode,
     ) -> Result<Box<TypedNode>, Box<TypeError>> {
-        for expr in Self::pattern_expression_nodes_mut(&mut node) {
-            *expr = *self.concretize_pending_trait_calls(expr.clone())?;
+        self.concretize_pending_trait_calls_in_place(&mut node)?;
+        Ok(Box::new(node))
+    }
+
+    // Borrow children in place: rebuilding the large enum at every level keeps
+    // all variant temporaries live on the stack of long continuation chains.
+    fn concretize_pending_trait_calls_in_place(
+        &mut self,
+        node: &mut TypedNode,
+    ) -> Result<(), Box<TypeError>> {
+        for expr in Self::pattern_expression_nodes_mut(node) {
+            self.concretize_pending_trait_calls_in_place(expr)?;
         }
-        let span = node.span.clone();
-        let ty = self.resolve_ty(&node.ty);
-        let node = match node.node {
+        node.ty = self.resolve_ty(&node.ty);
+        match &mut node.node {
             TypedInner::TraitCall {
-                trait_name,
-                method_name,
                 receiver_ty,
                 obligation,
-                dispatch,
-                origin,
                 args,
+                dispatch,
+                method_name,
+                ..
             } => {
-                let receiver_ty = self.resolve_ty(&receiver_ty);
-                let obligation = TraitObligation {
-                    trait_id: obligation.trait_id,
-                    trait_args: obligation
-                        .trait_args
-                        .iter()
-                        .map(|arg| self.resolve_ty(arg))
-                        .collect(),
-                    receiver: self.resolve_ty(&obligation.receiver),
-                };
-                let args = args
-                    .into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let abstract_constructor_receiver = match &obligation.receiver {
-                    Ty::SelfApp(items) => Self::constructor_application_parts(items)
-                        .map(|(witness, _)| {
-                            self.constructor_witness_supports_trait(witness, &obligation.trait_id)
-                        })
-                        .unwrap_or(false),
-                    _ => false,
-                };
-                let mut unresolved_obligation_variables = Vec::new();
-                for ty in obligation
+                *receiver_ty = self.resolve_ty(receiver_ty);
+                obligation.trait_args = obligation
                     .trait_args
                     .iter()
-                    .chain(std::iter::once(&obligation.receiver))
-                {
-                    Self::collect_ty_vars(ty, &mut unresolved_obligation_variables);
+                    .map(|ty| self.resolve_ty(ty))
+                    .collect();
+                obligation.receiver = self.resolve_ty(&obligation.receiver);
+                for arg in args.iter_mut() {
+                    self.concretize_pending_trait_calls_in_place(arg)?;
                 }
-                let dispatch = match dispatch {
-                    crate::typed::TraitDispatch::Pending
-                        if unresolved_obligation_variables.is_empty()
-                            && !abstract_constructor_receiver =>
-                    {
-                        let argument_tys = args
-                            .iter()
-                            .map(|arg| self.resolve_ty(&arg.ty))
-                            .collect::<Vec<_>>();
-                        match self.select_trait_method_instantiation(
-                            &obligation.trait_id,
-                            &method_name,
-                            &obligation.receiver,
-                            &obligation.trait_args,
-                            &argument_tys,
-                            &ty,
-                        )? {
-                            CandidateApplicability::Applicable(instantiation) => {
-                                TraitDispatch::Selected(Box::new(instantiation))
-                            }
-                            CandidateApplicability::Deferred(_) => TraitDispatch::Pending,
-                            CandidateApplicability::Rejected(_) => {
-                                return Err(Box::new(self.trait_failure(
-                                    TypeDiagnosticReason::NoApplicableTraitImplementation,
-                                    &obligation.trait_id,
-                                    &obligation.receiver,
-                                    &span,
-                                    DiagnosticOrigin::TraitCall,
-                                )));
-                            }
-                        }
-                    }
-                    other => other,
-                };
-                TypedInner::TraitCall {
-                    trait_name,
+                self.concretize_trait_dispatch(
+                    &node.span,
+                    &node.ty,
                     method_name,
-                    receiver_ty,
                     obligation,
-                    dispatch,
-                    origin,
                     args,
-                }
+                    dispatch,
+                )?;
             }
-            TypedInner::DeferredDoFailure(mut deferred) => {
+            TypedInner::DeferredDoFailure(deferred) => {
                 deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
                 deferred.propagated_error_tys = deferred
                     .propagated_error_tys
                     .iter()
                     .map(|ty| self.resolve_ty(ty))
                     .collect();
-                TypedInner::DeferredDoFailure(deferred)
             }
-            TypedInner::App(func, args) => TypedInner::App(
-                self.concretize_pending_trait_calls(*func)?,
-                args.into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
-                self.concretize_pending_trait_calls(*func)?,
-                args.into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::Capture(func, args) => TypedInner::Capture(
-                self.concretize_pending_trait_calls(*func)?,
-                args.into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::Block(stmts) => TypedInner::Block(
-                stmts
-                    .into_iter()
-                    .map(|stmt| self.concretize_pending_trait_calls(stmt).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::Bind(pattern, rhs) => {
-                TypedInner::Bind(pattern, self.concretize_pending_trait_calls(*rhs)?)
+            TypedInner::App(func, args)
+            | TypedInner::InjectCall(func, args)
+            | TypedInner::Capture(func, args) => {
+                self.concretize_pending_trait_calls_in_place(func)?;
+                for arg in args {
+                    self.concretize_pending_trait_calls_in_place(arg)?;
+                }
             }
-            TypedInner::ApplyPattern {
-                value,
-                pattern,
-                projections,
-            } => TypedInner::ApplyPattern {
-                value: self.concretize_pending_trait_calls(*value)?,
-                pattern,
-                projections,
-            },
-            TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
-                pattern,
-                self.concretize_pending_trait_calls(*rhs)?,
-                projection,
-                failure_target,
-            ),
+            TypedInner::Block(items)
+            | TypedInner::TupleLiteral(items)
+            | TypedInner::ListLiteral(items)
+            | TypedInner::ConstructorCall(_, items)
+            | TypedInner::StructLit(_, items) => {
+                for item in items {
+                    self.concretize_pending_trait_calls_in_place(item)?;
+                }
+            }
+            TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
+            | TypedInner::SafeBind(_, rhs, _, _)
+            | TypedInner::AssertErrorKinds(_, rhs)
+            | TypedInner::EagerBoundary(rhs)
+            | TypedInner::FieldAccess(rhs, _)
+            | TypedInner::Semi(rhs)
+            | TypedInner::SupervisorSpawn { init: rhs, .. }
+            | TypedInner::SupervisorAdopt { pid: rhs, .. }
+            | TypedInner::FacetView { source: rhs, .. }
+            | TypedInner::Closure(_, _, rhs)
+            | TypedInner::ExtractorClosure(_, _, rhs)
+            | TypedInner::CaptureClosure(_, _, rhs)
+            | TypedInner::DeferrorDef(_, _, _, _, rhs)
+            | TypedInner::Def(_, _, _, _, _, _, rhs, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, rhs, _) => {
+                self.concretize_pending_trait_calls_in_place(rhs)?;
+            }
             TypedInner::DoSafeBind(control) => {
-                let TypedDoSafeBind {
-                    pattern,
-                    rhs,
-                    projection,
-                    failure_target,
-                    continuation,
-                    origins,
-                } = *control;
-                TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
-                    pattern,
-                    rhs: self.concretize_pending_trait_calls(*rhs)?,
-                    projection,
-                    failure_target: match failure_target {
-                        SafeBindFailureTarget::DoAlternative { empty } => {
-                            SafeBindFailureTarget::DoAlternative {
-                                empty: self.concretize_pending_trait_calls(*empty)?,
-                            }
-                        }
-                        SafeBindFailureTarget::Deferred(mut deferred) => {
-                            deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
-                            deferred.propagated_error_tys = deferred
-                                .propagated_error_tys
-                                .iter()
-                                .map(|ty| self.resolve_ty(ty))
-                                .collect();
-                            SafeBindFailureTarget::Deferred(deferred)
-                        }
-                        other => other,
-                    },
-                    continuation: self.concretize_pending_trait_calls(*continuation)?,
-                    origins,
-                }))
+                self.concretize_pending_trait_calls_in_place(&mut control.rhs)?;
+                match &mut control.failure_target {
+                    SafeBindFailureTarget::DoAlternative { empty } => {
+                        self.concretize_pending_trait_calls_in_place(empty)?
+                    }
+                    SafeBindFailureTarget::Deferred(deferred) => {
+                        deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
+                        deferred.propagated_error_tys = deferred
+                            .propagated_error_tys
+                            .iter()
+                            .map(|ty| self.resolve_ty(ty))
+                            .collect();
+                    }
+                    _ => {}
+                }
+                self.concretize_pending_trait_calls_in_place(&mut control.continuation)?;
             }
-            TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
-                op,
-                self.concretize_pending_trait_calls(*left)?,
-                self.concretize_pending_trait_calls(*right)?,
-            ),
-            TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                self.concretize_pending_trait_calls(*left)?,
-                self.concretize_pending_trait_calls(*right)?,
-            ),
-            TypedInner::Compose(flavor, left, right) => TypedInner::Compose(
-                flavor,
-                self.concretize_pending_trait_calls(*left)?,
-                self.concretize_pending_trait_calls(*right)?,
-            ),
-            TypedInner::ListCons(head, tail) => TypedInner::ListCons(
-                self.concretize_pending_trait_calls(*head)?,
-                self.concretize_pending_trait_calls(*tail)?,
-            ),
-            TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
-                items
-                    .into_iter()
-                    .map(|item| self.concretize_pending_trait_calls(item).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::ListLiteral(items) => TypedInner::ListLiteral(
-                items
-                    .into_iter()
-                    .map(|item| self.concretize_pending_trait_calls(item).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| {
-                        Ok((
-                            *self.concretize_pending_trait_calls(key)?,
-                            *self.concretize_pending_trait_calls(value)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
-            TypedInner::InterpolatedStr(parts) => TypedInner::InterpolatedStr(
-                parts
-                    .into_iter()
-                    .map(|part| match part {
-                        crate::typed::TypedInterpolatedPart::Text(text) => {
-                            Ok(crate::typed::TypedInterpolatedPart::Text(text))
-                        }
-                        crate::typed::TypedInterpolatedPart::Expr(expr) => {
-                            Ok(crate::typed::TypedInterpolatedPart::Expr(
-                                self.concretize_pending_trait_calls(*expr)?,
-                            ))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
-            TypedInner::Dbg(args) => TypedInner::Dbg(
-                args.into_iter()
-                    .map(|arg| {
-                        Ok(crate::typed::TypedDbgArg {
-                            span: arg.span,
-                            ty_name: arg.ty_name,
-                            expr: *self.concretize_pending_trait_calls(arg.expr)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
-            TypedInner::AssertErrorKinds(marker, inner) => {
-                TypedInner::AssertErrorKinds(marker, self.concretize_pending_trait_calls(*inner)?)
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right)
+            | TypedInner::Assert(left, right)
+            | TypedInner::MapErr(left, right)
+            | TypedInner::Cause(left, right)
+            | TypedInner::RecoverKind(left, _, right)
+            | TypedInner::SupervisorWorkers {
+                init: left,
+                strategy: right,
+                ..
             }
-            TypedInner::EagerBoundary(inner) => {
-                TypedInner::EagerBoundary(self.concretize_pending_trait_calls(*inner)?)
+            | TypedInner::FacetSet {
+                source: left,
+                value: right,
+                ..
             }
-            TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
-                self.concretize_pending_trait_calls(*cond)?,
-                self.concretize_pending_trait_calls(*then_branch)?,
-                else_branch
-                    .map(|branch| {
-                        self.concretize_pending_trait_calls(*branch)
-                            .map(|node| *node)
-                    })
-                    .transpose()?
-                    .map(Box::new),
-            ),
-            TypedInner::Assert(cond, err) => TypedInner::Assert(
-                self.concretize_pending_trait_calls(*cond)?,
-                self.concretize_pending_trait_calls(*err)?,
-            ),
-            TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                self.concretize_pending_trait_calls(*value)?,
-                self.concretize_pending_trait_calls(*pred)?,
-                self.concretize_pending_trait_calls(*err)?,
-            ),
-            TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                self.concretize_pending_trait_calls(*value)?,
-                self.concretize_pending_trait_calls(*err)?,
-            ),
-            TypedInner::Cause(value, err) => TypedInner::Cause(
-                self.concretize_pending_trait_calls(*value)?,
-                self.concretize_pending_trait_calls(*err)?,
-            ),
-            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                self.concretize_pending_trait_calls(*value)?,
-                marker,
-                self.concretize_pending_trait_calls(*handler)?,
-            ),
-            TypedInner::Match(scrutinee, arms) => TypedInner::Match(
-                self.concretize_pending_trait_calls(*scrutinee)?,
-                arms.into_iter()
-                    .map(|arm| {
-                        Ok(crate::typed::TypedMatchArm {
-                            direct_expression: arm.direct_expression,
-                            pattern: arm.pattern,
-                            guard: arm
-                                .guard
-                                .map(|guard| {
-                                    self.concretize_pending_trait_calls(guard).map(|node| *node)
-                                })
-                                .transpose()?,
-                            body: *self.concretize_pending_trait_calls(arm.body)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
-            TypedInner::FieldAccess(expr, index) => {
-                TypedInner::FieldAccess(self.concretize_pending_trait_calls(*expr)?, index)
+            | TypedInner::FacetOver {
+                source: left,
+                update_fun: right,
+                ..
+            } => {
+                self.concretize_pending_trait_calls_in_place(left)?;
+                self.concretize_pending_trait_calls_in_place(right)?;
             }
-            TypedInner::Semi(expr) => TypedInner::Semi(self.concretize_pending_trait_calls(*expr)?),
-            TypedInner::SupervisorSpawn {
-                supervisor_process,
-                worker_process,
-                init,
-            } => TypedInner::SupervisorSpawn {
-                supervisor_process,
-                worker_process,
-                init: self.concretize_pending_trait_calls(*init)?,
-            },
-            TypedInner::SupervisorAdopt {
-                supervisor_process,
-                worker_process,
-                pid,
-            } => TypedInner::SupervisorAdopt {
-                supervisor_process,
-                worker_process,
-                pid: self.concretize_pending_trait_calls(*pid)?,
-            },
-            TypedInner::SupervisorWorkers {
-                supervisor_process,
-                worker_process,
-                init,
-                strategy,
-            } => TypedInner::SupervisorWorkers {
-                supervisor_process,
-                worker_process,
-                init: self.concretize_pending_trait_calls(*init)?,
-                strategy: self.concretize_pending_trait_calls(*strategy)?,
-            },
-            TypedInner::FacetView {
-                api,
-                source,
-                path,
-                source_is_result,
-            } => TypedInner::FacetView {
-                api,
-                source: self.concretize_pending_trait_calls(*source)?,
-                path,
-                source_is_result,
-            },
-            TypedInner::FacetSet {
-                api,
-                source,
-                path,
-                value,
-                source_is_result,
-                mode,
-            } => TypedInner::FacetSet {
-                api,
-                source: self.concretize_pending_trait_calls(*source)?,
-                path,
-                value: self.concretize_pending_trait_calls(*value)?,
-                source_is_result,
-                mode,
-            },
-            TypedInner::FacetOver {
-                api,
-                source,
-                path,
-                update_fun,
-                source_is_result,
-                mode,
-            } => TypedInner::FacetOver {
-                api,
-                source: self.concretize_pending_trait_calls(*source)?,
-                path,
-                update_fun: self.concretize_pending_trait_calls(*update_fun)?,
-                source_is_result,
-                mode,
-            },
-            TypedInner::ConstructorCall(tag, fields) => TypedInner::ConstructorCall(
-                tag,
-                fields
-                    .into_iter()
-                    .map(|field| self.concretize_pending_trait_calls(field).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::StructLit(name, fields) => TypedInner::StructLit(
-                name,
-                fields
-                    .into_iter()
-                    .map(|field| self.concretize_pending_trait_calls(field).map(|node| *node))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedInner::Closure(params, captures, body) => TypedInner::Closure(
-                params,
-                captures,
-                self.concretize_pending_trait_calls(*body)?,
-            ),
-            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
-                params,
-                captures,
-                self.concretize_pending_trait_calls(*body)?,
-            ),
-            TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
-                params,
-                captures,
-                self.concretize_pending_trait_calls(*body)?,
-            ),
-            TypedInner::DeferrorDef(tag, fun_idx, id, params, body) => TypedInner::DeferrorDef(
-                tag,
-                fun_idx,
-                id,
-                params,
-                self.concretize_pending_trait_calls(*body)?,
-            ),
-            TypedInner::Def(
-                fun_idx,
-                id,
-                type_params,
-                params,
-                ret_ty,
-                where_clause,
-                body,
-                attrs,
-            ) => TypedInner::Def(
-                fun_idx,
-                id,
-                type_params,
-                params,
-                ret_ty,
-                where_clause,
-                self.concretize_pending_trait_calls(*body)?,
-                attrs,
-            ),
-            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, attrs) => {
-                TypedInner::ExtractorDef(
-                    fun_idx,
-                    id,
-                    type_params,
-                    param,
-                    ret_ty,
-                    self.concretize_pending_trait_calls(*body)?,
-                    attrs,
-                )
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.concretize_pending_trait_calls_in_place(key)?;
+                    self.concretize_pending_trait_calls_in_place(value)?;
+                }
             }
-            other => other,
+            TypedInner::InterpolatedStr(parts) => {
+                for part in parts {
+                    if let crate::typed::TypedInterpolatedPart::Expr(expr) = part {
+                        self.concretize_pending_trait_calls_in_place(expr)?;
+                    }
+                }
+            }
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.concretize_pending_trait_calls_in_place(&mut arg.expr)?;
+                }
+            }
+            TypedInner::If(condition, then_branch, else_branch) => {
+                self.concretize_pending_trait_calls_in_place(condition)?;
+                self.concretize_pending_trait_calls_in_place(then_branch)?;
+                if let Some(branch) = else_branch {
+                    self.concretize_pending_trait_calls_in_place(branch)?;
+                }
+            }
+            TypedInner::Ensure(value, predicate, error) => {
+                self.concretize_pending_trait_calls_in_place(value)?;
+                self.concretize_pending_trait_calls_in_place(predicate)?;
+                self.concretize_pending_trait_calls_in_place(error)?;
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                self.concretize_pending_trait_calls_in_place(scrutinee)?;
+                for arm in arms {
+                    if let Some(guard) = &mut arm.guard {
+                        self.concretize_pending_trait_calls_in_place(guard)?;
+                    }
+                    self.concretize_pending_trait_calls_in_place(&mut arm.body)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn concretize_trait_dispatch(
+        &mut self,
+        span: &Span,
+        ty: &Ty,
+        method_name: &str,
+        obligation: &TraitObligation,
+        args: &[TypedNode],
+        dispatch: &mut TraitDispatch,
+    ) -> Result<(), Box<TypeError>> {
+        let abstract_constructor_receiver = match &obligation.receiver {
+            Ty::SelfApp(items) => Self::constructor_application_parts(items)
+                .map(|(witness, _)| {
+                    self.constructor_witness_supports_trait(witness, &obligation.trait_id)
+                })
+                .unwrap_or(false),
+            _ => false,
         };
-        Ok(Box::new(TypedNode { ty, span, node }))
+        let mut unresolved = Vec::new();
+        for ty in obligation
+            .trait_args
+            .iter()
+            .chain(std::iter::once(&obligation.receiver))
+        {
+            Self::collect_ty_vars(ty, &mut unresolved);
+        }
+        if matches!(dispatch, TraitDispatch::Pending)
+            && unresolved.is_empty()
+            && !abstract_constructor_receiver
+        {
+            let argument_tys = args
+                .iter()
+                .map(|arg| self.resolve_ty(&arg.ty))
+                .collect::<Vec<_>>();
+            *dispatch = match self.select_trait_method_instantiation(
+                &obligation.trait_id,
+                method_name,
+                &obligation.receiver,
+                &obligation.trait_args,
+                &argument_tys,
+                ty,
+            )? {
+                CandidateApplicability::Applicable(instantiation) => {
+                    TraitDispatch::Selected(Box::new(instantiation))
+                }
+                CandidateApplicability::Deferred(_) => TraitDispatch::Pending,
+                CandidateApplicability::Rejected(_) => {
+                    return Err(Box::new(self.trait_failure(
+                        TypeDiagnosticReason::NoApplicableTraitImplementation,
+                        &obligation.trait_id,
+                        &obligation.receiver,
+                        span,
+                        DiagnosticOrigin::TraitCall,
+                    )))
+                }
+            };
+        }
+        Ok(())
     }
 
     // Recursive block/callable traversal must not retain the large temporary
@@ -5459,6 +5279,51 @@ impl Checker {
         receiver_hint: Option<&Ty>,
         defer_incompatible_result_context: bool,
     ) -> Result<TypedNode, TypeError> {
+        let call = TraitInvocationContext {
+            span,
+            trait_name,
+            method_name,
+            args,
+            receiver_owner_hint,
+            expected_ret_ty,
+            expected_ret_relation,
+            argument_expected_relation,
+            constructor_failure_reason,
+            explicit_type_args,
+            operator,
+            receiver_hint,
+            defer_incompatible_result_context,
+        };
+        // Release signature/projection temporaries before recursively checking
+        // argument bodies (notably the next continuation in a do block).
+        let mut prepared = match self.prepare_trait_invocation(&call)? {
+            TraitInvocationPreparation::Complete(typed) => return Ok(typed),
+            TraitInvocationPreparation::Arguments(prepared) => prepared,
+        };
+        let typed_args = self.check_prepared_trait_arguments(&call, &mut prepared)?;
+        self.finish_trait_invocation(&call, prepared, typed_args)
+    }
+
+    #[inline(never)]
+    fn prepare_trait_invocation(
+        &mut self,
+        call: &TraitInvocationContext<'_>,
+    ) -> Result<TraitInvocationPreparation, TypeError> {
+        let TraitInvocationContext {
+            span,
+            trait_name,
+            method_name,
+            args,
+            expected_ret_ty,
+            expected_ret_relation,
+            argument_expected_relation,
+            constructor_failure_reason,
+            explicit_type_args,
+            operator,
+            receiver_hint,
+            defer_incompatible_result_context,
+            ..
+        } = call.clone();
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -5680,7 +5545,7 @@ impl Checker {
                         args: Vec::new(),
                     },
                 };
-                return Ok(typed);
+                return Ok(TraitInvocationPreparation::Complete(typed));
             }
         }
         let self_ty = if method.attrs.visibility == spire::ast::Visibility::Private {
@@ -5944,7 +5809,7 @@ impl Checker {
                         operator.clone(),
                         index,
                     )? {
-                        return Ok(typed);
+                        return Ok(TraitInvocationPreparation::Complete(typed));
                     }
                 }
                 Some(self.check_node_with_expected(positional_args[index], receiver_hint)?)
@@ -6194,6 +6059,30 @@ impl Checker {
             );
         }
 
+        Ok(TraitInvocationPreparation::Arguments(
+            PreparedTraitInvocation {
+                param_tys,
+                ret_ty,
+                trait_arg_tys,
+                self_ty,
+                declared_param_tys,
+                constructor_receiver_index,
+                prepared_args,
+                plain_output_parameters,
+            },
+        ))
+    }
+
+    fn check_prepared_trait_arguments(
+        &mut self,
+        call: &TraitInvocationContext<'_>,
+        prepared: &mut PreparedTraitInvocation,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let args = call.args;
+        let param_tys = &prepared.param_tys;
+        let prepared_args = &mut prepared.prepared_args;
+        let operator = &call.operator;
+        let argument_expected_relation = call.argument_expected_relation;
         let typed_args = args
             .iter()
             .zip(param_tys.iter())
@@ -6225,6 +6114,37 @@ impl Checker {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
+        Ok(typed_args)
+    }
+
+    #[inline(never)]
+    fn finish_trait_invocation(
+        &mut self,
+        call: &TraitInvocationContext<'_>,
+        prepared: PreparedTraitInvocation,
+        typed_args: Vec<TypedNode>,
+    ) -> Result<TypedNode, TypeError> {
+        let TraitInvocationContext {
+            span,
+            trait_name,
+            method_name,
+            receiver_owner_hint,
+            expected_ret_ty,
+            expected_ret_relation,
+            constructor_failure_reason,
+            defer_incompatible_result_context,
+            ..
+        } = call.clone();
+        let PreparedTraitInvocation {
+            param_tys,
+            ret_ty,
+            trait_arg_tys,
+            self_ty,
+            declared_param_tys,
+            constructor_receiver_index,
+            plain_output_parameters,
+            ..
+        } = prepared;
         if expected_ret_ty.is_none() {
             for (index, arg) in typed_args.iter().enumerate() {
                 if plain_output_parameters[index] {

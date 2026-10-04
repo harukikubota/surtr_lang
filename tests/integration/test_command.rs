@@ -1624,3 +1624,39 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
         "{evaluated}"
     );
 }
+
+#[test]
+fn test_command_long_do_preserves_order_and_short_circuit_without_stack_overflow() {
+    let temp = unique_temp_dir("surtr_test_long_do");
+    let steps = (0..40)
+        .map(|index| format!("assert_true(True)\nprint(\"step {index}\")\n"))
+        .collect::<String>();
+    let source = format!(
+        "import Test;\nit(\"complete\") {{ do {{\n{steps}Ok(())\n}} }}\n\
+         it(\"short circuit\") {{ do {{\n{steps}assert_true(False)\nprint(\"unreachable\")\nOk(())\n}} }}\n"
+    );
+    write_math_test(&temp, &source);
+    let output = run_surtr(&temp, &["test", "math", "--format=json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = test_json(&output);
+    assert_eq!(report["summary"]["script_errors"], 0, "{report}");
+    assert_eq!(report["summary"]["passed"], 1, "{report}");
+    assert_eq!(report["summary"]["failed"], 1, "{report}");
+    let expected = serde_json::json!((0..40)
+        .map(|index| format!("step {index}"))
+        .collect::<Vec<_>>());
+    for case in report["cases"].as_array().unwrap() {
+        assert_eq!(case["io"]["stdout"], expected, "{case}");
+    }
+    assert!(report["cases"][1]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("TestAssertionFailed"));
+    let _ = fs::remove_dir_all(temp);
+}
