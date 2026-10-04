@@ -63,11 +63,11 @@ fn write_math_module(temp: &Path) {
 }
 
 fn write_math_test(temp: &Path, body: &str) {
-    write_source(&temp.join("lib/tests/math.srt"), body);
+    write_source(&temp.join("lib/tests/local/math.srt"), body);
 }
 
 #[test]
-fn test_command_runs_named_test_scripts() {
+fn test_command_runs_actual_test_file_paths() {
     let temp = unique_temp_dir("surtr_test_command_named_scripts");
     write_math_module(&temp);
     write_math_test(
@@ -84,7 +84,12 @@ test("Math") {
 "#,
     );
 
-    for args in [vec!["test", "math"], vec!["test", "math.srt"]] {
+    let absolute = temp.join("lib/tests/local/math.srt");
+    for args in [
+        vec!["test", "lib/tests/local/math.srt"],
+        vec!["test", "./lib/tests/local/math.srt"],
+        vec!["test", absolute.to_str().unwrap()],
+    ] {
         let output = run_surtr(&temp, &args);
         assert!(
             output.status.success(),
@@ -110,40 +115,32 @@ test("Math") {
 
 #[cfg(unix)]
 #[test]
-fn test_command_rejects_test_file_symlink_outside_lib_tests() {
+fn test_command_accepts_parent_and_symlink_file_paths() {
     use std::os::unix::fs::symlink;
-
-    let temp = unique_temp_dir("surtr_test_command_symlink_escape");
-    write_source(&temp.join("private/secret.srt"), "not valid Surtr source");
-    fs::create_dir_all(temp.join("lib/tests")).expect("create test directory");
-    symlink(
-        "../../private/secret.srt",
-        temp.join("lib/tests/escape.srt"),
-    )
-    .expect("create escaping test symlink");
-
-    let output = run_surtr(&temp, &["test", "escape"]);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("test: selector must stay within lib/tests"),
-        "unexpected diagnostic: {stderr}"
-    );
-
+    let temp = unique_temp_dir("surtr_test_command_file_paths");
     write_source(
-        &temp.join("lib/tests/inside.srt"),
-        "import Test;\ntest(\"Inside\") { describe(\"link\") { it(\"passes\") { assert_eq(1, 1) } } }\n",
+        &temp.join("private/helper.srt"),
+        "defmod Helper { def value() -> Int { 3 } }\n",
     );
-    symlink("inside.srt", temp.join("lib/tests/alias.srt"))
-        .expect("create test symlink within lib/tests");
-    let output = run_surtr(&temp, &["test", "alias"]);
-    assert!(
-        output.status.success(),
-        "symlink within lib/tests should run\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    write_source(&temp.join("private/entry.srt"), "include \"./helper.srt\"\nimport Test;\nit(\"outside lib tests\") { assert_eq(3, Helper::value()) }\n");
+    fs::create_dir_all(temp.join("nested")).unwrap();
+    symlink("private/entry.srt", temp.join("alias.srt")).unwrap();
+    // Includes stay relative to the entry path: the alias also has its own adjacent helper.
+    write_source(
+        &temp.join("helper.srt"),
+        "defmod Helper { def value() -> Int { 3 } }\n",
     );
-
+    for (cwd, path) in [
+        (temp.join("nested"), "../private/entry.srt"),
+        (temp.clone(), "alias.srt"),
+    ] {
+        let output = run_surtr(&cwd, &["test", path]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let _ = fs::remove_dir_all(temp);
 }
 
@@ -178,7 +175,7 @@ test("Sequencing") {{
 "#
             ),
         );
-        let output = run_surtr(&temp, &["test", "math"]);
+        let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
         let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{kind}: {stdout}\n{stderr}");
@@ -202,7 +199,7 @@ test("Unit tail") {
 }
 "#,
     );
-    let output = run_surtr(&temp, &["test", "math"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
@@ -233,7 +230,7 @@ test("Math") {
 "#,
     );
 
-    let output = run_surtr(&temp, &["test", "math"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     assert!(
         !output.status.success(),
         "test command should fail\nstdout:\n{}\nstderr:\n{}",
@@ -247,7 +244,7 @@ test("Math") {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("[FAIL] Math > add > rejects wrong sum (lib/tests/math.srt)"));
+    assert!(stdout.contains("[FAIL] Math > add > rejects wrong sum (lib/tests/local/math.srt)"));
     assert!(stdout.contains("expected 6, got 14"));
     assert!(stdout.contains("test result: passed=0, failed=1, total=1"));
 
@@ -290,12 +287,12 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
         let prefix = &source[..source.find(call).unwrap()];
         let line = prefix.chars().filter(|ch| *ch == '\n').count() + 1;
         let column = prefix.rsplit('\n').next().unwrap().chars().count() + 1;
-        let output = run_surtr(&temp, &["test", "math"]);
+        let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
         let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
         assert!(
-            stdout.contains(&format!("lib/tests/math.srt:{line}:{column}")),
+            stdout.contains(&format!("lib/tests/local/math.srt:{line}:{column}")),
             "{source}\n{stdout}\n{stderr}"
         );
         assert!(stdout.contains(&format!("{assertion} failed:")), "{stdout}");
@@ -311,9 +308,9 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
 
     let helper =
         "defmod Helper {\n  def check() -> Result<()> {\n    Test::assert_false(True)\n  }\n}\n";
-    write_source(&temp.join("lib/tests/helper.srt"), helper);
+    write_source(&temp.join("lib/tests/local/helper.srt"), helper);
     write_math_test(&temp, "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::check() } }\n");
-    let output = run_surtr(&temp, &["test", "math"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
@@ -323,9 +320,9 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
 
     // A function with the same short name is not a standard assertion. Keep
     // the Error's construction site, even for TestAssertionFailed itself.
-    write_source(&temp.join("lib/tests/helper.srt"), "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestAssertionFailed(\"custom failure\"))\n  }\n}\n");
+    write_source(&temp.join("lib/tests/local/helper.srt"), "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestAssertionFailed(\"custom failure\"))\n  }\n}\n");
     write_math_test(&temp, "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::assert_true() } }\n");
-    let output = run_surtr(&temp, &["test", "math"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
@@ -380,7 +377,7 @@ fn test_command_assertion_captions_use_the_executed_call_site() {
             let prefix = &source[..byte_start];
             let line = prefix.chars().filter(|ch| *ch == '\n').count() + 1;
             let column = prefix.rsplit('\n').next().unwrap().chars().count() + 1;
-            let output = run_surtr(&temp, &["test", "math"]);
+            let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
             let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert_eq!(
@@ -389,7 +386,7 @@ fn test_command_assertion_captions_use_the_executed_call_site() {
                 "{source}\n{stdout}\n{stderr}"
             );
             assert!(
-                stdout.contains(&format!("lib/tests/math.srt:{line}:{column}")),
+                stdout.contains(&format!("lib/tests/local/math.srt:{line}:{column}")),
                 "wrong caption for {assertion}:\n{stdout}\n{stderr}"
             );
             assert!(stdout.contains(&format!("{name} failed:")), "{stdout}");
@@ -418,7 +415,7 @@ test("String") {
 "#,
     );
 
-    let output = run_surtr(&temp, &["test", "math"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     assert!(
         !output.status.success(),
         "test command should fail\nstdout:\n{}\nstderr:\n{}",
@@ -432,13 +429,13 @@ test("String") {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("[FAIL] String > repeat > bad (lib/tests/math.srt)"));
+    assert!(stdout.contains("[FAIL] String > repeat > bad (lib/tests/local/math.srt)"));
     assert!(stdout.contains("TestAssertionFailed: expected \"tes\", got \"bad\""));
     assert!(stdout.contains("assert_eq(\"tes\", \"bad\")"));
     assert!(stdout.contains("LHS term: \"tes\""));
     assert!(stdout.contains("RHS term: \"bad\""));
     assert!(stdout.contains("assert_eq failed: expected \"tes\", got \"bad\""));
-    assert!(stdout.contains("lib/tests/math.srt"));
+    assert!(stdout.contains("lib/tests/local/math.srt"));
     assert!(!stdout.contains("note:"));
 
     let _ = fs::remove_dir_all(temp);
@@ -447,7 +444,7 @@ test("String") {
 #[test]
 fn test_command_runs_range_library_tests_with_polymorphic_constructor_calls() {
     let repo = repo_root();
-    let output = run_surtr(&repo, &["test", "range"]);
+    let output = run_surtr(&repo, &["test", "lib/tests/basic_types/range.srt"]);
     assert!(
         output.status.success(),
         "range test command should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -464,7 +461,7 @@ fn test_command_runs_range_library_tests_with_polymorphic_constructor_calls() {
 fn test_command_type_errors_hide_numeric_inference_variables_in_diagnostics() {
     let temp = unique_temp_dir("surtr_test_command_hidden_numeric_tyvars");
     write_source(
-        &temp.join("lib/tests/generic_diag.srt"),
+        &temp.join("lib/tests/local/generic_diag.srt"),
         r#"import Test;
 
 defstruct Box<$A> {
@@ -490,7 +487,7 @@ test("Diagnostics") {
 "#,
     );
 
-    let output = run_surtr(&temp, &["test", "generic_diag"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/generic_diag.srt"]);
     assert!(
         !output.status.success(),
         "generic diagnostic test should fail\nstdout:\n{}\nstderr:\n{}",
@@ -527,7 +524,7 @@ test("Math") {
 "#,
     );
 
-    let output = run_surtr(&temp, &["test", "--quiet", "math"]);
+    let output = run_surtr(&temp, &["test", "--quiet", "lib/tests/local/math.srt"]);
     assert!(
         output.status.success(),
         "quiet test command should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -537,7 +534,7 @@ test("Math") {
 
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
 
-    let output = run_surtr(&temp, &["test", "math", "-q"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt", "-q"]);
     assert!(
         output.status.success(),
         "quiet test command should accept trailing flag\nstdout:\n{}\nstderr:\n{}",
@@ -564,7 +561,7 @@ test("Math") {
 "#,
     );
 
-    let output = run_surtr(&temp, &["test", "-q", "math"]);
+    let output = run_surtr(&temp, &["test", "-q", "lib/tests/local/math.srt"]);
     assert!(
         !output.status.success(),
         "quiet failing test command should fail\nstdout:\n{}\nstderr:\n{}",
@@ -573,7 +570,7 @@ test("Math") {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("[FAIL] Math > rejects wrong sum (lib/tests/math.srt)"));
+    assert!(stdout.contains("[FAIL] Math > rejects wrong sum (lib/tests/local/math.srt)"));
     assert!(stdout.contains("expected 6, got 14"));
     assert!(stdout.contains("test result: passed=0, failed=1, total=1"));
 
@@ -597,7 +594,11 @@ test("Math") {
 "#,
     );
 
-    let output = run_surtr_with_env(&temp, &["test", "math"], &[("SURTR_TEST_COLOR", "always")]);
+    let output = run_surtr_with_env(
+        &temp,
+        &["test", "lib/tests/local/math.srt"],
+        &[("SURTR_TEST_COLOR", "always")],
+    );
     assert!(
         output.status.success(),
         "test command should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -618,7 +619,7 @@ test("Math") {
 fn test_command_supports_result_pipeline_assertions() {
     let temp = unique_temp_dir("surtr_test_command_pipeline");
     write_source(
-        &temp.join("lib/tests/string_pipeline.srt"),
+        &temp.join("lib/tests/local/string_pipeline.srt"),
         r#"import String;
 import Test;
 
@@ -632,7 +633,7 @@ test("String") {
 "#,
     );
 
-    let output = run_surtr(&temp, &["test", "string_pipeline"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/string_pipeline.srt"]);
     assert!(
         output.status.success(),
         "test command should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -662,7 +663,7 @@ fn test_command_reports_missing_test_script() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("test: failed to read lib/tests/missing.srt for selector `missing`"));
+    assert!(stderr.contains("test: failed to read missing:"));
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -671,7 +672,7 @@ fn test_command_reports_missing_test_script() {
 fn test_command_all_runs_lib_test_scripts() {
     let temp = unique_temp_dir("surtr_test_command_all");
     write_source(
-        &temp.join("lib/tests/alpha.srt"),
+        &temp.join("lib/tests/local/alpha.srt"),
         r#"import Test;
 
 test("Alpha") {
@@ -689,7 +690,7 @@ test("Beta") {
 "#,
     );
     write_source(
-        &temp.join("lib/tests/capture_stdout.srt"),
+        &temp.join("lib/tests/local/capture_stdout.srt"),
         r#"import Test;
 
 test("Capture stdout") {
@@ -705,7 +706,7 @@ test("Capture stdout") {
 "#,
     );
     write_source(
-        &temp.join("lib/tests/stdin.srt"),
+        &temp.join("lib/tests/local/stdin.srt"),
         r#"import IO;
 import Test;
 
@@ -725,7 +726,7 @@ test("Stdin") {
 "#,
     );
     write_source(
-        &temp.join("lib/tests/capture_stderr.srt"),
+        &temp.join("lib/tests/local/capture_stderr.srt"),
         r#"import Test;
 
 test("Capture stderr") {
@@ -741,7 +742,7 @@ test("Capture stderr") {
 "#,
     );
     write_source(
-        &temp.join("lib/tests/io_isolation.srt"),
+        &temp.join("lib/tests/local/io_isolation.srt"),
         r#"import IO;
 import Test;
 
@@ -797,7 +798,7 @@ fn test_nested_lib_tests_are_ignored_by_normal_script_run() {
     let temp = unique_temp_dir("surtr_test_command_nested_lib_tests_ignored");
     write_source(&temp.join("main.srt"), r#"print("ok")"#);
     write_source(
-        &temp.join("lib/tests/bad.srt"),
+        &temp.join("lib/tests/local/bad.srt"),
         r#"this is not valid surtr syntax"#,
     );
 
@@ -843,69 +844,21 @@ print("ok")
 #[test]
 fn test_command_runs_file_module_tests_and_writes_real_files() {
     let temp = unique_temp_dir("surtr_test_command_file_module");
-    let sandbox_dir = temp.join("tmp/sandbox");
-    fs::create_dir_all(&sandbox_dir).expect("sandbox dir should be creatable");
-
-    let repo_file_test = repo_root().join("lib/tests/file.srt");
+    let target = temp.join("written.txt");
     write_source(
-        &temp.join("lib/tests/file.srt"),
-        &fs::read_to_string(&repo_file_test).expect("repo file test fixture should exist"),
+        &temp.join("entry.srt"),
+        &format!(
+            "import Test;\nit(\"writes a real file\") {{ File::write(\"{}\", \"alpha\") }}\n",
+            target.display()
+        ),
     );
-
-    let repo_file_module = repo_root().join("lib/file.srt");
-    if repo_file_module.exists() {
-        write_source(
-            &temp.join("lib/file.srt"),
-            &fs::read_to_string(&repo_file_module).expect("repo file module should be readable"),
-        );
-    }
-
-    let output = run_surtr(&temp, &["test", "file"]);
+    let output = run_surtr(&temp, &["test", "entry.srt"]);
     assert!(
         output.status.success(),
-        "file test command should succeed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("[PASS] File > writes and reads text"));
-    assert!(stdout.contains("[PASS] File > appends text"));
-    assert!(stdout.contains("[PASS] File > checks exists and delete"));
-    assert!(stdout.contains("[PASS] File > writes and flushes through with_open"));
-    assert!(stdout.contains("[PASS] File > reads chunks until eof"));
-    assert!(stdout.contains("[PASS] File > reports missing path"));
-    assert!(stdout.contains("test result: passed=6, failed=0, total=6"));
-
-    assert_eq!(
-        fs::read_to_string(sandbox_dir.join("write_read.txt"))
-            .expect("write_read file should exist after test"),
-        "alpha"
-    );
-    assert_eq!(
-        fs::read_to_string(sandbox_dir.join("append.txt"))
-            .expect("append file should exist after test"),
-        "onetwo"
-    );
-    assert!(
-        !sandbox_dir.join("delete.txt").exists(),
-        "delete.txt should have been removed by the File test"
-    );
-    assert_eq!(
-        fs::read_to_string(sandbox_dir.join("with_open_write.txt"))
-            .expect("with_open_write file should exist after test"),
-        "chunk-a"
-    );
-    assert_eq!(
-        fs::read_to_string(sandbox_dir.join("read_chunk.txt"))
-            .expect("read_chunk file should exist after test"),
-        "abcdef"
-    );
-    assert!(
-        !sandbox_dir.join("missing/nope.txt").exists(),
-        "missing-path assertion should not materialize the absent file"
-    );
-
+    assert_eq!(fs::read_to_string(&target).unwrap(), "alpha");
     let _ = fs::remove_dir_all(temp);
 }
 
@@ -922,7 +875,7 @@ test("suite") {
 }
 "#,
     );
-    let output = run_surtr(&temp, &["test", "math"]);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     assert!(
         output.status.success(),
         "{}\n{}",
@@ -930,9 +883,20 @@ test("suite") {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("[SKIP]"));
-    let output = run_surtr(&temp, &["test", "math", "--include-xit"]);
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--include-xit"],
+    );
     assert!(!output.status.success());
-    let output = run_surtr(&temp, &["test", "math", "--list", "--include-xit"]);
+    let output = run_surtr(
+        &temp,
+        &[
+            "test",
+            "lib/tests/local/math.srt",
+            "--list",
+            "--include-xit",
+        ],
+    );
     assert!(output.status.success());
     let _ = fs::remove_dir_all(temp);
 }
@@ -980,13 +944,20 @@ test("suite") {
 "#,
     );
     write_source(
-        &temp.join("lib/tests/second.srt"),
+        &temp.join("lib/tests/local/second.srt"),
         "import Test;\nit(\"top level\") { assert_true(True) }\n",
     );
     for all in [false, true] {
         for list in [false, true] {
             for json in [false, true] {
-                let mut args = vec!["test", if all { "--all" } else { "math" }];
+                let mut args = vec![
+                    "test",
+                    if all {
+                        "--all"
+                    } else {
+                        "lib/tests/local/math.srt"
+                    },
+                ];
                 if list {
                     args.push("--list");
                 }
@@ -1111,7 +1082,7 @@ it("selected top") { assert_true(True) }
         &temp,
         &[
             "test",
-            "math",
+            "lib/tests/local/math.srt",
             "--include-xit",
             "--timings",
             "--it=paused",
@@ -1135,7 +1106,7 @@ it("selected top") { assert_true(True) }
         &temp,
         &[
             "test",
-            "math",
+            "lib/tests/local/math.srt",
             "--deny-pending",
             "--it=active",
             "--quiet",
@@ -1161,7 +1132,7 @@ it("not reached") { assert_true(True) }
 "#,
     );
     write_source(
-        &temp.join("lib/tests/second.srt"),
+        &temp.join("lib/tests/local/second.srt"),
         "import Test;\nit(\"next file\") { assert_true(True) }\n",
     );
     let output = run_surtr(&temp, &["test", "--all", "--format=json", "--timings"]);
@@ -1186,7 +1157,13 @@ it("not reached") { assert_true(True) }
     );
     let output = run_surtr(
         &temp,
-        &["test", "math", "--list", "--it=missing", "--format=json"],
+        &[
+            "test",
+            "lib/tests/local/math.srt",
+            "--list",
+            "--it=missing",
+            "--format=json",
+        ],
     );
     let report = test_json(&output);
     assert_eq!(output.status.code(), Some(1));
@@ -1197,7 +1174,13 @@ it("not reached") { assert_true(True) }
 
     for args in [
         vec!["test", "--bad", "--format=json"],
-        vec!["test", "math", "--it", "--format", "json"],
+        vec![
+            "test",
+            "lib/tests/local/math.srt",
+            "--it",
+            "--format",
+            "json",
+        ],
         vec!["test", "--format=json"],
     ] {
         let output = run_surtr(&temp, &args);
@@ -1207,9 +1190,19 @@ it("not reached") { assert_true(True) }
         assert!(report["options"].is_null());
     }
     for args in [
-        vec!["test", "math", "--format=json", "--format=human"],
-        vec!["test", "math", "--format=json", "--format"],
-        vec!["test", "math", "--format=bad"],
+        vec![
+            "test",
+            "lib/tests/local/math.srt",
+            "--format=json",
+            "--format=human",
+        ],
+        vec![
+            "test",
+            "lib/tests/local/math.srt",
+            "--format=json",
+            "--format",
+        ],
+        vec!["test", "lib/tests/local/math.srt", "--format=bad"],
     ] {
         let output = run_surtr(&temp, &args);
         assert_eq!(output.status.code(), Some(1));
@@ -1231,7 +1224,13 @@ fn test_command_extension_scan_and_declaration_failures_are_not_filtered() {
         write_math_test(&temp, source);
         let output = run_surtr(
             &temp,
-            &["test", "math", "--it=missing", "--list", "--format=json"],
+            &[
+                "test",
+                "lib/tests/local/math.srt",
+                "--it=missing",
+                "--list",
+                "--format=json",
+            ],
         );
         let report = test_json(&output);
         assert_eq!(output.status.code(), Some(1), "{source}");
@@ -1240,7 +1239,7 @@ fn test_command_extension_scan_and_declaration_failures_are_not_filtered() {
     }
     write_math_test(&temp, "import Test;\npend(\"future\", \"later\")");
     write_source(
-        &temp.join("lib/tests/second.srt"),
+        &temp.join("lib/tests/local/second.srt"),
         "import Test;\nxit(\"paused\", \"repair\") { assert_true(True) }",
     );
     for name in ["future", "paused"] {
@@ -1347,7 +1346,10 @@ fn test_command_extension_assertion_type_boundaries() {
                 "import Test;\ndeferror PayloadFailure(detail: String) {{ detail }}\n{source}\n"
             ),
         );
-        let output = run_surtr(&temp, &["test", "math", "--format=json"]);
+        let output = run_surtr(
+            &temp,
+            &["test", "lib/tests/local/math.srt", "--format=json"],
+        );
         let report = test_json(&output);
         assert_eq!(output.status.code(), Some(1), "{source}: {report}");
         assert_eq!(report["summary"]["script_errors"], 1);
@@ -1369,7 +1371,7 @@ fn check_assertion_cases(
 ) -> serde_json::Value {
     let temp = unique_temp_dir(label);
     write_source(
-        &temp.join("lib/tests/schema/assertions.srt"),
+        &temp.join("lib/tests/local/support/assertions.srt"),
         r#"
 defmod UserAssertions {
   def assert_err_kind(marker: String, result: Result<Int>) -> Result<()> { Ok(()) }
@@ -1377,12 +1379,16 @@ defmod UserAssertions {
 }
 "#,
     );
-    let mut source = format!("include \"./schema/assertions.srt\"\nimport Test;\n{declarations}\n");
+    let mut source =
+        format!("include \"./support/assertions.srt\"\nimport Test;\n{declarations}\n");
     for (name, body, _) in cases {
         source.push_str(&format!("it(\"{name}\") {{ {body} }}\n"));
     }
     write_math_test(&temp, &source);
-    let output = run_surtr(&temp, &["test", "math", "--format=json"]);
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
     let report = test_json(&output);
     let failures = cases
         .iter()
@@ -1636,7 +1642,10 @@ fn test_command_long_do_preserves_order_and_short_circuit_without_stack_overflow
          it(\"short circuit\") {{ do {{\n{steps}assert_true(False)\nprint(\"unreachable\")\nOk(())\n}} }}\n"
     );
     write_math_test(&temp, &source);
-    let output = run_surtr(&temp, &["test", "math", "--format=json"]);
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
     assert_eq!(
         output.status.code(),
         Some(1),
@@ -1658,5 +1667,216 @@ fn test_command_long_do_preserves_order_and_short_circuit_without_stack_overflow
         .as_str()
         .unwrap()
         .contains("TestAssertionFailed"));
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_all_selects_only_category_entries_in_path_order() {
+    let temp = unique_temp_dir("surtr_test_command_fixed_depth");
+    for path in [
+        "lib/tests/root.srt",
+        "lib/tests/support/shared/defs.srt",
+        "lib/tests/z/support/defs.srt",
+        "lib/tests/z/deeper/entry.srt",
+    ] {
+        write_source(
+            &temp.join(path),
+            "invalid Surtr: depth must exclude this input",
+        );
+    }
+    for path in ["schema/prelude.srt", "a/spec_defs.srt", "z/entry.srt"] {
+        write_source(
+            &temp.join("lib/tests").join(path),
+            "import Test;\nit(\"passes\") { assert_true(True) }\n",
+        );
+    }
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&output);
+    assert!(output.status.success(), "{report}");
+    let files: Vec<_> = report["scripts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|script| script["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        files,
+        [
+            "lib/tests/a/spec_defs.srt",
+            "lib/tests/schema/prelude.srt",
+            "lib/tests/z/entry.srt"
+        ]
+    );
+    assert_eq!(report["summary"]["passed"], 3);
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_all_rejects_zero_files_but_keeps_zero_case_policy() {
+    let temp = unique_temp_dir("surtr_test_command_empty_targets");
+    write_source(
+        &temp.join("lib/tests/root.srt"),
+        "invalid ignored root input",
+    );
+    write_source(
+        &temp.join("lib/tests/support/shared/defs.srt"),
+        "invalid ignored support input",
+    );
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(report["summary"]["script_errors"], 1);
+    assert!(report["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("no test files"));
+    write_source(&temp.join("lib/tests/local/empty.srt"), "import Test;\n");
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&output);
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["summary"]["discovered"], 0);
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_does_not_rewrite_file_paths_or_fall_back_to_selectors() {
+    let temp = unique_temp_dir("surtr_test_command_literal_paths");
+    write_source(
+        &temp.join("lib/tests/local/result.srt"),
+        "import Test;\nit(\"library\") { assert_true(True) }\n",
+    );
+    for path in [
+        "result",
+        "result.srt",
+        "lib\\tests\\local\\result.srt",
+        "directory",
+    ] {
+        fs::create_dir_all(temp.join("directory")).unwrap();
+        let output = run_surtr(&temp, &["test", path, "--format=json"]);
+        let report = test_json(&output);
+        assert_eq!(output.status.code(), Some(1), "{path}: {report}");
+        assert_eq!(report["summary"]["script_errors"], 1);
+    }
+    for path in ["result", " spaced "] {
+        write_source(
+            &temp.join(path),
+            "import Test;\nit(\"literal file\") { assert_true(True) }\n",
+        );
+        let output = run_surtr(&temp, &["test", path]);
+        assert!(
+            output.status.success(),
+            "{path}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_assert_eq_obeys_custom_eq_instead_of_inspect() {
+    check_assertion_cases(
+        "surtr_test_custom_eq",
+        r#"
+defstruct EqByValue { value: Int, description: String }
+impl EqByValue { def new(value: Int, description: String) -> Self { EqByValue { value, description } } }
+impl Eq for EqByValue { def eq(self: Self, rhs: Self) -> Boolean { Eq::eq(self.value, rhs.value) } }
+defstruct AlwaysDifferent { value: Int }
+impl AlwaysDifferent { def new(value: Int) -> Self { AlwaysDifferent { value } } }
+impl Eq for AlwaysDifferent { def eq(self: Self, rhs: Self) -> Boolean { False } }
+"#,
+        &[
+            (
+                "different text equal values",
+                "assert_eq(EqByValue(7, \"first\"), EqByValue(7, \"second\"))",
+                None,
+            ),
+            (
+                "same text unequal values",
+                "assert_eq(AlwaysDifferent(7), AlwaysDifferent(7))",
+                Some("expected AlwaysDifferent"),
+            ),
+        ],
+    );
+}
+
+#[test]
+fn test_command_moved_entries_and_changed_support_invalidate_cached_bytecode() {
+    let temp = unique_temp_dir("surtr_test_moved_include_cache");
+    let entry = "include \"./support/value.srt\"\nimport Test;\nit(\"included value\") { assert_eq(1, CachedValue::get()) }\n";
+    write_source(&temp.join("lib/tests/old/entry.srt"), entry);
+    write_source(
+        &temp.join("lib/tests/old/support/value.srt"),
+        "defmod CachedValue { def get() -> Int { 1 } }\n",
+    );
+    for _ in 0..2 {
+        let output = run_surtr(&temp, &["test", "lib/tests/old/entry.srt", "--format=json"]);
+        assert!(output.status.success(), "{}", test_json(&output));
+    }
+    fs::rename(temp.join("lib/tests/old"), temp.join("lib/tests/new")).unwrap();
+    write_source(
+        &temp.join("lib/tests/new/support/value.srt"),
+        "defmod CachedValue { def get() -> Int { 2 } }\n",
+    );
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(report["summary"]["failed"], 1);
+    assert_eq!(report["cases"][0]["file"], "lib/tests/new/entry.srt");
+    assert!(report["cases"][0]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("expected 1, got 2"));
+    // Change only the dependency at the same path: the cached failure must not survive.
+    write_source(
+        &temp.join("lib/tests/new/support/value.srt"),
+        "defmod CachedValue { def get() -> Int { 1 } }\n",
+    );
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    assert!(output.status.success(), "{}", test_json(&output));
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_preserves_existing_backslash_names_and_relative_includes() {
+    let temp = unique_temp_dir("surtr_test_backslash_names");
+    let category = temp.join("lib/tests").join(r"literal\category");
+    write_source(
+        &category.join("support/value.srt"),
+        "defmod LiteralValue { def get() -> Int { 3 } }\n",
+    );
+    write_source(&category.join(r"literal\entry.srt"), "include \"./support/value.srt\"\nimport Test;\nit(\"literal path\") { assert_eq(3, LiteralValue::get()) }\n");
+    let entry = r"lib/tests/literal\category/literal\entry.srt";
+    for target in [entry, "--all"] {
+        let output = run_surtr(&temp, &["test", target, "--format=json"]);
+        let report = test_json(&output);
+        assert!(output.status.success(), "{report}");
+        assert_eq!(report["summary"]["passed"], 1);
+        assert_eq!(report["scripts"][0]["file"], entry);
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_all_reports_broken_file_links_and_continues() {
+    let temp = unique_temp_dir("surtr_test_broken_file_link");
+    write_source(
+        &temp.join("lib/tests/local/z_good.srt"),
+        "import Test;\nit(\"later case\") { assert_true(True) }\n",
+    );
+    std::os::unix::fs::symlink("missing.srt", temp.join("lib/tests/local/a_broken.srt")).unwrap();
+    std::os::unix::fs::symlink(".", temp.join("lib/tests/local/b_directory.srt")).unwrap();
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(report["summary"]["script_errors"], 2);
+    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["scripts"][0]["file"], "lib/tests/local/a_broken.srt");
+    assert_eq!(
+        report["scripts"][1]["file"],
+        "lib/tests/local/b_directory.srt"
+    );
+    assert_eq!(report["scripts"][2]["file"], "lib/tests/local/z_good.srt");
     let _ = fs::remove_dir_all(temp);
 }
