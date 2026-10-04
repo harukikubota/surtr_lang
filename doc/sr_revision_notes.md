@@ -2,7 +2,23 @@
 
 記録日: 2026-10-04。
 
-利用者の回答だけを新規文書として整理した。元の調査書はコピー・変更していない。今回は追加調査、実装、テストを行っていない。以下の現状・改修済みの記述は利用者の回答に基づき、今回の再検証結果ではない。
+利用者の回答を起点に、現行コード・正本文書・実行結果を照合した。各項目の冒頭は回答時の方針を保持し、「現行確認」「実施記録」で調査結果と実装状況を区別する。
+
+| 項目 | 状況 | 次の作業・根拠 |
+|---|---|---|
+| SR-01 | 確定範囲の設計済み | canonical identity と元エラー保持は実施可能。新規予約の範囲は未確定 |
+| SR-02〜04 | 実装着手 | [標準環境の統一計画](sr_standard_environment_plan.md)にAPI・移行順・受入条件を整理 |
+| SR-05 | 実装・局所検証済み | 未登録builtin metadataで内部エラー |
+| SR-06 | 既存挙動確認・回帰テスト追加済み | 関数宣言のshadowと中置固定先を区別 |
+| SR-07 | 詳細仕様待ち | Pattern→Expr変換範囲と対象表記の確定が必要 |
+| SR-08 | 現行実装・既存テスト確認 | Result / Booleanの実宣言に基づくaliasを維持 |
+| SR-09 | 既存挙動確認・回帰テスト追加済み | 通常dbgと専用dbg!の共存 |
+| SR-10 | 構文選択待ち | 括弧内形式・旧表記・予約範囲を整理 |
+| SR-11 | 現行処理の責務を確認 | callee UIDは一意。型に依存する引数役割の遅延と区別 |
+| SR-12 | 可視性・拒否条件を確認 | public Constはimportなし、private Constはファイル内 |
+| SR-13 | 回答と現行契約の差を確認 | Resultを返すnewは現行で許可。未定義deconstructはエラー |
+
+SR-01・07・10・11の具体的な根拠、未確定事項、受入条件は[呼出し解決・構文の計画](sr_call_resolution_syntax_plan.md)にまとめた。
 
 ## SR-01: special formの呼出し先とスコープ解決
 
@@ -75,6 +91,10 @@ lookup失敗はコンパイラバグとして、明確なエラーで処理を�
 
 改修で仕様を確定済みとの回答。今回、新たな仕様変更案は追加しない。
 
+### 現行確認（2026-10-04）
+
+Sigil の `special_variants_require_a_real_enum_declaration`、`canonical_special_variants_share_alias_and_capture_targets`、`reserved_special_variant_aliases_reject_programmatic_binding_and_argument_shadowing` が、実enum宣言の必要性、canonical UIDの共有、予約aliasの束縛拒否を固定している。初期scopeに架空constructorを置く仕様へ戻さない。新たな仕様変更は不要。
+
 ## SR-09: dbg!とdbgを区別する
 
 `dbg!`と変数・関数の`dbg`を区別するように改修する。具体的な名前解決・シャドーイングの境界は、後段の仕様整理で扱う。
@@ -111,11 +131,25 @@ importは関数・Extractor専用のキーワードとして全体で統一す�
 
 型とConstはどのスコープからも同じ見え方とする。ただしprivate constはファイルスコープに閉じる。
 
+### 現行確認（2026-10-04）
+
+Sigil `build_global_scope`はpublic Constを裸名・修飾名で導入し、private Constはそのファイルのscopeだけに導入する。`is_importable_declaration`はConst・Struct・builtin型・`new`をimport対象から除く。既存module fixture `public_const_cross_file`、`private_const_visibility_forbidden`、`duplicate_public_const`が可視性・衝突を固定している。
+
+追加の複数ファイルprobeではpublic `VALUE`をimportなしで参照できた。同じmoduleの関数importは成功し、Constのimportは `Import target not importable`、型のmember importは `Unknown import member`、enum型をmoduleとするvariant importは `Unknown module import` で停止した。宣言kindだけでimport可否を判断せず、実際のnamespace経路も含めて確認した。型・Constの可視性変更は不要。
+
 ## SR-13: Structのnewとdeconstructは明確な言語仕様
 
 言語仕様で明確に定められている。`new`は確実に成功し、Pattern側のExtractorは定義されていなければエラーで処理を止められる。
 
 この仕様を維持し、未定義Extractorを別の分解経路で救済しない。
+
+### 現行確認（2026-10-04）
+
+`docs/site/structs.md`は `new -> Result<Self, Error>` を許可し、Scar の `struct_new_accepts_result_self_return_type` / `struct_constructor_call_accepts_result_return_type` がこの境界を検証する。実際に `new(value)` が負数で `Err(NoneError)` を返す Struct を実行し、constructor呼出しが `Err(NoneError("None Value."))` を返すことを確認した。
+
+したがって回答の「確実に成功」が「newの解決先が保証される」を意味するのか、「実行時にもErrを返せない」を意味するのかで仕様が異なる。後者は現行の正本・成功テストの変更を要するため、今回の修正には含めない。
+
+一方、`new`を定義し`deconstruct`を定義しないStructをPattern headに使うと、Sigilは `requires attached extractor ... but it is not defined` で停止した。構造分解への救済は追加しない。
 
 ## 後段タスクへの引継ぎ
 
@@ -123,4 +157,4 @@ importは関数・Extractor専用のキーワードとして全体で統一す�
 
 SR-02〜04は標準環境を前提に入口とテスト構成を統一し、SR-05は内部lookup失敗を明確なエラーにする。SR-06／08／12／13は回答で示された仕様を前提に扱う。SR-11は呼出し先の一意性を前提とし、再走査を加えない。
 
-この文書は改修方針と課題のメモであり、詳細な実装仕様の確定や改修完了を示すものではない。
+完了の判断は各項目の実施記録による。構文・予約範囲の未確定事項と、実装の内部選択だけで進められる項目を区別し、未確定仕様を実装済みとして扱わない。
