@@ -71,8 +71,8 @@ test("StyledDoc") {
         segment = StyledDocSegment::new("sur", style)
         line = StyledDocLine::new([segment])
         doc = StyledDocDoc::new([line])
-        first_line =? doc.lines.[0]
-        first_segment =? first_line.segments.[0]
+        first_line <- doc.lines.[0]
+        first_segment <- first_line.segments.[0]
 
         assert_eq(Option::Some(StyledDocColor::Blue), first_segment.style.fg)
         assert_true(first_segment.style.bold)
@@ -90,8 +90,8 @@ test("StyledDoc") {
         restyled,
         Option::Some(StyledDocColor::Green),
         )
-        first_line =? recolored.lines.[0]
-        first_segment =? first_line.segments.[0]
+        first_line <- recolored.lines.[0]
+        first_segment <- first_line.segments.[0]
 
         assert_true(first_segment.style.bold)
         assert_eq(Option::Some(StyledDocColor::Green), first_segment.style.fg)

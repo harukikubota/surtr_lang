@@ -302,6 +302,14 @@ segment を検査する。`&Facet::view(Duration.millis, &1)`、期待型付き�
 解決を経て Facet API の専用処理に入る。期待型の矛盾は正規の診断で拒否し、失敗後の
 無注釈再検査や式ごとの正規化を追加しない。無注釈では `Result<Duration>` source を推測しない。
 
+Facet の読み取りが新しい `Result` を返す場合、constructor capability の由来も
+外側の `Result` と成功payloadに分けて保持する。対象はfallibleな `view`、
+`Result` sourceに対する `view`、および `preview` であり、通常の `Result` と同じく
+`Monad::bind` や `do` の `<-` に渡せる。payloadがStructなどのnominal型でも変わらない。
+成功payloadの由来には元のfocusの制約を保持し、Facetの読み取り自体で強めない。
+totalな通常sourceの `view` はfocusをそのまま返す。focus自体が `Result` でも、
+新しい外側の `Result` やcapabilityを追加しない。
+
 `preview` / `put` / `set` / `over` / `over_result` / `case_set` / `case_over` は通常の
 capture 型推論に従う。FacetPath 自体を placeholder 仮引数で受け取ることは位置制約として拒否する。
 直接の置換や合成の path 部分の置換も対象とし、違反式の span を指す。

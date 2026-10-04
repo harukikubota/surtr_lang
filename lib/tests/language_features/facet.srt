@@ -16,9 +16,55 @@ defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
     )
   }
 
+def bind_missing_nominal_facet() -> Result<Config> {
+  do {
+    config <- Facet::view(List.[2], [Config::new("App")])
+    print("continued after missing facet")
+    Ok(config)
+  }
+}
+
+def bind_nominal_facet_source(source: Result<(Config, Int)>) -> Result<Config> {
+  do {
+    config <- Facet::view(Tuple._0, source)
+    print("continued after failed source")
+    Ok(config)
+  }
+}
+
 import Test;
 
 test("Facet") {
+  describe("Result binding") {
+    it("preserves nominal index failures and skips the continuation") {
+      do {
+        result = bind_missing_nominal_facet()
+
+        assert_err_kind(IndexOutOfBounds, result)
+        match result {
+          Err(err) => assert_eq("index 2 out of bounds for len 1", Error::message(err)),
+          Ok(_) => assert_true(False),
+        }
+        assert_stdout_eq([])
+      }
+    }
+
+    it("preserves the failed source cause chain and skips the continuation") {
+      do {
+        source: Result<(Config, Int)> = Result::cause(Err(NoneError), ZeroDivisionError)
+        result = bind_nominal_facet_source(source)
+
+        assert_err_kind(ZeroDivisionError, result)
+        assert_cause_chain([ZeroDivisionError, NoneError], result)
+        match (source, result) {
+          (Err(original), Err(propagated)) => assert_eq(Error::format(original), Error::format(propagated)),
+          _ => assert_true(False),
+        }
+        assert_stdout_eq([])
+      }
+    }
+  }
+
   describe("view and sugar") {
     it("views nested fields through compose and arrow syntax") {
       do {

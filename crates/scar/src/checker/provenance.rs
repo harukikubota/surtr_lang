@@ -89,7 +89,7 @@ impl Checker {
                 .0
             }
             TypedInner::FacetView {
-                api: _,
+                api,
                 source,
                 path,
                 source_is_result,
@@ -124,11 +124,24 @@ impl Checker {
                             tag: Some(*variant_tag),
                         },
                         TypedFacetSegment::ListRange { .. } => continue,
-                        _ => return Provenance::Intersection(Vec::new()),
+                        _ => {
+                            source = (Provenance::Intersection(Vec::new()), path.focus_ty.clone());
+                            break;
+                        }
                     };
                     source = self.project_provenance(&source, &projection, &path.focus_ty);
                 }
-                source.0
+                // These reads produce a new Result, independently of the
+                // focus's constructor capabilities. Preserve the focus view
+                // under Ok so extracting it does not strengthen its proof.
+                if matches!(api, TypedFacetApi::Preview) || *source_is_result || path.may_fail {
+                    Provenance::Variants(vec![
+                        (0, vec![source]),
+                        (1, vec![(Provenance::RequiresProof, Ty::Error)]),
+                    ])
+                } else {
+                    source.0
+                }
             }
             TypedInner::Closure(parameters, _, body)
             | TypedInner::ExtractorClosure(parameters, _, body)

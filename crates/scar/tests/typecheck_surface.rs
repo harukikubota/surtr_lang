@@ -595,6 +595,11 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(do_safebind_return_mismatch_points_to_the_final_expression),
     surface_case!(do_partial_extract_rejects_carriers_without_alternative),
     surface_case!(do_generated_bind_closure_keeps_facet_source_scope),
+    surface_case!(do_extract_accepts_fallible_facet_nominal_payload),
+    surface_case!(do_extract_accepts_structural_facet_on_result_source),
+    surface_case!(do_extract_accepts_variant_facet_payload_shapes),
+    surface_case!(do_facet_extract_preserves_caller_payload_capability),
+    surface_case!(facet_result_preserves_payload_carrier_capability),
     surface_case!(result_effect_annotation_validates_canonical_monad_t_shape),
     surface_case!(result_effect_annotation_rejects_invalid_structure_and_capabilities),
     surface_case!(result_effect_annotation_rejects_noncanonical_trait_metadata),
@@ -7078,6 +7083,175 @@ result: Identity<String> = do::<Identity> {
         RuntimeSourcePolicy::script(),
     )
     .expect("compiler-generated bind closures must not create a source Facet scope boundary");
+}
+
+fn do_extract_accepts_fallible_facet_nominal_payload() {
+    for rhs in ["items.[0]", "Facet::view(List.[0], items)"] {
+        let source = format!(
+            r#"defstruct Item {{ value: Int }}
+impl Item {{
+  def new(value: Int) -> Self {{ Item {{ value }} }}
+}}
+items = [Item::new(7)]
+result: Result<Int> = do {{
+  item <- {rhs}
+  Ok(item.value)
+}}"#
+        );
+        let typed =
+            typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_or_else(|error| {
+                panic!("Facet Result<Item> must bind like an ordinary Result: {rhs}: {error:?}")
+            });
+        assert_eq!(
+            typed_bind_rhs(&typed, "result").ty,
+            Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            "{rhs}"
+        );
+    }
+}
+
+fn do_extract_accepts_structural_facet_on_result_source() {
+    for rhs in ["source.item", "Facet::view(Holder.item, source)"] {
+        let source = format!(
+            r#"defstruct Item {{ value: Int }}
+impl Item {{
+  def new(value: Int) -> Self {{ Item {{ value }} }}
+}}
+defstruct Holder {{ item: Item }}
+impl Holder {{
+  def new(item: Item) -> Self {{ Holder {{ item }} }}
+}}
+source = Ok(Holder::new(Item::new(7)))
+result: Result<Int> = do {{
+  item <- {rhs}
+  Ok(item.value)
+}}"#
+        );
+        let typed =
+            typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_or_else(|error| {
+                panic!("structural view on Result must retain its nominal focus: {rhs}: {error:?}")
+            });
+        assert_eq!(
+            typed_bind_rhs(&typed, "result").ty,
+            Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            "{rhs}"
+        );
+    }
+}
+
+fn do_extract_accepts_variant_facet_payload_shapes() {
+    for (constructor, path, expected_payload) in [
+        ("Packet::Empty", "Packet.Empty", Ty::Unit),
+        (
+            "Packet::Pair(7, True)",
+            "Packet.Pair",
+            Ty::Tuple(vec![Ty::Int, Ty::Bool]),
+        ),
+    ] {
+        let source = format!(
+            r#"defenum Packet {{ Empty, Pair(Int, Boolean), }}
+packet = {constructor}
+result = do {{
+  payload <- Facet::preview({path}, packet)
+  Ok(payload)
+}}"#
+        );
+        let typed =
+            typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_or_else(|error| {
+                panic!(
+                    "variant preview must unwrap its zero or multiple payloads: {path}: {error:?}"
+                )
+            });
+        assert_eq!(
+            typed_bind_rhs(&typed, "result").ty,
+            Ty::Result(Box::new(expected_payload), Box::new(Ty::Error)),
+            "{path}"
+        );
+    }
+}
+
+fn do_facet_extract_preserves_caller_payload_capability() {
+    let definition = r#"def double_first(values: List<$A>) -> Result<$A>
+where
+  $A: Add
+{
+  do {
+    item <- values.[0]
+    Ok(item + item)
+  }
+}
+"#;
+    typecheck_with_rules(
+        &format!("{definition}result: Result<Int> = double_first([7])"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("unwrapping Facet Result must preserve the caller-owned Add capability");
+
+    let field_definition = r#"defstruct Boxed<$A> { value: Result<$A> }
+impl Boxed {
+  def new(value: Result<$A>) -> Boxed<$A> { Boxed { value } }
+}
+def double_field(boxed: Boxed<$A>) -> Result<$A>
+where
+  $A: Add
+{
+  do {
+    item <- Facet::view(Boxed.value, boxed)
+    Ok(item + item)
+  }
+}
+"#;
+    typecheck_with_rules(
+        &format!("{field_definition}result: Result<Int> = double_field(Boxed::new(Ok(7)))"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("total Facet field view must retain the stored Result payload capability without another wrapper");
+
+    let error = typecheck_with_rules(
+        &format!("{definition}double_first([()])"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Facet Result unwrapping must not authorize Add for an unsupported payload");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTraitCapability),
+        "{error:?}"
+    );
+}
+
+fn facet_result_preserves_payload_carrier_capability() {
+    let declarations = r#"def retain(value: $F<Int>) -> $F<Int>
+where
+  $F: Functor
+{
+  Functor::fmap(value, {|item| item})
+}
+def stronger(value: Monad<Int>) -> Int { 1 }
+"#;
+    let computation = r#"values = [source]
+projected = values.[0]
+result = match projected {
+  Ok(item) => stronger(item),
+  Err(_) => 0,
+}"#;
+    typecheck_with_rules(
+        &format!("{declarations}source = Identity::new(7)\n{computation}"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("fresh concrete payload independently provides its Monad capability");
+
+    let source = format!("{declarations}source = retain(Identity::new(7))\n{computation}");
+    let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script())
+        .expect_err("Facet Result projection must retain the payload constructor capability");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
+    );
+    assert!(
+        error.span.start >= source.find("stronger(item)").unwrap(),
+        "the rejection must belong to the projected payload capability: {error:?}"
+    );
 }
 
 const RESULT_EFFECT_CARRIER_SOURCE: &str = r#"@result_effect
