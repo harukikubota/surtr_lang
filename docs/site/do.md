@@ -27,6 +27,7 @@ option # Option::Some(21)
 
 - `pattern <- rhs`: carrierのpayloadをpatternへ渡します。
 - `pattern =? rhs`: SafeBind。自動分解するRHSはResultの外側一段だけです。
+- `expression?`: 文末の `?`。canonical Result の成功型の終端が Unit の場合に、成功値を捨てて外側一段の Err を do-local failure target へ接続します。
 - `name = expression`:通常の束縛。Monad payloadを取り出しません。
 - 途中のbare Monad式: payloadを捨てて次の文へ進みます。
 - 最後の式:同じcarrierのMonad値を返します。空blockや末尾bindingだけのblockは拒否されます。
@@ -35,6 +36,15 @@ separatorには改行か`;`を使います。bindingはそのRHSでは見えず�
 block内で導入した名前はblock外へ漏れません。
 各binding/continuationの実行ごとにRHSを一度評価し、failureとなったその経路の後続文を実行しません。
 List等の分岐carrierでは、後続のcontinuationを各payloadについて実行します。
+
+文末の `?` は Unit 文なので、carrier を推論する根拠にはなりません。
+末尾に置くだけでは最終 Monad 値にならず、たとえば Result carrier では後に `Ok(())` が必要です。
+内側にネストした Result の Err を再帰的に探す規則もありません。
+詳しい型制約と式位置の拒否は[エラーハンドリング](./error-handling.md)を参照してください。
+
+複数のアサーションは、通常の bare Result 式を順に書けば短絡できます。
+`do` はテストで必須ではなく、文末の `?` や SafeBind でも失敗を伝播できます。
+具体例は[テストを書く](./test.md)を参照してください。
 
 ## Failure matcherとResult
 

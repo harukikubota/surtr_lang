@@ -3434,6 +3434,7 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         }),
         Ast::Bind(_, _, rhs)
         | Ast::SafeBind(_, _, rhs)
+        | Ast::StatementQuestion(_, rhs)
         | Ast::Grouped(_, rhs)
         | Ast::FacetCapture(_, rhs)
         | Ast::Semi(_, rhs) => bulk_update_proc_contains_operation_call(rhs),

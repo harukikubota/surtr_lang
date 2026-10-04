@@ -231,6 +231,25 @@ fn error_source_location_partial_bind_selects_the_failing_child_in_result_contex
 }
 
 #[test]
+fn error_source_location_statement_question_preserves_error_and_cause() {
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n}\n";
+    for body in [
+        "E::source()?\n  Ok(0)",
+        "match True { True => { E::source()?\n    () }, False => () }\n  Ok(0)",
+        "do::<Result> {\n    E::source()?\n    Ok(0)\n  }",
+        "inner: (-> Result<Int>) = {|| E::source()?\n    Ok(0) }\n  inner()",
+    ] {
+        let source = format!("{definitions}def main() -> Result<Int> {{\n  {body}\n}}\nmain()\n");
+        let dump = assert_error_source_location(&source, "Outer(\"wrapped\")", "Outer");
+        assert_eq!(dump["result"]["error"]["message"], "wrapped");
+        assert_eq!(
+            dump["result"]["last_value"],
+            "Err(Outer(\"wrapped\"))\n|_ Inner(\"inner\")"
+        );
+    }
+}
+
+#[test]
 fn error_source_location_partial_bind_preserves_result_effect_errors_and_causes() {
     let definitions = "deferror Inner { \"inner\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
     for body in [

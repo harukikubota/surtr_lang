@@ -185,6 +185,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         | Resolved::FieldAccess(_, inner, _)
         | Resolved::FacetSegmentAccess(_, inner, _)
         | Resolved::FacetCapture(_, inner)
+        | Resolved::StatementQuestion(_, inner)
         | Resolved::Semi(_, inner) => collect_node_usage(inner, usage),
         Resolved::InterpolatedStr(_, parts) => {
             for part in parts {

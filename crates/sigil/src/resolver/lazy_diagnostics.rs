@@ -235,6 +235,7 @@ impl Resolver {
             | Ast::Semi(_, inner)
             | Ast::Bind(_, _, inner)
             | Ast::SafeBind(_, _, inner)
+            | Ast::StatementQuestion(_, inner)
             | Ast::FieldAccess(_, inner, _)
             | Ast::FacetCapture(_, inner)
             | Ast::ReturnTypeArgumentApply(_, inner, _) => {

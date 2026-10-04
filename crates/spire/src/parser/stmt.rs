@@ -114,7 +114,22 @@ impl Parser<'_> {
                     }
                 }
 
-                let expr = self.parse_expr()?;
+                let mut expr = self.parse_expr()?;
+                if matches!(self.peek(), Token::Question) {
+                    if matches!(expr, Ast::Bind(..) | Ast::SafeBind(..)) {
+                        return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::StatementSyntax,
+                            "`?` is only allowed at the end of an independent expression statement",
+                            self.peek_span(),
+                        ));
+                    }
+                    let question = self.advance().span;
+                    let span = Span {
+                        start: expr.span().start,
+                        end: question.end,
+                    };
+                    expr = Ast::StatementQuestion(span, Box::new(expr));
+                }
                 if matches!(self.peek(), Token::Semicolon) {
                     let semi = self.advance().span.clone();
                     let span = Span {

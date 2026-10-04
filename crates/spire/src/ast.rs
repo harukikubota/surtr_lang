@@ -673,6 +673,9 @@ pub enum Ast {
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
     SafeBind(Span, AstPattern, Box<Ast>),
 
+    /// Statement-only `expr?`; the terminal success type must be Unit.
+    StatementQuestion(Span, Box<Ast>),
+
     /// Compiler-owned monadic sequencing expression.
     Do(Span, Vec<ReturnTypeArgument>, Vec<AstDoStatement>),
 

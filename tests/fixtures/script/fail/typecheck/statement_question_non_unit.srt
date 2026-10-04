@@ -1,0 +1,6 @@
+def invalid() -> Result<()> {
+  Ok(1)?
+  Ok(())
+}
+
+invalid()

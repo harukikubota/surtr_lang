@@ -10,11 +10,14 @@
 name = expr
 name: Ty = expr
 name =? expr
+operation()?
 ```
 
 - `expr;` はその式を `Unit` として扱う
 - `;` は改行区切りと同様に扱われ、同じ行で次の式を書ける
 - `=` と `=?` 自体の結果型も `Unit`
+- 文末の `?` は独立した文の式全体に付ける。canonical `Result` の成功型をたどった終端が Unit のときだけ使え、成功値を捨てて外側一段の Err を SafeBind と同じ返却先へ伝播する
+- 文末の `?` は式の一部に組み込めず、成功時の型は Unit。詳しくは[エラーハンドリング](./error-handling.md)を参照
 - `Unit` を返す closure が期待される場所では、最後の式に `;` を付ければよい
 
 ### `const`

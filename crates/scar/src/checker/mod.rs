@@ -4573,7 +4573,8 @@ impl Checker {
             Resolved::Grouped(_, inner)
             | Resolved::FieldAccess(_, inner, _)
             | Resolved::FacetCapture(_, inner)
-            | Resolved::Semi(_, inner) => {
+            | Resolved::Semi(_, inner)
+            | Resolved::StatementQuestion(_, inner) => {
                 self.validate_constructor_body_positions(inner, constructor_traits)?;
             }
             Resolved::Capture(_, function, args) => {
@@ -5013,6 +5014,7 @@ impl Checker {
             Resolved::EnumDef(_, id, ..) => format!("EnumDef {}", id.name),
             Resolved::Bind(..) => "Bind".to_string(),
             Resolved::SafeBind(..) => "SafeBind".to_string(),
+            Resolved::StatementQuestion(..) => "StatementQuestion".to_string(),
             Resolved::Match(..) | Resolved::IsMatch(..) | Resolved::IfLet(..) => {
                 "Match".to_string()
             }
@@ -5048,6 +5050,7 @@ impl Checker {
             Resolved::EnumDef(..) => "EnumDef",
             Resolved::Bind(..) => "Bind",
             Resolved::SafeBind(..) => "SafeBind",
+            Resolved::StatementQuestion(..) => "StatementQuestion",
             Resolved::Match(..) | Resolved::IsMatch(..) | Resolved::IfLet(..) => "Match",
             Resolved::Block(..) => "Block",
             Resolved::App(..) => "App",

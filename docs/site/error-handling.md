@@ -115,6 +115,48 @@ def render_bool(text: String) -> String {
 
 `inspect(result)` は表示の観測です。等価性を検査するときは `Eq::eq`、表示そのものを検査するときは `inspect` の戻り値を比較します。
 
+## 文末の `?` で成功値を捨てる
+
+独立した文の末尾に `?` を付けると、成功値を捨て、外側の Err を既存 SafeBind と同じ返却先へ伝播します。
+対象の式は一度だけ評価します。複数行の呼び出しにも使えます。
+
+```surtr
+def check_ready() -> Result<()> {
+  Result::Ok(())?
+  Result::Ok(
+    (),
+  )?
+  Ok(())
+}
+```
+
+受理するのは canonical `Result` で、成功型をたどった終端が Unit の型だけです。
+`Result<()>` や `Result<Result<()>>` は使えますが、`Result<Int>`、
+`Result<Result<Int>>`、Unit、Option、List、成功型が未確定の Result は型エラーになります。
+型 alias は通常の型の正規化に従います。
+
+`?` は値を取り出す演算子ではありません。`value = operation()?`、
+`consume(operation()?)`、`operation()? + 1`、`operation()??` は拒否されます。
+値を取り出す場合は次節の `value =? operation()` を使います。
+optional 型や FacetPath の optional segment の `?` は、引き続きそれぞれの構文です。
+
+制御フローは `_ =? operation()` と同じで、Result の外側一段だけを検査します。
+`Result<Result<()>>` の `Ok(Err(error))` は外側が Ok なので成功側で捨てます。
+内側の Err を観測したい場合は Result を通常の束縛で保存して検査するか、
+SafeBind を使って必要な段を明示します。
+
+通常の callable では、その callable の Result / Result-effect の返却先を使い、
+`do` 内では do-local failure target を使います。match の arm などの通常ブロックは、新しい返却先を作りません。
+返却先が成立しない位置ではエラーになります。Result / Result-effect の返却先へ伝播する場合は、
+元 Error の kind、message、location、cause を保持します。`do` の Alternative の返却先では、既存 SafeBind と同じく empty に変換します。
+
+closure は外側の関数の返却先を借りません。`do` の外で `?` や `=?` を使う通常の closure には、
+型注釈や呼び出し先の引数型から、その closure 自身の Result / Result-effect の返り型が確定している必要があります。
+
+成功時の文の型は Unit です。Result を返す関数や `it` の末尾に `?` を書く場合は、
+後に `Ok(())` を置きます。Unit から Result への暗黙の変換はありません。
+[テストを書く](./test.md)では、複数アサーションへの適用例を説明しています。
+
 ## `=?` SafeBind と早期リターン
 
 `=?` は「`Ok` を取り出し、`Err` ならその場で返す」ための束縛です。通常は

@@ -1864,7 +1864,13 @@ impl Checker {
             }
 
             Resolved::ApplyPattern(span, value, pattern) => self.check_apply_pattern(span, value, pattern, None),
-            Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs),
+            Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs, false),
+            Resolved::StatementQuestion(span, rhs) => self.check_safebind(
+                span,
+                &ResolvedPattern::Wildcard(span.clone()),
+                rhs,
+                true,
+            ),
 
             Resolved::BinOp(span, op, left, right) => self.check_binop(span, op, left, right),
             Resolved::Pipe(span, left, right) => self.check_pipe(span, left, right),
@@ -3548,13 +3554,49 @@ impl Checker {
         }
     }
 
+    fn require_statement_question_unit_success(
+        &self,
+        rhs_ty: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let rhs_ty = self.resolve_ty(rhs_ty);
+        let Ty::Result(success, _) = &rhs_ty else {
+            return Err(TypeError::new(
+                format!(
+                    "Statement `?` requires a canonical Result with terminal success type Unit; got {}.",
+                    self.ty_name(&rhs_ty),
+                ),
+                span.clone(),
+            ));
+        };
+        let mut terminal = self.resolve_ty(success);
+        while let Ty::Result(success, _) = terminal {
+            terminal = self.resolve_ty(&success);
+        }
+        if terminal != Ty::Unit {
+            return Err(TypeError::new(
+                format!(
+                    "Statement `?` requires terminal success type Unit; got {} in {}.",
+                    self.ty_name(&terminal),
+                    self.ty_name(&rhs_ty),
+                ),
+                span.clone(),
+            ));
+        }
+        Ok(())
+    }
+
     fn check_safebind_input(
         &mut self,
         span: &Span,
         pat: &ResolvedPattern,
         rhs: &Resolved,
+        unit_success_only: bool,
     ) -> Result<CheckedSafeBindInput, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
+        if unit_success_only {
+            self.require_statement_question_unit_success(&typed_rhs.ty, span)?;
+        }
         if matches!(typed_rhs.ty, Ty::Facet(..)) {
             return Err(self.policy_error(
                 TypeDiagnosticReason::FacetSafeBindForbidden,
@@ -3671,8 +3713,9 @@ impl Checker {
         span: &Span,
         pat: &ResolvedPattern,
         rhs: &Resolved,
+        unit_success_only: bool,
     ) -> Result<TypedNode, TypeError> {
-        let mut checked = self.check_safebind_input(span, pat, rhs)?;
+        let mut checked = self.check_safebind_input(span, pat, rhs, unit_success_only)?;
         let failure_target = if matches!(
             self.callable_context,
             CallableContext::Extractor | CallableContext::ExtractorClosure
@@ -4387,6 +4430,7 @@ impl Checker {
             | Resolved::Bind(span, _, _)
             | Resolved::ApplyPattern(span, _, _)
             | Resolved::SafeBind(span, _, _)
+            | Resolved::StatementQuestion(span, _)
             | Resolved::Do(span, _, _, _, _)
             | Resolved::BinOp(span, _, _, _)
             | Resolved::Pipe(span, _, _)
@@ -12330,9 +12374,10 @@ impl Checker {
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_callable_context = self.callable_context;
         self.callable_context = kind;
-        if matches!(self.function_return_ty, Some(Ty::MatchResult(_))) {
-            self.function_return_ty = Some(self.env.fresh_tyvar());
-        }
+        self.function_return_ty = Some(match expected {
+            Some(Ty::Func(_, expected_ret)) => expected_ret.as_ref().clone(),
+            _ => self.env.fresh_tyvar(),
+        });
         let saved_closure_depth = self.closure_depth;
         let saved_facet_bindings = self.facet_bindings.clone();
 
@@ -12439,9 +12484,6 @@ impl Checker {
                 }
             }
 
-            if let Some(Ty::Func(_, expected_ret)) = expected {
-                self.function_return_ty = Some(expected_ret.as_ref().clone());
-            }
             let profile = self.profiler.start();
             let body_is_result_constructor = match body {
                 Resolved::ConstructorCall(_, _, _) | Resolved::EnumConstructorCall(_, _, _, _) => {

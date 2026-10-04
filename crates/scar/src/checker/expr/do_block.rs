@@ -339,11 +339,37 @@ impl Checker {
                 pattern_span,
                 pattern,
                 rhs,
+                false,
                 rest,
                 result_span,
                 carrier_hint,
                 carrier_relation,
             ),
+            ResolvedDoStatement::Statement(statement)
+                if Self::statement_question_parts(statement).is_some() =>
+            {
+                let (span, rhs) = Self::statement_question_parts(statement)
+                    .expect("matched a statement question");
+                let operator_span = Span {
+                    start: span.end - 1,
+                    end: span.end,
+                };
+                self.check_do_safebind(
+                    do_span,
+                    intrinsic,
+                    resolved_contract,
+                    span,
+                    &operator_span,
+                    span,
+                    &ResolvedPattern::Wildcard(span.clone()),
+                    rhs,
+                    true,
+                    rest,
+                    result_span,
+                    carrier_hint,
+                    carrier_relation,
+                )
+            }
             ResolvedDoStatement::Statement(statement)
                 if matches!(
                     statement,
@@ -992,6 +1018,14 @@ impl Checker {
         }
     }
 
+    fn statement_question_parts(statement: &Resolved) -> Option<(&Span, &Resolved)> {
+        match statement {
+            Resolved::StatementQuestion(span, rhs) => Some((span, rhs)),
+            Resolved::Semi(_, inner) => Self::statement_question_parts(inner),
+            _ => None,
+        }
+    }
+
     fn check_do_safebind(
         &mut self,
         do_span: &Span,
@@ -1002,13 +1036,15 @@ impl Checker {
         pattern_span: &Span,
         pattern: &ResolvedPattern,
         rhs: &Resolved,
+        unit_success_only: bool,
         rest: &[ResolvedDoStatement],
         result_span: &Span,
         carrier_hint: Option<&Ty>,
         carrier_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
         let inherited_substitutions = self.substitutions.clone();
-        let mut checked = self.check_safebind_input(statement_span, pattern, rhs)?;
+        let mut checked =
+            self.check_safebind_input(statement_span, pattern, rhs, unit_success_only)?;
         checked.typed_pattern = self.resolve_typed_pattern(checked.typed_pattern);
         checked.pattern_ty = self.resolve_ty(&checked.pattern_ty);
         checked.typed_rhs = *self.resolve_typed_node(checked.typed_rhs);

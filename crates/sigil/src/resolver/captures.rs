@@ -342,7 +342,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(arg, bound, free);
             }
         }
-        Resolved::Semi(_, inner) => collect_captures_inner(inner, bound, free),
+        Resolved::StatementQuestion(_, inner) | Resolved::Semi(_, inner) => {
+            collect_captures_inner(inner, bound, free)
+        }
     }
 }
 

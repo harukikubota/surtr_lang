@@ -8,7 +8,42 @@ deferror TestAssertionFailed(detail: String) {
 import StyledDoc;
 
 @doc """
-Test DSL helpers consumed by `surtr test`.
+`surtr test` で使うテスト DSL。
+
+`test`、任意の `describe`、`it` でテストをまとめます。`it` 本文は `Result<()>` を返し、
+その Result を一件の成否として記録します。アサーション自体は成否を記録せず、
+成功時に `Ok(())`、失敗時に `Err(TestAssertionFailed(...))` を返します。
+
+複数のアサーションは `do::<Result>` で順に実行し、最初の失敗で短絡できます。
+通常の本文に並べるだけでは、途中の失敗を捨ててしまいます。
+
+次の例はテストファイルに保存し、`surtr test` で実行します。
+`Test` は test サブコマンドで読み込まれるため、通常の REPL では import できません。
+
+```surtr
+import Test;
+
+test("examples") {
+  it("checks several conditions") {
+    do::<Result> {
+      assert_true(True)
+      assert_eq(3, 1 + 2)
+      assert_false(False)
+    }
+  }
+  it("checks an expected error") {
+    result: Result<Int> = Err(NoneError)
+    assert_err_contains("NoneError", result)
+  }
+}
+```
+
+`do` を使わず、独立したアサーション文の末尾に `?` を付けても失敗を伝播できます。
+文末 `?` は成功時に Unit を返すので、すべてのアサーションに付ける場合は
+本文の末尾に `Ok(())` を置きます。期待する Err は通常の束縛か直接引数で検証し、
+検証対象自体に `?` / `=?` を使いません。
+
+テストは直列に実行し、stdout・stderr・stdin のバッファは `it` ごとに分離します。
 """
 defmod Test {
   @builtin def __test_push(kind: String, name: String) -> Unit
@@ -79,6 +114,13 @@ defmod Test {
     }
   }
 
+  @doc """
+  本文の `Result<()>` を一件のテスト結果として記録します。
+  Err を記録した後も `Ok(())` を返し、次の `it` へ進みます。
+  一つの本文に複数のアサーションを書けますが、`do::<Result>`、文末 `?`、
+  SafeBind などで最初の失敗を本文から返してください。
+  VM の実行異常からの回復は行いません。
+  """
   def it(name: String, body: (-> Result<()>)) -> Result<()> {
     __test_begin_it()
     match body() {

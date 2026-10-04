@@ -40,6 +40,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [パイプ演算子](./pipe-operators.md)
 - [関数演算子](./function-operators.md)
 - [エラーハンドリング](./error-handling.md)
+- [テストを書く](./test.md)
 - [Extractor](./extractors.md)
 - [Process](./process.md)
 - [Compiler Warnings](./warnings.md)

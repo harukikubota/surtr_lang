@@ -1,0 +1,52 @@
+def once() -> Result<()> {
+  print("once")
+  Ok(())
+}
+
+def sequence() -> Result<Int> {
+  once()?
+  print("after-success")
+  Ok(7)
+}
+
+def stop(value: Result<()>) -> Result<Int> {
+  value?
+  print("unreachable")
+  Ok(0)
+}
+
+def outer_only(value: Result<Result<()>>) -> Result<()> {
+  value?
+  print("outer-success")
+  Ok(())
+}
+
+def nested_target() -> Result<Int> {
+  inner: (-> Result<()>) = {||
+    value: Result<()> = Err(NoneError)
+    value?
+    print("unreachable-inner")
+    Ok(())
+  }
+  saved = inner()
+  print(inspect(saved))
+  Ok(9)
+}
+
+def do_target() -> Int {
+  saved = do::<Result> {
+    value: Result<()> = Err(NoneError)
+    value?
+    print("unreachable-do")
+    Ok(())
+  }
+  print(inspect(saved))
+  11
+}
+
+print(inspect(sequence()))
+print(inspect(stop(Err(NoneError))))
+print(inspect(outer_only(Ok(Err(NoneError)))))
+print(inspect(outer_only(Err(NoneError))))
+print(inspect(nested_target()))
+print(to_string(do_target()))

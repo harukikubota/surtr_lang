@@ -15,6 +15,8 @@ RTAは既存のcall-site parserを使い、一項のbare constructor head、完�
 generic contextではRHSや期待型からrigid constructor variableへ統一できるが、`do::<$F>`を別surfaceとして追加しない。
 
 文はExtract (`pattern <- rhs`)、SafeBind (`pattern =? rhs`)、通常statementへ分類する。
+文末の `?` は独立した通常statementとして保持し、式のpostfix演算子にはしない。
+式全体の末尾だけに付けられ、複数行callも受理する。binding RHS、引数、演算途中、`??` は拒否する。
 separatorは改行または`;`。空block、末尾binding、最終Monad式不足はparse errorとする。
 blockはchild scopeを持ち、RHSをLHS bindingより先に解決し、pattern名を後続文だけへ公開する。
 capture、warning、ID rebase、Facet bulk_update等のvisitorはdo内部にも再帰する。
@@ -69,6 +71,18 @@ non-Result RHSは値と型全体を通常MatchBlock検査へ渡し、partial pat
 static pattern errorを先に報告し、型関係が成立するtotal non-Resultは既存の二SafeBind reasonで拒否する。
 Result-effect return targetでもTransformer RHSを自動unwrapしない。
 
+文末の `?` の対象型は canonical `Result<UnitSuccess, E>` とする。
+`UnitSuccess := Unit | Result<UnitSuccess, E>` で、alias は通常の正規化を行い、
+終端非 Unit、non-Result、終端成功型が未確定の場合は型エラーにする。
+構文固有の型制約を検査してから、既存の `_ =? rhs` と同じ外側一段の射影へ接続する。
+対象式を一度だけ評価し、成功値を捨てて Unit 文とする。
+`Ok(Err(error))` の内側の Err を再伝播しない。
+do 内では既存 do-local failure target、do 外では最も近い callable 自身の SafeBind target を使う。
+match arm などの通常 Block は新しい target を作らず、成立しない位置は拒否する。
+closure に入ると自身の期待返り型、または自身の未確定返り型へ切り替える。外側 callable の target を継承せず、未確定 target の SafeBind / 文末 `?` は拒否する。
+carrier の推論元にせず、末尾の Unit を最終 Monad 値へ暗黙 wrap しない。
+optional 型や FacetPath optional segment の既存 `?` と構文所有者を区別し、fallback は設けない。
+
 Result-preserving routeはRHS Err、既存pattern Errorのkind/message/location/causeを保存する。
 Extractor / ExtractorClosure は MatchResult を返し、Err の元 Error を Result-effect route で保持する。Alternative route は破棄する。Extractor / ExtractorClosure 本文内でも do の failure は do-local target に接続し、外側 MatchResult へ直接 return しない。
 partial `<-`のno-matchは共通pattern ErrorをResult effectで保持し、Alternative routeではemptyにする。
@@ -88,6 +102,7 @@ List等の分岐carrierでは、後続continuationを各payloadについて実�
 - Spire: token、RTA、statement分類、pattern/operator/source span。parserではlowerしない。
 - Sigil: canonical identity、surface検証、RHS-first scope、captureとsource origin。
 - Scar: carrier/obligation推論、pattern検査、failure target、具体化済みbind/empty dispatch。
+- 文末 `?` の canonical Result / 終端 Unit 制約も Scar で検査し、既存 typed SafeBind control へ接続する。
 - Forge: concrete closure、block、match、専用typed SafeBind controlを既存命令へlowerする。
 - Eldr:既存命令の実行。carrier推論、candidate探索を行わない。
 

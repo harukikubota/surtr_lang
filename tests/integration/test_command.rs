@@ -148,6 +148,75 @@ fn test_command_rejects_test_file_symlink_outside_lib_tests() {
 }
 
 #[test]
+fn test_command_short_circuits_multiple_assertions_and_continues_next_it() {
+    let temp = unique_temp_dir("surtr_test_statement_question_short_circuit");
+    for (body, kind) in [
+        (
+            "assert_eq(1, 2)?\n    print(\"after-failure\")\n    assert_eq(3, 3)",
+            "question",
+        ),
+        (
+            "do::<Result> {\n      assert_eq(1, 2)\n      print(\"after-failure\")\n      assert_eq(3, 3)\n    }",
+            "do",
+        ),
+    ] {
+        write_math_test(
+            &temp,
+            &format!(
+                r#"import Test;
+test("Sequencing") {{
+  it("first failure") {{
+    print("before-failure")
+    {body}
+  }}
+  it("next it") {{
+    assert_stdout_eq([])?
+    print("next-only")
+    assert_stdout_eq(["next-only"])
+  }}
+}}
+"#
+            ),
+        );
+        let output = run_surtr(&temp, &["test", "math"]);
+        let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{kind}: {stdout}\n{stderr}");
+        assert!(stdout.contains("[FAIL] Sequencing > first failure"), "{kind}: {stdout}\n{stderr}");
+        assert!(stdout.contains("expected 1, got 2"), "{kind}: {stdout}");
+        assert!(stdout.contains("[PASS] Sequencing > next it"), "{kind}: {stdout}\n{stderr}");
+        assert!(stdout.contains("test result: passed=1, failed=1, total=2"), "{kind}: {stdout}");
+        assert!(!stdout.contains("after-failure"), "{kind}: {stdout}");
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_statement_question_requires_explicit_result_tail() {
+    let temp = unique_temp_dir("surtr_test_statement_question_unit_tail");
+    write_math_test(
+        &temp,
+        r#"import Test;
+test("Unit tail") {
+  it("requires Result") { assert_true(True)? }
+}
+"#,
+    );
+    let output = run_surtr(&temp, &["test", "math"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Unit tail must not become Ok implicitly"
+    );
+    assert!(
+        stderr.contains("TypeError")
+            && stderr.contains("expected (-> Result<Unit>), got (-> Unit)"),
+        "{stderr}"
+    );
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn test_command_reports_assertion_failures_from_it() {
     let temp = unique_temp_dir("surtr_test_command_assertion_failure");
     write_math_module(&temp);

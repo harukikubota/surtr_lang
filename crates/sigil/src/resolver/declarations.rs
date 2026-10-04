@@ -2168,6 +2168,9 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
         Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(span, func),
         Ast::CapturePlaceholder(span, index) => Ast::CapturePlaceholder(span, index),
         Ast::Grouped(span, inner) => Ast::Grouped(span, Box::new(rewrite_self_ast(*inner, target))),
+        Ast::StatementQuestion(span, inner) => {
+            Ast::StatementQuestion(span, Box::new(rewrite_self_ast(*inner, target)))
+        }
         Ast::Semi(span, inner) => Ast::Semi(span, Box::new(rewrite_self_ast(*inner, target))),
         other => other,
     }

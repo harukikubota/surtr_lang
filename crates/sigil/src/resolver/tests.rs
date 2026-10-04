@@ -9174,3 +9174,58 @@ fn facet_path_capture_arguments_allow_bracket_data_but_reject_path_placeholders(
         );
     }
 }
+
+#[test]
+fn statement_question_retains_constraint_and_resolves_captured_rhs() {
+    let resolved = parse_and_resolve("operation = {|| ()}\ncall = {|| operation()?; ()}")
+        .expect("question statement should resolve");
+    let Resolved::Bind(_, ResolvedPattern::Var(operation), _) = &resolved[0] else {
+        panic!("operation binding");
+    };
+    let Resolved::Bind(_, _, rhs) = &resolved[1] else {
+        panic!("closure binding");
+    };
+    let Resolved::Closure(_, _, captures, body) = rhs.as_ref() else {
+        panic!("closure");
+    };
+    assert!(captures
+        .iter()
+        .any(|capture| capture.unique_id == operation.unique_id));
+    let Resolved::Block(_, statements) = body.as_ref() else {
+        panic!("closure block");
+    };
+    let Resolved::Semi(_, node) = &statements[0] else {
+        panic!("semicolon statement");
+    };
+    let Resolved::StatementQuestion(_, rhs) = node.as_ref() else {
+        panic!("must retain the question constraint before Scar");
+    };
+    let Resolved::App(_, target, _) = rhs.as_ref() else {
+        panic!("call");
+    };
+    assert!(matches!(target.as_ref(), Resolved::Var(_, id) if id.unique_id == operation.unique_id));
+}
+
+#[test]
+fn statement_question_retains_do_local_statement_and_semicolon() {
+    for source in [
+        "operation = {|| ()}\nresult = do::<Result> { operation()?\n () }",
+        "operation = {|| ()}\nresult = do::<Result> { operation()?; () }",
+    ] {
+        let resolved = parse_and_resolve(source).expect("do question statement should resolve");
+        let Resolved::Bind(_, _, rhs) = &resolved[1] else {
+            panic!("result binding");
+        };
+        let Resolved::Do(_, _, _, _, statements) = rhs.as_ref() else {
+            panic!("do");
+        };
+        let ResolvedDoStatement::Statement(node) = &statements[0] else {
+            panic!("ordinary do statement");
+        };
+        let node = match node {
+            Resolved::Semi(_, node) => node.as_ref(),
+            node => node,
+        };
+        assert!(matches!(node, Resolved::StatementQuestion(..)));
+    }
+}

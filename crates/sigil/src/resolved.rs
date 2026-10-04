@@ -173,6 +173,9 @@ pub enum Resolved {
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
     SafeBind(Span, ResolvedPattern, Box<Resolved>),
 
+    /// Statement-only `expr?`, retaining its Unit-success constraint for Scar.
+    StatementQuestion(Span, Box<Resolved>),
+
     /// Compiler-owned monadic sequencing expression.
     Do(
         Span,

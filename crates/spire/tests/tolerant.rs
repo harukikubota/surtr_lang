@@ -130,3 +130,16 @@ fn tolerant_parse_reports_cursor_context_inside_import_path() {
     assert_eq!(result.cursor_context, CursorSyntaxContext::ImportPath);
     assert!(!result.diagnostics.is_empty());
 }
+
+#[test]
+fn tolerant_statement_question_preserves_nodes_and_recovers_after_invalid_rhs() {
+    let source = "operation()?\nbad = operation()?\nnext()?";
+    let result = parse_tolerant_with_context(source, ParserContext::script(0), None);
+    assert_eq!(result.diagnostics.len(), 1);
+    assert_eq!(result.ast.len(), 2);
+    assert!(result
+        .ast
+        .iter()
+        .all(|node| matches!(node, Ast::StatementQuestion(..))));
+    assert_eq!(text_for_span(source, result.ast[1].span()), "next()?");
+}
