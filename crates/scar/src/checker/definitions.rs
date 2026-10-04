@@ -267,14 +267,7 @@ impl Checker {
             });
         }
         let declared_name = id.name.rsplit("::").next().unwrap_or(&id.name);
-        let is_kernel_is_match = declared_name == "is_match"
-            && Self::surface_qualified_name(id.qualified_name.as_deref())
-                == Some("Kernel::is_match");
-        let is_special_form = if declared_name == "is_match" {
-            is_kernel_is_match
-        } else {
-            Self::is_special_form_builtin_decl_name(declared_name)
-        };
+        let is_special_form = Self::is_special_form_builtin_decl_name(declared_name);
         if is_special_form {
             let syntax_ret_ty = ret_ty.as_ref().map(|ty| ty.syntax.clone());
             return self.check_special_form_builtin_decl(span, id, params, &syntax_ret_ty);

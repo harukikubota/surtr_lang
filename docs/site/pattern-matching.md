@@ -227,7 +227,7 @@ do の `<-` は carrier の payload を左辺へ渡します。partial Pattern �
 
 ## consumer の呼び出し
 
-`is_match`、`apply_pattern`、`if_let`、`if_let_then` は、第2引数をPatternとして読みます。通常の前置Call、`Kernel::` 修飾、backtick前置Callで同じ文法を使います。`Regex::is_match` は通常のExpr引数Callです。
+`is_match`、`apply_pattern`、`if_let`、`if_let_then` は、第2引数をPatternとして読みます。通常の前置Call、`Kernel::` 修飾、backtick前置Callで同じ文法を使います。`Regex::matches` は通常のExpr引数Callです。
 
 ```surtr
 Ok(1) `is_match` Ok(_) | Err(_)
@@ -289,7 +289,7 @@ on_ok({|| 42}) # 42。仮引数は (-> Int)
 
 pipe は最外 call の直接の式引数へ入力を渡します。Pattern 位置へ注入したり、Extractor 事前引数内を探索したり、欠けた Pattern を補完したりはしません。pipe の `_1`、Pattern projection の `_1`〜`_16`、capture の `&1`〜`&16` は別の役割です。
 
-`if_let`・`if_let_then`・`is_match`・`apply_pattern` は予約 consumer 名で、同名の変数・関数・user member は宣言できません。`Kernel::is_match` などの修飾形も同じ consumer です。`Regex::is_match` は通常関数であり、第2引数は式です。
+`if_let`・`if_let_then`・`is_match`・`apply_pattern` は予約 consumer 名で、同名の変数・関数・user member は宣言できません。`Kernel::is_match` などの修飾形も同じ consumer です。`Regex::matches` は通常関数であり、第2引数は式です。
 
 詳しい共通規則は [Capture Operator](./capture-operator.md#lazy・pattern・errorkind引数)、[Lazy Evaluation](./lazy-evaluation.md#pattern-bindingと成功branch)、[パイプ演算子](./pipe-operators.md) を参照してください。
 

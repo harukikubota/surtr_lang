@@ -247,17 +247,17 @@ test("apply_pattern projection contract") {
     }
   }
 
-  it("preserves Regex is_match ordinary call and capture") {
+  it("preserves Regex matches ordinary call and capture") {
     do {
       re <- Regex::compile("^issue-[0-9]+$")
       text = "issue-42"
 
-      assert_true(Regex::is_match(re, text))
-      matches: (Regex, String -> Boolean) = &Regex::is_match
+      assert_true(Regex::matches(re, text))
+      matches: (Regex, String -> Boolean) = &Regex::matches
 
       assert_true(matches(re, text))
       assert_false(matches(re, "no-match"))
-      describe_match = &Regex::is_match(re, &1)
+      describe_match = &Regex::matches(re, &1)
 
       assert_true(describe_match("issue-42"))
       describe_projection = &apply_pattern(&1, _1: Int)

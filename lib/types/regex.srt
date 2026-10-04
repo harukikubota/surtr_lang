@@ -38,10 +38,10 @@ impl Regex {
   Return `True` when the regex matches any part of `input`.
   ## REPL
   xldr(1)> re =? Regex::compile("a+")
-  xldr(2)> Regex::is_match(re, "caaat")
+  xldr(2)> Regex::matches(re, "caaat")
   True
   """
-  @builtin def is_match(re: Regex, input: String) -> Boolean
+  @builtin def matches(re: Regex, input: String) -> Boolean
 
   @doc """
   Return the first capture set for `input`.

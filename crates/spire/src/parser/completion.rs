@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn tolerant_recovery_after_partial_consumer_preserves_later_call_grammars() {
         use crate::ast::{Ast, RecordLitArg};
-        let source = "bad = input |> apply_pattern(_ | )\ngood = is_match(input, _)\nplain = Regex::is_match(regex, input)\nnested = True |> Boolean::eqv(is_match(input, _))";
+        let source = "bad = input |> apply_pattern(_ | )\ngood = is_match(input, _)\nplain = Regex::matches(regex, input)\nnested = True |> Boolean::eqv(is_match(input, _))";
         let result =
             super::super::parse_tolerant_with_context(source, ParserContext::repl(1), None);
         assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);

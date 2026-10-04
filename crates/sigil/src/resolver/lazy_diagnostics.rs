@@ -193,7 +193,7 @@ impl Resolver {
                     );
                 } else {
                     // The canonical consumer selects exactly one Pattern slot;
-                    // ordinary builtins (including Regex) use ordinary call syntax.
+                    // ordinary builtins use ordinary call syntax.
                     for (index, argument) in arguments.iter().enumerate() {
                         if kind.is_some_and(|kind| index == kind.pattern_index()) {
                             continue;

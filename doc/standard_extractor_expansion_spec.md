@@ -37,7 +37,7 @@ Record / struct、Enum、Tuple、List の構造分解 Extractor は追加しな�
 - [Int](../lib/types/int.srt): sign、is_odd / is_even、safe_mod、bit 判定、各基数の parse。符号・parity は既に SRT に定義され、Eq / Compare と BigInt 演算は builtin を利用する。
 - [Float](../lib/types/float.srt): Eq / Compare、floor / ceil / round / trunc、abs / min / max。Eq / Compare と丸めの primitive は builtin。
 - [String](../lib/types/string.srt): strip_prefix / strip_suffix / split_once、lines / chars、trim 系、try_to_int / try_to_boolean は SRT。starts_with / ends_with / contains / split は現行 builtin。
-- [Regex](../lib/types/regex.srt): compile / is_match / captures / find / split、capture の get / get_name、match の text は既存 builtin。
+- [Regex](../lib/types/regex.srt): compile / matches / captures / find / split、capture の get / get_name、match の text は既存 builtin。
 - [Eq](../lib/traits/operator/eq.srt)、[Compare](../lib/traits/operator/compare.srt): 値比較の既存契約。String には Eq があるが、現行の String Compare 実装はない。
 - [Kernel](../lib/kernel.srt): assert は Result<Unit>、ensure は成功時に入力値を返す Result<Self>。標準 guard には assert 型の検証を使い、Self を payload として返す ensure 型を標準化しない。
 - Duration / Range / HashMap / Json、Option / Result / Either、Generator、Reader / State / Identity / MonadT、Facet、File / FS / IO / Shell / Process / Random、Project / Config、StyledDoc、Function / 各 Trait、test / bootstrap も一覧を確認した。追加候補または対象外の理由を第7節に記載する。
@@ -273,7 +273,7 @@ trim / chars / lines のような常に成功する変換は、通常関数で�
 
 | 提案 head | 事前引数 | 照合対象 | 成功 payload | 合成元 |
 |---|---|---|---|---|
-| String::regex_match | regex: Regex | String | Unit | Regex::is_match。部分一致の現行契約 |
+| String::regex_match | regex: Regex | String | Unit | Regex::matches。部分一致の現行契約 |
 | String::regex_captures | regex: Regex | String | RegexCaptures | Regex::captures |
 | String::regex_find | regex: Regex | String | RegexMatch | Regex::find |
 | String::regex_separated | regex: Regex | String | List<String> | Regex::split |

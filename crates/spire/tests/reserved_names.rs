@@ -88,3 +88,17 @@ fn tolerant_names_have_keyword_classification_and_matching_rejections() {
     }
     parse("compare = 1\npipe = 2\nfmap = 3\nbind = 4").unwrap();
 }
+
+#[test]
+fn tolerant_consumer_paths_reject_non_kernel_owners() {
+    for name in CONSUMER_NAMES {
+        let source = format!("Regex::{name}(value, input)");
+        let result = parse_tolerant_with_context(&source, ParserContext::project(0), None);
+        assert!(
+            !result.diagnostics.is_empty(),
+            "accepted reserved member: {source}"
+        );
+        parse(&format!("import Regex::{name}"))
+            .expect("import syntax retains ordinary member validation");
+    }
+}

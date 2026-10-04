@@ -5071,21 +5071,21 @@ fn capture_placeholders_inside_pattern_consumers_are_rewritten() {
 }
 
 #[test]
-fn regex_is_match_keeps_expression_calls_and_captures() {
+fn regex_matches_keeps_expression_calls_and_captures() {
     let modules = vec![vec![
         kernel_pattern_test_module(),
         staged_module(
             "Regex",
             parse_module_ast(
-                "@builtin def is_match(re: Regex, text: String) -> Boolean",
+                "@builtin def matches(re: Regex, text: String) -> Boolean",
                 "Regex",
             ),
         ),
     ]];
     for source in [
-        "f = &Regex::is_match",
-        "f = &Regex::is_match(&1, \"text\")",
-        "f = &inspect(Regex::is_match(&1, \"text\"))",
+        "f = &Regex::matches",
+        "f = &Regex::matches(&1, \"text\")",
+        "f = &inspect(Regex::matches(&1, \"text\"))",
     ] {
         resolve_user_with_modules(source, &modules)
             .expect("Regex builtin remains a normal callable");
@@ -9599,4 +9599,26 @@ fn reserved_standard_compare_implementation_and_infix_logic_are_preserved() {
 fn named_infix_keeps_undefined_callable_diagnostic() {
     let error = parse_and_resolve("1 `missing_combine` 2").expect_err("missing declaration");
     assert_eq!(error.message, "Undefined function missing_combine/2");
+}
+
+#[test]
+fn pattern_consumer_builtin_declarations_require_kernel_identity() {
+    for consumer in sindr::pattern::PatternConsumer::ALL {
+        for owner in ["Regex", "Custom", "Nested::Kernel"] {
+            let source = format!(
+                "@builtin def {}(value: $A, pattern: $Pattern) -> Boolean",
+                consumer.name()
+            );
+            let stages = vec![vec![staged_module(owner, parse_module_ast(&source, owner))]];
+            let error = precollect_declaration_index(&stages).expect_err(owner);
+            assert!(
+                error
+                    .message
+                    .contains("reserved for the canonical Kernel consumer"),
+                "{owner}: {error:?}"
+            );
+        }
+    }
+    precollect_declaration_index(&[vec![kernel_pattern_test_module()]])
+        .expect("canonical consumer declarations remain available");
 }

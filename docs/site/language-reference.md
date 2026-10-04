@@ -815,7 +815,7 @@ defmod Bootstrap {
 - 通常位置・alias・list tail の型注釈を許可する。通常 binding は内部限定で、全照合成功後にだけ投影結果を公開する
 - Extractor の元 Error と通常 Pattern の Error を `Err` に保持し、外側 callable から早期 return しない
 - OR、Pattern への pipe 注入、Pattern 引数の部分適用補完は拒否する。`value |> apply_pattern(pattern)` は第1 Expr 引数へ注入する
-- `if_let` / `if_let_then` / `is_match` / `apply_pattern` は予約 consumer 名。`Regex::is_match` は canonical identity により通常 call / capture として扱う
+- `if_let` / `if_let_then` / `is_match` / `apply_pattern` は予約 consumer 名。`Regex::matches` は通常 call / capture として扱う
 - これらの consumer は Pattern を直接記述した完全 call を capture できる（`&is_match(&1, Ok(_))`、`&apply_pattern(&1, [_1, .._])` など）。bare capture、Pattern 引数の `&N` による直接置換は拒否する
 
 ### Result callable の Extractor 変換

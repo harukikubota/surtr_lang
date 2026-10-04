@@ -1,9 +1,9 @@
 re =? Regex::compile("^ok$")
-print(to_string(Regex::is_match(re, "ok")))
-print(to_string(`Regex::is_match`(re, "ok")))
-print(to_string(re `Regex::is_match` "ok"))
-predicate = &Regex::is_match
+print(to_string(Regex::matches(re, "ok")))
+print(to_string(`Regex::matches`(re, "ok")))
+print(to_string(re `Regex::matches` "ok"))
+predicate = &Regex::matches
 print(to_string(predicate(re, "ok")))
-partial = &Regex::is_match(re, &1)
+partial = &Regex::matches(re, &1)
 print(to_string(partial("ok")))
-print(to_string(re |> Regex::is_match("ok")))
+print(to_string(re |> Regex::matches("ok")))
