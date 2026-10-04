@@ -2,7 +2,7 @@ use super::*;
 
 impl Checker {
     /// Runtime expression children, including expressions owned by Patterns.
-    fn capture_expression_children(node: &TypedNode) -> Vec<&TypedNode> {
+    pub(super) fn capture_expression_children(node: &TypedNode) -> Vec<&TypedNode> {
         fn path_expressions<'a>(path: &'a TypedFacetPath, children: &mut Vec<&'a TypedNode>) {
             for segment in &path.segments {
                 match segment {

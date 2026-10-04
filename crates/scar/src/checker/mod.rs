@@ -1275,6 +1275,7 @@ struct PersistentCheckerState {
     tyvar_bounds: HashMap<u32, Vec<String>>,
     constructor_witness_traits: HashMap<u32, String>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
+    explicit_closure_parameters: HashMap<u32, Ty>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
 }
@@ -1300,6 +1301,7 @@ impl PersistentCheckerState {
             tyvar_bounds: HashMap::new(),
             constructor_witness_traits: HashMap::new(),
             constructor_capabilities: HashMap::new(),
+            explicit_closure_parameters: HashMap::new(),
             signature_aliases: HashMap::new(),
             pattern_binding_aliases: HashMap::new(),
         }
@@ -1325,6 +1327,7 @@ impl PersistentCheckerState {
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
+            explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             signature_aliases: self.signature_aliases.clone(),
             pattern_binding_aliases: self.pattern_binding_aliases.clone(),
             process_specs,
@@ -1353,6 +1356,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             tyvar_bounds: checkpoint.tyvar_bounds,
             constructor_witness_traits: checkpoint.constructor_witness_traits,
             constructor_capabilities: checkpoint.constructor_capabilities,
+            explicit_closure_parameters: checkpoint.explicit_closure_parameters,
             signature_aliases: checkpoint.signature_aliases,
             pattern_binding_aliases: checkpoint.pattern_binding_aliases,
         }
@@ -1384,6 +1388,7 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     constructor_witness_traits: HashMap<u32, String>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
+    explicit_closure_parameters: HashMap<u32, Ty>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
     process_specs: Vec<TypedProcessSpec>,
@@ -2823,6 +2828,7 @@ struct Checker {
     /// sets. An empty set remains constrained and is not an ordinary concrete
     /// value.
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
+    explicit_closure_parameters: HashMap<u32, Ty>,
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
@@ -2869,6 +2875,12 @@ enum ConstructorCapabilityProvenance {
     Callable {
         parameters: Vec<u32>,
         result: Box<(ConstructorCapabilityProvenance, Ty)>,
+        /// Calls depending on inferred inputs preserve their declaration
+        /// contracts independently of the callable's nominal function type.
+        calls: Vec<(
+            (ConstructorCapabilityProvenance, Ty),
+            Vec<(ConstructorCapabilityProvenance, Ty)>,
+        )>,
     },
     Parameter(u32),
     DeclaredCallable(u32),
@@ -2968,6 +2980,7 @@ impl Checker {
             pending_trait_obligations: HashMap::new(),
             active_capabilities: Vec::new(),
             constructor_capabilities: state.constructor_capabilities,
+            explicit_closure_parameters: state.explicit_closure_parameters,
             constructor_witness_traits: state.constructor_witness_traits,
             signature_aliases: state.signature_aliases,
             pattern_binding_aliases: state.pattern_binding_aliases,
@@ -3023,6 +3036,7 @@ impl Checker {
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
         checker.active_capabilities = self.active_capabilities.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
+        checker.explicit_closure_parameters = self.explicit_closure_parameters.clone();
         checker.constructor_witness_traits = self.constructor_witness_traits.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
@@ -3260,7 +3274,9 @@ impl Checker {
                     method.id.name
                 ),
                 span: method.span.clone(),
-                hint: Some("ReturnTypeArguments type variables must appear in the return type.".into()),
+                hint: Some(
+                    "ReturnTypeArguments type variables must appear in the return type.".into(),
+                ),
             });
         }
 
@@ -4149,6 +4165,7 @@ impl Checker {
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
+            explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             signature_aliases: self.signature_aliases.clone(),
             pattern_binding_aliases: self.pattern_binding_aliases.clone(),
         }
@@ -4174,6 +4191,7 @@ impl Checker {
             tyvar_bounds: self.tyvar_bounds,
             constructor_witness_traits: self.constructor_witness_traits,
             constructor_capabilities: self.constructor_capabilities,
+            explicit_closure_parameters: self.explicit_closure_parameters,
             signature_aliases: self.signature_aliases,
             pattern_binding_aliases: self.pattern_binding_aliases,
         }

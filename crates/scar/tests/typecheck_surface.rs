@@ -600,6 +600,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(do_extract_accepts_variant_facet_payload_shapes),
     surface_case!(do_facet_extract_preserves_caller_payload_capability),
     surface_case!(facet_result_preserves_payload_carrier_capability),
+    surface_case!(do_implicit_bind_inputs_preserve_payload_views),
+    surface_case!(generic_callbacks_preserve_input_views_in_either_argument_order),
+    surface_case!(contextual_callbacks_preserve_implicit_payload_views),
+    surface_case!(captured_contextual_callbacks_preserve_payload_views),
+    surface_case!(fixed_nominal_callback_parameters_keep_independent_views),
+    surface_case!(rigid_callback_payloads_keep_declared_constructor_capability),
     surface_case!(result_effect_annotation_validates_canonical_monad_t_shape),
     surface_case!(result_effect_annotation_rejects_invalid_structure_and_capabilities),
     surface_case!(result_effect_annotation_rejects_noncanonical_trait_metadata),
@@ -7252,6 +7258,144 @@ result = match projected {
         error.span.start >= source.find("stronger(item)").unwrap(),
         "the rejection must belong to the projected payload capability: {error:?}"
     );
+}
+
+const CALLBACK_PAYLOAD_VIEW_SOURCE: &str = r#"def retain(value: $F<Int>) -> $F<Int>
+where
+  $F: Functor
+{
+  Functor::fmap(value, {|item| item})
+}
+def retain_monad(value: $F<Int>) -> $F<Int>
+where
+  $F: Monad
+{
+  Monad::bind(value, {|item| Monad::return(item)})
+}
+def stronger(value: Monad<Int>) -> Int { 1 }
+def consume(value: $A, mapper: ($A -> Int)) -> Int { mapper(value) }
+def consume_reversed(mapper: ($A -> Int), value: $A) -> Int { mapper(value) }
+def layer(body: (-> Int)) -> Int { body() }
+"#;
+
+fn assert_implicit_callback_input_views(computations: &[&str]) {
+    // Check every positive input before evaluating the rejection boundary.
+    for computation in computations {
+        for producer in ["Identity::new(7)", "retain_monad(Identity::new(7))"] {
+            let source =
+                format!("{CALLBACK_PAYLOAD_VIEW_SOURCE}source = {producer}\n{computation}");
+            typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_or_else(|error| {
+                panic!("fresh or Monad-constrained inputs must authorize the implicit callback: {computation}: {error:?}")
+            });
+        }
+    }
+    for computation in computations {
+        let source = format!(
+            "{CALLBACK_PAYLOAD_VIEW_SOURCE}source = retain(Identity::new(7))\n{computation}"
+        );
+        let Err(error) = typecheck_with_rules(&source, RuntimeSourcePolicy::script()) else {
+            panic!("implicit callback input lost its source's Functor-only view: {computation}");
+        };
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{computation}: {error:?}"
+        );
+        assert!(
+            error.span.start >= source.len() - computation.len(),
+            "the callback use must own the payload capability diagnostic: {computation}: {error:?}"
+        );
+    }
+}
+
+fn do_implicit_bind_inputs_preserve_payload_views() {
+    assert_implicit_callback_input_views(&[
+        "result: Result<Int> = do { item <- Ok(source); Ok(stronger(item)) }",
+        "result: Result<Int> = do { item: Identity<Int> <- Ok(source); Ok(stronger(item)) }",
+        "result: List<Int> = do { item <- [source]; [stronger(item)] }",
+        "result: Identity<Int> = do { item <- Identity::new(source); Identity::new(stronger(item)) }",
+        "result: Result<Int> = do { (item, _) <- Ok((source, 1)); Ok(stronger(item)) }",
+        "result: Result<Int> = do { Option::Some(item) <- Ok(Option::Some(source)); Ok(stronger(item)) }",
+        "result: Result<Int> = do { Option::Some(item) @ whole <- Ok(Option::Some(source)); Ok(stronger(item)) }",
+        "result: Result<Int> = do { [item] <- Ok([source]); Ok(stronger(item)) }",
+        "result: Result<Int> = do { pair <- Ok((Option::Some(source), Option::Some(source))); Ok(match pair { (Option::Some(item), _) | (_, Option::Some(item)) => stronger(item), _ => 0, }) }",
+    ]);
+}
+
+fn generic_callbacks_preserve_input_views_in_either_argument_order() {
+    assert_implicit_callback_input_views(&[
+        "consume(source, {|item| stronger(item)})",
+        "consume_reversed({|item| stronger(item)}, source)",
+    ]);
+}
+
+fn contextual_callbacks_preserve_implicit_payload_views() {
+    assert_implicit_callback_input_views(&[
+        "Monad::bind(Ok(source), {|item| Ok(stronger(item))})",
+        "Functor::fmap(Ok(source), {|item| stronger(item)})",
+        "Ok(source) |>= {|item| Ok(stronger(item))}",
+        "Ok(source) |*> {|item| stronger(item)}",
+    ]);
+}
+
+fn captured_contextual_callbacks_preserve_payload_views() {
+    assert_implicit_callback_input_views(&[
+        "Function::apply(&stronger, source)",
+        "Function::apply(&stronger(&1), source)",
+        "Functor::fmap(Ok(source), &stronger)",
+        "Functor::fmap(Ok(source), &stronger(&1))",
+        "Applicative::ap(Ok(&stronger), Ok(source))",
+        "Applicative::ap(Ok(&stronger(&1)), Ok(source))",
+        "Applicative::ap(Ok({|item| stronger(item)}), Ok(source))",
+        "Applicative::ap(Ok({|item| layer() { stronger(item) }}), Ok(source))",
+        "mapper: (Identity<Int> -> Identity<Int>) = &Monad::bind(&1, {|item| Identity::new(item)}); mapper(source)",
+    ]);
+}
+
+fn fixed_nominal_callback_parameters_keep_independent_views() {
+    let source = format!(
+        r#"{CALLBACK_PAYLOAD_VIEW_SOURCE}
+def fixed_mapper(item: Identity<Int>) -> Result<Int> {{ Ok(stronger(item)) }}
+source = retain(Identity::new(7))
+"#
+    );
+    for computation in [
+        "Monad::bind(Ok(source), &fixed_mapper)",
+        "Monad::bind(Ok(source), {|item: Identity<Int>| Ok(stronger(item))})",
+        "consume(source, {|item: Identity<Int>| stronger(item)})",
+        "consume_reversed({|item: Identity<Int>| stronger(item)}, source)",
+        "Applicative::ap(Ok({|item: Identity<Int>| stronger(item)}), Ok(source))",
+        "mapper: (Identity<Int> -> Int) = {|item| stronger(item)}; mapper(source)",
+    ] {
+        typecheck_with_rules(&format!("{source}{computation}"), RuntimeSourcePolicy::script())
+            .unwrap_or_else(|error| panic!("a fixed nominal callback input has its own declared capability view: {computation}: {error:?}"));
+    }
+}
+
+fn rigid_callback_payloads_keep_declared_constructor_capability() {
+    for computation in [
+        "do { item <- Ok(value); Ok(stronger(item)) }",
+        "Monad::bind(Ok(value), {|item| Ok(stronger(item))})",
+    ] {
+        let definition = format!(
+            "{CALLBACK_PAYLOAD_VIEW_SOURCE}def probe(value: $F<Int>) -> Result<Int> where $F: __CAPABILITY__ {{ {computation} }}"
+        );
+        typecheck_with_rules(
+            &definition.replace("__CAPABILITY__", "Monad"),
+            RuntimeSourcePolicy::script(),
+        )
+        .unwrap_or_else(|error| panic!("a rigid Monad payload supports stronger inside the callback: {computation}: {error:?}"));
+        let error = typecheck_with_rules(
+            &definition.replace("__CAPABILITY__", "Functor"),
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("a rigid Functor-only payload must remain insufficient inside the callback");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{computation}: {error:?}"
+        );
+    }
 }
 
 const RESULT_EFFECT_CARRIER_SOURCE: &str = r#"@result_effect

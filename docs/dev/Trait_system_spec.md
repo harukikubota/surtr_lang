@@ -241,6 +241,18 @@ where $F: Alternative
 同じpayload型変数を使っても、異なるTrait名の間で共有するのはpayloadだけである。parameter位置で
 利用できるmethod能力は、そこに書かれたTraitまでに制限する。
 
+generic な型変数を介して値を callback に渡す場合も、実際の入力値の能力制約を保持する。
+同じ宣言型変数に対応する入力値の由来を未注釈 callback の仮引数へ渡し、その由来で本文を検査する。
+通常関数と Trait method で同じ規則を使い、callback と入力値の引数順には依存しない。
+`do` の `<-` が生成する callback もこの規則に従う。束縛パターンの型注釈は能力を強めない。
+
+generic な関数を capture して関数値として使う場合、元の宣言が要求した能力を利用時に検査する。
+関数値の入力型を nominal 型に具体化しても、この要求は消えない。
+宣言された要求が `List<$F<Int>>` など入力の内側にある場合も、構造に沿って値の由来を射影し、
+直接呼び出しと関数値の利用で同じ検査を行う。
+Extractor の成功値も、宣言された入力・出力の型変数関係に従って能力制約を保持する。
+独立した関数や明示的な callback parameter に固定 nominal 型を宣言する既存の契約は変更しない。
+
 ```surtr
 def independent(left: Functor<$A>, right: Monad<$A>) -> Unit {
   # payload Aは同じだが、leftとrightのcarrierは独立
