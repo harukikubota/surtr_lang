@@ -8,11 +8,15 @@ impl TryConvert<Int> for Decimal {
 test("TryConvert") {
   describe("try_to") {
     it("returns a successful custom conversion") {
-      assert_ok_eq(7, TryConvert::try_to::<Int>(Decimal("7")))
+      do {
+        assert_ok_eq(7, TryConvert::try_to::<Int>(Decimal("7")))
+      }
     }
 
     it("preserves the custom conversion error") {
-      assert_err_kind(InvalidIntegerLiteral, TryConvert::try_to::<Int>(Decimal("invalid")))
+      do {
+        assert_err_kind(InvalidIntegerLiteral, TryConvert::try_to::<Int>(Decimal("invalid")))
+      }
     }
 
   }

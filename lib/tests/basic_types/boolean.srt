@@ -3,50 +3,136 @@ import Test;
 test("Boolean") {
   describe("canonical variant constructors") {
     it("uses bare and qualified nullary captures") {
-      yes: (-> Boolean) = &True
-      no: (-> Boolean) = &Boolean::False
-      assert_eq((Boolean::True, False), (yes(), no()))
+      do {
+        yes: (-> Boolean) = &True
+        no: (-> Boolean) = &Boolean::False
+
+        assert_eq((Boolean::True, False), (yes(), no()))
+      }
     }
 
     it("matches qualified variants exhaustively") {
-      value = match True {
-        Boolean::True => 1,
-        Boolean::False => 0,
+      do {
+        value = match True {
+          Boolean::True => 1,
+          Boolean::False => 0,
+        }
+
+        assert_eq(1, value)
       }
-      assert_eq(1, value)
     }
   }
 
   describe("not") {
-    it("False returns True") { assert_true(Boolean::not(False)) }
-    it("True returns False") { assert_false(Boolean::not(True)) }
+    it("False returns True") {
+      do {
+        assert_true(Boolean::not(False))
+      }
+    }
+    it("True returns False") {
+      do {
+        assert_false(Boolean::not(True))
+      }
+    }
   }
   describe("xor") {
-    it("False, False returns False") { assert_false(Boolean::xor(False, False)) }
-    it("False, True returns True") { assert_true(Boolean::xor(False, True)) }
-    it("True, False returns True") { assert_true(Boolean::xor(True, False)) }
-    it("True, True returns False") { assert_false(Boolean::xor(True, True)) }
+    it("False, False returns False") {
+      do {
+        assert_false(Boolean::xor(False, False))
+      }
+    }
+    it("False, True returns True") {
+      do {
+        assert_true(Boolean::xor(False, True))
+      }
+    }
+    it("True, False returns True") {
+      do {
+        assert_true(Boolean::xor(True, False))
+      }
+    }
+    it("True, True returns False") {
+      do {
+        assert_false(Boolean::xor(True, True))
+      }
+    }
   }
   describe("eqv") {
-    it("False, False returns True") { assert_true(Boolean::eqv(False, False)) }
-    it("False, True returns False") { assert_false(Boolean::eqv(False, True)) }
-    it("True, False returns False") { assert_false(Boolean::eqv(True, False)) }
-    it("True, True returns True") { assert_true(Boolean::eqv(True, True)) }
+    it("False, False returns True") {
+      do {
+        assert_true(Boolean::eqv(False, False))
+      }
+    }
+    it("False, True returns False") {
+      do {
+        assert_false(Boolean::eqv(False, True))
+      }
+    }
+    it("True, False returns False") {
+      do {
+        assert_false(Boolean::eqv(True, False))
+      }
+    }
+    it("True, True returns True") {
+      do {
+        assert_true(Boolean::eqv(True, True))
+      }
+    }
   }
   describe("implies") {
-    it("False, False returns True") { assert_true(Boolean::implies(False, False)) }
-    it("False, True returns True") { assert_true(Boolean::implies(False, True)) }
-    it("True, False returns False") { assert_false(Boolean::implies(True, False)) }
-    it("True, True returns True") { assert_true(Boolean::implies(True, True)) }
+    it("False, False returns True") {
+      do {
+        assert_true(Boolean::implies(False, False))
+      }
+    }
+    it("False, True returns True") {
+      do {
+        assert_true(Boolean::implies(False, True))
+      }
+    }
+    it("True, False returns False") {
+      do {
+        assert_false(Boolean::implies(True, False))
+      }
+    }
+    it("True, True returns True") {
+      do {
+        assert_true(Boolean::implies(True, True))
+      }
+    }
   }
   describe("Show/Convert") {
-    it("renders True") { assert_eq("True", to_string(True)) }
-    it("converts False to String") { assert_eq("False", to::<String>(False)) }
+    it("renders True") {
+      do {
+        assert_eq("True", to_string(True))
+      }
+    }
+    it("converts False to String") {
+      do {
+        assert_eq("False", to::<String>(False))
+      }
+    }
   }
   describe("Eq") {
-    it("accepts the same value") { assert_true(eq(True, True)) }
-    it("rejects different values") { assert_false(eq(True, False)) }
-    it("derives neq from eq") { assert_true(neq(True, False)) }
+    it("accepts the same value") {
+      do {
+        assert_true(eq(True, True))
+      }
+    }
+    it("rejects different values") {
+      do {
+        assert_false(eq(True, False))
+      }
+    }
+    it("derives neq from eq") {
+      do {
+        assert_true(neq(True, False))
+      }
+    }
   }
-  describe("prefix bang") { it("negates a comparison") { assert_false(!(1 < 2)) } }
+  describe("prefix bang") { it("negates a comparison") {
+                              do {
+                                assert_false(!(1 < 2))
+                              }
+                            } }
 }

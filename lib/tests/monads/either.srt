@@ -7,110 +7,143 @@ def either_pure(value: Int) -> Either<String, Int> { Applicative::pure(value) }
 test("Either") {
   describe("is_left") {
     it("recognizes Left") {
-      assert_true(Either::is_left(Either<String, Int>::Left("stop")))
+      do {
+        assert_true(Either::is_left(Either<String, Int>::Left("stop")))
+      }
     }
 
   }
 
   describe("is_left") {
     it("rejects Right") {
-      assert_false(Either::is_left(Either<String, Int>::Right(7)))
+      do {
+        assert_false(Either::is_left(Either<String, Int>::Right(7)))
+      }
     }
 
   }
 
   describe("is_right") {
     it("recognizes Right") {
-      assert_true(Either::is_right(Either<String, Int>::Right(7)))
+      do {
+        assert_true(Either::is_right(Either<String, Int>::Right(7)))
+      }
     }
 
   }
 
   describe("is_right") {
     it("rejects Left") {
-      assert_false(Either::is_right(Either<String, Int>::Left("stop")))
+      do {
+        assert_false(Either::is_right(Either<String, Int>::Left("stop")))
+      }
     }
 
   }
 
   describe("wrap") {
     it("constructs Right") {
-      wrapped: Either<String, Int> = Either::wrap(7)
-      assert_eq(Either<String, Int>::Right(7), wrapped)
+      do {
+        wrapped: Either<String, Int> = Either::wrap(7)
+
+        assert_eq(Either<String, Int>::Right(7), wrapped)
+      }
     }
 
   }
 
   describe("swap") {
     it("turns Left into Right") {
-      assert_eq(Either<Int, String>::Right("stop"), Either::swap(Either<String, Int>::Left("stop")))
+      do {
+        assert_eq(Either<Int, String>::Right("stop"), Either::swap(Either<String, Int>::Left("stop")))
+      }
     }
 
   }
 
   describe("swap") {
     it("turns Right into Left") {
-      assert_eq(Either<Int, String>::Left(7), Either::swap(Either<String, Int>::Right(7)))
+      do {
+        assert_eq(Either<Int, String>::Left(7), Either::swap(Either<String, Int>::Right(7)))
+      }
     }
 
   }
 
   describe("map_left") {
     it("maps the selected Left branch") {
-      assert_eq(Either<Int, Int>::Left(4), Either::map_left(Either<String, Int>::Left("stop"), &String::len))
+      do {
+        assert_eq(Either<Int, Int>::Left(4), Either::map_left(Either<String, Int>::Left("stop"), &String::len))
+      }
     }
 
     it("maps the selected Right branch") {
-      assert_eq(Either<Int, Int>::Right(7), Either::map_left(Either<String, Int>::Right(7), &String::len))
+      do {
+        assert_eq(Either<Int, Int>::Right(7), Either::map_left(Either<String, Int>::Right(7), &String::len))
+      }
     }
 
   }
 
   describe("map_right") {
     it("maps the selected Left branch") {
-      assert_eq(Either<String, String>::Left("stop"), Either::map_right(Either<String, Int>::Left("stop"), &to_string))
+      do {
+        assert_eq(Either<String, String>::Left("stop"), Either::map_right(Either<String, Int>::Left("stop"), &to_string))
+      }
     }
 
     it("maps the selected Right branch") {
-      assert_eq(Either<String, String>::Right("7"), Either::map_right(Either<String, Int>::Right(7), &to_string))
+      do {
+        assert_eq(Either<String, String>::Right("7"), Either::map_right(Either<String, Int>::Right(7), &to_string))
+      }
     }
 
   }
 
   describe("bimap") {
     it("maps the selected Left branch") {
-      assert_eq(Either<Int, String>::Left(4), Either::bimap(Either<String, Int>::Left("stop"), &String::len, &to_string))
+      do {
+        assert_eq(Either<Int, String>::Left(4), Either::bimap(Either<String, Int>::Left("stop"), &String::len, &to_string))
+      }
     }
 
     it("maps the selected Right branch") {
-      assert_eq(Either<Int, String>::Right("7"), Either::bimap(Either<String, Int>::Right(7), &String::len, &to_string))
+      do {
+        assert_eq(Either<Int, String>::Right("7"), Either::bimap(Either<String, Int>::Right(7), &String::len, &to_string))
+      }
     }
 
   }
 
   describe("left_or") {
     it("returns its own branch") {
-      assert_eq("stop", Either::left_or(Either<String, Int>::Left("stop"), "fallback"))
+      do {
+        assert_eq("stop", Either::left_or(Either<String, Int>::Left("stop"), "fallback"))
+      }
     }
 
     it("returns the default for the other branch") {
-      assert_eq("fallback", Either::left_or(Either<String, Int>::Right(7), "fallback"))
+      do {
+        assert_eq("fallback", Either::left_or(Either<String, Int>::Right(7), "fallback"))
+      }
     }
 
   }
 
   describe("left_or_else") {
     it("does not call the default for its own branch") {
-      value = Either::left_or_else(Either<String, Int>::Left("stop"), {|_| print("unexpected"); "fallback"})
-      do::<Result> {
+      do {
+        value = Either::left_or_else(Either<String, Int>::Left("stop"), {|_| print("unexpected"); "fallback"})
+
         assert_eq("stop", value)
         assert_stdout_eq([])
       }
     }
 
     it("calls the default once for the other branch") {
-      value = Either::left_or_else(Either<String, Int>::Right(7), {|_| print("default"); "fallback"})
-      do::<Result> {
+      do {
+        value = Either::left_or_else(Either<String, Int>::Right(7), {|_| print("default"); "fallback"})
+
         assert_eq("fallback", value)
         assert_stdout_eq(["default"])
       }
@@ -120,27 +153,33 @@ test("Either") {
 
   describe("right_or") {
     it("returns its own branch") {
-      assert_eq(7, Either::right_or(Either<String, Int>::Right(7), 9))
+      do {
+        assert_eq(7, Either::right_or(Either<String, Int>::Right(7), 9))
+      }
     }
 
     it("returns the default for the other branch") {
-      assert_eq(9, Either::right_or(Either<String, Int>::Left("stop"), 9))
+      do {
+        assert_eq(9, Either::right_or(Either<String, Int>::Left("stop"), 9))
+      }
     }
 
   }
 
   describe("right_or_else") {
     it("does not call the default for its own branch") {
-      value = Either::right_or_else(Either<String, Int>::Right(7), {|_| print("unexpected"); 9})
-      do::<Result> {
+      do {
+        value = Either::right_or_else(Either<String, Int>::Right(7), {|_| print("unexpected"); 9})
+
         assert_eq(7, value)
         assert_stdout_eq([])
       }
     }
 
     it("calls the default once for the other branch") {
-      value = Either::right_or_else(Either<String, Int>::Left("stop"), {|_| print("default"); 9})
-      do::<Result> {
+      do {
+        value = Either::right_or_else(Either<String, Int>::Left("stop"), {|_| print("default"); 9})
+
         assert_eq(9, value)
         assert_stdout_eq(["default"])
       }
@@ -150,16 +189,18 @@ test("Either") {
 
   describe("fold") {
     it("calls only the Left handler") {
-      value = Either::fold(Either<String, Int>::Left("stop"), {|x| print("left"); x}, {|x| print("unexpected"); to_string(x)})
-      do::<Result> {
+      do {
+        value = Either::fold(Either<String, Int>::Left("stop"), {|x| print("left"); x}, {|x| print("unexpected"); to_string(x)})
+
         assert_eq("stop", value)
         assert_stdout_eq(["left"])
       }
     }
 
     it("calls only the Right handler") {
-      value = Either::fold(Either<String, Int>::Right(7), {|x| print("unexpected"); x}, {|x| print("right"); to_string(x)})
-      do::<Result> {
+      do {
+        value = Either::fold(Either<String, Int>::Right(7), {|x| print("unexpected"); x}, {|x| print("right"); to_string(x)})
+
         assert_eq("7", value)
         assert_stdout_eq(["right"])
       }
@@ -169,18 +210,20 @@ test("Either") {
 
   describe("to_option / Convert") {
     it("maps Right to Some") {
-      source = Either<String, Int>::Right(7)
-      converted: Option<Int> = to::<Option>(source)
-      do::<Result> {
+      do {
+        source = Either<String, Int>::Right(7)
+        converted: Option<Int> = to::<Option>(source)
+
         assert_some_eq(7, Either::to_option(source))
         assert_some_eq(7, converted)
       }
     }
 
     it("maps Left to None") {
-      source = Either<String, Int>::Left("stop")
-      converted: Option<Int> = to::<Option>(source)
-      do::<Result> {
+      do {
+        source = Either<String, Int>::Left("stop")
+        converted: Option<Int> = to::<Option>(source)
+
         assert_none(Either::to_option(source))
         assert_none(converted)
       }
@@ -190,23 +233,25 @@ test("Either") {
 
   describe("Functor::fmap / Monad::bind") {
     it("maps and binds the right slot") {
-      right_seven: Either<String, Int> = Either::Right(7)
-      expected_right_map: Either<String, Int> = Either::Right(8)
-      do::<Result> {
+      do {
+        right_seven: Either<String, Int> = Either::Right(7)
+        expected_right_map: Either<String, Int> = Either::Right(8)
         law_left8: Either<String, Int> = expected_right_map
         law_right8: Either<String, Int> = right_seven |*> &inc
-        assert_eq(law_left8, law_right8)
+
         expected_left_map: Either<String, Int> = Either::Left("stop")
         law_left7: Either<String, Int> = expected_left_map
         law_right7: Either<String, Int> = Either::Left("stop") |*> &inc
-        assert_eq(law_left7, law_right7)
         expected_right_bind: Either<String, Int> = Either::Right(8)
         law_left6: Either<String, Int> = expected_right_bind
         law_right6: Either<String, Int> = right_seven |>= {|value| Either::Right(value + 1)}
-        assert_eq(law_left6, law_right6)
         expected_left_bind: Either<String, Int> = Either::Left("stop")
         law_left5: Either<String, Int> = expected_left_bind
         law_right5: Either<String, Int> = Either::Left("stop") |>= {|value| Either::Right(value + 1)}
+
+        assert_eq(law_left8, law_right8)
+        assert_eq(law_left7, law_right7)
+        assert_eq(law_left6, law_right6)
         assert_eq(law_left5, law_right5)
       }
     }
@@ -215,21 +260,23 @@ test("Either") {
 
   describe("Applicative::ap") {
     it("applies within the captured left family") {
-      mapper_left: Either<String, (Int -> Int)> = Either::Left("mapper")
-      mapper_right: Either<String, (Int -> Int)> = Either::Right(&inc)
-      value_right: Either<String, Int> = Either::Right(2)
-      expected_apply: Either<String, Int> = Either::Right(3)
-      do::<Result> {
+      do {
+        mapper_left: Either<String, (Int -> Int)> = Either::Left("mapper")
+        mapper_right: Either<String, (Int -> Int)> = Either::Right(&inc)
+        value_right: Either<String, Int> = Either::Right(2)
+        expected_apply: Either<String, Int> = Either::Right(3)
         law_left4: Either<String, Int> = expected_apply
         law_right4: Either<String, Int> = mapper_right |*| value_right
-        assert_eq(law_left4, law_right4)
+
         expected_mapper_left: Either<String, Int> = Either::Left("mapper")
         law_left3: Either<String, Int> = expected_mapper_left
         law_right3: Either<String, Int> = mapper_left |*| value_right
-        assert_eq(law_left3, law_right3)
         expected_left_apply: Either<String, Int> = Either::Left("value")
         law_left2: Either<String, Int> = expected_left_apply
         law_right2: Either<String, Int> = mapper_right |*| Either::Left("value")
+
+        assert_eq(law_left4, law_right4)
+        assert_eq(law_left3, law_right3)
         assert_eq(law_left2, law_right2)
       }
     }
@@ -238,22 +285,28 @@ test("Either") {
 
   describe("Monad laws") {
     it("left identity") {
-      left: Either<String, Int> = Monad::return(3) |>= &either_step
-      assert_eq(either_step(3), left)
+      do {
+        left: Either<String, Int> = Monad::return(3) |>= &either_step
+
+        assert_eq(either_step(3), left)
+      }
     }
 
     it("right identity preserves Right and Left") {
-      do::<Result> {
+      do {
         assert_eq(Either<String, Int>::Right(3), Either<String, Int>::Right(3) |>= &either_pure)
         assert_eq(Either<String, Int>::Left("stop"), Either<String, Int>::Left("stop") |>= &either_pure)
       }
     }
 
     it("associativity compares both bind trees") {
-      value = Either<String, Int>::Right(3)
-      law_left1: Either<String, Int> = (value |>= &either_step) |>= &either_step
-      law_right1: Either<String, Int> = value |>= {|x| either_step(x) |>= &either_step}
-      assert_eq(law_left1, law_right1)
+      do {
+        value = Either<String, Int>::Right(3)
+        law_left1: Either<String, Int> = (value |>= &either_step) |>= &either_step
+        law_right1: Either<String, Int> = value |>= {|x| either_step(x) |>= &either_step}
+
+        assert_eq(law_left1, law_right1)
+      }
     }
 
   }
@@ -261,7 +314,7 @@ test("Either") {
 
   describe("Eq") {
     it("compares variants and payloads") {
-      do::<Result> {
+      do {
         assert_true(Eq::eq(Either<String, Int>::Right(3), Either<String, Int>::Right(3)))
         assert_false(Eq::eq(Either<String, Int>::Right(3), Either<String, Int>::Right(4)))
         assert_false(Eq::eq(Either<String, Int>::Left("3"), Either<String, Int>::Right(3)))

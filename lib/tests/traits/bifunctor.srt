@@ -23,9 +23,10 @@ where
 test("Bifunctor") {
   describe("bimap") {
     it("specializes a binary constructor application") {
-      mapped: Pair<String, Int> = Bifunctor::bimap(Pair::Pair(9, "abcd"), &to_string, &String::len)
-      Pair::Pair(left, right) =? mapped
-      do::<Result> {
+      do {
+        mapped: Pair<String, Int> = Bifunctor::bimap(Pair::Pair(9, "abcd"), &to_string, &String::len)
+        Pair::Pair(left, right) <- Ok(mapped)
+
         assert_eq("9", left)
         assert_eq(4, right)
       }

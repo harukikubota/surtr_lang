@@ -1,6 +1,9 @@
 #[path = "support/special_enum_declarations.rs"]
 mod special_enum_declarations;
 
+#[allow(dead_code)]
+mod support;
+
 fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
     let ast = special_enum_declarations::parse_with_canonical_special_enums(source).expect("parse");
     scar::typecheck(sigil::resolve(ast).expect("resolve"))
@@ -996,4 +999,129 @@ def stronger(value: Monad<Int>) -> Int { 1 }
         Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
         "{error:?}"
     );
+}
+
+const RESTRICTED_RETURN_PROJECTIONS: &str = r#"
+deftrait ProjectionFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait ProjectionMonad where Self: ProjectionFunctor {}
+defenum Box<$T> { Box($T), }
+impl ProjectionFunctor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl ProjectionMonad for Box<$T> {}
+def retain(value: $F<Int>) -> $F<Int> where $F: ProjectionFunctor { ProjectionFunctor::fmap(value, {|x| x}) }
+def stronger(value: ProjectionMonad<Int>) -> Int { 1 }
+"#;
+
+#[test]
+fn captured_generic_callable_keeps_its_required_constructor_capability() {
+    for capture in ["&stronger", "&stronger(&1)"] {
+        check(&format!(
+        "{RESTRICTED_RETURN_PROJECTIONS}\nmapper: (Box<Int> -> Int) = {capture}\nmapper(Box::Box(1))"
+    ))
+    .expect("fresh nominal sources meet the generic function's required capability");
+        let error = check(&format!(
+        "{RESTRICTED_RETURN_PROJECTIONS}\nmapper: (Box<Int> -> Int) = {capture}\nmapper(retain(Box::Box(1)))"
+    ))
+    .expect_err("capturing a generic function must not erase its original Monad requirement");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{error:?}"
+        );
+    }
+}
+
+fn check_with_uncons(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
+    support::typecheck(support::resolve_with_builtin_prelude(source))
+}
+
+#[test]
+fn specialized_return_views_survive_extractor_payload_projections() {
+    let declarations = format!(
+        "{RESTRICTED_RETURN_PROJECTIONS}\nimpl Int {{ defextractor project(chosen: $T, value: Int) -> MatchResult<$T> {{ MatchResult::Ok(chosen) }} }}"
+    );
+    for expression in [
+        "match 0 { Int::project(a, item) => stronger(item), _ => 0, }",
+        "match [a] { uncons(item, _) => stronger(item), _ => 0, }",
+        "uncons(item, _) =? [a]; stronger(item)",
+        "match apply_pattern([a], uncons(_1, _)) { Ok(item) => stronger(item), Err(_) => 0, }",
+    ] {
+        check_with_uncons(&format!("{declarations}\na = Box::Box(1)\n{expression}"))
+            .unwrap_or_else(|error| panic!("fresh concrete source: {expression}: {error:?}"));
+        let source = format!("{declarations}\na = retain(Box::Box(1))\n{expression}");
+        let error = check_with_uncons(&source).expect_err(
+            "extractor output projections must preserve the input payload's return view",
+        );
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn callback_output_dependencies_preserve_transitive_input_views() {
+    let declarations = format!(
+        r#"{RESTRICTED_RETURN_PROJECTIONS}
+def consume_chain(value: $A, first: ($A -> $B), second: ($B -> $C)) -> $C {{ second(first(value)) }}
+def consume_chain_callback_first(first: ($A -> $B), second: ($B -> $C), value: $A) -> $C {{ second(first(value)) }}
+def compose_reversed(value: $A, second: ($B -> $C), first: ($A -> $B)) -> $C {{ second(first(value)) }}
+def independent_callbacks(value: $A, weaker: ($A -> $A), consume: ($A -> Int)) -> Int {{ consume(value) }}
+"#
+    );
+    for expression in [
+        "consume_chain(a, {|item| item}, {|item| stronger(item)})",
+        "consume_chain_callback_first({|item| item}, {|item| stronger(item)}, a)",
+        "b = compose_reversed(a, {|item| item}, {|item| item}); stronger(b)",
+        "independent_callbacks(a, {|item| retain(item)}, {|item| stronger(item)})",
+    ] {
+        check(&format!("{declarations}\na = Box::Box(1)\n{expression}"))
+            .unwrap_or_else(|error| panic!("fresh source: {expression}: {error:?}"));
+        let error = check(&format!(
+            "{declarations}\na = retain(Box::Box(1))\n{expression}"
+        ))
+        .expect_err("a callback output must retain restrictions from its transitive source");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn independently_annotated_callbacks_do_not_wait_on_each_other() {
+    check(
+        r#"
+def accept(left: ($T -> $T), right: ($T -> $T)) -> Int { 1 }
+accept({|value: Int| value}, {|value: Int| value})
+"#,
+    )
+    .expect("explicit callback contracts establish their input types independently");
+}
+
+#[test]
+fn nested_declared_constructor_requirements_survive_direct_and_captured_calls() {
+    let declarations = format!(
+        r#"{RESTRICTED_RETURN_PROJECTIONS}
+def stronger_list(values: List<$F<Int>>) -> Int where $F: ProjectionMonad {{ 1 }}
+"#
+    );
+    for expression in [
+        "stronger_list([a])",
+        "mapper: (List<Box<Int>> -> Int) = &stronger_list; mapper([a])",
+        "mapper: (List<Box<Int>> -> Int) = &stronger_list(&1); mapper([a])",
+    ] {
+        check(&format!("{declarations}\na = Box::Box(1)\n{expression}"))
+            .unwrap_or_else(|error| panic!("fresh source: {expression}: {error:?}"));
+        let error = check(&format!(
+            "{declarations}\na = retain(Box::Box(1))\n{expression}"
+        ))
+        .expect_err("nested constructor constraints must be checked on the actual payload view");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{expression}: {error:?}"
+        );
+    }
 }

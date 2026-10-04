@@ -8,7 +8,9 @@ impl Encode<String> for Payload {
 test("Encode") {
   describe("encode") {
     it("uses a custom output representation") {
-      assert_ok_eq("encoded:7", Encode::encode::<String>(Payload(7)))
+      do {
+        assert_ok_eq("encoded:7", Encode::encode::<String>(Payload(7)))
+      }
     }
 
   }

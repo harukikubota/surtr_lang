@@ -47,6 +47,12 @@ payload型は文ごとに変化できる。family所属だけからcarrier同一
 返り値にだけ現れるconstructor入力は、通常callの型引数の具体化結果を使ってcapabilityを検査する。
 たとえば`guard::<List>(...)`の返り値は`List<Unit>`としてMonadの実装を確認できる。
 値引数から受け継いだcapabilityは、同じnominal型へ具体化されても強めない。
+`<-` のpayloadも、通常のgeneric callback引数と同じく入力値の由来を保持する。
+生成したcallbackの仮引数へ由来を渡してから本文を検査し、束縛パターンの型注釈や
+tuple・list・Extractorによる取り出しで能力制約を失わない。
+Facet の読み取りが返した `Result` も通常の `Result` として `<-` に渡せる。
+Facetの読み取りでは外側のcarrierと成功payloadのcapabilityを区別し、
+読み取り自体でpayloadの制約を強めない。
 `List<Unit>`のbare式と`_ <- rhs`は通常の`Monad::bind`でsequenceし、空Listでは後続文を評価しない。
 impl数・順序・表示名・field探索による逆推論、暗黙lift、runtime Trait dictionaryを認めない。
 未確定obligationは`Deferred`を保持し、実行境界では構造化ambiguity等として拒否する。

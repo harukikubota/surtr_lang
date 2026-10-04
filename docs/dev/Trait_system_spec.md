@@ -241,6 +241,18 @@ where $F: Alternative
 同じpayload型変数を使っても、異なるTrait名の間で共有するのはpayloadだけである。parameter位置で
 利用できるmethod能力は、そこに書かれたTraitまでに制限する。
 
+generic な型変数を介して値を callback に渡す場合も、実際の入力値の能力制約を保持する。
+同じ宣言型変数に対応する入力値の由来を未注釈 callback の仮引数へ渡し、その由来で本文を検査する。
+通常関数と Trait method で同じ規則を使い、callback と入力値の引数順には依存しない。
+`do` の `<-` が生成する callback もこの規則に従う。束縛パターンの型注釈は能力を強めない。
+
+generic な関数を capture して関数値として使う場合、元の宣言が要求した能力を利用時に検査する。
+関数値の入力型を nominal 型に具体化しても、この要求は消えない。
+宣言された要求が `List<$F<Int>>` など入力の内側にある場合も、構造に沿って値の由来を射影し、
+直接呼び出しと関数値の利用で同じ検査を行う。
+Extractor の成功値も、宣言された入力・出力の型変数関係に従って能力制約を保持する。
+独立した関数や明示的な callback parameter に固定 nominal 型を宣言する既存の契約は変更しない。
+
 ```surtr
 def independent(left: Functor<$A>, right: Monad<$A>) -> Unit {
   # payload Aは同じだが、leftとrightのcarrierは独立
@@ -301,6 +313,14 @@ segment を検査する。`&Facet::view(Duration.millis, &1)`、期待型付き�
 共通の view 処理で `Duration -> Int` に確定する。autoimport は通常の import・呼び出し先
 解決を経て Facet API の専用処理に入る。期待型の矛盾は正規の診断で拒否し、失敗後の
 無注釈再検査や式ごとの正規化を追加しない。無注釈では `Result<Duration>` source を推測しない。
+
+Facet の読み取りが新しい `Result` を返す場合、constructor capability の由来も
+外側の `Result` と成功payloadに分けて保持する。対象はfallibleな `view`、
+`Result` sourceに対する `view`、および `preview` であり、通常の `Result` と同じく
+`Monad::bind` や `do` の `<-` に渡せる。payloadがStructなどのnominal型でも変わらない。
+成功payloadの由来には元のfocusの制約を保持し、Facetの読み取り自体で強めない。
+totalな通常sourceの `view` はfocusをそのまま返す。focus自体が `Result` でも、
+新しい外側の `Result` やcapabilityを追加しない。
 
 `preview` / `put` / `set` / `over` / `over_result` / `case_set` / `case_over` は通常の
 capture 型推論に従う。FacetPath 自体を placeholder 仮引数で受け取ることは位置制約として拒否する。

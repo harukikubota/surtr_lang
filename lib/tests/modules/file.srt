@@ -1,142 +1,168 @@
+def prepare_file(root: FilePath, path: String) -> Result<()> {
+  do {
+    if(File::exists(path), File::delete(path), Ok(()))
+    FS::mkdir_all(root)
+  }
+}
+
+def check_missing_read(path: String, setup: Result<()>) -> Result<()> {
+  do {
+    setup
+
+    assert_err_kind(FileNotFound, File::read(path))
+  }
+}
+
+def remove_file(root: FilePath, path: String) -> Result<()> {
+  do {
+    if(File::exists(path), File::delete(path), Ok(()))
+    FS::rm(root)
+  }
+}
+
+def check_read_chunks(path: String, setup: Result<()>) -> Result<()> {
+  do {
+    setup
+    _ <- File::write(path, "abcdef")
+    chunks <- File::with_open(path, FileMode::Read, {|handle|
+      a =? File::read_chunk(handle, 2)
+      b =? File::read_chunk(handle, 2)
+      c =? File::read_chunk(handle, 2)
+      d =? File::read_chunk(handle, 2)
+      Ok((a, b, c, d))
+    })
+    (a,b,c,d) = chunks
+
+    assert_eq("ab", a)
+    assert_eq("cd", b)
+    assert_eq("ef", c)
+    assert_eq("", d)
+  }
+}
+
+def check_open_write(path: String, setup: Result<()>) -> Result<()> {
+  do {
+    setup
+    _ <- File::with_open(path, FileMode::Write, {|handle|
+      _ =? File::write_chunk(handle, "chunk-a")
+      File::flush(handle)
+    })
+
+    assert_ok_eq("chunk-a", File::read(path))
+  }
+}
+
+def check_delete(path: String, setup: Result<()>) -> Result<()> {
+  do {
+    setup
+
+    assert_false(File::exists(path))
+    _ <- File::write(path, "bye")
+    assert_true(File::exists(path))
+    _ <- File::delete(path)
+    assert_false(File::exists(path))
+  }
+}
+
+def check_append(path: String, setup: Result<()>) -> Result<()> {
+  do {
+    setup
+    _ <- File::write(path, "one")
+    _ <- File::append(path, "two")
+
+    assert_ok_eq("onetwo", File::read(path))
+  }
+}
+
+def check_write_read(path: String, setup: Result<()>) -> Result<()> {
+  do {
+    setup
+    _ <- File::write(path, "alpha")
+
+    assert_ok_eq("alpha", File::read(path))
+  }
+}
+
 import File;
 import Test;
 
 test("File") {
   describe("write/read") {
     it("observes the public file result") {
-      root =? FS::path("./tmp/sandbox/lib_test_file_write_read")
-      path = root.raw ++ "/value.txt"
-      setup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::mkdir_all(root)
+      do {
+        root <- FS::path("./tmp/sandbox/lib_test_file_write_read")
+        path = root.raw ++ "/value.txt"
+        setup = prepare_file(root, path)
+        checked = check_write_read(path, setup)
+        cleanup = remove_file(root, path)
+        cleanup
+        checked
       }
-      checked = do::<Result> {
-        setup
-        _ =? File::write(path, "alpha")
-      assert_ok_eq("alpha", File::read(path))
-      }
-      cleanup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::rm(root)
-      }
-      do::<Result> { cleanup; checked }
     }
   }
   describe("append") {
     it("observes the public file result") {
-      root =? FS::path("./tmp/sandbox/lib_test_file_append")
-      path = root.raw ++ "/value.txt"
-      setup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::mkdir_all(root)
+      do {
+        root <- FS::path("./tmp/sandbox/lib_test_file_append")
+        path = root.raw ++ "/value.txt"
+        setup = prepare_file(root, path)
+        checked = check_append(path, setup)
+        cleanup = remove_file(root, path)
+        cleanup
+        checked
       }
-      checked = do::<Result> {
-        setup
-        _ =? File::write(path, "one")
-      _ =? File::append(path, "two")
-      assert_ok_eq("onetwo", File::read(path))
-      }
-      cleanup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::rm(root)
-      }
-      do::<Result> { cleanup; checked }
     }
   }
   describe("exists/delete") {
     it("observes the public file result") {
-      root =? FS::path("./tmp/sandbox/lib_test_file_delete")
-      path = root.raw ++ "/value.txt"
-      setup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::mkdir_all(root)
+      do {
+        root <- FS::path("./tmp/sandbox/lib_test_file_delete")
+        path = root.raw ++ "/value.txt"
+        setup = prepare_file(root, path)
+        checked = check_delete(path, setup)
+        cleanup = remove_file(root, path)
+        cleanup
+        checked
       }
-      checked = do::<Result> {
-        setup
-        assert_false(File::exists(path))
-      _ =? File::write(path, "bye")
-      assert_true(File::exists(path))
-      _ =? File::delete(path)
-      assert_false(File::exists(path))
-      }
-      cleanup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::rm(root)
-      }
-      do::<Result> { cleanup; checked }
     }
   }
   describe("with_open/write_chunk/flush") {
     it("observes the public file result") {
-      root =? FS::path("./tmp/sandbox/lib_test_file_with_open")
-      path = root.raw ++ "/value.txt"
-      setup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::mkdir_all(root)
+      do {
+        root <- FS::path("./tmp/sandbox/lib_test_file_with_open")
+        path = root.raw ++ "/value.txt"
+        setup = prepare_file(root, path)
+        checked = check_open_write(path, setup)
+        cleanup = remove_file(root, path)
+        cleanup
+        checked
       }
-      checked = do::<Result> {
-        setup
-        _ =? File::with_open(path, FileMode::Write, {|handle|
-        _ =? File::write_chunk(handle, "chunk-a")
-        File::flush(handle)
-      })
-      assert_ok_eq("chunk-a", File::read(path))
-      }
-      cleanup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::rm(root)
-      }
-      do::<Result> { cleanup; checked }
     }
   }
   describe("read_chunk") {
     it("observes the public file result") {
-      root =? FS::path("./tmp/sandbox/lib_test_file_read_chunk")
-      path = root.raw ++ "/value.txt"
-      setup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::mkdir_all(root)
+      do {
+        root <- FS::path("./tmp/sandbox/lib_test_file_read_chunk")
+        path = root.raw ++ "/value.txt"
+        setup = prepare_file(root, path)
+        checked = check_read_chunks(path, setup)
+        cleanup = remove_file(root, path)
+        cleanup
+        checked
       }
-      checked = do::<Result> {
-        setup
-        _ =? File::write(path, "abcdef")
-      chunks =? File::with_open(path, FileMode::Read, {|handle|
-        a =? File::read_chunk(handle, 2)
-        b =? File::read_chunk(handle, 2)
-        c =? File::read_chunk(handle, 2)
-        d =? File::read_chunk(handle, 2)
-        Ok((a, b, c, d))
-      })
-      (a,b,c,d) = chunks
-      assert_eq("ab", a)
-      assert_eq("cd", b)
-      assert_eq("ef", c)
-      assert_eq("", d)
-      }
-      cleanup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::rm(root)
-      }
-      do::<Result> { cleanup; checked }
     }
   }
   describe("missing read") {
     it("observes the public file result") {
-      root =? FS::path("./tmp/sandbox/lib_test_file_missing")
-      path = root.raw ++ "/value.txt"
-      setup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::mkdir_all(root)
+      do {
+        root <- FS::path("./tmp/sandbox/lib_test_file_missing")
+        path = root.raw ++ "/value.txt"
+        setup = prepare_file(root, path)
+        checked = check_missing_read(path, setup)
+        cleanup = remove_file(root, path)
+        cleanup
+        checked
       }
-      checked = do::<Result> {
-        setup
-        assert_err_kind(FileNotFound, File::read(path))
-      }
-      cleanup = do::<Result> {
-        if(File::exists(path), File::delete(path), Ok(()))
-        FS::rm(root)
-      }
-      do::<Result> { cleanup; checked }
     }
   }
 }

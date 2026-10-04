@@ -1,20 +1,37 @@
 import Test;
 test("Project") {
-  describe("empty") { it("starts with no entries") { assert_eq(0, List::len(Project::empty().entries)) } }
+  describe("empty") { it("starts with no entries") {
+                        do {
+                          assert_eq(0, List::len(Project::empty().entries))
+                        }
+                      } }
   describe("new") { it("preserves provided entries") {
-    project = Project::new([Config::new("App")])
-    cfg =? List::first(project.entries)
-    do::<Result> { assert_eq(1, List::len(project.entries)); assert_eq("App", cfg.name) }
-  } }
+                      do {
+                        project = Project::new([Config::new("App")])
+                        cfg <- List::first(project.entries)
+
+                        assert_eq(1, List::len(project.entries)); assert_eq("App", cfg.name)
+                      }
+                    } }
   describe("entrypoint") { it("appends a configured entry") {
-    project = Project::entrypoint(Project::empty(), "Api", {|cfg| Config::entry_fun(cfg, "Api::main")})
-    cfg =? List::first(project.entries)
-    do::<Result> { assert_eq(1, List::len(project.entries)); assert_eq("Api", cfg.name); assert_eq("Api::main", cfg.entrypoint) }
-  } }
+                             do {
+                               project = Project::entrypoint(Project::empty(), "Api", {|cfg| Config::entry_fun(cfg, "Api::main")})
+                               cfg <- List::first(project.entries)
+
+                               assert_eq(1, List::len(project.entries)); assert_eq("Api", cfg.name); assert_eq("Api::main", cfg.entrypoint)
+                             }
+                           } }
   describe("config") { it("starts the builder from an empty project") {
-    project = Project::config({|initial| Project::new(List::append(initial.entries, [Config::new("App")]))})
-    cfg =? List::first(project.entries)
-    do::<Result> { assert_eq(1, List::len(project.entries)); assert_eq("App", cfg.name) }
-  } }
-  describe("args") { it("uses the same entrypoint arguments as Kernel") { assert_eq(project_args(), Project::args()) } }
+                         do {
+                           project = Project::config({|initial| Project::new(List::append(initial.entries, [Config::new("App")]))})
+                           cfg <- List::first(project.entries)
+
+                           assert_eq(1, List::len(project.entries)); assert_eq("App", cfg.name)
+                         }
+                       } }
+  describe("args") { it("uses the same entrypoint arguments as Kernel") {
+                       do {
+                         assert_eq(project_args(), Project::args())
+                       }
+                     } }
 }

@@ -8,7 +8,9 @@ impl Show for Label {
 test("Show") {
   describe("to_string") {
     it("uses the custom representation") {
-      assert_eq("label:surtr", Show::to_string(Label("surtr")))
+      do {
+        assert_eq("label:surtr", Show::to_string(Label("surtr")))
+      }
     }
 
   }

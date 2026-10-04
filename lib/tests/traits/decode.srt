@@ -9,12 +9,17 @@ impl Decode<Payload> for Encoded {
 test("Decode") {
   describe("decode") {
     it("decodes a custom payload without Eq or Show") {
-      value: Payload =? Decode::decode::<Payload>(Encoded("7"))
-      assert_eq(7, value.value)
+      do {
+        value: Payload <- Decode::decode::<Payload>(Encoded("7"))
+
+        assert_eq(7, value.value)
+      }
     }
 
     it("preserves decoding failures") {
-      assert_err_kind(InvalidIntegerLiteral, Decode::decode::<Payload>(Encoded("invalid")))
+      do {
+        assert_err_kind(InvalidIntegerLiteral, Decode::decode::<Payload>(Encoded("invalid")))
+      }
     }
 
   }

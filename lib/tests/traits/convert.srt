@@ -8,7 +8,9 @@ impl Convert<Int> for Number {
 test("Convert") {
   describe("to") {
     it("selects the output type of a custom conversion") {
-      assert_eq(7, Convert::to::<Int>(Number(7)))
+      do {
+        assert_eq(7, Convert::to::<Int>(Number(7)))
+      }
     }
 
   }

@@ -201,6 +201,7 @@ pub(super) struct CandidateProbeCheckpoint {
     pending_trait_obligations: HashMap<u32, Vec<PendingTraitObligation>>,
     active_capabilities: Vec<CapabilityUse>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
+    explicit_closure_parameters: HashMap<u32, Ty>,
     constructor_witness_traits: HashMap<u32, String>,
     safe_operator_results: HashMap<(usize, usize), SourceFact>,
     warnings: WarningBuffer,
@@ -496,6 +497,7 @@ impl Checker {
             pending_trait_obligations: self.pending_trait_obligations.clone(),
             active_capabilities: self.active_capabilities.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
+            explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             safe_operator_results: self.safe_operator_results.clone(),
             warnings: self.warnings.clone(),
@@ -512,6 +514,7 @@ impl Checker {
         self.pending_trait_obligations = checkpoint.pending_trait_obligations;
         self.active_capabilities = checkpoint.active_capabilities;
         self.constructor_capabilities = checkpoint.constructor_capabilities;
+        self.explicit_closure_parameters = checkpoint.explicit_closure_parameters;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
         self.safe_operator_results = checkpoint.safe_operator_results;
         self.warnings = checkpoint.warnings;
@@ -748,29 +751,7 @@ impl Checker {
         callee_label: &str,
         arg: &TypedNode,
     ) -> Result<(), TypeError> {
-        let Some(required_trait) = self.constructor_capability_for_type(expected) else {
-            return Ok(());
-        };
-        let actual = self.constructor_capability_for_node(arg);
-        if let Some(outcome) = self.constructor_provenance_application_outcome(&actual) {
-            self.require_constructor_projection_type(
-                outcome,
-                &required_trait,
-                &arg.ty,
-                &arg.span,
-                callee_label,
-            )?;
-        }
-        if self.constructor_provenance_allows(&actual, &required_trait, &arg.ty) {
-            return Ok(());
-        }
-        Err(self.trait_failure(
-            TypeDiagnosticReason::MissingTypeConstructorCapability,
-            &required_trait,
-            &arg.ty,
-            &arg.span,
-            DiagnosticOrigin::Call,
-        ))
+        self.check_parameter_constructor_provenance(expected, arg, callee_label)
     }
 
     fn check_trait_method_constructor_capabilities(
@@ -1324,7 +1305,7 @@ impl Checker {
                         &obligation.receiver,
                         span,
                         DiagnosticOrigin::TraitCall,
-                    )))
+                    )));
                 }
             };
         }
@@ -3613,7 +3594,8 @@ impl Checker {
         match node {
             Resolved::Capture(_, _, _)
             | Resolved::Closure(_, _, _, _)
-            | Resolved::ExtractorClosure(_, _, _, _) | Resolved::CaptureClosure(_, _, _, _)
+            | Resolved::ExtractorClosure(_, _, _, _)
+            | Resolved::CaptureClosure(_, _, _, _)
             | Resolved::Compose(_, _, _)
             | Resolved::LiftedCompose(_, _, _)
             | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
@@ -4754,7 +4736,7 @@ impl Checker {
         }
     }
 
-    fn require_constructor_projection_type(
+    pub(super) fn require_constructor_projection_type(
         &self,
         outcome: ConstructorApplicationOutcome,
         trait_name: &str,
@@ -6058,43 +6040,124 @@ impl Checker {
         call: &TraitInvocationContext<'_>,
         prepared: &mut PreparedTraitInvocation,
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let args = call.args;
-        let param_tys = &prepared.param_tys;
-        let prepared_args = &mut prepared.prepared_args;
-        let operator = &call.operator;
-        let argument_expected_relation = call.argument_expected_relation;
-        let typed_args = args
+        let mut remaining = prepared
+            .prepared_args
             .iter()
-            .zip(param_tys.iter())
-            .enumerate()
-            .map(|(index, (arg, expected))| {
-                if let Some(typed) = prepared_args[index].take() {
-                    return Ok(typed);
+            .filter(|arg| arg.is_none())
+            .count();
+        while remaining > 0 {
+            let before = remaining;
+            for (index, (argument, expected)) in
+                call.args.iter().zip(&prepared.param_tys).enumerate()
+            {
+                if prepared.prepared_args[index].is_some() {
+                    continue;
                 }
-                match arg {
-                    ResolvedRecordLitArg::Positional(expr) => self
-                        .check_invocation_argument(
+                let ResolvedRecordLitArg::Positional(expr) = argument else {
+                    unreachable!("named arguments rejected");
+                };
+                let inputs = if Self::has_contextual_callback_parameters(expr) {
+                    self.callback_input_provenance(
+                        &prepared.param_tys,
+                        &prepared.prepared_args,
+                        index,
+                        self.resolved_span(expr),
+                    )?
+                } else {
+                    Some(Vec::new())
+                };
+                let Some(inputs) = inputs else {
+                    continue;
+                };
+                let typed = self
+                    .with_callback_parameter_provenance(expr, &inputs, |checker| {
+                        checker.check_invocation_argument(
                             expr,
                             expected,
-                            operator.clone(),
+                            call.operator.clone(),
                             index,
-                            argument_expected_relation.filter(|_| index == 1),
+                            call.argument_expected_relation.filter(|_| index == 1),
                         )
-                        .map_err(|mut error| {
-                            if let Some(diagnostic) = &mut error.structured {
-                                if diagnostic.origin == DiagnosticOrigin::Call
-                                    && diagnostic.primary.span == *self.resolved_span(expr)
-                                {
-                                    diagnostic.origin = DiagnosticOrigin::TraitCall;
-                                }
+                    })
+                    .map_err(|mut error| {
+                        if let Some(diagnostic) = &mut error.structured {
+                            if diagnostic.origin == DiagnosticOrigin::Call
+                                && diagnostic.primary.span == *self.resolved_span(expr)
+                            {
+                                diagnostic.origin = DiagnosticOrigin::TraitCall;
                             }
-                            error
-                        }),
-                    ResolvedRecordLitArg::Named(_, _) => unreachable!("named arguments rejected"),
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                        }
+                        error
+                    })?;
+                prepared.prepared_args[index] = Some(typed);
+                remaining -= 1;
+            }
+            if remaining == before {
+                return Err(self.unresolved_callback_provenance_error(call.span));
+            }
+        }
+        let typed_args = prepared
+            .prepared_args
+            .iter_mut()
+            .map(|arg| arg.take().expect("all trait arguments were checked"))
+            .collect::<Vec<_>>();
+        self.check_callback_argument_provenance(&prepared.param_tys, &typed_args)?;
         Ok(typed_args)
+    }
+
+    fn has_contextual_callback_parameters(expression: &Resolved) -> bool {
+        match expression {
+            Resolved::Grouped(_, inner) => Self::has_contextual_callback_parameters(inner),
+            Resolved::Closure(_, parameters, _, _)
+            | Resolved::CaptureClosure(_, parameters, _, _)
+            | Resolved::ExtractorClosure(_, parameters, _, _) => parameters
+                .iter()
+                .any(|parameter| parameter.ty.is_none() || parameter.id.compiler_generated),
+            _ => false,
+        }
+    }
+
+    /// Install input views by resolved parameter identity, before checking a
+    /// contextual closure body. Declared nominal parameters retain their own
+    /// contract; inferred and compiler-generated parameters inherit the source.
+    fn with_callback_parameter_provenance<T>(
+        &mut self,
+        expression: &Resolved,
+        inputs: &[(ConstructorCapabilityProvenance, Ty)],
+        check: impl FnOnce(&mut Self) -> Result<T, TypeError>,
+    ) -> Result<T, TypeError> {
+        let mut expression = expression;
+        while let Resolved::Grouped(_, inner) = expression {
+            expression = inner;
+        }
+        let parameters = match expression {
+            Resolved::Closure(_, parameters, _, _)
+            | Resolved::CaptureClosure(_, parameters, _, _)
+            | Resolved::ExtractorClosure(_, parameters, _, _) => parameters.as_slice(),
+            _ => &[],
+        };
+        let saved = parameters
+            .iter()
+            .zip(inputs)
+            .filter_map(|(parameter, source)| {
+                (parameter.ty.is_none() || parameter.id.compiler_generated).then(|| {
+                    let id = parameter.id.unique_id;
+                    (
+                        id,
+                        self.constructor_capabilities.insert(id, source.0.clone()),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let result = check(self);
+        for (id, previous) in saved {
+            if let Some(previous) = previous {
+                self.constructor_capabilities.insert(id, previous);
+            } else {
+                self.constructor_capabilities.remove(&id);
+            }
+        }
+        result
     }
 
     #[inline(never)]
@@ -7743,7 +7806,7 @@ impl Checker {
                 return Err(TypeError::new(
                     "Extractor head is not callable",
                     span.clone(),
-                ))
+                ));
             }
         };
         let Some((input, expected_pre_args)) = params.split_last() else {
@@ -8249,7 +8312,7 @@ impl Checker {
                             message: format!("Missing argument '{}'", name),
                             span: span.clone(),
                             hint: None,
-                        })
+                        });
                     }
                 };
                 if self
@@ -8258,39 +8321,23 @@ impl Checker {
                 {
                     continue;
                 }
-                let (typed, defer) = match mode {
-                    CallArgumentMode::User {
-                        allow_error_observer,
-                        defer_constructor_conflicts,
-                    } => {
-                        let defer = defer_constructor_conflicts
-                            && self.constructor_argument_needs_deferred_check(expected_ty);
-                        let typed = if defer {
-                            self.check_node(expr)?
-                        } else {
-                            self.check_argument_node_with_error_observer_context(
-                                expr,
-                                expected_ty,
-                                allow_error_observer,
-                            )?
-                        };
-                        self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
-                        self.check_expected_constructor_capability(
-                            expected_ty,
-                            callee_label,
-                            &typed,
-                        )?;
-                        (typed, defer)
-                    }
-                    CallArgumentMode::Positional => (
-                        if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
-                            self.check_node(expr)?
-                        } else {
-                            self.check_node_with_expected(expr, Some(expected_ty))?
-                        },
-                        false,
-                    ),
+                let callback_inputs = if Self::has_contextual_callback_parameters(expr) {
+                    self.callback_input_provenance(
+                        params,
+                        &typed_args,
+                        ordinal,
+                        self.resolved_span(expr),
+                    )?
+                } else {
+                    Some(Vec::new())
                 };
+                let Some(callback_inputs) = callback_inputs else {
+                    continue;
+                };
+                let (typed, defer) =
+                    self.with_callback_parameter_provenance(expr, &callback_inputs, |checker| {
+                        checker.check_ordered_call_argument(expr, expected_ty, callee_label, mode)
+                    })?;
                 if !defer {
                     if matches!(mode, CallArgumentMode::Positional) {
                         checked_this_pass.push(ordinal);
@@ -8322,10 +8369,12 @@ impl Checker {
                 )?;
             }
             if remaining == 0 {
-                return Ok(typed_args
+                let typed_args = typed_args
                     .into_iter()
                     .map(|arg| arg.expect("all call arguments were checked"))
-                    .collect());
+                    .collect::<Vec<_>>();
+                self.check_callback_argument_provenance(params, &typed_args)?;
+                return Ok(typed_args);
             }
             if remaining == before {
                 let ordinal = typed_args
@@ -8335,9 +8384,9 @@ impl Checker {
                 let OrderedCallArgument::Present(expr) = args[ordinal] else {
                     unreachable!("missing arguments were rejected")
                 };
-                let source = self
-                    .pending_facet_capture_source(expr, &params[ordinal])
-                    .expect("unchecked call argument must be a source-dependent capture");
+                let Some(source) = self.pending_facet_capture_source(expr, &params[ordinal]) else {
+                    return Err(self.unresolved_callback_provenance_error(self.resolved_span(expr)));
+                };
                 return Err(TypeError {
                     structured: None,
                     message: format!("FacetPath capture has unresolved source type: {}",
@@ -8347,6 +8396,44 @@ impl Checker {
                 });
             }
         }
+    }
+
+    fn check_ordered_call_argument(
+        &mut self,
+        expr: &Resolved,
+        expected_ty: &Ty,
+        callee_label: &str,
+        mode: CallArgumentMode,
+    ) -> Result<(TypedNode, bool), TypeError> {
+        Ok(match mode {
+            CallArgumentMode::User {
+                allow_error_observer,
+                defer_constructor_conflicts,
+            } => {
+                let defer = defer_constructor_conflicts
+                    && self.constructor_argument_needs_deferred_check(expected_ty);
+                let typed = if defer {
+                    self.check_node(expr)?
+                } else {
+                    self.check_argument_node_with_error_observer_context(
+                        expr,
+                        expected_ty,
+                        allow_error_observer,
+                    )?
+                };
+                self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
+                self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
+                (typed, defer)
+            }
+            CallArgumentMode::Positional => (
+                if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+                    self.check_node(expr)?
+                } else {
+                    self.check_node_with_expected(expr, Some(expected_ty))?
+                },
+                false,
+            ),
+        })
     }
 
     fn check_call_argument_relation(
@@ -11213,6 +11300,12 @@ impl Checker {
                 )),
             }
         })();
+        let result = result.and_then(|typed| {
+            if let TypedInner::App(function, arguments) = &typed.node {
+                self.check_callable_input_provenance(function, arguments)?;
+            }
+            Ok(typed)
+        });
         result.map_err(|error| self.lazy_call_error(error, span, func, args))
     }
 
@@ -12223,7 +12316,7 @@ impl Checker {
                 return Err(TypeError::new(
                     format!("Expected {}, got ExtractorClosure", self.ty_name(&other)),
                     span.clone(),
-                ))
+                ));
             }
         };
         let Ty::Func(_, ret) = &signature else {
@@ -12375,6 +12468,18 @@ impl Checker {
                 } else {
                     self.resolve_ty(param_ty)
                 };
+                if !param.id.compiler_generated
+                    && (param.ty.is_some()
+                        || expected_relation.is_some_and(|relation| {
+                            matches!(
+                                relation.origin,
+                                DiagnosticOrigin::Annotation | DiagnosticOrigin::Return
+                            )
+                        }))
+                {
+                    self.explicit_closure_parameters
+                        .insert(param.id.unique_id, param_ty.clone());
+                }
                 self.env.bind_var(param.id.unique_id, param_ty.clone());
                 typed_params.push(TypedClosureParam {
                     id: param.id.clone(),
@@ -13296,7 +13401,7 @@ impl Checker {
                 return Err(self.typecheck_invariant_error(
                     "safe operator selected declaration",
                     operator_span,
-                ))
+                ));
             }
         };
         let mut variables = Vec::new();

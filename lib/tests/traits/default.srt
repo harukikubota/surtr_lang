@@ -8,13 +8,19 @@ impl Default for Settings {
 test("Default") {
   describe("default") {
     it("constructs the expected custom target") {
-      value: Settings = Default::default()
-      assert_eq(7, value.value)
+      do {
+        value: Settings = Default::default()
+
+        assert_eq(7, value.value)
+      }
     }
 
     it("constructs the explicitly selected custom target") {
-      value = Default::default::<Settings>()
-      assert_eq(7, value.value)
+      do {
+        value = Default::default::<Settings>()
+
+        assert_eq(7, value.value)
+      }
     }
 
   }

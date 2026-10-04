@@ -23,252 +23,334 @@ impl Holder {
 test("ReaderT") {
   describe("new/run") {
     it("observes new/run with the explicit environment") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
-      assert_eq(4, Identity::run(ReaderT::run(value, 3)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+
+        assert_eq(4, Identity::run(ReaderT::run(value, 3)))
+      }
     }
 
   }
 
   describe("ask") {
     it("observes ask with the explicit environment") {
-      asked: ReaderT<Int, Identity, Int> = ReaderT::ask::<Int, Identity>()
-      assert_eq(3, Identity::run(ReaderT::run(asked, 3)))
+      do {
+        asked: ReaderT<Int, Identity, Int> = ReaderT::ask::<Int, Identity>()
+
+        assert_eq(3, Identity::run(ReaderT::run(asked, 3)))
+      }
     }
 
   }
 
   describe("asks") {
     it("observes asks with the explicit environment") {
-      projected: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment| environment * 2})
-      assert_eq(6, Identity::run(ReaderT::run(projected, 3)))
+      do {
+        projected: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment| environment * 2})
+
+        assert_eq(6, Identity::run(ReaderT::run(projected, 3)))
+      }
     }
 
   }
 
   describe("local") {
     it("observes local with the explicit environment") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
-      localized: ReaderT<Int, Identity, Int> = ReaderT::local(value, {|environment| environment + 10})
-      assert_eq(14, Identity::run(ReaderT::run(localized, 3)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+        localized: ReaderT<Int, Identity, Int> = ReaderT::local(value, {|environment| environment + 10})
+
+        assert_eq(14, Identity::run(ReaderT::run(localized, 3)))
+      }
     }
 
   }
 
   describe("Functor::fmap") {
     it("maps the successful payload") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
-      mapped: ReaderT<Int, Identity, Int> = value |*> {|item| item * 2}
-      assert_eq(8, Identity::run(ReaderT::run(mapped, 3)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+        mapped: ReaderT<Int, Identity, Int> = value |*> {|item| item * 2}
+
+        assert_eq(8, Identity::run(ReaderT::run(mapped, 3)))
+      }
     }
 
   }
 
   describe("Applicative::ap") {
     it("applies a successful contextual mapper") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
-      mapper: ReaderT<Int, Identity, (Int -> Int)> = ReaderT::new({|environment| Identity::new({|item| item + environment})})
-      applied: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
-      assert_eq(7, Identity::run(ReaderT::run(applied, 3)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+        mapper: ReaderT<Int, Identity, (Int -> Int)> = ReaderT::new({|environment| Identity::new({|item| item + environment})})
+        applied: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
+
+        assert_eq(7, Identity::run(ReaderT::run(applied, 3)))
+      }
     }
 
   }
 
   describe("Monad::bind") {
     it("binds the successful payload") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
-      bound: ReaderT<Int, Identity, Int> = value |>= {|item|
-        ReaderT::new({|environment| Identity::new(item + environment)})
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+        bound: ReaderT<Int, Identity, Int> = value |>= {|item|
+          ReaderT::new({|environment| Identity::new(item + environment)})
+        }
+
+        assert_eq(7, Identity::run(ReaderT::run(bound, 3)))
       }
-      assert_eq(7, Identity::run(ReaderT::run(bound, 3)))
     }
 
     it("preserves base failure while binding") {
-      failed: ReaderT<Int, Result, Int> = ReaderT::new({|_environment| Err(NoneError)})
-      bound: ReaderT<Int, Result, Int> = failed |>= {|value|
-        ReaderT::new({|environment| Ok(value + environment)})
+      do {
+        failed: ReaderT<Int, Result, Int> = ReaderT::new({|_environment| Err(NoneError)})
+        bound: ReaderT<Int, Result, Int> = failed |>= {|value|
+          ReaderT::new({|environment| Ok(value + environment)})
+        }
+
+        assert_err_kind(NoneError, ReaderT::run(bound, 3))
       }
-      assert_err_kind(NoneError, ReaderT::run(bound, 3))
     }
 
   }
 
   describe("Alternative::empty") {
     it("derives Alternative only from an Alternative base") {
-      empty: ReaderT<Int, Option, Int> = Alternative::empty()
-      expected_none: Option<Int> = Option::None
-      assert_eq(expected_none, ReaderT::run(empty, 3))
+      do {
+        empty: ReaderT<Int, Option, Int> = Alternative::empty()
+        expected_none: Option<Int> = Option::None
+
+        assert_eq(expected_none, ReaderT::run(empty, 3))
+      }
     }
 
   }
 
   describe("Alternative::choose") {
     it("derives Alternative only from an Alternative base") {
-      left: ReaderT<Int, Option, Int> = ReaderT::new({|_environment| Option::None})
-      right: ReaderT<Int, Option, Int> = ReaderT::new({|environment| Option::Some(environment + 1)})
-      assert_eq(Option::Some(4), ReaderT::run(left <|> right, 3))
+      do {
+        left: ReaderT<Int, Option, Int> = ReaderT::new({|_environment| Option::None})
+        right: ReaderT<Int, Option, Int> = ReaderT::new({|environment| Option::Some(environment + 1)})
+
+        assert_eq(Option::Some(4), ReaderT::run(left <|> right, 3))
+      }
     }
 
   }
 
   describe("Alternative::choose List") {
     it("derives Alternative only from an Alternative base") {
-      left_list: ReaderT<Int, List, Int> = ReaderT::new({|environment| [environment]})
-      right_list: ReaderT<Int, List, Int> = ReaderT::new({|environment| [environment + 10]})
-      chosen_list: ReaderT<Int, List, Int> = left_list <|> right_list
-      assert_eq([3, 13], ReaderT::run(chosen_list, 3))
+      do {
+        left_list: ReaderT<Int, List, Int> = ReaderT::new({|environment| [environment]})
+        right_list: ReaderT<Int, List, Int> = ReaderT::new({|environment| [environment + 10]})
+        chosen_list: ReaderT<Int, List, Int> = left_list <|> right_list
+
+        assert_eq([3, 13], ReaderT::run(chosen_list, 3))
+      }
     }
 
   }
 
   describe("Monad left identity") {
     it("Monad left identity") {
-      left_identity: ReaderT<Int, Identity, Int> = Monad::return(3) |>= &reader_t_inc
-      assert_eq(Identity::run(ReaderT::run(reader_t_inc(3), 4)), Identity::run(ReaderT::run(left_identity, 4)))
+      do {
+        left_identity: ReaderT<Int, Identity, Int> = Monad::return(3) |>= &reader_t_inc
+
+        assert_eq(Identity::run(ReaderT::run(reader_t_inc(3), 4)), Identity::run(ReaderT::run(left_identity, 4)))
+      }
     }
 
   }
 
   describe("Monad right identity") {
     it("Monad right identity") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
-      right_identity: ReaderT<Int, Identity, Int> = value |>= &reader_t_pure
-      assert_eq(Identity::run(ReaderT::run(value, 4)), Identity::run(ReaderT::run(right_identity, 4)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+        right_identity: ReaderT<Int, Identity, Int> = value |>= &reader_t_pure
+
+        assert_eq(Identity::run(ReaderT::run(value, 4)), Identity::run(ReaderT::run(right_identity, 4)))
+      }
     }
 
   }
 
   describe("Monad associativity") {
     it("Monad associativity") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
-      assoc_left: ReaderT<Int, Identity, Int> = (value |>= &reader_t_inc) |>= &reader_t_double
-      assoc_right: ReaderT<Int, Identity, Int> = value |>= {|item| reader_t_inc(item) |>= &reader_t_double}
-      assert_eq(Identity::run(ReaderT::run(assoc_left, 4)), Identity::run(ReaderT::run(assoc_right, 4)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+        assoc_left: ReaderT<Int, Identity, Int> = (value |>= &reader_t_inc) |>= &reader_t_double
+        assoc_right: ReaderT<Int, Identity, Int> = value |>= {|item| reader_t_inc(item) |>= &reader_t_double}
+
+        assert_eq(Identity::run(ReaderT::run(assoc_left, 4)), Identity::run(ReaderT::run(assoc_right, 4)))
+      }
     }
 
   }
 
   describe("lift pure law") {
     it("lift pure law") {
-      lifted_pure: ReaderT<Int, Identity, Int> = MonadT::lift(Applicative::pure(3))
-      transformer_pure: ReaderT<Int, Identity, Int> = Applicative::pure(3)
-      assert_eq(Identity::run(ReaderT::run(lifted_pure, 4)), Identity::run(ReaderT::run(transformer_pure, 4)))
+      do {
+        lifted_pure: ReaderT<Int, Identity, Int> = MonadT::lift(Applicative::pure(3))
+        transformer_pure: ReaderT<Int, Identity, Int> = Applicative::pure(3)
+
+        assert_eq(Identity::run(ReaderT::run(lifted_pure, 4)), Identity::run(ReaderT::run(transformer_pure, 4)))
+      }
     }
 
   }
 
   describe("lift bind law") {
     it("lift bind law") {
-      base: Identity<Int> = Identity::new(3)
-      lifted: ReaderT<Int, Identity, Int> = MonadT::lift(base)
-      lifted_bind: ReaderT<Int, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
-      bound_lifts: ReaderT<Int, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
-      assert_eq(Identity::run(ReaderT::run(lifted_bind, 4)), Identity::run(ReaderT::run(bound_lifts, 4)))
+      do {
+        base: Identity<Int> = Identity::new(3)
+        lifted: ReaderT<Int, Identity, Int> = MonadT::lift(base)
+        lifted_bind: ReaderT<Int, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+        bound_lifts: ReaderT<Int, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+
+        assert_eq(Identity::run(ReaderT::run(lifted_bind, 4)), Identity::run(ReaderT::run(bound_lifts, 4)))
+      }
     }
 
   }
 
   describe("ordinary values") {
     it("stores in a field collection and Facet") {
-      holder = Holder::new(ReaderT::asks::<Identity>({|x: Int| x + 1}))
-      updated = Facet::put(Holder.value, holder, ReaderT::asks::<Identity>({|x: Int| x + 9}))
-      values: List<ReaderT<Int, Identity, Int>> = [holder.value, updated.value]
-      second =? List::at(values, 1)
-      assert_eq(12, Identity::run(ReaderT::run(second, 3)))
+      do {
+        holder = Holder::new(ReaderT::asks::<Identity>({|x: Int| x + 1}))
+        updated = Facet::put(Holder.value, holder, ReaderT::asks::<Identity>({|x: Int| x + 9}))
+        values: List<ReaderT<Int, Identity, Int>> = [holder.value, updated.value]
+        second <- List::at(values, 1)
+
+        assert_eq(12, Identity::run(ReaderT::run(second, 3)))
+      }
     }
 
   }
 
   describe("base injection") {
     it("reader_ask delegates to the base constructor") {
-      reader_ask: ReaderT<Int, Probe, Int> = ReaderT::ask::<Int, Probe>()
-      assert_eq("pure", ReaderT::run(reader_ask, 1).origin)
+      do {
+        reader_ask: ReaderT<Int, Probe, Int> = ReaderT::ask::<Int, Probe>()
+
+        assert_eq("pure", ReaderT::run(reader_ask, 1).origin)
+      }
     }
 
     it("reader_asks delegates to the base constructor") {
-      reader_asks: ReaderT<Int, Probe, Int> = ReaderT::asks::<Probe>({|value| value + 1})
-      assert_eq("pure", ReaderT::run(reader_asks, 1).origin)
+      do {
+        reader_asks: ReaderT<Int, Probe, Int> = ReaderT::asks::<Probe>({|value| value + 1})
+
+        assert_eq("pure", ReaderT::run(reader_asks, 1).origin)
+      }
     }
 
   }
 
   describe("Functor laws") {
     it("identity compares original and mapped payloads") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
-      mapped: ReaderT<Int, Identity, Int> = value |*> {|x| x}
-      assert_eq(Identity::run(ReaderT::run(value, 4)), Identity::run(ReaderT::run(mapped, 4)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
+        mapped: ReaderT<Int, Identity, Int> = value |*> {|x| x}
+
+        assert_eq(Identity::run(ReaderT::run(value, 4)), Identity::run(ReaderT::run(mapped, 4)))
+      }
     }
 
     it("composition compares both mappings") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
-      left: ReaderT<Int, Identity, Int> = (value |*> {|x| x + 1}) |*> {|x| x * 2}
-      right: ReaderT<Int, Identity, Int> = value |*> {|x| (x + 1) * 2}
-      assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
+        left: ReaderT<Int, Identity, Int> = (value |*> {|x| x + 1}) |*> {|x| x * 2}
+        right: ReaderT<Int, Identity, Int> = value |*> {|x| (x + 1) * 2}
+
+        assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      }
     }
 
   }
 
   describe("Applicative laws") {
     it("identity compares applied and original values") {
-      value: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
-      mapper: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x})
-      left: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
-      assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(value, 4)))
+      do {
+        value: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
+        mapper: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x})
+        left: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
+
+        assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(value, 4)))
+      }
     }
 
     it("homomorphism compares both pure injections") {
-      mapper: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
-      value: ReaderT<Int, Identity, Int> = Applicative::pure(3)
-      left: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
-      right: ReaderT<Int, Identity, Int> = Applicative::pure(4)
-      assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      do {
+        mapper: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+        value: ReaderT<Int, Identity, Int> = Applicative::pure(3)
+        left: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
+        right: ReaderT<Int, Identity, Int> = Applicative::pure(4)
+
+        assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      }
     }
 
     it("interchange compares both applications") {
-      mapper: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
-      value: ReaderT<Int, Identity, Int> = Applicative::pure(3)
-      left: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
-      apply_value: ReaderT<Int, Identity, ((Int -> Int) -> Int)> = Applicative::pure({|f| f(3)})
-      right: ReaderT<Int, Identity, Int> = Applicative::ap(apply_value, mapper)
-      assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      do {
+        mapper: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+        value: ReaderT<Int, Identity, Int> = Applicative::pure(3)
+        left: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
+        apply_value: ReaderT<Int, Identity, ((Int -> Int) -> Int)> = Applicative::pure({|f| f(3)})
+        right: ReaderT<Int, Identity, Int> = Applicative::ap(apply_value, mapper)
+
+        assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      }
     }
 
     it("composition compares nested applications") {
-      compose: ReaderT<Int, Identity, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Applicative::pure({|f| {|g| {|x| f(g(x))}}})
-      u: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
-      v: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x * 2})
-      w: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
-      left: ReaderT<Int, Identity, Int> = compose |*| u |*| v |*| w
-      right: ReaderT<Int, Identity, Int> = Applicative::ap(u, Applicative::ap(v, w))
-      assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      do {
+        compose: ReaderT<Int, Identity, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Applicative::pure({|f| {|g| {|x| f(g(x))}}})
+        u: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+        v: ReaderT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x * 2})
+        w: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment: Int| environment + 3})
+        left: ReaderT<Int, Identity, Int> = compose |*| u |*| v |*| w
+        right: ReaderT<Int, Identity, Int> = Applicative::ap(u, Applicative::ap(v, w))
+
+        assert_eq(Identity::run(ReaderT::run(left, 4)), Identity::run(ReaderT::run(right, 4)))
+      }
     }
 
   }
 
   describe("base injection") {
     it("pure delegates to base pure") {
-      pure: ReaderT<Int, Probe, Int> = Applicative::pure(7)
-      assert_eq("pure", ReaderT::run(pure, 4).origin)
+      do {
+        pure: ReaderT<Int, Probe, Int> = Applicative::pure(7)
+
+        assert_eq("pure", ReaderT::run(pure, 4).origin)
+      }
     }
 
     it("return delegates to base return") {
-      returned: ReaderT<Int, Probe, Int> = Monad::return(7)
-      assert_eq("return", ReaderT::run(returned, 4).origin)
+      do {
+        returned: ReaderT<Int, Probe, Int> = Monad::return(7)
+
+        assert_eq("return", ReaderT::run(returned, 4).origin)
+      }
     }
 
   }
 
   describe("Alternative::choose") {
     it("runs both branches once with the same environment") {
-      left: ReaderT<Int, Option, Int> = ReaderT::new({|environment|
-        print("left:#{environment}")
-        Option::Some(environment)
-      })
-      right: ReaderT<Int, Option, Int> = ReaderT::new({|environment|
-        print("right:#{environment}")
-        Option::Some(environment + 10)
-      })
-      actual = ReaderT::run(left <|> right, 3)
-      do::<Result> {
+      do {
+        left: ReaderT<Int, Option, Int> = ReaderT::new({|environment|
+          print("left:#{environment}")
+          Option::Some(environment)
+        })
+        right: ReaderT<Int, Option, Int> = ReaderT::new({|environment|
+          print("right:#{environment}")
+          Option::Some(environment + 10)
+        })
+        actual = ReaderT::run(left <|> right, 3)
+
         assert_some_eq(3, actual)
         assert_stdout_eq(["left:3", "right:3"])
       }

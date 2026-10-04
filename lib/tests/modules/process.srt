@@ -2,35 +2,44 @@ import Test;
 
 test("Process") {
   describe("Task::call and Task::async") {
-    it("returns the inner task result") { assert_ok_eq("call:build", Task::call({|| Ok("call:build")})) }
+    it("returns the inner task result") {
+      do {
+        assert_ok_eq("call:build", Task::call({|| Ok("call:build")}))
+      }
+    }
 
     it("supports async work that sleeps before returning") {
-      task = Task::async({||
-        _ =? Process::sleep(1ms)
-        Ok("async:ready")
-      })
-      result =? Task::await(task)
-      assert_eq("async:ready", result)
+      do {
+        task = Task::async({||
+          _ =? Process::sleep(1ms)
+          Ok("async:ready")
+        })
+        result <- Task::await(task)
+
+        assert_eq("async:ready", result)
+      }
     }
   }
 
   describe("Task::cast and Task::launch") {
     it("runs cast bodies and captures stdout") {
-      result = Task::cast({||
-        print("cast:worker")
-      })
-      do::<Result> {
+      do {
+        result = Task::cast({||
+          print("cast:worker")
+        })
+
         assert_ok_eq((), result)
         assert_stdout_eq(["cast:worker"])
       }
     }
 
     it("runs launch bodies and still returns Ok") {
-      result = Task::launch({||
-        print("launch:worker")
-        Err(NoneError)
-      })
-      do::<Result> {
+      do {
+        result = Task::launch({||
+          print("launch:worker")
+          Err(NoneError)
+        })
+
         assert_ok_eq((), result)
         assert_stdout_eq(["launch:worker"])
       }
@@ -39,8 +48,11 @@ test("Process") {
 
   describe("Process::sleep") {
     it("accepts converted durations") {
-      d: Duration =? try_to::<Duration>(1)
-      assert_ok_eq((), Process::sleep(d))
+      do {
+        d: Duration <- try_to::<Duration>(1)
+
+        assert_ok_eq((), Process::sleep(d))
+      }
     }
   }
 }
