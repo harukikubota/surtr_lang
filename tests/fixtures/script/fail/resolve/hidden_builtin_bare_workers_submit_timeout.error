@@ -1,2 +1,2 @@
 phase: resolve
-contains: Undefined function __workers_submit_timeout/3
+contains: hidden builtin `__workers_submit_timeout` is compiler-internal

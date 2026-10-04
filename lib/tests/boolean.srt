@@ -3,6 +3,22 @@ include "./schema/boolean_schema.srt"
 import Test;
 
 test("Boolean") {
+  describe("canonical variant constructors") {
+    it("uses bare and qualified nullary captures") {
+      yes: (-> Boolean) = &True
+      no: (-> Boolean) = &Boolean::False
+      assert_eq((Boolean::True, False), (yes(), no()))
+    }
+
+    it("matches qualified variants exhaustively") {
+      value = match True {
+        Boolean::True => 1,
+        Boolean::False => 0,
+      }
+      assert_eq(1, value)
+    }
+  }
+
   describe("helpers") {
     it("negates values and supports prefix bang") {
       assert_eq((False, True, False), (Boolean::not(True), !False, !(1 < 2)))

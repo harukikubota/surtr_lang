@@ -20,6 +20,27 @@ import ResultSchema::{
 import Test;
 
 test("Result") {
+  describe("canonical variant constructors") {
+    it("constructs through owner type arguments and capture aliases") {
+      wrap: (Int -> Result<Int>) = &Result<_>::Ok
+      short: (Int -> Result<Int>) = &Ok(&1)
+      assert_ok_eq(2, wrap(2))
+      assert_ok_eq(3, short(3))
+      assert_ok_eq(4, Result<Int>::Ok(4))
+    }
+
+    it("keeps nested success and failure branches distinct") {
+      value: Result<Result<Int>> = Result::Ok(Result::Err(NoneError))
+      answer = match value {
+        Result::Ok(Result::Err(_)) => 1,
+        _ => 0,
+      }
+      assert_eq(1, answer)
+      failure: Result<Result<Int>> = Result<_>::Err(NoneError)
+      assert_err_kind(NoneError, failure)
+    }
+  }
+
   describe("is_ok") {
     it("returns True for Ok") { assert_true(is_ok(Ok(1))) }
     it("returns False for Err") { assert_false(is_ok(Err(NoneError))) }
