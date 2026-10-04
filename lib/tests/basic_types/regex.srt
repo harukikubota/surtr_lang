@@ -2,11 +2,19 @@ import Test;
 
 test("Regex") {
   describe("compile and match") {
+    it("matches any part of the input") {
+      do {
+        re <- Regex::compile("a+")
+        assert_true(Regex::matches(re, "caaat"))
+        assert_false(Regex::matches(re, "bbb"))
+      }
+    }
+
     it("matches realistic issue identifiers") {
       do {
         re <- Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
 
-        assert_true(Regex::is_match(re, "issue-runtime-42"))
+        assert_true(Regex::matches(re, "issue-runtime-42"))
       }
     }
 
@@ -14,7 +22,7 @@ test("Regex") {
       do {
         re <- Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
 
-        assert_false(Regex::is_match(re, "runtime-42"))
+        assert_false(Regex::matches(re, "runtime-42"))
       }
     }
   }

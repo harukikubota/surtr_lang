@@ -98,7 +98,7 @@ print(id)
 print(full)
 print(to_string(count))
 print(RegexMatch::text(first))
-print(to_string(Regex::is_match(rx, "bob-7")))
+print(to_string(Regex::matches(rx, "bob-7")))
 print(Regex::replace_all(rx, "alice-42 bob-7", "X"))"#,
         &["alice", "42", "alice-42", "3", "alice-42", "True", "X X"],
     );

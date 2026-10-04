@@ -374,8 +374,8 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: |vm, args| builtin_regex_compile(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
-        name: "is_match",
-        func: |vm, args| builtin_regex_is_match(vm, args).map(BuiltinOutcome::Complete),
+        name: "matches",
+        func: |vm, args| builtin_regex_matches(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "captures",
@@ -2843,12 +2843,12 @@ fn builtin_regex_compile(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     }
 }
 
-fn builtin_regex_is_match(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let pattern = decode_regex_arg(&args[0], "is_match", "re")?;
+fn builtin_regex_matches(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "matches", "re")?;
     let Value::Str(input) = &args[1] else {
-        return Err(RuntimeError::new("is_match expects String as input"));
+        return Err(RuntimeError::new("matches expects String as input"));
     };
-    let re = compile_cached_regex(pattern, "is_match")?;
+    let re = compile_cached_regex(pattern, "matches")?;
     Ok(Value::Bool(re.is_match(input)))
 }
 

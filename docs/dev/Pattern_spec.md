@@ -394,11 +394,11 @@ direct = *{|value: Int|
 
 Pattern consumer の専用引数文法は、一般の名前付き中置呼出しとは区別する。一般中置は Sigil で最初に解決した参照が関数宣言であることを要求し、値への参照なら拒否する。Pattern consumer は共有の専用構文契約と canonical identity に従う。ErrorKind API の通常名を Pattern consumer として予約したり、解決後に Expr / Pattern を再解析したりしない。
 
-`if_let`、`if_let_then`、`is_match`、`apply_pattern` を Pattern 引数を持つ予約 consumer surface とする。通常の宣言名、引数名、local bind、user member 名への利用・shadowing は Spire で拒否する。標準 @builtin 宣言と正規の Kernel::name call は明示的に許可し、canonical consumer identity へ確定する。
+`if_let`、`if_let_then`、`is_match`、`apply_pattern` を Pattern 引数を持つ予約 consumer surface とする。通常の宣言名、引数名、local bind、user member 名への利用・shadowing は Spire で拒否する。正規の Kernel consumer の @builtin 宣言と Kernel::name call だけを許可し、canonical consumer identity へ確定する。他の標準 @builtin 宣言にも同名禁止を適用する。
 
-予約語 token は qualified member / capture 構文でも解析できるようにする。既存の canonical 標準 builtin の qualified 通常 call / capture は維持する。たとえば `Regex::is_match(re, input)` とその capture は通常の Regex builtin であり、第2引数は Expr のままである。Pattern consumer と判定するのは canonical な Kernel consumer identity だけとし、member の綴りが `is_match` であることでは判定しない。この許可を新規 user member 宣言や予約 consumer の shadowing に広げず、Regex API の改名や表示名による fallback は追加しない。
+予約語 token の qualified call / capture 構文は正規の Kernel consumer に限定する。他の owner の同名 member を通常 call / capture として受理しない。Regex の通常 API は `Regex::matches(re, input)` とし、引数は Expr として読む。旧名の alias、同名宣言の特権、表示名による fallback は設けない。
 
-consumerの引数位置・個数・OR許可は共有の構文契約を使う。Spireは裸名と正規の `Kernel::name` から第2引数のPattern文法を直接選び、入力とbranchはExprとして読む。通常・backtick前置Callと2引数consumerの中置Callで同じ契約を使い、`if_let`系の中置Callは引数不足として拒否する。`Regex::is_match` の引数はExprとして読む。Sigilはconsumer表記とcanonical identityの一致を検証し、不一致を通常Callへ再解釈しない。
+consumerの引数位置・個数・OR許可は共有の構文契約を使う。Spireは裸名と正規の `Kernel::name` から第2引数のPattern文法を直接選び、入力とbranchはExprとして読む。通常・backtick前置Callと2引数consumerの中置Callで同じ契約を使い、`if_let`系の中置Callは引数不足として拒否する。`Regex::matches` の引数はExprとして読む。Sigilはconsumer表記とcanonical identityの一致を検証し、不一致を通常Callへ再解釈しない。
 
 consumer名はフィールド名にも使えない。キーワード化を理由にimportを禁止しない。Kernelは各ファイルでautoimport済みのため、全件・単一consumer・リストの明示importを重複importとして拒否する。この規則はconsumer名やキーワード分類ではなく、import元のモジュールに適用する。
 
@@ -413,7 +413,7 @@ canonical な Kernel の `is_match`、`apply_pattern`、`if_let`、`if_let_then`
 Pattern 引数そのものを `&N` で置き換えること、Pattern 未指定の bare capture、consumer 自体の一般値参照は禁止する。
 Pattern 内の事前 Expr にある既存のプレースホルダは、Pattern 全体の直接置換とは区別する。
 projection `_1`〜`_16` と capture `&1`〜`&16` の意味は変更しない。
-consumer 判定には canonical identity を使い、同名の `Regex::is_match` を Pattern consumer と扱わない。
+consumer 判定には canonical identity を使う。`Regex::matches` は通常関数であり、Pattern consumer と扱わない。
 
 ```surtr
 &is_match(&1, Ok(_))
@@ -510,7 +510,7 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 10. 通常 Result target と MatchResult 本文 target の SafeBind が RHS Result.Err、LHS Extractor.Err、nested Err、通常 Pattern Error の kind / message / location / cause を保持して早期 return する。失敗後の本文は未評価で、成功終端には明示 constructor を必要とする。
 11. Result RHS は外側一段だけ射影する。non-Result partial pass-through、total non-Result 拒否と型エラー優先を維持する。apply_pattern は Result input を自動射影しない。
 12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の Result-effect 保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
-13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR は match / if_let / if_let_then で各 alternative の binding 名・canonical 型・順序が一致する場合に許可する。空 list の OR も同じ規則で扱う。if_let 系は全候補失敗時だけ fallback に進み、網羅性要求を持たない。is_match は OR を許可するが全 alternative の binding を拒否する。`=` / `=?`、do binding、apply_pattern は bind 数にかかわらず OR を拒否する。予約語 shadowing 拒否、既存 Regex::is_match の qualified 通常 call / capture、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
+13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR は match / if_let / if_let_then で各 alternative の binding 名・canonical 型・順序が一致する場合に許可する。空 list の OR も同じ規則で扱う。if_let 系は全候補失敗時だけ fallback に進み、網羅性要求を持たない。is_match は OR を許可するが全 alternative の binding を拒否する。`=` / `=?`、do binding、apply_pattern は bind 数にかかわらず OR を拒否する。予約語 shadowing 拒否、Regex::matches の qualified 通常 call / capture と旧名の拒否、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
 14. list / string uncons の成功と空入力 Error、builtin / user-defined / local の consumer 一貫性、不正 tag / metadata の内部 failure を検証する。
 15. 旧専用経路と互換 fallback が残らず、正本・標準 @doc・実装・テストが同じ契約を示す。
 16. Extractor::from_result が単一入力の Result-returning callable を受理し、単値 / tuple / Unit payload を維持する。生成時は本体未評価、各 occurrence 到達時は一回評価とし、元 Error の保持、Result payload の追加 unwrap なし、通常 Closure の capture、Option / raw payload / 入力 arity 不一致の静的拒否を確認する。

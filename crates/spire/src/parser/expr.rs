@@ -74,12 +74,32 @@ impl Parser<'_> {
         }
     }
 
+    fn validate_pattern_consumer_path(segments: &[String], span: Span) -> Result<(), ParseError> {
+        if let Some(kind) = segments
+            .iter()
+            .find_map(|segment| sindr::pattern::PatternConsumer::from_name(segment))
+        {
+            if sindr::pattern::PatternConsumer::from_source_path(segments) != Some(kind) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
+                    format!(
+                        "Pattern consumer name `{}` is reserved for the canonical Kernel consumer",
+                        kind.name()
+                    ),
+                    span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
         if func_literal_operator(body).is_some() {
             return Ok(FuncLiteralBodyKind::Operator(body.to_string()));
         }
 
         if let Some(segments) = parse_func_literal_path(body) {
+            Self::validate_pattern_consumer_path(&segments, span.clone())?;
             return Ok(FuncLiteralBodyKind::Path(AstPath { span, segments }));
         }
 
@@ -1921,6 +1941,14 @@ impl Parser<'_> {
             path_segments.push(seg);
         }
 
+        Self::validate_pattern_consumer_path(
+            &path_segments,
+            Span {
+                start: name_span.start,
+                end: path_end,
+            },
+        )?;
+
         if let Some(meta) =
             sindr::names::special_enum_variant_surface_meta(&path_segments.join("::"))
         {
@@ -2812,6 +2840,14 @@ impl Parser<'_> {
                     path_end = seg_span.end;
                     path_segments.push(seg);
                 }
+
+                Self::validate_pattern_consumer_path(
+                    &path_segments,
+                    Span {
+                        start: name_span.start,
+                        end: path_end,
+                    },
+                )?;
 
                 if path_segments
                     .last()

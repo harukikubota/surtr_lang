@@ -1493,14 +1493,14 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
-        name: "is_match",
+        name: "matches",
         arity: 2,
         sig_str: "(Regex, String) -> Boolean",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
                 Some("Regex"),
-                "is_match",
+                "matches",
                 &[],
                 &[
                     builtin_surface_parameter("re", "Regex"),

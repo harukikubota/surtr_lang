@@ -279,7 +279,7 @@ add_on_success = &if_let(&1, Ok(x), x + &2, 0)
 
 `is_match`・`apply_pattern`・`if_let`・`if_let_then` は、Pattern を直接記述した完全な call をキャプチャできます。
 Pattern がない bare capture と、consumer 自体の一般値参照は禁止です。
-`Regex::is_match` は通常関数なので、この Pattern consumer の規則には分類しません。
+`Regex::matches` は通常関数なので、この Pattern consumer の規則には分類しません。
 
 ```surtr
 &is_match(&1, &2)                     # compile error: Patternの直接置換

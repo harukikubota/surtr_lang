@@ -111,7 +111,7 @@ test('reserved infix names, ordinary calls, and canonical Pattern consumers', ()
     scope(`${word}(value, _)`, word, 'support.function.pattern.surtr');
     scope(`Kernel::${word}(value, _)`, word, 'support.function.pattern.surtr');
   }
-  scope('Regex::is_match(rx, text)', 'is_match', 'entity.name.function.surtr');
+  scope('Regex::matches(rx, text)', 'matches', 'entity.name.function.surtr');
 });
 
 test('operators are consumed whole, including current pipe and composition operators', () => {

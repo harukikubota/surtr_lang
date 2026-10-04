@@ -5374,8 +5374,8 @@ fn test_match_nested_or_patterns_are_preserved() {
         "is_match(match input { 1 | 2 => 1, _ => 0, }, _)",
         "if_let(input, _, match input { 1 | 2 => 1, _ => 0, }, 0)",
         "if_let_then(input, _, print(match input { 1 | 2 => 1, _ => 0, }))",
-        "Regex::is_match(regex, input)",
-        "predicate = &Regex::is_match",
+        "Regex::matches(regex, input)",
+        "predicate = &Regex::matches",
     ] {
         parse(source).expect(source);
     }
@@ -7691,7 +7691,7 @@ fn pattern_consumers_choose_argument_grammar_directly_in_all_call_forms() {
             "{source}"
         );
     }
-    for callee in ["Regex::is_match", "`Regex::is_match`"] {
+    for callee in ["Regex::matches", "`Regex::matches`"] {
         let source = format!("{callee}(regex, input)");
         assert!(
             matches!(&parse(&source).unwrap()[0], Ast::App(..)),
@@ -7733,7 +7733,7 @@ fn pattern_consumer_infix_rhs_returns_to_expression_grammar() {
         parse(source).expect_err(source);
     }
     assert!(matches!(
-        &parse("regex `Regex::is_match` input").unwrap()[0],
+        &parse("regex `Regex::matches` input").unwrap()[0],
         Ast::App(..)
     ));
 }
@@ -8419,5 +8419,32 @@ fn named_infix_origin_is_preserved_by_strict_and_tolerant_parsing() {
         assert!(
             matches!(&strict[0], Ast::App(_, callee, _) if matches!(callee.as_ref(), Ast::NamedInfixRef(..)))
         );
+    }
+}
+
+#[test]
+fn pattern_consumer_names_reject_ordinary_qualified_callables() {
+    for consumer in sindr::pattern::PatternConsumer::ALL {
+        let name = consumer.name();
+        for owner in ["Regex", "Custom", "Nested::Kernel"] {
+            let callee = format!("{owner}::{name}");
+            for source in [
+                format!("{callee}(value, input)"),
+                format!("`{callee}`(value, input)"),
+                format!("value `{callee}` input"),
+                format!("&{callee}"),
+                format!("&`{callee}`"),
+                format!("&{callee}(&1, input)"),
+                format!("value |> {callee}(input)"),
+            ] {
+                let error = parse(&source).expect_err(&source);
+                assert!(
+                    error
+                        .message()
+                        .contains("reserved for the canonical Kernel consumer"),
+                    "{source}: {error:?}"
+                );
+            }
+        }
     }
 }

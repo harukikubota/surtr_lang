@@ -1264,9 +1264,24 @@ pub(super) fn validate_reserved_callable_declaration(
     qualified_name: &str,
     span: &Span,
 ) -> Result<(), ResolveError> {
-    if let Some(kind) = sindr::names::ReservedCallName::from_name(
-        qualified_name.rsplit("::").next().unwrap_or(qualified_name),
-    ) {
+    let member = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
+    if let Some(kind) = sindr::pattern::PatternConsumer::from_name(member) {
+        if sindr::pattern::PatternConsumer::from_canonical_name(qualified_name) != Some(kind) {
+            return Err(ResolveError {
+                message: format!(
+                    "Pattern consumer name `{}` is reserved for the canonical Kernel consumer",
+                    kind.name()
+                ),
+                span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Declaration,
+                    subject: Some(kind.name().into()),
+                },
+                related_labels: Vec::new(),
+            });
+        }
+    }
+    if let Some(kind) = sindr::names::ReservedCallName::from_name(member) {
         if global_surface_name(qualified_name) != kind.canonical_name() {
             return Err(reserved_callable_declaration_error(kind, span));
         }

@@ -6,7 +6,7 @@ compile した正規表現値を `Regex` として保持し、マッチ判定、
 ## 最初の 3 点
 
 - `re"pattern"` / `re'pattern'` は `Regex::compile("pattern")` へ lower される sugar です
-- `Regex::is_match` は部分一致です。全体一致したいときは `^...$` を使います
+- `Regex::matches` は部分一致です。全体一致したいときは `^...$` を使います
 - `Regex::captures` や `Regex::find` は対象がないと `Err(NoneError)` を返します
 
 ## 生成
@@ -30,7 +30,7 @@ regex sugarも[通常の文字列のエスケープ規則](./language-reference.
 
 ```surtr
 rx =? re"\\d+"
-print(to_string(Regex::is_match(rx, "123")))
+print(to_string(Regex::matches(rx, "123")))
 ```
 
 `re"\d"` は未知のエスケープとして解析時に拒否します。従来の表記を使っていた場合は `re"\\d"` に書き換えてください。
@@ -41,7 +41,7 @@ Surtrの文字列解析と正規表現エンジンの検証は別の段階です
 ## 主な API
 
 - `Regex::compile(pattern: String) -> Result<Regex, RegexCompileError>`
-- `Regex::is_match(re: Regex, input: String) -> Boolean`
+- `Regex::matches(re: Regex, input: String) -> Boolean`
 - `Regex::captures(re: Regex, input: String) -> Result<RegexCaptures, NoneError>`
 - `Regex::find(re: Regex, input: String) -> Result<RegexMatch, NoneError>`
 - `Regex::find_all(re: Regex, input: String) -> List<RegexMatch>`
@@ -83,7 +83,7 @@ print(id)
 ```surtr
 rx =? re"(?<name>[A-Za-z]+)-(?<id>[0-9]+)"
 
-print(to_string(Regex::is_match(rx, "alice-42")))
+print(to_string(Regex::matches(rx, "alice-42")))
 
 caps =? Regex::captures(rx, "alice-42")
 name =? RegexCaptures::get_name(caps, "name")

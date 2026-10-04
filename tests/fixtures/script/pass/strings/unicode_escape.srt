@@ -8,7 +8,7 @@ def main() -> Result<Unit> {
   print(inspect("\u{23}{missing}"))
   print(inspect(match esc { '\u{001B}' => True, _ => False, }))
   rx =? re"\\d+"
-  print(inspect(Regex::is_match(rx, "123")))
+  print(inspect(Regex::matches(rx, "123")))
   Ok(())
 }
 

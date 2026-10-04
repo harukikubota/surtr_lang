@@ -66,8 +66,8 @@ pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
         .any(|meta| meta.name == name)
 }
 
-pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
-    sindr::pattern::PatternConsumer::from_name(name).is_some()
+pub(super) fn is_special_form_builtin_decl(name: &str, qualified_name: &str) -> bool {
+    sindr::pattern::PatternConsumer::from_canonical_name(qualified_name).is_some()
         || matches!(
             name,
             "if" | "if_then"

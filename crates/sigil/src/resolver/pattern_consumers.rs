@@ -56,7 +56,7 @@ mod pipe_contract_tests {
     #[test]
     fn consumer_syntax_rejects_an_ordinary_builtin_identity() {
         let mut resolver = Resolver::new();
-        let callee = named_target(&mut resolver, "Regex", "is_match");
+        let callee = named_target(&mut resolver, "Regex", "matches");
         let error = resolver
             .resolve_pattern_consumer_identity(&callee)
             .expect_err("consumer syntax cannot become an ordinary call");

@@ -1,2 +1,2 @@
 phase: resolve
-contains: Import conflict for `is_match` from module `Regex`
+contains: Unknown import member: Regex::is_match

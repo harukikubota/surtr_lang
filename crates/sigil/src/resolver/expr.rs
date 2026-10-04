@@ -4219,6 +4219,10 @@ impl Resolver {
                 attrs,
             ) => {
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                super::declarations::validate_reserved_callable_declaration(
+                    &qualified_name,
+                    &span,
+                )?;
                 let declared_name = name.rsplit("::").next().unwrap_or(&name);
                 let is_surface_builtin =
                     sindr::builtin::builtin_meta_for_decl(declared_name, Some(&qualified_name))
@@ -4230,7 +4234,7 @@ impl Resolver {
                     )
                     .is_some();
                 if !is_runtime_builtin_decl(&name)
-                    && !is_special_form_builtin_decl(&name)
+                    && !is_special_form_builtin_decl(&name, &qualified_name)
                     && !is_surface_builtin
                     && !is_generated_runtime_builtin
                 {
