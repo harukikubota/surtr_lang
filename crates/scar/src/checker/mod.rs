@@ -2793,6 +2793,8 @@ struct Checker {
     rigid_tyvars: HashSet<u32>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
+    /// Private field authority comes from inherent methods or type-owned derive bodies.
+    current_private_field_owner: Option<String>,
     callable_context: CallableContext,
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
@@ -2949,6 +2951,7 @@ impl Checker {
             rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
+            current_private_field_owner: None,
             callable_context: CallableContext::Function,
             closure_depth: 0,
             facet_bindings: state.facet_bindings,
@@ -3012,6 +3015,7 @@ impl Checker {
         checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
+        checker.current_private_field_owner = self.current_private_field_owner.clone();
         checker.callable_context = self.callable_context;
         checker.closure_depth = self.closure_depth;
         checker.facet_bindings = self.facet_bindings.clone();

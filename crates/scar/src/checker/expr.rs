@@ -1871,6 +1871,7 @@ impl Checker {
                             Self::ast_ty_span(method.ret_ty.syntax()),
                             method.id.name.clone(),
                             None,
+                            None,
                             false,
                             body,
                         )?;
@@ -8142,7 +8143,8 @@ impl Checker {
                     .env
                     .field_policy(owner, field_name)
                     .is_some_and(|policy| policy.private)
-                    && self.current_impl_struct_target.as_deref() != Some(Self::surface_name(owner))
+                    && self.current_private_field_owner.as_deref()
+                        != Some(Self::surface_name(owner))
                     && !self.allow_private_facet_inspection
                 {
                     return None;
@@ -12280,6 +12282,7 @@ impl Checker {
         let saved_function_return_ty = self.function_return_ty.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
+        let saved_current_private_field_owner = self.current_private_field_owner.clone();
         let saved_callable_context = self.callable_context;
         self.callable_context = kind;
         self.function_return_ty = Some(match expected {
@@ -12506,6 +12509,7 @@ impl Checker {
         self.function_return_ty = saved_function_return_ty;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
+        self.current_private_field_owner = saved_current_private_field_owner;
         self.callable_context = saved_callable_context;
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
@@ -14967,7 +14971,7 @@ impl Checker {
                 if field_policy.is_some_and(|policy| policy.private) {
                     let display_name = Self::surface_name(&name);
                     let outside_impl =
-                        self.current_impl_struct_target.as_deref() != Some(display_name);
+                        self.current_private_field_owner.as_deref() != Some(display_name);
                     if outside_impl && !self.allow_private_facet_inspection {
                         return Err(TypeError {
                             structured: None,

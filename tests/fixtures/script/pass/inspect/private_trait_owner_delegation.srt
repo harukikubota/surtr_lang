@@ -1,0 +1,18 @@
+deftrait Reveal {
+  def reveal(self: Self) -> Int
+}
+
+defstruct Secret { private value: Int }
+
+impl Secret {
+  def new(value: Int) -> Self { Secret { value } }
+  def reveal_value(self: Self) -> Int { self.value }
+}
+
+impl Reveal for Secret {
+  def reveal(self: Self) -> Int { Secret::reveal_value(self) }
+}
+
+secret = Secret(7)
+print(inspect(Secret::reveal_value(secret)))
+print(inspect(Reveal::reveal(secret)))
