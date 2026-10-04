@@ -445,7 +445,8 @@ Opcode は以下のカテゴリを持つ。
 
 ## 7. 組込み関数と型情報
 
-- 組込み関数メタデータは単一テーブルで管理する
+- 組込み関数メタデータは `BUILTIN_METAS` を正本とし、runtime ID は正本の名前検索で定義順から求める。コピーした metadata も同じ ID を得る
+- metadata から runtime ID を要求して解決できなければ、builtin 名を含む `internal compiler error` の invariant panic で直ちに停止する。代替 ID による処理継続は認めない。一般の検索 API が未登録名を `None` として返す契約は維持する
 - `Bootstrap` module の `@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
 - `Facet<K, S, A, T, B>` は compile-time capability であり runtime value を持たない。`Facet::view` / `Facet::preview` / `Facet::put` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::compose` / Facet `->` 合成 は compile-time lowering 対象で、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする

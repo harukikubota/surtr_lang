@@ -230,17 +230,14 @@ impl BuiltinMeta {
     }
 
     /// Definition-order id used by the runtime implementation table.
+    /// Missing canonical metadata is an internal compiler invariant violation.
     pub fn runtime_id(&self) -> u16 {
-        BUILTIN_METAS
-            .iter()
-            .position(|candidate| std::ptr::eq(candidate, self))
-            .and_then(|index| u16::try_from(index).ok())
-            .unwrap_or_else(|| {
-                // This branch is only reachable for a caller that constructed
-                // a standalone BuiltinMeta. Metadata in BUILTIN_METAS always
-                // has a stable table identity.
-                builtin_id_by_name(self.name).unwrap_or(u16::MAX)
-            })
+        builtin_id_by_name(self.name).unwrap_or_else(|| {
+            panic!(
+                "internal compiler error: no runtime ID for builtin `{}`",
+                self.name
+            )
+        })
     }
 
     /// Build all callable identities exposed by this runtime entry.
@@ -4236,9 +4233,22 @@ mod tests {
     #[test]
     fn builtin_ids_match_definition_order() {
         for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
-            let id = idx as u16;
+            let id = u16::try_from(idx).expect("builtin table must fit its ID type");
             assert_eq!(builtin_id_by_name(meta.name), Some(id));
+            assert_eq!(meta.runtime_id(), id);
+            let copied_meta = *meta;
+            assert_eq!(copied_meta.runtime_id(), id);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "internal compiler error: no runtime ID for builtin `__missing__`")]
+    fn builtin_runtime_id_rejects_unregistered_metadata() {
+        let meta = super::BuiltinMeta {
+            name: "__missing__",
+            ..BUILTIN_METAS[0]
+        };
+        meta.runtime_id();
     }
 
     #[test]

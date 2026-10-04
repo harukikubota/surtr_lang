@@ -36,6 +36,18 @@ autoimportと明示importを含め、呼出し解決に必要な環境を用意�
 
 lookup失敗はコンパイラバグとして、明確なエラーで処理を止める。`u16::MAX`などの代替値へ降格して処理を続けない。
 
+### 実装方針（2026-10-04、level2）
+
+対象は `crates/sindr/src/builtin.rs` の `BuiltinMeta::runtime_id()`。現行のポインタ検索→名前検索→`u16::MAX` の経路を、正本 `BUILTIN_METAS` の名前検索に一本化する。登録済み metadata のコピーも同じ ID に対応させる。登録のない metadata は利用者の入力エラーではなくコンパイラ内部契約違反であり、builtin 名を含む `internal compiler error` の invariant panic で即時停止する。既存の非 fallible API を保ち、代替 ID は生成しない。一般の検索 API が未知名を `None` として返す契約は維持する。
+
+受入条件は、全登録 builtin の ID が定義順を保つこと、コピーした metadata も同じ ID を得ること、未登録 metadata の ID 要求が明確に停止すること。Sindr の回帰テストで旧 sentinel 成功を Red として確認し、修正後に対象 crate と CI profile の全体テストを検証する。正本の builtin 単一テーブル契約も更新する。
+
+### 実施記録（2026-10-04）
+
+実装と対象検証を完了した。未知 metadata の ID 要求が旧実装では停止しないことを `test did not panic as expected` で確認し、正本検索への一本化後は `rtk cargo nextest run -p sindr` が108件成功（exit 0）。登録順・metadata のコピー・未知名検索の `None` 契約も検証した。`docs/dev/EldrVM_spec.md` の builtin 登録契約を更新した。全体検証の結果は末尾へ追記する。
+
+
+
 ## SR-06: 裸の中置onはFunction::onに固定する
 
 現行の固定先は仕様通り。中置記法では優先度が絡むため、bare名の`on`は`Function::on`を指す。
