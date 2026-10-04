@@ -23,7 +23,10 @@ test("Config") {
         original = Config::new("Cli")
         updated = Config::entry_fun(original, "Cli::main")
 
-        assert_eq("Main::main", original.entrypoint); assert_eq("Cli::main", updated.entrypoint); assert_eq("Cli", updated.name); assert_eq(0, List::len(updated.paths))
+        assert_eq("Main::main", original.entrypoint)
+        assert_eq("Cli::main", updated.entrypoint)
+        assert_eq("Cli", updated.name)
+        assert_eq(0, List::len(updated.paths))
       }
     }
   }

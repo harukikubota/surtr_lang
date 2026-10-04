@@ -98,11 +98,17 @@ fn question_uses_nearest_callable_target() {
 
 #[test]
 fn question_does_not_implicitly_wrap_a_unit_tail() {
-    let error = typecheck(resolve_with_builtin_prelude(
+    typecheck_with_builtin_prelude(
+        "def run() -> Result<()> { match True { True => { Ok(())? }, False => (), }\n Ok(()) }",
+    );
+    for source in [
         "def bad() -> Result<()> { Ok(())? }",
-    ))
-    .expect_err("a Unit statement is not a Result return value");
-    assert!(error.message.contains("Unit"), "{error:?}");
+        "closure: (Int -> Result<()>) = {|value| Ok(())? }",
+    ] {
+        let error = typecheck(resolve_with_builtin_prelude(source))
+            .expect_err("a Unit statement is not a Result return value");
+        assert!(error.message.contains("Unit"), "{source}: {error:?}");
+    }
 }
 
 #[test]

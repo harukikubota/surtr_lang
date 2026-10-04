@@ -143,7 +143,8 @@ test("String") {
       do {
         StringSplit::Split(left, right) <- split_once("key=value", "=")
 
-        assert_eq("key", left); assert_eq("value", right)
+        assert_eq("key", left)
+        assert_eq("value", right)
       }
     }
 
@@ -151,7 +152,8 @@ test("String") {
       do {
         StringSplit::Split(left, right) <- split_once("surtr", "")
 
-        assert_eq("", left); assert_eq("surtr", right)
+        assert_eq("", left)
+        assert_eq("surtr", right)
       }
     }
 
@@ -271,7 +273,7 @@ test("String") {
         result = from_chars(["ab"])
 
         assert_err_kind(InvalidCharList, result)
-        match result { Err(error) => assert_eq("expected single-character string at index 0, got \"ab\"", Error::message(error)), Ok(_) => fail("expected InvalidCharList"), }
+        assert_err_message_eq("expected single-character string at index 0, got \"ab\"", result)
       }
     }
   }
