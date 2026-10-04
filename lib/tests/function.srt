@@ -45,8 +45,10 @@ test("Function") {
     it("id composes on both sides") {
       left = &id >> &inc
       right = &inc >> &id
-      assert_eq(inc(4), left(4))
-      assert_eq(inc(4), right(4))
+      do::<Result> {
+        assert_eq(inc(4), left(4))
+        assert_eq(inc(4), right(4))
+      }
     }
   }
 

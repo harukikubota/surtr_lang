@@ -330,13 +330,15 @@ fn collect_missing_singleton_calls(
         | TypedInner::BuiltinExtractorDecl(_, _, _)
         | TypedInner::StructDef(_, _, _, _, _)
         | TypedInner::RecordDef(_, _, _, _, _) => {}
-        TypedInner::EagerBoundary(inner) => collect_missing_singleton_calls(
-            inner,
-            surface_to_process,
-            available_singletons,
-            available_supervisors,
-            first_missing,
-        ),
+        TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
+            collect_missing_singleton_calls(
+                inner,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            )
+        }
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -8137,6 +8139,33 @@ impl Codegen {
             }
             TypedInner::Cause(value, err) => {
                 self.emit_result_error_transform(node, value, err, "cause")?;
+            }
+            TypedInner::AssertErrorKinds(kinds, value) => {
+                use sigil::resolved::ErrorKindAssertion;
+                for kind in kinds.markers() {
+                    let constant = self.add_constant(Constant::Str(kind.clone()));
+                    self.emit(Opcode::LoadConst(constant));
+                }
+                let builtin = match kinds {
+                    ErrorKindAssertion::Root(_) => "__test_assert_err_kind",
+                    ErrorKindAssertion::Chain(markers) => {
+                        self.emit(Opcode::ListFromItems {
+                            len: markers.len() as u32,
+                        });
+                        "__test_assert_cause_chain"
+                    }
+                };
+                self.emit_node(value)?;
+                let builtin_id = Self::builtin_id(builtin).ok_or_else(|| CodegenError {
+                    message: format!("Unknown builtin: {builtin}"),
+                    span: node.span.clone(),
+                })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
             }
             TypedInner::RecoverKind(value, marker, handler) => {
                 self.emit_recover_kind(node, value, marker, handler)?;

@@ -51,10 +51,12 @@ test("State") {
       current: State<Int, Int> = State::get()
       projected: State<Int, Int> = State::gets({|state| state * 2})
 
-      assert_eq((7, 7), State::run(current, 7))
-      assert_eq((14, 7), State::run(projected, 7))
-      assert_eq(((), 11), State::run(State::put(11), 7))
-      assert_eq(((), 8), State::run(State::modify({|state| state + 1}), 7))
+      do::<Result> {
+        assert_eq((7, 7), State::run(current, 7))
+        assert_eq((14, 7), State::run(projected, 7))
+        assert_eq(((), 11), State::run(State::put(11), 7))
+        assert_eq(((), 8), State::run(State::modify({|state| state + 1}), 7))
+      }
     }
 
     it("threads bind from the left transition to the right transition") {
@@ -80,8 +82,10 @@ test("State") {
       pure_value: State<Int, Int> = Applicative::pure(4)
       returned_value: State<Int, Int> = Monad::return(4)
 
-      assert_eq(State::run(pure_value, 9), State::run(returned_value, 9))
-      assert_eq((4, 9), State::run(pure_value, 9))
+      do::<Result> {
+        assert_eq(State::run(pure_value, 9), State::run(returned_value, 9))
+        assert_eq((4, 9), State::run(pure_value, 9))
+      }
     }
 
     it("runs eval and exec callbacks once each") {
@@ -91,12 +95,14 @@ test("State") {
       })
 
       capture_stdout()
-      assert_eq(6, State::eval(action, 5))
-      assert_stdout_eq(["state-run"])
+      do::<Result> {
+        assert_eq(6, State::eval(action, 5))
+        assert_stdout_eq(["state-run"])
 
-      capture_stdout()
-      assert_eq(7, State::exec(action, 5))
-      assert_stdout_eq(["state-run"])
+        _ = capture_stdout()
+        assert_eq(7, State::exec(action, 5))
+        assert_stdout_eq(["state-run"])
+      }
     }
 
     it("keeps State as an ordinary property, list, tuple, and Facet value") {
@@ -108,8 +114,10 @@ test("State") {
       first: State<Int, Int> =? List::at(values, 0)
       pair: (State<Int, Int>, State<Int, Int>) = (first, updated.value)
 
-      assert_eq((3, 4), State::run(holder.value, 3))
-      assert_eq((20, 3), State::run(pair._1, 3))
+      do::<Result> {
+        assert_eq((3, 4), State::run(holder.value, 3))
+        assert_eq((20, 3), State::run(pair._1, 3))
+      }
     }
 
     it("changes payload types without Eq or Show bounds") {
@@ -121,8 +129,10 @@ test("State") {
         State::new({|state| (item.value + state, state)})
       }
 
-      assert_eq((8, 7), State::run(mapped, 7))
-      assert_eq((14, 7), State::run(bound, 7))
+      do::<Result> {
+        assert_eq((8, 7), State::run(mapped, 7))
+        assert_eq((14, 7), State::run(bound, 7))
+      }
     }
   }
 

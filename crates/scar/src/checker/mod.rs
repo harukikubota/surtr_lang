@@ -2072,7 +2072,9 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(&mut arg.expr, rewrites);
                 }
             }
-            TypedInner::EagerBoundary(inner) => Self::rewrite_fun_indices_in_node(inner, rewrites),
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
+                Self::rewrite_fun_indices_in_node(inner, rewrites)
+            }
             TypedInner::If(cond, then_node, else_node) => {
                 Self::rewrite_fun_indices_in_node(cond, rewrites);
                 Self::rewrite_fun_indices_in_node(then_node, rewrites);
@@ -3450,7 +3452,9 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(&arg.expr);
                 }
             }
-            TypedInner::EagerBoundary(inner) => self.collect_unused_value_warnings_in_node(inner),
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
+                self.collect_unused_value_warnings_in_node(inner)
+            }
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(then_branch);
@@ -4549,6 +4553,9 @@ impl Checker {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
+            Resolved::AssertErrorKinds(_, _, value) => {
+                self.validate_constructor_body_positions(value, constructor_traits)?
+            }
             Resolved::RecoverKind(_, a, _, c) => {
                 self.validate_constructor_body_positions(a, constructor_traits)?;
                 self.validate_constructor_body_positions(c, constructor_traits)?;
@@ -4573,7 +4580,8 @@ impl Checker {
             Resolved::Grouped(_, inner)
             | Resolved::FieldAccess(_, inner, _)
             | Resolved::FacetCapture(_, inner)
-            | Resolved::Semi(_, inner) => {
+            | Resolved::Semi(_, inner)
+            | Resolved::StatementQuestion(_, inner) => {
                 self.validate_constructor_body_positions(inner, constructor_traits)?;
             }
             Resolved::Capture(_, function, args) => {
@@ -5013,6 +5021,7 @@ impl Checker {
             Resolved::EnumDef(_, id, ..) => format!("EnumDef {}", id.name),
             Resolved::Bind(..) => "Bind".to_string(),
             Resolved::SafeBind(..) => "SafeBind".to_string(),
+            Resolved::StatementQuestion(..) => "StatementQuestion".to_string(),
             Resolved::Match(..) | Resolved::IsMatch(..) | Resolved::IfLet(..) => {
                 "Match".to_string()
             }
@@ -5026,6 +5035,7 @@ impl Checker {
             Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
             Resolved::RecoverKind(..) => "RecoverKind".to_string(),
+            Resolved::AssertErrorKinds(..) => "AssertErrorKinds".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -5048,6 +5058,7 @@ impl Checker {
             Resolved::EnumDef(..) => "EnumDef",
             Resolved::Bind(..) => "Bind",
             Resolved::SafeBind(..) => "SafeBind",
+            Resolved::StatementQuestion(..) => "StatementQuestion",
             Resolved::Match(..) | Resolved::IsMatch(..) | Resolved::IfLet(..) => "Match",
             Resolved::Block(..) => "Block",
             Resolved::App(..) => "App",
@@ -5059,6 +5070,7 @@ impl Checker {
             Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
             Resolved::RecoverKind(..) => "RecoverKind",
+            Resolved::AssertErrorKinds(..) => "AssertErrorKinds",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

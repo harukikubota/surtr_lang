@@ -232,6 +232,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(value, bound, free);
             collect_captures_inner(err, bound, free);
         }
+        Resolved::AssertErrorKinds(_, _, value) => collect_captures_inner(value, bound, free),
         Resolved::RecoverKind(_, value, _, handler) => {
             collect_captures_inner(value, bound, free);
             collect_captures_inner(handler, bound, free);
@@ -342,7 +343,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(arg, bound, free);
             }
         }
-        Resolved::Semi(_, inner) => collect_captures_inner(inner, bound, free),
+        Resolved::StatementQuestion(_, inner) | Resolved::Semi(_, inner) => {
+            collect_captures_inner(inner, bound, free)
+        }
     }
 }
 

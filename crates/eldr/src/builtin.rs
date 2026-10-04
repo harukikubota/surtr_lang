@@ -363,8 +363,8 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: |vm, args| builtin_test_push_stdin(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
-        name: "__test_begin_it",
-        func: |vm, args| builtin_test_begin_it(vm, args).map(BuiltinOutcome::Complete),
+        name: "__test_begin_case",
+        func: |vm, args| builtin_test_begin_case(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "compile",
@@ -981,6 +981,18 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "inf_gen_take_while",
         func: |vm, args| generator::materialize(vm, args, true, "take_while"),
+    },
+    BuiltinImpl {
+        name: "__test_approx_equal",
+        func: |vm, args| builtin_test_approx_equal(vm, args).map(BuiltinOutcome::Complete),
+    },
+    BuiltinImpl {
+        name: "__test_assert_err_kind",
+        func: |vm, args| builtin_test_assert_err_kind(vm, args).map(BuiltinOutcome::Complete),
+    },
+    BuiltinImpl {
+        name: "__test_assert_cause_chain",
+        func: |vm, args| builtin_test_assert_cause_chain(vm, args).map(BuiltinOutcome::Complete),
     },
 ];
 
@@ -2288,6 +2300,80 @@ fn builtin_result_recover_kind(
     })
 }
 
+fn builtin_test_assert_err_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let expected = decode_string_arg(&args[0], "__test_assert_err_kind", "kind")?;
+    let result = decode_result_arg(&args[1], "__test_assert_err_kind", "result")?;
+    match result {
+        Err(error) if error.kind == expected => Ok(ok_result(Value::Unit)),
+        Err(error) => Ok(err_result(
+            vm,
+            "TestAssertionFailed",
+            &format!("expected error kind {expected}, got {}", error.kind),
+        )),
+        Ok(value) => Ok(err_result(
+            vm,
+            "TestAssertionFailed",
+            &format!(
+                "expected Err({expected}), got Ok({})",
+                inspect_value(vm, &value)
+            ),
+        )),
+    }
+}
+
+fn builtin_test_assert_cause_chain(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let expected = decode_string_list_arg(&args[0], "__test_assert_cause_chain", "expected")?;
+    let result = decode_result_arg(&args[1], "__test_assert_cause_chain", "result")?;
+    let mut actual = Vec::new();
+    let is_ok = result.is_ok();
+    if let Err(error) = &result {
+        let mut cursor = Some(error);
+        while let Some(error) = cursor {
+            actual.push(error.kind.clone());
+            cursor = error.cause.as_deref();
+        }
+    }
+    if !is_ok && expected == actual {
+        return Ok(ok_result(Value::Unit));
+    }
+    let detail = if is_ok {
+        "got Ok; expected an Err cause chain".to_string()
+    } else if let Some(index) = expected.iter().zip(&actual).position(|(a, b)| a != b) {
+        format!("first mismatch at index {index}")
+    } else {
+        format!(
+            "length mismatch: expected {}, got {}",
+            expected.len(),
+            actual.len()
+        )
+    };
+    Ok(err_result(
+        vm,
+        "TestAssertionFailed",
+        &format!(
+            "expected cause chain [{}], got [{}]; {detail}",
+            expected.join(", "),
+            actual.join(", ")
+        ),
+    ))
+}
+
+fn builtin_test_approx_equal(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [Value::Float(expected), Value::Float(actual), Value::Float(tolerance)] = args.as_slice()
+    else {
+        return Err(RuntimeError::new(
+            "__test_approx_equal expects three Float arguments",
+        ));
+    };
+    let (expected, actual) = expect_finite_float_pair(*expected, *actual, "__test_approx_equal")?;
+    let tolerance = expect_finite_float(*tolerance, "__test_approx_equal")?;
+    let difference = (expected - actual).abs();
+    // Overflow is an out-of-tolerance comparison, never a nonfinite Surtr value.
+    Ok(Value::Bool(
+        tolerance >= 0.0 && difference.is_finite() && difference <= tolerance,
+    ))
+}
+
 fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::Str(kind) = &args[0] else {
         return Err(RuntimeError::new("__test_push expects String as kind"));
@@ -2295,7 +2381,7 @@ fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     let Value::Str(name) = &args[1] else {
         return Err(RuntimeError::new("__test_push expects String as name"));
     };
-    vm.push_test_scope(kind, name.clone());
+    vm.push_test_scope(kind, name.clone())?;
     Ok(Value::Unit)
 }
 
@@ -2308,7 +2394,7 @@ fn builtin_test_pass(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     let Value::Str(name) = &args[0] else {
         return Err(RuntimeError::new("__test_pass expects String as name"));
     };
-    vm.record_test_pass(name.clone());
+    vm.record_test_pass(name.clone())?;
     Ok(Value::Unit)
 }
 
@@ -2319,7 +2405,7 @@ fn builtin_test_fail(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     let Value::Str(detail) = &args[1] else {
         return Err(RuntimeError::new("__test_fail expects String as detail"));
     };
-    vm.record_test_fail(name.clone(), detail.clone());
+    vm.record_test_fail(name.clone(), detail.clone())?;
     Ok(Value::Unit)
 }
 
@@ -2334,7 +2420,7 @@ fn builtin_test_fail_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
             "__test_fail_error expects Error as error",
         ));
     };
-    vm.record_test_fail_error(name.clone(), error);
+    vm.record_test_fail_error(name.clone(), error)?;
     Ok(Value::Unit)
 }
 
@@ -2372,9 +2458,15 @@ fn builtin_test_push_stdin(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
     Ok(Value::Unit)
 }
 
-fn builtin_test_begin_it(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
-    vm.begin_test_case_io();
-    Ok(Value::Unit)
+fn builtin_test_begin_case(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let kind = decode_string_arg(&args[0], "__test_begin_case", "kind")?;
+    let name = decode_string_arg(&args[1], "__test_begin_case", "name")?;
+    let reason = decode_string_arg(&args[2], "__test_begin_case", "reason")?;
+    Ok(Value::Bool(vm.begin_test_case(
+        kind,
+        name.to_string(),
+        reason.to_string(),
+    )?))
 }
 
 fn builtin_list_group_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

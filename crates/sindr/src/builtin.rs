@@ -1471,20 +1471,15 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
-        name: "__test_begin_it",
-        arity: 0,
-        sig_str: "() -> Unit",
+        name: "__test_begin_case",
+        arity: 3,
+        sig_str: "(String, String, String) -> Boolean",
         compiler_generated_surfaces: &[],
-        surfaces: &[
-            builtin_surface_spec(
-                Some("Test"),
-                "__test_begin_it",
-                &[],
-                &[],
-                "Unit",
-                &[],
-            ),
-        ],
+        surfaces: &[builtin_surface_spec(Some("Test"), "__test_begin_case", &[], &[
+            builtin_surface_parameter("kind", "String"),
+            builtin_surface_parameter("name", "String"),
+            builtin_surface_parameter("reason", "String"),
+        ], "Boolean", &[])],
     },
     BuiltinMeta {
         name: "compile",
@@ -3848,6 +3843,23 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
             "(List<$Item>, InfiniteGenerator<$Item>)",
             &[],
         )],
+    },
+    BuiltinMeta {
+        name: "__test_approx_equal", arity: 3,
+        sig_str: "(Float, Float, Float) -> Boolean",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(Some("Test"), "__test_approx_equal", &[], &[
+            builtin_surface_parameter("expected", "Float"), builtin_surface_parameter("actual", "Float"),
+            builtin_surface_parameter("tolerance", "Float"),
+        ], "Boolean", &[])],
+    },
+    BuiltinMeta {
+        name: "__test_assert_err_kind", arity: 2, sig_str: "(String, Result<$A>) -> Result<Unit>",
+        compiler_generated_surfaces: &[], surfaces: &[],
+    },
+    BuiltinMeta {
+        name: "__test_assert_cause_chain", arity: 2, sig_str: "(List<String>, Result<$A>) -> Result<Unit>",
+        compiler_generated_surfaces: &[], surfaces: &[],
     },
 
 ];

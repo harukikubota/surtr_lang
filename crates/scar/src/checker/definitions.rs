@@ -170,6 +170,30 @@ fn special_form_shape_recover_kind(
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
 }
 
+fn special_form_shape_assert_err_kind(
+    params: &[ResolvedValueParameter],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "ErrorKind")
+        && Checker::is_result_of_named(&params[1].ty, "$A")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
+}
+
+fn special_form_shape_assert_cause_chain(
+    params: &[ResolvedValueParameter],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 2
+        && matches!(&*params[0].ty, AstTy::Generic(_, name, args) if name == "List" && args.len() == 1 && Checker::is_named_type(&args[0], "ErrorKind"))
+        && Checker::is_result_of_named(&params[1].ty, "$A")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
+}
+
 fn special_form_shape_and_or(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -361,6 +385,17 @@ impl Checker {
         })
     }
 
+    pub(super) fn is_cause_chain_marker_parameter(
+        id: &ResolvedId,
+        index: usize,
+        ty: &AstTy,
+    ) -> bool {
+        index == 0
+            && Self::surface_qualified_name(id.qualified_name.as_deref())
+                == Some("Test::assert_cause_chain")
+            && matches!(ty, AstTy::Generic(_, name, args) if name == "List" && args.len() == 1 && Self::is_named_type(&args[0], "ErrorKind"))
+    }
+
     pub(super) fn check_special_form_builtin_decl(
         &mut self,
         span: &Span,
@@ -399,7 +434,15 @@ impl Checker {
         let mut tyvars = HashMap::new();
         let param_tys = params
             .iter()
-            .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
+            .enumerate()
+            .map(|(index, param)| {
+                // Only this validated canonical signature admits a static marker list.
+                if Self::is_cause_chain_marker_parameter(id, index, &param.ty) {
+                    Ok(Ty::List(Box::new(Ty::Enum("ErrorKind".into(), Vec::new()))))
+                } else {
+                    self.resolve_builtin_ast_ty(&param.ty, &mut tyvars)
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match ret_ty {
             Some(ty) => self.resolve_builtin_ast_ty_in_context(
@@ -779,6 +822,8 @@ impl Checker {
                 | "map_err"
                 | "cause"
                 | "recover_kind"
+                | "assert_err_kind"
+                | "assert_cause_chain"
                 | "and"
                 | "or"
                 | "eq"
@@ -845,6 +890,16 @@ impl Checker {
                 expected_qname: "Result::cause",
                 expected_signature: "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "assert_err_kind" => SpecialFormContract {
+                expected_qname: "Test::assert_err_kind",
+                expected_signature: "@builtin def assert_err_kind(marker: ErrorKind, result: Result<$A>) -> Result<()>",
+                shape_ok: special_form_shape_assert_err_kind,
+            },
+            "assert_cause_chain" => SpecialFormContract {
+                expected_qname: "Test::assert_cause_chain",
+                expected_signature: "@builtin def assert_cause_chain(expected: List<ErrorKind>, result: Result<$A>) -> Result<()>",
+                shape_ok: special_form_shape_assert_cause_chain,
             },
             "recover_kind" => SpecialFormContract {
                 expected_qname: "Result::recover_kind",

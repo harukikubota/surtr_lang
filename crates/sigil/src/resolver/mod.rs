@@ -765,6 +765,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         | Resolved::FieldAccess(_, inner, _)
         | Resolved::FacetSegmentAccess(_, inner, _)
         | Resolved::FacetCapture(_, inner)
+        | Resolved::StatementQuestion(_, inner)
         | Resolved::Semi(_, inner) => {
             rebase_resolved_node(inner, base, offset);
         }
@@ -805,6 +806,12 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
             rebase_resolved_node(value, base, offset);
             rebase_resolved_node(err, base, offset);
+        }
+        Resolved::AssertErrorKinds(_, markers, value) => {
+            for marker in markers.markers_mut() {
+                rebase_resolved_id(marker, base, offset);
+            }
+            rebase_resolved_node(value, base, offset);
         }
         Resolved::RecoverKind(_, value, marker, handler) => {
             rebase_resolved_node(value, base, offset);

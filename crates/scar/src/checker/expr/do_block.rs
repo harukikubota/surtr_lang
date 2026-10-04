@@ -269,25 +269,14 @@ impl Checker {
         carrier_hint: Option<&Ty>,
         carrier_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
-        let Some((first, rest)) = statements.split_first() else {
-            return Err(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("non-empty resolved do block".into()),
-                None,
-                None,
-                None,
-                None,
-                do_span,
-                None,
-            ));
-        };
-        if rest.is_empty() {
-            let ResolvedDoStatement::Statement(final_expression) = first else {
+        let mut statements = statements;
+        let mut prefix = Vec::new();
+        let tail = loop {
+            let Some((first, rest)) = statements.split_first() else {
                 return Err(self.policy_error(
                     TypeDiagnosticReason::TypecheckInvariantViolation,
                     diagnostics::TypePolicy::ProducerContract,
-                    Some("final do expression".into()),
+                    Some("non-empty resolved do block".into()),
                     None,
                     None,
                     None,
@@ -296,92 +285,141 @@ impl Checker {
                     None,
                 ));
             };
-            return self.check_do_final_expression(
-                do_span,
-                resolved_contract,
-                final_expression,
-                carrier_hint,
-                carrier_relation,
-            );
-        }
+            if rest.is_empty() {
+                let ResolvedDoStatement::Statement(final_expression) = first else {
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::TypecheckInvariantViolation,
+                        diagnostics::TypePolicy::ProducerContract,
+                        Some("final do expression".into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                        do_span,
+                        None,
+                    ));
+                };
+                break self.check_do_final_expression(
+                    do_span,
+                    resolved_contract,
+                    final_expression,
+                    carrier_hint,
+                    carrier_relation,
+                )?;
+            }
 
-        match first {
-            ResolvedDoStatement::Extract {
-                span,
-                operator_span: _,
-                pattern_span,
-                pattern,
-                rhs,
-            } => self.check_do_extract(
-                do_span,
-                intrinsic,
-                resolved_contract,
-                span,
-                pattern_span,
-                pattern,
-                rhs,
-                rest,
-                carrier_hint,
-                carrier_relation,
-            ),
-            ResolvedDoStatement::SafeBind {
-                span,
-                operator_span,
-                pattern_span,
-                pattern,
-                rhs,
-            } => self.check_do_safebind(
-                do_span,
-                intrinsic,
-                resolved_contract,
-                span,
-                operator_span,
-                pattern_span,
-                pattern,
-                rhs,
-                rest,
-                result_span,
-                carrier_hint,
-                carrier_relation,
-            ),
-            ResolvedDoStatement::Statement(statement)
-                if matches!(
-                    statement,
-                    Resolved::Bind(..)
-                        | Resolved::Semi(..)
-                        | Resolved::Def(..)
-                        | Resolved::ExtractorDef(..)
-                        | Resolved::ConstDef(..)
-                ) =>
-            {
-                let inherited_substitutions = self.substitutions.clone();
-                let typed_statement = self.check_node(statement)?;
-                self.substitutions = inherited_substitutions;
-                let typed_rest = self.check_do_statements(
+            if let ResolvedDoStatement::Statement(statement) = first {
+                if Self::statement_question_parts(statement).is_none() {
+                    let plain = matches!(
+                        statement,
+                        Resolved::Bind(..)
+                            | Resolved::Semi(..)
+                            | Resolved::Def(..)
+                            | Resolved::ExtractorDef(..)
+                            | Resolved::ConstDef(..)
+                    ) || self.classify_do_statement(
+                        do_span,
+                        resolved_contract,
+                        statement,
+                        carrier_hint,
+                    )? == DoStatementKind::Plain;
+                    if plain {
+                        let inherited_substitutions = self.substitutions.clone();
+                        let typed = self.check_node(statement)?;
+                        self.substitutions = inherited_substitutions;
+                        prefix.push(typed);
+                        statements = rest;
+                        continue;
+                    }
+                }
+            }
+
+            break match first {
+                ResolvedDoStatement::Extract {
+                    span,
+                    operator_span: _,
+                    pattern_span,
+                    pattern,
+                    rhs,
+                } => self.check_do_extract(
                     do_span,
                     intrinsic,
                     resolved_contract,
+                    span,
+                    pattern_span,
+                    pattern,
+                    rhs,
+                    rest,
+                    carrier_hint,
+                    carrier_relation,
+                ),
+                ResolvedDoStatement::SafeBind {
+                    span,
+                    operator_span,
+                    pattern_span,
+                    pattern,
+                    rhs,
+                } => self.check_do_safebind(
+                    do_span,
+                    intrinsic,
+                    resolved_contract,
+                    span,
+                    operator_span,
+                    pattern_span,
+                    pattern,
+                    rhs,
+                    false,
                     rest,
                     result_span,
                     carrier_hint,
                     carrier_relation,
-                )?;
-                Ok(TypedNode {
-                    ty: typed_rest.ty.clone(),
-                    span: do_span.clone(),
-                    node: TypedInner::Block(vec![typed_statement, typed_rest]),
-                })
-            }
-            ResolvedDoStatement::Statement(statement) => self.check_do_bare_or_plain_statement(
-                do_span,
-                intrinsic,
-                resolved_contract,
-                statement,
-                rest,
-                result_span,
-                carrier_hint,
-                carrier_relation,
-            ),
+                ),
+                ResolvedDoStatement::Statement(statement)
+                    if Self::statement_question_parts(statement).is_some() =>
+                {
+                    let (span, rhs) = Self::statement_question_parts(statement)
+                        .expect("matched a statement question");
+                    let operator_span = Span {
+                        start: span.end - 1,
+                        end: span.end,
+                    };
+                    self.check_do_safebind(
+                        do_span,
+                        intrinsic,
+                        resolved_contract,
+                        span,
+                        &operator_span,
+                        span,
+                        &ResolvedPattern::Wildcard(span.clone()),
+                        rhs,
+                        true,
+                        rest,
+                        result_span,
+                        carrier_hint,
+                        carrier_relation,
+                    )
+                }
+                ResolvedDoStatement::Statement(statement) => self.check_do_monadic_statement(
+                    do_span,
+                    intrinsic,
+                    resolved_contract,
+                    statement,
+                    rest,
+                    carrier_hint,
+                    carrier_relation,
+                ),
+            }?;
+        };
+        if prefix.is_empty() {
+            Ok(tail)
+        } else {
+            let ty = tail.ty.clone();
+            prefix.push(tail);
+            Ok(TypedNode {
+                ty,
+                span: do_span.clone(),
+                node: TypedInner::Block(prefix),
+            })
         }
     }
 
@@ -992,6 +1030,14 @@ impl Checker {
         }
     }
 
+    fn statement_question_parts(statement: &Resolved) -> Option<(&Span, &Resolved)> {
+        match statement {
+            Resolved::StatementQuestion(span, rhs) => Some((span, rhs)),
+            Resolved::Semi(_, inner) => Self::statement_question_parts(inner),
+            _ => None,
+        }
+    }
+
     fn check_do_safebind(
         &mut self,
         do_span: &Span,
@@ -1002,13 +1048,15 @@ impl Checker {
         pattern_span: &Span,
         pattern: &ResolvedPattern,
         rhs: &Resolved,
+        unit_success_only: bool,
         rest: &[ResolvedDoStatement],
         result_span: &Span,
         carrier_hint: Option<&Ty>,
         carrier_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
         let inherited_substitutions = self.substitutions.clone();
-        let mut checked = self.check_safebind_input(statement_span, pattern, rhs)?;
+        let mut checked =
+            self.check_safebind_input(statement_span, pattern, rhs, unit_success_only)?;
         checked.typed_pattern = self.resolve_typed_pattern(checked.typed_pattern);
         checked.pattern_ty = self.resolve_ty(&checked.pattern_ty);
         checked.typed_rhs = *self.resolve_typed_node(checked.typed_rhs);
@@ -1166,17 +1214,13 @@ impl Checker {
         })
     }
 
-    fn check_do_bare_or_plain_statement(
+    fn classify_do_statement(
         &mut self,
         do_span: &Span,
-        intrinsic: sindr::intrinsic::IntrinsicId,
         resolved_contract: &sigil::resolved::ResolvedDoContract,
         statement: &Resolved,
-        rest: &[ResolvedDoStatement],
-        result_span: &Span,
         carrier_hint: Option<&Ty>,
-        carrier_relation: Option<&ExpectedTypeRelation>,
-    ) -> Result<TypedNode, TypeError> {
+    ) -> Result<DoStatementKind, TypeError> {
         let monad = self.canonical_do_trait_key(
             resolved_contract,
             sindr::intrinsic::CanonicalTraitIdentity::Monad,
@@ -1207,26 +1251,19 @@ impl Checker {
             }
         };
         self.rollback_candidate_probe(checkpoint);
-        if statement_kind == DoStatementKind::Plain {
-            let inherited_substitutions = self.substitutions.clone();
-            let typed_statement = self.check_node(statement)?;
-            self.substitutions = inherited_substitutions;
-            let typed_rest = self.check_do_statements(
-                do_span,
-                intrinsic,
-                resolved_contract,
-                rest,
-                result_span,
-                carrier_hint,
-                carrier_relation,
-            )?;
-            return Ok(TypedNode {
-                ty: typed_rest.ty.clone(),
-                span: do_span.clone(),
-                node: TypedInner::Block(vec![typed_statement, typed_rest]),
-            });
-        }
+        Ok(statement_kind)
+    }
 
+    fn check_do_monadic_statement(
+        &mut self,
+        do_span: &Span,
+        intrinsic: sindr::intrinsic::IntrinsicId,
+        resolved_contract: &sigil::resolved::ResolvedDoContract,
+        statement: &Resolved,
+        rest: &[ResolvedDoStatement],
+        carrier_hint: Option<&Ty>,
+        carrier_relation: Option<&ExpectedTypeRelation>,
+    ) -> Result<TypedNode, TypeError> {
         let parameter_id = ResolvedId {
             name: "__do_ignored_payload".into(),
             qualified_name: None,

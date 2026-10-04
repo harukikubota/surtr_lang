@@ -21,11 +21,13 @@ test("File") {
 
   it("checks exists and delete") {
     path = sandbox_path("delete.txt")
-    assert_false(File::exists(path))
-    _ =? File::write(path, "bye")
-    assert_true(File::exists(path))
-    _ =? File::delete(path)
-    assert_false(File::exists(path))
+    do::<Result> {
+      assert_false(File::exists(path))
+      _ =? File::write(path, "bye")
+      assert_true(File::exists(path))
+      _ =? File::delete(path)
+      assert_false(File::exists(path))
+    }
   }
 
   it("writes and flushes through with_open") {

@@ -145,7 +145,7 @@ impl Resolver {
         let [value_expr, marker_expr, handler_expr] =
             collect_fixed_positional_args(span.clone(), args, "recover_kind", 3)?;
         let value = self.resolve_node(value_expr)?;
-        let marker = self.resolve_error_kind_name(marker_expr)?;
+        let marker = self.resolve_error_kind_name(marker_expr, "recover_kind")?;
         let handler = self.resolve_node(handler_expr)?;
         Ok(Resolved::RecoverKind(
             span,
@@ -155,10 +155,62 @@ impl Resolver {
         ))
     }
 
-    fn resolve_error_kind_name(&mut self, expr: Ast) -> Result<ResolvedId, ResolveError> {
+    pub(super) fn resolve_assert_err_kind(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let [marker_expr, value_expr] =
+            collect_fixed_positional_args(span.clone(), args, "assert_err_kind", 2)?;
+        let marker = self.resolve_error_kind_name(marker_expr, "assert_err_kind")?;
+        let value = self.resolve_node(value_expr)?;
+        Ok(Resolved::AssertErrorKinds(
+            span,
+            crate::resolved::ErrorKindAssertion::Root(marker),
+            Box::new(value),
+        ))
+    }
+
+    pub(super) fn resolve_assert_cause_chain(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let [expected, value] =
+            collect_fixed_positional_args(span.clone(), args, "assert_cause_chain", 2)?;
+        let markers = match expected {
+            Ast::ListLiteral(_, markers) => markers,
+            Ast::ListNil(_) => Vec::new(),
+            other => return Err(ResolveError {
+                message: "assert_cause_chain expected must be a direct List literal of concrete deferror type names".into(),
+                span: other.span().clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
+            }),
+        };
+        let markers = markers
+            .into_iter()
+            .map(|marker| self.resolve_error_kind_name(marker, "assert_cause_chain"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let value = self.resolve_node(value)?;
+        Ok(Resolved::AssertErrorKinds(
+            span,
+            crate::resolved::ErrorKindAssertion::Chain(markers),
+            Box::new(value),
+        ))
+    }
+
+    fn resolve_error_kind_name(
+        &mut self,
+        expr: Ast,
+        api: &str,
+    ) -> Result<ResolvedId, ResolveError> {
         let span = expr.span().clone();
         let invalid = || ResolveError {
-            message: "recover_kind marker must be a concrete deferror type name".into(),
+            message: format!("{api} marker must be a concrete deferror type name"),
             span: span.clone(),
             diagnostic: crate::error::ResolveErrorDiagnostic {
                 reason: crate::error::ResolveErrorReason::SpecialForm,
@@ -187,7 +239,7 @@ impl Resolver {
         }
         id.qualified_name = Some(self.declaration_fq_name_for_uid(id.unique_id).ok_or_else(
             || ResolveError {
-                message: "recover_kind ErrorKind identity has no canonical declaration name".into(),
+                message: format!("{api} ErrorKind identity has no canonical declaration name"),
                 span,
                 diagnostic: crate::error::ResolveErrorDiagnostic {
                     reason: crate::error::ResolveErrorReason::CompilerInvariant,

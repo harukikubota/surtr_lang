@@ -128,7 +128,7 @@ metadata は維持する。`:doc Bootstrap` は module documentation を返し�
 - 入力ごとに名前解決、型検査、コード生成の checkpoint を取る
 - 途中で失敗した場合は、その入力ぶんの変更をロールバックする
 - 失敗した入力は後続セッションへ持ち越さない
-- 実行失敗時の VM checkpoint / rollback には process runtime 状態、singleton slot、waiting table、deadline queue、標準 I/O handler buffer cursor を含める
+- 実行失敗時の VM checkpoint / rollback には process runtime 状態、singleton slot、waiting table、deadline queue、標準 I/O handler buffer cursor、test runner の状態を含める
 
 ---
 

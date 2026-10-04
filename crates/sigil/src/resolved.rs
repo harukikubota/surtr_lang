@@ -173,6 +173,9 @@ pub enum Resolved {
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
     SafeBind(Span, ResolvedPattern, Box<Resolved>),
 
+    /// Statement-only `expr?`, retaining its Unit-success constraint for Scar.
+    StatementQuestion(Span, Box<Resolved>),
+
     /// Compiler-owned monadic sequencing expression.
     Do(
         Span,
@@ -251,6 +254,7 @@ pub enum Resolved {
     /// `Result::recover_kind(value, ErrorKind, handler)` special form.
     /// The kind is a concrete deferror declaration identity, never an evaluated expression.
     RecoverKind(Span, Box<Resolved>, ResolvedId, Box<Resolved>),
+    AssertErrorKinds(Span, ErrorKindAssertion<ResolvedId>, Box<Resolved>),
 
     /// Match expression
     Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
@@ -682,6 +686,36 @@ impl ResolvedPattern {
         match self {
             Self::Located(_, inner) => inner.unlocated(),
             other => other,
+        }
+    }
+}
+
+/// Static declaration metadata, never a surface ErrorKind value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ErrorKindAssertion<T> {
+    Root(T),
+    Chain(Vec<T>),
+}
+
+impl<T> ErrorKindAssertion<T> {
+    pub fn markers(&self) -> &[T] {
+        match self {
+            Self::Root(marker) => std::slice::from_ref(marker),
+            Self::Chain(markers) => markers,
+        }
+    }
+
+    pub fn markers_mut(&mut self) -> &mut [T] {
+        match self {
+            Self::Root(marker) => std::slice::from_mut(marker),
+            Self::Chain(markers) => markers,
+        }
+    }
+
+    pub fn api(&self) -> &'static str {
+        match self {
+            Self::Root(_) => "assert_err_kind",
+            Self::Chain(_) => "assert_cause_chain",
         }
     }
 }

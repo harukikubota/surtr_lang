@@ -426,9 +426,10 @@ impl<'a> Parser<'a> {
 
     fn anonymous_callable_call_target(stmt: &Ast) -> Option<&Ast> {
         match stmt {
-            Ast::Bind(_, _, rhs) | Ast::SafeBind(_, _, rhs) | Ast::Semi(_, rhs) => {
-                Self::anonymous_callable_call_target(rhs)
-            }
+            Ast::Bind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs)
+            | Ast::StatementQuestion(_, rhs)
+            | Ast::Semi(_, rhs) => Self::anonymous_callable_call_target(rhs),
             Ast::Capture(_, _, _)
             | Ast::FacetCapture(_, _)
             | Ast::Closure(_, _, _)
@@ -1470,6 +1471,10 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 })
                 .collect(),
             Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
+        ),
+        Ast::StatementQuestion(span, expr) => Ast::StatementQuestion(
+            span,
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
         ),
         Ast::Semi(span, expr) => Ast::Semi(
             span,
@@ -2832,6 +2837,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::CapturePlaceholder(span, index) => {
             Ast::CapturePlaceholder(shift_span(span, delta), index)
         }
+        Ast::StatementQuestion(span, inner) => Ast::StatementQuestion(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*inner, delta)),
+        ),
         Ast::Semi(span, inner) => Ast::Semi(
             shift_span(span, delta),
             Box::new(shift_ast_span(*inner, delta)),
@@ -2856,6 +2865,7 @@ impl Ast {
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
             | Ast::SafeBind(s, _, _)
+            | Ast::StatementQuestion(s, _)
             | Ast::Do(s, _, _)
             | Ast::BinOp(s, _, _, _)
             | Ast::Pipe(s, _, _)

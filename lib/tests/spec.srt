@@ -60,20 +60,22 @@ test("Spec") {
   describe("control/block execution") {
     it("runs only the selected blocks") {
       capture_stdout()
-      assert_eq(
-        ["10", "0", "()", "()", "()", "()"],
-        [
-          to_string(take(True) { num = 10; num }),
-          to_string(take(False) { print("skip-take"); 99 }),
-          inspect(run_if(True) { print("run-if") }),
-          inspect(run_if(False) { print("skip-run-if") }),
-          inspect(if_then(True, print("if-then"))),
-          inspect(if_then(False, print("skip-if-then"))),
-        ],
-      )
-      if_let_then(Ok("alice"), Ok(name), print(name))
-      if_let_then(Err(NoneError), Ok(name), print(name))
-      assert_stdout_eq(["run-if", "if-then", "alice"])
+      do::<Result> {
+        assert_eq(
+          ["10", "0", "()", "()", "()", "()"],
+          [
+            to_string(take(True) { num = 10; num }),
+            to_string(take(False) { print("skip-take"); 99 }),
+            inspect(run_if(True) { print("run-if") }),
+            inspect(run_if(False) { print("skip-run-if") }),
+            inspect(if_then(True, print("if-then"))),
+            inspect(if_then(False, print("skip-if-then"))),
+          ],
+        )
+        if_let_then(Ok("alice"), Ok(name), print(name))
+        if_let_then(Err(NoneError), Ok(name), print(name))
+        assert_stdout_eq(["run-if", "if-then", "alice"])
+      }
     }
   }
 
@@ -144,44 +146,46 @@ test("Spec") {
       nums = [1, 2, 3]
       strs = ["a", "b", "c"]
       empty: List<Int> = []
-      assert_eq(
-        (
-          10,
-          "hello",
-          20,
-          "(1, \"two\")",
-          1,
-          "two",
-          1,
-          "two",
-        ),
-        (
-          num,
-          name,
-          x,
-          inspect(pair),
-          pair._0,
-          pair._1,
-          left,
-          right,
-        ),
-      )
-      assert_eq(
-        (
-          "two:1",
-          "[1, 2, 3]",
-          "[\"a\", \"b\", \"c\"]",
-          "[]",
-        ),
-        (
-          match pair {
-            (n, text) => text ++ ":" ++ to_string(n),
-          },
-          inspect(nums),
-          inspect(strs),
-          inspect(empty),
-        ),
-      )
+      do::<Result> {
+        assert_eq(
+          (
+            10,
+            "hello",
+            20,
+            "(1, \"two\")",
+            1,
+            "two",
+            1,
+            "two",
+          ),
+          (
+            num,
+            name,
+            x,
+            inspect(pair),
+            pair._0,
+            pair._1,
+            left,
+            right,
+          ),
+        )
+        assert_eq(
+          (
+            "two:1",
+            "[1, 2, 3]",
+            "[\"a\", \"b\", \"c\"]",
+            "[]",
+          ),
+          (
+            match pair {
+              (n, text) => text ++ ":" ++ to_string(n),
+            },
+            inspect(nums),
+            inspect(strs),
+            inspect(empty),
+          ),
+        )
+      }
     }
   }
 }

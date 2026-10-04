@@ -49,6 +49,22 @@ renderer に渡す直前に byte range へ変換する。
 ソース本文を取得できない場合は、保持している Error の位置と message を text で表示する。
 別の入力や呼出し位置を生成位置として代用しない。
 
+### テストのアサーション失敗
+
+`surtr test` の失敗イベントでは、標準 `Test` のアサーションが返した
+`Global::TestAssertionFailed` のキャプションを、そのアサーションの呼出式に付ける。
+保存済みの stack trace から関数の正規名と呼出位置を取得し、末尾呼出しも同じ規則で扱う。
+`assert_ok_eq` などが内部で `assert_eq` を使う場合は、外側の公開アサーションの呼出式を指す。
+キャプチャしたアサーションも、そのキャプチャを実行した呼出式を指す。
+Error 自体の生成位置、cause、stack trace は変更しない。
+アサーション以外の Error は、通常どおり Error の生成位置を表示する。
+
+ファイル名に対応するソース本文を使い、別ファイルのヘルパー内で失敗した場合も
+そのヘルパーのソースを表示する。本文が取得できない場合は、保持している位置を text で表示する。
+`it` の名前や本文の文字列検索から位置を決めない。
+`assert_eq` の直接呼出しでは、LHS/RHS label にその式の引数 span を使う。
+キャプチャの呼出しでは引数の対応が変わり得るため、呼出式のキャプションだけを表示する。
+
 ## CLI の実行時オプション
 
 ### 通常表示と `--error-context verbose`
@@ -194,6 +210,7 @@ REPL 専用の行加算や列の置換は行わず、stack trace も追加しな
 | REPL の既定値と設定コマンド | [`crates/xldr/src/repl/logic/core.rs`](../../crates/xldr/src/repl/logic/core.rs) |
 | CLI オプション、runtime context、最終結果の診断、VM dump | [`crates/rune/src/commands/run.rs`](../../crates/rune/src/commands/run.rs) |
 | stack frame の text 書式 | [`crates/eldr/src/error.rs`](../../crates/eldr/src/error.rs) |
+| テストの失敗位置とアサーションの表示 | [`crates/eldr/src/vm.rs`](../../crates/eldr/src/vm.rs)、[`crates/rune/src/commands/test.rs`](../../crates/rune/src/commands/test.rs) |
 | Error の生成位置・cause・trace の保持 | [`crates/sindr/src/runtime.rs`](../../crates/sindr/src/runtime.rs)、[`crates/eldr/src/vm.rs`](../../crates/eldr/src/vm.rs) |
 | 明示的な stderr 出力 | [`crates/eldr/src/builtin.rs`](../../crates/eldr/src/builtin.rs) の `builtin_eprint` |
 
@@ -202,6 +219,8 @@ Ariadne の色、罫線、空白を契約として固定しない。
 
 - [`tests/integration/error_source_locations.rs`](../../tests/integration/error_source_locations.rs):
   生成位置、Pattern の失敗箇所、伝播、wrap、bytecode roundtrip、human / VM dump の位置一致。
+- [`tests/integration/test_command.rs`](../../tests/integration/test_command.rs):
+  各アサーションの呼出位置、`do` / 文末 `?`、同名の `it`、キャプチャ、名前付き引数、別ファイルのヘルパー。
 - [`tests/integration/run_eldr.rs`](../../tests/integration/run_eldr.rs):
   `run_error_context_verbose_*`、通常表示での trace 非表示、tail-call、builtin、closure、VM dump。
 - [`crates/xldr/tests/repl_core.rs`](../../crates/xldr/tests/repl_core.rs):

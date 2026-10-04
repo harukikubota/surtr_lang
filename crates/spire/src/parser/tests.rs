@@ -8121,3 +8121,67 @@ fn safe_arithmetic_preserves_quoted_operator_span() {
         matches!(value.as_ref(), Ast::BinOp(_, BinOp::Mod(span), _, _) if *span == Span { start: 10, end: 13 })
     );
 }
+
+#[test]
+fn statement_question_accepts_whole_statements_and_existing_separators() {
+    for source in [
+        "operation()?",
+        "operation(\n  1,\n  2,\n)?\nnext()",
+        "operation()?; next()",
+        "1 + operation()?",
+        "do::<Result> { operation()?\n Ok(()) }",
+    ] {
+        let ast = parse(source).unwrap_or_else(|err| panic!("{source}: {err:?}"));
+        let node = match &ast[0] {
+            Ast::Semi(_, inner) => inner.as_ref(),
+            Ast::Do(_, _, statements) => match &statements[0] {
+                AstDoStatement::Statement(node) => node,
+                other => panic!("expected question statement, got {other:?}"),
+            },
+            node => node,
+        };
+        let Ast::StatementQuestion(span, rhs) = node else {
+            panic!("expected question statement, got {node:?}");
+        };
+        assert_eq!(source.chars().nth(span.end - 1), Some('?'));
+        assert_eq!(rhs.span().start, span.start);
+    }
+}
+
+#[test]
+fn statement_question_rejects_expression_positions_and_repeated_suffixes() {
+    for source in [
+        "value = operation()?",
+        "value =? operation()?",
+        "consume(operation()?)",
+        "operation()? + 1",
+        "operation()??",
+        "(operation()?)",
+        "[operation()?]",
+        "do::<Result> { value <- operation()?\n Ok(()) }",
+    ] {
+        assert!(parse(source).is_err(), "must reject {source}");
+    }
+}
+
+#[test]
+fn statement_question_retains_optional_type_and_facet_suffixes() {
+    let ast = parse("value: Int? = input\nconsume(Option.Some?, value)?").unwrap();
+    assert!(
+        matches!(&ast[0], Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, _)), _) if name == "Option")
+    );
+    let Ast::StatementQuestion(_, rhs) = &ast[1] else {
+        panic!("expected outer question statement");
+    };
+    let Ast::App(_, _, args) = rhs.as_ref() else {
+        panic!("expected call");
+    };
+    assert!(matches!(
+        &args[0],
+        RecordLitArg::Positional(Ast::FacetSegmentAccess(
+            _,
+            _,
+            FacetPathSegment::Field { optional: true, .. }
+        ))
+    ));
+}

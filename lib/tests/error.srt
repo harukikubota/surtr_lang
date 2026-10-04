@@ -28,8 +28,10 @@ test("Error") {
 
     it("formats user-defined errors and preserves cause chains") {
       chained = Result::cause(Err(NoneError), ApiError("api down"))
-      assert_eq("Err(ApiError(\"api down\"))\n|_ NoneError(\"None Value.\")", inspect(chained))
-      assert_eq("api down", Error::message(ApiError("api down")))
+      do::<Result> {
+        assert_eq("Err(ApiError(\"api down\"))\n|_ NoneError(\"None Value.\")", inspect(chained))
+        assert_eq("api down", Error::message(ApiError("api down")))
+      }
     }
 
     it("observes errors through explicit Error methods") {

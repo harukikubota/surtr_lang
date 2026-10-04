@@ -860,7 +860,7 @@ impl Holder { def new(value: $T) -> Holder<$T> { Holder { value: value } } }
 "#;
     for expression in [
         "nums =? wrap(a); [item, ..tail] =? nums; stronger(item)",
-        "thunk = { nums =? wrap(a); [item, ..tail] =? nums; Ok(item) }; match thunk() { Ok(item) => stronger(item), Err(_) => 0, }",
+        "thunk: (-> Result<Box<Int>>) = { nums =? wrap(a); [item, ..tail] =? nums; Ok(item) }; match thunk() { Ok(item) => stronger(item), Err(_) => 0, }",
         "pair = (a, 1); match pair { (item, _) => stronger(item), }",
         "values = [a]; match values { [item] => stronger(item), _ => 0, }",
         "identity: (Box<Int> -> Box<Int>) = {|value| value}; stronger(identity(a))",

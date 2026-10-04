@@ -113,12 +113,14 @@ test("Monad transformers") {
       from_option: OptionT<Identity, Int> = OptionT::from_option::<Identity>(Option::Some(3))
       from_none: OptionT<Identity, Int> = OptionT::from_option::<Identity>(Option::None)
 
-      assert_eq(Identity::run(inner), Identity::run(OptionT::run(wrapped)))
-      assert_eq(Option::Some(2), Identity::run(OptionT::run(some)))
-      expected_none: Option<Int> = Option::None
-      assert_eq(expected_none, Identity::run(OptionT::run(none)))
-      assert_eq(Option::Some(3), Identity::run(OptionT::run(from_option)))
-      assert_eq(expected_none, Identity::run(OptionT::run(from_none)))
+      do::<Result> {
+        assert_eq(Identity::run(inner), Identity::run(OptionT::run(wrapped)))
+        assert_eq(Option::Some(2), Identity::run(OptionT::run(some)))
+        expected_none: Option<Int> = Option::None
+        assert_eq(expected_none, Identity::run(OptionT::run(none)))
+        assert_eq(Option::Some(3), Identity::run(OptionT::run(from_option)))
+        assert_eq(expected_none, Identity::run(OptionT::run(from_none)))
+      }
     }
 
     it("maps applies and binds only Some payloads") {
@@ -131,12 +133,14 @@ test("Monad transformers") {
       none_mapped: OptionT<Identity, Int> = none |*> {|item| item + 1}
       none_bound: OptionT<Identity, Int> = none |>= &option_t_inc
 
-      assert_eq(Option::Some(3), Identity::run(OptionT::run(mapped)))
-      assert_eq(Option::Some(6), Identity::run(OptionT::run(applied)))
-      assert_eq(Option::Some(3), Identity::run(OptionT::run(bound)))
-      expected_none: Option<Int> = Option::None
-      assert_eq(expected_none, Identity::run(OptionT::run(none_mapped)))
-      assert_eq(expected_none, Identity::run(OptionT::run(none_bound)))
+      do::<Result> {
+        assert_eq(Option::Some(3), Identity::run(OptionT::run(mapped)))
+        assert_eq(Option::Some(6), Identity::run(OptionT::run(applied)))
+        assert_eq(Option::Some(3), Identity::run(OptionT::run(bound)))
+        expected_none: Option<Int> = Option::None
+        assert_eq(expected_none, Identity::run(OptionT::run(none_mapped)))
+        assert_eq(expected_none, Identity::run(OptionT::run(none_bound)))
+      }
     }
 
     it("keeps inner None separate from base failure") {
@@ -146,9 +150,11 @@ test("Monad transformers") {
       none_bound: OptionT<Result, Int> = none |>= {|item| OptionT::some::<Result>(item + 1)}
       failed_bound: OptionT<Result, Int> = failed |>= {|item| OptionT::some::<Result>(item + 1)}
 
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(base_failure))
-      assert_eq("Ok(Option::None)", inspect(OptionT::run(none_bound)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_bound)))
+      do::<Result> {
+        assert_err_kind(NoneError, base_failure)
+        assert_eq("Ok(Option::None)", inspect(OptionT::run(none_bound)))
+        assert_err_kind(NoneError, OptionT::run(failed_bound))
+      }
     }
 
     it("uses inner None for Alternative empty and preserves List multiplicity") {
@@ -162,12 +168,14 @@ test("Monad transformers") {
       right: OptionT<List, Int> = OptionT::new([Option::Some(2), Option::Some(3)])
       chosen: OptionT<List, Int> = left <|> right
 
-      assert_eq("Ok(Option::None)", inspect(OptionT::run(empty)))
-      assert_eq("[Option::None]", inspect(OptionT::run(empty_list)))
-      assert_eq(
-        "[Option::Some(2), Option::Some(3), Option::Some(2), Option::Some(3), Option::Some(1)]",
-        inspect(OptionT::run(chosen)),
-      )
+      do::<Result> {
+        assert_eq("Ok(Option::None)", inspect(OptionT::run(empty)))
+        assert_eq("[Option::None]", inspect(OptionT::run(empty_list)))
+        assert_eq(
+          "[Option::Some(2), Option::Some(3), Option::Some(2), Option::Some(3), Option::Some(1)]",
+          inspect(OptionT::run(chosen)),
+        )
+      }
     }
 
     it("sequences ap in base order while None short-circuits the value") {
@@ -182,9 +190,11 @@ test("Monad transformers") {
       )
       failed_ap: OptionT<Result, Int> = Applicative::ap(present_mapper, failed_value)
 
-      assert_eq("Ok(Option::None)", inspect(OptionT::run(absent_ap)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_mapper_ap)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_ap)))
+      do::<Result> {
+        assert_eq("Ok(Option::None)", inspect(OptionT::run(absent_ap)))
+        assert_err_kind(NoneError, OptionT::run(failed_mapper_ap))
+        assert_err_kind(NoneError, OptionT::run(failed_ap))
+      }
     }
 
     it("preserves finite Monad and lift laws") {
@@ -200,11 +210,13 @@ test("Monad transformers") {
       lifted_bind: OptionT<Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
       bound_lifts: OptionT<Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
 
-      assert_eq(Identity::run(OptionT::run(option_t_inc(3))), Identity::run(OptionT::run(left_identity)))
-      assert_eq(Identity::run(OptionT::run(value)), Identity::run(OptionT::run(right_identity)))
-      assert_eq(Identity::run(OptionT::run(assoc_left)), Identity::run(OptionT::run(assoc_right)))
-      assert_eq(Identity::run(OptionT::run(lifted_pure)), Identity::run(OptionT::run(transformer_pure)))
-      assert_eq(Identity::run(OptionT::run(lifted_bind)), Identity::run(OptionT::run(bound_lifts)))
+      do::<Result> {
+        assert_eq(Identity::run(OptionT::run(option_t_inc(3))), Identity::run(OptionT::run(left_identity)))
+        assert_eq(Identity::run(OptionT::run(value)), Identity::run(OptionT::run(right_identity)))
+        assert_eq(Identity::run(OptionT::run(assoc_left)), Identity::run(OptionT::run(assoc_right)))
+        assert_eq(Identity::run(OptionT::run(lifted_pure)), Identity::run(OptionT::run(transformer_pure)))
+        assert_eq(Identity::run(OptionT::run(lifted_bind)), Identity::run(OptionT::run(bound_lifts)))
+      }
     }
   }
 
@@ -216,13 +228,15 @@ test("Monad transformers") {
       right: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
       from_either: EitherT<String, Identity, Int> = EitherT::from_either::<Identity>(Either::Right(3))
 
-      assert_eq(Identity::run(inner), Identity::run(EitherT::run(wrapped)))
-      expected_left: Either<String, Int> = Either::Left("stop")
-      expected_right: Either<String, Int> = Either::Right(2)
-      expected_from_either: Either<String, Int> = Either::Right(3)
-      assert_eq(expected_left, Identity::run(EitherT::run(left)))
-      assert_eq(expected_right, Identity::run(EitherT::run(right)))
-      assert_eq(expected_from_either, Identity::run(EitherT::run(from_either)))
+      do::<Result> {
+        assert_eq(Identity::run(inner), Identity::run(EitherT::run(wrapped)))
+        expected_left: Either<String, Int> = Either::Left("stop")
+        expected_right: Either<String, Int> = Either::Right(2)
+        expected_from_either: Either<String, Int> = Either::Right(3)
+        assert_eq(expected_left, Identity::run(EitherT::run(left)))
+        assert_eq(expected_right, Identity::run(EitherT::run(right)))
+        assert_eq(expected_from_either, Identity::run(EitherT::run(from_either)))
+      }
     }
 
     it("maps and constructs through Left as well as Right") {
@@ -255,21 +269,23 @@ test("Monad transformers") {
       expected_mapped_right: Either<String, String> = Either::Right("7")
       expected_bimap_left: Either<Int, String> = Either::Left(4)
       expected_bimap_right: Either<Int, String> = Either::Right("7")
-      assert_eq(expected_mapped_left, EitherT::run(mapped_left).value)
-      assert_eq(expected_preserved_right, EitherT::run(preserved_right).value)
-      assert_eq(expected_preserved_left, EitherT::run(preserved_left).value)
-      assert_eq(expected_mapped_right, EitherT::run(mapped_right).value)
-      assert_eq(expected_bimap_left, EitherT::run(bimap_left).value)
-      assert_eq(expected_bimap_right, EitherT::run(bimap_right).value)
-      assert_eq(EitherT::run(preserved_left).value, EitherT::run(functor_left).value)
-      assert_eq(EitherT::run(mapped_right).value, EitherT::run(functor_right).value)
-      assert_eq(EitherT::run(preserved_left).origin, EitherT::run(functor_left).origin)
-      assert_eq(EitherT::run(mapped_right).origin, EitherT::run(functor_right).origin)
-      assert_eq(("input", "input", "input"), (
-        EitherT::run(mapped_left).origin,
-        EitherT::run(mapped_right).origin,
-        EitherT::run(bimap_right).origin,
-      ))
+      do::<Result> {
+        assert_eq(expected_mapped_left, EitherT::run(mapped_left).value)
+        assert_eq(expected_preserved_right, EitherT::run(preserved_right).value)
+        assert_eq(expected_preserved_left, EitherT::run(preserved_left).value)
+        assert_eq(expected_mapped_right, EitherT::run(mapped_right).value)
+        assert_eq(expected_bimap_left, EitherT::run(bimap_left).value)
+        assert_eq(expected_bimap_right, EitherT::run(bimap_right).value)
+        assert_eq(EitherT::run(preserved_left).value, EitherT::run(functor_left).value)
+        assert_eq(EitherT::run(mapped_right).value, EitherT::run(functor_right).value)
+        assert_eq(EitherT::run(preserved_left).origin, EitherT::run(functor_left).origin)
+        assert_eq(EitherT::run(mapped_right).origin, EitherT::run(functor_right).origin)
+        assert_eq(("input", "input", "input"), (
+          EitherT::run(mapped_left).origin,
+          EitherT::run(mapped_right).origin,
+          EitherT::run(bimap_right).origin,
+        ))
+      }
     }
 
     it("preserves base failure while mapping either slot") {
@@ -278,9 +294,11 @@ test("Monad transformers") {
       mapped_right: EitherT<String, Result, String> = EitherT::map_right(failed, &to_string)
       mapped_both: EitherT<Int, Result, String> = EitherT::bimap(failed, &String::len, &to_string)
 
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_left)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_right)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_both)))
+      do::<Result> {
+        assert_err_kind(NoneError, EitherT::run(mapped_left))
+        assert_err_kind(NoneError, EitherT::run(mapped_right))
+        assert_err_kind(NoneError, EitherT::run(mapped_both))
+      }
     }
 
     it("maps applies and binds only Right payloads") {
@@ -295,10 +313,12 @@ test("Monad transformers") {
       expected_three: Either<String, Int> = Either::Right(3)
       expected_six: Either<String, Int> = Either::Right(6)
       expected_left: Either<String, Int> = Either::Left("stop")
-      assert_eq(expected_three, Identity::run(EitherT::run(mapped)))
-      assert_eq(expected_six, Identity::run(EitherT::run(applied)))
-      assert_eq(expected_three, Identity::run(EitherT::run(bound)))
-      assert_eq(expected_left, Identity::run(EitherT::run(left_bound)))
+      do::<Result> {
+        assert_eq(expected_three, Identity::run(EitherT::run(mapped)))
+        assert_eq(expected_six, Identity::run(EitherT::run(applied)))
+        assert_eq(expected_three, Identity::run(EitherT::run(bound)))
+        assert_eq(expected_left, Identity::run(EitherT::run(left_bound)))
+      }
     }
 
     it("keeps inner Left separate from base failure") {
@@ -308,9 +328,11 @@ test("Monad transformers") {
       left_bound: EitherT<String, Result, Int> = left |>= {|item| EitherT::right::<String, Result>(item + 1)}
       failed_bound: EitherT<String, Result, Int> = failed |>= {|item| EitherT::right::<String, Result>(item + 1)}
 
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(base_failure))
-      assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_bound)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_bound)))
+      do::<Result> {
+        assert_err_kind(NoneError, base_failure)
+        assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_bound)))
+        assert_err_kind(NoneError, EitherT::run(failed_bound))
+      }
     }
 
     it("sequences ap in base order while Left short-circuits the value") {
@@ -327,9 +349,11 @@ test("Monad transformers") {
       )
       failed_ap: EitherT<String, Result, Int> = Applicative::ap(right_mapper, failed_value)
 
-      assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_ap)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_mapper_ap)))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_ap)))
+      do::<Result> {
+        assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_ap)))
+        assert_err_kind(NoneError, EitherT::run(failed_mapper_ap))
+        assert_err_kind(NoneError, EitherT::run(failed_ap))
+      }
     }
 
     it("preserves finite Monad and lift laws") {
@@ -345,11 +369,13 @@ test("Monad transformers") {
       lifted_bind: EitherT<String, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
       bound_lifts: EitherT<String, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
 
-      assert_eq(Identity::run(EitherT::run(either_t_inc(3))), Identity::run(EitherT::run(left_identity)))
-      assert_eq(Identity::run(EitherT::run(value)), Identity::run(EitherT::run(right_identity)))
-      assert_eq(Identity::run(EitherT::run(assoc_left)), Identity::run(EitherT::run(assoc_right)))
-      assert_eq(Identity::run(EitherT::run(lifted_pure)), Identity::run(EitherT::run(transformer_pure)))
-      assert_eq(Identity::run(EitherT::run(lifted_bind)), Identity::run(EitherT::run(bound_lifts)))
+      do::<Result> {
+        assert_eq(Identity::run(EitherT::run(either_t_inc(3))), Identity::run(EitherT::run(left_identity)))
+        assert_eq(Identity::run(EitherT::run(value)), Identity::run(EitherT::run(right_identity)))
+        assert_eq(Identity::run(EitherT::run(assoc_left)), Identity::run(EitherT::run(assoc_right)))
+        assert_eq(Identity::run(EitherT::run(lifted_pure)), Identity::run(EitherT::run(transformer_pure)))
+        assert_eq(Identity::run(EitherT::run(lifted_bind)), Identity::run(EitherT::run(bound_lifts)))
+      }
     }
   }
 
@@ -360,10 +386,12 @@ test("Monad transformers") {
       projected: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment| environment * 2})
       localized: ReaderT<Int, Identity, Int> = ReaderT::local(value, {|environment| environment + 10})
 
-      assert_eq(Identity::run(Identity::new(4)), Identity::run(ReaderT::run(value, 3)))
-      assert_eq(Identity::run(Identity::new(3)), Identity::run(ReaderT::run(asked, 3)))
-      assert_eq(Identity::run(Identity::new(6)), Identity::run(ReaderT::run(projected, 3)))
-      assert_eq(Identity::run(Identity::new(14)), Identity::run(ReaderT::run(localized, 3)))
+      do::<Result> {
+        assert_eq(Identity::run(Identity::new(4)), Identity::run(ReaderT::run(value, 3)))
+        assert_eq(Identity::run(Identity::new(3)), Identity::run(ReaderT::run(asked, 3)))
+        assert_eq(Identity::run(Identity::new(6)), Identity::run(ReaderT::run(projected, 3)))
+        assert_eq(Identity::run(Identity::new(14)), Identity::run(ReaderT::run(localized, 3)))
+      }
     }
 
     it("maps applies and binds with the same environment") {
@@ -375,9 +403,11 @@ test("Monad transformers") {
         ReaderT::new({|environment| Identity::new(item + environment)})
       }
 
-      assert_eq(Identity::run(Identity::new(8)), Identity::run(ReaderT::run(mapped, 3)))
-      assert_eq(Identity::run(Identity::new(7)), Identity::run(ReaderT::run(applied, 3)))
-      assert_eq(Identity::run(Identity::new(7)), Identity::run(ReaderT::run(bound, 3)))
+      do::<Result> {
+        assert_eq(Identity::run(Identity::new(8)), Identity::run(ReaderT::run(mapped, 3)))
+        assert_eq(Identity::run(Identity::new(7)), Identity::run(ReaderT::run(applied, 3)))
+        assert_eq(Identity::run(Identity::new(7)), Identity::run(ReaderT::run(bound, 3)))
+      }
     }
 
     it("preserves base failure while binding") {
@@ -386,7 +416,7 @@ test("Monad transformers") {
         ReaderT::new({|environment| Ok(value + environment)})
       }
 
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(ReaderT::run(bound, 3)))
+      assert_err_kind(NoneError, ReaderT::run(bound, 3))
     }
 
     it("derives Alternative only from an Alternative base") {
@@ -398,9 +428,11 @@ test("Monad transformers") {
       chosen_list: ReaderT<Int, List, Int> = left_list <|> right_list
 
       expected_none: Option<Int> = Option::None
-      assert_eq(expected_none, ReaderT::run(empty, 3))
-      assert_eq(Option::Some(4), ReaderT::run(left <|> right, 3))
-      assert_eq([3, 13], ReaderT::run(chosen_list, 3))
+      do::<Result> {
+        assert_eq(expected_none, ReaderT::run(empty, 3))
+        assert_eq(Option::Some(4), ReaderT::run(left <|> right, 3))
+        assert_eq([3, 13], ReaderT::run(chosen_list, 3))
+      }
     }
 
     it("preserves finite Monad and lift laws") {
@@ -416,11 +448,13 @@ test("Monad transformers") {
       lifted_bind: ReaderT<Int, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
       bound_lifts: ReaderT<Int, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
 
-      assert_eq(Identity::run(ReaderT::run(reader_t_inc(3), 4)), Identity::run(ReaderT::run(left_identity, 4)))
-      assert_eq(Identity::run(ReaderT::run(value, 4)), Identity::run(ReaderT::run(right_identity, 4)))
-      assert_eq(Identity::run(ReaderT::run(assoc_left, 4)), Identity::run(ReaderT::run(assoc_right, 4)))
-      assert_eq(Identity::run(ReaderT::run(lifted_pure, 4)), Identity::run(ReaderT::run(transformer_pure, 4)))
-      assert_eq(Identity::run(ReaderT::run(lifted_bind, 4)), Identity::run(ReaderT::run(bound_lifts, 4)))
+      do::<Result> {
+        assert_eq(Identity::run(ReaderT::run(reader_t_inc(3), 4)), Identity::run(ReaderT::run(left_identity, 4)))
+        assert_eq(Identity::run(ReaderT::run(value, 4)), Identity::run(ReaderT::run(right_identity, 4)))
+        assert_eq(Identity::run(ReaderT::run(assoc_left, 4)), Identity::run(ReaderT::run(assoc_right, 4)))
+        assert_eq(Identity::run(ReaderT::run(lifted_pure, 4)), Identity::run(ReaderT::run(transformer_pure, 4)))
+        assert_eq(Identity::run(ReaderT::run(lifted_bind, 4)), Identity::run(ReaderT::run(bound_lifts, 4)))
+      }
     }
   }
 
@@ -432,13 +466,15 @@ test("Monad transformers") {
       put: StateT<Int, Identity, Unit> = StateT::put::<Identity>(9)
       modified: StateT<Int, Identity, Unit> = StateT::modify::<Identity>({|state| state + 1})
 
-      assert_eq(Identity::run(Identity::new((4, 5))), Identity::run(StateT::run(value, 3)))
-      assert_eq(Identity::run(Identity::new(4)), Identity::run(StateT::eval(value, 3)))
-      assert_eq(Identity::run(Identity::new(5)), Identity::run(StateT::exec(value, 3)))
-      assert_eq(Identity::run(Identity::new((3, 3))), Identity::run(StateT::run(current, 3)))
-      assert_eq(Identity::run(Identity::new((6, 3))), Identity::run(StateT::run(projected, 3)))
-      assert_eq(Identity::run(Identity::new(((), 9))), Identity::run(StateT::run(put, 3)))
-      assert_eq(Identity::run(Identity::new(((), 4))), Identity::run(StateT::run(modified, 3)))
+      do::<Result> {
+        assert_eq(Identity::run(Identity::new((4, 5))), Identity::run(StateT::run(value, 3)))
+        assert_eq(Identity::run(Identity::new(4)), Identity::run(StateT::eval(value, 3)))
+        assert_eq(Identity::run(Identity::new(5)), Identity::run(StateT::exec(value, 3)))
+        assert_eq(Identity::run(Identity::new((3, 3))), Identity::run(StateT::run(current, 3)))
+        assert_eq(Identity::run(Identity::new((6, 3))), Identity::run(StateT::run(projected, 3)))
+        assert_eq(Identity::run(Identity::new(((), 9))), Identity::run(StateT::run(put, 3)))
+        assert_eq(Identity::run(Identity::new(((), 4))), Identity::run(StateT::run(modified, 3)))
+      }
     }
 
     it("threads applicative and monadic state from left to right") {
@@ -452,8 +488,10 @@ test("Monad transformers") {
         StateT::new({|state| Identity::new((item + state, state + 10))})
       }
 
-      assert_eq(Identity::run(Identity::new((11, 12))), Identity::run(StateT::run(applied, 1)))
-      assert_eq(Identity::run(Identity::new((3, 12))), Identity::run(StateT::run(bound, 1)))
+      do::<Result> {
+        assert_eq(Identity::run(Identity::new((11, 12))), Identity::run(StateT::run(applied, 1)))
+        assert_eq(Identity::run(Identity::new((3, 12))), Identity::run(StateT::run(bound, 1)))
+      }
     }
 
     it("derives Alternative only from an Alternative base") {
@@ -465,9 +503,11 @@ test("Monad transformers") {
       chosen_list: StateT<Int, List, Int> = left_list <|> right_list
 
       expected_none: Option<(Int, Int)> = Option::None
-      assert_eq(expected_none, StateT::run(empty, 3))
-      assert_eq(Option::Some((4, 5)), StateT::run(left <|> right, 3))
-      assert_eq([(3, 4), (13, 23)], StateT::run(chosen_list, 3))
+      do::<Result> {
+        assert_eq(expected_none, StateT::run(empty, 3))
+        assert_eq(Option::Some((4, 5)), StateT::run(left <|> right, 3))
+        assert_eq([(3, 4), (13, 23)], StateT::run(chosen_list, 3))
+      }
     }
 
     it("preserves base failure without producing a next state") {
@@ -478,7 +518,7 @@ test("Monad transformers") {
         StateT::new({|state| Ok((value + 1, state + 1))})
       }
 
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(StateT::run(bound, 3)))
+      assert_err_kind(NoneError, StateT::run(bound, 3))
     }
 
     it("preserves finite Monad and lift laws") {
@@ -494,11 +534,13 @@ test("Monad transformers") {
       lifted_bind: StateT<Int, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
       bound_lifts: StateT<Int, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
 
-      assert_eq(Identity::run(StateT::run(state_t_inc(3), 4)), Identity::run(StateT::run(left_identity, 4)))
-      assert_eq(Identity::run(StateT::run(value, 4)), Identity::run(StateT::run(right_identity, 4)))
-      assert_eq(Identity::run(StateT::run(assoc_left, 4)), Identity::run(StateT::run(assoc_right, 4)))
-      assert_eq(Identity::run(StateT::run(lifted_pure, 4)), Identity::run(StateT::run(transformer_pure, 4)))
-      assert_eq(Identity::run(StateT::run(lifted_bind, 4)), Identity::run(StateT::run(bound_lifts, 4)))
+      do::<Result> {
+        assert_eq(Identity::run(StateT::run(state_t_inc(3), 4)), Identity::run(StateT::run(left_identity, 4)))
+        assert_eq(Identity::run(StateT::run(value, 4)), Identity::run(StateT::run(right_identity, 4)))
+        assert_eq(Identity::run(StateT::run(assoc_left, 4)), Identity::run(StateT::run(assoc_right, 4)))
+        assert_eq(Identity::run(StateT::run(lifted_pure, 4)), Identity::run(StateT::run(transformer_pure, 4)))
+        assert_eq(Identity::run(StateT::run(lifted_bind, 4)), Identity::run(StateT::run(bound_lifts, 4)))
+      }
     }
   }
 
@@ -517,12 +559,14 @@ test("Monad transformers") {
       values: List<OptionT<Identity, Int>> = [holder.option, updated.option]
       second: OptionT<Identity, Int> =? List::at(values, 1)
 
-      assert_eq(Option::Some(1), Identity::run(OptionT::run(holder.option)))
-      assert_eq(Option::Some(9), Identity::run(OptionT::run(second)))
-      expected_either: Either<String, Int> = Either::Right(2)
-      assert_eq(expected_either, Identity::run(EitherT::run(holder.either)))
-      assert_eq(Identity::run(Identity::new(3)), Identity::run(ReaderT::run(holder.reader, 3)))
-      assert_eq(Identity::run(Identity::new((3, 3))), Identity::run(StateT::run(holder.state, 3)))
+      do::<Result> {
+        assert_eq(Option::Some(1), Identity::run(OptionT::run(holder.option)))
+        assert_eq(Option::Some(9), Identity::run(OptionT::run(second)))
+        expected_either: Either<String, Int> = Either::Right(2)
+        assert_eq(expected_either, Identity::run(EitherT::run(holder.either)))
+        assert_eq(Identity::run(Identity::new(3)), Identity::run(ReaderT::run(holder.reader, 3)))
+        assert_eq(Identity::run(Identity::new((3, 3))), Identity::run(StateT::run(holder.state, 3)))
+      }
     }
   }
 
@@ -564,31 +608,45 @@ test("Monad transformers") {
       state_put: StateT<Int, Probe, Unit> = StateT::put::<Probe>(2)
       state_modify: StateT<Int, Probe, Unit> = StateT::modify::<Probe>({|value| value + 1})
 
-      assert_eq("pure", OptionT::run(option_pure).origin)
-      assert_eq("pure", OptionT::run(option_some).origin)
-      assert_eq("pure", OptionT::run(option_none).origin)
-      assert_eq("pure", OptionT::run(option_from_some).origin)
-      assert_eq("pure", OptionT::run(option_from_none).origin)
-      assert_eq("pure", OptionT::run(option_empty).origin)
-      assert_eq("pure", OptionT::run(option_bind_none).origin)
-      assert_eq("pure", OptionT::run(option_ap_none).origin)
-      assert_eq("return", OptionT::run(option_return).origin)
+      do::<Result> {
+        do::<Result> {
+          assert_eq("pure", OptionT::run(option_pure).origin)
+          assert_eq("pure", OptionT::run(option_some).origin)
+          assert_eq("pure", OptionT::run(option_none).origin)
+          assert_eq("pure", OptionT::run(option_from_some).origin)
+          assert_eq("pure", OptionT::run(option_from_none).origin)
+        }
+        do::<Result> {
+          assert_eq("pure", OptionT::run(option_empty).origin)
+          assert_eq("pure", OptionT::run(option_bind_none).origin)
+          assert_eq("pure", OptionT::run(option_ap_none).origin)
+          assert_eq("return", OptionT::run(option_return).origin)
+        }
 
-      assert_eq("pure", EitherT::run(either_pure).origin)
-      assert_eq("pure", EitherT::run(either_left).origin)
-      assert_eq("pure", EitherT::run(either_right).origin)
-      assert_eq("pure", EitherT::run(either_from_right).origin)
-      assert_eq("pure", EitherT::run(either_from_left).origin)
-      assert_eq("pure", EitherT::run(either_bind_left).origin)
-      assert_eq("pure", EitherT::run(either_ap_left).origin)
-      assert_eq("return", EitherT::run(either_return).origin)
+        do::<Result> {
+          assert_eq("pure", EitherT::run(either_pure).origin)
+          assert_eq("pure", EitherT::run(either_left).origin)
+          assert_eq("pure", EitherT::run(either_right).origin)
+          assert_eq("pure", EitherT::run(either_from_right).origin)
+          assert_eq("pure", EitherT::run(either_from_left).origin)
+        }
+        do::<Result> {
+          assert_eq("pure", EitherT::run(either_bind_left).origin)
+          assert_eq("pure", EitherT::run(either_ap_left).origin)
+          assert_eq("return", EitherT::run(either_return).origin)
+        }
 
-      assert_eq("pure", ReaderT::run(reader_ask, 1).origin)
-      assert_eq("pure", ReaderT::run(reader_asks, 1).origin)
-      assert_eq("pure", StateT::run(state_get, 1).origin)
-      assert_eq("pure", StateT::run(state_gets, 1).origin)
-      assert_eq("pure", StateT::run(state_put, 1).origin)
-      assert_eq("pure", StateT::run(state_modify, 1).origin)
+        do::<Result> {
+          assert_eq("pure", ReaderT::run(reader_ask, 1).origin)
+          assert_eq("pure", ReaderT::run(reader_asks, 1).origin)
+        }
+        do::<Result> {
+          assert_eq("pure", StateT::run(state_get, 1).origin)
+          assert_eq("pure", StateT::run(state_gets, 1).origin)
+          assert_eq("pure", StateT::run(state_put, 1).origin)
+          assert_eq("pure", StateT::run(state_modify, 1).origin)
+        }
+      }
     }
   }
 }

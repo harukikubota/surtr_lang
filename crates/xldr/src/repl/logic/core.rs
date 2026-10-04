@@ -8968,6 +8968,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::Block(span, _)
         | Ast::Bind(span, _, _)
         | Ast::SafeBind(span, _, _)
+        | Ast::StatementQuestion(span, _)
         | Ast::Do(span, _, _)
         | Ast::BinOp(span, _, _, _)
         | Ast::Pipe(span, _, _)

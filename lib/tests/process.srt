@@ -25,8 +25,10 @@ test("Process") {
       result = Task::cast({||
         print("cast:worker")
       })
-      assert_eq("Ok(())", inspect(result))
-      assert_stdout_eq(["cast:worker"])
+      do::<Result> {
+        assert_eq("Ok(())", inspect(result))
+        assert_stdout_eq(["cast:worker"])
+      }
     }
 
     it("runs launch bodies and still returns Ok") {
@@ -35,8 +37,10 @@ test("Process") {
         print("launch:worker")
         Err(NoneError)
       })
-      assert_eq("Ok(())", inspect(result))
-      assert_stdout_eq(["launch:worker"])
+      do::<Result> {
+        assert_eq("Ok(())", inspect(result))
+        assert_stdout_eq(["launch:worker"])
+      }
     }
   }
 

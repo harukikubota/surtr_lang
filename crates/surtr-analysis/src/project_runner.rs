@@ -358,6 +358,7 @@ impl ProjectRunnerExtractor {
             | Ast::ExtractorClosure(_, _, inner)
             | Ast::Capture(_, inner, _)
             | Ast::Semi(_, inner)
+            | Ast::StatementQuestion(_, inner)
             | Ast::FieldAccess(_, inner, _)
             | Ast::FacetSegmentAccess(_, inner, _)
             | Ast::FacetCapture(_, inner) => self.visit(inner),
@@ -615,6 +616,7 @@ fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut Con
         | Ast::ExtractorClosure(_, _, inner)
         | Ast::Capture(_, inner, _)
         | Ast::Semi(_, inner)
+        | Ast::StatementQuestion(_, inner)
         | Ast::FieldAccess(_, inner, _)
         | Ast::FacetSegmentAccess(_, inner, _)
         | Ast::FacetCapture(_, inner) => collect_config_builder_facts(inner, project_file, facts),

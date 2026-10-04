@@ -1,0 +1,11 @@
+once
+after-success
+Ok(7)
+Err(NoneError("None Value."))
+outer-success
+Ok(())
+Err(NoneError("None Value."))
+Err(NoneError("None Value."))
+Ok(9)
+Err(NoneError("None Value."))
+11

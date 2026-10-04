@@ -558,6 +558,9 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             Box::new(rewrite_process_self_refs(*target)),
             args.into_iter().map(rewrite_process_self_refs).collect(),
         ),
+        Ast::StatementQuestion(span, inner) => {
+            Ast::StatementQuestion(span, Box::new(rewrite_process_self_refs(*inner)))
+        }
         Ast::Semi(span, inner) => Ast::Semi(span, Box::new(rewrite_process_self_refs(*inner))),
         other => other,
     }

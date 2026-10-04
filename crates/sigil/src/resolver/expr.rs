@@ -183,6 +183,8 @@ pub(super) enum CanonicalSpecialForm {
     MapErr,
     Cause,
     RecoverKind,
+    AssertErrKind,
+    AssertCauseChain,
     Logic(LogicKind),
 }
 
@@ -198,6 +200,8 @@ impl Resolver {
             "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
             "Result::cause" => Some(CanonicalSpecialForm::Cause),
             "Result::recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
+            "Test::assert_err_kind" => Some(CanonicalSpecialForm::AssertErrKind),
+            "Test::assert_cause_chain" => Some(CanonicalSpecialForm::AssertCauseChain),
             _ => None,
         }
     }
@@ -237,6 +241,8 @@ impl Resolver {
             ("Result", "map_err") => Some(CanonicalSpecialForm::MapErr),
             ("Result", "cause") => Some(CanonicalSpecialForm::Cause),
             ("Result", "recover_kind") => Some(CanonicalSpecialForm::RecoverKind),
+            ("Test", "assert_err_kind") => Some(CanonicalSpecialForm::AssertErrKind),
+            ("Test", "assert_cause_chain") => Some(CanonicalSpecialForm::AssertCauseChain),
             _ => None,
         }
     }
@@ -293,6 +299,8 @@ impl Resolver {
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
             CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
+            CanonicalSpecialForm::AssertErrKind => self.resolve_assert_err_kind(span, args),
+            CanonicalSpecialForm::AssertCauseChain => self.resolve_assert_cause_chain(span, args),
             CanonicalSpecialForm::Logic(logic_kind) => {
                 self.resolve_logic_call(span, args, logic_kind)
             }
@@ -721,6 +729,7 @@ impl Resolver {
             }
             Ast::Bind(_, _, rhs)
             | Ast::SafeBind(_, _, rhs)
+            | Ast::StatementQuestion(_, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
             | Ast::FieldAccess(_, rhs, _)
@@ -1125,6 +1134,15 @@ impl Resolver {
             Ast::SafeBind(span, pat, rhs) => Ok(Ast::SafeBind(
                 span,
                 pat,
+                Box::new(self.rewrite_capture_placeholders(
+                    *rhs,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::StatementQuestion(span, rhs) => Ok(Ast::StatementQuestion(
+                span,
                 Box::new(self.rewrite_capture_placeholders(
                     *rhs,
                     capture_span,
@@ -1783,6 +1801,7 @@ impl Resolver {
             }
             Ast::Bind(_, _, rhs)
             | Ast::SafeBind(_, _, rhs)
+            | Ast::StatementQuestion(_, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
             | Ast::FieldAccess(_, rhs, _)
@@ -3000,6 +3019,7 @@ impl Resolver {
             | Ast::App(..)
             | Ast::Bind(..)
             | Ast::SafeBind(..)
+            | Ast::StatementQuestion(..)
             | Ast::Do(..)
             | Ast::BinOp(..)
             | Ast::Pipe(..)
@@ -3188,6 +3208,11 @@ impl Resolver {
                     Box::new(resolved_rhs),
                 ))
             }
+
+            Ast::StatementQuestion(span, rhs) => Ok(Resolved::StatementQuestion(
+                span,
+                Box::new(self.resolve_node(*rhs)?),
+            )),
 
             Ast::Do(span, return_type_arguments, statements) => {
                 let resolved_contract = self.resolve_do_contract(&span);

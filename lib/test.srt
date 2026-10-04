@@ -1,5 +1,5 @@
 @doc """
-Recoverable assertion failure raised by the test DSL.
+An assertion failure whose message is the supplied `detail`.
 """
 deferror TestAssertionFailed(detail: String) {
   detail
@@ -8,7 +8,35 @@ deferror TestAssertionFailed(detail: String) {
 import StyledDoc;
 
 @doc """
-Test DSL helpers consumed by `surtr test`.
+Build named test suites and check values, errors, documents, and captured I/O.
+Available to test files executed by `surtr test`.
+
+`test` and `describe` group cases; `it` records each selected case's result.
+`xit(name, reason, body)` pauses a case; `pend(name, reason)` declares an unimplemented case.
+Reasons must be nonblank. Case declarations inside an executing case are rejected.
+Use `--test`, `--describe`, and `--it` for case-sensitive substring filters,
+`--include-xit` to run paused cases, and `--deny-pending` to reject selected pending cases.
+`--list` skips case bodies but still executes top-level and test/describe traversal.
+`--timings` measures executed cases; `--format json` produces one structured report.
+`--quiet` suppresses normal details while retaining failures and denied pending cases.
+Assertions return `Ok(())` on success or `Err(TestAssertionFailed(...))` on failure.
+Tests run serially, with separate stdin, stdout, and stderr buffers for each case.
+
+Example file: `lib/tests/test_examples.srt` (`surtr test test_examples`).
+
+```surtr
+import Test;
+
+test("examples") {
+  it("adds two values") {
+    assert_eq(3, 1 + 2)
+  }
+  it("checks an expected error") {
+    result: Result<Int> = Err(NoneError)
+    assert_err_contains("NoneError", result)
+  }
+}
+```
 """
 defmod Test {
   @builtin def __test_push(kind: String, name: String) -> Unit
@@ -20,7 +48,7 @@ defmod Test {
   @builtin def __test_capture_stdout() -> List<String>
   @builtin def __test_capture_stderr() -> List<String>
   @builtin def __test_push_stdin(input: String) -> Unit
-  @builtin def __test_begin_it() -> Unit
+  @builtin def __test_begin_case(kind: String, name: String, reason: String) -> Boolean
 
   defp _fail(detail: String) -> Result<()> {
     Err(TestAssertionFailed(detail))
@@ -61,6 +89,10 @@ defmod Test {
     )
   }
 
+  @doc """
+  Run `body` as a named test suite, grouping its case results under `name`.
+  A returned `Err` records a suite failure. Returns `Ok(())` after either outcome.
+  """
   def test(name: String, body: (-> Result<()>)) -> Result<()> {
     __test_push("test", name)
     result = body()
@@ -70,6 +102,10 @@ defmod Test {
     }
   }
 
+  @doc """
+  Run `body` as a named group within the current suite or group.
+  A returned `Err` records a group failure. Returns `Ok(())` after either outcome.
+  """
   def describe(name: String, body: (-> Result<()>)) -> Result<()> {
     __test_push("describe", name)
     result = body()
@@ -79,25 +115,94 @@ defmod Test {
     }
   }
 
+  @doc """
+  Run a selected `body` as one named test case with fresh stdin, stdout, and stderr buffers.
+  Filtered cases and list mode do not execute the body or consume I/O buffers.
+  Record one pass for `Ok(())` or one failure for `Err(error)`.
+  Returns `Ok(())` after either result so later cases can run.
+  """
   def it(name: String, body: (-> Result<()>)) -> Result<()> {
-    __test_begin_it()
-    match body() {
-      Ok(_) => _finish_it_ok(name),
-      Err(err) => _finish_it_err(name, err),
+    _case("it", name, "", body)
+  }
+
+  defp _case(kind: String, name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
+    match __test_begin_case(kind, name, reason) {
+      True => match body() {
+        Ok(_) => _finish_it_ok(name),
+        Err(err) => _finish_it_err(name, err),
+      },
+      False => Ok(()),
     }
   }
 
+  @doc """
+  Declare a paused case with a required nonblank reason.
+  The body runs only with `surtr test --include-xit`, subject to name filters.
+  Example: `xit("parser", "repairing nesting") { assert_true(True) }`.
+  """
+  def xit(name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
+    _case("xit", name, reason, body)
+  }
+
+  @doc """
+  Declare an unimplemented case with a required nonblank reason and no body.
+  Example: `pend("parser", "implementation pending")`.
+  `--deny-pending` rejects selected pending cases, including in list mode.
+  """
+  def pend(name: String, reason: String) -> Result<()> {
+    __test_begin_case("pend", name, reason)
+    Ok(())
+  }
+
+  @doc """
+  Check that `flag` is `True`.
+  Returns `Ok(())` for `True`, or `Err(TestAssertionFailed(...))` for `False`.
+
+  ```surtr
+  import Test;
+
+  test("assert_true") {
+    it("accepts a true condition") {
+      assert_true(1 < 2)
+    }
+  }
+  ```
+  """
   def assert_true(flag: Boolean) -> Result<()> {
     if(flag, Ok(()), _fail("expected True, got False"))
   }
 
+  @doc """
+  Check that `flag` is `False`.
+  Returns `Ok(())` for `False`, or `Err(TestAssertionFailed(...))` for `True`.
+
+  ```surtr
+  import Test;
+
+  test("assert_false") {
+    it("accepts a false condition") {
+      assert_false(1 > 2)
+    }
+  }
+  ```
+  """
   def assert_false(flag: Boolean) -> Result<()> {
     if(flag, _fail("expected False, got True"), Ok(()))
   }
 
   @doc """
-  Assert equality through `Eq` for two values of the same static type.
-  `inspect` is used only to render a failure message, not to decide equality.
+  Check that `actual` equals `expected` according to `Eq`.
+  Returns `Ok(())` for equal values, or `Err(TestAssertionFailed(...))` describing the mismatch.
+
+  ```surtr
+  import Test;
+
+  test("assert_eq") {
+    it("compares the sum with the expected value") {
+      assert_eq(3, 1 + 2)
+    }
+  }
+  ```
   """
   def assert_eq(expected: $A, actual: $A) -> Result<()>
   where
@@ -111,7 +216,121 @@ defmod Test {
   }
 
   @doc """
-  Assert that a result is `Ok(actual)` and that `actual` equals `expected` via `Eq`.
+  Check that same-typed values differ according to Eq. Inspection is diagnostic only.
+  Example: `assert_ne(1, 2)` returns `Ok(())`.
+  """
+  def assert_ne(expected: $A, actual: $A) -> Result<()>
+  where
+    $A: Eq
+  {
+    if(Eq::eq(expected, actual), _fail("expected unequal values, got #{inspect(actual)}"), Ok(()))
+  }
+
+  @doc """
+  Check only the Ok branch, without requiring Eq for the payload.
+  Example: `assert_ok(Ok(3))` returns `Ok(())`.
+  """
+  def assert_ok(result: Result<$A>) -> Result<()> {
+    match result {
+      Ok(_) => Ok(()),
+      Err(err) => _fail("expected Ok, got Err(#{inspect(err)})"),
+    }
+  }
+
+  @doc """
+  Check only the Err branch, without comparing the error kind or payload.
+  Example: `assert_err(Err(NoneError))` returns `Ok(())`.
+  """
+  def assert_err(result: Result<$A>) -> Result<()> {
+    match result {
+      Err(_) => Ok(()),
+      Ok(actual) => _fail("expected Err, got Ok(#{inspect(actual)})"),
+    }
+  }
+
+  @doc """
+  Check Err against a concrete deferror declaration's canonical identity.
+  Payloads, messages, causes, and locations do not participate in the comparison.
+  The marker must be a declaration name, never a string, variable, or error instance.
+  Example: `assert_err_kind(NoneError, Err(NoneError))` returns `Ok(())`.
+  """
+  @builtin def assert_err_kind(marker: ErrorKind, result: Result<$A>) -> Result<()>
+
+  @doc """
+  Compares the complete error cause chain, outermost error first.
+  Pass a direct list of concrete deferror names. Order and length must match;
+  payloads and display strings are ignored. Ok and an empty expected list fail.
+  Example: `assert_cause_chain([ZeroDivisionError, NoneError], Result::cause(Err(NoneError), ZeroDivisionError))`.
+  """
+  @builtin def assert_cause_chain(expected: List<ErrorKind>, result: Result<$A>) -> Result<()>
+
+  @doc """
+  Check that the option is Some and its content equals expected according to Eq.
+  Example: `assert_some_eq(3, Option::Some(3))` returns `Ok(())`.
+  """
+  def assert_some_eq(expected: $A, option: Option<$A>) -> Result<()>
+  where
+    $A: Eq
+  {
+    match option {
+      Option::Some(actual) => assert_eq(expected, actual),
+      Option::None => _fail("expected Some(#{inspect(expected)}), got None"),
+    }
+  }
+
+  @doc """
+  Check the None branch without requiring Eq. A failure shows the actual Some content.
+  Example: `assert_none(Option<Int>::None)` returns `Ok(())`.
+  """
+  def assert_none(option: Option<$A>) -> Result<()> {
+    match option {
+      Option::None => Ok(()),
+      Option::Some(actual) => _fail("expected None, got Some(#{inspect(actual)})"),
+    }
+  }
+
+  @doc """
+  Check a case-sensitive literal substring. The empty fragment always matches.
+  Example: `assert_contains("ell", "hello")` returns `Ok(())`.
+  """
+  def assert_contains(fragment: String, actual: String) -> Result<()> {
+    if(String::contains(actual, fragment), Ok(()), _fail("expected #{inspect(actual)} to contain #{inspect(fragment)}"))
+  }
+
+  @builtin def __test_approx_equal(expected: Float, actual: Float, tolerance: Float) -> Boolean
+
+  @doc """
+  Check absolute Float error against a nonnegative tolerance, including equality at the boundary.
+  Negative tolerance is an assertion failure. An overflowing difference also fails without aborting the VM.
+  Example: `assert_approx(1.0, 1.25, 0.25)` returns `Ok(())`.
+  """
+  def assert_approx(expected: Float, actual: Float, tolerance: Float) -> Result<()> {
+    if(tolerance < 0.0,
+      _fail("invalid negative tolerance: #{inspect(tolerance)}"),
+      if(__test_approx_equal(expected, actual, tolerance), Ok(()),
+        _fail("expected #{inspect(expected)} within tolerance #{inspect(tolerance)}, got #{inspect(actual)}")),
+    )
+  }
+
+  @doc """
+  Always return Err(TestAssertionFailed(detail)), preserving detail unchanged.
+  Example: `fail("not reached")` returns an assertion failure containing `not reached`.
+  """
+  def fail(detail: String) -> Result<()> { _fail(detail) }
+
+  @doc """
+  Check that `result` is `Ok(actual)` and that `actual` equals `expected` according to `Eq`.
+  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` for an unequal value or an `Err`.
+
+  ```surtr
+  import Test;
+
+  test("assert_ok_eq") {
+    it("compares the successful result value") {
+      assert_ok_eq(3, Ok(1 + 2))
+    }
+  }
+  ```
   """
   def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()>
   where
@@ -123,6 +342,21 @@ defmod Test {
     }
   }
 
+  @doc """
+  Check that `result` is `Err(error)` and `inspect(error)` contains `fragment` as a case-sensitive substring.
+  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` for an `Ok` or a missing fragment.
+
+  ```surtr
+  import Test;
+
+  test("assert_err_contains") {
+    it("checks the expected error text") {
+      result: Result<Int> = Err(NoneError)
+      assert_err_contains("NoneError", result)
+    }
+  }
+  ```
+  """
   def assert_err_contains(fragment: String, result: Result<$A>) -> Result<()> {
     match result {
       Ok(actual) => _fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
@@ -130,35 +364,68 @@ defmod Test {
     }
   }
 
+  @doc """
+  Check that `doc` rendered as plain text equals `expected`.
+  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the text mismatch.
+
+  ```surtr
+  import Test;
+  import StyledDoc;
+
+  test("assert_doc_plain_eq") {
+    it("compares text without styling") {
+      doc = StyledDoc::bold(StyledDoc::text("hello"))
+      assert_doc_plain_eq("hello", doc)
+    }
+  }
+  ```
+  """
   def assert_doc_plain_eq(expected: String, doc: StyledDocDoc) -> Result<()> {
     assert_eq(expected, StyledDoc::plain(doc))
   }
 
+  @doc """
+  Check that `doc` rendered with ANSI styling equals `expected`, including escape sequences.
+  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the text mismatch.
+
+  ```surtr
+  import Test;
+  import StyledDoc;
+
+  test("assert_doc_ansi_eq") {
+    it("compares text with ANSI styling") {
+      doc = StyledDoc::bold(StyledDoc::text("hello"))
+      assert_doc_ansi_eq("\u{1b}[1mhello\u{1b}[0m", doc)
+    }
+  }
+  ```
+  """
   def assert_doc_ansi_eq(expected: String, doc: StyledDocDoc) -> Result<()> {
     assert_eq(expected, StyledDoc::to_ansi(doc))
   }
 
   @doc """
-  Drain captured stdout lines produced since the previous capture read.
-  Current contract:
-  - buffer is backed by the VM standard stdout test handler
-  - the buffer is isolated for each `it`
+  Return unread stdout entries from the current test case, in output order, and empty the buffer.
+  Entries may contain embedded newlines and include input prompts.
+  Includes output since the case began or the last `capture_stdout` or `assert_stdout_eq` call.
   """
   def capture_stdout() -> List<String> {
     __test_capture_stdout()
   }
 
   @doc """
-  Drain captured stderr lines produced since the previous capture read.
-  Shares the same per-`it` handler buffer semantics as `capture_stdout`.
+  Return unread stderr entries from the current test case, in output order, and empty the buffer.
+  Entries may contain embedded newlines.
+  Includes output since the case began or the last `capture_stderr` or `assert_stderr_eq` call.
   """
   def capture_stderr() -> List<String> {
     __test_capture_stderr()
   }
 
   @doc """
-  Append text to the current test stdin buffer.
-  `IO::get` and `IO::get_line` read this buffer before host stdin.
+  Supply text for `IO::get` and `IO::get_line` in the current test case.
+  Append `input` without adding a newline and return `Ok(())`.
+  After this call, reads use only this buffer and return `Err(InputError(...))` when it is exhausted.
   """
   def push_stdin(input: String) -> Result<()> {
     __test_push_stdin(input)
@@ -166,14 +433,40 @@ defmod Test {
   }
 
   @doc """
-  Assert captured stdout lines equal expected lines.
+  Compare the current case's captured stdout entries with `expected`, in output order.
+  Consume the captured entries even when the comparison fails.
+  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the mismatch.
+
+  ```surtr
+  import Test;
+
+  test("assert_stdout_eq") {
+    it("compares captured stdout") {
+      print("hello")
+      assert_stdout_eq(["hello"])
+    }
+  }
+  ```
   """
   def assert_stdout_eq(expected: List<String>) -> Result<()> {
     assert_eq(expected, __test_capture_stdout())
   }
 
   @doc """
-  Assert captured stderr lines equal expected lines.
+  Compare the current case's captured stderr entries with `expected`, in output order.
+  Consume the captured entries even when the comparison fails.
+  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the mismatch.
+
+  ```surtr
+  import Test;
+
+  test("assert_stderr_eq") {
+    it("compares captured stderr") {
+      eprint(NoneError)
+      assert_stderr_eq(["Error: NoneError: None Value."])
+    }
+  }
+  ```
   """
   def assert_stderr_eq(expected: List<String>) -> Result<()> {
     assert_eq(expected, __test_capture_stderr())

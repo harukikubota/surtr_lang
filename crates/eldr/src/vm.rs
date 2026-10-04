@@ -1,3 +1,6 @@
+mod test_runner;
+use test_runner::VmTestRunner;
+pub use test_runner::{VmTestCase, VmTestDeclaration, VmTestPolicy, VmTestScope, VmTestScopeKind};
 mod process_continuation;
 pub(crate) use process_continuation::RuntimeContinuation;
 use process_continuation::{DetachedTask, SingletonFlight};
@@ -43,6 +46,11 @@ const MAX_TAIL_CALL_TRACE_BREADCRUMBS: usize = 32;
 pub enum VmTestEventKind {
     Passed,
     Failed,
+    Skipped,
+    Pending,
+    Filtered,
+    Runnable,
+    ScopeFailed,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -80,6 +88,7 @@ impl RuntimeOutputEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmTestEvent {
+    pub case: Option<VmTestCase>,
     pub path: Vec<String>,
     pub detail: Option<String>,
     pub kind: VmTestEventKind,
@@ -91,6 +100,8 @@ pub struct VmTestEvent {
 pub struct VmTestDiagnostic {
     pub kind: String,
     pub message: String,
+    pub assertion: Option<String>,
+    pub assertion_call_kind: Option<RuntimeCallKind>,
     pub file: String,
     pub line: u32,
     pub column: u32,
@@ -99,15 +110,49 @@ pub struct VmTestDiagnostic {
 }
 
 impl VmTestDiagnostic {
-    fn from_rich_error(error: &RichError) -> Self {
+    fn from_rich_error(error: &RichError, bytecode: &Bytecode) -> Self {
+        // Use the saved failure trace, including tail calls. Public Test wrappers
+        // may call another assertion; the outer assertion is the user's call.
+        let assertion = if error.kind == compiler_global_error_kind("TestAssertionFailed") {
+            error
+                .stack_trace
+                .iter()
+                .filter_map(|frame| {
+                    let entry = bytecode.functions.get(frame.fun_idx? as usize)?;
+                    let name = sindr::names::surface_path_name(entry.qualified_name.as_deref()?)
+                        .strip_prefix("Test::")?;
+                    matches!(
+                        name,
+                        "assert_true"
+                            | "assert_false"
+                            | "assert_eq"
+                            | "assert_ok_eq"
+                            | "assert_err_contains"
+                            | "assert_doc_plain_eq"
+                            | "assert_doc_ansi_eq"
+                            | "assert_stdout_eq"
+                            | "assert_stderr_eq"
+                    )
+                    .then_some((name, frame))
+                    .filter(|(_, frame)| frame.location.is_some())
+                })
+                .last()
+        } else {
+            None
+        };
+        let location = assertion
+            .and_then(|(_, frame)| frame.location.as_ref())
+            .unwrap_or(&error.location);
         Self {
             kind: error.kind.clone(),
             message: error.visible_message().to_string(),
-            file: error.location.file.clone(),
-            line: error.location.line,
-            column: error.location.column,
-            span_start: error.location.span_start,
-            span_end: error.location.span_end,
+            assertion: assertion.map(|(name, _)| name.to_string()),
+            assertion_call_kind: assertion.map(|(_, frame)| frame.call_kind.clone()),
+            file: location.file.clone(),
+            line: location.line,
+            column: location.column,
+            span_start: location.span_start,
+            span_end: location.span_end,
         }
     }
 }
@@ -149,7 +194,7 @@ struct VmCheckpoint {
     last_result: Option<Value>,
     output_len: Option<usize>,
     error_output_len: Option<usize>,
-    test_scope_len: usize,
+    test_runner: VmTestRunner,
     test_event_len: usize,
     test_stdout_cursor: usize,
     test_stderr_cursor: usize,
@@ -853,7 +898,7 @@ pub struct VM {
     /// Optional developer-facing execution observer.
     observer: Option<VmObserver>,
     /// Current nested test/describe scope names.
-    test_scope: Vec<String>,
+    test_runner: VmTestRunner,
     /// Collected test events emitted by the test DSL runtime helpers.
     test_events: Vec<VmTestEvent>,
     /// Cursor tracking for test-event I/O slices.
@@ -901,7 +946,7 @@ impl VM {
             exit_code: 0,
             last_result: None,
             observer: None,
-            test_scope: Vec::new(),
+            test_runner: VmTestRunner::default(),
             test_events: Vec::new(),
             test_stdout_cursor: 0,
             test_stderr_cursor: 0,
@@ -1504,12 +1549,6 @@ impl VM {
         }
         self.test_stdout_cursor = 0;
         self.test_stderr_cursor = 0;
-    }
-
-    pub(crate) fn begin_test_case_io(&mut self) {
-        self.reset_captured_io();
-        self.stdin_input = None;
-        self.stdin_input_cursor = 0;
     }
 
     fn emit_host_stdout_line(&mut self, line: String) {
@@ -2904,71 +2943,6 @@ impl VM {
         &self.test_events
     }
 
-    pub(crate) fn push_test_scope(&mut self, _kind: &str, name: String) {
-        if self.test_scope.is_empty() {
-            self.test_stdout_cursor = self.current_output_len();
-            self.test_stderr_cursor = self.current_error_output_len();
-        }
-        self.test_scope.push(name);
-    }
-
-    pub(crate) fn pop_test_scope(&mut self) -> Result<(), RuntimeError> {
-        self.test_scope
-            .pop()
-            .map(|_| ())
-            .ok_or_else(|| RuntimeError::new("test scope stack underflow"))
-    }
-
-    pub(crate) fn record_test_pass(&mut self, name: String) {
-        let mut path = self.test_scope.clone();
-        path.push(name);
-        let io = self.next_test_event_io();
-        self.test_events.push(VmTestEvent {
-            path,
-            detail: None,
-            kind: VmTestEventKind::Passed,
-            io,
-            diagnostic: None,
-        });
-    }
-
-    pub(crate) fn record_test_fail(&mut self, name: String, detail: String) {
-        let mut path = self.test_scope.clone();
-        path.push(name);
-        let io = self.next_test_event_io();
-        self.test_events.push(VmTestEvent {
-            path,
-            detail: Some(detail),
-            kind: VmTestEventKind::Failed,
-            io,
-            diagnostic: None,
-        });
-    }
-
-    pub(crate) fn record_test_fail_error(&mut self, name: String, error: &RichError) {
-        let mut path = self.test_scope.clone();
-        path.push(name);
-        let io = self.next_test_event_io();
-        self.test_events.push(VmTestEvent {
-            path,
-            detail: Some(error.to_display_string()),
-            kind: VmTestEventKind::Failed,
-            io,
-            diagnostic: Some(VmTestDiagnostic::from_rich_error(error)),
-        });
-    }
-
-    pub(crate) fn record_current_scope_fail(&mut self, detail: String) {
-        let io = self.next_test_event_io();
-        self.test_events.push(VmTestEvent {
-            path: self.test_scope.clone(),
-            detail: Some(detail),
-            kind: VmTestEventKind::Failed,
-            io,
-            diagnostic: None,
-        });
-    }
-
     pub fn enable_observation(&mut self, options: VmObservationOptions) {
         self.observer = Some(VmObserver::new(options));
     }
@@ -3148,11 +3122,11 @@ impl VM {
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         self.boot_runtime()?;
         self.last_result = None;
-        self.test_scope.clear();
+        self.test_runner.reset();
         self.test_events.clear();
         self.test_stdout_cursor = self.current_output_len();
         self.test_stderr_cursor = self.current_error_output_len();
-        let result = match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
+        let result = (|| match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
             StepOutcome::Halt(_) => {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 Ok(())
@@ -3167,7 +3141,10 @@ impl VM {
             },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("top-level execution did not finish")),
-        };
+        })();
+        if let Err(error) = &result {
+            self.abort_test_case(error);
+        }
         if result.is_ok() && self.has_pending_background_work() {
             self.batch_shutdown_pending = true;
         } else {
@@ -3373,7 +3350,7 @@ impl VM {
             last_result: self.last_result.clone(),
             output_len: self.output.as_ref().map(Vec::len),
             error_output_len: self.error_output.as_ref().map(Vec::len),
-            test_scope_len: self.test_scope.len(),
+            test_runner: self.test_runner.clone(),
             test_event_len: self.test_events.len(),
             test_stdout_cursor: self.test_stdout_cursor,
             test_stderr_cursor: self.test_stderr_cursor,
@@ -3417,7 +3394,7 @@ impl VM {
         if let (Some(buf), Some(len)) = (self.error_output.as_mut(), checkpoint.error_output_len) {
             buf.truncate(len);
         }
-        self.test_scope.truncate(checkpoint.test_scope_len);
+        self.test_runner = checkpoint.test_runner;
         self.test_events.truncate(checkpoint.test_event_len);
         self.test_stdout_cursor = checkpoint.test_stdout_cursor;
         self.test_stderr_cursor = checkpoint.test_stderr_cursor;
