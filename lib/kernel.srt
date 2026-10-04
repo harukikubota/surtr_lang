@@ -3,6 +3,9 @@ Kernel module.
 
 Provides the small auto-imported standard surface for cross-cutting builtins
 and special forms.
+The names if, if_then, require, and ensure are ordinary names; their Lazy
+argument rules apply only when these standard declarations are selected.
+and / or and the Pattern consumer names are reserved.
 Use this layer for operations that are not owned by a single primitive module
 such as conditional special forms, printing, debug inspection, sequence
 decomposition, and process-oriented entrypoint control.

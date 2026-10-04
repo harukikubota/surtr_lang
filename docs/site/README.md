@@ -35,6 +35,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [FS and Shell](./shell.md)
 - [Regex](./regex.md)
 - [パターンマッチ](./pattern-matching.md)
+- [関数名と呼出し構文](./callable-names.md): 関数の名前の指定方法と呼出し方。
 - [関数コールと関数値](./callables.md)
 - [キャプチャ演算子 `&`](./capture-operator.md)
 - [パイプ演算子](./pipe-operators.md)

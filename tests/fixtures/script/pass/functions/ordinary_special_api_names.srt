@@ -1,0 +1,23 @@
+def if(value: Int) -> Int { print("if"); value + 1 }
+def if_then(value: Int) -> Int { print("if_then"); value + 1 }
+def require(value: Int) -> Int { print("require"); value + 1 }
+def ensure(value: Int) -> Int { print("ensure"); value + 1 }
+def map_err(value: Int) -> Int { print("map_err"); value + 1 }
+def cause(value: Int) -> Int { print("cause"); value + 1 }
+def recover(value: Int) -> Int { print("recover"); value + 1 }
+def recover_kind(value: Int) -> Int { print("recover_kind"); value + 1 }
+def assert_err_kind(value: Int) -> Int { print("assert_err_kind"); value + 1 }
+def assert_cause_chain(value: Int) -> Int { print("assert_cause_chain"); value + 1 }
+
+def observed() -> Int { print("argument"); 41 }
+
+print(to_string(if(observed())))
+print(to_string(if_then(observed())))
+print(to_string(require(observed())))
+print(to_string(ensure(observed())))
+print(to_string(map_err(observed())))
+print(to_string(cause(observed())))
+print(to_string(recover(observed())))
+print(to_string(recover_kind(observed())))
+print(to_string(assert_err_kind(observed())))
+print(to_string(assert_cause_chain(observed())))

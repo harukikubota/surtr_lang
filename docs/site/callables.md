@@ -254,16 +254,17 @@ left `concat` right
 
 意味は次です。
 
-- ``left `name` right`` は `name(left, right)`
+- ``left `name` right`` は、最初に解決した参照が関数宣言の場合に `name(left, right)` として呼び出します。変数・関数引数は、関数型でも拒否します
 - ``left `+` right`` は通常の演算子と同じ
 - `` `name`(args...) `` と `` `Type::method`(args...) `` は通常の call と同じ
 - `` `+`(left, right) `` は通常の二項演算子と同じ
 - unqualified ``left `on` right`` は `Function::on(left, right)` として扱います
 - ``left `Function::on` right`` も同じ意味で、flow 演算子より低優先度です
-- ``left `Other::on` right`` は通常どおり `Other::on(left, right)` です
-- 通常の `on(...)`、`&on`、パイプ右辺の `on(...)` は名前解決で選ばれた関数を使います。同名の関数宣言で標準の `on` を隠しても、裸の中置 `` `on` `` の呼出し先は `Function::on` のままです
+- 通常の `on(...)`、`&on`、パイプ右辺の `on(...)` も標準 `Function::on` を使います
 
-`on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名です。変数・引数・Patternの束縛名・フィールド名には使えませんが、関数の宣言名には使えます。import規則は変わりません。標準の `and` / `or` は短絡評価を維持し、裸の比較関数6名は比較演算子と同じ優先度です。`MyMod::and` などの修飾中置Callは通常のCallとして引数を評価します。
+`on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名です。変数・引数・Pattern の束縛名・フィールド名・独立した関数・独自 member の名前には使えません。標準の `Eq` / `Compare` trait の同名 method 実装は許可します。標準の `and` / `or` は短絡評価を維持し、裸の比較関数6名は比較演算子と同じ優先度です。
+
+一般の名前付き中置呼出しでは、内側に同名の変数があればそこで拒否し、外側の関数を探し直しません。capture や closure を保存した変数にも通常の前置呼出しを使います。backtick 前置呼出しにはこの制限を加えません。名前の分類と例は [関数名と呼出し構文](./callable-names.md) を参照してください。
 
 FuncLiteral は値にならないので、単独では置けません。
 

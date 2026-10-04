@@ -514,9 +514,9 @@ result: Option<Int> = do::<Option> {
 - `value |> normalize` は不許可
 - `pipeline = parse >=> validate` も不許可
 - 関数値として保持できるのは capture、closure、または `Ty::Func` を持つ変数・式
-- backtick FuncLiteral は中置位置専用で、値にはならない
+- backtick FuncLiteral は中置・前置の呼出しと capture に使う補助構文で、単独では値にならない
 - FuncLiteral body は `ident | qualified_path | operator`
-- ``left `name` right`` は `name(left, right)` に lower される
+- ``left `name` right`` は、通常の名前解決で最初に選んだ参照が関数宣言の場合だけ許可する。変数・関数引数は関数型でも拒否し、外側の宣言を探し直さない
 - ``left `operator` right`` は対応する通常演算に lower される
 - ``left `Type::method` right`` は `Type::method(left, right)` に lower される
 - `&`name`` / `&`Type::method`` はそれぞれ通常の capture と同義
@@ -535,15 +535,15 @@ result: Option<Int> = do::<Option> {
 - `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
 - 結合優先度は `Bind < StdOn < Apply=Compose < AndOr < Compare < Pair < Expr < FacetChain < Postfix`
-- `on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名。変数・引数・Patternの束縛名・フィールド名には使えない。関数の宣言名には使え、import規則は変更しない
+- `on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名。変数・引数・Patternの束縛名・フィールド名には使えない。独立した関数・独自 member 名にも使えない。標準 Eq / Compare trait の同名 method 実装は許可する
 - 裸の比較関数6名の中置Callは比較演算子と同じ `Compare` 層・左結合。修飾中置Callは既存の `Function::on`・`Kernel::and`・`Kernel::or` を除き通常の `Expr` 層
-- `compare`、`pipe` / `fmap` / `bind`、関数合成の関数インターフェースは予約せず、名前付き中置Callは通常の2引数Call
+- `compare`、`pipe` / `fmap` / `bind`、関数合成の関数インターフェースは予約せず、名前付き中置Callの対象は関数宣言に限る
 - pair constructor `(,)` は右結合で、`left (,) right` を nested pair に lower する
 - `Expr` クラスの `+`, `-`, `*`, `/`, `%`, `++` は同列・左結合
 - `FacetChain` の `->` は Facet path 合成に限定した固定構文で、左結合。各オペランドのドット・呼び出しは `Postfix` で先に結合する
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
 - ``left `on` right`` は scope に見えている `on` ではなく、常に `Function::on(left, right)` として解釈される
-- ``left `Other::on` right`` はその qualified path を使い、通常の `Expr` クラスに留まる
+- 利用者の `Other::on` 宣言は予約名規則で拒否する
 
 ## 5. パターン
 
@@ -836,3 +836,5 @@ defmod Bootstrap {
 - 高度なモジュールシステム拡張
 
 Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を参照してください。開発者向けの正本一覧は [Developer Docs](../dev/README.md) にあります。
+
+名前の予約範囲と標準宣言の特殊処理は [関数名と呼出し構文](./callable-names.md) を参照してください。

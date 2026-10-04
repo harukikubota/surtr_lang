@@ -1,0 +1,7 @@
+defmod Helpers {
+  def curry(value: Int) -> Int {
+    print("helper curry")
+    value + 900
+  }
+  def run() -> Int { curry(99) }
+}

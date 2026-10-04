@@ -658,6 +658,10 @@ pub enum Ast {
     /// Parser-only backtick capture target such as `&`+``.
     FuncLiteralRef(Span, FuncLiteralRef),
 
+    /// Named infix callee, preserved until declaration selection in Sigil.
+    /// Resolve the name normally, then reject value bindings without searching outer scopes.
+    NamedInfixRef(Span, AstPath),
+
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
 

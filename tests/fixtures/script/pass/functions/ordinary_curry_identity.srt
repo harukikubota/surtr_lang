@@ -1,0 +1,12 @@
+def add(a: Int, b: Int) -> Int { a + b }
+def curry(fun: (Int, Int -> Int)) -> Int {
+  print("curry body")
+  999
+}
+value: Int = curry(&add)
+print(to_string(value))
+inferred = curry(&add)
+print(to_string(inferred))
+captured = &curry
+print(to_string(captured(&add)))
+print(to_string(&add |> curry()))

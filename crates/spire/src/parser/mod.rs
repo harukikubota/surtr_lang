@@ -2825,6 +2825,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*target, delta)),
             args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
         ),
+        Ast::NamedInfixRef(span, path) => Ast::NamedInfixRef(
+            shift_span(span, delta),
+            AstPath {
+                span: shift_span(path.span, delta),
+                segments: path.segments,
+            },
+        ),
         Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(
             shift_span(span, delta),
             FuncLiteralRef {
@@ -2858,6 +2865,7 @@ impl Ast {
             | Ast::InternalVar(s, _)
             | Ast::Path(s, _)
             | Ast::FuncLiteralRef(s, _)
+            | Ast::NamedInfixRef(s, _)
             | Ast::App(s, _, _)
             | Ast::ReturnTypeArgumentApply(s, _, _)
             | Ast::Block(s, _)

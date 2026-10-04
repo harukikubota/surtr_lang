@@ -2711,7 +2711,9 @@ fn test_func_literal_name_lowers_to_binary_call() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "eq"));
+                assert!(
+                    matches!(func.as_ref(), Ast::NamedInfixRef(_, path) if path.segments == ["eq"])
+                );
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2733,7 +2735,7 @@ fn test_func_literal_qualified_path_lowers_to_binary_call() {
             Ast::App(_, func, args) => {
                 assert!(matches!(
                     func.as_ref(),
-                    Ast::Path(_, path)
+                    Ast::NamedInfixRef(_, path)
                         if path.segments == vec!["Boolean".to_string(), "not_eq".to_string()]
                 ));
                 assert!(matches!(
@@ -2755,7 +2757,9 @@ fn test_func_literal_comparison_name_uses_logical_tier() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "eq"));
+                assert!(
+                    matches!(func.as_ref(), Ast::NamedInfixRef(_, path) if path.segments == ["eq"])
+                );
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2783,7 +2787,9 @@ fn test_func_literal_and_is_lower_precedence_than_comparison_ops() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(
+                    matches!(func.as_ref(), Ast::NamedInfixRef(_, path) if path.segments == ["and"])
+                );
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2861,14 +2867,16 @@ fn test_func_literal_and_or_chain_is_left_associative_with_comparisons() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, or_func, or_args) => {
-                assert!(matches!(or_func.as_ref(), Ast::Var(_, name) if name == "or"));
+                assert!(
+                    matches!(or_func.as_ref(), Ast::NamedInfixRef(_, path) if path.segments == ["or"])
+                );
                 assert!(matches!(
                     or_args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
                         if matches!(
                             left,
                             Ast::App(_, and_func, and_args)
-                                if matches!(and_func.as_ref(), Ast::Var(_, name) if name == "and")
+                                if matches!(and_func.as_ref(), Ast::NamedInfixRef(_, path) if path.segments == ["and"])
                                     && matches!(
                                         and_args.as_slice(),
                                         [RecordLitArg::Positional(_), RecordLitArg::Positional(_)]
@@ -2969,7 +2977,7 @@ fn test_unqualified_on_is_lower_precedence_than_compose() {
             Ast::App(_, func, args) => {
                 assert!(matches!(
                     func.as_ref(),
-                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
+                    Ast::NamedInfixRef(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
                 ));
                 assert!(matches!(
                     args.as_slice(),
@@ -2997,7 +3005,7 @@ fn test_function_on_path_is_lower_precedence_than_compose() {
             Ast::App(_, func, args) => {
                 assert!(matches!(
                     func.as_ref(),
-                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
+                    Ast::NamedInfixRef(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
                 ));
                 assert!(matches!(
                     args.as_slice(),
@@ -3029,7 +3037,7 @@ fn test_kernel_on_path_stays_expr_tier() {
                     Ast::App(_, func, args)
                         if matches!(
                             func.as_ref(),
-                            Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Kernel".to_string(), "on".to_string()]
+                            Ast::NamedInfixRef(_, AstPath { segments, .. }) if segments == &vec!["Kernel".to_string(), "on".to_string()]
                         )
                         && matches!(
                             args.as_slice(),
@@ -3060,7 +3068,7 @@ fn test_other_on_path_stays_expr_tier() {
                     Ast::App(_, func, args)
                         if matches!(
                             func.as_ref(),
-                            Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Other".to_string(), "on".to_string()]
+                            Ast::NamedInfixRef(_, AstPath { segments, .. }) if segments == &vec!["Other".to_string(), "on".to_string()]
                         )
                         && matches!(
                             args.as_slice(),
@@ -7799,7 +7807,7 @@ fn named_comparisons_share_compare_precedence() {
         let Ast::App(_, callee, args) = &ast[0] else {
             panic!("comparison Call: {source}")
         };
-        assert!(matches!(callee.as_ref(), Ast::Var(_, actual) if actual == name));
+        assert!(matches!(callee.as_ref(), Ast::NamedInfixRef(_, path) if path.segments == [name]));
         assert!(
             matches!(
                 &args[1],
@@ -8395,4 +8403,21 @@ fn special_block_call_bulk_update_keyword_preserves_intrinsic_declaration() {
     )
     .expect("compiler intrinsic can declare the keyword");
     assert!(matches!(&ast[0], Ast::IntrinsicDecl(_, name, _, _) if name == "bulk_update"));
+}
+
+#[test]
+fn named_infix_origin_is_preserved_by_strict_and_tolerant_parsing() {
+    for source in [
+        "2 `combine` 3",
+        "2 `User::combine` 3",
+        "True `Kernel::and` False",
+    ] {
+        let strict = parse(source).unwrap();
+        let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+        assert!(tolerant.diagnostics.is_empty(), "{source}");
+        assert_eq!(strict, tolerant.ast, "{source}");
+        assert!(
+            matches!(&strict[0], Ast::App(_, callee, _) if matches!(callee.as_ref(), Ast::NamedInfixRef(..)))
+        );
+    }
 }

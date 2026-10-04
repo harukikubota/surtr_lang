@@ -277,34 +277,13 @@ fn symbolic_boolean_operators_require_boolean_operands() {
     );
 }
 
-fn symbolic_boolean_operators_ignore_local_logic_helpers() {
-    assert_output(
-        r#"def and(left: Boolean, right: Boolean) -> Boolean {
-  print("local and")
-  right
-}
-
-def or(left: Boolean, right: Boolean) -> Boolean {
-  print("local or")
-  right
-}
-
-def rhs_true() -> Boolean {
-  print("rhs true")
-  True
-}
-
-def rhs_false() -> Boolean {
-  print("rhs false")
-  False
-}
-
-print(to_string(False && rhs_true()))
-print(to_string(True || rhs_false()))
-print(to_string(and(False, True)))
-print(to_string(or(True, False)))"#,
-        &["False", "True", "local and", "True", "local or", "False"],
-    );
+fn reserved_logic_helper_declarations_are_rejected() {
+    for name in ["and", "or"] {
+        assert_compile_error(
+            &format!("def {name}(left: Boolean, right: Boolean) -> Boolean {{ right }}"),
+            "reserved",
+        );
+    }
 }
 
 fn kernel_eq_neq_helpers_match_operator_behavior() {
@@ -354,10 +333,6 @@ print(to_string(1.5 < 2.0))"#,
 fn symbolic_value_operators_ignore_local_helper_names() {
     assert_output(
         r#"def add(left: Int, right: Int) -> Int { 999 }
-def eq(left: Int, right: Int) -> Boolean { False }
-def neq(left: Boolean, right: Boolean) -> Boolean { False }
-def lt(left: Int, right: Int) -> Boolean { False }
-def gte(left: Int, right: Int) -> Boolean { False }
 def concat(left: String, right: String) -> String { "wrong" }
 
 print(to_string(1 + 2))
@@ -370,7 +345,7 @@ print(to_string(add(1, 2)))
 print(to_string(eq(3, 3)))
 print(to_string(concat("a", "b")))"#,
         &[
-            "3", "True", "True", "True", "True", "ab", "999", "False", "wrong",
+            "3", "True", "True", "True", "True", "ab", "999", "True", "wrong",
         ],
     );
 }
@@ -533,11 +508,7 @@ fn kernel_callable_helpers_are_removed_from_qualified_surface() {
 
 fn func_literal_infix_invocation_works() {
     assert_output(
-        r#"def eq(left: Int, right: Int) -> Boolean {
-  left == right
-}
-
-print(to_string(10 `+` 5))
+        r#"print(to_string(10 `+` 5))
 print(to_string(7 `eq` 7))"#,
         &["15", "True"],
     );
@@ -1210,8 +1181,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             symbolic_boolean_operators_require_boolean_operands as fn(),
         ),
         (
-            "symbolic_boolean_operators_ignore_local_logic_helpers",
-            symbolic_boolean_operators_ignore_local_logic_helpers as fn(),
+            "reserved_logic_helper_declarations_are_rejected",
+            reserved_logic_helper_declarations_are_rejected as fn(),
         ),
         (
             "kernel_eq_neq_helpers_match_operator_behavior",
