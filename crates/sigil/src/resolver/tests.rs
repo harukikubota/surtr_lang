@@ -3988,12 +3988,12 @@ fn test_qualified_func_literal_path_resolves_via_module_namespace() {
     let module_stages = vec![vec![staged_module(
         "Boolean",
         parse_module_ast(
-            r#"def eq(lhs: Boolean, rhs: Boolean) -> Boolean { lhs }"#,
+            r#"def same(lhs: Boolean, rhs: Boolean) -> Boolean { lhs }"#,
             "Boolean",
         ),
     )]];
 
-    let resolved = resolve_user_with_modules("value = True `Boolean::eq` False", &module_stages)
+    let resolved = resolve_user_with_modules("value = True `Boolean::same` False", &module_stages)
         .expect("qualified func literal path should resolve");
     let bind = resolved
         .iter()
@@ -4005,8 +4005,8 @@ fn test_qualified_func_literal_path_resolves_via_module_namespace() {
                 assert!(matches!(
                     func.as_ref(),
                     Resolved::Var(_, id)
-                        if id.name == "Boolean::eq"
-                            && id.qualified_name.as_deref() == Some("Boolean::eq")
+                        if id.name == "Boolean::same"
+                            && id.qualified_name.as_deref() == Some("Boolean::same")
                 ));
                 assert_eq!(args.len(), 2);
             }
@@ -4482,95 +4482,22 @@ x = True || rhs()"#,
 }
 
 #[test]
-fn test_symbolic_and_ignores_local_and_binding() {
-    let resolved = parse_and_resolve(
-        r#"def rhs() -> Boolean { True }
-def and(left: Boolean, right: Boolean) -> Boolean { right }
-x = False && rhs()"#,
-    )
-    .expect("symbolic && should still resolve as builtin logic");
-    match &resolved[2] {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(
-                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::False" && args.is_empty())
-                );
-                assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
-                assert!(matches!(
-                    else_branch.as_ref(),
-                    Resolved::Lit(_, Lit::Bool(false))
-                ));
-            }
-            other => panic!("Expected If for && despite local and, got {:?}", other),
-        },
-        other => panic!("Expected Bind for && regression, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_symbolic_or_ignores_local_or_binding() {
-    let resolved = parse_and_resolve(
-        r#"def rhs() -> Boolean { False }
-def or(left: Boolean, right: Boolean) -> Boolean { right }
-x = True || rhs()"#,
-    )
-    .expect("symbolic || should still resolve as builtin logic");
-    match &resolved[2] {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
-                assert!(
-                    matches!(cond.as_ref(), Resolved::ConstructorCall(_, id, args) if id.name == "Boolean::True" && args.is_empty())
-                );
-                assert!(matches!(
-                    then_branch.as_ref(),
-                    Resolved::Lit(_, Lit::Bool(true))
-                ));
-                assert!(matches!(else_branch.as_ref(), Resolved::App(_, _, _)));
-            }
-            other => panic!("Expected If for || despite local or, got {:?}", other),
-        },
-        other => panic!("Expected Bind for || regression, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_bare_and_call_still_uses_local_binding() {
-    let resolved = parse_and_resolve(
-        r#"def and(left: Boolean, right: Boolean) -> Boolean { right }
-x = and(False, True)"#,
-    )
-    .expect("bare and(...) should still follow normal name resolution");
-    match &resolved[1] {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::App(_, func, args) => {
-                assert!(matches!(
-                    func.as_ref(),
-                    Resolved::Var(_, id)
-                        if id.name == "and" && id.qualified_name.as_deref() == Some("and")
-                ));
-                assert_eq!(args.len(), 2);
-            }
-            other => panic!("Expected plain App for bare and(...), got {:?}", other),
-        },
-        other => panic!("Expected Bind for bare and(...), got {:?}", other),
+fn test_reserved_logical_declarations_are_rejected_before_calls() {
+    for source in [
+        "def and(left: Boolean, right: Boolean) -> Boolean { right }\nx = False && True",
+        "def or(left: Boolean, right: Boolean) -> Boolean { right }\nx = True || False",
+        "def and(left: Boolean, right: Boolean) -> Boolean { right }\nx = and(False, True)",
+    ] {
+        let error = parse_and_resolve(source).expect_err(source);
+        assert!(error
+            .message
+            .contains("reserved for its standard declaration"));
     }
 }
 
 #[test]
 fn test_eq_helper_resolves_via_autoimport_trait() {
-    let module_stages = vec![vec![staged_module(
-        "Eq",
-        parse_module_ast(
-            r#"@autoimport
-deftrait Eq {
-  def eq(self: Self, rhs: Self) -> Boolean
-}"#,
-            "Eq",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules("x = eq(1, 2)", &module_stages)
-        .expect("eq helper should resolve");
+    let resolved = parse_and_resolve("x = eq(1, 2)").expect("standard helper resolves");
     let bind = resolved
         .iter()
         .find(|node| matches!(node, Resolved::Bind(_, _, _)))
@@ -4582,7 +4509,7 @@ deftrait Eq {
                 match func.as_ref() {
                     Resolved::Var(_, id) => {
                         assert_eq!(id.name, "eq");
-                        assert_eq!(id.qualified_name.as_deref(), Some("Eq::Eq::eq"));
+                        assert_eq!(id.qualified_name.as_deref(), Some("Eq::eq"));
                     }
                     other => panic!("expected helper var, got {:?}", other),
                 }
@@ -4612,19 +4539,7 @@ defstruct User { name: String }
 
 #[test]
 fn test_neq_helper_resolves_via_autoimport_trait() {
-    let module_stages = vec![vec![staged_module(
-        "Neq",
-        parse_module_ast(
-            r#"@autoimport
-deftrait Neq {
-  def neq(self: Self, rhs: Self) -> Boolean
-}"#,
-            "Neq",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules("x = neq(1, 2)", &module_stages)
-        .expect("neq helper should resolve");
+    let resolved = parse_and_resolve("x = neq(1, 2)").expect("standard helper resolves");
     let bind = resolved
         .iter()
         .find(|node| matches!(node, Resolved::Bind(_, _, _)))
@@ -4636,7 +4551,7 @@ deftrait Neq {
                 match func.as_ref() {
                     Resolved::Var(_, id) => {
                         assert_eq!(id.name, "neq");
-                        assert_eq!(id.qualified_name.as_deref(), Some("Neq::Neq::neq"));
+                        assert_eq!(id.qualified_name.as_deref(), Some("Eq::neq"));
                     }
                     other => panic!("expected helper var, got {:?}", other),
                 }
@@ -4702,22 +4617,7 @@ deftrait Compare {
 
 #[test]
 fn test_lt_helper_resolves_via_autoimport_trait() {
-    let module_stages = vec![vec![staged_module(
-        "Ord",
-        parse_module_ast(
-            r#"@autoimport
-deftrait Ord {
-  def lt(self: Self, rhs: Self) -> Boolean
-  def lte(self: Self, rhs: Self) -> Boolean
-  def gt(self: Self, rhs: Self) -> Boolean
-  def gte(self: Self, rhs: Self) -> Boolean
-}"#,
-            "Ord",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules("x = lt(1, 2)", &module_stages)
-        .expect("lt helper should resolve");
+    let resolved = parse_and_resolve("x = lt(1, 2)").expect("standard helper resolves");
     let bind = resolved
         .iter()
         .find(|node| matches!(node, Resolved::Bind(_, _, _)))
@@ -4729,7 +4629,7 @@ deftrait Ord {
                 match func.as_ref() {
                     Resolved::Var(_, id) => {
                         assert_eq!(id.name, "lt");
-                        assert_eq!(id.qualified_name.as_deref(), Some("Ord::Ord::lt"));
+                        assert_eq!(id.qualified_name.as_deref(), Some("Compare::lt"));
                     }
                     other => panic!("expected helper var, got {:?}", other),
                 }
@@ -4786,19 +4686,7 @@ fn test_and_named_arg_is_error() {
 
 #[test]
 fn test_eq_wrong_arity_resolves_as_regular_app() {
-    let module_stages = vec![vec![staged_module(
-        "Eq",
-        parse_module_ast(
-            r#"@autoimport
-deftrait Eq {
-  def eq(self: Self, rhs: Self) -> Boolean
-}"#,
-            "Eq",
-        ),
-    )]];
-
-    let resolved =
-        resolve_user_with_modules("x = eq(1)", &module_stages).expect("eq call should resolve");
+    let resolved = parse_and_resolve("x = eq(1)").expect("standard helper resolves");
     let bind = resolved
         .iter()
         .find(|node| matches!(node, Resolved::Bind(_, _, _)))
@@ -9611,4 +9499,104 @@ fn statement_question_retains_do_local_statement_and_semicolon() {
         };
         assert!(matches!(node, Resolved::StatementQuestion(..)));
     }
+}
+
+#[test]
+fn named_infix_requires_selected_function_declaration() {
+    for source in [
+        "combine = {|a: Int, b: Int| a + b}\n2 `combine` 3",
+        "def add(a: Int, b: Int) -> Int { a + b }\ncombine = &add\n2 `combine` 3",
+        "def combine(a: Int, b: Int) -> Int { a + b }\ncombine = {|a: Int, b: Int| a - b}\n2 `combine` 3",
+        "def apply(combine: (Int, Int -> Int)) -> Int { 2 `combine` 3 }",
+        "combine = 5\n2 `combine` 3",
+    ] {
+        let error = parse_and_resolve(source).expect_err(source);
+        assert!(error.message.contains("Named infix requires a function declaration"), "{error:?}");
+    }
+    for source in [
+        "def combine(a: Int, b: Int) -> Int { a + b }\n2 `combine` 3",
+        "combine = {|a: Int, b: Int| a + b}\ncombine(2, 3)",
+        "combine = {|a: Int, b: Int| a + b}\n`combine`(2, 3)",
+    ] {
+        parse_and_resolve(source).expect(source);
+    }
+}
+
+#[test]
+fn reserved_callable_declarations_require_standard_identity() {
+    for kind in sindr::names::ReservedCallName::ALL {
+        for source in [
+            format!("def {}(a: Int, b: Int) -> Int {{ a + b }}", kind.name()),
+            format!("deftrait Custom {{ def {}(self: Self, other: Self) -> Boolean }}", kind.name()),
+            format!("defstruct Custom {{ value: Int }}\nimpl Custom {{ def {}(self: Custom) -> Int {{ 1 }} }}", kind.name()),
+        ] {
+            let error = parse_and_resolve(&source).expect_err(&source);
+            assert!(error.message.contains("reserved for its standard declaration"), "{error:?}");
+        }
+    }
+    for kind in sindr::names::ReservedCallName::ALL {
+        let source = format!(
+            "defmod Custom {{ def {}(a: Int, b: Int) -> Int {{ a + b }} }}",
+            kind.name()
+        );
+        let ast = spire::parse_with_context(&source, spire::ParserContext::project(0)).unwrap();
+        let stages = vec![staged_modules_from_source_ast(ast, None)];
+        let error = precollect_declaration_index(&stages).expect_err(&source);
+        assert!(
+            error
+                .message
+                .contains("reserved for its standard declaration"),
+            "{error:?}"
+        );
+    }
+    parse_and_resolve("defstruct Item { value: Int }\nimpl Eq for Item { def eq(self: Item, other: Item) -> Boolean { True } }").expect("canonical trait implementation remains available");
+}
+
+#[test]
+fn named_infix_imports_and_qualified_declarations_keep_identity() {
+    let stages = vec![vec![staged_module(
+        "Combiner",
+        parse_module_ast(
+            "def combine(left: Int, right: Int) -> Int { left + right }",
+            "Combiner",
+        ),
+    )]];
+    for source in [
+        "2 `Combiner::combine` 3",
+        "import Combiner::combine\n2 `combine` 3",
+    ] {
+        resolve_user_with_modules(source, &stages).expect(source);
+    }
+}
+
+#[test]
+fn reserved_standard_compare_implementation_and_infix_logic_are_preserved() {
+    parse_and_resolve("defstruct Item { value: Int }\nimpl Compare for Item { def compare(self: Item, other: Item) -> Ordering { Ordering::Equal }\n def lt(self: Item, other: Item) -> Boolean { False } }")
+        .expect("standard Compare methods can be implemented");
+    for source in [
+        "True `and` False",
+        "True `Kernel::and` False",
+        "False `or` True",
+        "False `Kernel::or` True",
+    ] {
+        let resolved = parse_and_resolve(source).expect(source);
+        assert!(
+            matches!(&resolved[0], Resolved::If(..)),
+            "{source}: {resolved:?}"
+        );
+    }
+    let error = parse_and_resolve("deftrait Custom { def choose(self: Self) -> Boolean }\ndefstruct Item { value: Int }\nimpl Custom for Item { def eq(self: Item, other: Item) -> Boolean { True } }")
+        .expect_err("a method spelling cannot grant a custom trait the standard contract");
+    assert!(
+        error
+            .message
+            .contains("reserved for its standard declaration"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn named_infix_keeps_undefined_callable_diagnostic() {
+    let error = parse_and_resolve("1 `missing_combine` 2").expect_err("missing declaration");
+    assert_eq!(error.message, "Undefined function missing_combine/2");
 }

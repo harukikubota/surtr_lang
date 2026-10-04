@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::intrinsic::IntrinsicId;
 
 /// Reserved callable spellings whose bare infix syntax has a fixed precedence.
-/// Reservation concerns variable and field positions; member declarations and
-/// import eligibility remain independent contracts.
+/// These names are restricted to their canonical declarations and standard
+/// trait implementations, and cannot be used for value bindings or fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReservedCallName {
     On,
@@ -43,6 +43,23 @@ impl ReservedCallName {
             Self::Gt => "gt",
             Self::Gte => "gte",
         }
+    }
+
+    pub const fn canonical_owner(self) -> &'static str {
+        match self {
+            Self::On => "Function",
+            Self::And | Self::Or => "Kernel",
+            Self::Eq | Self::Neq => "Eq",
+            Self::Lt | Self::Lte | Self::Gt | Self::Gte => "Compare",
+        }
+    }
+
+    pub fn canonical_name(self) -> String {
+        format!("{}::{}", self.canonical_owner(), self.name())
+    }
+
+    pub const fn allows_trait_implementation(self) -> bool {
+        !matches!(self, Self::On | Self::And | Self::Or)
     }
 
     pub fn from_name(name: &str) -> Option<Self> {

@@ -1241,11 +1241,60 @@ fn declaration_entry(
     }
 }
 
+fn reserved_callable_declaration_error(
+    kind: sindr::names::ReservedCallName,
+    span: &Span,
+) -> ResolveError {
+    ResolveError {
+        message: format!(
+            "Callable name `{}` is reserved for its standard declaration `{}`",
+            kind.name(),
+            kind.canonical_name()
+        ),
+        span: span.clone(),
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::Declaration,
+            subject: Some(kind.name().into()),
+        },
+        related_labels: Vec::new(),
+    }
+}
+
+pub(super) fn validate_reserved_callable_declaration(
+    qualified_name: &str,
+    span: &Span,
+) -> Result<(), ResolveError> {
+    if let Some(kind) = sindr::names::ReservedCallName::from_name(
+        qualified_name.rsplit("::").next().unwrap_or(qualified_name),
+    ) {
+        if global_surface_name(qualified_name) != kind.canonical_name() {
+            return Err(reserved_callable_declaration_error(kind, span));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_reserved_trait_method(
+    trait_name: &str,
+    method_name: &str,
+    span: &Span,
+) -> Result<(), ResolveError> {
+    if let Some(kind) = sindr::names::ReservedCallName::from_name(method_name) {
+        if !kind.allows_trait_implementation()
+            || global_surface_name(trait_name) != kind.canonical_owner()
+        {
+            return Err(reserved_callable_declaration_error(kind, span));
+        }
+    }
+    Ok(())
+}
+
 fn insert_declaration_entry(
     index: &mut DeclarationIndex,
     mut entry: DeclarationEntry,
     span: &Span,
 ) -> Result<(), ResolveError> {
+    validate_reserved_callable_declaration(&entry.fq_name, span)?;
     if let Some(prev) = index.get(&entry.fq_name) {
         return Err(duplicate_fq_declaration_error(&entry.fq_name, prev, span));
     }
@@ -2726,6 +2775,7 @@ pub fn precollect_declarations(
                                 });
                             }
                         };
+                        validate_reserved_trait_method(trait_name, method_name, method_span)?;
                         let internal_name = trait_impl_method_qualified_name(
                             Some(module.module_path.as_str()),
                             trait_name,
@@ -3384,6 +3434,7 @@ impl Resolver {
                         span,
                     )?;
                     let qualified_name = self.qualify_current_declaration_name(name);
+                    validate_reserved_callable_declaration(&qualified_name, stmt.span())?;
                     let uid = self.reserve_declaration_uid(&qualified_name);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Def);
                     // Keep the outer scope at the most recent declaration,
@@ -3399,8 +3450,8 @@ impl Resolver {
                         span,
                     )?;
                     let qualified_name = self.qualify_current_declaration_name(name);
+                    validate_reserved_callable_declaration(&qualified_name, stmt.span())?;
                     let uid = self.reserve_declaration_uid(&qualified_name);
-                    let qualified_name = self.qualify_current_declaration_name(name);
                     self.declaration_uids.insert(qualified_name.clone(), uid);
                     let mut entry = self
                         .declaration_entries
@@ -3491,6 +3542,7 @@ impl Resolver {
                             &method_alias,
                             &method.span,
                         )?;
+                        validate_reserved_callable_declaration(&qualified_method, &method.span)?;
                         let method_uid = self.reserve_declaration_uid(&qualified_method);
                         self.record_predeclared_uid(
                             &method_alias,
@@ -3512,6 +3564,7 @@ impl Resolver {
                         ));
                     }
                     let qualified_name = self.qualify_current_declaration_name(name);
+                    validate_reserved_callable_declaration(&qualified_name, stmt.span())?;
                     let uid = self.reserve_declaration_uid(&qualified_name);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Def);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
@@ -3526,6 +3579,7 @@ impl Resolver {
                         ));
                     }
                     let qualified_name = self.qualify_current_declaration_name(name);
+                    validate_reserved_callable_declaration(&qualified_name, stmt.span())?;
                     let uid = self.reserve_declaration_uid(&qualified_name);
                     let mut entry = self
                         .declaration_entries

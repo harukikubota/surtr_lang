@@ -343,6 +343,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     ),
     repl_core_case!(core_generic_callable_capture_uses_site_signature_inside_nested_values),
     repl_core_case!(core_repl_displays_curry_callable_inside_result_without_internal_id),
+    repl_core_case!(core_callable_declaration_identity_survives_chunks),
     repl_core_case!(core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive),
     repl_core_case!(core_pattern_bindings_are_displayed_in_preorder),
     repl_core_case!(core_pattern_binding_order_defers_pattern_match_as_aliases),
@@ -6992,4 +6993,38 @@ impl ExtractorFactory<$A> for Unit {
         rejected.contains("only allowed in function return signatures"),
         "{rejected}"
     );
+}
+
+fn core_callable_declaration_identity_survives_chunks() {
+    let mut engine = engine();
+    let declaration = engine.handle_line("def curry(value: Int) -> Int { value + 900 }");
+    assert!(
+        !matches!(declaration.output, ReplOutput::EvalError { .. }),
+        "{}",
+        visible_text(&declaration)
+    );
+    assert_eq!(rendered_text(&engine.handle_line("curry(99)")), "999");
+    let bound = engine.handle_line("saved = &curry");
+    assert!(
+        !matches!(bound.output, ReplOutput::EvalError { .. }),
+        "{}",
+        visible_text(&bound)
+    );
+    assert_eq!(rendered_text(&engine.handle_line("saved(1)")), "901");
+
+    engine.handle_line("def combine(a: Int, b: Int) -> Int { a + b }");
+    assert_eq!(rendered_text(&engine.handle_line("2 `combine` 3")), "5");
+    let bound = engine.handle_line("combine = {|a: Int, b: Int| a * b}");
+    assert!(
+        !matches!(bound.output, ReplOutput::EvalError { .. }),
+        "{}",
+        visible_text(&bound)
+    );
+    let rejected = engine.handle_line("2 `combine` 3");
+    assert!(
+        matches!(rejected.output, ReplOutput::EvalError { .. }),
+        "{}",
+        visible_text(&rejected)
+    );
+    assert_eq!(rendered_text(&engine.handle_line("combine(2, 3)")), "6");
 }

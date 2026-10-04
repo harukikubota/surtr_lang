@@ -1,4 +1,3 @@
-def on(left: Int, right: Int) -> Int { left + right }
 def note(tag: String, value: Boolean) -> Boolean { print(tag); value }
 def key(value: Int) -> Int { value + 1 }
 
@@ -17,7 +16,15 @@ compare_by_qualified_key = &eq `Function::on` &key
 print(to_string(compare_by_key(2, 2)))
 print(to_string(compare_by_qualified_key(2, 3)))
 
-print(to_string(on(20, 22)))
-ordinary_on: (Int, Int -> Int) = &on
-print(to_string(ordinary_on(10, 2)))
-print(to_string(1 |> on(2)))
+standard_on = on(&eq, &key)
+print(to_string(standard_on(20, 20)))
+qualified_on = Function::on(&eq, &key)
+print(to_string(qualified_on(10, 2)))
+same_int: (Int, Int -> Boolean) = &eq
+piped_on = same_int |> on(&key)
+print(to_string(piped_on(1, 1)))
+on_capture: ((Int, Int -> Boolean), (Int -> Int) -> (Int, Int -> Boolean)) = &on
+captured_on = on_capture(&eq, &key)
+print(to_string(captured_on(7, 7)))
+print(to_string(False `Kernel::and` note("unreachable-qualified-and", True)))
+print(to_string(True `Kernel::or` note("unreachable-qualified-or", False)))

@@ -324,6 +324,7 @@ impl Resolver {
             | Ast::InternalVar(..)
             | Ast::Path(..)
             | Ast::FuncLiteralRef(..)
+            | Ast::NamedInfixRef(..)
             | Ast::ListNil(..)
             | Ast::StructDef(..)
             | Ast::RecordDef(..)

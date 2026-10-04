@@ -6,10 +6,6 @@ import Test;
 
 def add_pair(x: Int, y: Int) -> Int { x + y }
 
-def on(_left: String, _right: String) -> Ordering {
-  Ordering::Greater
-}
-
 test("Function") {
   describe("plain composition laws") {
     # ghci> let f = (+ 1)
@@ -78,13 +74,14 @@ test("Function") {
       }
     }
 
-    it("ordinary call form still follows shadowing") {
+    it("unqualified call uses the standard declaration") {
       do {
-        assert_eq(Ordering::Greater, on("a", "b"))
+        by_len = on(&compare, &String::len)
+        assert_eq(Ordering::Less, by_len("a", "bb"))
       }
     }
 
-    it("infix form resolves to Function::on even when shadowed") {
+    it("infix form resolves to Function::on") {
       do {
         sorted = List::sort_by(["a", "abcd", "xy"], &compare `on` &String::len)
 

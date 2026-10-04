@@ -8652,6 +8652,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::InternalVar(span, _)
         | Ast::Path(span, _)
         | Ast::FuncLiteralRef(span, _)
+        | Ast::NamedInfixRef(span, _)
         | Ast::App(span, _, _)
         | Ast::ReturnTypeArgumentApply(span, _, _)
         | Ast::Block(span, _)

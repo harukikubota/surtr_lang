@@ -855,6 +855,7 @@ impl Resolver {
             | Ast::InternalVar(_, _)
             | Ast::Path(_, _)
             | Ast::FuncLiteralRef(_, _)
+            | Ast::NamedInfixRef(_, _)
             | Ast::ListNil(_)
             | Ast::StructDef(..)
             | Ast::RecordDef(..)
@@ -1881,7 +1882,7 @@ impl Resolver {
             true
         } else if matches!(
             callee.as_ref(),
-            Ast::Var(..) | Ast::InternalVar(..) | Ast::Path(..)
+            Ast::Var(..) | Ast::InternalVar(..) | Ast::Path(..) | Ast::NamedInfixRef(..)
         ) {
             let resolved = match callee.as_ref() {
                 Ast::Var(span, name) | Ast::InternalVar(span, name) => {
@@ -1890,6 +1891,7 @@ impl Resolver {
                 Ast::Path(span, path) => {
                     self.resolve_var_like(span.clone(), path.segments.join("::"), false)?
                 }
+                Ast::NamedInfixRef(..) => self.resolve_node(*callee.clone())?,
                 _ => unreachable!(),
             };
             self.classify_canonical_special_form_callee(&resolved)
@@ -2040,6 +2042,14 @@ impl Resolver {
         func: &Ast,
         arity: usize,
     ) -> ResolveError {
+        if let Ast::NamedInfixRef(span, path) = func {
+            let callee = if path.segments.len() == 1 {
+                Ast::Var(span.clone(), path.segments[0].clone())
+            } else {
+                Ast::Path(span.clone(), path.clone())
+            };
+            return self.map_undefined_callable_error(err, &callee, arity);
+        }
         if let Ast::Var(_, name) = func {
             if let Some(message) = self.private_callable_error_for_candidate(name, arity) {
                 return ResolveError {
@@ -2944,6 +2954,7 @@ impl Resolver {
             | Ast::InternalVar(..)
             | Ast::Path(..)
             | Ast::FuncLiteralRef(..)
+            | Ast::NamedInfixRef(..)
             | Ast::ReturnTypeArgumentApply(..)
             | Ast::App(..)
             | Ast::Bind(..)
@@ -3074,6 +3085,30 @@ impl Resolver {
                     Box::new(resolved_target),
                     resolved_args,
                 ))
+            }
+
+            Ast::NamedInfixRef(span, path) => {
+                let callee = if path.segments.len() == 1 {
+                    Ast::Var(span.clone(), path.segments[0].clone())
+                } else {
+                    Ast::Path(span.clone(), path)
+                };
+                let resolved = self.resolve_node(callee)?;
+                if matches!(&resolved, Resolved::Var(_, id)
+                    if self.declaration_uid_kinds.get(&id.unique_id).is_some_and(|kind|
+                        matches!(kind, DeclarationKind::Def | DeclarationKind::TraitMethod | DeclarationKind::ImplMethod))) {
+                    Ok(resolved)
+                } else {
+                    Err(ResolveError {
+                        message: "Named infix requires a function declaration; the selected reference is a value binding".into(),
+                        span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: None,
+                        },
+                        related_labels: Vec::new(),
+                    })
+                }
             }
 
             Ast::App(span, func, args) => {
@@ -3958,6 +3993,17 @@ impl Resolver {
                     symbol_info: trait_symbol_info,
                     span: span.clone(),
                 };
+                for method in &methods {
+                    if let Ast::Def(method_span, method_name, ..)
+                    | Ast::BuiltinDecl(method_span, method_name, ..) = method
+                    {
+                        super::declarations::validate_reserved_trait_method(
+                            &qualified_trait_name,
+                            method_name,
+                            method_span,
+                        )?;
+                    }
+                }
                 let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
                 let target_key = ast_ty_key(&resolved_target_ty);
                 let target_owner_key =

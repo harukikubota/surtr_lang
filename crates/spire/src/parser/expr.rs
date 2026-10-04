@@ -415,6 +415,17 @@ impl Parser<'_> {
     }
 
     pub(super) fn lower_func_literal_call(left: Ast, func: Ast, right: Ast) -> Ast {
+        let func = match func {
+            Ast::Var(span, name) if name != "&&" && name != "||" => Ast::NamedInfixRef(
+                span.clone(),
+                AstPath {
+                    span,
+                    segments: vec![name],
+                },
+            ),
+            Ast::Path(span, path) => Ast::NamedInfixRef(span, path),
+            other => other,
+        };
         let span = Span {
             start: left.span().start,
             end: right.span().end,
@@ -3669,6 +3680,7 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         | Ast::InternalVar(_, _)
         | Ast::Path(_, _)
         | Ast::FuncLiteralRef(_, _)
+        | Ast::NamedInfixRef(_, _)
         | Ast::ListNil(_)
         | Ast::CapturePlaceholder(_, _)
         | Ast::StructDef(..)

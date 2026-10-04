@@ -657,8 +657,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         eq_helper_mismatch_uses_shared_reason as fn(),
     ),
     (
-        "shadowed_eq_keeps_generic_call_mismatch_message",
-        shadowed_eq_keeps_generic_call_mismatch_message as fn(),
+        "shadowed_compare_keeps_generic_call_mismatch_message",
+        shadowed_compare_keeps_generic_call_mismatch_message as fn(),
     ),
     (
         "concat_helper_typechecks_as_trait_call",
@@ -4328,7 +4328,7 @@ result = invoke(1, {|value| Use::use(ObligationBox(value))})"#;
 fn child_impl_where_assumptions_cover_parent_impl_requirements() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait FixtureEq {
-  def eq(self: Self, other: Self) -> Boolean
+  def same(self: Self, other: Self) -> Boolean
 }
 
 deftrait FixtureShow {
@@ -4353,7 +4353,7 @@ where
   def parent(self: List<$A>) -> String {
     match self {
       [] => "parent",
-      [head, ..tail] => if(FixtureEq::eq(head, head), "parent", "parent"),
+      [head, ..tail] => if(FixtureEq::same(head, head), "parent", "parent"),
     }
   }
 }
@@ -4366,7 +4366,7 @@ where
     match self {
       [] => "child",
       [head, ..tail] => if(
-        FixtureEq::eq(head, head),
+        FixtureEq::same(head, head),
         FixtureShow::show(head),
         FixtureShow::show(head)
       ),
@@ -7799,19 +7799,19 @@ fn eq_helper_mismatch_uses_shared_reason() {
     assert_eq!(data["actual_type"], "Boolean");
 }
 
-fn shadowed_eq_keeps_generic_call_mismatch_message() {
+fn shadowed_compare_keeps_generic_call_mismatch_message() {
     let resolved = resolve_with_builtin_prelude(
-        r#"def eq(left: String, right: String) -> Boolean {
+        r#"def compare(left: String, right: String) -> Boolean {
   True
 }
 
-print(to_string(eq(1, True)))"#,
+print(to_string(compare(1, True)))"#,
     );
-    let err = typecheck(resolved).expect_err("shadowed eq should use generic call checking");
+    let err = typecheck(resolved).expect_err("shadowed compare should use generic call checking");
     assert!(err
         .message
         .contains("Argument type mismatch: expected String, got Int"));
-    assert!(!err.message.contains("Eq::eq helper"));
+    assert!(!err.message.contains("Compare::compare helper"));
 }
 
 fn concat_helper_typechecks_as_trait_call() {
@@ -7888,7 +7888,7 @@ impl Boolean {
     value
   }
 
-  @builtin def and(left: Boolean, right: Boolean) -> Boolean
+  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
 }
 
 impl Eq for Boolean {
@@ -7898,7 +7898,7 @@ impl Eq for Boolean {
     .expect_err("special-form declaration outside its canonical module must fail");
     assert!(err
         .message
-        .contains("Special-form declaration `and` is only allowed at `Kernel::and`."));
+        .contains("Special-form declaration `if` is only allowed at `Kernel::if`."));
 }
 
 fn kernel_does_not_allow_removed_concat_builtin() {
