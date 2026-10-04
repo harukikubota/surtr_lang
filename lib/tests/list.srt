@@ -23,35 +23,39 @@ test("List") {
       }
       composed = &list_pure >=> &list_ordered_step
       combined = List::flat_map(values, composed)
-      assert_eq([1, 11, 2, 12], direct)
-      assert_eq(direct, bound)
-      assert_eq(direct, piped)
-      assert_eq(direct, computed)
-      assert_eq(direct, combined)
-      assert_stdout_eq([
-        "step=1", "step=2", "step=1", "step=2", "step=1", "step=2",
-        "step=1", "step=2", "step=1", "step=2",
-      ])
+      do::<Result> {
+        assert_eq([1, 11, 2, 12], direct)
+        assert_eq(direct, bound)
+        assert_eq(direct, piped)
+        assert_eq(direct, computed)
+        assert_eq(direct, combined)
+        assert_stdout_eq([
+          "step=1", "step=2", "step=1", "step=2", "step=1", "step=2",
+          "step=1", "step=2", "step=1", "step=2",
+        ])
+      }
     }
 
     it("mixed lists preserve decomposition, display, and algebraic laws") {
       packed = [2, 3]
       mixed = List::cons(1, packed)
       uncons(head, tail) =? mixed
-      assert_eq(1, head)
-      assert_eq([2, 3], tail)
-      assert_eq([2, 3], packed)
-      assert_eq(3, List::len(mixed))
-      assert_eq("[1, 2, 3]", inspect(mixed))
-      assert_eq(mixed, List::append([], mixed))
-      assert_eq(mixed, List::append(mixed, []))
-      assert_eq(mixed, List::reverse(List::reverse(mixed)))
-      assert_eq(mixed, List::map(mixed, {|value| value}))
-      assert_eq(mixed, List::flat_map(mixed, {|value| [value]}))
-      assert_eq(
-        List::append(List::append(mixed, [4]), [5]),
-        List::append(mixed, List::append([4], [5])),
-      )
+      do::<Result> {
+        assert_eq(1, head)
+        assert_eq([2, 3], tail)
+        assert_eq([2, 3], packed)
+        assert_eq(3, List::len(mixed))
+        assert_eq("[1, 2, 3]", inspect(mixed))
+        assert_eq(mixed, List::append([], mixed))
+        assert_eq(mixed, List::append(mixed, []))
+        assert_eq(mixed, List::reverse(List::reverse(mixed)))
+        assert_eq(mixed, List::map(mixed, {|value| value}))
+        assert_eq(mixed, List::flat_map(mixed, {|value| [value]}))
+        assert_eq(
+          List::append(List::append(mixed, [4]), [5]),
+          List::append(mixed, List::append([4], [5])),
+        )
+      }
     }
 
     it("flat_map visits each input once and preserves result order") {
@@ -65,9 +69,11 @@ test("List") {
           _ => List::cons(value, [value + 10]),
         }
       })
-      assert_eq([1, 2, 12, 3, 13], actual)
-      assert_eq([0, 1, 2, 3], values)
-      assert_stdout_eq(["visit=0", "visit=1", "visit=2", "visit=3"])
+      do::<Result> {
+        assert_eq([1, 2, 12, 3, 13], actual)
+        assert_eq([0, 1, 2, 3], values)
+        assert_stdout_eq(["visit=0", "visit=1", "visit=2", "visit=3"])
+      }
     }
 
     it("flat_map skips callbacks for empty input") {
@@ -77,8 +83,10 @@ test("List") {
         print("visit=#{value}")
         [value]
       })
-      assert_eq(values, actual)
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq(values, actual)
+        assert_stdout_eq([])
+      }
     }
 
     it("nested flat_map completes inner results in input order") {
@@ -90,11 +98,13 @@ test("List") {
           [outer * 10 + inner]
         })
       })
-      assert_eq([13, 14, 23, 24], actual)
-      assert_stdout_eq([
-        "outer=1", "inner=1:3", "inner=1:4",
-        "outer=2", "inner=2:3", "inner=2:4",
-      ])
+      do::<Result> {
+        assert_eq([13, 14, 23, 24], actual)
+        assert_stdout_eq([
+          "outer=1", "inner=1:3", "inner=1:4",
+          "outer=2", "inner=2:3", "inner=2:4",
+        ])
+      }
     }
 
     it("concatenates lists with Alternative choice") {
@@ -106,9 +116,11 @@ test("List") {
       first: List<Int> = [1]
       second: List<Int> = [2]
       third: List<Int> = [3]
-      assert_eq(first, empty <|> first)
-      assert_eq(first, first <|> empty)
-      assert_eq((first <|> second) <|> third, first <|> (second <|> third))
+      do::<Result> {
+        assert_eq(first, empty <|> first)
+        assert_eq(first, first <|> empty)
+        assert_eq((first <|> second) <|> third, first <|> (second <|> third))
+      }
     }
 
     it("keeps Monad return equal to Applicative pure") {
@@ -119,27 +131,33 @@ test("List") {
 
     it("folds, maps, and reduces with a Monoid") {
       sum = Monoid(0, {|left, right| left + right})
-      assert_eq(0, List::fold([], sum))
-      assert_eq(6, List::fold([1, 2, 3], sum))
-      assert_eq(12, List::fold_map([1, 2, 3], sum, {|value| value * 2}))
-      assert_eq(Option::Some(6), List::reduce_with([1, 2, 3], sum.combine))
-      values: List<Int> = []
-      none: Option<Int> = Option::None
-      assert_eq(none, List::reduce_with(values, sum.combine))
+      do::<Result> {
+        assert_eq(0, List::fold([], sum))
+        assert_eq(6, List::fold([1, 2, 3], sum))
+        assert_eq(12, List::fold_map([1, 2, 3], sum, {|value| value * 2}))
+        assert_eq(Option::Some(6), List::reduce_with([1, 2, 3], sum.combine))
+        values: List<Int> = []
+        none: Option<Int> = Option::None
+        assert_eq(none, List::reduce_with(values, sum.combine))
+      }
     }
 
     it("each runs callbacks from left to right") {
       capture_stdout()
       result = List::each([1, 2, 3], {|n| print("n=#{to_string(n)}")})
-      assert_eq((), result)
-      assert_stdout_eq(["n=1", "n=2", "n=3"])
+      do::<Result> {
+        assert_eq((), result)
+        assert_stdout_eq(["n=1", "n=2", "n=3"])
+      }
     }
 
     it("each returns Unit and does nothing for empty lists") {
       capture_stdout()
       result = List::each([], {|n: Int| print("n=#{to_string(n)}")})
-      assert_eq((), result)
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq((), result)
+        assert_stdout_eq([])
+      }
     }
 
     it("min_max returns min and max in one result") {

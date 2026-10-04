@@ -17,14 +17,16 @@ test("Config") {
     it("updates the entrypoint without changing the original value") {
       original = Config::new("Cli")
       updated = Config::entry_fun(original, "Cli::main")
-      assert_eq(
-        "Config(name: \"Cli\", entrypoint: \"Main::main\", paths: [])",
-        inspect(original),
-      )
-      assert_eq(
-        "Config(name: \"Cli\", entrypoint: \"Cli::main\", paths: [])",
-        inspect(updated),
-      )
+      do::<Result> {
+        assert_eq(
+          "Config(name: \"Cli\", entrypoint: \"Main::main\", paths: [])",
+          inspect(original),
+        )
+        assert_eq(
+          "Config(name: \"Cli\", entrypoint: \"Cli::main\", paths: [])",
+          inspect(updated),
+        )
+      }
     }
   }
 

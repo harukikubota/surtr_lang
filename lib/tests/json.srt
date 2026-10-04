@@ -6,16 +6,18 @@ test("Json") {
   describe("parse") {
     it("parses primitive values") {
       null_value =? Json::parse("null")
-      assert_eq("JsonValue::Null", inspect(null_value))
+      do::<Result> {
+        assert_eq("JsonValue::Null", inspect(null_value))
 
-      true_value =? Json::parse("true")
-      assert_eq("JsonValue::Bool(True)", inspect(true_value))
+        true_value =? Json::parse("true")
+        assert_eq("JsonValue::Bool(True)", inspect(true_value))
 
-      int_value =? Json::parse("42")
-      assert_eq("JsonValue::Int(42)", inspect(int_value))
+        int_value =? Json::parse("42")
+        assert_eq("JsonValue::Int(42)", inspect(int_value))
 
-      float_value =? Json::parse("4.2")
-      assert_eq("JsonValue::Float(4.2)", inspect(float_value))
+        float_value =? Json::parse("4.2")
+        assert_eq("JsonValue::Float(4.2)", inspect(float_value))
+      }
     }
   }
 

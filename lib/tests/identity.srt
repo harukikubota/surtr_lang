@@ -76,8 +76,10 @@ test("Identity") {
       mapped: Identity<Int> = payload |*> {|item| item.value + 1}
       bound: Identity<Int> = payload |>= {|item| Identity::new(item.value * 2)}
 
-      assert_eq(5, Identity::run(mapped))
-      assert_eq(8, Identity::run(bound))
+      do::<Result> {
+        assert_eq(5, Identity::run(mapped))
+        assert_eq(8, Identity::run(bound))
+      }
     }
 
     it("preserves Identity in properties, lists, tuples, and Facet updates") {
@@ -89,10 +91,12 @@ test("Identity") {
       second: Identity<Int> =? List::at(values, 1)
       pair: (Identity<Int>, Identity<Int>) = (first, second)
 
-      assert_eq(10, Identity::run(holder.value))
-      assert_eq(20, Identity::run(updated_holder.value))
-      assert_eq(10, Identity::run(pair._0))
-      assert_eq(20, Identity::run(second))
+      do::<Result> {
+        assert_eq(10, Identity::run(holder.value))
+        assert_eq(20, Identity::run(updated_holder.value))
+        assert_eq(10, Identity::run(pair._0))
+        assert_eq(20, Identity::run(second))
+      }
     }
 
     it("keeps Applicative pure and Monad return equivalent") {

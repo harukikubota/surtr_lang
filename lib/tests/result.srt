@@ -138,8 +138,10 @@ test("Result") {
 
   describe("contextual function application") {
     it("applies a wrapped unary function") {
-      assert_eq("Ok(2)", inspect(Ok(&inc) |*| Ok(1)))
-      assert_eq("Ok(2)", inspect(Applicative::ap(Ok(&inc), Ok(1))))
+      do::<Result> {
+        assert_eq("Ok(2)", inspect(Ok(&inc) |*| Ok(1)))
+        assert_eq("Ok(2)", inspect(Applicative::ap(Ok(&inc), Ok(1))))
+      }
     }
 
     it("applies a wrapped binary function after explicit curry") {
@@ -153,8 +155,10 @@ test("Result") {
     }
 
     it("accepts a function curried before wrapping") {
-      assert_eq("Ok(3)", inspect(Ok(curry(&add2)) |*| Ok(1) |*| Ok(2)))
-      assert_eq("Ok(6)", inspect(Ok(curry(&add3)) |*| Ok(1) |*| Ok(2) |*| Ok(3)))
+      do::<Result> {
+        assert_eq("Ok(3)", inspect(Ok(curry(&add2)) |*| Ok(1) |*| Ok(2)))
+        assert_eq("Ok(6)", inspect(Ok(curry(&add3)) |*| Ok(1) |*| Ok(2) |*| Ok(3)))
+      }
     }
 
     it("preserves mapper errors before value errors") {
@@ -171,14 +175,16 @@ test("Result") {
     }
 
     it("preserves the first value error from left to right") {
-      assert_eq(
-        "Err(NoneError(\"None Value.\"))",
-        inspect(Ok(curry(&add3)) |*| Err(NoneError) |*| Err(ZeroDivisionError) |*| Ok(3)),
-      )
-      assert_eq(
-        "Err(NoneError(\"None Value.\"))",
-        inspect(Ok(curry(&add3)) |*| Ok(1) |*| Err(NoneError) |*| Err(ZeroDivisionError)),
-      )
+      do::<Result> {
+        assert_eq(
+          "Err(NoneError(\"None Value.\"))",
+          inspect(Ok(curry(&add3)) |*| Err(NoneError) |*| Err(ZeroDivisionError) |*| Ok(3)),
+        )
+        assert_eq(
+          "Err(NoneError(\"None Value.\"))",
+          inspect(Ok(curry(&add3)) |*| Ok(1) |*| Err(NoneError) |*| Err(ZeroDivisionError)),
+        )
+      }
     }
 
     it("propagates a final value error") {
@@ -194,8 +200,10 @@ test("Result") {
         print("unexpected")
         value + 1
       })
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(mapper |*| Err(NoneError)))
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(mapper |*| Err(NoneError)))
+        assert_stdout_eq([])
+      }
     }
 
     it("skips later curried mapper applications after Err") {
@@ -208,16 +216,20 @@ test("Result") {
         }
       })
       result = mapper |*| Ok(1) |*| Err(NoneError) |*| Ok(3)
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
-      assert_stdout_eq(["first:1"])
+      do::<Result> {
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+        assert_stdout_eq(["first:1"])
+      }
     }
   }
 
   describe("contextual Result function application") {
     it("applies a wrapped unary function and joins its Result") {
       nested = Ok(&safe_inc) |*| Ok(1)
-      assert_eq("Ok(Ok(2))", inspect(nested))
-      assert_eq("Ok(2)", inspect(nested |>= {|inner| inner}))
+      do::<Result> {
+        assert_eq("Ok(Ok(2))", inspect(nested))
+        assert_eq("Ok(2)", inspect(nested |>= {|inner| inner}))
+      }
     }
 
     it("curries a wrapped binary function and joins its Result") {
@@ -240,8 +252,10 @@ test("Result") {
 
     it("propagates errors returned by the mapper") {
       nested = Ok(&safe_double_under_limit) |*| Ok(5)
-      assert_eq("Ok(Err(NoneError(\"None Value.\")))", inspect(nested))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(nested |>= {|inner| inner}))
+      do::<Result> {
+        assert_eq("Ok(Err(NoneError(\"None Value.\")))", inspect(nested))
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(nested |>= {|inner| inner}))
+      }
     }
 
     it("preserves mapper errors before value errors when joining") {
@@ -263,20 +277,26 @@ test("Result") {
         Ok(a + b)
       })
       nested = (mapper |*> {|fun| curry(fun)}) |*| Ok(1) |*| Err(NoneError)
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(nested |>= {|inner| inner}))
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(nested |>= {|inner| inner}))
+        assert_stdout_eq([])
+      }
     }
 
     it("directly binds a unary Result function") {
-      assert_eq("Ok(2)", inspect(Ok(1) |>= safe_inc()))
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(Ok(5) |>= safe_double_under_limit()))
+      do::<Result> {
+        assert_eq("Ok(2)", inspect(Ok(1) |>= safe_inc()))
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(Ok(5) |>= safe_double_under_limit()))
+      }
     }
 
     it("directly binds binary and ternary Result functions") {
       binary = Ok(1) |>= {|a| Ok(2) |>= {|b| safe_add2(a, b)}}
       ternary = Ok(1) |>= {|a| Ok(2) |>= {|b| Ok(3) |>= {|c| safe_add3(a, b, c)}}}
-      assert_eq("Ok(3)", inspect(binary))
-      assert_eq("Ok(6)", inspect(ternary))
+      do::<Result> {
+        assert_eq("Ok(3)", inspect(binary))
+        assert_eq("Ok(6)", inspect(ternary))
+      }
     }
 
     it("direct bind stops at Err before invoking subsequent functions") {
@@ -287,8 +307,10 @@ test("Result") {
           safe_add2(a, b)
         }
       }
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+        assert_stdout_eq([])
+      }
     }
   }
 
@@ -330,42 +352,54 @@ test("Result") {
     it("tap_ok observes Ok and keeps value") {
       capture_stdout()
       result = tap_ok(Ok(1), {|x| print("tap:#{to_string(x)}")})
-      assert_eq("Ok(1)", inspect(result))
-      assert_stdout_eq(["tap:1"])
+      do::<Result> {
+        assert_eq("Ok(1)", inspect(result))
+        assert_stdout_eq(["tap:1"])
+      }
     }
 
     it("tap_err observes Err and keeps error") {
       capture_stdout()
       result = tap_err(Err(NoneError), {|err| print("tap_err:#{inspect(err)}")})
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
-      assert_stdout_eq(["tap_err:NoneError(\"None Value.\")"])
+      do::<Result> {
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+        assert_stdout_eq(["tap_err:NoneError(\"None Value.\")"])
+      }
     }
 
     it("tap_ok skips handlers for Err") {
       capture_stdout()
       result = tap_ok(Err(NoneError), {|_| print("unexpected")})
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+        assert_stdout_eq([])
+      }
     }
 
     it("tap_err skips handlers for Ok") {
       capture_stdout()
       result = tap_err(Ok(1), {|_| print("unexpected")})
-      assert_eq("Ok(1)", inspect(result))
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq("Ok(1)", inspect(result))
+        assert_stdout_eq([])
+      }
     }
 
     it("then runs next when Ok") {
       capture_stdout()
-      assert_eq("Ok(\"next\")", inspect(then(Ok(1), &emit_next)))
-      assert_stdout_eq(["then-next"])
+      do::<Result> {
+        assert_eq("Ok(\"next\")", inspect(then(Ok(1), &emit_next)))
+        assert_stdout_eq(["then-next"])
+      }
     }
 
     it("then short-circuits on Err") {
       capture_stdout()
       result = then(Err(NoneError), &emit_next)
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
-      assert_stdout_eq([])
+      do::<Result> {
+        assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+        assert_stdout_eq([])
+      }
     }
   }
 

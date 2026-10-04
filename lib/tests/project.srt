@@ -13,8 +13,10 @@ top_level_sum = add_one(included_sum)
 test("Project") {
   describe("include and top-level ordering") {
     it("evaluates import, definitions, and top-level expressions") {
-      assert_eq(3, included_sum)
-      assert_eq(4, top_level_sum)
+      do::<Result> {
+        assert_eq(3, included_sum)
+        assert_eq(4, top_level_sum)
+      }
     }
   }
 

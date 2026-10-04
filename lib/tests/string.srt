@@ -8,8 +8,10 @@ test("String") {
     it("detects empty strings") { assert_true(is_empty("")) }
     it("detects non-empty strings") { assert_true(non_empty("surtr")) }
     it("reports False for the opposite branch") {
-      assert_false(is_empty("surtr"))
-      assert_false(non_empty(""))
+      do::<Result> {
+        assert_false(is_empty("surtr"))
+        assert_false(non_empty(""))
+      }
     }
   }
 

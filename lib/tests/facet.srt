@@ -10,19 +10,23 @@ test("Facet") {
       outer = Facet::compose(Tuple._0, Tuple._0)
       path = outer -> Config.entrypoint
       arrow = Tuple._0 -> Tuple._0 -> Config.entrypoint
-      assert_eq("Main::main", Facet::view(path, fixture))
-      assert_eq(Facet::view(path, fixture), Facet::view(arrow, fixture))
+      do::<Result> {
+        assert_eq("Main::main", Facet::view(path, fixture))
+        assert_eq(Facet::view(path, fixture), Facet::view(arrow, fixture))
+      }
     }
 
     it("reads nested values with value-side sugar") {
       fixture = demo_fixture()
-      assert_eq("Main::main", fixture._0._0.entrypoint)
-      assert_eq("Ok(\"ally\")", inspect(fixture._0._1))
-      assert_eq(
-        "Ok(\"ally\")",
-        inspect(Facet::view(Tuple._0 -> Tuple._1, fixture)),
-      )
-      assert_eq(7, fixture._1._1)
+      do::<Result> {
+        assert_eq("Main::main", fixture._0._0.entrypoint)
+        assert_eq("Ok(\"ally\")", inspect(fixture._0._1))
+        assert_eq(
+          "Ok(\"ally\")",
+          inspect(Facet::view(Tuple._0 -> Tuple._1, fixture)),
+        )
+        assert_eq(7, fixture._1._1)
+      }
     }
 
     it("supports deferred tuple facet bindings") {
@@ -32,8 +36,10 @@ test("Facet") {
 
     it("supports shorthand source/path expansion for reads") {
       fixture = demo_fixture()
-      assert_eq("Main::main", Facet::view(~fixture._0._0.entrypoint))
-      assert_eq(7, Facet::view(~fixture._1._1))
+      do::<Result> {
+        assert_eq("Main::main", Facet::view(~fixture._0._0.entrypoint))
+        assert_eq(7, Facet::view(~fixture._1._1))
+      }
     }
   }
 
@@ -41,8 +47,10 @@ test("Facet") {
     it("sets nested fields through composed paths") {
       fixture = demo_fixture()
       updated =? Facet::set(Tuple._0 -> Tuple._0 -> Config.entrypoint, fixture, "App::main")
-      assert_eq("App::main", updated._0._0.entrypoint)
-      assert_eq("Ok(\"ally\")", inspect(updated._0._1))
+      do::<Result> {
+        assert_eq("App::main", updated._0._0.entrypoint)
+        assert_eq("Ok(\"ally\")", inspect(updated._0._1))
+      }
     }
 
     it("updates nested tuple fields with over") {
@@ -61,8 +69,10 @@ test("Facet") {
       fixture = demo_fixture()
       renamed =? Facet::set(~fixture._0._0.entrypoint, "App::main")
       bumped =? Facet::over(~renamed._1._1, {|value| bump(value)})
-      assert_eq("App::main", bumped._0._0.entrypoint)
-      assert_eq(8, bumped._1._1)
+      do::<Result> {
+        assert_eq("App::main", bumped._0._0.entrypoint)
+        assert_eq(8, bumped._1._1)
+      }
     }
 
     it("over updates only successful Result payloads") {
@@ -70,8 +80,10 @@ test("Facet") {
       pending = pending_fixture()
       ok_updated =? Facet::over(Tuple._0 -> Tuple._1, ok_fixture, {|value| rename(value)})
       pending_updated =? Facet::over(Tuple._0 -> Tuple._1, pending, {|value| rename(value)})
-      assert_eq("Ok(\"ally!\")", inspect(ok_updated._0._1))
-      assert_eq(inspect(pending._0._1), inspect(pending_updated._0._1))
+      do::<Result> {
+        assert_eq("Ok(\"ally!\")", inspect(ok_updated._0._1))
+        assert_eq(inspect(pending._0._1), inspect(pending_updated._0._1))
+      }
     }
 
     it("over_result can rewrite the whole Result focus") {
@@ -86,14 +98,16 @@ test("Facet") {
     }
 
     it("propagates updater errors") {
-      assert_err_contains(
-        "ZeroDivisionError",
-        Facet::over(Tuple._0 -> Tuple._0 -> Config.entrypoint, demo_fixture(), {|_| Err(ZeroDivisionError)}),
-      )
-      assert_err_contains(
-        "ZeroDivisionError",
-        Facet::over_result(Tuple._0 -> Tuple._1, demo_fixture(), {|_| Err(ZeroDivisionError)}),
-      )
+      do::<Result> {
+        assert_err_contains(
+          "ZeroDivisionError",
+          Facet::over(Tuple._0 -> Tuple._0 -> Config.entrypoint, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+        )
+        assert_err_contains(
+          "ZeroDivisionError",
+          Facet::over_result(Tuple._0 -> Tuple._1, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+        )
+      }
     }
   }
 
@@ -101,34 +115,40 @@ test("Facet") {
     it("views and updates List index and HashMap key segments") {
       map = HashMap::map_from_entries([("talk", 80), ("listen", 70)])
       user = score_fixture([10, 20], map)
-      assert_eq("Ok(20)", inspect(Facet::view(List.[1], user.scores)))
-      assert_eq("Ok(80)", inspect(Facet::view(HashMap.["talk"], user.score)))
-      assert_eq("Ok(20)", inspect(Facet::view(ScoreFixture.scores.[1], user)))
-      assert_eq("Ok(80)", inspect(Facet::view(ScoreFixture.score.["talk"], user)))
-      changed_scores =? Facet::set(ScoreFixture.scores.[0], user, 99)
-      changed_map =? Facet::over(ScoreFixture.score.["talk"], changed_scores, {|score| Ok(score + 1)})
-      assert_eq("[99, 20]", inspect(changed_map.scores))
-      assert_eq("Ok(81)", inspect(HashMap::map_get(changed_map.score, "talk")))
+      do::<Result> {
+        assert_eq("Ok(20)", inspect(Facet::view(List.[1], user.scores)))
+        assert_eq("Ok(80)", inspect(Facet::view(HashMap.["talk"], user.score)))
+        assert_eq("Ok(20)", inspect(Facet::view(ScoreFixture.scores.[1], user)))
+        assert_eq("Ok(80)", inspect(Facet::view(ScoreFixture.score.["talk"], user)))
+        changed_scores =? Facet::set(ScoreFixture.scores.[0], user, 99)
+        changed_map =? Facet::over(ScoreFixture.score.["talk"], changed_scores, {|score| Ok(score + 1)})
+        assert_eq("[99, 20]", inspect(changed_map.scores))
+        assert_eq("Ok(81)", inspect(HashMap::map_get(changed_map.score, "talk")))
+      }
     }
 
     it("supports negative indexes and slice updates for List segments") {
       map = HashMap::map_from_entries([("talk", 80), ("listen", 70)])
       user = score_fixture([10, 20, 30, 40], map)
-      assert_eq("Ok(40)", inspect(Facet::view(List.[-1], user.scores)))
-      assert_eq("Ok([20, 30, 40])", inspect(Facet::view(ScoreFixture.scores.[1..-1], user)))
-      shrunk =? Facet::set(ScoreFixture.scores.[1..2], user, [99])
-      grown =? Facet::over(ScoreFixture.scores.[0..1], shrunk, {|slice| Ok(List::append(slice, [77]))})
-      assert_eq("[10, 99, 40]", inspect(shrunk.scores))
-      assert_eq("[10, 99, 77, 40]", inspect(grown.scores))
+      do::<Result> {
+        assert_eq("Ok(40)", inspect(Facet::view(List.[-1], user.scores)))
+        assert_eq("Ok([20, 30, 40])", inspect(Facet::view(ScoreFixture.scores.[1..-1], user)))
+        shrunk =? Facet::set(ScoreFixture.scores.[1..2], user, [99])
+        grown =? Facet::over(ScoreFixture.scores.[0..1], shrunk, {|slice| Ok(List::append(slice, [77]))})
+        assert_eq("[10, 99, 40]", inspect(shrunk.scores))
+        assert_eq("[10, 99, 77, 40]", inspect(grown.scores))
+      }
     }
 
     it("reports list and map path misses") {
       map = HashMap::map_from_entries([("talk", 80)])
       user = score_fixture([10], map)
-      assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[2], user))
-      assert_err_contains("KeyNotFound", Facet::view(ScoreFixture.score.["missing"], user))
-      assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[-2], user))
-      assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[1..2], user))
+      do::<Result> {
+        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[2], user))
+        assert_err_contains("KeyNotFound", Facet::view(ScoreFixture.score.["missing"], user))
+        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[-2], user))
+        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[1..2], user))
+      }
     }
   }
 
@@ -143,26 +163,32 @@ test("Facet") {
       some: Option<Result<String>> = Option::Some(Ok("alice"))
       changed =? Facet::case_over(Option.Some, some, {|name| Ok(name ++ "!")})
       rewritten =? Facet::case_over(Option.Some, changed, {|value: Result<String>| Ok(value)})
-      assert_eq("Option::Some(Ok(\"alice!\"))", inspect(rewritten))
-      none: Option<Result<String>> = Option::None
-      assert_err_contains("VariantMismatch", Facet::case_over(Option.Some, none, {|name| Ok(name ++ "!")}))
+      do::<Result> {
+        assert_eq("Option::Some(Ok(\"alice!\"))", inspect(rewritten))
+        none: Option<Result<String>> = Option::None
+        assert_err_contains("VariantMismatch", Facet::case_over(Option.Some, none, {|name| Ok(name ++ "!")}))
+      }
     }
   }
 
   describe("variant paths") {
     it("views matching variants") {
-      assert_eq("Ok(5)", inspect(Facet::view(BitWidth.Any, demo_fixture()._2)))
-      nested: Option<Result<String>> = Option::Some(Err(NoneError))
-      assert_eq(
-        "Ok(Err(NoneError(\"None Value.\")))",
-        inspect(Facet::view(Option.Some, nested)),
-      )
+      do::<Result> {
+        assert_eq("Ok(5)", inspect(Facet::view(BitWidth.Any, demo_fixture()._2)))
+        nested: Option<Result<String>> = Option::Some(Err(NoneError))
+        assert_eq(
+          "Ok(Err(NoneError(\"None Value.\")))",
+          inspect(Facet::view(Option.Some, nested)),
+        )
+      }
     }
 
     it("previews variant facets explicitly") {
       option: Option<Int> = Option::Some(3)
-      assert_eq("Ok(5)", inspect(Facet::preview(BitWidth.Any, demo_fixture()._2)))
-      assert_eq("Ok(3)", inspect(Facet::preview(Option.Some, option)))
+      do::<Result> {
+        assert_eq("Ok(5)", inspect(Facet::preview(BitWidth.Any, demo_fixture()._2)))
+        assert_eq("Ok(3)", inspect(Facet::preview(Option.Some, option)))
+      }
     }
 
     it("updates inside matching variants") {
@@ -180,9 +206,11 @@ test("Facet") {
     it("reports variant mismatches") {
       fixture = demo_fixture()
       replaced = (fixture._0, fixture._1, BitWidth::W8)
-      assert_err_contains("VariantMismatch", Facet::view(BitWidth.Any, replaced._2))
-      assert_err_contains("VariantMismatch", Facet::set(Tuple._2 -> BitWidth.Any, replaced, 9))
-      assert_err_contains("VariantMismatch", Facet::over(Tuple._2 -> BitWidth.Any, replaced, {|value| bump(value)}))
+      do::<Result> {
+        assert_err_contains("VariantMismatch", Facet::view(BitWidth.Any, replaced._2))
+        assert_err_contains("VariantMismatch", Facet::set(Tuple._2 -> BitWidth.Any, replaced, 9))
+        assert_err_contains("VariantMismatch", Facet::over(Tuple._2 -> BitWidth.Any, replaced, {|value| bump(value)}))
+      }
     }
   }
 }

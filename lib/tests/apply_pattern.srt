@@ -7,158 +7,196 @@ import ExtractorSchema::{positive, offset, supply, at_least, observed_between, n
 
 test("apply_pattern projection contract") {
   it("returns Unit for zero slots and a value for one slot") {
-    assert_eq("Ok(())", inspect(apply_pattern(3, 3)))
-    assert_eq("Ok(())", inspect(apply_pattern(3, _)))
-    assert_eq("Ok(())", inspect(apply_pattern(3, _name)))
-    assert_eq("Ok(())", inspect(apply_pattern(3, _foo1)))
-    assert_eq("Ok(3)", inspect(apply_pattern(3, _1: Int)))
-    assert_eq("Ok(3)", inspect(apply_pattern(3, _01)))
+    do::<Result> {
+      assert_eq("Ok(())", inspect(apply_pattern(3, 3)))
+      assert_eq("Ok(())", inspect(apply_pattern(3, _)))
+      assert_eq("Ok(())", inspect(apply_pattern(3, _name)))
+      assert_eq("Ok(())", inspect(apply_pattern(3, _foo1)))
+      assert_eq("Ok(3)", inspect(apply_pattern(3, _1: Int)))
+      assert_eq("Ok(3)", inspect(apply_pattern(3, _01)))
+    }
   }
 
   it("returns multiple projections in numeric order") {
-    assert_eq("Ok((3, \"tag\", True))", inspect(apply_pattern(("tag", True, 3), (_2: String, _3: Boolean, _1: Int))))
-    assert_eq("Ok((1, 2))", inspect(apply_pattern((1, 2), (_1, _2))))
-    assert_eq("Ok((16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1))", inspect(apply_pattern((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16), (_16, _15, _14, _13, _12, _11, _10, _9, _8, _7, _6, _5, _4, _3, _2, _1))))
+    do::<Result> {
+      assert_eq("Ok((3, \"tag\", True))", inspect(apply_pattern(("tag", True, 3), (_2: String, _3: Boolean, _1: Int))))
+      assert_eq("Ok((1, 2))", inspect(apply_pattern((1, 2), (_1, _2))))
+      assert_eq("Ok((16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1))", inspect(apply_pattern((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16), (_16, _15, _14, _13, _12, _11, _10, _9, _8, _7, _6, _5, _4, _3, _2, _1))))
+    }
   }
 
   it("projects annotated tails and root or nested aliases") {
-    assert_eq("Ok((1, [2, 3]))", inspect(apply_pattern([1, 2, 3], [_1: Int, .._2: List<Int>])))
-    assert_eq("Ok((1, [(1, 3)], (1, 3)))", inspect(apply_pattern([(1, 3)], [(_1: Int, 3) @ _3: (Int, Int)] @ _2: List<(Int, Int)>)))
+    do::<Result> {
+      assert_eq("Ok((1, [2, 3]))", inspect(apply_pattern([1, 2, 3], [_1: Int, .._2: List<Int>])))
+      assert_eq("Ok((1, [(1, 3)], (1, 3)))", inspect(apply_pattern([(1, 3)], [(_1: Int, 3) @ _3: (Int, Int)] @ _2: List<(Int, Int)>)))
+    }
   }
 
   it("accepts Unit payload omission and explicit projection") {
-    assert_eq("Ok(())", inspect(apply_pattern(1, positive())))
-    assert_eq("Ok(())", inspect(apply_pattern(1, positive(unit: Unit))))
-    assert_eq("Ok(())", inspect(apply_pattern(1, positive(_))))
-    assert_eq("Ok(())", inspect(apply_pattern(1, positive(_1: Unit))))
-    assert_eq("Ok(())", inspect(apply_pattern(5, at_least(2))))
-    assert_eq("Ok(())", inspect(apply_pattern(5, at_least(2, _1: Unit))))
-    assert_eq("Ok(((), 3))", inspect(apply_pattern(((), 3), (_1: Unit, _2))))
+    do::<Result> {
+      assert_eq("Ok(())", inspect(apply_pattern(1, positive())))
+      assert_eq("Ok(())", inspect(apply_pattern(1, positive(unit: Unit))))
+      assert_eq("Ok(())", inspect(apply_pattern(1, positive(_))))
+      assert_eq("Ok(())", inspect(apply_pattern(1, positive(_1: Unit))))
+      assert_eq("Ok(())", inspect(apply_pattern(5, at_least(2))))
+      assert_eq("Ok(())", inspect(apply_pattern(5, at_least(2, _1: Unit))))
+      assert_eq("Ok(((), 3))", inspect(apply_pattern(((), 3), (_1: Unit, _2))))
+    }
   }
 
   it("matches the whole Result input unless the Pattern selects Ok") {
-    assert_eq("Ok(Ok(3))", inspect(apply_pattern(Ok(3), _1)))
-    assert_eq("Ok(3)", inspect(apply_pattern(Ok(3), Ok(_1))))
-    source = ExtractorSchema::source(0)
-    assert_eq("Ok(())", inspect(apply_pattern(source, Err(_))))
+    do::<Result> {
+      assert_eq("Ok(Ok(3))", inspect(apply_pattern(Ok(3), _1)))
+      assert_eq("Ok(3)", inspect(apply_pattern(Ok(3), Ok(_1))))
+      source = ExtractorSchema::source(0)
+      assert_eq("Ok(())", inspect(apply_pattern(source, Err(_))))
+    }
   }
 
   it("keeps ordinary bindings local to the matching operation") {
     temporary = 99
-    assert_eq("Ok(20)", inspect(apply_pattern([10, 20], [temporary, _1: Int])))
-    assert_eq(99, temporary)
+    do::<Result> {
+      assert_eq("Ok(20)", inspect(apply_pattern([10, 20], [temporary, _1: Int])))
+      assert_eq(99, temporary)
+    }
   }
 
   it("resolves pre-arguments and pins in the outer scope") {
     amount = 10
-    assert_eq("Ok(13)", inspect(apply_pattern((2, 10, 3), (amount, ^amount, offset(amount, _1)))))
-    assert_eq(10, amount)
-    runner = ApplyPatternSchema::make_runner(amount)
-    assert_eq("Ok(13)", inspect(runner(3)))
+    do::<Result> {
+      assert_eq("Ok(13)", inspect(apply_pattern((2, 10, 3), (amount, ^amount, offset(amount, _1)))))
+      assert_eq(10, amount)
+      runner = ApplyPatternSchema::make_runner(amount)
+      assert_eq("Ok(13)", inspect(runner(3)))
+    }
   }
 
   it("applies captured local ExtractorClosure values") {
     ext = ExtractorClosureSchema::make_threshold(2)
-    assert_eq("Ok(3)", inspect(apply_pattern(3, ext(_1: Int))))
-    assert_true(is_match(apply_pattern(1, ext(_1)), Err(_)))
-    shift = 10
-    multiple = *{|amount: Int, value: Int| MatchResult::Ok((value + amount + shift, value))}
-    assert_eq("Ok((3, 15))", inspect(apply_pattern(3, multiple(2, _2, _1))))
+    do::<Result> {
+      assert_eq("Ok(3)", inspect(apply_pattern(3, ext(_1: Int))))
+      assert_true(is_match(apply_pattern(1, ext(_1)), Err(_)))
+      shift = 10
+      multiple = *{|amount: Int, value: Int| MatchResult::Ok((value + amount + shift, value))}
+      assert_eq("Ok((3, 15))", inspect(apply_pattern(3, multiple(2, _2, _1))))
+    }
   }
 
   it("preserves the failing Extractor error and cause chain") {
     capture_stdout()
     expected = "Err(ExtractorContextError(\"extractor context\"))\n|_ ExtractorSourceError(\"source rejected\")"
-    assert_eq(expected, inspect(apply_pattern(0, nested_checked(_1))))
-    ext = ExtractorClosureSchema::make_checked()
-    assert_eq(expected, inspect(apply_pattern(0, ext(_1))))
-    empty_output: List<String> = []
-    assert_eq(empty_output, capture_stdout())
-    assert_eq(expected, inspect(apply_pattern((3, 0), (_1, nested_checked(_)))))
-    assert_eq(empty_output, capture_stdout())
+    do::<Result> {
+      assert_eq(expected, inspect(apply_pattern(0, nested_checked(_1))))
+      ext = ExtractorClosureSchema::make_checked()
+      assert_eq(expected, inspect(apply_pattern(0, ext(_1))))
+      empty_output: List<String> = []
+      assert_eq(empty_output, capture_stdout())
+      assert_eq(expected, inspect(apply_pattern((3, 0), (_1, nested_checked(_)))))
+      assert_eq(empty_output, capture_stdout())
+    }
   }
 
   it("returns ordinary mismatch errors without publishing partial projections") {
-    assert_true(is_match(apply_pattern(3, 4), Err(_)))
-    assert_true(is_match(apply_pattern([1], [_1, 2]), Err(_)))
-    assert_true(is_match(apply_pattern(Option::None, Option::Some(_1: Int)), Err(_)))
-    assert_true(is_match(apply_pattern((3, 4), (_1, 5)), Err(_)))
+    do::<Result> {
+      assert_true(is_match(apply_pattern(3, 4), Err(_)))
+      assert_true(is_match(apply_pattern([1], [_1, 2]), Err(_)))
+      assert_true(is_match(apply_pattern(Option::None, Option::Some(_1: Int)), Err(_)))
+      assert_true(is_match(apply_pattern((3, 4), (_1, 5)), Err(_)))
+    }
   }
 
   it("preserves existing ordinary Pattern failure kinds") {
-    assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern(3, 4)))
-    assert_eq("IndexOutOfBounds", ApplyPatternSchema::error_kind(apply_pattern([1], [_, _] @ _1: List<Int>)))
-    assert_eq("IndexOutOfBounds", ApplyPatternSchema::error_kind(apply_pattern([1, 2, 3], [_1, _])))
-    assert_eq("EmptyList", ApplyPatternSchema::error_kind(apply_pattern([], [_1: Int, .._])))
-    assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern([2, 3], [1, _1])))
-    assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern([2, 3, 4], [1, _1])))
-    assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern(Option::None, Option::Some(_1: Int))))
+    do::<Result> {
+      assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern(3, 4)))
+      assert_eq("IndexOutOfBounds", ApplyPatternSchema::error_kind(apply_pattern([1], [_, _] @ _1: List<Int>)))
+      assert_eq("IndexOutOfBounds", ApplyPatternSchema::error_kind(apply_pattern([1, 2, 3], [_1, _])))
+      assert_eq("EmptyList", ApplyPatternSchema::error_kind(apply_pattern([], [_1: Int, .._])))
+      assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern([2, 3], [1, _1])))
+      assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern([2, 3, 4], [1, _1])))
+      assert_eq("PatternMismatch", ApplyPatternSchema::error_kind(apply_pattern(Option::None, Option::Some(_1: Int))))
+    }
   }
 
   it("evaluates input pre-arguments and each body exactly once") {
     capture_stdout()
-    assert_eq("Ok(5)", inspect(apply_pattern(note("input", 5), observed_between(note("min", 2), note("max", 8), _1))))
-    assert_eq(["input", "min", "max", "body:5"], capture_stdout())
+    do::<Result> {
+      assert_eq("Ok(5)", inspect(apply_pattern(note("input", 5), observed_between(note("min", 2), note("max", 8), _1))))
+      assert_eq(["input", "min", "max", "body:5"], capture_stdout())
+    }
   }
 
   it("skips later occurrences and pre-arguments after failure") {
     capture_stdout()
     empty_output: List<String> = []
-    assert_true(is_match(apply_pattern((0, 5), (positive(), observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
-    assert_eq(empty_output, capture_stdout())
-    assert_true(is_match(apply_pattern((3, 5), (4, observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
-    assert_eq(empty_output, capture_stdout())
+    do::<Result> {
+      assert_true(is_match(apply_pattern((0, 5), (positive(), observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
+      assert_eq(empty_output, capture_stdout())
+      assert_true(is_match(apply_pattern((3, 5), (4, observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
+      assert_eq(empty_output, capture_stdout())
+    }
   }
 
   it("continues a non-Result callable after failure") {
     capture_stdout()
-    assert_eq(4, ApplyPatternSchema::continue_after_failure(3))
-    assert_eq(["after-failure"], capture_stdout())
+    do::<Result> {
+      assert_eq(4, ApplyPatternSchema::continue_after_failure(3))
+      assert_eq(["after-failure"], capture_stdout())
+    }
   }
 
   it("keeps nested apply_pattern failures inside their returned Result") {
-    assert_eq("Ok(())", inspect(apply_pattern(1, supply(apply_pattern(3, 4), Err(_)))))
-    assert_eq("Ok(3)", inspect(apply_pattern(1, supply(apply_pattern(3, _1), Ok(_1)))))
+    do::<Result> {
+      assert_eq("Ok(())", inspect(apply_pattern(1, supply(apply_pattern(3, 4), Err(_)))))
+      assert_eq("Ok(3)", inspect(apply_pattern(1, supply(apply_pattern(3, _1), Ok(_1)))))
+    }
   }
 
   it("uses a do pre-argument's own failure target") {
-    assert_eq("Ok(())", inspect(apply_pattern(1, supply(do::<Result> {
-      accepted =? ExtractorSchema::source(0)
-      Ok(accepted)
-    }, Err(_)))))
-    assert_eq("Ok(3)", inspect(apply_pattern(1, supply(do::<Result> {
-      accepted =? ExtractorSchema::source(3)
-      Ok(accepted)
-    }, Ok(_1)))))
+    do::<Result> {
+      assert_eq("Ok(())", inspect(apply_pattern(1, supply(do::<Result> {
+        accepted =? ExtractorSchema::source(0)
+        Ok(accepted)
+      }, Err(_)))))
+      assert_eq("Ok(3)", inspect(apply_pattern(1, supply(do::<Result> {
+        accepted =? ExtractorSchema::source(3)
+        Ok(accepted)
+      }, Ok(_1)))))
+    }
   }
 
   it("keeps failure local inside a do Alternative SafeBind input") {
-    assert_eq("Option::Some(7)", inspect(do::<Option> {
-      False =? is_match(apply_pattern(3, 4), Ok(_))
-      Option::Some(7)
-    }))
-    assert_eq("Option::Some(7)", inspect(do::<Option> {
-      False =? is_match(apply_pattern(0, positive()), Ok(_))
-      Option::Some(7)
-    }))
+    do::<Result> {
+      assert_eq("Option::Some(7)", inspect(do::<Option> {
+        False =? is_match(apply_pattern(3, 4), Ok(_))
+        Option::Some(7)
+      }))
+      assert_eq("Option::Some(7)", inspect(do::<Option> {
+        False =? is_match(apply_pattern(0, positive()), Ok(_))
+        Option::Some(7)
+      }))
+    }
   }
 
   it("separates pipe Expr slots from Pattern projection slots") {
-    assert_eq("Ok(5)", inspect(3 |> apply_pattern(offset(2, _1))))
-    assert_eq("Ok(5)", inspect(3 |> apply_pattern(_1, offset(2, _1))))
-    assert_eq("Ok(5)", inspect(Kernel::apply_pattern(3, offset(2, _1))))
+    do::<Result> {
+      assert_eq("Ok(5)", inspect(3 |> apply_pattern(offset(2, _1))))
+      assert_eq("Ok(5)", inspect(3 |> apply_pattern(_1, offset(2, _1))))
+      assert_eq("Ok(5)", inspect(Kernel::apply_pattern(3, offset(2, _1))))
+    }
   }
 
   it("preserves Regex is_match ordinary call and capture") {
     re =? Regex::compile("^issue-[0-9]+$")
     text = "issue-42"
-    assert_true(Regex::is_match(re, text))
-    matches: (Regex, String -> Boolean) = &Regex::is_match
-    assert_true(matches(re, text))
-    assert_false(matches(re, "no-match"))
-    describe_match = &inspect(Regex::is_match(re, &1))
-    assert_eq("True", describe_match("issue-42"))
-    describe_projection = &inspect(apply_pattern(&1, _1: Int))
-    assert_eq("Ok(3)", describe_projection(3))
+    do::<Result> {
+      assert_true(Regex::is_match(re, text))
+      matches: (Regex, String -> Boolean) = &Regex::is_match
+      assert_true(matches(re, text))
+      assert_false(matches(re, "no-match"))
+      describe_match = &inspect(Regex::is_match(re, &1))
+      assert_eq("True", describe_match("issue-42"))
+      describe_projection = &inspect(apply_pattern(&1, _1: Int))
+      assert_eq("Ok(3)", describe_projection(3))
+    }
   }
 }

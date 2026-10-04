@@ -87,11 +87,13 @@ test("Option") {
       first: Option<Int> = Option::Some(1)
       second: Option<Int> = Option::Some(2)
       third: Option<Int> = Option::Some(3)
-      assert_eq(first, empty <|> first)
-      assert_eq(explicit_empty, empty)
-      assert_eq(inferred_empty, empty)
-      assert_eq(first, first <|> empty)
-      assert_eq((first <|> second) <|> third, first <|> (second <|> third))
+      do::<Result> {
+        assert_eq(first, empty <|> first)
+        assert_eq(explicit_empty, empty)
+        assert_eq(inferred_empty, empty)
+        assert_eq(first, first <|> empty)
+        assert_eq((first <|> second) <|> third, first <|> (second <|> third))
+      }
     }
 
     it("keeps Monad return equal to Applicative pure") {
@@ -133,8 +135,10 @@ test("Option") {
 
     it("supports user-defined record pipelines") {
       flow = &maybe_profile >=> &ensure_short_name
-      assert_eq("Option::Some(DraftProfile(name: \"surtr\"))", inspect(flow(" surtr ")))
-      assert_eq("Option::None", inspect(flow("a-very-long-profile-name")))
+      do::<Result> {
+        assert_eq("Option::Some(DraftProfile(name: \"surtr\"))", inspect(flow(" surtr ")))
+        assert_eq("Option::None", inspect(flow("a-very-long-profile-name")))
+      }
     }
 
     it("checks constructor-constrained helpers") {

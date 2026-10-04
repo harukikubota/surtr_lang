@@ -47,25 +47,31 @@ test("Int") {
     }
 
     it("truncates toward zero for every sign combination") {
-      assert_ok_eq((-2, -1), Int::div_mod(-7, 3))
-      assert_ok_eq((-2, 1), Int::div_mod(7, -3))
-      assert_ok_eq((2, -1), Int::div_mod(-7, -3))
+      do::<Result> {
+        assert_ok_eq((-2, -1), Int::div_mod(-7, 3))
+        assert_ok_eq((-2, 1), Int::div_mod(7, -3))
+        assert_ok_eq((2, -1), Int::div_mod(-7, -3))
+      }
     }
 
     it("handles zero dividends exact division and smaller dividends") {
-      assert_ok_eq((0, 0), Int::div_mod(0, 3))
-      assert_ok_eq((0, 0), Int::div_mod(0, -3))
-      assert_ok_eq((3, 0), Int::div_mod(9, 3))
-      assert_ok_eq((0, -2), Int::div_mod(-2, 3))
+      do::<Result> {
+        assert_ok_eq((0, 0), Int::div_mod(0, 3))
+        assert_ok_eq((0, 0), Int::div_mod(0, -3))
+        assert_ok_eq((3, 0), Int::div_mod(9, 3))
+        assert_ok_eq((0, -2), Int::div_mod(-2, 3))
+      }
     }
 
     it("preserves arbitrary precision and the division identity") {
       value = 10000000000000000000000000000000000000001
       divisor = 100000000000000000000
       (quotient, remainder) =? Int::div_mod(value, divisor)
-      assert_eq((100000000000000000000, 1), (quotient, remainder))
-      assert_eq(value, quotient * divisor + remainder)
-      assert_ok_eq((-100000000000000000000, -1), Int::div_mod(0 - value, divisor))
+      do::<Result> {
+        assert_eq((100000000000000000000, 1), (quotient, remainder))
+        assert_eq(value, quotient * divisor + remainder)
+        assert_ok_eq((-100000000000000000000, -1), Int::div_mod(0 - value, divisor))
+      }
     }
 
     it("supports an imported callable with a concrete signature") {
@@ -75,9 +81,11 @@ test("Int") {
 
     it("returns ZeroDivisionError for zero divisors") {
       expected: Result<(Int, Int)> = Err(ZeroDivisionError)
-      assert_eq(expected, Int::div_mod(7, 0))
-      assert_eq(expected, Int::div_mod(-7, 0))
-      assert_eq(expected, Int::div_mod(0, 0))
+      do::<Result> {
+        assert_eq(expected, Int::div_mod(7, 0))
+        assert_eq(expected, Int::div_mod(-7, 0))
+        assert_eq(expected, Int::div_mod(0, 0))
+      }
     }
   }
 
@@ -166,8 +174,10 @@ test("Int") {
     }
 
     it("parses octal and binary literals") {
-      assert_eq("Ok(15)", inspect(parse_literal("0o17")))
-      assert_eq("Ok(13)", inspect(parse_literal("0b1101")))
+      do::<Result> {
+        assert_eq("Ok(15)", inspect(parse_literal("0o17")))
+        assert_eq("Ok(13)", inspect(parse_literal("0b1101")))
+      }
     }
 
     it("parses explicit decimal literals") {
@@ -179,8 +189,10 @@ test("Int") {
     }
 
     it("accepts signed literals") {
-      assert_eq("Ok(-255)", inspect(parse_literal("-0xff")))
-      assert_eq("Ok(13)", inspect(parse_literal("+0b1101")))
+      do::<Result> {
+        assert_eq("Ok(-255)", inspect(parse_literal("-0xff")))
+        assert_eq("Ok(13)", inspect(parse_literal("+0b1101")))
+      }
     }
 
     it("rejects unknown prefixes") {

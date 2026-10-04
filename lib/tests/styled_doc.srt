@@ -11,8 +11,10 @@ test("StyledDoc") {
         StyledDoc::line("hello"),
         StyledDoc::append(StyledDoc::newline(), StyledDoc::line("world")),
       )
-      assert_doc_plain_eq("", StyledDoc::empty())
-      assert_doc_plain_eq("hello\n\nworld", doc)
+      do::<Result> {
+        assert_doc_plain_eq("", StyledDoc::empty())
+        assert_doc_plain_eq("hello\n\nworld", doc)
+      }
     }
 
     it("renders segment text line and concat helpers") {
@@ -63,9 +65,11 @@ test("StyledDoc") {
       doc = StyledDocDoc::new([line])
       first_line =? doc.lines.[0]
       first_segment =? first_line.segments.[0]
-      assert_eq(Option::Some(StyledDocColor::Blue), first_segment.style.fg)
-      assert_eq(True, first_segment.style.bold)
-      assert_doc_plain_eq("sur", doc)
+      do::<Result> {
+        assert_eq(Option::Some(StyledDocColor::Blue), first_segment.style.fg)
+        assert_eq(True, first_segment.style.bold)
+        assert_doc_plain_eq("sur", doc)
+      }
     }
 
     it("supports facet updates through 0-based public paths") {
@@ -78,9 +82,11 @@ test("StyledDoc") {
       )
       first_line =? recolored.lines.[0]
       first_segment =? first_line.segments.[0]
-      assert_eq(True, first_segment.style.bold)
-      assert_eq(Option::Some(StyledDocColor::Green), first_segment.style.fg)
-      assert_doc_ansi_eq(esc() ++ "[1;32msurtr" ++ esc() ++ "[0m", recolored)
+      do::<Result> {
+        assert_eq(True, first_segment.style.bold)
+        assert_eq(Option::Some(StyledDocColor::Green), first_segment.style.fg)
+        assert_doc_ansi_eq(esc() ++ "[1;32msurtr" ++ esc() ++ "[0m", recolored)
+      }
     }
   }
 
@@ -163,8 +169,10 @@ test("StyledDoc") {
         StyledDoc::text(""),
         StyledDocStyle(Option::Some(StyledDocColor::Red), Option::None, True, False, False, False),
       )
-      assert_doc_ansi_eq("plain", StyledDoc::text("plain"))
-      assert_doc_ansi_eq("", empty_styled)
+      do::<Result> {
+        assert_doc_ansi_eq("plain", StyledDoc::text("plain"))
+        assert_doc_ansi_eq("", empty_styled)
+      }
     }
   }
 

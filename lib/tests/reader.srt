@@ -39,9 +39,11 @@ test("Reader") {
       asked: Reader<Int, Int> = Reader::ask::<Int>()
       asked_mapped: Reader<Int, Int> = Reader::asks({|environment| environment * 3})
 
-      assert_eq(12, Reader::run(constructed, 10))
-      assert_eq(10, Reader::run(asked, 10))
-      assert_eq(30, Reader::run(asked_mapped, 10))
+      do::<Result> {
+        assert_eq(12, Reader::run(constructed, 10))
+        assert_eq(10, Reader::run(asked, 10))
+        assert_eq(30, Reader::run(asked_mapped, 10))
+      }
     }
 
     it("maps and applies functions in the same environment") {
@@ -50,8 +52,10 @@ test("Reader") {
       value: Reader<Int, Int> = Reader::new({|environment: Int| environment * 2})
       applied: Reader<Int, Int> = Applicative::ap(mapper, value)
 
-      assert_eq(8, Reader::run(mapped, 3))
-      assert_eq(9, Reader::run(applied, 3))
+      do::<Result> {
+        assert_eq(8, Reader::run(mapped, 3))
+        assert_eq(9, Reader::run(applied, 3))
+      }
     }
 
     it("binds without replacing the environment with the payload") {
@@ -67,9 +71,11 @@ test("Reader") {
       original: Reader<Int, Int> = Reader::asks({|environment| environment * 2})
       localized: Reader<Int, Int> = Reader::local(original, {|environment| environment + 10})
 
-      assert_eq(6, Reader::run(original, 3))
-      assert_eq(26, Reader::run(localized, 3))
-      assert_eq(6, Reader::run(original, 3))
+      do::<Result> {
+        assert_eq(6, Reader::run(original, 3))
+        assert_eq(26, Reader::run(localized, 3))
+        assert_eq(6, Reader::run(original, 3))
+      }
     }
 
     it("keeps pure and return equivalent") {
@@ -88,10 +94,12 @@ test("Reader") {
       second: Reader<Int, Int> =? List::at(values, 1)
       pair: (Reader<Int, Int>, Reader<Int, Int>) = (first, second)
 
-      assert_eq(11, Reader::run(holder.value, 10))
-      assert_eq(12, Reader::run(updated.value, 10))
-      assert_eq(11, Reader::run(pair._0, 10))
-      assert_eq(12, Reader::run(pair._1, 10))
+      do::<Result> {
+        assert_eq(11, Reader::run(holder.value, 10))
+        assert_eq(12, Reader::run(updated.value, 10))
+        assert_eq(11, Reader::run(pair._0, 10))
+        assert_eq(12, Reader::run(pair._1, 10))
+      }
     }
 
     it("changes payload types without Eq or Show bounds") {
@@ -99,8 +107,10 @@ test("Reader") {
       mapped: Reader<Int, Int> = payload |*> {|item| item.value + 1}
       bound: Reader<Int, Int> = payload |>= {|item| Reader::new({|environment| item.value + environment})}
 
-      assert_eq(8, Reader::run(mapped, 7))
-      assert_eq(14, Reader::run(bound, 7))
+      do::<Result> {
+        assert_eq(8, Reader::run(mapped, 7))
+        assert_eq(14, Reader::run(bound, 7))
+      }
     }
   }
 
@@ -146,8 +156,10 @@ test("Reader") {
       apply_to_value: Reader<Int, ((Int -> Int) -> Int)> = Reader::new({|_environment| {|function| apply(function, 3)}})
       right: Reader<Int, Int> = Applicative::ap(apply_to_value, mapper)
 
-      assert_eq(4, Reader::run(left, 8))
-      assert_eq(Reader::run(left, 8), Reader::run(right, 8))
+      do::<Result> {
+        assert_eq(4, Reader::run(left, 8))
+        assert_eq(Reader::run(left, 8), Reader::run(right, 8))
+      }
     }
 
     it("satisfies composition") {
@@ -160,8 +172,10 @@ test("Reader") {
       left: Reader<Int, Int> = Applicative::ap(Applicative::ap(Applicative::ap(compose, first), second), value)
       right: Reader<Int, Int> = Applicative::ap(first, Applicative::ap(second, value))
 
-      assert_eq(17, Reader::run(left, 5))
-      assert_eq(17, Reader::run(right, 5))
+      do::<Result> {
+        assert_eq(17, Reader::run(left, 5))
+        assert_eq(17, Reader::run(right, 5))
+      }
     }
   }
 
