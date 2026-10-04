@@ -49,6 +49,8 @@ where
 
 `defstruct` には `new` が必須です。
 
+この必須条件により、式位置の `Type(...)` から呼出し先 `Type::new` をコンパイル時に解決できます。実行時に構築が必ず成功するという意味ではありません。`new` は `Self` または `Result<Self, E>` を返せます。`Result` を返す場合、`Type(...)` もその `Ok` / `Err` をそのまま返します。
+
 - `impl User { def new(...) -> Self { ... } }` を定義する
 - `User(...)` は `User::new(...)` の糖衣として解決される
 - `User::new` は import 対象外
@@ -168,6 +170,8 @@ print(name)
 - `deconstruct` は constructor pattern を使いたいときに定義する
 - `match user { User(...) => ... }` は attached extractor `User::deconstruct` を要求する
 - `deconstruct` が未定義なら compile error になる
+
+`new` の定義だけでは Pattern による分解は可能になりません。`deconstruct` がない場合に、フィールドの直接分解や別の Extractor で補うことはありません。
 
 `deconstruct` の一般的な extractor 契約は `./extractors.md`、pattern 全体は `./pattern-matching.md` を参照してください。
 

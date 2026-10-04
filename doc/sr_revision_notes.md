@@ -16,7 +16,7 @@
 | SR-10 | 構文方針確定・未実装 | matchは3形式を同等に扱う。bulk_updateは引数の括弧必須、condは括弧有無を許容 |
 | SR-11 | 現行処理の責務を確認 | callee UIDは一意。型に依存する引数役割の遅延と区別 |
 | SR-12 | 可視性・拒否条件を確認 | public Constはimportなし、private Constはファイル内 |
-| SR-13 | 意図を確認・仕様整理済み | newの定義必須によるコンパイル時の呼出し先解決。実行時のResult値とは独立 |
+| SR-13 | 正本文書の整合済み | newの定義必須によるコンパイル時の呼出し先解決。実行時のResult値とは独立 |
 
 SR-01・07・10・11の具体的な根拠、未確定事項、受入条件は[呼出し解決・構文の計画](sr_call_resolution_syntax_plan.md)にまとめた。
 
@@ -191,6 +191,10 @@ Pattern側のExtractorは、定義されていなければコンパイル時の�
 利用者の補足により、「確実に成功する」はコンパイル時の呼出し先解決を意味すると確認した。前回の調査では実行時の成功保証との解釈を未確定事項にしたが、その扱いを訂正する。上記の`Result`を返す契約と矛盾せず、実行時の戻り値や成功・失敗の規則を変更する必要はない。
 
 一方、`new`を定義し`deconstruct`を定義しないStructをPattern headに使うと、Sigilは `requires attached extractor ... but it is not defined` で停止した。構造分解への救済は追加しない。
+
+### 文書整合の実施記録（2026-10-04）
+
+`docs/site/structs.md` と `docs/dev/Pattern_spec.md` に、`new` の必須条件がコンパイル時の呼出し先解決を保証すること、実行時の `Result` の成否とは独立することを記載した。`deconstruct` 未定義時は名前解決エラーとし、フィールドの直接分解や別Extractorで救済しない点も明記した。処理系・テストは変更していない。文書差分を確認し、`git diff --check` は成功した。
 
 ## 後段タスクへの引継ぎ
 
