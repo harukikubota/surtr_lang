@@ -12,7 +12,8 @@
 - process / Task の待機・取消・結果配送: [Process Runtime 仕様](../docs/dev/ProcessRuntime_spec.md)。
 - generic do の型検査・lowering: [do intrinsic 仕様](../docs/dev/Do_intrinsic_spec.md)。
 - 公開 API と `Monad::bind`: [List の標準定義](../lib/types/list.srt)。
-- ListHandle: [runtime.rs](../crates/sindr/src/runtime.rs)。Builder: [list_flat_map.rs](../crates/eldr/src/builtin/list_flat_map.rs)。
+- ListHandle: [runtime.rs](../crates/sindr/src/runtime.rs)。Builder: [list_builder.rs](../crates/eldr/src/builtin/list_builder.rs)。
+- List 操作の回帰基準: [標準テスト](../lib/tests/monads/list.srt)。
 - 予算・操作数・失敗・rollback の回帰基準: [VM テスト](../crates/eldr/src/vm/list_flat_map_tests.rs)、[REPL テスト](../crates/xldr/tests/repl_core.rs)。
 
 改善時も、論理順、永続性、mapper の呼出し回数、失敗後の未評価、source trace、
