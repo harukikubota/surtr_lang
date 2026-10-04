@@ -122,7 +122,10 @@ fn test_command_accepts_parent_and_symlink_file_paths() {
         &temp.join("private/helper.srt"),
         "defmod Helper { def value() -> Int { 3 } }\n",
     );
-    write_source(&temp.join("private/entry.srt"), "include \"./helper.srt\"\nimport Test;\nit(\"outside lib tests\") { assert_eq(3, Helper::value()) }\n");
+    write_source(
+        &temp.join("private/entry.srt"),
+        "include \"./helper.srt\"\nimport Test;\nit(\"outside lib tests\") { assert_eq(3, Helper::value()) }\n",
+    );
     fs::create_dir_all(temp.join("nested")).unwrap();
     symlink("private/entry.srt", temp.join("alias.srt")).unwrap();
     // Includes stay relative to the entry path: the alias also has its own adjacent helper.
@@ -179,10 +182,19 @@ test("Sequencing") {{
         let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{kind}: {stdout}\n{stderr}");
-        assert!(stdout.contains("[FAIL] Sequencing > first failure"), "{kind}: {stdout}\n{stderr}");
+        assert!(
+            stdout.contains("[FAIL] Sequencing > first failure"),
+            "{kind}: {stdout}\n{stderr}"
+        );
         assert!(stdout.contains("expected 1, got 2"), "{kind}: {stdout}");
-        assert!(stdout.contains("[PASS] Sequencing > next it"), "{kind}: {stdout}\n{stderr}");
-        assert!(stdout.contains("test result: passed=1, failed=1, total=2"), "{kind}: {stdout}");
+        assert!(
+            stdout.contains("[PASS] Sequencing > next it"),
+            "{kind}: {stdout}\n{stderr}"
+        );
+        assert!(
+            stdout.contains("test result: passed=1, failed=1, total=2"),
+            "{kind}: {stdout}"
+        );
         assert!(!stdout.contains("after-failure"), "{kind}: {stdout}");
     }
     let _ = fs::remove_dir_all(temp);
@@ -256,6 +268,16 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
     let temp = unique_temp_dir("surtr_test_assertion_call_boundaries");
     let cases = [
         (
+            "check: (Int -> Result<()>) = &Test::assert_lt(&1, 2)\n    check(3)",
+            "check(3)",
+            "assert_lt",
+        ),
+        (
+            "assert_satisfies(predicate: {|n| n > 0}, message: \"positive\", actual: 0)",
+            "assert_satisfies(predicate: {|n| n > 0}, message: \"positive\", actual: 0)",
+            "assert_satisfies",
+        ),
+        (
             "check: (Boolean -> Result<()>) = &Test::assert_true\n    check(False)",
             "check(False)",
             "assert_true",
@@ -282,7 +304,9 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
         ),
     ];
     for (body, call, assertion) in cases {
-        let source = format!("import Test;\ntest(\"boundary\") {{\n  it(\"same\") {{ assert_eq(0, 0) }}\n  it(\"same\") {{\n    {body}\n  }}\n}}\n");
+        let source = format!(
+            "import Test;\ntest(\"boundary\") {{\n  it(\"same\") {{ assert_eq(0, 0) }}\n  it(\"same\") {{\n    {body}\n  }}\n}}\n"
+        );
         write_math_test(&temp, &source);
         let prefix = &source[..source.find(call).unwrap()];
         let line = prefix.chars().filter(|ch| *ch == '\n').count() + 1;
@@ -296,7 +320,7 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
             "{source}\n{stdout}\n{stderr}"
         );
         assert!(stdout.contains(&format!("{assertion} failed:")), "{stdout}");
-        if body.contains("actual:") {
+        if assertion == "assert_eq" && body.contains("actual:") {
             assert!(stdout.contains("LHS term: \"期待\""), "{stdout}");
             assert!(stdout.contains("RHS term: \"実際\""), "{stdout}");
         }
@@ -307,21 +331,30 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
     }
 
     let helper =
-        "defmod Helper {\n  def check() -> Result<()> {\n    Test::assert_false(True)\n  }\n}\n";
+        "defmod Helper {\n  def check() -> Result<()> {\n    Test::assert_gte(1, 2)\n  }\n}\n";
     write_source(&temp.join("lib/tests/local/helper.srt"), helper);
-    write_math_test(&temp, "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::check() } }\n");
+    write_math_test(
+        &temp,
+        "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::check() } }\n",
+    );
     let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
     assert!(stdout.contains("helper.srt:3:5"), "{stdout}\n{stderr}");
-    assert!(stdout.contains("Test::assert_false(True)"), "{stdout}");
-    assert!(stdout.contains("assert_false failed:"), "{stdout}");
+    assert!(stdout.contains("Test::assert_gte(1, 2)"), "{stdout}");
+    assert!(stdout.contains("assert_gte failed:"), "{stdout}");
 
     // A function with the same short name is not a standard assertion. Keep
     // the Error's construction site, even for TestAssertionFailed itself.
-    write_source(&temp.join("lib/tests/local/helper.srt"), "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestAssertionFailed(\"custom failure\"))\n  }\n}\n");
-    write_math_test(&temp, "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::assert_true() } }\n");
+    write_source(
+        &temp.join("lib/tests/local/helper.srt"),
+        "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestAssertionFailed(\"custom failure\"))\n  }\n}\n",
+    );
+    write_math_test(
+        &temp,
+        "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::assert_true() } }\n",
+    );
     let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -334,7 +367,6 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
 
 #[test]
 fn test_command_assertion_captions_use_the_executed_call_site() {
-    let temp = unique_temp_dir("surtr_test_assertion_captions");
     let cases = [
         ("assert_true(False)", "assert_true"),
         ("assert_false(True)", "assert_false"),
@@ -360,7 +392,34 @@ fn test_command_assertion_captions_use_the_executed_call_site() {
             "assert_doc_ansi_eq",
         ),
     ];
-    for (assertion, name) in cases {
+    check_assertion_call_sites(&cases);
+}
+
+#[test]
+fn test_command_validation_assertions_report_public_call_sites() {
+    check_assertion_call_sites(&[
+        ("assert(False, \"condition\")", "assert"),
+        (
+            "assert_satisfies(0, \"positive\", {|n| n > 0})",
+            "assert_satisfies",
+        ),
+        ("assert_lt(2, 1)", "assert_lt"),
+        ("assert_lte(2, 1)", "assert_lte"),
+        ("assert_gt(1, 2)", "assert_gt"),
+        ("assert_gte(1, 2)", "assert_gte"),
+        (
+            "assert_err_message_eq(\"other\", Err(NoneError))",
+            "assert_err_message_eq",
+        ),
+        ("assert_starts_with(\"a\", \"b\")", "assert_starts_with"),
+        ("assert_ends_with(\"a\", \"b\")", "assert_ends_with"),
+        ("assert_some(Option<Int>::None)", "assert_some"),
+    ]);
+}
+
+fn check_assertion_call_sites(cases: &[(&str, &str)]) {
+    let temp = unique_temp_dir("surtr_test_assertion_captions");
+    for &(assertion, name) in cases {
         for (before, after) in [
             ("", ""),
             (
@@ -1311,6 +1370,11 @@ fn test_command_extension_assertion_type_boundaries() {
             "Eq",
         ),
         ("assert_approx(1, 1.0, 0.0)", "Float"),
+        ("assert(1, \"message\")", "Boolean"),
+        ("assert_satisfies(1, \"message\", {|n| n + 1})", "Boolean"),
+        ("assert_lt(1, 2.0)", "Int"),
+        ("assert_gt({|x: Int| x}, {|x: Int| x})", "Compare"),
+        ("assert_some(Ok(1))", "Option"),
         (
             "assert_err_kind(\"NoneError\", Err(NoneError))",
             "concrete deferror",
@@ -1374,6 +1438,8 @@ fn check_assertion_cases(
         &temp.join("lib/tests/local/support/assertions.srt"),
         r#"
 defmod UserAssertions {
+  def assert() -> Result<()> { Ok(()) }
+  def check() -> Result<()> { assert() }
   def assert_err_kind(marker: String, result: Result<Int>) -> Result<()> { Ok(()) }
   def assert_cause_chain(markers: List<String>, result: Result<Int>) -> Result<()> { Ok(()) }
 }
@@ -1494,6 +1560,151 @@ fn test_command_extended_assertions_return_expected_results() {
 }
 
 #[test]
+fn test_command_validation_assertions_and_composition() {
+    check_assertion_cases(
+        "surtr_test_validation_assertions",
+        "deferror MessageFailure(detail: String) { detail }",
+        &[
+            ("assert pass", "assert(True, \"yes\")", None),
+            (
+                "assert function",
+                "check: (Boolean, String -> Result<()>) = &Test::assert\ncheck(True, \"ok\")",
+                None,
+            ),
+            ("assert named", "assert(message: \"ok\", flag: True)", None),
+            ("user assert", "UserAssertions::check()", None),
+            (
+                "assert message",
+                "assert(False, \"exact message\")",
+                Some("exact message"),
+            ),
+            (
+                "assert empty message",
+                "assert_err_message_eq(\"\", assert(False, \"\"))",
+                None,
+            ),
+            (
+                "predicate pass",
+                "assert_satisfies(3, \"positive\", {|n| n > 0})",
+                None,
+            ),
+            (
+                "predicate failure",
+                "assert_satisfies(0, \"positive\", {|n| n > 0})",
+                Some("positive\\nactual: 0"),
+            ),
+            (
+                "predicate once",
+                "do { assert_satisfies(3, \"positive\", {|n| print(\"called\")\nn > 0})\nassert_stdout_eq([\"called\"]) }",
+                None,
+            ),
+            (
+                "eager message",
+                "message: (-> String) = {|| print(\"message\")\n\"positive\"}\ndo { assert_satisfies(3, message(), {|n| n > 0})\nassert_stdout_eq([\"message\"]) }",
+                None,
+            ),
+            (
+                "message ignores cause",
+                "assert_err_message_eq(\"outer\", Result::cause(Err(MessageFailure(\"inner\")), MessageFailure(\"outer\")))",
+                None,
+            ),
+            ("lt pass", "assert_lt(1, 2)", None),
+            ("lt equal", "assert_lt(2, 2)", Some("2 < 2")),
+            ("lte equal", "assert_lte(2, 2)", None),
+            ("lte strict", "assert_lte(1, 2)", None),
+            ("lte failure", "assert_lte(3, 2)", Some("3 <= 2")),
+            ("gt pass", "assert_gt(2, 1)", None),
+            ("gt equal", "assert_gt(2, 2)", Some("2 > 2")),
+            ("gte equal", "assert_gte(2, 2)", None),
+            ("gte strict", "assert_gte(2, 1)", None),
+            ("gte failure", "assert_gte(1, 2)", Some("1 >= 2")),
+            (
+                "message pass",
+                "assert_err_message_eq(\"detail\", Err(MessageFailure(\"detail\")))",
+                None,
+            ),
+            (
+                "message mismatch",
+                "assert_err_message_eq(\"wanted\", Err(MessageFailure(\"actual\")))",
+                Some("actual"),
+            ),
+            (
+                "message Ok",
+                "assert_err_message_eq(\"wanted\", Ok(42))",
+                Some("Ok(42)"),
+            ),
+            (
+                "prefix unicode",
+                "assert_starts_with(\"世界\", \"世界 hello\")",
+                None,
+            ),
+            ("prefix empty", "assert_starts_with(\"\", \"text\")", None),
+            (
+                "prefix mismatch",
+                "assert_starts_with(\"Text\", \"text\")",
+                Some("Text"),
+            ),
+            (
+                "suffix unicode",
+                "assert_ends_with(\"世界\", \"hello 世界\")",
+                None,
+            ),
+            ("suffix empty", "assert_ends_with(\"\", \"text\")", None),
+            (
+                "suffix mismatch",
+                "assert_ends_with(\"Text\", \"text\")",
+                Some("Text"),
+            ),
+            (
+                "some no Eq",
+                "assert_some(Option::Some({|x: Int| x}))",
+                None,
+            ),
+            (
+                "some None",
+                "value: Option<Int> = Option::None\nassert_some(value)",
+                Some("None"),
+            ),
+            (
+                "bare propagation",
+                "do { assert(False, \"stopped\")\nfail(\"unreachable\") }",
+                Some("stopped"),
+            ),
+            (
+                "question propagation",
+                "assert(False, \"stopped\")?\nfail(\"unreachable\")",
+                Some("stopped"),
+            ),
+            (
+                "safe bind propagation",
+                "_ =? assert(False, \"stopped\")\nfail(\"unreachable\")",
+                Some("stopped"),
+            ),
+            (
+                "explicit discard",
+                "assert(False, \"discarded\");\nOk(())",
+                None,
+            ),
+            (
+                "do discard",
+                "do::<Result> { assert(False, \"discarded\");\nOk(()) }",
+                None,
+            ),
+            (
+                "failed predicate once",
+                "result = assert_satisfies(0, \"positive\", {|n| print(\"called\")\nn > 0})\ndo { assert_err(result)\nassert_stdout_eq([\"called\"]) }",
+                None,
+            ),
+            (
+                "stored functions",
+                "checks: List<(Int -> Result<()>)> = [&Test::assert_gt(&1, 0), &Test::assert_lt(&1, 10)]\nList::reduce(checks, Ok(()), {|prior, check| do { prior\ncheck(3) }})",
+                None,
+            ),
+        ],
+    );
+}
+
+#[test]
 fn test_command_approx_assertion_finite_boundaries() {
     let huge = format!("17{}.0", "0".repeat(307));
     let overflow = format!("huge = {huge}\nassert_approx(huge, 0.0 - huge, huge)");
@@ -1595,29 +1806,101 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
 
 #[test]
 fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
-    let report = check_assertion_cases("surtr_test_cause_chain", ERROR_KIND_DECLARATIONS, &[
-        ("outer first", r#"assert_cause_chain([PayloadFailure, NoneError], Result::cause(Err(NoneError), PayloadFailure("outer")))"#, None),
-        ("singleton", "assert_cause_chain([NoneError], Err(NoneError))", None),
-        ("repeated kind", "assert_cause_chain([NoneError, NoneError], Result::cause(Err(NoneError), NoneError))", None),
-        ("qualified", r#"assert_cause_chain([First::Same, Second::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#, None),
-        ("reversed names", r#"assert_cause_chain([Second::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#, Some("first mismatch at index 0")),
-        ("inner mismatch", r#"assert_cause_chain([First::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#, Some("first mismatch at index 1")),
-        ("missing cause", "assert_cause_chain([NoneError], Result::cause(Err(NoneError), NoneError))", Some("length mismatch: expected 1, got 2")),
-        ("extra cause", "assert_cause_chain([NoneError, NoneError], Err(NoneError))", Some("length mismatch: expected 2, got 1")),
-        ("empty Err", "assert_cause_chain([], Err(NoneError))", Some("expected cause chain [], got [Global::NoneError]")),
-        ("empty Ok", "assert_cause_chain([], Ok(1))", Some("got Ok")),
-        ("nonempty Ok", "assert_cause_chain([NoneError], Ok(1))", Some("got Ok")),
-        ("Ok needs no Eq", "assert_cause_chain([NoneError], Ok({|x: Int| x}))", Some("got Ok")),
-        ("capture", r#"captured: (Result<Int> -> Result<()>) = &Test::assert_cause_chain([PayloadFailure, NoneError], &1)
- captured(Result::cause(Err(NoneError), PayloadFailure("capture")))"#, None),
-        ("generic Int", r#"value: Result<Int> = Result::cause(Err(NoneError), PayloadFailure("int"))
- check_chain(value)"#, None),
-        ("generic String", r#"value: Result<String> = Result::cause(Err(NoneError), PayloadFailure("string"))
- check_chain(value)"#, None),
-        ("user function", r#"UserAssertions::assert_cause_chain(["literal"], Ok(1))"#, None),
-        ("evaluated once", "assert_cause_chain([NoneError], make_failure())", None),
-        ("three entries", r#"assert_cause_chain([PayloadFailure, PayloadFailure, NoneError], Result::cause(Result::cause(Err(NoneError), PayloadFailure("inner")), PayloadFailure("outer")))"#, None),
-    ]);
+    let report = check_assertion_cases(
+        "surtr_test_cause_chain",
+        ERROR_KIND_DECLARATIONS,
+        &[
+            (
+                "outer first",
+                r#"assert_cause_chain([PayloadFailure, NoneError], Result::cause(Err(NoneError), PayloadFailure("outer")))"#,
+                None,
+            ),
+            (
+                "singleton",
+                "assert_cause_chain([NoneError], Err(NoneError))",
+                None,
+            ),
+            (
+                "repeated kind",
+                "assert_cause_chain([NoneError, NoneError], Result::cause(Err(NoneError), NoneError))",
+                None,
+            ),
+            (
+                "qualified",
+                r#"assert_cause_chain([First::Same, Second::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#,
+                None,
+            ),
+            (
+                "reversed names",
+                r#"assert_cause_chain([Second::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#,
+                Some("first mismatch at index 0"),
+            ),
+            (
+                "inner mismatch",
+                r#"assert_cause_chain([First::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#,
+                Some("first mismatch at index 1"),
+            ),
+            (
+                "missing cause",
+                "assert_cause_chain([NoneError], Result::cause(Err(NoneError), NoneError))",
+                Some("length mismatch: expected 1, got 2"),
+            ),
+            (
+                "extra cause",
+                "assert_cause_chain([NoneError, NoneError], Err(NoneError))",
+                Some("length mismatch: expected 2, got 1"),
+            ),
+            (
+                "empty Err",
+                "assert_cause_chain([], Err(NoneError))",
+                Some("expected cause chain [], got [Global::NoneError]"),
+            ),
+            ("empty Ok", "assert_cause_chain([], Ok(1))", Some("got Ok")),
+            (
+                "nonempty Ok",
+                "assert_cause_chain([NoneError], Ok(1))",
+                Some("got Ok"),
+            ),
+            (
+                "Ok needs no Eq",
+                "assert_cause_chain([NoneError], Ok({|x: Int| x}))",
+                Some("got Ok"),
+            ),
+            (
+                "capture",
+                r#"captured: (Result<Int> -> Result<()>) = &Test::assert_cause_chain([PayloadFailure, NoneError], &1)
+ captured(Result::cause(Err(NoneError), PayloadFailure("capture")))"#,
+                None,
+            ),
+            (
+                "generic Int",
+                r#"value: Result<Int> = Result::cause(Err(NoneError), PayloadFailure("int"))
+ check_chain(value)"#,
+                None,
+            ),
+            (
+                "generic String",
+                r#"value: Result<String> = Result::cause(Err(NoneError), PayloadFailure("string"))
+ check_chain(value)"#,
+                None,
+            ),
+            (
+                "user function",
+                r#"UserAssertions::assert_cause_chain(["literal"], Ok(1))"#,
+                None,
+            ),
+            (
+                "evaluated once",
+                "assert_cause_chain([NoneError], make_failure())",
+                None,
+            ),
+            (
+                "three entries",
+                r#"assert_cause_chain([PayloadFailure, PayloadFailure, NoneError], Result::cause(Result::cause(Err(NoneError), PayloadFailure("inner")), PayloadFailure("outer")))"#,
+                None,
+            ),
+        ],
+    );
     let evaluated = report["cases"]
         .as_array()
         .unwrap()
@@ -1845,7 +2128,10 @@ fn test_command_preserves_existing_backslash_names_and_relative_includes() {
         &category.join("support/value.srt"),
         "defmod LiteralValue { def get() -> Int { 3 } }\n",
     );
-    write_source(&category.join(r"literal\entry.srt"), "include \"./support/value.srt\"\nimport Test;\nit(\"literal path\") { assert_eq(3, LiteralValue::get()) }\n");
+    write_source(
+        &category.join(r"literal\entry.srt"),
+        "include \"./support/value.srt\"\nimport Test;\nit(\"literal path\") { assert_eq(3, LiteralValue::get()) }\n",
+    );
     let entry = r"lib/tests/literal\category/literal\entry.srt";
     for target in [entry, "--all"] {
         let output = run_surtr(&temp, &["test", target, "--format=json"]);

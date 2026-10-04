@@ -124,6 +124,16 @@ impl VmTestDiagnostic {
                     matches!(
                         name,
                         "assert_true"
+                            | "assert"
+                            | "assert_satisfies"
+                            | "assert_lt"
+                            | "assert_lte"
+                            | "assert_gt"
+                            | "assert_gte"
+                            | "assert_err_message_eq"
+                            | "assert_starts_with"
+                            | "assert_ends_with"
+                            | "assert_some"
                             | "assert_false"
                             | "assert_eq"
                             | "assert_ok_eq"
