@@ -47,6 +47,24 @@ print(inspect("\\u{1b}"))
 
 `"\u{1b}"` はESC1文字、`"\\u{1b}"` は文字としての `\u{1b}` です。`\u{...}` はUTF-8のバイト指定ではありません。たとえば `"\u{80}"` のUTF-8バイト列は `[194, 128]` です。`String::codepoints(..., StringEncoding::Utf8)` と `String::from_codepoints(..., StringEncoding::Utf8)` はUTF-8バイト列を扱います。
 
+## 文字列埋め込み式に渡せる型
+
+文字列の `#{...}` に渡せるのは、`Show` を実装した型の値だけです。`"#{value}"` は値の `Show::to_string` を呼び、手書きの実装や `derive Show` で定めた表示を使います。埋め込み式は左から一度ずつ評価されます。
+
+`Show` を実装していない型を直接渡すと、型検査で拒否されます。その値を診断用に表示する場合は、`inspect(value)` で明示的に String へ変換してから埋め込みます。`inspect` への暗黙の変換は行いません。
+
+```surtr
+values = [1, 2]
+# print("values=#{values}")  # ListはShowを実装していないため拒否
+print("values=#{inspect(values)}")
+```
+
+```text
+values=[1, 2]
+```
+
+Result も直接埋め込めません。成功値を表示する場合は先に match などで中身を取り出し、Result 全体を診断用に表示する場合は `"#{inspect(result)}"` と書きます。
+
 ## 補間を文字として書く
 
 元ソースの `#{...}` だけが補間を開始します。`\#{` で補間を抑止できます。
@@ -81,7 +99,7 @@ hello alice
 
 Unicodeエスケープの表示は小文字の16進数とし、不要な先頭ゼロを付けません。通常のUnicode文字はそのまま表示します。
 
-**String単体の引用表示を通常の文字列式として再入力すると、元のStringになります。** List、Tuple、Result、構造体内のStringやHashMapキーにも同じ引用規則を使います。ただし `inspect` 全体を再入力可能なソースにする保証はありません。private fieldの省略やError表示などは、その値の表示契約に従います。
+**String単体の引用表示を通常の文字列式として再入力すると、元のStringになります。** List、Tuple、Result、構造体内のStringやHashMapキーにも同じ引用規則を使います。ただし `inspect` 全体を再入力可能なソースにする保証はありません。構造体は private フィールドも含む全フィールドを表示しますが、その列がコンストラクタの引数と一致するとは限りません。Error なども、その値の表示契約に従います。
 
 `print` で文字列を直接出力するときと、`to_string` が返す生の文字列には、この引用処理を加えません。`eprint(String)` は引用表示を標準エラー出力へ書き出します。内容を観察したいときは `print(inspect(value))` を使います。詳しくは[Kernel](./kernel.md#inspect)を参照してください。
 

@@ -665,9 +665,11 @@ well-formedness診断は少なくとも次のmessage、label、helpを構築で�
 
 ### 4.2 `Show` derive と実装権限
 
-`Show` の compiler-wide な暗黙提供は行わない。primitive の標準 impl、通常型の明示 impl、derive だけが能力を提供する。`inspect` は独立した観測関数であり、Trait obligation や dispatch の fallback ではない。
+`Show` の compiler-wide な暗黙提供は行わない。primitive の標準 impl、通常型の明示 impl、derive だけが能力を提供する。`inspect` は独立した観測関数であり、Trait obligation や dispatch の fallback ではない。Show がない型の `to_string` は型検査で拒否し、型検査後の不正な内部状態も汎用表示で隠さない。private を含む inspect の全フィールド表示を to_string 全般へ自動適用しない。手書きの Show が明示的に `inspect(self)` を呼ぶことは許可する。
 
 `@derive Show` は各 field / enum payload の `Show::to_string` を呼ぶ構造的な本体を生成する。generic 型では使用するフィールド型全体に必要な `Show` 条件を付け、具象化時も検査する。内側の型に手書き `Show` があればその impl を利用し、内部表現を再展開しない。`@derive Eq` も各フィールド・payload の能力を要求し、関数型など禁止された末端型を `inspect` で補わない。
+
+`@derive` による生成処理は型宣言の所有者に由来するため、private フィールドを処理できる。Scar は生成由来情報を用いてこの権限を保持し、手書きのトレイト実装へは付与しない。トレイト名による可視性の特例は設けない。
 
 標準 `Eq` の compiler-generated な enum 比較は payload のない variant に限る。payload を持つ enum の値比較には、各 payload の `Eq` を要求する明示 impl または `@derive Eq` を使う。variant tag だけの比較を payload を持つ値の Eq として公開しない。
 

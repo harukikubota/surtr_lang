@@ -113,14 +113,15 @@ impl User {
 - shorthand と明示 field は混在可能
 - shorthand は struct literal 専用で、`User(...)` の named argument や pattern には広がらない
 
-`inspect(...)` / `to_string(...)` もこの公開 surface に合わせます。
+`inspect(...)` は構造体の全フィールドを定義順に表示します。private フィールドも省略せず、呼び出し側のスコープや `Show` の有無によって表示を変えません。
 
-- `to_string(User("alice", 30))` は `User(name: alice, age: 30)` と表示される
-- `inspect(User("alice", 30))` は nested string を quote して `User(name: "alice", age: 30)` と表示される
+- `inspect(User("alice", 30))` は `User(name: "alice", age: 30)` と表示される
+- フィールド値は再帰的に `inspect` の規則で表示し、入れ子の String も引用する
 - 内部専用の `User { ... }` 構造体リテラルは表示に使わない
-- private field を含むときは `User(name: "alice", ..private)` や `User(name: alice, ..private)` のように hidden 部分を要約する
 
-このため、private field を含む構造体の表示は人間向けの inspect であり、完全な round-trip code にはなりません。
+`to_string(...)` は対象型の `Show` 実装に従います。上の `User` に `@derive Show` を付けた場合は `User(name: alice, age: 30)` と表示されます。`Show` がない型の `to_string` は型検査で拒否し、`inspect` で暗黙に代用しません。手書きの `Show` で明示的に `inspect(self)` を呼ぶことはできます。
+
+`inspect` は診断用の String を返します。表示されたフィールド列と `new` の引数は一致するとは限らず、表示全体を再入力できることは保証しません。構築と分解の契約は変わりません。
 
 ## `new` と `deconstruct` の関係
 
@@ -181,10 +182,10 @@ defstruct User {
 }
 ```
 
-このときの可視性ルールは少し特徴的です。
+private フィールドへの直接アクセスと Facet の導出は、所有者の `impl User` 内だけで許可されます。
 
-- `User.password` のような type-root access は `impl User` / `impl Trait for User` の外では不可
-- `user.password` のような value access も同じく `impl User` / `impl Trait for User` の外では不可
+- `User.password` のような type-root access は所有者の `impl User` の外では不可
+- `user.password` のような value access も同じく 所有者の `impl User` の外では不可
 - closure の中かどうかで特別扱いはされず、field access が path segment を作る時点で同じ規則が適用される
 
 ```surtr
@@ -201,6 +202,10 @@ impl User {
 一方で impl の外側にある `{|| user.password}` は compile error です。
 
 Facet の `User.password` path も同じ private 境界に従います。path と更新 API の詳細は `./facet.md` を参照してください。
+
+`impl Trait for User` も外側スコープです。private フィールドを使うトレイト実装では、`impl User` に公開関数を定義し、その関数に委譲します。
+
+`private` はフィールドの扱い方を型の定義側で管理するための境界であり、情報の秘匿は保証しません。たとえば `inspect` は private な password の名前と内容も表示します。表示された String を解析しても、元のフィールド参照や Facet、更新権限は得られません。型の定義側が公開関数で値を返すことはできます。
 
 ## プロパティアクセス
 

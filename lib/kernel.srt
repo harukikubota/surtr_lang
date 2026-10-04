@@ -403,7 +403,11 @@ defmod Kernel {
   String単体の引用表示は、通常の文字列リテラルとして再入力すると元の値に戻ります。
   LFとTABは `\n`・`\t`、ESCなどその他の制御文字は `\u{1b}` のように表示します。
   `print`へ直接渡した文字列はエスケープされません。
-  構造体のprivate field省略などがあるため、inspect全体の再入力は保証しません。
+  構造体はprivateフィールドも含め、全フィールドの名前と値を定義順に表示します。
+  入れ子の構造体も同じ規則に従い、呼び出し側のスコープやShowの有無で表示を変えません。
+  privateは情報の秘匿を保証せず、表示からフィールドへのアクセスや更新権限は得られません。
+  構造体の構築経路やErrorの表示は文字列リテラルと異なるため、inspect全体の再入力は保証しません。
+  to_stringはShowの契約に従い、inspectによる暗黙の代用は行いません。
   bare callableは、runtime metadataがある場合にmodule・name・signatureを表示します。
 
   ## REPL
