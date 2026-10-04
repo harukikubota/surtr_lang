@@ -20,11 +20,8 @@ test("Facet") {
       fixture = demo_fixture()
       do::<Result> {
         assert_eq("Main::main", fixture._0._0.entrypoint)
-        assert_eq("Ok(\"ally\")", inspect(fixture._0._1))
-        assert_eq(
-          "Ok(\"ally\")",
-          inspect(Facet::view(Tuple._0 -> Tuple._1, fixture)),
-        )
+        assert_ok_eq("ally", fixture._0._1)
+        assert_ok_eq("ally", Facet::view(Tuple._0 -> Tuple._1, fixture))
         assert_eq(7, fixture._1._1)
       }
     }
@@ -49,7 +46,7 @@ test("Facet") {
       updated =? Facet::set(Tuple._0 -> Tuple._0 -> Config.entrypoint, fixture, "App::main")
       do::<Result> {
         assert_eq("App::main", updated._0._0.entrypoint)
-        assert_eq("Ok(\"ally\")", inspect(updated._0._1))
+        assert_ok_eq("ally", updated._0._1)
       }
     }
 
@@ -62,7 +59,7 @@ test("Facet") {
     it("stores plain values into Result-backed fields") {
       fixture = demo_fixture()
       updated =? Facet::set(Tuple._0 -> Tuple._1, fixture, Ok("captain"))
-      assert_eq("Ok(\"captain\")", inspect(updated._0._1))
+      assert_ok_eq("captain", updated._0._1)
     }
 
     it("supports shorthand source/path expansion for mutations") {
@@ -81,14 +78,14 @@ test("Facet") {
       ok_updated =? Facet::over(Tuple._0 -> Tuple._1, ok_fixture, {|value| rename(value)})
       pending_updated =? Facet::over(Tuple._0 -> Tuple._1, pending, {|value| rename(value)})
       do::<Result> {
-        assert_eq("Ok(\"ally!\")", inspect(ok_updated._0._1))
+        assert_ok_eq("ally!", ok_updated._0._1)
         assert_eq(inspect(pending._0._1), inspect(pending_updated._0._1))
       }
     }
 
     it("over_result can rewrite the whole Result focus") {
       updated =? Facet::over_result(Tuple._0 -> Tuple._1, pending_fixture(), {|_| Ok(Ok("fallback"))})
-      assert_eq("Ok(\"fallback\")", inspect(updated._0._1))
+      assert_ok_eq("fallback", updated._0._1)
     }
 
     it("replace works through shorthand on plain structural paths") {
@@ -116,14 +113,14 @@ test("Facet") {
       map = HashMap::map_from_entries([("talk", 80), ("listen", 70)])
       user = score_fixture([10, 20], map)
       do::<Result> {
-        assert_eq("Ok(20)", inspect(Facet::view(List.[1], user.scores)))
-        assert_eq("Ok(80)", inspect(Facet::view(HashMap.["talk"], user.score)))
-        assert_eq("Ok(20)", inspect(Facet::view(ScoreFixture.scores.[1], user)))
-        assert_eq("Ok(80)", inspect(Facet::view(ScoreFixture.score.["talk"], user)))
+        assert_ok_eq(20, Facet::view(List.[1], user.scores))
+        assert_ok_eq(80, Facet::view(HashMap.["talk"], user.score))
+        assert_ok_eq(20, Facet::view(ScoreFixture.scores.[1], user))
+        assert_ok_eq(80, Facet::view(ScoreFixture.score.["talk"], user))
         changed_scores =? Facet::set(ScoreFixture.scores.[0], user, 99)
         changed_map =? Facet::over(ScoreFixture.score.["talk"], changed_scores, {|score| Ok(score + 1)})
         assert_eq("[99, 20]", inspect(changed_map.scores))
-        assert_eq("Ok(81)", inspect(HashMap::map_get(changed_map.score, "talk")))
+        assert_ok_eq(81, HashMap::map_get(changed_map.score, "talk"))
       }
     }
 
@@ -131,7 +128,7 @@ test("Facet") {
       map = HashMap::map_from_entries([("talk", 80), ("listen", 70)])
       user = score_fixture([10, 20, 30, 40], map)
       do::<Result> {
-        assert_eq("Ok(40)", inspect(Facet::view(List.[-1], user.scores)))
+        assert_ok_eq(40, Facet::view(List.[-1], user.scores))
         assert_eq("Ok([20, 30, 40])", inspect(Facet::view(ScoreFixture.scores.[1..-1], user)))
         shrunk =? Facet::set(ScoreFixture.scores.[1..2], user, [99])
         grown =? Facet::over(ScoreFixture.scores.[0..1], shrunk, {|slice| Ok(List::append(slice, [77]))})
@@ -156,7 +153,7 @@ test("Facet") {
     it("case_set constructs the requested case") {
       none: Option<String> = Option::None
       some =? Facet::case_set(Option.Some, none, "alice")
-      assert_eq("Option::Some(\"alice\")", inspect(some))
+      assert_some_eq("alice", some)
     }
 
     it("case_over preserves mismatch policy for plain and result focus") {
@@ -174,7 +171,7 @@ test("Facet") {
   describe("variant paths") {
     it("views matching variants") {
       do::<Result> {
-        assert_eq("Ok(5)", inspect(Facet::view(BitWidth.Any, demo_fixture()._2)))
+        assert_ok_eq(5, Facet::view(BitWidth.Any, demo_fixture()._2))
         nested: Option<Result<String>> = Option::Some(Err(NoneError))
         assert_eq(
           "Ok(Err(NoneError(\"None Value.\")))",
@@ -186,8 +183,8 @@ test("Facet") {
     it("previews variant facets explicitly") {
       option: Option<Int> = Option::Some(3)
       do::<Result> {
-        assert_eq("Ok(5)", inspect(Facet::preview(BitWidth.Any, demo_fixture()._2)))
-        assert_eq("Ok(3)", inspect(Facet::preview(Option.Some, option)))
+        assert_ok_eq(5, Facet::preview(BitWidth.Any, demo_fixture()._2))
+        assert_ok_eq(3, Facet::preview(Option.Some, option))
       }
     }
 

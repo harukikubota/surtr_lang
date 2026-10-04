@@ -8,12 +8,12 @@ import ExtractorSchema::{positive, offset, supply, at_least, observed_between, n
 test("apply_pattern projection contract") {
   it("returns Unit for zero slots and a value for one slot") {
     do::<Result> {
-      assert_eq("Ok(())", inspect(apply_pattern(3, 3)))
-      assert_eq("Ok(())", inspect(apply_pattern(3, _)))
-      assert_eq("Ok(())", inspect(apply_pattern(3, _name)))
-      assert_eq("Ok(())", inspect(apply_pattern(3, _foo1)))
-      assert_eq("Ok(3)", inspect(apply_pattern(3, _1: Int)))
-      assert_eq("Ok(3)", inspect(apply_pattern(3, _01)))
+      assert_ok(apply_pattern(3, 3))
+      assert_ok(apply_pattern(3, _))
+      assert_ok(apply_pattern(3, _name))
+      assert_ok(apply_pattern(3, _foo1))
+      assert_ok_eq(3, apply_pattern(3, _1: Int))
+      assert_ok_eq(3, apply_pattern(3, _01))
     }
   }
 
@@ -34,12 +34,12 @@ test("apply_pattern projection contract") {
 
   it("accepts Unit payload omission and explicit projection") {
     do::<Result> {
-      assert_eq("Ok(())", inspect(apply_pattern(1, positive())))
-      assert_eq("Ok(())", inspect(apply_pattern(1, positive(unit: Unit))))
-      assert_eq("Ok(())", inspect(apply_pattern(1, positive(_))))
-      assert_eq("Ok(())", inspect(apply_pattern(1, positive(_1: Unit))))
-      assert_eq("Ok(())", inspect(apply_pattern(5, at_least(2))))
-      assert_eq("Ok(())", inspect(apply_pattern(5, at_least(2, _1: Unit))))
+      assert_ok(apply_pattern(1, positive()))
+      assert_ok(apply_pattern(1, positive(unit: Unit)))
+      assert_ok(apply_pattern(1, positive(_)))
+      assert_ok(apply_pattern(1, positive(_1: Unit)))
+      assert_ok(apply_pattern(5, at_least(2)))
+      assert_ok(apply_pattern(5, at_least(2, _1: Unit)))
       assert_eq("Ok(((), 3))", inspect(apply_pattern(((), 3), (_1: Unit, _2))))
     }
   }
@@ -47,16 +47,16 @@ test("apply_pattern projection contract") {
   it("matches the whole Result input unless the Pattern selects Ok") {
     do::<Result> {
       assert_eq("Ok(Ok(3))", inspect(apply_pattern(Ok(3), _1)))
-      assert_eq("Ok(3)", inspect(apply_pattern(Ok(3), Ok(_1))))
+      assert_ok_eq(3, apply_pattern(Ok(3), Ok(_1)))
       source = ExtractorSchema::source(0)
-      assert_eq("Ok(())", inspect(apply_pattern(source, Err(_))))
+      assert_ok(apply_pattern(source, Err(_)))
     }
   }
 
   it("keeps ordinary bindings local to the matching operation") {
     temporary = 99
     do::<Result> {
-      assert_eq("Ok(20)", inspect(apply_pattern([10, 20], [temporary, _1: Int])))
+      assert_ok_eq(20, apply_pattern([10, 20], [temporary, _1: Int]))
       assert_eq(99, temporary)
     }
   }
@@ -64,17 +64,17 @@ test("apply_pattern projection contract") {
   it("resolves pre-arguments and pins in the outer scope") {
     amount = 10
     do::<Result> {
-      assert_eq("Ok(13)", inspect(apply_pattern((2, 10, 3), (amount, ^amount, offset(amount, _1)))))
+      assert_ok_eq(13, apply_pattern((2, 10, 3), (amount, ^amount, offset(amount, _1))))
       assert_eq(10, amount)
       runner = ApplyPatternSchema::make_runner(amount)
-      assert_eq("Ok(13)", inspect(runner(3)))
+      assert_ok_eq(13, runner(3))
     }
   }
 
   it("applies captured local ExtractorClosure values") {
     ext = ExtractorClosureSchema::make_threshold(2)
     do::<Result> {
-      assert_eq("Ok(3)", inspect(apply_pattern(3, ext(_1: Int))))
+      assert_ok_eq(3, apply_pattern(3, ext(_1: Int)))
       assert_true(is_match(apply_pattern(1, ext(_1)), Err(_)))
       shift = 10
       multiple = *{|amount: Int, value: Int| MatchResult::Ok((value + amount + shift, value))}
@@ -120,7 +120,7 @@ test("apply_pattern projection contract") {
   it("evaluates input pre-arguments and each body exactly once") {
     capture_stdout()
     do::<Result> {
-      assert_eq("Ok(5)", inspect(apply_pattern(note("input", 5), observed_between(note("min", 2), note("max", 8), _1))))
+      assert_ok_eq(5, apply_pattern(note("input", 5), observed_between(note("min", 2), note("max", 8), _1)))
       assert_eq(["input", "min", "max", "body:5"], capture_stdout())
     }
   }
@@ -146,42 +146,42 @@ test("apply_pattern projection contract") {
 
   it("keeps nested apply_pattern failures inside their returned Result") {
     do::<Result> {
-      assert_eq("Ok(())", inspect(apply_pattern(1, supply(apply_pattern(3, 4), Err(_)))))
-      assert_eq("Ok(3)", inspect(apply_pattern(1, supply(apply_pattern(3, _1), Ok(_1)))))
+      assert_ok(apply_pattern(1, supply(apply_pattern(3, 4), Err(_))))
+      assert_ok_eq(3, apply_pattern(1, supply(apply_pattern(3, _1), Ok(_1))))
     }
   }
 
   it("uses a do pre-argument's own failure target") {
     do::<Result> {
-      assert_eq("Ok(())", inspect(apply_pattern(1, supply(do::<Result> {
+      assert_ok(apply_pattern(1, supply(do::<Result> {
         accepted =? ExtractorSchema::source(0)
         Ok(accepted)
-      }, Err(_)))))
-      assert_eq("Ok(3)", inspect(apply_pattern(1, supply(do::<Result> {
+      }, Err(_))))
+      assert_ok_eq(3, apply_pattern(1, supply(do::<Result> {
         accepted =? ExtractorSchema::source(3)
         Ok(accepted)
-      }, Ok(_1)))))
+      }, Ok(_1))))
     }
   }
 
   it("keeps failure local inside a do Alternative SafeBind input") {
     do::<Result> {
-      assert_eq("Option::Some(7)", inspect(do::<Option> {
+      assert_some_eq(7, do::<Option> {
         False =? is_match(apply_pattern(3, 4), Ok(_))
         Option::Some(7)
-      }))
-      assert_eq("Option::Some(7)", inspect(do::<Option> {
+      })
+      assert_some_eq(7, do::<Option> {
         False =? is_match(apply_pattern(0, positive()), Ok(_))
         Option::Some(7)
-      }))
+      })
     }
   }
 
   it("separates pipe Expr slots from Pattern projection slots") {
     do::<Result> {
-      assert_eq("Ok(5)", inspect(3 |> apply_pattern(offset(2, _1))))
-      assert_eq("Ok(5)", inspect(3 |> apply_pattern(_1, offset(2, _1))))
-      assert_eq("Ok(5)", inspect(Kernel::apply_pattern(3, offset(2, _1))))
+      assert_ok_eq(5, 3 |> apply_pattern(offset(2, _1)))
+      assert_ok_eq(5, 3 |> apply_pattern(_1, offset(2, _1)))
+      assert_ok_eq(5, Kernel::apply_pattern(3, offset(2, _1)))
     }
   }
 

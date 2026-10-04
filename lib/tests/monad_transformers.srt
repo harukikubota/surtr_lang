@@ -151,9 +151,9 @@ test("Monad transformers") {
       failed_bound: OptionT<Result, Int> = failed |>= {|item| OptionT::some::<Result>(item + 1)}
 
       do::<Result> {
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(base_failure))
+        assert_err_kind(NoneError, base_failure)
         assert_eq("Ok(Option::None)", inspect(OptionT::run(none_bound)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_bound)))
+        assert_err_kind(NoneError, OptionT::run(failed_bound))
       }
     }
 
@@ -192,8 +192,8 @@ test("Monad transformers") {
 
       do::<Result> {
         assert_eq("Ok(Option::None)", inspect(OptionT::run(absent_ap)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_mapper_ap)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_ap)))
+        assert_err_kind(NoneError, OptionT::run(failed_mapper_ap))
+        assert_err_kind(NoneError, OptionT::run(failed_ap))
       }
     }
 
@@ -295,9 +295,9 @@ test("Monad transformers") {
       mapped_both: EitherT<Int, Result, String> = EitherT::bimap(failed, &String::len, &to_string)
 
       do::<Result> {
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_left)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_right)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_both)))
+        assert_err_kind(NoneError, EitherT::run(mapped_left))
+        assert_err_kind(NoneError, EitherT::run(mapped_right))
+        assert_err_kind(NoneError, EitherT::run(mapped_both))
       }
     }
 
@@ -329,9 +329,9 @@ test("Monad transformers") {
       failed_bound: EitherT<String, Result, Int> = failed |>= {|item| EitherT::right::<String, Result>(item + 1)}
 
       do::<Result> {
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(base_failure))
+        assert_err_kind(NoneError, base_failure)
         assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_bound)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_bound)))
+        assert_err_kind(NoneError, EitherT::run(failed_bound))
       }
     }
 
@@ -351,8 +351,8 @@ test("Monad transformers") {
 
       do::<Result> {
         assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_ap)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_mapper_ap)))
-        assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_ap)))
+        assert_err_kind(NoneError, EitherT::run(failed_mapper_ap))
+        assert_err_kind(NoneError, EitherT::run(failed_ap))
       }
     }
 
@@ -416,7 +416,7 @@ test("Monad transformers") {
         ReaderT::new({|environment| Ok(value + environment)})
       }
 
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(ReaderT::run(bound, 3)))
+      assert_err_kind(NoneError, ReaderT::run(bound, 3))
     }
 
     it("derives Alternative only from an Alternative base") {
@@ -518,7 +518,7 @@ test("Monad transformers") {
         StateT::new({|state| Ok((value + 1, state + 1))})
       }
 
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(StateT::run(bound, 3)))
+      assert_err_kind(NoneError, StateT::run(bound, 3))
     }
 
     it("preserves finite Monad and lift laws") {

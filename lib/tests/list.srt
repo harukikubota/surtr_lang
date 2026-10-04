@@ -174,7 +174,7 @@ test("List") {
 
     it("min_max returns NoneError for empty lists") {
       values: List<Int> = []
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(List::min_max(values)))
+      assert_err_kind(NoneError, List::min_max(values))
     }
   }
 
