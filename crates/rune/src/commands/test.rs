@@ -187,7 +187,8 @@ fn execute_test_script(
             }
             VmTestEventKind::Failed => {
                 summary.failed += 1;
-                let rendered_diagnostic = render_test_event_diagnostic(event, &script);
+                let rendered_diagnostic =
+                    render_test_event_diagnostic(event, &script, vm.bytecode());
                 print_test_event_line(
                     "[FAIL]",
                     &format!("{} ({})", format_event_path(event), script.file_path),
@@ -567,56 +568,72 @@ fn format_event_path(event: &VmTestEvent) -> String {
     event.path.join(" > ")
 }
 
-fn render_test_event_diagnostic(event: &VmTestEvent, script: &TestScript) -> Option<String> {
+fn render_test_event_diagnostic(
+    event: &VmTestEvent,
+    script: &TestScript,
+    bytecode: &Bytecode,
+) -> Option<String> {
     let diagnostic = event.diagnostic.as_ref()?;
-    let assert_eq = find_test_assert_eq_spans(&script.source, event);
-    let span = match assert_eq.as_ref() {
-        Some(spans) => {
-            return Some(render_assert_eq_failure_diagnostic(
-                test_diagnostic_file_name(diagnostic, script),
-                &script.source,
-                diagnostic,
-                spans,
-            ));
-        }
-        None if test_diagnostic_points_into_script(diagnostic, &script.source) => Span {
-            start: diagnostic.span_start as usize,
-            end: diagnostic.span_end as usize,
-        },
-        None => return None,
-    };
-
-    let spec = diagnostics::simple_error(
-        diagnostic.kind.clone(),
-        diagnostic.message.clone(),
-        span,
-        Some(format!("assert_eq failed: {}", diagnostic.message)),
-    );
-    Some(diagnostics::render_error(
-        test_diagnostic_file_name(diagnostic, script),
-        &script.source,
-        &spec,
-    ))
-}
-
-fn test_diagnostic_file_name<'a>(
-    diagnostic: &'a VmTestDiagnostic,
-    script: &'a TestScript,
-) -> &'a str {
-    if diagnostic.file.is_empty() {
-        &script.file_path
+    let source = if diagnostic.file == script.file_path {
+        Some(script.source.as_str())
     } else {
-        &diagnostic.file
-    }
-}
-
-fn test_diagnostic_points_into_script(diagnostic: &VmTestDiagnostic, source: &str) -> bool {
+        bytecode
+            .sources
+            .iter()
+            .find(|source| {
+                source.normalized_path.as_deref().unwrap_or(&source.path) == diagnostic.file
+            })
+            .and_then(|source| source.text.as_deref())
+    };
     let span = Span {
         start: diagnostic.span_start as usize,
         end: diagnostic.span_end as usize,
     };
-    let len = source.chars().count();
-    span.start < len && span.end <= len && span.end > span.start
+    let Some(source) = source.filter(|source| source_for_span(source, &span).is_some()) else {
+        return Some(format!(
+            "Error: {}: {}\n  at {}:{}:{}\n",
+            diagnostic.kind,
+            diagnostic.message,
+            diagnostic.file,
+            diagnostic.line,
+            diagnostic.column,
+        ));
+    };
+    if diagnostic.assertion.as_deref() == Some("assert_eq")
+        && diagnostic.assertion_call_kind == Some(sindr::runtime::RuntimeCallKind::DirectFunction)
+    {
+        if let Some(spans) = test_assert_eq_spans(source, &span) {
+            return Some(render_assert_eq_failure_diagnostic(
+                &diagnostic.file,
+                source,
+                diagnostic,
+                &spans,
+            ));
+        }
+    }
+    let spec = diagnostics::simple_error(
+        diagnostic.kind.clone(),
+        diagnostic.message.clone(),
+        span,
+        diagnostic
+            .assertion
+            .as_ref()
+            .map(|name| format!("{name} failed: {}", diagnostic.message)),
+    );
+    Some(diagnostics::render_error(&diagnostic.file, source, &spec))
+}
+
+fn source_for_span<'a>(source: &'a str, span: &Span) -> Option<&'a str> {
+    if span.start >= span.end || span.end > source.chars().count() {
+        return None;
+    }
+    let start = source.char_indices().nth(span.start)?.0;
+    let end = source
+        .char_indices()
+        .nth(span.end)
+        .map(|(byte, _)| byte)
+        .unwrap_or(source.len());
+    source.get(start..end)
 }
 
 #[derive(Debug, Clone)]
@@ -628,82 +645,49 @@ struct AssertEqSpans {
     rhs_term: String,
 }
 
-fn find_test_assert_eq_spans(source: &str, event: &VmTestEvent) -> Option<AssertEqSpans> {
-    let test_name = event.path.last()?;
-    let pattern = format!("it(\"{}\")", test_name.replace('"', "\\\""));
-    let it_byte = source.find(&pattern)?;
-    let block_byte = it_byte + source[it_byte..].find('{')? + 1;
-    let next_item_byte = source[block_byte..]
-        .find("\n  it(")
-        .or_else(|| source[block_byte..].find("\n  describe("))
-        .map(|offset| block_byte + offset)
-        .unwrap_or(source.len());
-    let window = &source[block_byte..next_item_byte];
-    let assertion_rel = window.find("assert_eq")?;
-    let assert_byte = block_byte + assertion_rel;
-    let open_rel = source[assert_byte..].find('(')?;
-    let open_byte = assert_byte + open_rel;
-    let (comma_byte, close_byte) = split_assert_eq_args(source, open_byte)?;
-    let lhs_start = next_non_ws_byte(source, open_byte + 1, comma_byte)?;
-    let lhs_end = prev_non_ws_byte(source, lhs_start, comma_byte)?;
-    let rhs_start = next_non_ws_byte(source, comma_byte + 1, close_byte)?;
-    let rhs_end = prev_non_ws_byte(source, rhs_start, close_byte)?;
-    Some(AssertEqSpans {
-        call: byte_span(source, assert_byte, close_byte + 1),
-        lhs: byte_span(source, lhs_start, lhs_end),
-        rhs: byte_span(source, rhs_start, rhs_end),
-        lhs_term: source[lhs_start..lhs_end].to_string(),
-        rhs_term: source[rhs_start..rhs_end].to_string(),
-    })
-}
-
-fn split_assert_eq_args(source: &str, open_byte: usize) -> Option<(usize, usize)> {
-    let mut depth = 0usize;
-    let mut comma = None;
-    let mut in_string = false;
-    let mut escape = false;
-    for (offset, ch) in source[open_byte..].char_indices() {
-        let byte = open_byte + offset;
-        if in_string {
-            if escape {
-                escape = false;
-            } else if ch == '\\' {
-                escape = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_string = true,
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 && ch == ')' {
-                    return comma.map(|comma| (comma, byte));
+fn test_assert_eq_spans(source: &str, call: &Span) -> Option<AssertEqSpans> {
+    // Parse only the executed call. The runtime identity determines which
+    // assertion failed; source text is used solely for its argument labels.
+    let call_source = source_for_span(source, call)?;
+    let nodes = spire::parse(call_source).ok()?;
+    let mut node = nodes.first()?;
+    while let spire::ast::Ast::Grouped(_, inner) = node {
+        node = inner;
+    }
+    let spire::ast::Ast::App(_, _, args) = node else {
+        return None;
+    };
+    let (mut lhs, mut rhs) = (None, None);
+    let mut positional = 0;
+    for arg in args {
+        match arg {
+            spire::ast::RecordLitArg::Positional(value) => {
+                match positional {
+                    0 => lhs = Some(value),
+                    1 => rhs = Some(value),
+                    _ => return None,
                 }
+                positional += 1;
             }
-            ',' if depth == 1 && comma.is_none() => comma = Some(byte),
-            _ => {}
+            spire::ast::RecordLitArg::Named(name, value) => match name.as_str() {
+                "expected" => lhs = Some(value),
+                "actual" => rhs = Some(value),
+                _ => return None,
+            },
         }
     }
-    None
-}
-
-fn next_non_ws_byte(source: &str, start: usize, end: usize) -> Option<usize> {
-    source[start..end]
-        .char_indices()
-        .find(|(_, ch)| !ch.is_whitespace())
-        .map(|(offset, _)| start + offset)
-}
-
-fn prev_non_ws_byte(source: &str, start: usize, end: usize) -> Option<usize> {
-    for (offset, ch) in source[start..end].char_indices().rev() {
-        if !ch.is_whitespace() {
-            return Some(start + offset + ch.len_utf8());
-        }
-    }
-    None
+    let (lhs, rhs) = (lhs?.span(), rhs?.span());
+    let absolute = |span: &Span| Span {
+        start: call.start + span.start,
+        end: call.start + span.end,
+    };
+    Some(AssertEqSpans {
+        call: call.clone(),
+        lhs: absolute(lhs),
+        rhs: absolute(rhs),
+        lhs_term: source_for_span(call_source, lhs)?.to_string(),
+        rhs_term: source_for_span(call_source, rhs)?.to_string(),
+    })
 }
 
 fn render_assert_eq_failure_diagnostic(
@@ -722,13 +706,6 @@ fn render_assert_eq_failure_diagnostic(
         spans.rhs_term.clone(),
     );
     diagnostics::render_surtr_code_error(file_name, source, &spec)
-}
-
-fn byte_span(source: &str, start_byte: usize, end_byte: usize) -> Span {
-    Span {
-        start: source[..start_byte].chars().count(),
-        end: source[..end_byte].chars().count(),
-    }
 }
 
 fn test_color_enabled() -> bool {
@@ -833,6 +810,39 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn test_diagnostic_without_matching_source_keeps_only_known_location() {
+        let script = super::TestScript {
+            selector: "math".to_string(),
+            file_path: "lib/tests/math.srt".to_string(),
+            source: "assert_eq(1, 2)".to_string(),
+        };
+        let event = eldr::vm::VmTestEvent {
+            path: vec!["suite".to_string(), "failure".to_string()],
+            detail: None,
+            kind: eldr::vm::VmTestEventKind::Failed,
+            io: None,
+            diagnostic: Some(eldr::vm::VmTestDiagnostic {
+                kind: "Global::TestAssertionFailed".to_string(),
+                message: "expected True, got False".to_string(),
+                assertion: Some("assert_eq".to_string()),
+                assertion_call_kind: Some(sindr::runtime::RuntimeCallKind::DirectFunction),
+                file: "helper.srt".to_string(),
+                line: 4,
+                column: 3,
+                span_start: 0,
+                span_end: 15,
+            }),
+        };
+        let rendered =
+            super::render_test_event_diagnostic(&event, &script, &sindr::ir::Bytecode::default())
+                .unwrap();
+        assert_eq!(
+            rendered,
+            "Error: Global::TestAssertionFailed: expected True, got False\n  at helper.srt:4:3\n"
+        );
     }
 
     #[test]

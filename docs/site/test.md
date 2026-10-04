@@ -102,6 +102,11 @@ test("expected failure") {
 | `assert_doc_plain_eq` / `assert_doc_ansi_eq` | StyledDoc の出力 |
 | `assert_stdout_eq` / `assert_stderr_eq` | キャプチャした出力行 |
 
+失敗時のキャプションは、実際に失敗したアサーションの呼出式を示します。
+たとえば `assert_true(False)` が失敗した場合は、その式とファイル名・行・列を表示します。
+`do` や文末の `?` で伝播した場合も同じ位置を示します。
+`assert_eq` を直接呼び出した場合は、期待値と実際の値に LHS/RHS のラベルを付けます。
+
 `capture_stdout()` と `capture_stderr()` は、前回読み取った後の出力を返し、
 バッファを空にします。`push_stdin(text)` はテスト用の入力バッファに文字列を追加します。
 stdout・stderr・stdin は `it` ごとに分離され、未読の内容は次の `it` に持ち越されません。

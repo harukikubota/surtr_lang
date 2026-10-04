@@ -91,6 +91,8 @@ pub struct VmTestEvent {
 pub struct VmTestDiagnostic {
     pub kind: String,
     pub message: String,
+    pub assertion: Option<String>,
+    pub assertion_call_kind: Option<RuntimeCallKind>,
     pub file: String,
     pub line: u32,
     pub column: u32,
@@ -99,15 +101,49 @@ pub struct VmTestDiagnostic {
 }
 
 impl VmTestDiagnostic {
-    fn from_rich_error(error: &RichError) -> Self {
+    fn from_rich_error(error: &RichError, bytecode: &Bytecode) -> Self {
+        // Use the saved failure trace, including tail calls. Public Test wrappers
+        // may call another assertion; the outer assertion is the user's call.
+        let assertion = if error.kind == compiler_global_error_kind("TestAssertionFailed") {
+            error
+                .stack_trace
+                .iter()
+                .filter_map(|frame| {
+                    let entry = bytecode.functions.get(frame.fun_idx? as usize)?;
+                    let name = sindr::names::surface_path_name(entry.qualified_name.as_deref()?)
+                        .strip_prefix("Test::")?;
+                    matches!(
+                        name,
+                        "assert_true"
+                            | "assert_false"
+                            | "assert_eq"
+                            | "assert_ok_eq"
+                            | "assert_err_contains"
+                            | "assert_doc_plain_eq"
+                            | "assert_doc_ansi_eq"
+                            | "assert_stdout_eq"
+                            | "assert_stderr_eq"
+                    )
+                    .then_some((name, frame))
+                    .filter(|(_, frame)| frame.location.is_some())
+                })
+                .last()
+        } else {
+            None
+        };
+        let location = assertion
+            .and_then(|(_, frame)| frame.location.as_ref())
+            .unwrap_or(&error.location);
         Self {
             kind: error.kind.clone(),
             message: error.visible_message().to_string(),
-            file: error.location.file.clone(),
-            line: error.location.line,
-            column: error.location.column,
-            span_start: error.location.span_start,
-            span_end: error.location.span_end,
+            assertion: assertion.map(|(name, _)| name.to_string()),
+            assertion_call_kind: assertion.map(|(_, frame)| frame.call_kind.clone()),
+            file: location.file.clone(),
+            line: location.line,
+            column: location.column,
+            span_start: location.span_start,
+            span_end: location.span_end,
         }
     }
 }
@@ -2954,7 +2990,7 @@ impl VM {
             detail: Some(error.to_display_string()),
             kind: VmTestEventKind::Failed,
             io,
-            diagnostic: Some(VmTestDiagnostic::from_rich_error(error)),
+            diagnostic: Some(VmTestDiagnostic::from_rich_error(error, &self.bytecode)),
         });
     }
 

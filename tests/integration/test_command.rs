@@ -255,6 +255,155 @@ test("Math") {
 }
 
 #[test]
+fn test_command_assertion_captions_follow_captures_and_included_helpers() {
+    let temp = unique_temp_dir("surtr_test_assertion_call_boundaries");
+    let cases = [
+        (
+            "check: (Boolean -> Result<()>) = &Test::assert_true\n    check(False)",
+            "check(False)",
+            "assert_true",
+        ),
+        (
+            "check: (Int -> Result<()>) = &Test::assert_eq(1, &1)\n    check(2)",
+            "check(2)",
+            "assert_eq",
+        ),
+        (
+            "check: (Int, Int -> Result<()>) = &Test::assert_eq(&2, &1)\n    check(1, 2)",
+            "check(1, 2)",
+            "assert_eq",
+        ),
+        (
+            "assert_eq(actual: \"実際\", expected: \"期待\")",
+            "assert_eq(actual: \"実際\", expected: \"期待\")",
+            "assert_eq",
+        ),
+        (
+            "do::<Result> {\n      assert_eq(0, 0)\n      assert_eq(1, 2)\n    }",
+            "assert_eq(1, 2)",
+            "assert_eq",
+        ),
+    ];
+    for (body, call, assertion) in cases {
+        let source = format!("import Test;\ntest(\"boundary\") {{\n  it(\"same\") {{ assert_eq(0, 0) }}\n  it(\"same\") {{\n    {body}\n  }}\n}}\n");
+        write_math_test(&temp, &source);
+        let prefix = &source[..source.find(call).unwrap()];
+        let line = prefix.chars().filter(|ch| *ch == '\n').count() + 1;
+        let column = prefix.rsplit('\n').next().unwrap().chars().count() + 1;
+        let output = run_surtr(&temp, &["test", "math"]);
+        let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
+        assert!(
+            stdout.contains(&format!("lib/tests/math.srt:{line}:{column}")),
+            "{source}\n{stdout}\n{stderr}"
+        );
+        assert!(stdout.contains(&format!("{assertion} failed:")), "{stdout}");
+        if body.contains("actual:") {
+            assert!(stdout.contains("LHS term: \"期待\""), "{stdout}");
+            assert!(stdout.contains("RHS term: \"実際\""), "{stdout}");
+        }
+        if body.contains("&Test::") {
+            assert!(!stdout.contains("LHS term:"), "{stdout}");
+            assert!(!stdout.contains("RHS term:"), "{stdout}");
+        }
+    }
+
+    let helper =
+        "defmod Helper {\n  def check() -> Result<()> {\n    Test::assert_false(True)\n  }\n}\n";
+    write_source(&temp.join("lib/tests/helper.srt"), helper);
+    write_math_test(&temp, "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::check() } }\n");
+    let output = run_surtr(&temp, &["test", "math"]);
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
+    assert!(stdout.contains("helper.srt:3:5"), "{stdout}\n{stderr}");
+    assert!(stdout.contains("Test::assert_false(True)"), "{stdout}");
+    assert!(stdout.contains("assert_false failed:"), "{stdout}");
+
+    // A function with the same short name is not a standard assertion. Keep
+    // the Error's construction site, even for TestAssertionFailed itself.
+    write_source(&temp.join("lib/tests/helper.srt"), "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestAssertionFailed(\"custom failure\"))\n  }\n}\n");
+    write_math_test(&temp, "include \"./helper.srt\"\nimport Test;\ntest(\"included\") { it(\"failure\") { Helper::assert_true() } }\n");
+    let output = run_surtr(&temp, &["test", "math"]);
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
+    assert!(stdout.contains("helper.srt:3:9"), "{stdout}\n{stderr}");
+    assert!(stdout.contains("custom failure"), "{stdout}");
+    assert!(!stdout.contains("assert_true failed:"), "{stdout}");
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_assertion_captions_use_the_executed_call_site() {
+    let temp = unique_temp_dir("surtr_test_assertion_captions");
+    let cases = [
+        ("assert_true(False)", "assert_true"),
+        ("assert_false(True)", "assert_false"),
+        ("assert_eq(1, 2)", "assert_eq"),
+        ("assert_ok_eq(1, Ok(2))", "assert_ok_eq"),
+        ("assert_ok_eq(1, Err(NoneError))", "assert_ok_eq"),
+        (
+            "assert_err_contains(\"missing\", Err(NoneError))",
+            "assert_err_contains",
+        ),
+        (
+            "assert_err_contains(\"missing\", Ok(1))",
+            "assert_err_contains",
+        ),
+        ("assert_stdout_eq([\"missing\"])", "assert_stdout_eq"),
+        ("assert_stderr_eq([\"missing\"])", "assert_stderr_eq"),
+        (
+            "assert_doc_plain_eq(\"expected\", StyledDoc::text(\"actual\"))",
+            "assert_doc_plain_eq",
+        ),
+        (
+            "assert_doc_ansi_eq(\"expected\", StyledDoc::text(\"actual\"))",
+            "assert_doc_ansi_eq",
+        ),
+    ];
+    for (assertion, name) in cases {
+        for (before, after) in [
+            ("", ""),
+            (
+                "do::<Result> { assert_eq(\"prior\", \"prior\")\n        ",
+                " }",
+            ),
+            ("assert_true(True)?\n      ", "?\n      Ok(())"),
+        ] {
+            let source = format!(
+                "import Test;\ntest(\"キャプション\") {{\n  describe(\"nested\") {{\n    it(\"same name\") {{\n      {before}{assertion}{after}\n    }}\n    it(\"same name\") {{ assert_eq(\"later\", \"later\") }}\n  }}\n}}\n",
+            );
+            write_math_test(&temp, &source);
+            let byte_start = source.find(assertion).unwrap();
+            let prefix = &source[..byte_start];
+            let line = prefix.chars().filter(|ch| *ch == '\n').count() + 1;
+            let column = prefix.rsplit('\n').next().unwrap().chars().count() + 1;
+            let output = run_surtr(&temp, &["test", "math"]);
+            let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{source}\n{stdout}\n{stderr}"
+            );
+            assert!(
+                stdout.contains(&format!("lib/tests/math.srt:{line}:{column}")),
+                "wrong caption for {assertion}:\n{stdout}\n{stderr}"
+            );
+            assert!(stdout.contains(&format!("{name} failed:")), "{stdout}");
+            assert!(!stdout.contains("LHS term: \"later\""), "{stdout}");
+            assert!(
+                stdout.contains("test result: passed=1, failed=1, total=2"),
+                "{stdout}"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn test_command_reports_assertion_failure_source_diagnostic() {
     let temp = unique_temp_dir("surtr_test_command_assertion_source_diagnostic");
     write_math_test(
