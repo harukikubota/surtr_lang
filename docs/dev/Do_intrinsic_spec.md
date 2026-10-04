@@ -4,9 +4,6 @@
 型入力・Trait解決は[Trait system](./Trait_system_spec.md)、診断は[diagnostics](./diagnostics.md)を参照する。
 実装計画や過去の検証ログはGit履歴に残し、未採用仕様を現行契約へ混ぜない。
 
-既知の実装不整合: REPLのpartial `<-`で合成したErrorのkind/messageが崩れる。
-契約を変更せず、[フォローアップ仕様](../../doc/do_result_effect_repl_error_followup_spec.md)で追跡する。
-
 ## Surfaceとscope
 
 `do { ... }`、`do::<_> { ... }`、`do::<Carrier> { ... }`を受理する。

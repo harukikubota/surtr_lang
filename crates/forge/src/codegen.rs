@@ -2007,7 +2007,6 @@ struct CodegenState {
     dbg_templates: Vec<DbgTemplate>,
     callable_templates: Vec<CallableTemplate>,
     functions: Vec<FunctionEntry>,
-    error_ctor_funs: HashMap<String, (u32, u8)>, // error kind -> (fun_idx, arity)
 }
 
 impl CodegenState {
@@ -2024,7 +2023,6 @@ impl CodegenState {
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
             functions: Vec::new(),
-            error_ctor_funs: HashMap::new(),
         }
     }
 }
@@ -2076,24 +2074,6 @@ impl ForgeSession {
             .max()
             .unwrap_or(0);
 
-        // Reconstruct error_ctor_funs: ErrTemplate.kind → (fun_idx, num_params).
-        let mut error_ctor_funs = HashMap::new();
-        for template in &bytecode.error_templates {
-            if template.location_source != sindr::ir::ErrorLocationSource::ConstructorCallSite {
-                continue;
-            }
-            if let Some(fun_entry) = bytecode
-                .functions
-                .iter()
-                .find(|f| f.qualified_name.as_deref() == Some(&template.kind))
-            {
-                error_ctor_funs.insert(
-                    template.kind.clone(),
-                    (fun_entry.fun_idx, template.num_params),
-                );
-            }
-        }
-
         Self {
             state: CodegenState {
                 constants: bytecode.constants.clone(),
@@ -2107,7 +2087,6 @@ impl ForgeSession {
                 dbg_templates: bytecode.dbg_templates.clone(),
                 callable_templates: bytecode.callable_templates.clone(),
                 functions: bytecode.functions.clone(),
-                error_ctor_funs,
             },
         }
     }
@@ -7309,12 +7288,6 @@ impl Codegen {
             .max(existing_fun_idx);
 
         for stmt in &stmts {
-            if let TypedInner::DeferrorDef(_, fun_idx, id, params, _) = &stmt.node {
-                let arity = checked_u8_arity(params.len(), &stmt.span)?;
-                self.state
-                    .error_ctor_funs
-                    .insert(id.name.clone(), (*fun_idx, arity));
-            }
             match &stmt.node {
                 TypedInner::Def(fun_idx, id, ..)
                 | TypedInner::ExtractorDef(fun_idx, id, ..)
@@ -7520,10 +7493,6 @@ impl Codegen {
                 generated: false,
             },
         });
-        self.state
-            .error_ctor_funs
-            .insert(id.name.clone(), (*fun_idx, arity));
-
         self.state.slot_map = saved_slot_map;
         self.state.next_slot = saved_next_slot;
         Ok(())

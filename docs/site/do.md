@@ -55,10 +55,6 @@ literal、constructor、list/string分解、Extractor等の、実行時に不一
 
 Result carrierでは、不一致のErrorはmessage等を置き換えず、そのままResultへ返します。
 
-現在のREPLでは、partial `<-`の不一致から生成するErrorのkind/messageが崩れる既知の問題があります。
-以下のpartial `<-`の出力コメントは仕様上の期待値です。SafeBindの例はREPLで確認済みです。
-再現条件と修正条件は[フォローアップ](../../doc/do_result_effect_repl_error_followup_spec.md)に記録しています。
-
 ```surtr
 mismatch: Result<Int> = do::<Result> {
   2 <- Ok(1)

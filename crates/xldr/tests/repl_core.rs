@@ -370,6 +370,9 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_error_generation_site_survives_static_diagnostic_rollback),
     repl_core_case!(core_eldr_restore_preserves_error_sources_when_new_chunks_are_added),
     repl_core_case!(core_script_preload_rejects_source_spans_outside_the_runtime_range),
+    repl_core_case!(core_do_result_effect_pattern_error_is_preserved_in_fresh_repl),
+    repl_core_case!(core_do_result_effect_pattern_error_is_preserved_across_chunks),
+    repl_core_case!(core_do_result_effect_safebind_and_alternative_boundaries),
 ];
 
 fn assert_repl_error_origin(result: &ReplResult, line: usize, column: usize, origin: &str) {
@@ -399,6 +402,95 @@ fn core_error_generation_site_uses_direct_input_and_unicode_pattern_spans() {
     assert_repl_error_origin(&multiline, 2, 9, "(\"あ\", 11) =? (\"あ\", 2)");
     assert!(rendered_text(&multiline).contains("PatternMismatch"));
     assert_eq!(rendered_text(&engine.handle_line("2 + 3")), "5");
+}
+
+fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str) {
+    let result = engine.handle_line(source);
+    assert!(!result.should_exit, "{source}: {}", rendered_text(&result));
+    assert!(
+        matches!(result.output, ReplOutput::EvalSuccess { .. }),
+        "{source}: {}",
+        rendered_text(&result)
+    );
+    assert_eq!(
+        rendered_text(&result),
+        "(\"PatternMismatch\", \"Pattern did not match.\")",
+        "{source}"
+    );
+}
+
+fn core_do_result_effect_pattern_error_is_preserved_in_fresh_repl() {
+    for source in [
+        "match do::<Result> { 2 <- Ok(1); Ok(3) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match OptionT::run(do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) }) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+    ] {
+        assert_repl_pattern_mismatch(&mut engine(), source);
+    }
+}
+
+fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
+    let mut engine = engine();
+    for source in [
+        "def unrelated(value: Int) -> Int { value + 41 }",
+        "saved_closure = {|value: Int| unrelated(value)}",
+        "saved_text = \"relocation must preserve Error kind and message\"",
+        "saved_error: Result<Int> = Err(NoneError)",
+        "mismatch: Result<Int> = do::<Result> { 2 <- Ok(1); Ok(3) }",
+        "mismatch_t: OptionT<Result, Int> = do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) }",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    for source in [
+        "match mismatch { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match OptionT::run(mismatch_t) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+    ] {
+        assert_repl_pattern_mismatch(&mut engine, source);
+    }
+    assert_eq!(rendered_text(&engine.handle_line("saved_closure(1)")), "42");
+    assert_eq!(
+        rendered_text(&engine.handle_line("match saved_error { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }")),
+        "(\"NoneError\", \"None Value.\")"
+    );
+}
+
+fn core_do_result_effect_safebind_and_alternative_boundaries() {
+    let mut engine = engine();
+    for source in [
+        "match do::<Result> { Option::Some(value) =? Option<Int>::None; Ok(value) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match OptionT::run(do::<OptionT<Result, _>> { Option::Some(value) =? Option<Int>::None; OptionT::some::<Result>(value) }) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+    ] {
+        assert_repl_pattern_mismatch(&mut engine, source);
+    }
+    let blocked = engine.handle_line("blocked: OptionT<Result, Unit> = guard(False)");
+    assert!(
+        matches!(blocked.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&blocked)
+    );
+    for (source, expected) in [
+        (
+            "OptionT::run(Alternative::empty::<OptionT<Result, Int>>())",
+            "Ok(Option::None)",
+        ),
+        ("OptionT::run(blocked)", "Ok(Option::None)"),
+        (
+            "do::<Option> { 2 <- Option::Some(1); Option::Some(3) }",
+            "Option::None",
+        ),
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+        assert_eq!(rendered_text(&result), expected, "{source}");
+    }
 }
 
 fn core_error_generation_site_survives_nested_function_calls_across_chunks() {

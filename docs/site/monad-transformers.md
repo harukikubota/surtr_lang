@@ -90,9 +90,6 @@ blocked: OptionT<Result, Unit> = guard(False)
 OptionT::run(blocked) # => Ok(Option::None)
 ```
 
-partial `<-`のError出力は仕様上の期待値です。現行REPLにはErrorのkind/messageが崩れる
-[既知の問題](../../doc/do_result_effect_repl_error_followup_spec.md)があります。SafeBindとは区別してください。
-
 通常関数のSafeBindとdoのfailure matcherはResult effectを使うためErrorを保持します。
 一方、`guard`はOptionT自身の`Alternative`を使うためabsenceを返します。
 
