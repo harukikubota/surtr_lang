@@ -436,33 +436,19 @@ impl Value {
     fn render_named_value(
         type_name: &str,
         field_names: &[String],
-        private_flags: &[bool],
         fields: &[Value],
         registry: &TypeRegistry,
     ) -> String {
-        let hidden_field_count = private_flags.iter().filter(|flag| **flag).count();
-        let mut parts = field_names
+        let parts = field_names
             .iter()
-            .zip(
-                private_flags
-                    .iter()
-                    .copied()
-                    .chain(std::iter::repeat(false)),
-            )
             .zip(fields.iter())
-            .filter_map(|((name, is_private), val)| {
-                (!is_private).then(|| format!("{}: {}", name, val.to_display_string(registry)))
-            })
+            .map(|(name, val)| format!("{}: {}", name, val.to_display_string(registry)))
             .collect::<Vec<_>>();
-
-        if hidden_field_count > 0 {
-            parts.push("..private".to_string());
-        }
 
         format!("{}({})", surface_path_name(type_name), parts.join(", "))
     }
 
-    /// Display string for `to_string` built-in.
+    /// Generic value display for runtime diagnostics.
     pub fn to_display_string(&self, registry: &TypeRegistry) -> String {
         match self {
             Value::Int(n) => n.to_string(),
@@ -529,7 +515,6 @@ impl Value {
                         TypeKind::Struct | TypeKind::Record => Self::render_named_value(
                             &entry.name,
                             &entry.field_names,
-                            &entry.private_flags,
                             fields,
                             registry,
                         ),
@@ -1099,7 +1084,7 @@ mod tests {
         assert_eq!(pair.to_display_string(&registry), "Pair(left: 1, right: 2)");
         assert_eq!(
             secret_user.to_display_string(&registry),
-            "SecretUser(name: alice, ..private)"
+            "SecretUser(name: alice, password: s3cr3t)"
         );
     }
 

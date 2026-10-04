@@ -13856,9 +13856,38 @@ impl Checker {
                     typed_parts.push(TypedInterpolatedPart::Text(s.clone()));
                 }
                 ResolvedInterpolatedPart::Expr(expr) => {
-                    let typed_expr = self.check_node(expr)?;
-                    self.ensure_no_runtime_facet_value(&typed_expr, "String interpolation")?;
-                    if matches!(typed_expr.ty, Ty::Result(_, _)) {
+                    let show = self.trait_key_by_short_name("Show").ok_or_else(|| {
+                        TypeError::new("Missing canonical Show trait", span.clone())
+                    })?;
+                    let args = [ResolvedRecordLitArg::Positional(expr.as_ref().clone())];
+                    let call = TraitInvocationContext {
+                        span: self.resolved_span(expr),
+                        trait_name: &show,
+                        method_name: "to_string",
+                        args: &args,
+                        receiver_owner_hint: None,
+                        expected_ret_ty: Some(&Ty::Str),
+                        expected_ret_relation: None,
+                        argument_expected_relation: None,
+                        constructor_failure_reason: None,
+                        explicit_type_args: None,
+                        operator: None,
+                        receiver_hint: None,
+                        defer_incompatible_result_context: false,
+                    };
+                    let mut prepared = match self.prepare_trait_invocation(&call)? {
+                        TraitInvocationPreparation::Arguments(prepared) => prepared,
+                        TraitInvocationPreparation::Complete(_) => {
+                            return Err(TypeError::new(
+                                "Show interpolation unexpectedly completed without checking its argument",
+                                self.resolved_span(expr).clone(),
+                            ));
+                        }
+                    };
+                    let typed_args = self.check_prepared_trait_arguments(&call, &mut prepared)?;
+                    let typed_expr = &typed_args[0];
+                    self.ensure_no_runtime_facet_value(typed_expr, "String interpolation")?;
+                    if matches!(self.resolve_ty(&typed_expr.ty), Ty::Result(_, _)) {
                         return Err(TypeError {
                             structured: None,
                             message: "Interpolation does not allow Result type".into(),
@@ -13869,7 +13898,8 @@ impl Checker {
                             ),
                         });
                     }
-                    typed_parts.push(TypedInterpolatedPart::Expr(Box::new(typed_expr)));
+                    let conversion = self.finish_trait_invocation(&call, prepared, typed_args)?;
+                    typed_parts.push(TypedInterpolatedPart::Expr(Box::new(conversion)));
                 }
             }
         }

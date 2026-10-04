@@ -1,0 +1,63 @@
+defstruct Secret {
+  private password: String,
+  private count: Int,
+}
+
+impl Secret {
+  def new(password: String, count: Int) -> Self {
+    Secret { password, count }
+  }
+}
+
+defstruct User {
+  name: String,
+  private secret: Secret,
+  active: Boolean,
+}
+
+impl User {
+  def new(name: String, secret: Secret) -> Self {
+    User { name, secret, active: True }
+  }
+}
+
+defstruct Display { private value: Int }
+
+impl Display {
+  def new(value: Int) -> Self { Display { value } }
+}
+
+impl Show for Display {
+  def to_string(self: Self) -> String { "custom" }
+}
+
+defstruct Explicit { private value: Int }
+
+impl Explicit {
+  def new(value: Int) -> Self { Explicit { value } }
+}
+
+impl Show for Explicit {
+  def to_string(self: Self) -> String { inspect(self) }
+}
+
+@derive Eq, Compare, Show
+defstruct Derived { private value: Int }
+
+impl Derived {
+  def new(value: Int) -> Self { Derived { value } }
+}
+
+secret = Secret("a\"b\nc\\d", 7)
+user = User("alice", secret)
+print(inspect(secret))
+print(inspect(user))
+print(inspect([user]))
+print(inspect((user, 1)))
+print(inspect(Ok(user)))
+print(inspect(Display(5)))
+print(to_string(Display(5)))
+print(to_string(Explicit(8)))
+print(to_string(Derived(9)))
+print(inspect(Derived(9) == Derived(9)))
+print(inspect(Derived(8) < Derived(9)))

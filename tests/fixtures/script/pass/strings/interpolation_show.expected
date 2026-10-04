@@ -1,0 +1,6 @@
+duration=250ms
+custom=custom;derived=Derived(inner: custom)
+first
+second
+custom:custom
+generic=custom

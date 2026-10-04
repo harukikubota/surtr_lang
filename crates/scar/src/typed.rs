@@ -629,6 +629,7 @@ pub enum TypedInner {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedInterpolatedPart {
     Text(String),
+    /// A Show::to_string invocation whose result type is String.
     Expr(Box<TypedNode>),
 }
 

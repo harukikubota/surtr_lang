@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Interpolation does not allow Result type

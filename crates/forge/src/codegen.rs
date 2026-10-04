@@ -3014,8 +3014,8 @@ mod tests {
                 scar::typed::TypedInterpolatedPart::Text("a".into()),
                 scar::typed::TypedInterpolatedPart::Text("b".into()),
                 scar::typed::TypedInterpolatedPart::Expr(Box::new(lit_node(
-                    Ty::Int,
-                    Lit::Int(1.into()),
+                    Ty::Str,
+                    Lit::Str("1".into()),
                     span(6, 7),
                 ))),
                 scar::typed::TypedInterpolatedPart::Text("c".into()),
@@ -11952,18 +11952,13 @@ impl Codegen {
                     self.emit(Opcode::LoadConst(idx));
                 }
                 TypedInterpolatedPart::Expr(expr) => {
-                    self.emit_node(expr)?;
-                    let to_string_id =
-                        Self::builtin_id("to_string").ok_or_else(|| CodegenError {
-                            message: "Unknown builtin: to_string".into(),
+                    if expr.ty != Ty::Str {
+                        return Err(CodegenError {
+                            message: "String interpolation requires a Show-converted String".into(),
                             span: expr.span.clone(),
-                        })?;
-                    self.emit(Opcode::CallBuiltin {
-                        builtin_id: to_string_id,
-                        arity: 1,
-                        span_start: expr.span.start as u32,
-                        span_end: expr.span.end as u32,
-                    });
+                        });
+                    }
+                    self.emit_node(expr)?;
                 }
             }
 
