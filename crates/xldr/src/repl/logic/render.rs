@@ -19,10 +19,10 @@ pub fn format_result_lines(
     vm: &eldr::VM,
     value: Option<&Value>,
     meta: Option<&ChunkMeta>,
-) -> Vec<String> {
+) -> Result<Vec<String>, eldr::RuntimeError> {
     if let Some(v) = value {
         if !matches!(v, Value::Unit) {
-            return vec![inspect_value(vm, v)];
+            return Ok(vec![inspect_value(vm, v)?]);
         }
     }
 
@@ -33,29 +33,60 @@ pub fn format_result_lines(
                 .iter()
                 .filter_map(|b| {
                     if let Some(facet_info) = &b.facet_info {
-                        return Some(format!(
+                        return Some(Ok(format!(
                             "{}: {} = {}",
                             b.name,
                             crate::surface_rendered_name(&b.ty),
                             crate::surface_rendered_name(&facet_info.full_path)
-                        ));
+                        )));
                     }
 
                     let val = vm.get_local(b.slot_id)?;
                     let rendered_ty = rendered_binding_type(&b.ty, &val);
-                    let displayed = inspect_value(vm, &val);
-
-                    Some(format!("{}: {} = {}", b.name, rendered_ty, displayed))
+                    Some(
+                        inspect_value(vm, &val).map(|displayed| {
+                            format!("{}: {} = {}", b.name, rendered_ty, displayed)
+                        }),
+                    )
                 })
                 .collect();
         }
         if let Some(facet_info) = &meta.result_facet_info {
-            return vec![format!("{} = {}", facet_info.ty, facet_info.full_path)];
+            return Ok(vec![format!(
+                "{} = {}",
+                facet_info.ty, facet_info.full_path
+            )]);
         }
         if !meta.type_defs.is_empty() {
-            return meta.type_defs.iter().map(|t| t.name.clone()).collect();
+            return Ok(meta.type_defs.iter().map(|t| t.name.clone()).collect());
         }
     }
 
-    vec![]
+    Ok(vec![])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_rendering_propagates_invalid_value_errors() {
+        let vm = eldr::VM::new(sindr::ir::Bytecode::default());
+        for value in [
+            Value::Tagged {
+                tag: 0,
+                fields: vec![],
+            },
+            Value::Tuple(vec![Value::Tagged {
+                tag: 9999,
+                fields: vec![],
+            }]),
+        ] {
+            assert!(format_result_lines(&vm, Some(&value), None).is_err());
+        }
+        assert_eq!(
+            format_result_lines(&vm, Some(&Value::Int(3.into())), None).unwrap(),
+            vec!["3"]
+        );
+    }
 }

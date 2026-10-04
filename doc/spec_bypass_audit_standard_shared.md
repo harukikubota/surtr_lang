@@ -12,10 +12,10 @@
 
 | 項目 | 状況 |
 |---|---|
-| SD-03 | 実装・対象テスト完了（level1）。全体検証は他項目の統合後に記録する |
-| SD-04 | 実装・対象テスト完了（level3）。全体検証は統合後に記録する |
-| SD-07 | 実装・対象テスト完了（level1）。全体検証は統合後に記録する |
-| SD-09 | 実施中 |
+| SD-03 | 完了（level1） |
+| SD-04 | 完了（level3） |
+| SD-07 | 完了（level1） |
+| SD-09 | 完了（level4、独立レビュー済み） |
 | SD-11 | 文書修正完了 |
 | SD-05・08 | 確定方針どおり現行仕様を維持 |
 | SD-06 | 簡素化案のまま保留 |
@@ -254,6 +254,16 @@ Value::Tagged { tag: 9999, fields: vec![] }  // RuntimeError: 未知 tag
 
 未知 tag、必要 payload の欠損、入れ子の異常値、正常 Result と正常ユーザー型の表示を検証する。
 
+### 実施記録（2026-10-04）
+
+level4 として [表示検証計画](sd09_display_validation_plan.md) に沿って実施した。Sindr の表示を `Result<String, ValueDisplayError>`、Eldr の inspect を `Result<String, RuntimeError>` に変更し、未知 tag、payload の欠損・余剰、既知型のフィールド数不一致を拒否する。コンテナ・既知型のフィールドも再帰的に検証し、`print` / `eprint` / `dbg!` / REPL / VM dump まで失敗を伝播する。
+
+検証中に、enum の metadata が payload のみを記録し、実行時には先頭 discriminant が加わることを確認した。検証数をこの表現に合わせた。また、比較 builtin が作る `Ordering` の空 fields は通常 enum と一致しなかったため、生成・predicate を正規の discriminant 付き表現へ統一し、旧表現を拒否するテストを追加した。スキーマ・VM バージョンは変更していない。
+
+独立レビューで見つかった CLI / REPL の最終 `Err` の先頭 payload だけを取り出す経路も修正した。表示前に外側の値を検証し、欠損・余剰は通常の言語エラーではなく RuntimeError にする。REPL は正常な言語 `Err` では継続し、不正値では終了する。`EldrVM_spec.md`、`Xldr_spec.md`、`Rune_observability.md`、`display_error.md` を整合させた。
+
+TDD では欠損 Ok payload が成功表示される Red を確認した。Sindr / Eldr の376件と、その後追加した Ordering の1件が成功。CLI / REPL 最終 Err の欠損・余剰の2件は `rtk cargo nextest run --profile ci -p rune -p xldr final_err_display_rejects_missing_and_extra_payload` で成功した。最終差分の独立レビューは指摘なし。全体検証は下記へ記録する。
+
 ## SD-10 任意メタデータと editor tolerant parse は許可された補助経路
 
 - `crates/sindr/src/ir.rs:1486-1488` は欠損 `Docs` / `SigT` を空にする。`docs/dev/EldrVM_spec.md:406-416` が両者を任意チャンクと明記する。`SigT` のない bytecode も受理する仕様。存在する payload の破損は `deserialize_optional` (`ir.rs:1634-1643`) が `DecodeFailed` を返す。実行に必要な `Code` / `CalT` / `Proc` 等は `deserialize_required` (`ir.rs:1470-1489`) であり、この任意処理を実行情報の欠損救済と混同しない。
@@ -331,7 +341,16 @@ add(1) >> &double
 
 既存の `compose_accepts_calls_returning_function_values` と `compose_rejects_non_function_call_results_after_typechecking_call` が実装上の受理・拒否境界を固定していることを確認した。製品コードは変更せず、`git diff --check` が成功した。全体検証の結果は統合検証記録へ追記する。
 
-## 検証記録
+## 統合検証記録（2026-10-04）
+
+- `rtk cargo nextest run --profile ci --workspace`: **2282 passed / 56 binaries、exit 0**。cold 対象を含み、最終の CLI / REPL 表示境界テストも実行した。
+- `rtk proxy cargo run -- test --quiet --all`: **exit 0**。quiet のため成功件数は出力されない。
+- `cargo fmt --all --check`、`git diff --check`: **exit 0**。
+- SD-03 と SD-09 は別エージェントがレビューした。SD-09 は指摘を修正し、最終追加テスト・正本文書まで再レビュー済み。
+
+SD-03、04、07、09、11 の確定した修正を完了した。SD-05 と SD-08 は確定方針どおり現行仕様を維持する。SD-06 は未確定の簡素化案として残し、SD-10 の LSP 改修は別ドラフトで扱う。これらを実装済みにはしていない。
+
+## 元の調査時点の検証記録
 
 元の調査 worktree で `cargo build -p rune --bin surtr` 成功（exit 0）。この HEAD の `target/debug/surtr` へ REPL stdin を渡し SD-03/07/08/11 を実測した。REPL exit 0 は各式成功の証明ではないため、個別出力・diagnostic を読んで判断した。SD-08 は初回の不正な式内型注釈を除外し、binding 注釈で再測定している。
 

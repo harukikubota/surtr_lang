@@ -1071,7 +1071,7 @@ fn builtin_flow_operator_unreachable(
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let s = match &args[0] {
         Value::Str(s) => s.clone(),
-        other => inspect_value(vm, other),
+        other => inspect_value(vm, other)?,
     };
     vm.emit_stdout_line(s);
     Ok(Value::Unit)
@@ -1081,7 +1081,7 @@ fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     let value = &args[0];
     match value {
         Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Bool(_) | Value::Unit => {
-            Ok(Value::Str(value.to_display_string(vm.type_registry())))
+            Ok(Value::Str(value.to_display_string(vm.type_registry()).map_err(|err| RuntimeError::new(err.to_string()))?))
         }
         _ => Err(RuntimeError::new(
             "builtin to_string expects Int, Float, String, Boolean, or Unit; other Show implementations must use their own method",
@@ -1090,7 +1090,7 @@ fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
 }
 
 fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    Ok(Value::Str(inspect_value(vm, &args[0])))
+    Ok(Value::Str(inspect_value(vm, &args[0])?))
 }
 
 fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1804,27 +1804,29 @@ fn builtin_operator_float_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, R
     Ok(Value::Bool(left >= right))
 }
 
+const ORDERING_VARIANTS: [&str; 3] = ["Ordering::Less", "Ordering::Equal", "Ordering::Greater"];
+
 fn ordering_value(vm: &VM, variant: &str) -> Result<Value, RuntimeError> {
-    let tag = find_variant_tag(vm, variant)?;
-    Ok(Value::Tagged {
-        tag,
-        fields: Vec::new(),
-    })
+    let discriminant = ORDERING_VARIANTS
+        .iter()
+        .position(|name| *name == variant)
+        .ok_or_else(|| RuntimeError::new(format!("unknown Ordering variant: {variant}")))?;
+    enum_variant_by_name(vm, variant, discriminant as i64, Vec::new())
 }
 
 fn ordering_matches(vm: &VM, value: &Value, variants: &[&str]) -> Result<bool, RuntimeError> {
     let Value::Tagged { tag, fields } = value else {
         return Err(RuntimeError::new("ordering predicate expects Ordering"));
     };
-    if !fields.is_empty() {
-        return Err(RuntimeError::new("ordering predicate expects Ordering"));
-    }
-    for variant in variants {
+    for (discriminant, variant) in ORDERING_VARIANTS.iter().enumerate() {
         if *tag == find_variant_tag(vm, variant)? {
-            return Ok(true);
+            if fields.as_slice() != [Value::Int(int(discriminant as i64))] {
+                return Err(RuntimeError::new("invalid Ordering runtime payload"));
+            }
+            return Ok(variants.contains(variant));
         }
     }
-    Ok(false)
+    Err(RuntimeError::new("ordering predicate expects Ordering"))
 }
 
 fn builtin_compare_int(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1952,7 +1954,7 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
             }
         }
         other => {
-            let s = inspect_value(vm, other);
+            let s = inspect_value(vm, other)?;
             vm.emit_stderr_line(s);
         }
     }
@@ -2330,7 +2332,7 @@ fn builtin_test_assert_err_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
             "TestAssertionFailed",
             &format!(
                 "expected Err({expected}), got Ok({})",
-                inspect_value(vm, &value)
+                inspect_value(vm, &value)?
             ),
         )),
     }
@@ -3531,12 +3533,12 @@ fn input_error(vm: &VM, detail: &str) -> Value {
     err_result(vm, "InputError", detail)
 }
 
-pub fn inspect_value(vm: &VM, value: &Value) -> String {
+pub fn inspect_value(vm: &VM, value: &Value) -> Result<String, RuntimeError> {
     render_value(vm, value)
 }
 
-fn render_value(vm: &VM, value: &Value) -> String {
-    match value {
+fn render_value(vm: &VM, value: &Value) -> Result<String, RuntimeError> {
+    Ok(match value {
         Value::Str(text) => quote_surtr_string_literal(text),
         Value::Callable(callable) => {
             inspect_callable(vm, callable).unwrap_or_else(|| match callable.target {
@@ -3549,26 +3551,26 @@ fn render_value(vm: &VM, value: &Value) -> String {
             let inner = handle
                 .iter()
                 .map(|item| render_value(vm, &item))
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, RuntimeError>>()?
                 .join(", ");
             format!("[{inner}]")
         }
         Value::HashMap(handle) => {
             if handle.entries.is_empty() {
-                return "hash![]".to_string();
+                return Ok("hash![]".to_string());
             }
 
             let inner = handle
                 .sorted_entries()
                 .into_iter()
                 .map(|(key, value)| {
-                    format!(
+                    Ok(format!(
                         "{} => {}",
                         quote_surtr_string_literal(&key),
-                        render_value(vm, &value)
-                    )
+                        render_value(vm, &value)?
+                    ))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, RuntimeError>>()?
                 .join(", ");
             format!("hash![{inner}]")
         }
@@ -3576,43 +3578,48 @@ fn render_value(vm: &VM, value: &Value) -> String {
             let inner = items
                 .iter()
                 .map(|item| render_value(vm, item))
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, RuntimeError>>()?
                 .join(", ");
             format!("({inner})")
         }
-        Value::Tagged { tag, fields } => render_tagged_value(vm, *tag, fields),
-        _ => value.to_display_string(vm.type_registry()),
-    }
+        Value::Tagged { tag, fields } => render_tagged_value(vm, *tag, fields)?,
+        _ => value
+            .to_display_string(vm.type_registry())
+            .map_err(|err| RuntimeError::new(err.to_string()))?,
+    })
 }
 
-fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
+fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> Result<String, RuntimeError> {
+    vm.type_registry()
+        .validate_display_fields(tag, fields)
+        .map_err(|err| RuntimeError::new(err.to_string()))?;
     if let Some(entry) = vm.type_registry().lookup(tag) {
         if is_duration_type_name(&entry.name) {
             if let Some(Value::Int(ms)) = fields.first() {
-                return format!("{ms}ms");
+                return Ok(format!("{ms}ms"));
             }
         }
-        let render_named_value = || {
+        let render_named_value = || -> Result<String, RuntimeError> {
             let display_name = surface_path_name(&entry.name);
             let parts = entry
                 .field_names
                 .iter()
                 .zip(fields.iter())
-                .map(|(name, val)| format!("{name}: {}", render_value(vm, val)))
-                .collect::<Vec<_>>();
-            format!("{}({})", display_name, parts.join(", "))
+                .map(|(name, val)| Ok(format!("{name}: {}", render_value(vm, val)?)))
+                .collect::<Result<Vec<_>, RuntimeError>>()?;
+            Ok(format!("{}({})", display_name, parts.join(", ")))
         };
 
-        return match entry.kind {
+        return Ok(match entry.kind {
             sindr::runtime::TypeKind::Struct | sindr::runtime::TypeKind::Record => {
-                render_named_value()
+                render_named_value()?
             }
             sindr::runtime::TypeKind::EnumVariant => {
                 let payload = fields
                     .iter()
                     .skip(1)
                     .map(|val| render_value(vm, val))
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, RuntimeError>>()?
                     .join(", ");
                 if payload.is_empty() {
                     surface_path_name(&entry.name).to_string()
@@ -3620,36 +3627,16 @@ fn render_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
                     format!("{}({payload})", surface_path_name(&entry.name))
                 }
             }
-        };
+        });
     }
 
     match tag {
-        0 => format!(
-            "Ok({})",
-            fields
-                .first()
-                .map(|v| render_value(vm, v))
-                .unwrap_or_default()
-        ),
-        1 => format!(
-            "{}",
-            fields
-                .first()
-                .map(|v| match v {
-                    Value::Error(rich) => rich.to_result_display_string(),
-                    _ => format!("Err({})", render_value(vm, v)),
-                })
-                .unwrap_or_default()
-        ),
-        _ => format!(
-            "Tagged({}, [{}])",
-            tag,
-            fields
-                .iter()
-                .map(|value| render_value(vm, value))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        0 => Ok(format!("Ok({})", render_value(vm, &fields[0])?)),
+        1 => match &fields[0] {
+            Value::Error(rich) => Ok(rich.to_result_display_string()),
+            value => Ok(format!("Err({})", render_value(vm, value)?)),
+        },
+        _ => Err(RuntimeError::new(format!("unknown runtime tag: {tag}"))),
     }
 }
 
@@ -4954,17 +4941,121 @@ mod tests {
                 tag: 41,
                 name: "MatchResult::Ok".into(),
                 kind: TypeKind::EnumVariant,
-                field_names: vec!["discriminant".into(), "value".into()],
-                private_flags: vec![false, false],
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
             },
             TypeEntry {
                 tag: 73,
                 name: "MatchResult::Err".into(),
                 kind: TypeKind::EnumVariant,
-                field_names: vec!["discriminant".into(), "error".into()],
-                private_flags: vec![false, false],
+                field_names: vec!["error".into()],
+                private_flags: vec![false],
             },
         ])
+    }
+
+    #[test]
+    fn comparison_ordering_uses_regular_enum_payload() {
+        let mut vm = test_vm_with_types(
+            super::ORDERING_VARIANTS
+                .iter()
+                .enumerate()
+                .map(|(index, name)| TypeEntry {
+                    tag: 40 + index as u32,
+                    name: (*name).into(),
+                    kind: TypeKind::EnumVariant,
+                    field_names: vec![],
+                    private_flags: vec![],
+                })
+                .collect(),
+        );
+        for (left, right, discriminant) in [(1, 2, 0), (2, 2, 1), (3, 2, 2)] {
+            let value = call_builtin(
+                &mut vm,
+                builtin_id("__compare_int"),
+                vec![Value::Int(int(left)), Value::Int(int(right))],
+            )
+            .unwrap();
+            assert_eq!(
+                value,
+                Value::Tagged {
+                    tag: 40 + discriminant as u32,
+                    fields: vec![Value::Int(int(discriminant))]
+                }
+            );
+            assert_eq!(
+                inspect_value(&vm, &value).unwrap(),
+                super::ORDERING_VARIANTS[discriminant as usize]
+            );
+            assert_eq!(
+                call_builtin(&mut vm, builtin_id("__ordering_is_lt"), vec![value]).unwrap(),
+                Value::Bool(discriminant == 0)
+            );
+        }
+        let malformed = Value::Tagged {
+            tag: 40,
+            fields: vec![],
+        };
+        assert!(call_builtin(&mut vm, builtin_id("__ordering_is_lt"), vec![malformed]).is_err());
+    }
+
+    #[test]
+    fn inspect_and_print_reject_invalid_runtime_payloads() {
+        let mut vm = test_vm_with_types(vec![TypeEntry {
+            tag: 10,
+            name: "Row".into(),
+            kind: TypeKind::Record,
+            field_names: vec!["value".into()],
+            private_flags: vec![false],
+        }]);
+        let invalid = Value::Tagged {
+            tag: 9999,
+            fields: vec![],
+        };
+        for value in [
+            invalid.clone(),
+            Value::Tagged {
+                tag: 0,
+                fields: vec![],
+            },
+            Value::Tagged {
+                tag: 1,
+                fields: vec![],
+            },
+            Value::Tagged {
+                tag: 10,
+                fields: vec![],
+            },
+            Value::Tagged {
+                tag: 10,
+                fields: vec![Value::Unit, Value::Unit],
+            },
+            Value::Tuple(vec![invalid.clone()]),
+            Value::List(ListHandle::from_items(vec![invalid.clone()])),
+            Value::HashMap(HashMapHandle::empty().insert("key".into(), invalid.clone())),
+            Value::Tagged {
+                tag: 10,
+                fields: vec![invalid],
+            },
+        ] {
+            for name in ["inspect", "print", "eprint"] {
+                assert!(
+                    call_builtin(&mut vm, builtin_id(name), vec![value.clone()]).is_err(),
+                    "{name}: {value:?}"
+                );
+            }
+        }
+        assert_eq!(
+            inspect_value(
+                &vm,
+                &Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Unit]
+                }
+            )
+            .unwrap(),
+            "Ok(())"
+        );
     }
 
     #[test]
@@ -6219,7 +6310,7 @@ mod tests {
                     .map(|value| match value {
                         Value::Tuple(items) => items
                             .iter()
-                            .map(|item| item.to_display_string(vm.type_registry()))
+                            .map(|item| item.to_display_string(vm.type_registry()).unwrap())
                             .collect::<Vec<_>>()
                             .join(":"),
                         other => panic!("expected tuple entry, got {:?}", other),
@@ -6258,7 +6349,7 @@ mod tests {
                     .map(|value| match value {
                         Value::Tuple(items) => items
                             .iter()
-                            .map(|item| item.to_display_string(vm.type_registry()))
+                            .map(|item| item.to_display_string(vm.type_registry()).unwrap())
                             .collect::<Vec<_>>()
                             .join(":"),
                         other => panic!("expected tuple entry, got {:?}", other),
@@ -6444,7 +6535,7 @@ mod tests {
             ("path\\to".into(), Value::Int(int(2))),
         ]));
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "hash![\"line\\nfeed\" => 1, \"path\\\\to\" => 2]"
         );
     }
@@ -6464,7 +6555,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "(\"hello\", [\"line\\nfeed\"], Ok(\"world\"))"
         );
     }
@@ -6510,7 +6601,7 @@ mod tests {
             Value::HashMap(HashMapHandle::from_entries(vec![("user".into(), user)])),
         ]);
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             format!(
                 r#"({user_display}, {vault_display}, [{user_display}], Ok({vault_display}), hash!["user" => {user_display}])"#
             )
@@ -6549,7 +6640,7 @@ mod tests {
             Value::HashMap(HashMapHandle::from_entries(vec![("\0#{key}".into(), text)])),
         ]);
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             r#"("\u{1b}a\#{body}\u{85}", ["\u{1b}a\#{body}\u{85}"], Ok("\u{1b}a\#{body}\u{85}"), Message(body: "\u{1b}a\#{body}\u{85}"), hash!["\u{0}\#{key}" => "\u{1b}a\#{body}\u{85}"])"#
         );
     }
@@ -7219,7 +7310,7 @@ mod tests {
         });
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "FnCapture(module: Int, name: shr, sig: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
         );
     }
@@ -7246,7 +7337,7 @@ mod tests {
             });
             let nested = Value::List(ListHandle::from_items(vec![value]));
             assert_eq!(
-                inspect_value(&vm, &nested),
+                inspect_value(&vm, &nested).unwrap(),
                 format!("[FnCapture(module: {visible}, name: apply, sig: (Int -> Int))]")
             );
         }
@@ -7283,7 +7374,7 @@ mod tests {
         });
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "FnCapture(module: Main, name: add, sig: add(x: Int, y: Int) -> Int)"
         );
     }
@@ -7319,7 +7410,7 @@ mod tests {
         });
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "FnCapture(module: <local>, name: add, sig: add(x: Int, y: Int) -> Int)"
         );
     }
@@ -7357,7 +7448,10 @@ mod tests {
             },
         });
 
-        assert_eq!(inspect_value(&vm, &value), "Closure(Int, Int -> Int)");
+        assert_eq!(
+            inspect_value(&vm, &value).unwrap(),
+            "Closure(Int, Int -> Int)"
+        );
     }
 
     #[test]
@@ -7405,7 +7499,7 @@ mod tests {
         ]));
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "[Ok(Closure(Int -> Int)), (hash![\"f\" => FnCapture(module: Add, name: add, sig: (Int -> Int))], Box(value: FnCapture(module: Add, name: add, sig: (Int -> Int))))]"
         );
     }
@@ -7501,7 +7595,7 @@ mod tests {
                 lexical_captures: Vec::new(),
                 metadata: CallableMetadata::default(),
             });
-            assert_eq!(inspect_value(&vm, &value), "<callable>");
+            assert_eq!(inspect_value(&vm, &value).unwrap(), "<callable>");
             assert!(call_builtin(&mut vm, builtin_id("to_string"), vec![value])
                 .expect_err("builtin to_string must reject callable values")
                 .message
@@ -7526,7 +7620,7 @@ mod tests {
         });
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "FnCapture(module: Add, name: add, sig: (Int -> Int))"
         );
     }
@@ -7548,7 +7642,7 @@ mod tests {
         });
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "FnCapture(module: Main, name: ready, sig: (-> String))"
         );
     }
@@ -7562,7 +7656,7 @@ mod tests {
             metadata: CallableMetadata::default(),
         });
 
-        assert_eq!(inspect_value(&vm, &value), "<callable>");
+        assert_eq!(inspect_value(&vm, &value).unwrap(), "<callable>");
     }
 
     #[test]
@@ -7591,7 +7685,7 @@ mod tests {
             },
         });
 
-        assert_eq!(inspect_value(&vm, &closure), "Closure(Int -> Int)");
+        assert_eq!(inspect_value(&vm, &closure).unwrap(), "Closure(Int -> Int)");
     }
 
     #[test]
@@ -7621,7 +7715,7 @@ mod tests {
         });
 
         assert_eq!(
-            inspect_value(&vm, &wrapper),
+            inspect_value(&vm, &wrapper).unwrap(),
             "FnCapture(module: Int, name: shr, sig: (Int -> Result<Int, Error>))"
         );
     }
@@ -7654,7 +7748,7 @@ mod tests {
         }
 
         assert_eq!(
-            inspect_value(&vm, &value),
+            inspect_value(&vm, &value).unwrap(),
             "FnCapture(module: Add, name: add, sig: (Int -> Int))"
         );
     }

@@ -3049,27 +3049,17 @@ impl ReplEngine {
         }
     }
 
-    fn report_main_result_error_if_any(&self, value: &Value) -> Option<Vec<String>> {
-        // E-3 note:
-        // Unlike CLI `run`, REPL keeps the session alive after `Result::Err`.
-        // This stays local to REPL entry handling by design.
+    fn report_main_result_error_if_any(
+        &self,
+        value: &Value,
+    ) -> Result<Option<Vec<String>>, eldr::RuntimeError> {
+        // A valid language Err keeps the REPL alive; malformed values are runtime traps.
         match value {
             Value::Tagged { tag: 1, fields } => {
-                if let Some(err_value) = fields.first() {
-                    Some(self.report_error_value(err_value))
-                } else {
-                    let text = error_display::invalid_result_missing_payload_text(
-                        self.vm.source(),
-                        self.vm.source_file(),
-                        self.vm.runtime_error_location(),
-                    );
-                    Some(error_display::lines_for_mode(
-                        &text,
-                        self.error_display_mode,
-                    ))
-                }
+                inspect_value(self.vm.as_vm(), value)?;
+                Ok(Some(self.report_error_value(&fields[0])))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -8127,13 +8117,19 @@ impl ReplEngine {
             self.vm.set_source(source_str, file_name);
         }
 
-        match self.execute_vm_chunk(chunk, ReplSessionPhase::Live) {
-            Ok(execution) => {
-                let committed_source = self.pending.clone();
+        let execution = self
+            .execute_vm_chunk(chunk, ReplSessionPhase::Live)
+            .and_then(|execution| {
                 let value = eval::committed_chunk_value(execution);
+                let main_error = self.report_main_result_error_if_any(&value)?;
+                Ok((value, main_error))
+            });
+        match execution {
+            Ok((value, main_error)) => {
+                let committed_source = self.pending.clone();
                 self.sync_scar_fun_index_with_vm();
                 self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
-                if let Some(rendered) = self.report_main_result_error_if_any(&value) {
+                if let Some(rendered) = main_error {
                     let (stdout, stderr) = self.take_repl_host_io_lines();
                     self.history_entries.push(ReplHistoryEntry {
                         line: committed_line,
@@ -8151,7 +8147,34 @@ impl ReplEngine {
                 }
 
                 let rendered =
-                    render::format_result_lines(self.vm.as_vm(), Some(&value), Some(&meta));
+                    match render::format_result_lines(self.vm.as_vm(), Some(&value), Some(&meta)) {
+                        Ok(rendered) => rendered,
+                        Err(error) => {
+                            let rendered =
+                                error_display::runtime_error_lines_with_registry_and_stack_trace(
+                                    &error,
+                                    &self.sources,
+                                    self.repl_source_id,
+                                    self.vm.runtime_error_location(),
+                                    self.error_display_mode,
+                                    self.stack_trace_display_mode,
+                                );
+                            let (stdout, stderr) = self.take_repl_host_io_lines();
+                            self.history_entries.push(ReplHistoryEntry {
+                                line: committed_line,
+                                source: committed_source,
+                            });
+                            self.bump_line(None, None);
+                            self.pending.clear();
+                            return ReplResult::exit(ReplOutput::EvalError {
+                                idx,
+                                source,
+                                rendered,
+                            })
+                            .with_stdout(stdout)
+                            .with_stderr(stderr);
+                        }
+                    };
 
                 let (stdout, stderr) = self.take_repl_host_io_lines();
                 let mut all_rendered = rendered;
@@ -8394,11 +8417,24 @@ impl ReplEngine {
         }
 
         match self.results[line_num - 1].clone() {
-            Some(value) => {
-                let displayed = inspect_value(self.vm.as_vm(), &value);
-                self.bump_line(Some(value), None);
-                Self::plain(vec![displayed])
-            }
+            Some(value) => match inspect_value(self.vm.as_vm(), &value) {
+                Ok(displayed) => {
+                    self.bump_line(Some(value), None);
+                    Self::plain(vec![displayed])
+                }
+                Err(error) => {
+                    let rendered = error_display::runtime_error_lines_with_registry_and_stack_trace(
+                        &error,
+                        &self.sources,
+                        self.repl_source_id,
+                        self.vm.runtime_error_location(),
+                        self.error_display_mode,
+                        self.stack_trace_display_mode,
+                    );
+                    self.bump_line(None, None);
+                    ReplResult::exit(ReplOutput::PlainText { lines: rendered })
+                }
+            },
             None => {
                 self.bump_line(None, None);
                 Self::plain(vec![format!("Line {} has no value", line_num)])
@@ -9902,6 +9938,30 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn final_err_display_rejects_missing_and_extra_payload() {
+        let engine = ReplEngine::new().expect("REPL engine should initialize");
+        for field_count in [0, 2] {
+            let value = Value::Tagged {
+                tag: 1,
+                fields: vec![Value::Unit; field_count],
+            };
+            let error = engine
+                .report_main_result_error_if_any(&value)
+                .expect_err("malformed Err must be a RuntimeError");
+            assert!(
+                error.message.contains("invalid runtime payload for tag 1"),
+                "{error:?}"
+            );
+            assert!(
+                error
+                    .message
+                    .contains(&format!("expected 1 fields, got {field_count}")),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn repl_source_spans_reject_overlapping_and_unrepresentable_offsets() {
         use diagnostics::SourceId;
         assert!(super::repl_source_span_fits(SourceId(0), 999_999));
@@ -10145,8 +10205,8 @@ supervisor_init {
             "each owned VM should boot exactly once"
         );
 
-        let first_runtime = first.vm.as_vm().process_runtime_snapshot();
-        let second_runtime = second.vm.as_vm().process_runtime_snapshot();
+        let first_runtime = first.vm.as_vm().process_runtime_snapshot().unwrap();
+        let second_runtime = second.vm.as_vm().process_runtime_snapshot().unwrap();
         assert!(
             first_runtime
                 .singleton_slots

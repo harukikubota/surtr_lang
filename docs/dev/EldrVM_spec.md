@@ -229,6 +229,9 @@ Eldr が扱う値の概念カテゴリ:
 - 言語エラー値: `Error(RichError)`
 - process capability: `PID`（runtime が発行する opaque handle）
 
+値の表示と `inspect` は、未知の tag、reserved Result（tag 0/1）の payload 数不一致、既知の struct / record / enum variant のフィールド数不一致を RuntimeError とする。enum variant の先頭フィールドは Int の discriminant を必須とし、runtime のフィールド数は payload を記録する `TypeEntry.field_names` の数に 1 を足した値とする。比較 builtin が生成する `Ordering` も通常の enum 表現に従い、Less / Equal / Greater はそれぞれ discriminant 0 / 1 / 2 を持つ。未知 tag の `Tagged(...)` 表示、欠損 payload の `Ok()` 表示、空文字による救済は行わない。正規の reserved Result は registry entry がなくても表示できる。
+List / tuple / HashMap / tagged value のフィールドも再帰的に検証し、内部値の表示失敗を保持する。Sindr の表示エラーは Eldr の境界で RuntimeError に変換する。`print` / `inspect` / REPL / `dbg!` / runtime snapshot の呼出し側まで伝播し、言語の `Err` 値や panic で代用しない。
+
 `inspect` における `Callable` 表示は runtime metadata に従い、closure は
 `Closure(sig)`、capture は `FnCapture(module: M, name: f, sig: sig)` を返す。
 callable 値の signature の `Result` は `Result<T>`、ExtractorClosure 内の `MatchResult` は `MatchResult<T>` と表示する。Error 位置は値の表示に含めない。ExtractorClosure は `ExtractorClosure<(A -> MatchResult<P>)>` と表示する。REPL の束縛表示も同じ inspect 処理を使い、単独評価やコンテナ内の表示と揃える。定義に明記された Error 名を表示するのは、REPL コマンドによる定義シグネチャの照会である。
