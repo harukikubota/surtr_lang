@@ -93,6 +93,28 @@ test("HashMap") {
 
 
 
+    it("maps an empty map without producing entries") {
+      do {
+        source: HashMap<Int> = hash![]
+        mapped: HashMap<String> = HashMap::map_values(source, {|n| to_string(n)})
+        assert_eq(0, HashMap::map_len(mapped))
+      }
+    }
+
+    it("stores callback Err values without dropping their keys") {
+      do {
+        mapped: HashMap<Result<Int>> = HashMap::map_values(
+          hash!["b" => 2, "a" => 1],
+          {|n| if(n == 1, Err(NoneError), Ok(n))},
+        )
+        assert_eq(["a", "b"], HashMap::map_keys(mapped))
+        a <- HashMap::map_get(mapped, "a")
+        assert_err_kind(NoneError, a)
+        b <- HashMap::map_get(mapped, "b")
+        assert_ok_eq(2, b)
+      }
+    }
+
     it("renders escaped keys safely") {
       do {
         escaped = HashMap::map_from_entries([

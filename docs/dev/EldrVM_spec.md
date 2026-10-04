@@ -178,6 +178,8 @@ VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk
 
 ### 3.9 Builtin / callback の継続実行
 
+`HashMap::map_values` は builtin として元 map の全キーを保ち、決定的なキー順で各値へ callback を一度ずつ適用する。空 map では callback を呼ばない。map の内部異常と callback の RuntimeError は伝播し、部分 map を成功として返さない。callback が返す言語の Result 値（`Err` を含む）はそのまま新しい値として格納する。
+
 builtin の内部結果は、完了、継続可能、callback 要求、Future 待機、RuntimeError を区別する。
 継続状態は VM の実行コンテキストが所有し、利用者の `Value` や bytecode に格納しない。
 即時完了する builtin も同じ dispatch へ接続する。

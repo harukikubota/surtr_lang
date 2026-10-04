@@ -13,7 +13,8 @@
 | 項目 | 状況 |
 |---|---|
 | SD-03 | 実装・対象テスト完了（level1）。全体検証は他項目の統合後に記録する |
-| SD-04・07・09・11 | 実施中 |
+| SD-04 | 実装・対象テスト完了（level3）。全体検証は統合後に記録する |
+| SD-07・09・11 | 実施中 |
 | SD-05・08 | 確定方針どおり現行仕様を維持 |
 | SD-06 | 簡素化案のまま保留 |
 | SD-10 | 別ドラフトの未確定事項として維持 |
@@ -89,6 +90,12 @@ HashMap::map_values(hash!["a" => 1, "b" => 2], {|n: Int| n + 1})
 - `lib/types/hash_map.srt` の `_map_values_go` など旧実装を削除する。ビルトイン登録は Sindr の `BUILTIN_METAS` を正本とし、Eldr の実装を対応させる。
 
 正常値・空 map・callback の順序と回数・Result 値の保持を検証する。内部異常の拒否は、公開入力で作れない条件を crate 内部のテストで確認する。
+
+### 実施記録（2026-10-04）
+
+`map_values` を Sindr の正本へ登録し、Eldr の callback 継続として実装した。元 map のソート済みエントリを直接走査するため、旧 `_map_values_go` とキーの再 lookup は不要になった。公開シグネチャを保ち、`@doc` と VM 正本へ callback の順序・回数・失敗伝播を明記した。
+
+TDD では新 builtin の metadata 不在による Red を確認後、`rtk cargo nextest run -p eldr map_values` の4件、metadata 順序の1件、`rtk cargo nextest run -p sindr builtin` の36件が成功した。`rtk proxy cargo run -- test --quiet lib/tests/basic_types/hash_map.srt` も exit 0。callback の RuntimeError は部分成功へ変えず、言語の `Err` 値はそのまま保持する。HashMap の内部 storage は非公開の immutable 表現であり、破損したキー一覧と source の不一致は新経路では構築しない。crate 内部テストでは不正な map 引数の拒否も確認した。
 
 ## SD-05 Int 固定幅演算が「起こらないはずの除算 Error」を 0 に変える
 

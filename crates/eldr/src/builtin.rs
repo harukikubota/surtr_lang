@@ -4,6 +4,7 @@ use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
 mod generator;
 mod list_builder;
 mod list_flat_map;
+mod map_values;
 #[cfg(test)]
 pub(crate) use list_builder::{list_builder_metrics, reset_list_builder_metrics};
 use list_flat_map::{builtin_list_flat_map, FlatMapContinuation};
@@ -54,6 +55,7 @@ pub(crate) enum BuiltinOutcome {
 #[derive(Debug, Clone)]
 pub(crate) enum BuiltinContinuation {
     FlatMap(FlatMapContinuation),
+    MapValues(map_values::MapValuesContinuation),
     Generator(generator::GeneratorContinuation),
     Runtime(crate::vm::RuntimeContinuation),
     Identity,
@@ -75,6 +77,7 @@ impl BuiltinContinuation {
     ) -> Result<BuiltinOutcome, RuntimeError> {
         let value = match self {
             Self::FlatMap(continuation) => return continuation.resume(result),
+            Self::MapValues(continuation) => return continuation.resume(result),
             Self::Generator(continuation) => return continuation.resume(vm, result),
             Self::Runtime(continuation) => return continuation.resume(vm, result),
             Self::Identity => result?,
@@ -993,6 +996,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "__test_assert_cause_chain",
         func: |vm, args| builtin_test_assert_cause_chain(vm, args).map(BuiltinOutcome::Complete),
+    },
+    BuiltinImpl {
+        name: "map_values",
+        func: map_values::builtin_map_values,
     },
 ];
 
@@ -5342,6 +5349,18 @@ mod tests {
                 private_flags: vec![false, false, false, false, false],
             },
         ])
+    }
+
+    #[test]
+    fn map_values_rejects_invalid_map_input() {
+        let mut vm = test_vm();
+        let error = call_builtin(
+            &mut vm,
+            builtin_id("map_values"),
+            vec![Value::Unit, Value::Unit],
+        )
+        .expect_err("invalid map must be a RuntimeError");
+        assert!(error.message.contains("map_values expects HashMap"));
     }
 
     #[test]

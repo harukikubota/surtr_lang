@@ -3857,6 +3857,23 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "__test_assert_cause_chain", arity: 2, sig_str: "(List<String>, Result<$A>) -> Result<Unit>",
         compiler_generated_surfaces: &[], surfaces: &[],
     },
+    BuiltinMeta {
+        name: "map_values",
+        arity: 2,
+        sig_str: "(HashMap<$A>, ($A -> $B)) -> HashMap<$B>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("HashMap"),
+            "map_values",
+            &[],
+            &[
+                builtin_surface_parameter("map", "HashMap<$A>"),
+                builtin_surface_parameter("f", "($A -> $B)"),
+            ],
+            "HashMap<$B>",
+            &[],
+        )],
+    },
 
 ];
 
