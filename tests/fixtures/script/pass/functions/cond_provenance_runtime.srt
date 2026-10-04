@@ -13,7 +13,7 @@ choose_local = {|flag: Boolean|
 }
 print(to_string(choose(True, base)))
 print(to_string(choose_local(False)))
-print(to_string(cond {
+print(to_string(cond({
   False => { print("unreachable"); 0 },
   True => if_let(Option::Some(3), Option::Some(value), value + base, base),
-}))
+})))

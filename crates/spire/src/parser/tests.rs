@@ -8267,3 +8267,132 @@ fn ordinary_enums_may_declare_qualified_boolean_named_variants() {
         matches!(&patterns[0], Ast::Match(_, _, arms) if matches!(&arms[0].pattern, AstPattern::Call(_, owner, _) if owner == "Other::True") && matches!(&arms[1].pattern, AstPattern::Constructor(_, owner, _) if owner == "Other::False"))
     );
 }
+
+#[test]
+fn special_block_call_match_forms_share_target_and_arms() {
+    for source in [
+        "match value { Some(item) => item, _ => 0 }",
+        "match(value) { Some(item) => item, _ => 0 }",
+        "match(value, { Some(item) => item, _ => 0 })",
+    ] {
+        let ast = parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        let Ast::Match(span, target, arms) = &ast[0] else {
+            panic!("{source}: {:?}", ast[0])
+        };
+        assert_eq!((span.start, span.end), (0, source.len()));
+        assert!(matches!(target.as_ref(), Ast::Var(_, name) if name == "value"));
+        assert_eq!(arms.len(), 2);
+        assert!(matches!(&arms[0].body, Ast::Var(_, name) if name == "item"));
+        assert!(matches!(&arms[1].body, Ast::Lit(_, Lit::Int(value)) if value == &int(0)));
+    }
+}
+
+#[test]
+fn special_block_call_cond_forms_share_ordered_clauses() {
+    for source in [
+        "cond { ready => 1, True => 2 }",
+        "cond({ ready => 1, True => 2 })",
+    ] {
+        let ast = parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        let Ast::Cond(span, clauses) = &ast[0] else {
+            panic!("{source}: {:?}", ast[0])
+        };
+        assert_eq!((span.start, span.end), (0, source.len()));
+        assert_eq!(clauses.len(), 2);
+        assert!(matches!(&clauses[0].0, Ast::Var(_, name) if name == "ready"));
+        assert!(matches!(&clauses[0].1, Ast::Lit(_, Lit::Int(value)) if value == &int(1)));
+        assert!(Parser::is_true_literal(&clauses[1].0));
+    }
+}
+
+#[test]
+fn special_block_call_bulk_update_forms_share_source_and_entries() {
+    for source in [
+        "bulk_update(value) { name <- set(1) }",
+        "bulk_update(value, { name <- set(1) })",
+        "Facet::bulk_update(value) { name <- set(1) }",
+    ] {
+        let ast = parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        let Ast::BulkUpdate(span, target, entries) = &ast[0] else {
+            panic!("{source}: {:?}", ast[0])
+        };
+        assert_eq!((span.start, span.end), (0, source.len()));
+        assert!(matches!(target.as_ref(), Ast::Var(_, name) if name == "value"));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            bulk_path_segments(&entries[0].path),
+            [FacetPathSegment::field("name")]
+        );
+        assert!(
+            matches!(&entries[0].kind, BulkUpdateEntryKind::Set(Ast::Lit(_, Lit::Int(value))) if value == &int(1))
+        );
+    }
+}
+
+#[test]
+fn special_block_call_bulk_update_keyword_cannot_be_shadowed() {
+    for source in [
+        "bulk_update = 1",
+        "def bulk_update(value) { value }",
+        "def use(bulk_update: Int) { bulk_update }",
+        "{|bulk_update| bulk_update}",
+        "defmod Custom { def bulk_update(value) { value } }",
+    ] {
+        assert!(
+            parse(source).is_err(),
+            "reserved keyword accepted: {source}"
+        );
+    }
+}
+
+#[test]
+fn special_block_call_nested_blocks_and_existing_tuple_targets() {
+    for source in [
+        "match(cond({ True => value }), { item => bulk_update(item, { name <- set(1) }) })",
+        "cond({ True => match(value, { _ => 1 }) })",
+        "match (1, 2) { (a, b) => a }",
+        "match (1, { 2 }) { (a, b) => a }",
+        "match (value, {|x| x}) { _ => 1 }",
+        "match (value, { cond { True => 2 } }) { _ => 1 }",
+        "match\n(value, { _ => 1 })",
+        "match (a) + b { _ => 1 }",
+        "match(value, { _ => 1 },)",
+        "cond({ True => 1 },)",
+        "bulk_update(value, { name <- set(1) },)",
+        "Facet::bulk_update(value,) { name <- set(1) }",
+    ] {
+        parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
+#[test]
+fn special_block_call_rejects_invalid_arguments_and_blocks() {
+    for source in [
+        "match (value, {}) { _ => 1 }",
+        "bulk_update value { name <- set(1) }",
+        "bulk_update(value)",
+        "bulk_update(value, { name <- set(1) }, extra)",
+        "bulk_update(source: value) { name <- set(1) }",
+        "bulk_update(value, {})",
+        "bulk_update(value, { name <- replace(1) })",
+        "match(value, {})",
+        "cond({})",
+        "cond({ ready => 1 })",
+        "cond({ True => 1 }, extra)",
+    ] {
+        assert!(
+            parse(source).is_err(),
+            "invalid special call accepted: {source}"
+        );
+    }
+}
+
+#[test]
+fn special_block_call_bulk_update_keyword_preserves_intrinsic_declaration() {
+    let ast = parse_with_context(
+        "@intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>",
+        ParserContext::module(0, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("compiler intrinsic can declare the keyword");
+    assert!(matches!(&ast[0], Ast::IntrinsicDecl(_, name, _, _) if name == "bulk_update"));
+}

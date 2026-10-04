@@ -110,6 +110,7 @@ pub enum Token {
     Do,
     When,
     Cond,
+    BulkUpdate,
     Private,
     Public,
     Readonly,

@@ -102,6 +102,8 @@ do::<Carrier> {
 }
 ```
 
+`match value { ... }`、`match(value) { ... }`、`match(value, { ... })` は同じ意味です。`cond { ... }` と `cond({ ... })` も同じ意味です。括弧内に置いても、`match` の arm と `cond` の条件節は専用のブロック構文であり、通常のブロック値にはなりません。
+
 `do` の carrier は `::<Carrier>` で指定するか、RHS・最終式・期待型から推論します。
 `<-` の束縛は後続文だけで見え、最終式は同じ carrier の Monad 値を返します。
 

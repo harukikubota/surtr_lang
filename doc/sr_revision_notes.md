@@ -13,7 +13,7 @@
 | SR-07 | 詳細仕様待ち | Pattern→Expr変換範囲と対象表記の確定が必要 |
 | SR-08 | 現行実装・既存テスト確認 | Result / Booleanの実宣言に基づくaliasを維持 |
 | SR-09 | 既存挙動確認・回帰テスト追加済み | 通常dbgと専用dbg!の共存 |
-| SR-10 | 構文方針確定・未実装 | matchは3形式を同等に扱う。bulk_updateは引数の括弧必須、condは括弧有無を許容 |
+| SR-10 | 実装・検証済み | matchは3形式を同等に扱う。bulk_updateは引数の括弧必須、condは括弧有無を許容 |
 | SR-11 | 現行処理の責務を確認 | callee UIDは一意。型に依存する引数役割の遅延と区別 |
 | SR-12 | 可視性・拒否条件を確認 | public Constはimportなし、private Constはファイル内 |
 | SR-13 | 正本文書の整合済み | newの定義必須によるコンパイル時の呼出し先解決。実行時のResult値とは独立 |
@@ -128,7 +128,15 @@ Sigil の `special_variants_require_a_real_enum_declaration`、`canonical_specia
 
 `tests/fixtures/script/pass/functions/dbg_name_is_distinct_from_special_form.srt` で同名関数と同名引数の通常呼出し、および `dbg!(dbg(value))` の共存を固定した。Xldr の既存 `core_dbg_docs_and_signatures_resolve_from_bootstrap_source` にはローカル `dbg` の呼出しを追加し、`dbg!` の出力と Bootstrap 文書・signature が両立することを確認した。script fixture bucket 7 と、CI profile の REPL bucket 1 はそれぞれ成功した。既存挙動の回帰テストであり、意図的な Red は作っていない。
 
-## SR-10: match・cond・bulk_updateの関数呼出し形式
+## SR-10: bulk_updateの専用構文と呼出し形式
+
+### 元の指摘と今回の判断
+
+元の監査では、Spireがソース上の完全修飾名 `Facet::bulk_update` を認識して専用ASTを作り、外側のcalleeを通常の関数として解決しない点を確認対象としていた。Sigilはsourceを `Ok(source)` で包み、entryを `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` の逐次合成へlowerする。生成した各関数呼出しは通常の名前解決・型検査を通る。
+
+今回の判断は、この専用構文としての契約を維持したうえで表記を追加すること。元の監査の「利用者分類: 未選択」は、この項目について選択済みとなる。`Facet::bulk_update(source) { ... }` も維持し、裸の `bulk_update` は予約キーワードとして扱う。外側の `bulk_update` を通常の関数値として解決する経路は追加しない。必須の専用ブロックがなければparse errorとし、生成したFacet関数の解決・型検査・実行時の失敗を、成功値の生成や別経路で救済しない。
+
+### 追加する表記
 
 通常関数呼出しの形でも記述できるようにする構文上の拡張とする。各形式は同じ専用ASTへ接続し、既存の意味論とブロック内の文法を維持する。
 
@@ -156,7 +164,17 @@ cond({ ... })
 
 `{ ... }`は各専用ブロックの内容を省略した表記。空ブロックの受理や、ブロックを一般の値として扱う機能を追加する意味ではない。named argument、パイプ注入、ブロック内区切りなどの新しい規則は今回の構文追加に含めない。
 
-以前の「一つの正規形を選び、外置きブロックを拒否する」という提案は撤回する。`bulk_update`のキーワード化・シャドーイング禁止という既存方針は維持する。現行の`Facet::bulk_update`という修飾表記の扱いは、今回確定した括弧の規則とは分けて記録する。
+以前の「一つの正規形を選び、外置きブロックを拒否する」という提案は撤回する。`bulk_update`のキーワード化・シャドーイング禁止という既存方針は維持する。既存の`Facet::bulk_update(source) { ... }`も、同じ専用構文として維持する。
+
+### 実施記録（2026-10-04、level4）
+
+Spireで指定の3形式の`match`、2形式の`cond`と`bulk_update`を同じ専用ASTへ接続した。`bulk_update`をキーワードにし、同名の通常宣言・引数・束縛を拒否する。標準のintrinsic宣言と既存の`Facet::bulk_update(source) { ... }`は維持し、修飾表記でも括弧内に更新ブロックを置ける。tolerant parserのkeyword分類も整合させた。
+
+`match`は既存のタプル対象・括弧後の演算式・タプル内クロージャを維持する。括弧内の専用arm blockはtokenの括弧深さとarmの矢印で判別し、失敗後に別文法で再解析する経路は設けていない。外側のcallee解決、Sigilのlower、型・評価規則は変更していない。
+
+新構文・予約境界のテストで旧実装の失敗を確認してから実装した。Spire全504件が成功。既存の`cond_provenance_runtime`と`facet_dynamic_container_path_expr`を新表記へ変更し、対応するscript fixture bucket 1・5の2件が成功した。既存の期待出力は変更していない。独立レビューは未解決の指摘なし。最終のworkspace CIは2300件・56バイナリがすべて成功し、標準Surtrテストもexit 0だった。
+
+正本の言語リファレンス・Facetガイド・BootstrapとFacetの`@doc`・テスト方針を更新した。元の監査で未選択だったcalleeの扱いも、専用構文として維持する判断を記録した。
 
 ## SR-11: Extractorの呼出し先は一意
 
@@ -198,7 +216,7 @@ Pattern側のExtractorは、定義されていなければコンパイル時の�
 
 ## 後段タスクへの引継ぎ
 
-最初にSR-01の関数ごとのキーワード・シャドーイング・呼出し先解決の仕様を詰める。SR-07はその決定後にフローを設計する。SR-09の区別は確認済み。SR-10は上記の構文方針に沿って実装する。
+最初にSR-01の関数ごとのキーワード・シャドーイング・呼出し先解決の仕様を詰める。SR-07はその決定後にフローを設計する。SR-09の区別は確認済み。SR-10は上記の構文方針に沿って実装した。
 
 SR-02〜04は標準環境を前提に入口とテスト構成を統一し、SR-05は内部lookup失敗を明確なエラーにする。SR-06／08／12／13は回答で示された仕様を前提に扱う。SR-11は呼出し先の一意性を前提とし、再走査を加えない。
 
@@ -212,3 +230,12 @@ SR-02〜04は標準環境を前提に入口とテスト構成を統一し、SR-0
 - 独立レビュー: canonical identity、環境・import共通化、rollback、標準helper、解析cacheの最終コード差分について未解決の指摘なし。
 
 最初の全体検証で見つかったLSPテストの標準 `print` との名前衝突は、テスト用symbolを `fixture_print` へ変えて修正した。同時実行時の15秒timeoutは並列数を4へ下げて全件を再実行し、成功を確認した。テストの除外・ignored化・時間上限の変更は行っていない。
+
+## SR-10の最終検証（2026-10-04）
+
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run -p spire`: 504件成功。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run -p rune --test integration -E 'test(run_srt::script_fixtures_bucket_1) | test(run_srt::script_fixtures_bucket_5)'`: 対象2件成功。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace --test-threads 4`: 2300件成功、56バイナリ、exit 0。失敗・除外なし。
+- `SURTR_TEST_CACHE=1 rtk proxy cargo run -- test --quiet --all`: exit 0。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。
+- 最終コード差分の独立レビュー: 未解決の指摘なし。

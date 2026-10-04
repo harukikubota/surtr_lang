@@ -6,7 +6,7 @@ SR-01・07・10・11について、現行コード・正本・既存テストを
 
 ## 1. 現行の分類
 
-以下の「予約」は現行実装の記録であり、今回すべてを予約語へ変更する提案ではない。トップレベル関数定義をモジュールとして読み込む現行仕様も維持する。
+以下の分類表は調査時点の実装を記録したもの。SR-01・SR-10の変更後の契約は各項目の実施記録を参照する。「予約」は、すべてを予約語へ変更する提案ではない。トップレベル関数定義をモジュールとして読み込む現行仕様も維持する。
 
 | 対象 | 現行の構文・呼出し先 | 名前とシャドーイングの境界 | 通常呼出し・パイプの差 |
 |---|---|---|---|
@@ -110,9 +110,9 @@ SR-01・07・10・11について、現行コード・正本・既存テストを
 
 ### 確定事項と現行
 
-入力ではbare `bulk_update`のキーワード化とshadow禁止を指定している。現在はSpire `parser/expr.rs`の`parse_ident_continuation`が`Facet::bulk_update(source)`の閉じ括弧後に更新ブロックを要求し、`parse_bulk_update_expr`が専用entryを読む。正本は`docs/site/facet.md`と`lib/facet.srt`の`@doc`。
+入力ではbare `bulk_update`のキーワード化とshadow禁止を指定している。改修前はSpire `parser/expr.rs`の`parse_ident_continuation`が`Facet::bulk_update(source)`の閉じ括弧後に更新ブロックを要求し、`parse_bulk_update_expr`が専用entryを読む。正本は`docs/site/facet.md`と`lib/facet.srt`の`@doc`。
 
-`parse_match_expr`は`match source { arms }`、`parse_cond_expr`は`cond { clauses }`を読む。各ブロックは通常Exprと同じ文法ではない。
+改修前の`parse_match_expr`は`match source { arms }`、`parse_cond_expr`は`cond { clauses }`を読んでいた。各ブロックの専用文法は改修後も維持する。
 
 ### 確定した構文（2026-10-04の補足）
 
@@ -126,7 +126,7 @@ SR-01・07・10・11について、現行コード・正本・既存テストを
 
 `{ ... }`は専用ブロックの内容を省略した表記である。一般ブロックの第一級値化や空ブロックの受理を意味しない。named argument、末尾カンマ、ブロック内区切り、パイプ注入の規則は今回の構文追加を理由に変更しない。
 
-一つの正規形に限定して外置き形式を拒否する従来の提案は撤回する。現行の`Facet::bulk_update`という修飾表記の存廃は、上記の括弧の規則と分ける。今回の補足は、その表記の削除を指定していない。
+一つの正規形に限定して外置き形式を拒否する従来の提案は撤回する。現行の`Facet::bulk_update(source) { ... }`も維持する。元の監査で確認対象だった外側calleeの扱いは、専用構文の契約として維持する。通常の関数値の解決は追加せず、生成した各Facet呼出しを通常どおり解決・型検査する。必須ブロックの欠落や生成呼出しの失敗を別経路で救済しない。
 
 ### 受入条件とテスト
 
@@ -139,7 +139,7 @@ SR-01・07・10・11について、現行コード・正本・既存テストを
 
 既存Spireテスト`test_facet_bulk_update_special_form_parses`、`test_facet_bulk_update_rejects_commas_between_entries`、`test_facet_bulk_update_rejects_non_whitelisted_leaf_call`を基点にする。runtimeの更新順序をparserテストへ重複させず、既存Facet実行テストで確認する。
 
-構文・予約範囲を変えるためlevel4。括弧の形式は確定済みであり、実装時はこの受入条件に沿って正本とparserを更新する。本項目の処理系への実装はまだ行っていない。
+構文・予約範囲を変えるためlevel4。括弧の形式は確定済みであり、実装時はこの受入条件に沿って正本とparserを更新する。本項目は実装済み。検証結果は入力文書のSR-10実施記録を参照。
 
 ## 5. SR-11: calleeの一意性と引数役割の遅延
 
@@ -194,4 +194,4 @@ callee identityを確定した後は変更しない。引数役割の決定だ�
 
 SR-01・07・10・11の実装では、変更契約を直接検証する最小テストからTDDで進める。対象Spire / Sigil / Scar、script fixture、必要なREPL境界を確認した後、level4の全体検証として`rtk cargo nextest run --profile ci --workspace`と`rtk proxy cargo run -- test --quiet --all`を実行し、別エージェントによる最終差分レビューを行う。
 
-SR-01の上記確定範囲とSR-09の確認を実施した。SR-07の未確定構文・予約範囲、および今回確定したSR-10の構文追加は未実装。SR-11はcalleeの一意性と引数役割の遅延を区別する方針を記録し、候補表現の変更は仕様確定後に判断する。
+SR-01の上記確定範囲とSR-09の確認を実施した。SR-10の構文追加も実装した。SR-07の未確定構文・予約範囲は未実装。SR-11はcalleeの一意性と引数役割の遅延を区別する方針を記録し、候補表現の変更は仕様確定後に判断する。

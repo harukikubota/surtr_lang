@@ -273,8 +273,11 @@ next2 =? Facet::case_over(Expr.Add, expr, {|pair| Ok(rewrite_pair(pair))})
 
 ## bulk_update
 
-`Facet::bulk_update(source) { ... }` は、1 つの state に対する複数の Facet 更新を
-source order でまとめて書くための special form です。
+`bulk_update(source) { ... }` は、1つの値に対する複数の Facet 更新を記述順にまとめて書くための専用構文です。`bulk_update(source, { ... })` とも書け、意味は同じです。修飾表記 `Facet::bulk_update(source) { ... }` と `Facet::bulk_update(source, { ... })` も使えます。
+
+値の引数には括弧が必要です。`bulk_update source { ... }` は構文エラーになります。`bulk_update` はキーワードであり、同名の宣言や束縛によるシャドーイングはできません。どの書式でも値の引数は一度だけ評価されます。
+
+`Facet::bulk_update` の修飾表記も、通常の関数値の呼出しではなく、この専用構文を指定します。更新ブロックは括弧内でも専用の文法に従います。ブロックを通常の値として渡したり、`bulk_update` 自体を関数値として扱ったりはできません。
 
 - 返り値は常に `Result<S>`
 - block は通常 block ではなく、`match` に近い専用 surface
@@ -303,6 +306,7 @@ updated =? Facet::bulk_update(user) {
 
 `bulk_update` は `Facet::set` / `Facet::over` / `Facet::over_result` の並びへ
 lower される範囲に限定されています。`case_*` も同じ要領で通常の Facet API へ展開されます。
+各更新が返す失敗は `Err` として伝播し、成功値に置き換えません。生成した Facet 呼出しの名前解決・型検査に失敗した場合もコンパイルエラーになります。
 `S -> Result<S>` の whole-state updater を
 混ぜたい場合は、普通の関数として bulk の外で `|>=` 合成します。
 
