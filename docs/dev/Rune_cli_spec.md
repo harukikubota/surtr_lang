@@ -65,7 +65,57 @@
 
 ---
 
-## 6. Testing
+## 6. Test コマンド
+
+`surtr test (<lib-relative-name> | --all) [--test TEXT] [--describe TEXT] [--it TEXT] [--include-xit] [--deny-pending] [--list] [--timings] [--quiet|-q] [--format human|json]`。
+値付き引数は空白・等号の両形式を受理する。各オプションは一度だけ指定でき、`--` 以降は位置引数とする。
+フィルターは大文字小文字を区別する部分一致。種類間は AND、同種の祖先間はいずれか一致とし、名前の結合文字列では比較しない。
+`--list` とフィルターはケース本文だけを抑止する。トップレベルと test/describe の走査は実行する。
+xit は理由付き停止、pend は理由付き未実装項目。理由の空白・空文字列とケース本文中のケース宣言は実行異常とする。
+明示フィルターの全体一致ゼロ、選択された pend に対する `--deny-pending` はポリシー違反とする。
+ケース・スコープ・ファイル・ポリシーの失敗を分離して集計する。JSON は単一文書とし、走査出力を scripts、ケース出力を cases の io に保持する。
+
+### 件数と終了コード
+
+`discovered = selected + filtered`。実行時は `selected = passed + failed + skipped + pending`、
+一覧時は `selected = runnable + skipped + pending`。`executed = passed + failed`。
+human の `total` は discovered と同じ件数を表示する。
+スコープ本文の Err は scope_failures、読み取り・コンパイル・VM 実行異常は script_errors とする。
+VM 異常で実行中ケースが中断した場合だけ、そのケースも Failed に確定する。
+未到達の宣言は discovered に含めない。
+
+policy_errors は拒否された選択 Pending 一件につき一件、明示フィルターの全体一致ゼロで一件。
+走査自体が失敗した場合、一致ゼロの診断は加えない。選択された xit / pend も一致件数に含む。
+失敗・異常・ポリシー違反・usage error があれば終了コード1、それ以外は0。
+all はファイル異常後も次のファイルへ進み、実行異常の起きた VM は再利用しない。
+
+### JSON 文書
+
+トップレベルは command、mode（run/list）、options、scripts、cases、errors、summary、exit_code、duration_ns。
+options は target（all/file）、filters（test/describe/it）、include_xit、deny_pending、quiet、timings、format。
+引数検証未完了の usage error では mode / options は null。
+
+cases は file、case_index（ファイル内の0始まり宣言順）、scopes（kind/name）、name、declaration（it/xit/pend）、
+selected、status、reason、detail、duration_ns、io（stdout/stderr）、diagnostic を持つ。
+status は実行時 passed/failed/skipped/pending/filtered、一覧時 runnable/skipped/pending/filtered。
+存在しない理由・詳細・診断と未計測時間は null。非実行ケースの io も null とする。
+既存の診断情報を渡し、新しい失敗位置は探索しない。
+
+scripts は処理した file、status（completed/aborted）、走査処理の io（stdout/stderr）。
+errors は kind（usage/scope/script/policy）、message、利用可能な diagnostic を保持する。
+quiet の実行結果では failed と拒否された pending の詳細だけを残す。一覧では選択項目をすべて残す。
+summary と errors は省略しない。stdout に走査の生出力・色・human 行を混ぜず、診断を stderr に重複表示しない。
+
+引数解析が失敗しても、一意な有効 `--format json` が共通トークン列にあれば JSON で usage error を出す。
+format の重複・不正・欠落で一意に決められなければ stderr に通常の usage error を出す。
+
+### 時間
+
+引数検証成功後から全ファイルの処理と集計終了までをコマンド時間とし、最終出力を含めない。
+ケースは本文の評価から Result の返却または実行異常までを測り、IO 初期化と結果の表示は含めない。
+Skipped / Pending / Filtered / 一覧のケースは未計測。human は ms、JSON は非負整数の ns。
+
+## 7. Testing
 
 - `Rune` 単体テストでは、実在 file path を与えた dispatch が `run` 経路へ入ることを固定する
 - CLI integration では shebang 付き script を直接実行した結果が `surtr run` と一致することを固定する

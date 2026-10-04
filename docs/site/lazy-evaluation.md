@@ -301,7 +301,7 @@ Errorの保持・受け渡しに関する既存の制約は、Lazyの正規化�
 
 ## `recover_kind`のErrorKind
 
-`Result::recover_kind` の marker は `ErrorKind` です。Lazy 入力ではありません。
+`Result::recover_kind` と `Test::assert_err_kind` の marker は `ErrorKind` です。Lazy 入力ではありません。
 具体的な `deferror` 型名を直接書きます。修飾名も使えます。
 constructor の payload 数にかかわらず、Error の生成や constructor の実行は行いません。
 

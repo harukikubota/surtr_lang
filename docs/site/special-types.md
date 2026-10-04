@@ -35,7 +35,7 @@ Monadの逐次処理には[do式](./do.md)を書いてください。
 利用者の関数で遅延処理を受け取るときは、通常の `(-> T)` を使います。
 詳細は [Lazy evaluation](./lazy-evaluation.md) を参照してください。
 
-`ErrorKind` は `Result::recover_kind` に具体的な `deferror` 型名を渡すためのマーカーです。
+`ErrorKind` は `Result::recover_kind` と `Test::assert_err_kind` に具体的な `deferror` 型名を渡すためのマーカーです。
 修飾名も使え、constructor の payload 数に依存しません。Error の生成や constructor の実行は行いません。
 
 両マーカーとも標準引数専用で、利用者の引数・戻り値・型注釈や通常の変数には使えません。

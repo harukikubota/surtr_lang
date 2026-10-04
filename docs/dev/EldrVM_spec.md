@@ -192,6 +192,21 @@ builtin の内部結果は、完了、継続可能、callback 要求、Future �
 
 ---
 
+### 3.10 Test のケース実行
+
+VM の実行時設定が test / describe / it の名前フィルター、一覧、xit の有効化、時間計測を保持する。
+スコープは Test / Describe の種類と名前を保持し、ケースは It / Xit / Pend の宣言種別、ファイル内の宣言順 index、理由、選択状態を保持する。
+不正な種類・空白だけの理由・実行中ケース内のケース宣言は VM 実行異常とする。理由はフィルター判定前に検証する。
+
+ケース開始処理は選択を判定し、非実行ケースを Filtered / Skipped / Pending / Runnable として記録する。
+実行ケースは一つの active case とし、本文の Ok / Err を Passed / Failed として確定する。
+VM 実行異常で中断した active case も一件の Failed に確定する。スコープの Err は ScopeFailed として別に記録する。
+
+実行するケースの開始時だけ stdout / stderr / stdin を分離し、終了時に走査側のバッファへ戻す。
+非実行ケースは IO を初期化・消費しない。走査出力をケース出力に含めない。
+計測を指定した実行ケースだけ単調時計の経過 ns を保持する。それ以外は未計測とする。
+選択・表示の設定は VM の実行時設定であり、コンパイルキャッシュのキーに加えない。
+
 ## 4. Value モデル
 
 Eldr が扱う値の概念カテゴリ:
@@ -261,6 +276,7 @@ compile / surface 契約との対応は次のとおり。
 - `Error` が surface 上で生存するのは `Err(Error)`、`match` の `Err(err)` で束縛された局所スコープ、標準定義ソース内の `Error` 観測 helper の引数位置に限る
 - `Result::map_err` / `Result::cause` / `assert` / `ensure` は、この既存 `Error` 値を forward してよい
 - `Result::recover_kind` の marker は標準引数専用の `ErrorKind` とし、具体的な `deferror` 型名だけを受ける。Sigil は修飾名を含む canonical 型 identity を確定し、Forge はその `fq_name` を静的 metadata から hidden builtin `__recover_kind` へ渡す。Eldr は内部 ABI の kind 文字列を照合して handler を呼び出す。marker は Error の生成や constructor 呼び出しを行わず、利用者が任意の文字列を渡せる surface は提供しない。
+- `Test::assert_err_kind(marker, result)` も同じ ErrorKind の宣言 identity 解決・検証を使う。Err の kind が一致すれば `Ok(())`、Ok または異種の Err なら `TestAssertionFailed`。payload や表示文字列は比較しない。marker を一般の値として束縛・転送する能力は追加しない。
 - Lazyの正規化とeager入力の評価順は[Lazy spec](Lazy_spec.md)に従う。VMへLazy markerは渡さず、確定した分岐と通常call命令を実行する。branchをruntime callableとして表す場合も呼び出しは一回とし、戻り値がcallableでも追加で実行しない。
 
 - parallel error は持たない
@@ -438,6 +454,9 @@ Opcode は以下のカテゴリを持つ。
 - `Float` は finite-only の `f64` ラッパーとして扱う
 - VM は `LoadConst`, float arithmetic opcode, float builtin helper, `safe_div`, JSON bridge の各経路で non-finite value を user-visible `Float` として生成しない
 - `Float` helper surface では `abs`, `min`, `max`, `floor`, `ceil`, `round`, `trunc`, `pi`, `e` を提供する
+
+`__test_approx_equal` は有限 Float の絶対誤差比較を行う。差の overflow は False とし、非有限値を Surtr の値として返さない。
+`Test::assert_approx` が比較結果と負の許容誤差を `TestAssertionFailed` に変換する。
 
 ### 7.1 Json builtins
 
