@@ -51,7 +51,7 @@ depthは型の先頭に連続する0引数関数の段数である。引数付�
 正規化後の共通型が`(-> R)`なら、選択branchを一回呼び、callの戻り値を`R`とする。
 `R`がさらに関数型でも追加で呼ばない。浅い側を一段wrapした場合は、その一回のconsumeで元の値を返す。
 単branchの`if_then`と、bindingを作らない`if_let_then`の成功branchは`(-> Unit)`を要求する。bindingを作る成功branchはDirectExpressionとして`Unit`を要求する。
-`assert`・`ensure`・`Result::map_err`・`Result::cause`のerrorは`(-> Error)`を要求する。
+`require`・`ensure`・`Result::map_err`・`Result::cause`のerrorは`(-> Error)`を要求する。
 `and`・`or`の右辺は`(-> Boolean)`を要求し、それぞれ左辺が`True`・`False`のときだけ実行する。
 個別の条件とError受け渡し制約は標準APIの契約に従う。
 

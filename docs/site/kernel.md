@@ -9,7 +9,7 @@ cross-cutting builtin と special form の説明は `../../lib/kernel.srt` が�
 - `inspect`
 - `if`
 - `if_then`
-- `assert`
+- `require`
 - `ensure`
 - `and`
 - `or`

@@ -22,8 +22,8 @@ import Math::add
 
 - autoimportは各ファイルの先頭で対象モジュールを全件importするため、導入済みモジュールの明示importは全件・単一・リストともcompile error
 - 同一 file での重複 import は compile error
-- 別モジュールからの明示 import は同名の auto-import surface を shadow できる
-- 明示 import 同士、または auto-import 同士の unqualified 名衝突は compile error
+- 関数の取り込みでは autoimport と明示 import を同等に扱い、両者の組み合わせを含め、取り込む名前の衝突は compile error
+- 全件取り込みした通常関数は、内側のスコープの定義・束縛で shadow できる。SpecialForm などの既存の禁止対象は除く
 - `Type::new` のように import 対象外の宣言がある
 - `import` は file declaration area に加えて `defmod` / `impl Type` / `impl Trait for Type` body に書ける
 - `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない

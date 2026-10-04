@@ -11,7 +11,7 @@ Surtr の標準定義ソースは language surface の一部です。
   - `import` / `include` の canonical anchor
   - 起動時に最初に読まれる固定ステージ
 - `Kernel`
-  - `print`, `inspect`, `if`, `assert`, `ensure` などの cross-cutting API
+  - `print`, `inspect`, `if`, `require`, `ensure` などの cross-cutting API
   - auto import される最小の標準 API
 - trait modules
   - capability: `Show`, `Compare`, `Convert`, `TryConvert`, `MonadT`

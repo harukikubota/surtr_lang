@@ -16,7 +16,7 @@ operation()?
 - `expr;` はその式を `Unit` として扱う
 - `;` は改行区切りと同様に扱われ、同じ行で次の式を書ける
 - `=` と `=?` 自体の結果型も `Unit`
-- 文末の `?` は独立した文の式全体に付ける。canonical `Result` の成功型をたどった終端が Unit のときだけ使え、成功値を捨てて外側一段の Err を SafeBind と同じ返却先へ伝播する
+- 文末の `?` は独立した文の式全体に付ける。canonical `Result` の成功型をたどった終端が Unit のときだけ使え、成功値を捨てて外側一段の Err を SafeBind と同じ返却先へ伝播する。文自体の型は Unit なので、Result が必要な戻り値位置に置くと通常の型不一致になる
 - 文末の `?` は式の一部に組み込めず、成功時の型は Unit。詳しくは[エラーハンドリング](./error-handling.md)を参照
 - `Unit` を返す closure が期待される場所では、最後の式に `;` を付ければよい
 
@@ -601,7 +601,7 @@ private field と property access を含む構造体全体の契約は `./struct
 |---|---|
 | `if` | `(Boolean, (-> $A), (-> $A)) -> $A` |
 | `if_then` | `(Boolean, (-> Unit)) -> Unit` |
-| `assert` | `(Boolean, Error) -> Result<Unit>` |
+| `require` | `(Boolean, Lazy<Error>) -> Result<Unit>` |
 | `ensure` | `($A, ($A -> Boolean), Error) -> Result<$A>` |
 | `and` | `(Boolean, Boolean) -> Boolean` |
 | `or` | `(Boolean, Boolean) -> Boolean` |
@@ -690,8 +690,9 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 - `Struct` 名や `new` のように import 不可の宣言もある
 - `import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書ける
 - `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
-- 別モジュールからの明示 import は同名の auto-import surface を shadow できる。auto import済みのモジュール自体を再importすることはできない
-- 明示 import 同士、または auto-import 同士が同じ unqualified 名を導入する場合は compile error
+- auto import 済みのモジュールを再 import することはできない
+- 明示 import と auto-import の組み合わせを含め、取り込み同士が同じ unqualified 関数名を導入する場合は compile error
+- 全件取り込み後の通常関数名は内側のスコープの定義・束縛で shadow できる。SpecialForm などの既存禁止対象は除く
 
 ### user namespace
 

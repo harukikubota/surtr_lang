@@ -246,17 +246,17 @@ on_match({|| print("matched")}) # matched
 
 bindingを作るPatternの成功branchは、`if_let`と同じく成功scopeに直接書く式です。
 
-### `assert`
+### `require`
 
 flagが `False` の場合だけerrorを実行して `Err` を返します。`True` なら `Ok(())` を返します。
 errorのプレースホルダの正規化型は `(-> Error)` です。
-ただし、`&assert(&1, &2)` が要求する `(Boolean, (-> Error) -> Result<Unit>)` は、Errorを通常の関数引数へ公開します。
+ただし、`&require(&1, &2)` が要求する `(Boolean, (-> Error) -> Result<Unit>)` は、Errorを通常の関数引数へ公開します。
 既存のError制約により、この生成関数を通常の関数値として呼び出したり受け渡したりすることはできません。
 キャプチャではerror式を固定してください。
 
 ```surtr
-assert(True, NoneError) # Ok(())
-check = &assert(&1, NoneError())
+require(True, NoneError) # Ok(())
+check = &require(&1, NoneError())
 # (Boolean -> Result<Unit>)
 check(True) # Ok(())
 ```

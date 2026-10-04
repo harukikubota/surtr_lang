@@ -41,7 +41,7 @@ concrete error は、最初の標準ステージから使えるようここに�
 
 ### `Kernel`
 
-- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `print`, `inspect`, `eprint`, `set_exit_code` のような共通の builtin を置く
+- `defmod Kernel` の中に `if`, `if_then`, `require`, `ensure`, `and`, `or`, `print`, `inspect`, `eprint`, `set_exit_code` のような共通の builtin を置く
 - auto import される最小の標準 API を置く
 
 primitive type に強く結びつかない builtin は、ここへ集めます。
@@ -246,7 +246,7 @@ impl String {
 
 - cross-cutting runtime builtin value を足すときは `kernel.srt` の `defmod Kernel` と shared builtin metadata の両方を更新する
 - 数値 helper surface を増やすときは対象 type owner (`int.srt` / `float.srt`) と shared builtin metadata / Forge lowering を同時に更新する
-- `if` / `assert` / `and` / `eq` のような compiler-handled helper を足すときは `kernel.srt` と resolver/checker の canonical contract を同時に更新する
+- `if` / `require` / `and` / `eq` のような compiler-handled helper を足すときは `kernel.srt` と resolver/checker の canonical contract を同時に更新する
 - builtin type を変えるときは、対応する `lib/*.srt` の `@builtin type` と compiler 側の canonical contract を同時に更新する
 - `Result` constructor contract を変えるときは `result.srt` の `Ok` / `Err` 宣言と checker 側の canonical rule を同時に更新する
 - module API を足すときは `defmod Name` に実装し、まず `@doc` を先に書く
