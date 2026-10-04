@@ -6,6 +6,18 @@
 
 **実測**、**既存テストの期待値**、**静的読解**を区別する。各項目の「確定した修正方針」「確定した扱い」が今回の判断である。SD-06 の実装案と SD-10 の LSP 詳細は、確定した言語仕様ではなく検討事項を含む。
 
+## 実施状況（2026-10-04）
+
+修正基準: `c71f510c`。以下の完了記録を除き、各項目の観測例は修正前の記録である。テストは現在の `lib/tests/` 配置を使う。
+
+| 項目 | 状況 |
+|---|---|
+| SD-03 | 実装・対象テスト完了（level1）。全体検証は他項目の統合後に記録する |
+| SD-04・07・09・11 | 実施中 |
+| SD-05・08 | 確定方針どおり現行仕様を維持 |
+| SD-06 | 簡素化案のまま保留 |
+| SD-10 | 別ドラフトの未確定事項として維持 |
+
 ## SD-03 `StyledDoc::indent` が負の幅の Error を空 prefix に変える
 
 - 性質: 公開入力で可達の成功フォールバック。確度: 実測。
@@ -38,6 +50,12 @@ StyledDoc::indent(StyledDoc::text("one\n\ntwo"), 2)
 ```
 
 `lib/styled_doc.srt` の宣言・実装・`@doc`、呼出し側、`lib/tests/styled_doc.srt` を整合させる。負数・0・正数と空行の境界を検証する。冒頭の実測例は変更前の記録であり、変更後は `indent` の Result を処理してから `plain` に渡す。
+
+### 実施記録（2026-10-04）
+
+`indent` を `Result<StyledDocDoc, NegativeRepeatCount>` に変更し、`String::repeat` の Error をそのまま返す。空 prefix に置換する `_spaces` は削除した。`@doc` と呼出し側は Result を処理する形へ更新した。
+
+`lib/tests/basic_types/styled_doc.srt` で負幅、0、正幅、空行、空文書を検証した。変更前は Result として扱えず `MissingTypeConstructorCapability: StyledDocDoc must implement Monad` で失敗し、修正後の `target/debug/surtr test --quiet lib/tests/basic_types/styled_doc.srt` は exit 0。対象バイナリは `cargo run` で標準定義更新後に再ビルドした。
 
 ## SD-04 `HashMap::map_values` が内部 lookup 失敗を欠落キーへ変える
 
