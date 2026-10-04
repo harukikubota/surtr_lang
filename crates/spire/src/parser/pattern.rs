@@ -421,14 +421,8 @@ impl Parser<'_> {
                 let value = s.into_static(sp.clone())?;
                 Ok(AstPattern::StrLit(sp, value))
             }
-            Token::True => {
-                self.advance();
-                Ok(AstPattern::BoolLit(sp, true))
-            }
-            Token::False => {
-                self.advance();
-                Ok(AstPattern::BoolLit(sp, false))
-            }
+            Token::True => self.parse_named_pattern_atom("True".into(), sp),
+            Token::False => self.parse_named_pattern_atom("False".into(), sp),
             Token::Ident(name) => self.parse_named_pattern_atom(name, sp),
             Token::ReservedCallName(kind) => self.parse_named_pattern_atom(kind.name().to_string(), sp),
             Token::LBrack => self.parse_list_bind_pattern(),
@@ -552,7 +546,17 @@ impl Parser<'_> {
             segments.push(seg);
         }
 
-        let callee_name = segments.join("::");
+        let source_name = segments.join("::");
+        let callee_name =
+            if let Some(meta) = sindr::names::special_enum_variant_surface_meta(&source_name) {
+                debug_assert_eq!(
+                    meta.identity(),
+                    sindr::names::TypeIdentity::SpecialEnumVariant
+                );
+                meta.qualified_name.to_string()
+            } else {
+                source_name
+            };
         if matches!(self.peek(), Token::LParen) {
             return self.with_parse_nesting(sp.clone(), |parser| {
                 parser.advance();

@@ -71,10 +71,7 @@ impl SigilSession {
             scope: initialize_scope(),
             declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
-            declaration_uid_kinds: HashMap::from([
-                (0, DeclarationKind::ResultCtor),
-                (1, DeclarationKind::ResultCtor),
-            ]),
+            declaration_uid_kinds: HashMap::new(),
             declaration_hidden_by_uid: HashMap::new(),
             trait_constructor_slots: HashMap::new(),
             owner_registry: OwnerRegistry::default(),

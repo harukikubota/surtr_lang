@@ -3799,6 +3799,7 @@ impl Checker {
         let profile = self.profiler.start();
         let mut fresh = HashMap::new();
         let instantiated = crate::env::EnumVariantInfo {
+            special_variant: variant.special_variant,
             constructor_name: variant.constructor_name.clone(),
             short_name: variant.short_name.clone(),
             enum_name: variant.enum_name.clone(),

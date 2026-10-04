@@ -53,6 +53,7 @@ impl ReservedCallName {
 pub fn is_reserved_value_name(name: &str) -> bool {
     ReservedCallName::from_name(name).is_some()
         || crate::pattern::PatternConsumer::from_name(name).is_some()
+        || special_enum_variant_alias_meta(name).is_some()
 }
 
 /// Internal canonical namespace used for implicit top-level definitions.
@@ -197,6 +198,85 @@ pub enum TypeIdentity {
     Sig,
     Const,
     Trait,
+    /// Parser classification of a canonical compiler-managed Enum variant.
+    /// The owner retains its ordinary Enum / type-constructor identity.
+    SpecialEnumVariant,
+}
+
+/// Runtime lowering associated with an ordinary canonical Enum variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpecialEnumVariantLowering {
+    ResultOk,
+    ResultErr,
+    Boolean(bool),
+}
+
+/// Canonical special variant contract. Bare aliases refer to this declaration;
+/// they never declare an additional constructor, symbol, or runtime tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpecialEnumVariantMeta {
+    pub owner: &'static str,
+    pub qualified_name: &'static str,
+    pub bare_alias: &'static str,
+    pub payload_arity: usize,
+    pub lowering: SpecialEnumVariantLowering,
+}
+
+impl SpecialEnumVariantMeta {
+    pub const fn identity(self) -> TypeIdentity {
+        TypeIdentity::SpecialEnumVariant
+    }
+}
+
+pub const SPECIAL_ENUM_VARIANT_METAS: &[SpecialEnumVariantMeta] = &[
+    SpecialEnumVariantMeta {
+        owner: "Result",
+        qualified_name: "Result::Ok",
+        bare_alias: "Ok",
+        payload_arity: 1,
+        lowering: SpecialEnumVariantLowering::ResultOk,
+    },
+    SpecialEnumVariantMeta {
+        owner: "Result",
+        qualified_name: "Result::Err",
+        bare_alias: "Err",
+        payload_arity: 1,
+        lowering: SpecialEnumVariantLowering::ResultErr,
+    },
+    SpecialEnumVariantMeta {
+        owner: "Boolean",
+        qualified_name: "Boolean::True",
+        bare_alias: "True",
+        payload_arity: 0,
+        lowering: SpecialEnumVariantLowering::Boolean(true),
+    },
+    SpecialEnumVariantMeta {
+        owner: "Boolean",
+        qualified_name: "Boolean::False",
+        bare_alias: "False",
+        payload_arity: 0,
+        lowering: SpecialEnumVariantLowering::Boolean(false),
+    },
+];
+
+/// Lookup only a canonical declaration; unrelated owners sharing a variant tail
+/// must never acquire special lowering or constraints.
+pub fn special_enum_variant_meta(name: &str) -> Option<&'static SpecialEnumVariantMeta> {
+    let name = surface_path_name(name);
+    SPECIAL_ENUM_VARIANT_METAS
+        .iter()
+        .find(|meta| meta.qualified_name == name)
+}
+
+pub fn special_enum_variant_alias_meta(name: &str) -> Option<&'static SpecialEnumVariantMeta> {
+    SPECIAL_ENUM_VARIANT_METAS
+        .iter()
+        .find(|meta| meta.bare_alias == name)
+}
+
+/// Syntax classification before normalization to an ordinary Enum reference.
+pub fn special_enum_variant_surface_meta(name: &str) -> Option<&'static SpecialEnumVariantMeta> {
+    special_enum_variant_meta(name).or_else(|| special_enum_variant_alias_meta(name))
 }
 
 /// Compile-space root kind used when a symbol can serve as a Facet path root.
@@ -328,9 +408,7 @@ impl ReservedOwnerSurfaceNameKind {
     pub const fn diagnostic_suffix(self) -> &'static str {
         match self {
             Self::CanonicalBuiltinType => "reserved by a canonical builtin type declaration",
-            Self::BuiltinSpecialEnumVariantAlias => {
-                "reserved for builtin-special enum variant sugar"
-            }
+            Self::BuiltinSpecialEnumVariantAlias => "reserved for canonical enum variant aliases",
         }
     }
 }
@@ -736,32 +814,11 @@ pub fn reserved_owner_surface_name_constraint(
     name: &str,
 ) -> Option<ReservedOwnerSurfaceNameConstraint> {
     let surface_name = owner_surface_tail(name);
-    match surface_name {
-        "Ok" => {
-            return Some(ReservedOwnerSurfaceNameConstraint {
-                surface_name: "Ok",
-                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
-            });
-        }
-        "Err" => {
-            return Some(ReservedOwnerSurfaceNameConstraint {
-                surface_name: "Err",
-                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
-            });
-        }
-        "True" => {
-            return Some(ReservedOwnerSurfaceNameConstraint {
-                surface_name: "True",
-                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
-            });
-        }
-        "False" => {
-            return Some(ReservedOwnerSurfaceNameConstraint {
-                surface_name: "False",
-                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
-            });
-        }
-        _ => {}
+    if let Some(meta) = special_enum_variant_alias_meta(surface_name) {
+        return Some(ReservedOwnerSurfaceNameConstraint {
+            surface_name: meta.bare_alias,
+            kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+        });
     }
 
     let type_name = builtin_type_name(surface_name)?;
@@ -845,6 +902,61 @@ pub fn builtin_symbol_identity_info(name: &str) -> Option<SymbolIdentityInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn special_enum_registry_classifies_only_canonical_variants_and_bare_aliases() {
+        for meta in SPECIAL_ENUM_VARIANT_METAS {
+            assert_eq!(meta.identity(), TypeIdentity::SpecialEnumVariant);
+            assert_eq!(special_enum_variant_meta(meta.qualified_name), Some(meta));
+            assert_eq!(special_enum_variant_alias_meta(meta.bare_alias), Some(meta));
+            assert_eq!(
+                special_enum_variant_surface_meta(meta.bare_alias),
+                Some(meta)
+            );
+            assert_eq!(
+                special_enum_variant_meta(&format!("Global::{}", meta.qualified_name)),
+                Some(meta)
+            );
+            assert!(is_reserved_value_name(meta.bare_alias));
+            assert_eq!(special_enum_variant_meta(meta.bare_alias), None);
+        }
+        for name in [
+            "Other::Ok",
+            "Other::Err",
+            "MatchResult::Ok",
+            "MatchResult::Err",
+            "Other::True",
+            "Nested::Result::Ok",
+        ] {
+            assert_eq!(special_enum_variant_surface_meta(name), None);
+            assert!(!is_reserved_value_name(name));
+        }
+        assert_eq!(SPECIAL_ENUM_VARIANT_METAS.len(), 4);
+        assert_eq!(
+            special_enum_variant_meta("Result::Ok")
+                .unwrap()
+                .payload_arity,
+            1
+        );
+        assert_eq!(
+            special_enum_variant_meta("Boolean::False")
+                .unwrap()
+                .payload_arity,
+            0
+        );
+        assert_eq!(
+            special_enum_variant_meta("Boolean::True").unwrap().lowering,
+            SpecialEnumVariantLowering::Boolean(true)
+        );
+        assert_eq!(
+            builtin_symbol_identity_info("Result").unwrap().identity,
+            TypeIdentity::TypeConstructor
+        );
+        assert_eq!(
+            builtin_symbol_identity_info("Boolean").unwrap().identity,
+            TypeIdentity::Enum
+        );
+    }
 
     #[test]
     fn match_result_is_reserved_without_general_value_capabilities() {

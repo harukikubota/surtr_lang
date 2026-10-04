@@ -889,9 +889,9 @@ impl ReplEngine {
         let vm = session::bytecode_interactive_vm(bytecode);
 
         // Populate completion symbols from the pre-loaded function table.
-        let mut symbols: BTreeSet<String> = ["Ok", "Err"]
-            .into_iter()
-            .map(str::to_string)
+        let mut symbols: BTreeSet<String> = sindr::names::SPECIAL_ENUM_VARIANT_METAS
+            .iter()
+            .map(|meta| meta.bare_alias.to_string())
             .chain(
                 builtin_function_metas()
                     .iter()
@@ -1584,11 +1584,7 @@ impl ReplEngine {
                     || self
                         .completion_symbol_declaration(symbol)
                         .is_some_and(|decl| {
-                            matches!(
-                                decl.kind,
-                                sigil::DeclarationKind::EnumVariant
-                                    | sigil::DeclarationKind::ResultCtor
-                            )
+                            matches!(decl.kind, sigil::DeclarationKind::EnumVariant)
                         })
             })
             .collect::<Vec<_>>();
@@ -1732,12 +1728,9 @@ impl ReplEngine {
     fn enrich_compile_symbol_details(&self, symbols: &mut [surtr_analysis::CompletionSymbol]) {
         for symbol in symbols {
             if let Some(decl) = self.completion_symbol_declaration(symbol) {
-                if matches!(
-                    decl.kind,
-                    sigil::DeclarationKind::EnumVariant | sigil::DeclarationKind::ResultCtor
-                ) {
+                if matches!(decl.kind, sigil::DeclarationKind::EnumVariant) {
                     symbol.kind = surtr_analysis::CompletionKind::FunctionCall;
-                    if let Some(signature) = Self::special_variant_completion_detail(decl) {
+                    if let Some(signature) = self.declaration_signature(decl) {
                         symbol.detail = Some(signature);
                     } else if let Some(signature) = symbol.detail.take() {
                         symbol.detail = Some(Self::render_signature_with_qualified_name(
@@ -1782,16 +1775,6 @@ impl ReplEngine {
         });
     }
 
-    fn special_variant_completion_detail(entry: &sigil::DeclarationEntry) -> Option<String> {
-        match crate::surface_path_name(&entry.fq_name) {
-            "Result::Ok" => Some("Result::Ok($T) -> Result<$T>".to_string()),
-            "Result::Err" => Some("Result::Err(Error) -> Result<$T>".to_string()),
-            "Boolean::True" => Some("Boolean::True() -> Boolean".to_string()),
-            "Boolean::False" => Some("Boolean::False() -> Boolean".to_string()),
-            _ => None,
-        }
-    }
-
     fn completion_symbol_declaration<'a>(
         &'a self,
         symbol: &surtr_analysis::CompletionSymbol,
@@ -1809,6 +1792,9 @@ impl ReplEngine {
         symbol: &surtr_analysis::CompletionSymbol,
     ) -> surtr_analysis::SymbolSemanticInfo {
         let mut info = surtr_analysis::SymbolSemanticInfo::from_completion_symbol(symbol);
+        if let Some(declaration) = self.completion_symbol_declaration(symbol) {
+            info.canonical_name = declaration.fq_name.clone();
+        }
         if info.identity.is_none() {
             info.identity = self
                 .completion_symbol_declaration(symbol)
@@ -4249,6 +4235,9 @@ impl ReplEngine {
     ) -> Option<(String, String)> {
         if decl.kind != sigil::DeclarationKind::EnumVariant {
             return None;
+        }
+        if let Some(signature) = self.find_signature(&decl.fq_name) {
+            return Some(signature);
         }
         let (owner, _) = decl.fq_name.rsplit_once("::")?;
         let variant = self
@@ -8744,9 +8733,9 @@ fn compile_repl_preload_from_module_stages(
         }
     };
 
-    let mut symbols: BTreeSet<String> = ["Ok", "Err"]
-        .into_iter()
-        .map(str::to_string)
+    let mut symbols: BTreeSet<String> = sindr::names::SPECIAL_ENUM_VARIANT_METAS
+        .iter()
+        .map(|meta| meta.bare_alias.to_string())
         .chain(
             builtin_function_metas()
                 .iter()
@@ -8950,7 +8939,6 @@ fn is_preload_declaration(stmt: &Ast) -> bool {
             | Ast::IntrinsicDecl(..)
             | Ast::BuiltinExtractorDecl(..)
             | Ast::BuiltinTypeDecl(..)
-            | Ast::ResultCtorDecl(..)
     )
 }
 
@@ -9010,7 +8998,6 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::BuiltinExtractorDecl(span, _, _, _, _)
         | Ast::BuiltinTypeDecl(span, _, _)
         | Ast::TypeAlias(span, _, _, _)
-        | Ast::ResultCtorDecl(span, _, _, _, _)
         | Ast::Defmod(span, _, _, _)
         | Ast::Defagent(span, _, _, _, _)
         | Ast::Defgenserver(span, _, _, _, _)

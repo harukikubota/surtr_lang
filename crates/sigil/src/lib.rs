@@ -5,9 +5,9 @@ pub mod scope;
 pub mod semantic_metadata;
 
 pub use resolver::{
-    build_scope_for_module, collect_resolved_closure_captures, const_only_fallback_module_path,
-    declaration_stage_ordering, declaration_symbol_identity_info, declaration_uid_order,
-    effective_auto_import_entries, effective_visible_entries,
+    build_scope_for_module, collect_resolved_closure_captures, compiler_builtin_bindings,
+    const_only_fallback_module_path, declaration_stage_ordering, declaration_symbol_identity_info,
+    declaration_uid_order, effective_auto_import_entries, effective_visible_entries,
     extract_process_modules_from_user_ast, lower_module_source_ast, lowered_module_is_impl_owner,
     precollect_declaration_index, precollect_declarations, precollect_owner_registry, resolve,
     resolve_staged_program, resolve_staged_program_from_state,

@@ -338,7 +338,6 @@ impl Resolver {
             | Ast::BuiltinExtractorDecl(..)
             | Ast::BuiltinTypeDecl(..)
             | Ast::TypeAlias(..)
-            | Ast::ResultCtorDecl(..)
             | Ast::Defmod(..)
             | Ast::Defagent(..)
             | Ast::Defgenserver(..)

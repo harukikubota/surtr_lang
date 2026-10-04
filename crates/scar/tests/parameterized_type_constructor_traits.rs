@@ -1,9 +1,12 @@
+#[path = "support/special_enum_declarations.rs"]
+mod special_enum_declarations;
+
 use diagnostics::TypeDiagnosticReason;
 use scar::typed::{TypedInner, TypedPattern};
 use sigil::resolved::Resolved;
 
 fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
-    let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+    let ast = special_enum_declarations::parse_with_canonical_special_enums(source)
         .expect("source should parse without the standard prelude");
     sigil::resolve(ast).expect("source should resolve without the standard prelude")
 }

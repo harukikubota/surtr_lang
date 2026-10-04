@@ -812,6 +812,33 @@ fn collect_source_location_symbols(
         if let Some(symbol) = source_location_symbol_for_ast(node, owner, path) {
             let nested_owner = nested_owner_for_ast(node, owner);
             out.push(symbol);
+            if let Ast::EnumDef(_, name, _, variants, attrs) = node {
+                let enum_name = qualify_symbol(owner, name);
+                for variant in variants {
+                    let qualified_name = format!("{enum_name}::{}", variant.name);
+                    let symbol = source_location_symbol(
+                        qualified_name.clone(),
+                        CompletionKind::TypeConstructor,
+                        &variant.span,
+                        path,
+                        None,
+                    );
+                    out.push(symbol.clone());
+                    if attrs.builtin {
+                        if let Some(meta) = sindr::names::special_enum_variant_meta(&qualified_name)
+                        {
+                            let mut alias = symbol;
+                            alias.label = meta.bare_alias.to_string();
+                            alias.replacement = alias.label.clone();
+                            alias.origin = Some(crate::CompletionOrigin::Metadata {
+                                qualified_name,
+                                module_path: enum_name.clone(),
+                            });
+                            out.push(alias);
+                        }
+                    }
+                }
+            }
             if let Some((body, owner_name)) = module_body_for_ast(node).zip(nested_owner.as_deref())
             {
                 collect_source_location_symbols(body, Some(owner_name), path, out);
@@ -874,7 +901,17 @@ fn source_location_symbol_for_ast(
         _ => return None,
     };
 
-    Some(CompletionSymbol {
+    Some(source_location_symbol(name, kind, span, path, capabilities))
+}
+
+fn source_location_symbol(
+    name: String,
+    kind: CompletionKind,
+    span: &Span,
+    path: &Path,
+    capabilities: Option<sindr::names::SymbolCapabilities>,
+) -> CompletionSymbol {
+    CompletionSymbol {
         replacement: name.clone(),
         label: name,
         kind,
@@ -888,7 +925,7 @@ fn source_location_symbol_for_ast(
             end: span.end,
         }),
         capabilities,
-    })
+    }
 }
 
 fn hover_contents(detail: Option<&str>, documentation: Option<&str>) -> Option<String> {
@@ -1625,6 +1662,81 @@ fn _text_position_for_byte(line_index: &LineIndex, byte_offset: usize) -> TextPo
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_enum_variant_source_locations_link_aliases_to_the_same_declaration() {
+        let source = "@builtin defenum Result<$T> { Ok($T), Err(Error) }\n@builtin defenum Boolean { True, False }";
+        let ast = spire::parse_with_context(
+            source,
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .unwrap();
+        let path = PathBuf::from("/repo/std/types.srt");
+        let index = semantic_index_with_source_locations(&SemanticIndex::default(), &path, &ast);
+        for meta in sindr::names::SPECIAL_ENUM_VARIANT_METAS {
+            let canonical = index
+                .find_symbol(meta.qualified_name)
+                .expect("variant declaration location");
+            let alias = index
+                .find_symbol(meta.bare_alias)
+                .expect("canonical alias location");
+            assert_eq!(canonical.definition, alias.definition);
+            let location = canonical.definition.as_ref().unwrap();
+            assert_eq!(location.path, path);
+            assert!(source[location.start..location.end].starts_with(meta.bare_alias));
+            let alias_info = index
+                .symbol_semantic_infos()
+                .iter()
+                .find(|info| info.surface_name == meta.bare_alias)
+                .unwrap();
+            assert_eq!(alias_info.canonical_name, meta.qualified_name);
+        }
+        let mut service = AnalysisService::new();
+        service.update_document(path.clone(), Some(1), source.into());
+        service.set_semantic_index(index);
+        let query_path = PathBuf::from("/repo/main.srt");
+        let queries = sindr::names::SPECIAL_ENUM_VARIANT_METAS
+            .iter()
+            .flat_map(|meta| [meta.bare_alias, meta.qualified_name])
+            .collect::<Vec<_>>();
+        service.update_document(query_path.clone(), Some(1), queries.join("\n"));
+        let context = resolve_context(AnalysisContextRequest {
+            workspace_root: PathBuf::from("/repo"),
+            active_file: query_path.clone(),
+            selected_context: Some(SelectedContext::ScriptEntry(query_path)),
+            runner_selection: None,
+            open_documents: service.document_store().open_document_versions(),
+        });
+        let snapshot = service.analyze(context);
+        for (index, pair) in queries.chunks_exact(2).enumerate() {
+            let definition = |offset| {
+                service.definition(
+                    &snapshot,
+                    Utf16Position {
+                        line: (index * 2 + offset) as u32,
+                        character: 1,
+                    },
+                )
+            };
+            let alias = definition(0);
+            let canonical = definition(1);
+            assert_eq!(alias.len(), 1, "{} has a declaration", pair[0]);
+            assert_eq!(alias, canonical, "{} / {}", pair[0], pair[1]);
+            assert_eq!(alias[0].path, path);
+        }
+        let other_ast = spire::parse("defenum Other { Ok(Int), Err(Int), True, False }").unwrap();
+        let other =
+            semantic_index_with_source_locations(&SemanticIndex::default(), &path, &other_ast);
+        assert!(other.find_symbol("Other::Ok").unwrap().definition.is_some());
+        for meta in sindr::names::SPECIAL_ENUM_VARIANT_METAS {
+            assert!(!other
+                .symbol_semantic_infos()
+                .iter()
+                .any(|info| info.surface_name == meta.bare_alias));
+        }
+    }
+
     #[test]
     fn lower_module_ast_hoists_impl_local_imports_like_xldr() {
         let ast = spire::parse_with_context(

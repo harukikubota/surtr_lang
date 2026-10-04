@@ -99,6 +99,7 @@ pub enum TypeDefState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumVariantInfo {
+    pub special_variant: Option<sindr::names::SpecialEnumVariantLowering>,
     pub constructor_name: Symbol,
     pub short_name: Symbol,
     pub enum_name: Symbol,

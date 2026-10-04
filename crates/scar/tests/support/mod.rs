@@ -107,7 +107,6 @@ fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil
         .collect::<Vec<_>>();
     let mut lowered = Vec::new();
     let mut shared_global_defs = Vec::new();
-    let mut shared_result_ctor_contracts = Vec::new();
 
     fn partition_nested_imports(body: Vec<Ast>) -> (Vec<Ast>, Vec<Ast>) {
         let mut imports = Vec::new();
@@ -120,30 +119,6 @@ fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil
             }
         }
         (imports, rest)
-    }
-
-    fn first_non_import_index(ast: &[Ast]) -> usize {
-        ast.iter()
-            .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
-            .count()
-    }
-
-    fn surface_module_name(name: &str) -> &str {
-        name.strip_prefix("Global::").unwrap_or(name)
-    }
-
-    fn find_result_owner_module(lowered: &[sigil::StagedModuleAst]) -> Option<usize> {
-        lowered.iter().position(|module| {
-            surface_module_name(&module.module_path) == "Result"
-                && matches!(
-                    module
-                        .ast
-                        .iter()
-                        .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-                    Some(Ast::ImplDef(_, target, _, _, _))
-                        if surface_module_name(target) == "Result"
-                )
-        })
     }
 
     for stmt in ast {
@@ -260,36 +235,7 @@ fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil
                 });
             }
             Ast::Import(_, _, _) => {}
-            Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
             other => shared_global_defs.push(other),
-        }
-    }
-
-    // Match the real xldr lowering strategy used by integration tests:
-    // keep normal top-level std declarations in the global declaration
-    // layer, but attach `Result` constructor contracts to the sole `defmod`
-    // when present so Scar sees `Result::Ok` / `Result::Err`.
-    if !shared_result_ctor_contracts.is_empty() {
-        if let Some(idx) =
-            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_result_ctor_contracts);
-        } else {
-            let mut global_ast = shared_imports.clone();
-            global_ast.extend(shared_result_ctor_contracts);
-            lowered.push(sigil::StagedModuleAst {
-                source_index: 0,
-                module_path: String::new(),
-                doc_module_path: None,
-                ast: global_ast,
-                owner: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
         }
     }
 

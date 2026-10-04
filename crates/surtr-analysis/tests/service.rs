@@ -1933,3 +1933,33 @@ fn analysis_service_refreshes_consumer_parse_contract_after_unfinished_edit() {
         }
     }
 }
+
+#[test]
+fn analysis_service_enum_constructor_definition_points_to_the_variant() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    let source = "defenum Choice { First(Int), Second }\nvalue = Choice::First(1)";
+    service.update_document(path.clone(), Some(1), source.into());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path.clone())),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let locations = service.definition(
+        &snapshot,
+        Utf16Position {
+            line: 1,
+            character: "value = Choice::Fir".len() as u32,
+        },
+    );
+    assert_eq!(locations.len(), 1);
+    assert_eq!(locations[0].path, path);
+    assert_eq!(locations[0].range.start.line, 0);
+    assert_eq!(
+        locations[0].range.start.character,
+        source.find("First(Int)").unwrap() as u32
+    );
+}

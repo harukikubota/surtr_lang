@@ -1,35 +1,41 @@
 use super::*;
 
-fn initialize_base_scope() -> Scope {
+fn registered_builtin_scope() -> (Scope, Vec<(u32, &'static sindr::builtin::BuiltinMeta)>) {
     let mut scope = Scope::new();
-    let dummy = Span { start: 0, end: 0 };
-    // Standalone resolver tests do not stage std modules, so keep placeholders
-    // for builtin-special constructor sugar here. Real module builds
-    // overwrite these bindings with the canonical constructor declarations.
-    let ok = scope.define("Result::Ok", dummy.clone());
-    scope.define_with_id("Ok", ok);
-    let err = scope.define("Result::Err", dummy.clone());
-    scope.define_with_id("Err", err);
-    let true_id = scope.define("Boolean::True", dummy.clone());
-    scope.define_with_id("True", true_id);
-    let false_id = scope.define("Boolean::False", dummy);
-    scope.define_with_id("False", false_id);
-    scope
+    let mut bindings = Vec::new();
+    for meta in builtin_function_metas() {
+        if is_global_runtime_builtin(meta.name) || is_compiler_runtime_builtin(meta.name) {
+            let uid = scope.define(meta.name, Span { start: 0, end: 0 });
+            bindings.push((uid, meta));
+        }
+    }
+    (scope, bindings)
 }
 
 pub(super) fn initialize_scope() -> Scope {
-    let mut scope = initialize_base_scope();
-    for (idx, meta) in builtin_function_metas().iter().enumerate() {
-        if is_global_runtime_builtin(meta.name) {
-            scope.define_with_id(meta.name, builtin_uid(idx as u16));
-        }
-    }
-    // Every runtime builtin owns a UID, including members with no global binding.
-    // Ordinary declarations start after the complete metadata range.
-    scope.advance_next_id_to(
-        sindr::builtin::BUILTIN_UID_BASE + builtin_function_metas().len() as u32,
-    );
-    scope
+    registered_builtin_scope().0
+}
+
+/// Compiler symbols actually registered in the initial scope, in allocator order.
+pub fn compiler_builtin_bindings() -> Vec<(u32, &'static sindr::builtin::BuiltinMeta)> {
+    registered_builtin_scope().1
+}
+
+pub(super) fn is_compiler_runtime_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "__task_call_timeout"
+            | "__task_await_timeout"
+            | "__workers_submit_timeout"
+            | "__workers_broadcast_timeout"
+            | "__genserver_call_reply"
+            | "__genserver_call_reply_later"
+            | "__genserver_call_stop_normal"
+            | "__genserver_call_stop_error"
+            | "__genserver_cast_next"
+            | "__genserver_cast_stop_normal"
+            | "__genserver_cast_stop_error"
+    )
 }
 
 fn is_global_runtime_builtin(name: &str) -> bool {

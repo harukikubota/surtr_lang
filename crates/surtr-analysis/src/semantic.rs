@@ -327,6 +327,10 @@ impl SemanticIndex {
             return Some(symbol);
         }
 
+        if sindr::names::special_enum_variant_alias_meta(name).is_some() {
+            return None;
+        }
+
         let mut tail_matches = self.symbols.iter().filter(|symbol| {
             symbol
                 .label
@@ -3155,7 +3159,6 @@ fn completion_kind_for_declaration_kind(kind: &DeclarationKind) -> Option<Comple
         DeclarationKind::Def
         | DeclarationKind::Extractor
         | DeclarationKind::TraitMethod
-        | DeclarationKind::ResultCtor
         | DeclarationKind::ImplMethod
         | DeclarationKind::ImplCtorNew => Some(CompletionKind::FunctionCall),
         DeclarationKind::Struct
@@ -3200,8 +3203,5 @@ fn surface_name(name: &str) -> String {
 }
 
 fn is_builtin_special_variant_symbol(name: &str) -> bool {
-    matches!(
-        surface_name(name).as_str(),
-        "Result::Ok" | "Result::Err" | "Boolean::True" | "Boolean::False"
-    )
+    sindr::names::special_enum_variant_meta(name).is_some()
 }

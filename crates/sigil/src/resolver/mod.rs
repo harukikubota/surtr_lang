@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::panic;
 
 use serde::{Deserialize, Serialize};
-use sindr::builtin::{builtin_function_metas, builtin_uid};
+use sindr::builtin::builtin_function_metas;
 use sindr::names::{
     builtin_symbol_identity_info, ConstructorCapturePolicy, FacetRootKind, SymbolCapabilities,
     SymbolIdentityInfo,
@@ -27,6 +27,7 @@ mod lazy_diagnostics;
 mod pattern_consumers;
 mod patterns;
 mod scope_init;
+pub use scope_init::compiler_builtin_bindings;
 mod session;
 mod special_forms;
 #[cfg(test)]
@@ -61,6 +62,24 @@ pub fn collect_resolved_closure_captures(
     params: &[ResolvedClosureParam],
 ) -> Vec<ResolvedId> {
     captures::collect_captures(body, params)
+}
+
+fn reject_special_variant_binding(name: &str, span: &Span) -> Result<(), ResolveError> {
+    if let Some(meta) = sindr::names::special_enum_variant_alias_meta(name) {
+        return Err(ResolveError {
+            message: format!(
+                "Binding `{name}` is reserved as an alias of `{}`",
+                meta.qualified_name
+            ),
+            span: span.clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Declaration,
+                subject: Some(meta.qualified_name.to_string()),
+            },
+            related_labels: Vec::new(),
+        });
+    }
+    Ok(())
 }
 
 const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -139,7 +158,6 @@ pub fn declaration_symbol_identity_info(
             | DeclarationKind::Record
             | DeclarationKind::Deferror
             | DeclarationKind::Enum
-            | DeclarationKind::ResultCtor
             | DeclarationKind::EnumVariant
     )
     .then_some(info.capabilities.constructor_capture)
@@ -934,7 +952,6 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::BuiltinTypeDecl(_, id, _, _) => rebase_resolved_id(id, base, offset),
         Resolved::TypeAlias(_, _, _, _, _) => {}
-        Resolved::ResultCtorDecl(_, id, _, _, _) => rebase_resolved_id(id, base, offset),
         Resolved::Closure(_, params, captures, body)
         | Resolved::ExtractorClosure(_, params, captures, body)
         | Resolved::CaptureClosure(_, params, captures, body) => {

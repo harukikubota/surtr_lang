@@ -450,9 +450,6 @@ pub const STANDARD_OWNER_IDENTITY_METAS: &[StandardOwnerIdentityMeta] =
         identity: TypeIdentity::TypeConstructor,
     }];
 
-/// Builtin unique ids start after the first two scope-reserved ids.
-pub const BUILTIN_UID_BASE: u32 = 2;
-
 /// Canonical registry for runtime builtin functions and their source surfaces.
 ///
 /// A builtin id is the entry's position in this slice. Eldr's `BUILTIN_IMPLS`
@@ -4189,19 +4186,14 @@ pub fn builtin_type_supports_inherent_impl(name: &str) -> bool {
     builtin_type_name(name).is_some_and(TypeName::supports_inherent_impl)
 }
 
-pub fn builtin_uid(builtin_id: u16) -> u32 {
-    BUILTIN_UID_BASE + u32::from(builtin_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         builtin_function_metas, builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name,
         builtin_meta_by_runtime_name, builtin_meta_for_compiler_generated_decl,
         builtin_meta_for_decl, builtin_runtime_name, builtin_surface_variant_for_decl,
-        builtin_type_head_metas, builtin_uid, parse_surface_signature,
-        standard_owner_identity_by_name, BUILTIN_FUNCTION_METAS, BUILTIN_METAS,
-        BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
+        builtin_type_head_metas, parse_surface_signature, standard_owner_identity_by_name,
+        BUILTIN_FUNCTION_METAS, BUILTIN_METAS, BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
     };
     use crate::names::{TypeIdentity, TypeName};
 
@@ -4230,7 +4222,6 @@ mod tests {
         for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
             let id = idx as u16;
             assert_eq!(builtin_id_by_name(meta.name), Some(id));
-            assert_eq!(builtin_uid(id), 2 + idx as u32);
         }
     }
 

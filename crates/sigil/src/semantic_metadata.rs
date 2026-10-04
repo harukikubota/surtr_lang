@@ -121,14 +121,6 @@ fn format_extractor_signature(
     format!("{name}({param}) -> {}", format_ast_ty(ret_ty))
 }
 
-fn format_result_ctor_signature(name: &str, param_ty: &AstTy, ret_ty: &AstTy) -> String {
-    format!(
-        "{name}({}) -> {}",
-        format_ast_ty(param_ty),
-        format_ast_ty(ret_ty)
-    )
-}
-
 fn format_builtin_type_signature(head: &BuiltinTypeHead) -> String {
     if head.params.is_empty() {
         format!("type {}", surface_path_name(&head.name))
@@ -183,16 +175,32 @@ fn builtin_special_enum_variant_signature(
     type_params: &[TypeParam],
     variant: &EnumVariant,
 ) -> Option<String> {
-    match (surface_path_name(enum_name), variant.name.as_str()) {
-        ("Result", "Ok") => {
-            let ok_ty = variant
-                .payload
-                .first()
-                .map(format_ast_ty)
-                .unwrap_or_else(|| "$T".to_string());
-            Some(format!("Ok({ok_ty}) -> Result<{ok_ty}>"))
+    let qualified_name = format!("{enum_name}::{}", variant.name);
+    if let Some(meta) = sindr::names::special_enum_variant_meta(&qualified_name) {
+        if variant.payload.len() != meta.payload_arity {
+            return None;
         }
-        ("Result", "Err") => Some("Err(Error) -> Result<$T>".to_string()),
+        use sindr::names::SpecialEnumVariantLowering;
+        return match meta.lowering {
+            SpecialEnumVariantLowering::ResultOk | SpecialEnumVariantLowering::ResultErr => {
+                let [param] = type_params else { return None };
+                let [payload] = variant.payload.as_slice() else {
+                    return None;
+                };
+                Some(format!(
+                    "{}({}) -> Result<{}>",
+                    meta.qualified_name,
+                    format_ast_ty(payload),
+                    param.name
+                ))
+            }
+            SpecialEnumVariantLowering::Boolean(_) if type_params.is_empty() => {
+                Some(format!("{}() -> Boolean", meta.qualified_name))
+            }
+            SpecialEnumVariantLowering::Boolean(_) => None,
+        };
+    }
+    match (surface_path_name(enum_name), variant.name.as_str()) {
         ("MatchResult", "Ok") => {
             let [payload] = variant.payload.as_slice() else {
                 return None;
@@ -210,12 +218,6 @@ fn builtin_special_enum_variant_signature(
                 "MatchResult::Err(Error) -> MatchResult<{}>",
                 param.name
             ))
-        }
-        ("Boolean", "True") if type_params.is_empty() && variant.payload.is_empty() => {
-            Some("True() -> Boolean".to_string())
-        }
-        ("Boolean", "False") if type_params.is_empty() && variant.payload.is_empty() => {
-            Some("False() -> Boolean".to_string())
         }
         _ => None,
     }
@@ -701,17 +703,6 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     });
                 }
             }
-            Ast::ResultCtorDecl(_, name, param_ty, ret_ty, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Function,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_result_ctor_signature(name, param_ty, ret_ty)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
             Ast::DeferrorDef(_, name, fields, _, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
@@ -1000,15 +991,6 @@ fn collect_signature_entries_for_ast(
                     format_builtin_type_signature(head),
                 );
             }
-            Ast::ResultCtorDecl(_, name, param_ty, ret_ty, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Function,
-                    format_result_ctor_signature(name, param_ty, ret_ty),
-                );
-            }
             Ast::DeferrorDef(_, name, fields, _, _) => {
                 push_signature_entry(
                     out,
@@ -1140,6 +1122,20 @@ pub fn collect_signature_entries_with_base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_special_variant_does_not_invent_a_signature_payload() {
+        let variant = EnumVariant {
+            span: spire::ast::Span { start: 0, end: 0 },
+            name: "Ok".into(),
+            payload: Vec::new(),
+            discriminant: None,
+        };
+        assert_eq!(
+            builtin_special_enum_variant_signature("Result", &[], &variant),
+            None
+        );
+    }
 
     #[test]
     fn extractor_signature_preserves_written_error_parameter() {
