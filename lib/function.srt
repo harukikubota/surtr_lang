@@ -17,13 +17,17 @@ defmod Function {
   @doc """
   Lift a binary callable through a key function.
 
+  on is reserved for this standard declaration. User functions and members cannot
+  redefine it. A callable stored under another name can use prefix calls, but
+  cannot be the target of a named infix call.
+
   `on(f, key)` turns a callable like `f: ($B, $B -> $C)` into
   `($A, $A -> $C)` by applying `key` to both inputs before calling `f`.
 
   This is useful for keyed comparisons and grouping logic.
   Bare infix `on` and `Function::on` bind below pipeline operators.
-  The reserved name cannot be used for variables, parameters, or fields;
-  callable declarations and existing import rules are unchanged.
+  The reserved name cannot be used for variables, parameters, fields, or user
+  callable declarations. Existing import rules are unchanged.
 
   ## REPL
   xldr(1)> by_len = on({|left, right| compare(left, right)}, &String::len)
@@ -102,6 +106,13 @@ defmod Function {
 
   @doc """
   Convert a callable with two or more arguments into a curried callable.
+
+  This type-dependent contract belongs to the standard Function::curry declaration.
+  A user function or callable variable named curry follows its own signature.
+  Use Function::curry to select this declaration explicitly.
+  Bare capture of this declaration (&Function::curry) is unsupported.
+  Pass the callable directly to Function::curry instead.
+  Placeholder capture (&curry(&1)) is supported with a concrete expected callable type.
 
   ## REPL
   xldr(1)> add = {|left: Int, right: Int| left + right}

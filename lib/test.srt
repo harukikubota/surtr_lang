@@ -9,6 +9,10 @@ deferror TestAssertionFailed(detail: String) {
 @doc """
 Build named test suites and check values, errors, documents, and captured I/O.
 Available to test files executed by `surtr test`.
+assert_err_kind and assert_cause_chain are ordinary names. Their static
+ErrorKind argument rules belong only to the standard Test declarations.
+User functions with these names follow their own signatures and cannot expose
+ErrorKind as an ordinary value.
 
 `test` and `describe` group cases; `it` records each selected case's result.
 `xit(name, reason, body)` pauses a case; `pend(name, reason)` declares an unimplemented case.

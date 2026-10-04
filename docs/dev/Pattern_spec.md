@@ -392,6 +392,8 @@ direct = *{|value: Int|
 
 ## 予約語・OR・pipe
 
+Pattern consumer の専用引数文法は、一般の名前付き中置呼出しとは区別する。一般中置は Sigil で最初に解決した参照が関数宣言であることを要求し、値への参照なら拒否する。Pattern consumer は共有の専用構文契約と canonical identity に従う。ErrorKind API の通常名を Pattern consumer として予約したり、解決後に Expr / Pattern を再解析したりしない。
+
 `if_let`、`if_let_then`、`is_match`、`apply_pattern` を Pattern 引数を持つ予約 consumer surface とする。通常の宣言名、引数名、local bind、user member 名への利用・shadowing は Spire で拒否する。標準 @builtin 宣言と正規の Kernel::name call は明示的に許可し、canonical consumer identity へ確定する。
 
 予約語 token は qualified member / capture 構文でも解析できるようにする。既存の canonical 標準 builtin の qualified 通常 call / capture は維持する。たとえば `Regex::is_match(re, input)` とその capture は通常の Regex builtin であり、第2引数は Expr のままである。Pattern consumer と判定するのは canonical な Kernel consumer identity だけとし、member の綴りが `is_match` であることでは判定しない。この許可を新規 user member 宣言や予約 consumer の shadowing に広げず、Regex API の改名や表示名による fallback は追加しない。

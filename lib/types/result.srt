@@ -1,6 +1,8 @@
 @doc """
 Standard `Result` type declaration.
 `Result` represents success-or-error control flow as a value.
+map_err, cause, and recover_kind are ordinary names. Lazy and ErrorKind rules
+belong to their standard declarations, not to user functions with the same names.
 The canonical builtin enum surface is `Result<$T>`.
 Variable, parameter, field, and callable type annotations use one type argument.
 Only a function definition's direct return position may write `Result<$T, E>`
