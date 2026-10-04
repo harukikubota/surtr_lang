@@ -330,7 +330,7 @@ fn collect_missing_singleton_calls(
         | TypedInner::BuiltinExtractorDecl(_, _, _)
         | TypedInner::StructDef(_, _, _, _, _)
         | TypedInner::RecordDef(_, _, _, _, _) => {}
-        TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+        TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
             collect_missing_singleton_calls(
                 inner,
                 surface_to_process,
@@ -8140,15 +8140,26 @@ impl Codegen {
             TypedInner::Cause(value, err) => {
                 self.emit_result_error_transform(node, value, err, "cause")?;
             }
-            TypedInner::AssertErrKind(kind, value) => {
-                let kind_constant = self.add_constant(Constant::Str(kind.clone()));
-                self.emit(Opcode::LoadConst(kind_constant));
+            TypedInner::AssertErrorKinds(kinds, value) => {
+                use sigil::resolved::ErrorKindAssertion;
+                for kind in kinds.markers() {
+                    let constant = self.add_constant(Constant::Str(kind.clone()));
+                    self.emit(Opcode::LoadConst(constant));
+                }
+                let builtin = match kinds {
+                    ErrorKindAssertion::Root(_) => "__test_assert_err_kind",
+                    ErrorKindAssertion::Chain(markers) => {
+                        self.emit(Opcode::ListFromItems {
+                            len: markers.len() as u32,
+                        });
+                        "__test_assert_cause_chain"
+                    }
+                };
                 self.emit_node(value)?;
-                let builtin_id =
-                    Self::builtin_id("__test_assert_err_kind").ok_or_else(|| CodegenError {
-                        message: "Unknown builtin: __test_assert_err_kind".into(),
-                        span: node.span.clone(),
-                    })?;
+                let builtin_id = Self::builtin_id(builtin).ok_or_else(|| CodegenError {
+                    message: format!("Unknown builtin: {builtin}"),
+                    span: node.span.clone(),
+                })?;
                 self.emit(Opcode::CallBuiltin {
                     builtin_id,
                     arity: 2,

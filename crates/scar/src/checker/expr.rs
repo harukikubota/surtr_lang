@@ -374,7 +374,7 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
-            | TypedInner::AssertErrKind(_, rhs)
+            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs) => recurse(rhs),
             TypedInner::DoSafeBind(control) => recurse(&control.rhs)
                 .or_else(|| match &control.failure_target {
@@ -887,7 +887,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .find_map(|arg| self.find_typed_node(&arg.expr, inspect)),
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
                 self.find_typed_node(inner, inspect)
             }
             TypedInner::Def(_, _, _, _, _, _, body, _)
@@ -981,7 +981,7 @@ impl Checker {
                 | TypedInner::SafeBind(_, rhs, _, _)
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _)
-                | TypedInner::AssertErrKind(_, rhs)
+                | TypedInner::AssertErrorKinds(_, rhs)
                 | TypedInner::EagerBoundary(rhs) => collect(rhs, obligations),
                 TypedInner::BinOp(_, left, right)
                 | TypedInner::Pipe(left, right)
@@ -1309,8 +1309,8 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
-            TypedInner::AssertErrKind(marker, inner) => {
-                TypedInner::AssertErrKind(marker, self.concretize_pending_trait_calls(*inner)?)
+            TypedInner::AssertErrorKinds(marker, inner) => {
+                TypedInner::AssertErrorKinds(marker, self.concretize_pending_trait_calls(*inner)?)
             }
             TypedInner::EagerBoundary(inner) => {
                 TypedInner::EagerBoundary(self.concretize_pending_trait_calls(*inner)?)
@@ -1918,7 +1918,7 @@ impl Checker {
             Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
             Resolved::MapErr(span, value, err) => self.check_map_err(span, value, err),
             Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
-            Resolved::AssertErrKind(span, marker, value) => self.check_assert_err_kind(span, marker, value),
+            Resolved::AssertErrorKinds(span, marker, value) => self.check_assert_error_kinds(span, marker, value),
             Resolved::RecoverKind(span, value, marker, handler) => {
                 self.check_recover_kind(span, value, marker, handler)
             }
@@ -4464,7 +4464,7 @@ impl Checker {
             | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
             | Resolved::RecoverKind(span, _, _, _)
-            | Resolved::AssertErrKind(span, _, _)
+            | Resolved::AssertErrorKinds(span, _, _)
             | Resolved::IfLet(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::IsMatch(span, _, _)
@@ -14055,7 +14055,7 @@ impl Checker {
                     | Resolved::MapErr(..)
                     | Resolved::Cause(..)
                     | Resolved::RecoverKind(..)
-                    | Resolved::AssertErrKind(..)
+                    | Resolved::AssertErrorKinds(..)
                     | Resolved::ApplyPattern(..)
                     | Resolved::IsMatch(..)
                     | Resolved::Dbg(..)
@@ -14598,18 +14598,30 @@ impl Checker {
         Ok(kind)
     }
 
-    fn check_assert_err_kind(
+    fn check_assert_error_kinds(
         &mut self,
         span: &Span,
-        marker: &ResolvedId,
+        markers: &sigil::resolved::ErrorKindAssertion<ResolvedId>,
         value: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let kind = self.checked_error_kind(marker, "assert_err_kind")?;
-        let value = self.check_result_value(value, "assert_err_kind", None)?;
+        use sigil::resolved::ErrorKindAssertion;
+        let api = markers.api();
+        let kinds = match markers {
+            ErrorKindAssertion::Root(marker) => {
+                ErrorKindAssertion::Root(self.checked_error_kind(marker, api)?)
+            }
+            ErrorKindAssertion::Chain(markers) => ErrorKindAssertion::Chain(
+                markers
+                    .iter()
+                    .map(|marker| self.checked_error_kind(marker, api))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        };
+        let value = self.check_result_value(value, api, None)?;
         Ok(TypedNode {
             ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
             span: span.clone(),
-            node: TypedInner::AssertErrKind(kind, Box::new(value)),
+            node: TypedInner::AssertErrorKinds(kinds, Box::new(value)),
         })
     }
 

@@ -807,8 +807,10 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_resolved_node(value, base, offset);
             rebase_resolved_node(err, base, offset);
         }
-        Resolved::AssertErrKind(_, marker, value) => {
-            rebase_resolved_id(marker, base, offset);
+        Resolved::AssertErrorKinds(_, markers, value) => {
+            for marker in markers.markers_mut() {
+                rebase_resolved_id(marker, base, offset);
+            }
             rebase_resolved_node(value, base, offset);
         }
         Resolved::RecoverKind(_, value, marker, handler) => {

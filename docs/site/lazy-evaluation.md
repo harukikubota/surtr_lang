@@ -311,6 +311,7 @@ Result::recover_kind(result, NetworkError, {|err| recover(err)})
 ```
 
 runtime Error 値、constructor call、文字列、抽象 `Error`、存在しない型名、非エラー型は拒否します。
+`Test::assert_cause_chain` の期待列も Lazy 入力ではなく、具体的な型名の直接リストに限ります。列全体や各要素をプレースホルダで置き換えることはできません。
 `ErrorKind` は標準引数専用で、利用者の引数・戻り値・型注釈や変数には使えません。
 キャプチャでも marker を直接プレースホルダへ置き換えることはできません。
 

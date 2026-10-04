@@ -517,7 +517,7 @@ impl Checker {
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
-            | TypedInner::AssertErrKind(_, rhs)
+            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _) => visit(rhs),
             TypedInner::DoSafeBind(control) => visit(&control.rhs)
@@ -887,7 +887,7 @@ impl Checker {
             | TypedInner::InterpolatedStr(..)
             | TypedInner::Dbg(..)
             | TypedInner::EagerBoundary(..)
-            | TypedInner::AssertErrKind(..)
+            | TypedInner::AssertErrorKinds(..)
             | TypedInner::If(..)
             | TypedInner::Assert(..)
             | TypedInner::Ensure(..)
@@ -1783,7 +1783,7 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
-            TypedInner::AssertErrKind(marker, inner) => TypedInner::AssertErrKind(
+            TypedInner::AssertErrorKinds(marker, inner) => TypedInner::AssertErrorKinds(
                 marker,
                 self.rewrite_specializations_in_node(
                     *inner,
@@ -3118,7 +3118,7 @@ impl Checker {
                 }
             }
             TypedInner::EagerBoundary(inner)
-            | TypedInner::AssertErrKind(_, inner)
+            | TypedInner::AssertErrorKinds(_, inner)
             | TypedInner::FieldAccess(inner, _)
             | TypedInner::SupervisorSpawn { init: inner, .. }
             | TypedInner::SupervisorAdopt { pid: inner, .. }
@@ -3310,7 +3310,7 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(&arg.expr, ordered, seen);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
                 self.collect_bound_tyvars_in_node(inner, ordered, seen)
             }
             TypedInner::DeferredDoFailure(deferred) => {
@@ -3809,7 +3809,7 @@ impl Checker {
                     })
                     .collect(),
             ),
-            TypedInner::AssertErrKind(marker, inner) => TypedInner::AssertErrKind(
+            TypedInner::AssertErrorKinds(marker, inner) => TypedInner::AssertErrorKinds(
                 marker,
                 Box::new(self.substitute_typed_node_with_mapping(*inner, mapping)),
             ),
@@ -5191,7 +5191,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .any(|arg| Self::typed_node_has_pending_trait_call(&arg.expr)),
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
                 Self::typed_node_has_pending_trait_call(inner)
             }
             TypedInner::If(cond, then_branch, else_branch) => {

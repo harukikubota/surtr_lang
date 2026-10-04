@@ -277,6 +277,7 @@ compile / surface 契約との対応は次のとおり。
 - `Result::map_err` / `Result::cause` / `assert` / `ensure` は、この既存 `Error` 値を forward してよい
 - `Result::recover_kind` の marker は標準引数専用の `ErrorKind` とし、具体的な `deferror` 型名だけを受ける。Sigil は修飾名を含む canonical 型 identity を確定し、Forge はその `fq_name` を静的 metadata から hidden builtin `__recover_kind` へ渡す。Eldr は内部 ABI の kind 文字列を照合して handler を呼び出す。marker は Error の生成や constructor 呼び出しを行わず、利用者が任意の文字列を渡せる surface は提供しない。
 - `Test::assert_err_kind(marker, result)` も同じ ErrorKind の宣言 identity 解決・検証を使う。Err の kind が一致すれば `Ok(())`、Ok または異種の Err なら `TestAssertionFailed`。payload や表示文字列は比較しない。marker を一般の値として束縛・転送する能力は追加しない。
+- `Test::assert_cause_chain(expected, result)` は最外側の Err から cause へ辿る kind の列を、静的な宣言 identity の列と比較する。順序・長さ・重複を含め完全一致なら `Ok(())`、不一致・Ok・空の期待列なら `TestAssertionFailed`。payload・message・位置は比較せず、result は一度だけ評価する。診断は期待列・実際列と、最初の不一致位置（0始まり）または長さの違いを含める。Forge は列を hidden builtin の `List<String>` metadata へ lower する。
 - Lazyの正規化とeager入力の評価順は[Lazy spec](Lazy_spec.md)に従う。VMへLazy markerは渡さず、確定した分岐と通常call命令を実行する。branchをruntime callableとして表す場合も呼び出しは一回とし、戻り値がcallableでも追加で実行しない。
 
 - parallel error は持たない

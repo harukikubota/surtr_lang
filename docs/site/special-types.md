@@ -36,6 +36,7 @@ Monadの逐次処理には[do式](./do.md)を書いてください。
 詳細は [Lazy evaluation](./lazy-evaluation.md) を参照してください。
 
 `ErrorKind` は `Result::recover_kind` と `Test::assert_err_kind` に具体的な `deferror` 型名を渡すためのマーカーです。
+`Test::assert_cause_chain([OuterError, InnerError], result)` では、型名を直接リストに並べて cause の全体を検証できます。この引数以外で `List<ErrorKind>` を宣言したり、リストを変数経由で渡したりはできません。
 修飾名も使え、constructor の payload 数に依存しません。Error の生成や constructor の実行は行いません。
 
 両マーカーとも標準引数専用で、利用者の引数・戻り値・型注釈や通常の変数には使えません。

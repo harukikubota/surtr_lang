@@ -4511,7 +4511,14 @@ impl Checker {
                         .collect::<Result<Vec<_>, _>>()?;
                     let param_tys = params
                         .iter()
-                        .map(|param| {
+                        .enumerate()
+                        .map(|(index, param)| {
+                            if Self::is_cause_chain_marker_parameter(id, index, &param.ty) {
+                                return Ok(Ty::List(Box::new(Ty::Enum(
+                                    "ErrorKind".into(),
+                                    Vec::new(),
+                                ))));
+                            }
                             self.resolve_builtin_signature_ty_in_context(
                                 &param.ty,
                                 TypeSyntaxContext::StdBuiltinParameter,

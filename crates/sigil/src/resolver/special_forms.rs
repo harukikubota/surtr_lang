@@ -164,7 +164,43 @@ impl Resolver {
             collect_fixed_positional_args(span.clone(), args, "assert_err_kind", 2)?;
         let marker = self.resolve_error_kind_name(marker_expr, "assert_err_kind")?;
         let value = self.resolve_node(value_expr)?;
-        Ok(Resolved::AssertErrKind(span, marker, Box::new(value)))
+        Ok(Resolved::AssertErrorKinds(
+            span,
+            crate::resolved::ErrorKindAssertion::Root(marker),
+            Box::new(value),
+        ))
+    }
+
+    pub(super) fn resolve_assert_cause_chain(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let [expected, value] =
+            collect_fixed_positional_args(span.clone(), args, "assert_cause_chain", 2)?;
+        let markers = match expected {
+            Ast::ListLiteral(_, markers) => markers,
+            Ast::ListNil(_) => Vec::new(),
+            other => return Err(ResolveError {
+                message: "assert_cause_chain expected must be a direct List literal of concrete deferror type names".into(),
+                span: other.span().clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
+            }),
+        };
+        let markers = markers
+            .into_iter()
+            .map(|marker| self.resolve_error_kind_name(marker, "assert_cause_chain"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let value = self.resolve_node(value)?;
+        Ok(Resolved::AssertErrorKinds(
+            span,
+            crate::resolved::ErrorKindAssertion::Chain(markers),
+            Box::new(value),
+        ))
     }
 
     fn resolve_error_kind_name(

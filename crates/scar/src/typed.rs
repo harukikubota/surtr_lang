@@ -461,7 +461,7 @@ pub enum TypedInner {
     MapErr(Box<TypedNode>, Box<TypedNode>),
     Cause(Box<TypedNode>, Box<TypedNode>),
     RecoverKind(Box<TypedNode>, String, Box<TypedNode>),
-    AssertErrKind(String, Box<TypedNode>),
+    AssertErrorKinds(sigil::resolved::ErrorKindAssertion<String>, Box<TypedNode>),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
     /// Expression-local Pattern execution with projection results in slot order.
     ApplyPattern {

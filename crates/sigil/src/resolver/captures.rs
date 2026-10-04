@@ -232,7 +232,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(value, bound, free);
             collect_captures_inner(err, bound, free);
         }
-        Resolved::AssertErrKind(_, _, value) => collect_captures_inner(value, bound, free),
+        Resolved::AssertErrorKinds(_, _, value) => collect_captures_inner(value, bound, free),
         Resolved::RecoverKind(_, value, _, handler) => {
             collect_captures_inner(value, bound, free);
             collect_captures_inner(handler, bound, free);

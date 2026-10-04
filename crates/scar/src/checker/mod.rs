@@ -2072,7 +2072,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(&mut arg.expr, rewrites);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
                 Self::rewrite_fun_indices_in_node(inner, rewrites)
             }
             TypedInner::If(cond, then_node, else_node) => {
@@ -3452,7 +3452,7 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(&arg.expr);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
                 self.collect_unused_value_warnings_in_node(inner)
             }
             TypedInner::If(cond, then_branch, else_branch) => {
@@ -4553,7 +4553,7 @@ impl Checker {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
-            Resolved::AssertErrKind(_, _, value) => {
+            Resolved::AssertErrorKinds(_, _, value) => {
                 self.validate_constructor_body_positions(value, constructor_traits)?
             }
             Resolved::RecoverKind(_, a, _, c) => {
@@ -5035,7 +5035,7 @@ impl Checker {
             Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
             Resolved::RecoverKind(..) => "RecoverKind".to_string(),
-            Resolved::AssertErrKind(..) => "AssertErrKind".to_string(),
+            Resolved::AssertErrorKinds(..) => "AssertErrorKinds".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -5070,7 +5070,7 @@ impl Checker {
             Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
             Resolved::RecoverKind(..) => "RecoverKind",
-            Resolved::AssertErrKind(..) => "AssertErrKind",
+            Resolved::AssertErrorKinds(..) => "AssertErrorKinds",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

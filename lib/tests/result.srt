@@ -61,9 +61,9 @@ test("Result") {
     }
 
     it("appends previous error") {
-      assert_eq(
-        "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
-        inspect(cause(Err(NoneError), ZeroDivisionError)),
+      assert_cause_chain(
+        [ZeroDivisionError, NoneError],
+        cause(Err(NoneError), ZeroDivisionError),
       )
     }
 
@@ -73,9 +73,9 @@ test("Result") {
         Err(e) => cause(Err(NoneError), e),
       }
 
-      assert_eq(
-        "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
-        inspect(wrapped),
+      assert_cause_chain(
+        [ZeroDivisionError, NoneError],
+        wrapped,
       )
     }
   }
@@ -86,20 +86,20 @@ test("Result") {
     }
 
     it("propagates right Err after Ok") {
-      assert_eq(
-        "Err(ZeroDivisionError(\"division by zero\"))",
-        inspect(chain(Ok(1), Err(ZeroDivisionError))),
+      assert_cause_chain(
+        [ZeroDivisionError],
+        chain(Ok(1), Err(ZeroDivisionError)),
       )
     }
 
     it("keeps left Err when right succeeds") {
-      assert_err_kind(NoneError, chain(Err(NoneError), Ok(())))
+      assert_cause_chain([NoneError], chain(Err(NoneError), Ok(())))
     }
 
     it("chains right Err") {
-      assert_eq(
-        "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
-        inspect(chain(Err(NoneError), Err(ZeroDivisionError))),
+      assert_cause_chain(
+        [ZeroDivisionError, NoneError],
+        chain(Err(NoneError), Err(ZeroDivisionError)),
       )
     }
   }

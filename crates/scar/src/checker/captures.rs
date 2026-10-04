@@ -43,7 +43,7 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, ..)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
-            | TypedInner::AssertErrKind(_, rhs)
+            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs) => children.push(rhs),
             TypedInner::DoSafeBind(control) => {
                 children.push(&control.rhs);

@@ -990,6 +990,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         name: "__test_assert_err_kind",
         func: |vm, args| builtin_test_assert_err_kind(vm, args).map(BuiltinOutcome::Complete),
     },
+    BuiltinImpl {
+        name: "__test_assert_cause_chain",
+        func: |vm, args| builtin_test_assert_cause_chain(vm, args).map(BuiltinOutcome::Complete),
+    },
 ];
 
 const _: () = {
@@ -2315,6 +2319,43 @@ fn builtin_test_assert_err_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
             ),
         )),
     }
+}
+
+fn builtin_test_assert_cause_chain(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let expected = decode_string_list_arg(&args[0], "__test_assert_cause_chain", "expected")?;
+    let result = decode_result_arg(&args[1], "__test_assert_cause_chain", "result")?;
+    let mut actual = Vec::new();
+    let is_ok = result.is_ok();
+    if let Err(error) = &result {
+        let mut cursor = Some(error);
+        while let Some(error) = cursor {
+            actual.push(error.kind.clone());
+            cursor = error.cause.as_deref();
+        }
+    }
+    if !is_ok && expected == actual {
+        return Ok(ok_result(Value::Unit));
+    }
+    let detail = if is_ok {
+        "got Ok; expected an Err cause chain".to_string()
+    } else if let Some(index) = expected.iter().zip(&actual).position(|(a, b)| a != b) {
+        format!("first mismatch at index {index}")
+    } else {
+        format!(
+            "length mismatch: expected {}, got {}",
+            expected.len(),
+            actual.len()
+        )
+    };
+    Ok(err_result(
+        vm,
+        "TestAssertionFailed",
+        &format!(
+            "expected cause chain [{}], got [{}]; {detail}",
+            expected.join(", "),
+            actual.join(", ")
+        ),
+    ))
 }
 
 fn builtin_test_approx_equal(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

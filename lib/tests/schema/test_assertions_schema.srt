@@ -1,5 +1,0 @@
-defmod UserAssertions {
-  def assert_err_kind(marker: String, result: Result<Int>) -> Result<()> {
-    Test::assert_eq("literal", marker)
-  }
-}

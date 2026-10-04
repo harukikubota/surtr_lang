@@ -220,8 +220,10 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
             collect_node_usage(value, usage);
             collect_node_usage(err, usage);
         }
-        Resolved::AssertErrKind(_, marker, value) => {
-            usage.use_id(marker);
+        Resolved::AssertErrorKinds(_, markers, value) => {
+            for marker in markers.markers() {
+                usage.use_id(marker);
+            }
             collect_node_usage(value, usage);
         }
         Resolved::RecoverKind(_, value, marker, handler) => {

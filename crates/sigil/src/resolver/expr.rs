@@ -184,6 +184,7 @@ pub(super) enum CanonicalSpecialForm {
     Cause,
     RecoverKind,
     AssertErrKind,
+    AssertCauseChain,
     Logic(LogicKind),
 }
 
@@ -200,6 +201,7 @@ impl Resolver {
             "Result::cause" => Some(CanonicalSpecialForm::Cause),
             "Result::recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
             "Test::assert_err_kind" => Some(CanonicalSpecialForm::AssertErrKind),
+            "Test::assert_cause_chain" => Some(CanonicalSpecialForm::AssertCauseChain),
             _ => None,
         }
     }
@@ -240,6 +242,7 @@ impl Resolver {
             ("Result", "cause") => Some(CanonicalSpecialForm::Cause),
             ("Result", "recover_kind") => Some(CanonicalSpecialForm::RecoverKind),
             ("Test", "assert_err_kind") => Some(CanonicalSpecialForm::AssertErrKind),
+            ("Test", "assert_cause_chain") => Some(CanonicalSpecialForm::AssertCauseChain),
             _ => None,
         }
     }
@@ -297,6 +300,7 @@ impl Resolver {
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
             CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
             CanonicalSpecialForm::AssertErrKind => self.resolve_assert_err_kind(span, args),
+            CanonicalSpecialForm::AssertCauseChain => self.resolve_assert_cause_chain(span, args),
             CanonicalSpecialForm::Logic(logic_kind) => {
                 self.resolve_logic_call(span, args, logic_kind)
             }

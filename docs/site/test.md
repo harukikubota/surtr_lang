@@ -126,7 +126,7 @@ test("statement question") {
 ## 期待する Err を検証する
 
 失敗すること自体を確認する場合は、Result を通常の `=` で保存するか、
-そのまま `assert_err`・`assert_err_kind`・`assert_err_contains` に渡します。検証対象に `?` や `=?` を使うと、
+そのまま `assert_err`・`assert_err_kind`・`assert_cause_chain`・`assert_err_contains` に渡します。検証対象に `?` や `=?` を使うと、
 期待している Err をアサーションに渡す前に伝播してしまいます。
 
 ```surtr
@@ -152,6 +152,7 @@ test("expected failure") {
 | `assert_ne(expected, actual)` | 同じ型の二つの値が `Eq` で異なること |
 | `assert_ok(result)` / `assert_err(result)` | 中身を比較せず Result の枝を検査 |
 | `assert_err_kind(marker, result)` | 具体的な deferror 宣言と Err の種別が一致すること |
+| `assert_cause_chain(expected, result)` | 最外側から cause を辿った deferror の種類・順序・長さが完全一致すること |
 | `assert_some_eq(expected, option)` / `assert_none(option)` | Some の値の等価性、または None の枝 |
 | `assert_contains(fragment, actual)` | 大文字小文字を区別する部分一致 |
 | `assert_approx(expected, actual, tolerance)` | Float の絶対誤差が非負の許容誤差以下であること |
@@ -165,6 +166,16 @@ test("expected failure") {
 `assert_ok`・`assert_err`・`assert_none` は値の Eq を要求しません。
 `assert_err_kind(NoneError, result)` の marker は具体的な deferror 宣言名に限ります。
 payload 付きの宣言も名前だけを渡せます。同名の別 namespace の宣言は別種として扱い、message や cause は比較しません。
+`assert_cause_chain([OuterError, NoneError], result)` は、最外側のエラーをリストの先頭に対応させます。
+同じ種類の繰り返しも含め、順序と長さを検証します。payload・message・位置は比較しません。
+期待列には具体的な deferror 名を直接並べます。変数・文字列・constructor call・spread は渡せません。
+`[]` は書けますが、Err には最外側のエラーがあるため常に失敗します。Ok も失敗です。
+`assert_err_kind(OuterError, result)` は cause の有無を問いませんが、`assert_cause_chain([OuterError], result)` は cause がないことも検証します。
+
+```surtr
+assert_cause_chain([ZeroDivisionError, NoneError], Result::cause(Err(NoneError), ZeroDivisionError))
+```
+
 表示文字列を検査するときは `assert_err_contains` を使います。
 
 `assert_approx` は絶対誤差だけを扱い、Int を Float に暗黙変換しません。

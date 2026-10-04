@@ -257,6 +257,14 @@ defmod Test {
   @builtin def assert_err_kind(marker: ErrorKind, result: Result<$A>) -> Result<()>
 
   @doc """
+  Compares the complete error cause chain, outermost error first.
+  Pass a direct list of concrete deferror names. Order and length must match;
+  payloads and display strings are ignored. Ok and an empty expected list fail.
+  Example: `assert_cause_chain([ZeroDivisionError, NoneError], Result::cause(Err(NoneError), ZeroDivisionError))`.
+  """
+  @builtin def assert_cause_chain(expected: List<ErrorKind>, result: Result<$A>) -> Result<()>
+
+  @doc """
   Check that the option is Some and its content equals expected according to Eq.
   Example: `assert_some_eq(3, Option::Some(3))` returns `Ok(())`.
   """

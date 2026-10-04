@@ -3857,6 +3857,10 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "__test_assert_err_kind", arity: 2, sig_str: "(String, Result<$A>) -> Result<Unit>",
         compiler_generated_surfaces: &[], surfaces: &[],
     },
+    BuiltinMeta {
+        name: "__test_assert_cause_chain", arity: 2, sig_str: "(List<String>, Result<$A>) -> Result<Unit>",
+        compiler_generated_surfaces: &[], surfaces: &[],
+    },
 
 ];
 
