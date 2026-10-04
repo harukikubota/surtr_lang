@@ -183,6 +183,7 @@ pub(super) enum CanonicalSpecialForm {
     MapErr,
     Cause,
     RecoverKind,
+    AssertErrKind,
     Logic(LogicKind),
 }
 
@@ -198,6 +199,7 @@ impl Resolver {
             "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
             "Result::cause" => Some(CanonicalSpecialForm::Cause),
             "Result::recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
+            "Test::assert_err_kind" => Some(CanonicalSpecialForm::AssertErrKind),
             _ => None,
         }
     }
@@ -237,6 +239,7 @@ impl Resolver {
             ("Result", "map_err") => Some(CanonicalSpecialForm::MapErr),
             ("Result", "cause") => Some(CanonicalSpecialForm::Cause),
             ("Result", "recover_kind") => Some(CanonicalSpecialForm::RecoverKind),
+            ("Test", "assert_err_kind") => Some(CanonicalSpecialForm::AssertErrKind),
             _ => None,
         }
     }
@@ -293,6 +296,7 @@ impl Resolver {
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
             CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
+            CanonicalSpecialForm::AssertErrKind => self.resolve_assert_err_kind(span, args),
             CanonicalSpecialForm::Logic(logic_kind) => {
                 self.resolve_logic_call(span, args, logic_kind)
             }

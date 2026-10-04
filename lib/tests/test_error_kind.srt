@@ -1,0 +1,32 @@
+include "./schema/test_assertions_schema.srt"
+
+import Test;
+
+deferror PayloadFailure(detail: String) { detail }
+deferror OtherFailure { "PayloadFailure" }
+
+namespace First { deferror Same(detail: String) { detail } }
+namespace Second { deferror Same(detail: String) { detail } }
+
+def check_payload(result: Result<$A>) -> Result<()> {
+  Test::assert_err_kind(PayloadFailure, result)
+}
+
+test("Test ErrorKind") {
+  it("matches canonical declarations without constructing markers") {
+    do {
+      assert_err_kind(PayloadFailure, Err(PayloadFailure("first")))
+      assert_err_kind(PayloadFailure, Err(PayloadFailure("second")))
+      assert_err_kind(NoneError, Err(NoneError))
+      check_payload(Err(PayloadFailure("generic helper")))
+      captured: (Result<Int> -> Result<()>) = &Test::assert_err_kind(PayloadFailure, &1)
+      captured(Err(PayloadFailure("captured")))
+      assert_err_kind(First::Same, Err(First::Same("same message")))
+      assert_err_contains("expected error kind", assert_err_kind(First::Same, Err(Second::Same("same message"))))
+      UserAssertions::assert_err_kind("literal", Ok(1))
+      assert_ok(assert_err_kind(NoneError, Err(NoneError)))
+      assert_err_contains("expected Err", assert_err_kind(PayloadFailure, Ok(3)))
+      assert_err_contains("expected error kind", assert_err_kind(PayloadFailure, Err(OtherFailure)))
+    }
+  }
+}

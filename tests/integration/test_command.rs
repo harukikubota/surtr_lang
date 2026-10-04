@@ -908,3 +908,411 @@ fn test_command_runs_file_module_tests_and_writes_real_files() {
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn test_command_extension_case_selection() {
+    let temp = unique_temp_dir("surtr_test_extension_selection");
+    write_math_test(
+        &temp,
+        r#"import Test;
+test("suite") {
+  it("active") { assert_true(True) }
+  xit("paused", "repairing") { assert_true(False) }
+  pend("future", "later")
+}
+"#,
+    );
+    let output = run_surtr(&temp, &["test", "math"]);
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("[SKIP]"));
+    let output = run_surtr(&temp, &["test", "math", "--include-xit"]);
+    assert!(!output.status.success());
+    let output = run_surtr(&temp, &["test", "math", "--list", "--include-xit"]);
+    assert!(output.status.success());
+    let _ = fs::remove_dir_all(temp);
+}
+
+fn test_json(output: &Output) -> serde_json::Value {
+    assert!(
+        output.stderr.is_empty(),
+        "JSON stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)))
+}
+
+fn assert_test_counts(report: &serde_json::Value) {
+    let s = &report["summary"];
+    let n = |key: &str| s[key].as_u64().unwrap();
+    assert_eq!(n("discovered"), n("selected") + n("filtered"));
+    assert_eq!(n("executed"), n("passed") + n("failed"));
+    assert_eq!(
+        n("selected"),
+        if report["mode"] == "list" {
+            n("runnable")
+        } else {
+            n("executed")
+        } + n("skipped")
+            + n("pending")
+    );
+}
+
+#[test]
+fn test_command_extension_eight_output_boundaries() {
+    let temp = unique_temp_dir("surtr_test_extension_outputs");
+    write_math_test(
+        &temp,
+        r#"import Test;
+print("walk top")
+test("suite") {
+  print("walk suite")
+  it("duplicate") { print("case output"); assert_true(True) }
+  it("duplicate") { assert_stdout_eq([]) }
+  xit("paused", "repairing") { print("paused body"); assert_true(False) }
+  pend("future", "later")
+}
+"#,
+    );
+    write_source(
+        &temp.join("lib/tests/second.srt"),
+        "import Test;\nit(\"top level\") { assert_true(True) }\n",
+    );
+    for all in [false, true] {
+        for list in [false, true] {
+            for json in [false, true] {
+                let mut args = vec!["test", if all { "--all" } else { "math" }];
+                if list {
+                    args.push("--list");
+                }
+                if json {
+                    args.extend(["--format=json"]);
+                }
+                let output = run_surtr(&temp, &args);
+                assert!(
+                    output.status.success(),
+                    "{args:?}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                if json {
+                    let report = test_json(&output);
+                    assert_test_counts(&report);
+                    assert_eq!(report["summary"]["discovered"], if all { 5 } else { 4 });
+                    assert_eq!(report["summary"]["pending"], 1);
+                    assert_eq!(report["summary"]["skipped"], 1);
+                    assert_eq!(report["summary"]["failed"], 0);
+                    assert_eq!(
+                        report["scripts"][0]["io"]["stdout"],
+                        serde_json::json!(["walk top", "walk suite"])
+                    );
+                    assert_eq!(report["cases"][0]["case_index"], 0);
+                    assert_eq!(report["cases"][1]["case_index"], 1);
+                    assert_eq!(report["cases"][0]["name"], report["cases"][1]["name"]);
+                    assert_eq!(
+                        report["cases"][0]["status"],
+                        if list { "runnable" } else { "passed" }
+                    );
+                    assert!(report["duration_ns"].is_null());
+                    for case in report["cases"].as_array().unwrap() {
+                        assert!(case["duration_ns"].is_null());
+                        if list {
+                            assert!(case["io"].is_null());
+                        }
+                    }
+                    if !list {
+                        assert_eq!(
+                            report["cases"][0]["io"]["stdout"],
+                            serde_json::json!(["case output"])
+                        );
+                    }
+                } else {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    assert!(stdout.contains(if list { "[LIST]" } else { "[PASS]" }));
+                    assert!(stdout.contains("repairing"));
+                    assert!(stdout.contains("later"));
+                    assert!(!stdout.contains("paused body"));
+                }
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_extension_combined_policies_and_timings() {
+    let temp = unique_temp_dir("surtr_test_extension_policies");
+    write_math_test(
+        &temp,
+        r#"import Test;
+test("outer") {
+  test("suite") {
+    describe("outer group") {
+      describe("group") {
+        it("selected active") { assert_stdout_eq([]) }
+        xit("selected paused", "repair") { print("only once"); assert_stdout_eq(["only once"]) }
+        pend("selected future", "later")
+        pend("excluded future", "filtered reason")
+      }
+    }
+  }
+}
+it("selected top") { assert_true(True) }
+"#,
+    );
+    for list in [false, true] {
+        let mut args = vec![
+            "test",
+            "--all",
+            "--test=suite",
+            "--describe",
+            "group",
+            "--it",
+            "selected",
+            "--include-xit",
+            "--deny-pending",
+            "--quiet",
+            "--timings",
+            "--format=json",
+        ];
+        if list {
+            args.push("--list");
+        }
+        let output = run_surtr(&temp, &args);
+        assert_eq!(output.status.code(), Some(1));
+        let report = test_json(&output);
+        assert_test_counts(&report);
+        assert_eq!(report["summary"]["selected"], 3);
+        assert_eq!(report["summary"]["filtered"], 2);
+        assert_eq!(report["summary"]["policy_errors"], 1);
+        assert!(report["duration_ns"].as_u64().is_some());
+        assert_eq!(
+            report["options"]["filters"],
+            serde_json::json!({"test":"suite","describe":"group","it":"selected"})
+        );
+        for flag in ["include_xit", "deny_pending", "quiet", "timings"] {
+            assert_eq!(report["options"][flag], true);
+        }
+        let cases = report["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), if list { 3 } else { 1 });
+        assert_eq!(cases.last().unwrap()["reason"], "later");
+        assert!(cases.last().unwrap()["duration_ns"].is_null());
+        if list {
+            assert_eq!(cases[1]["status"], "runnable");
+            assert!(cases[1]["io"].is_null());
+        }
+    }
+    let output = run_surtr(
+        &temp,
+        &[
+            "test",
+            "math",
+            "--include-xit",
+            "--timings",
+            "--it=paused",
+            "--format=json",
+        ],
+    );
+    let report = test_json(&output);
+    assert!(output.status.success());
+    assert_test_counts(&report);
+    let case = report["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["selected"] == true)
+        .unwrap();
+    assert_eq!(case["status"], "passed");
+    assert_eq!(case["declaration"], "xit");
+    assert_eq!(case["reason"], "repair");
+    assert!(case["duration_ns"].as_u64().is_some());
+    let output = run_surtr(
+        &temp,
+        &[
+            "test",
+            "math",
+            "--deny-pending",
+            "--it=active",
+            "--quiet",
+            "--format=json",
+        ],
+    );
+    let report = test_json(&output);
+    assert!(output.status.success());
+    assert_eq!(report["summary"]["policy_errors"], 0);
+    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["cases"], serde_json::json!([]));
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_extension_errors_and_usage_json() {
+    let temp = unique_temp_dir("surtr_test_extension_errors");
+    write_math_test(
+        &temp,
+        r#"import Test;
+it("interrupted") { it("nested") { assert_true(True) } }
+it("not reached") { assert_true(True) }
+"#,
+    );
+    write_source(
+        &temp.join("lib/tests/second.srt"),
+        "import Test;\nit(\"next file\") { assert_true(True) }\n",
+    );
+    let output = run_surtr(&temp, &["test", "--all", "--format=json", "--timings"]);
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1));
+    assert_test_counts(&report);
+    assert_eq!(report["summary"]["discovered"], 2);
+    assert_eq!(report["summary"]["failed"], 1);
+    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["summary"]["script_errors"], 1);
+    assert_eq!(report["scripts"][0]["status"], "aborted");
+    assert_eq!(report["scripts"][1]["status"], "completed");
+    assert!(report["cases"][0]["duration_ns"].as_u64().is_some());
+    assert!(report["errors"][0]["diagnostic"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("inside a test case"));
+
+    write_math_test(
+        &temp,
+        "import Test;\ntest(\"broken scope\") { Err(NoneError) }\n",
+    );
+    let output = run_surtr(
+        &temp,
+        &["test", "math", "--list", "--it=missing", "--format=json"],
+    );
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(report["summary"]["scope_failures"], 1);
+    assert_eq!(report["summary"]["failed"], 0);
+    assert_eq!(report["summary"]["policy_errors"], 0);
+    assert_eq!(report["errors"][0]["kind"], "scope");
+
+    for args in [
+        vec!["test", "--bad", "--format=json"],
+        vec!["test", "math", "--it", "--format", "json"],
+        vec!["test", "--format=json"],
+    ] {
+        let output = run_surtr(&temp, &args);
+        let report = test_json(&output);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(report["errors"][0]["kind"], "usage");
+        assert!(report["options"].is_null());
+    }
+    for args in [
+        vec!["test", "math", "--format=json", "--format=human"],
+        vec!["test", "math", "--format=json", "--format"],
+        vec!["test", "math", "--format=bad"],
+    ] {
+        let output = run_surtr(&temp, &args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_extension_scan_and_declaration_failures_are_not_filtered() {
+    let temp = unique_temp_dir("surtr_test_extension_scan_errors");
+    for source in [
+        "import Test;\nxit(\"hidden\", \"  \" ) { assert_true(True) }",
+        "import Test;\npend(\"hidden\", \"\")",
+        "import Test;\nxit(\"hidden\", \"repair\") { assert_true(1) }",
+        "import Test;\npend(\"hidden\", \"later\") { assert_true(True) }",
+    ] {
+        write_math_test(&temp, source);
+        let output = run_surtr(
+            &temp,
+            &["test", "math", "--it=missing", "--list", "--format=json"],
+        );
+        let report = test_json(&output);
+        assert_eq!(output.status.code(), Some(1), "{source}");
+        assert_eq!(report["summary"]["script_errors"], 1, "{source}: {report}");
+        assert_eq!(report["summary"]["policy_errors"], 0);
+    }
+    write_math_test(&temp, "import Test;\npend(\"future\", \"later\")");
+    write_source(
+        &temp.join("lib/tests/second.srt"),
+        "import Test;\nxit(\"paused\", \"repair\") { assert_true(True) }",
+    );
+    for name in ["future", "paused"] {
+        let output = run_surtr(&temp, &["test", "--all", "--it", name, "--format=json"]);
+        let report = test_json(&output);
+        assert!(output.status.success());
+        assert_eq!(report["summary"]["selected"], 1);
+        assert_eq!(report["summary"]["policy_errors"], 0);
+    }
+    let output = run_surtr(&temp, &["test", "--all", "--it=missing", "--format=json"]);
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(report["summary"]["policy_errors"], 1);
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_extension_assertion_type_boundaries() {
+    let temp = unique_temp_dir("surtr_test_extension_assertion_types");
+    for (source, expected) in [
+        ("assert_ne({|x: Int| x}, {|x: Int| x})", "Eq"),
+        (
+            "assert_some_eq({|x: Int| x}, Option::Some({|x: Int| x}))",
+            "Eq",
+        ),
+        ("assert_approx(1, 1.0, 0.0)", "Float"),
+        (
+            "assert_err_kind(\"NoneError\", Err(NoneError))",
+            "concrete deferror",
+        ),
+        (
+            "assert_err_kind(PayloadFailure(\"x\"), Err(NoneError))",
+            "concrete deferror",
+        ),
+        (
+            "assert_err_kind(Int, Err(NoneError))",
+            "Undefined variable: Int",
+        ),
+        (
+            "&Test::assert_err_kind(&1, Err(NoneError))",
+            "concrete deferror",
+        ),
+        (
+            "assert_err_kind(Error, Err(NoneError))",
+            "concrete deferror",
+        ),
+        (
+            "marker = NoneError\nassert_err_kind(marker, Err(NoneError))",
+            "concrete deferror",
+        ),
+        (
+            "def forward(marker: ErrorKind) -> Result<()> { Ok(()) }\nOk(())",
+            "ErrorKind is reserved",
+        ),
+    ] {
+        write_math_test(
+            &temp,
+            &format!(
+                "import Test;\ndeferror PayloadFailure(detail: String) {{ detail }}\n{source}\n"
+            ),
+        );
+        let output = run_surtr(&temp, &["test", "math", "--format=json"]);
+        let report = test_json(&output);
+        assert_eq!(output.status.code(), Some(1), "{source}: {report}");
+        assert_eq!(report["summary"]["script_errors"], 1);
+        assert!(
+            report["errors"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{source}: {report}"
+        );
+    }
+    let _ = fs::remove_dir_all(temp);
+}

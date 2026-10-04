@@ -2072,7 +2072,9 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(&mut arg.expr, rewrites);
                 }
             }
-            TypedInner::EagerBoundary(inner) => Self::rewrite_fun_indices_in_node(inner, rewrites),
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+                Self::rewrite_fun_indices_in_node(inner, rewrites)
+            }
             TypedInner::If(cond, then_node, else_node) => {
                 Self::rewrite_fun_indices_in_node(cond, rewrites);
                 Self::rewrite_fun_indices_in_node(then_node, rewrites);
@@ -3450,7 +3452,9 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(&arg.expr);
                 }
             }
-            TypedInner::EagerBoundary(inner) => self.collect_unused_value_warnings_in_node(inner),
+            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+                self.collect_unused_value_warnings_in_node(inner)
+            }
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(then_branch);
@@ -4549,6 +4553,9 @@ impl Checker {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
+            Resolved::AssertErrKind(_, _, value) => {
+                self.validate_constructor_body_positions(value, constructor_traits)?
+            }
             Resolved::RecoverKind(_, a, _, c) => {
                 self.validate_constructor_body_positions(a, constructor_traits)?;
                 self.validate_constructor_body_positions(c, constructor_traits)?;
@@ -5028,6 +5035,7 @@ impl Checker {
             Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
             Resolved::RecoverKind(..) => "RecoverKind".to_string(),
+            Resolved::AssertErrKind(..) => "AssertErrKind".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -5062,6 +5070,7 @@ impl Checker {
             Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
             Resolved::RecoverKind(..) => "RecoverKind",
+            Resolved::AssertErrKind(..) => "AssertErrKind",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

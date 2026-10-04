@@ -254,6 +254,7 @@ pub enum Resolved {
     /// `Result::recover_kind(value, ErrorKind, handler)` special form.
     /// The kind is a concrete deferror declaration identity, never an evaluated expression.
     RecoverKind(Span, Box<Resolved>, ResolvedId, Box<Resolved>),
+    AssertErrKind(Span, ResolvedId, Box<Resolved>),
 
     /// Match expression
     Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),

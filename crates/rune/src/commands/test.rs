@@ -3,9 +3,11 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Component, Path, PathBuf};
 
-use eldr::vm::{VmTestDiagnostic, VmTestEvent, VmTestEventKind};
+use eldr::vm::{VmTestDiagnostic, VmTestEvent, VmTestEventKind, VmTestPolicy};
 use forge::bytecode::{stable_hash_hex, Bytecode};
+use serde_json::{json, Value as JsonValue};
 use spire::ast::Span;
+use std::time::Instant;
 
 use crate::compile::{
     collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
@@ -19,6 +21,105 @@ const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v2";
 pub(crate) struct TestOptions {
     pub(crate) mode: TestMode,
     pub(crate) quiet: bool,
+    pub(crate) list: bool,
+    pub(crate) include_xit: bool,
+    pub(crate) deny_pending: bool,
+    pub(crate) timings: bool,
+    pub(crate) format: TestFormat,
+    pub(crate) test_filter: Option<String>,
+    pub(crate) describe_filter: Option<String>,
+    pub(crate) it_filter: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestFormat {
+    Human,
+    Json,
+}
+
+#[derive(Debug)]
+enum TestArg {
+    Positional(String),
+    Flag(String),
+    Value(String, String),
+    Invalid(String),
+}
+
+// One token stream is used both for validation and usage-error format selection.
+fn tokenize_test_args(args: &[String]) -> Vec<TestArg> {
+    let mut tokens = Vec::new();
+    let mut positional = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        index += 1;
+        if positional {
+            tokens.push(TestArg::Positional(arg.clone()));
+            continue;
+        }
+        if arg == "--" {
+            positional = true;
+            continue;
+        }
+        let (key, inline) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+        if matches!(key, "--test" | "--describe" | "--it" | "--format") {
+            let value = if let Some(value) = inline {
+                Some(value.to_string())
+            } else if args.get(index).is_some_and(|v| !v.starts_with('-')) {
+                index += 1;
+                Some(args[index - 1].clone())
+            } else {
+                None
+            };
+            match value {
+                Some(value) => tokens.push(TestArg::Value(key.into(), value)),
+                None => tokens.push(TestArg::Invalid(format!("test: {key} requires a value"))),
+            }
+        } else if matches!(
+            key,
+            "--all"
+                | "--quiet"
+                | "-q"
+                | "--list"
+                | "--include-xit"
+                | "--deny-pending"
+                | "--timings"
+        ) && inline.is_none()
+        {
+            tokens.push(TestArg::Flag(
+                if key == "-q" { "--quiet" } else { key }.into(),
+            ));
+        } else if arg.starts_with('-') {
+            tokens.push(TestArg::Invalid(format!("test: unknown option `{arg}`")));
+        } else {
+            tokens.push(TestArg::Positional(arg.clone()));
+        }
+    }
+    tokens
+}
+
+fn usage_test_format(tokens: &[TestArg]) -> Option<TestFormat> {
+    let mut formats = Vec::new();
+    for token in tokens {
+        match token {
+            TestArg::Value(key, value) if key == "--format" => formats.push(match value.as_str() {
+                "human" => Some(TestFormat::Human),
+                "json" => Some(TestFormat::Json),
+                _ => None,
+            }),
+            TestArg::Invalid(message) if message == "test: --format requires a value" => {
+                formats.push(None)
+            }
+            _ => (),
+        }
+    }
+    if formats.len() == 1 {
+        formats[0]
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +133,16 @@ struct TestRunSummary {
     passed: usize,
     failed: usize,
     total: usize,
+    discovered: usize,
+    selected: usize,
+    executed: usize,
+    skipped: usize,
+    pending: usize,
+    filtered: usize,
+    runnable: usize,
+    scope_failures: usize,
+    script_errors: usize,
+    policy_errors: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,55 +161,115 @@ enum TestOutputColor {
 }
 
 pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
-    let options = parse_test_options(args)?;
-    test_command(options, ExecutionEnv::Test)
+    let tokens = tokenize_test_args(args);
+    match parse_test_tokens(&tokens) {
+        Ok(options) => test_command(options, ExecutionEnv::Test),
+        Err(error) if usage_test_format(&tokens) == Some(TestFormat::Json) => {
+            let report = error.to_serializable_report();
+            println!(
+                "{}",
+                json!({
+                    "command": "test", "mode": null, "options": null,
+                    "scripts": [], "cases": [],
+                    "errors": [{"kind": "usage", "message": report.errors[0].message, "diagnostic": report}],
+                    "summary": summary_json(TestRunSummary::default()), "exit_code": 1, "duration_ns": null,
+                })
+            );
+            Err(RuneError::silent(1))
+        }
+        Err(error) => Err(error),
+    }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
-    let mut quiet = false;
-    let mut selector = None;
+    parse_test_tokens(&tokenize_test_args(args))
+}
 
-    for arg in args {
-        match arg.as_str() {
-            "--quiet" | "-q" => {
-                if quiet {
-                    return Err(RuneError::usage("test: --quiet may only be specified once"));
-                }
-                quiet = true;
-            }
-            value if value.starts_with('-') && value != "--all" => {
-                return Err(RuneError::usage(format!("test: unknown option `{value}`")));
-            }
-            value => {
+fn parse_test_tokens(tokens: &[TestArg]) -> RuneResult<TestOptions> {
+    let mut options = TestOptions {
+        mode: TestMode::All,
+        quiet: false,
+        list: false,
+        include_xit: false,
+        deny_pending: false,
+        timings: false,
+        format: TestFormat::Human,
+        test_filter: None,
+        describe_filter: None,
+        it_filter: None,
+    };
+    let mut target = None;
+    let mut seen = std::collections::HashSet::new();
+    for token in tokens {
+        match token {
+            TestArg::Invalid(message) => return Err(RuneError::usage(message)),
+            TestArg::Positional(value) => {
                 validate_test_selector(value.trim())?;
-                if value == "--all" && selector.as_deref() == Some("--all") {
-                    return Err(RuneError::usage("test: --all may only be specified once"));
+                if value.trim().is_empty() {
+                    return Err(RuneError::usage("test: selector must not be empty"));
                 }
-                if selector.replace(value.trim().to_string()).is_some() {
+                if target
+                    .replace(TestMode::One(value.trim().to_string()))
+                    .is_some()
+                {
                     return Err(RuneError::usage(
                         "test: expected exactly one lib-relative test name",
                     ));
                 }
             }
+            TestArg::Flag(key) | TestArg::Value(key, _) => {
+                if !seen.insert(key) {
+                    return Err(RuneError::usage(format!(
+                        "test: {key} may only be specified once"
+                    )));
+                }
+                match token {
+                    TestArg::Flag(key) => match key.as_str() {
+                        "--all" => {
+                            if target.replace(TestMode::All).is_some() {
+                                return Err(RuneError::usage(
+                                    "test: expected exactly one lib-relative test name",
+                                ));
+                            }
+                        }
+                        "--quiet" => options.quiet = true,
+                        "--list" => options.list = true,
+                        "--include-xit" => options.include_xit = true,
+                        "--deny-pending" => options.deny_pending = true,
+                        "--timings" => options.timings = true,
+                        _ => unreachable!("tokenizer supplies closed flag set"),
+                    },
+                    TestArg::Value(key, value) if key == "--format" => {
+                        options.format = match value.as_str() {
+                            "human" => TestFormat::Human,
+                            "json" => TestFormat::Json,
+                            _ => {
+                                return Err(RuneError::usage(
+                                    "test: --format must be human or json",
+                                ))
+                            }
+                        }
+                    }
+                    TestArg::Value(key, value) => {
+                        if value.trim().is_empty() {
+                            return Err(RuneError::usage(format!("test: {key} must not be empty")));
+                        }
+                        *match key.as_str() {
+                            "--test" => &mut options.test_filter,
+                            "--describe" => &mut options.describe_filter,
+                            "--it" => &mut options.it_filter,
+                            _ => unreachable!("tokenizer supplies closed value option set"),
+                        } = Some(value.clone());
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
     }
-
-    let Some(selector) = selector else {
-        return Err(RuneError::usage(
-            "test: expected exactly one lib-relative test name",
-        ));
-    };
-    if selector.is_empty() {
-        return Err(RuneError::usage("test: selector must not be empty"));
-    }
-
-    let mode = if selector == "--all" {
-        TestMode::All
-    } else {
-        TestMode::One(selector)
-    };
-
-    Ok(TestOptions { mode, quiet })
+    options.mode = target
+        .ok_or_else(|| RuneError::usage("test: expected exactly one lib-relative test name"))?;
+    Ok(options)
 }
 
 fn validate_test_selector(selector: &str) -> RuneResult<()> {
@@ -122,149 +293,347 @@ fn validate_test_selector(selector: &str) -> RuneResult<()> {
     Ok(())
 }
 
+struct TestCaseRecord {
+    file: String,
+    event: VmTestEvent,
+    rendered_diagnostic: Option<String>,
+}
+struct TestReportError {
+    kind: &'static str,
+    message: String,
+    source: Option<RuneError>,
+    diagnostic: Option<JsonValue>,
+}
+#[derive(Default)]
+struct TestReport {
+    cases: Vec<TestCaseRecord>,
+    scripts: Vec<JsonValue>,
+    errors: Vec<TestReportError>,
+    summary: TestRunSummary,
+}
+
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
-    match options.mode {
-        TestMode::One(selector) => run_one_test(&selector, env, options.quiet).map(|_| ()),
-        TestMode::All => run_all_tests(env, options.quiet),
+    let started = options.timings.then(Instant::now);
+    let mut report = TestReport::default();
+    let selectors = match &options.mode {
+        TestMode::One(selector) => Ok(vec![selector.clone()]),
+        TestMode::All => collect_all_test_selectors(),
+    };
+    match selectors {
+        Ok(selectors) => {
+            for selector in selectors {
+                execute_test_script(&selector, env, &options, &mut report);
+            }
+        }
+        Err(error) => report.script_error(error),
     }
-}
-
-fn run_one_test(selector: &str, env: ExecutionEnv, quiet: bool) -> RuneResult<TestRunSummary> {
-    let summary = execute_test_script(selector, env, quiet)?;
-    if summary.failed == 0 {
-        Ok(summary)
-    } else {
+    if options.has_filters()
+        && report.summary.selected == 0
+        && report.summary.script_errors == 0
+        && report.summary.scope_failures == 0
+    {
+        report.policy_error("test: no cases matched the specified filters".into());
+    }
+    let duration_ns = started.map(|time| time.elapsed().as_nanos());
+    let failed = report.summary.failed
+        + report.summary.scope_failures
+        + report.summary.script_errors
+        + report.summary.policy_errors
+        > 0;
+    match options.format {
+        TestFormat::Human => render_human_report(&report, &options, duration_ns, failed),
+        TestFormat::Json => println!(
+            "{}",
+            json!({
+                "command": "test", "mode": if options.list { "list" } else { "run" },
+                "options": options.to_json(), "scripts": report.scripts,
+                "cases": report.cases.iter().filter(|record| visible_case(&record.event, &options)).map(case_json).collect::<Vec<_>>(),
+                "errors": report.errors.iter().map(|error| json!({
+                    "kind": error.kind, "message": error.message,
+                    "diagnostic": error.diagnostic,
+                })).collect::<Vec<_>>(),
+                "summary": summary_json(report.summary), "exit_code": if failed { 1 } else { 0 }, "duration_ns": duration_ns,
+            })
+        ),
+    }
+    if failed {
         Err(RuneError::silent(1))
+    } else {
+        Ok(())
     }
 }
-
+impl TestOptions {
+    fn has_filters(&self) -> bool {
+        self.test_filter.is_some() || self.describe_filter.is_some() || self.it_filter.is_some()
+    }
+    fn policy(&self) -> VmTestPolicy {
+        VmTestPolicy {
+            test_filter: self.test_filter.clone(),
+            describe_filter: self.describe_filter.clone(),
+            it_filter: self.it_filter.clone(),
+            list: self.list,
+            include_xit: self.include_xit,
+            timings: self.timings,
+        }
+    }
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "target": match &self.mode { TestMode::All => json!({"all": true, "file": null}), TestMode::One(name) => json!({"all": false, "file": name}) },
+            "filters": {"test": self.test_filter, "describe": self.describe_filter, "it": self.it_filter},
+            "include_xit": self.include_xit, "deny_pending": self.deny_pending, "quiet": self.quiet,
+            "timings": self.timings, "format": match self.format {TestFormat::Human => "human", TestFormat::Json => "json"},
+        })
+    }
+}
+impl TestReport {
+    fn script_error(&mut self, error: RuneError) {
+        self.summary.script_errors += 1;
+        let message = error
+            .to_serializable_report()
+            .errors
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let diagnostic = Some(json!(error.to_serializable_report()));
+        self.errors.push(TestReportError {
+            kind: "script",
+            message,
+            source: Some(error),
+            diagnostic,
+        });
+    }
+    fn policy_error(&mut self, message: String) {
+        self.summary.policy_errors += 1;
+        self.errors.push(TestReportError {
+            kind: "policy",
+            message,
+            source: None,
+            diagnostic: None,
+        });
+    }
+}
 fn execute_test_script(
     selector: &str,
     env: ExecutionEnv,
-    quiet: bool,
-) -> RuneResult<TestRunSummary> {
-    let script = load_test_script(selector)?;
-    let bytecode = compile_test_script(&script, env)?;
-    let color = test_color_enabled();
-
+    options: &TestOptions,
+    report: &mut TestReport,
+) {
+    let script = match load_test_script(selector) {
+        Ok(script) => script,
+        Err(error) => {
+            report.scripts.push(
+                json!({"file": selector, "status": "aborted", "io": {"stdout": [], "stderr": []}}),
+            );
+            report.script_error(error);
+            return;
+        }
+    };
+    let bytecode = match compile_test_script(&script, env) {
+        Ok(bytecode) => bytecode,
+        Err(error) => {
+            report.scripts.push(json!({"file": script.file_path, "status": "aborted", "io": {"stdout": [], "stderr": []}}));
+            report.script_error(error);
+            return;
+        }
+    };
     let mut vm = eldr::VM::new(bytecode)
         .with_source(script.source.clone(), script.file_path.clone())
         .with_output_capture()
-        .with_error_capture();
-
-    if let Err(err) = vm.run() {
-        print_test_event_line(
-            "[FAIL]",
-            &format!("{} ({})", script.selector, script.file_path),
-            TestOutputColor::Red,
-            color,
-        );
-        print_note_line(
-            &format!("runtime error while running test script: {}", err),
-            color,
-        );
-        print_summary(TestRunSummary {
-            passed: 0,
-            failed: 1,
-            total: 1,
-        });
-        return Err(RuneError::silent(1));
-    }
-
-    let mut summary = TestRunSummary::default();
+        .with_error_capture()
+        .with_test_policy(options.policy());
+    let result = vm.run();
     for event in vm.test_events() {
+        if event.kind == VmTestEventKind::ScopeFailed {
+            report.summary.scope_failures += 1;
+            report.errors.push(TestReportError {
+                kind: "scope",
+                message: format!(
+                    "{} ({}): {}",
+                    format_event_path(event),
+                    script.file_path,
+                    event.detail.as_deref().unwrap_or("scope failed")
+                ),
+                source: None,
+                diagnostic: None,
+            });
+            continue;
+        }
+        let case = event.case.as_ref().expect("case events have case metadata");
+        report.summary.discovered += 1;
+        report.summary.selected += usize::from(case.selected);
         match event.kind {
-            VmTestEventKind::Passed => {
-                summary.passed += 1;
-                if !quiet {
-                    print_test_event_line(
-                        "[PASS]",
-                        &format_event_path(event),
-                        TestOutputColor::Green,
-                        color,
-                    );
+            VmTestEventKind::Passed => report.summary.passed += 1,
+            VmTestEventKind::Failed => report.summary.failed += 1,
+            VmTestEventKind::Skipped => report.summary.skipped += 1,
+            VmTestEventKind::Pending => {
+                report.summary.pending += 1;
+                if options.deny_pending {
+                    report.policy_error(format!(
+                        "pending case denied: {} ({}): {}",
+                        format_event_path(event),
+                        script.file_path,
+                        case.reason.as_deref().expect("pending reason")
+                    ));
                 }
             }
-            VmTestEventKind::Failed => {
-                summary.failed += 1;
-                let rendered_diagnostic =
-                    render_test_event_diagnostic(event, &script, vm.bytecode());
-                print_test_event_line(
-                    "[FAIL]",
-                    &format!("{} ({})", format_event_path(event), script.file_path),
-                    TestOutputColor::Red,
-                    color,
-                );
-                if rendered_diagnostic.is_none() {
-                    if let Some(detail) = &event.detail {
-                        print_note_line(detail, color);
-                    }
-                }
-                if let Some(diagnostic) = rendered_diagnostic {
-                    print!("{diagnostic}");
-                    if !diagnostic.ends_with('\n') {
-                        println!();
-                    }
-                }
-            }
+            VmTestEventKind::Filtered => report.summary.filtered += 1,
+            VmTestEventKind::Runnable => report.summary.runnable += 1,
+            VmTestEventKind::ScopeFailed => unreachable!(),
         }
+        report.cases.push(TestCaseRecord {
+            file: script.file_path.clone(),
+            event: event.clone(),
+            rendered_diagnostic: render_test_event_diagnostic(event, &script, vm.bytecode()),
+        });
     }
-
-    summary.total = summary.passed + summary.failed;
-    if summary.total == 0 {
-        if script.file_path.contains("lib/tests/spec/") {
-            return Ok(summary);
-        }
-        if !quiet {
-            print_color_line(
-                &format!("No tests found in {}.", script.file_path),
-                TestOutputColor::Yellow,
-                color,
-            );
-        }
-        return Ok(summary);
+    report.summary.executed = report.summary.passed + report.summary.failed;
+    report.summary.total = report.summary.discovered;
+    report.scripts.push(json!({
+        "file": script.file_path, "status": if result.is_ok() {"completed"} else {"aborted"},
+        "io": {"stdout": vm.take_stdout(), "stderr": vm.take_stderr()},
+    }));
+    if let Err(error) = result {
+        let diagnostic = json!({
+            "message": error.message, "pc": error.context.pc, "opcode": error.context.opcode,
+            "function": error.context.function, "call_site": super::run::location_json(error.context.call_site.as_ref()),
+            "details": error.context.details, "stack_trace": super::run::stack_trace_json(&error.context.stack_trace),
+        });
+        report.script_error(RuneError::message(
+            1,
+            format!(
+                "runtime error while running test script {}: {error}",
+                script.file_path
+            ),
+        ));
+        report
+            .errors
+            .last_mut()
+            .expect("recorded runtime error")
+            .diagnostic = Some(diagnostic);
     }
-
-    if !quiet || summary.failed > 0 {
-        print_summary(summary);
-    }
-
-    Ok(summary)
 }
-
-fn run_all_tests(env: ExecutionEnv, quiet: bool) -> RuneResult<()> {
-    let selectors = collect_all_test_selectors()?;
-    if selectors.is_empty() {
-        if !quiet {
-            println!("No test scripts found in lib/tests.");
-        }
-        return Ok(());
+fn visible_case(event: &VmTestEvent, options: &TestOptions) -> bool {
+    !options.quiet
+        || (options.list && event.case.as_ref().is_some_and(|case| case.selected))
+        || event.kind == VmTestEventKind::Failed
+        || (event.kind == VmTestEventKind::Pending && options.deny_pending)
+}
+fn event_status(kind: &VmTestEventKind) -> &'static str {
+    match kind {
+        VmTestEventKind::Passed => "passed",
+        VmTestEventKind::Failed => "failed",
+        VmTestEventKind::Skipped => "skipped",
+        VmTestEventKind::Pending => "pending",
+        VmTestEventKind::Filtered => "filtered",
+        VmTestEventKind::Runnable => "runnable",
+        VmTestEventKind::ScopeFailed => "scope_failed",
     }
-
-    let mut aggregate = TestRunSummary::default();
-    for selector in selectors {
-        match execute_test_script(&selector, env, quiet) {
-            Ok(summary) => {
-                aggregate.passed += summary.passed;
-                aggregate.failed += summary.failed;
-                aggregate.total += summary.total;
+}
+fn case_json(record: &TestCaseRecord) -> JsonValue {
+    let event = &record.event;
+    let case = event.case.as_ref().expect("case record");
+    json!({
+        "file": record.file, "case_index": case.case_index,
+        "scopes": case.scopes.iter().map(|scope| json!({"kind": scope.kind.as_str(), "name": scope.name})).collect::<Vec<_>>(),
+        "name": case.name, "declaration": case.declaration.as_str(), "selected": case.selected,
+        "status": event_status(&event.kind), "reason": case.reason, "detail": event.detail, "duration_ns": case.duration_ns,
+        "io": event.io.as_ref().map(|io| json!({"stdout": io.stdout, "stderr": io.stderr})),
+        "diagnostic": event.diagnostic.as_ref().map(|d| json!({
+            "kind": d.kind, "message": d.message, "assertion": d.assertion,
+            "assertion_call_kind": d.assertion_call_kind.as_ref().map(|kind| format!("{kind:?}")),
+            "file": d.file, "line": d.line, "column": d.column, "span_start": d.span_start, "span_end": d.span_end,
+        })),
+    })
+}
+fn summary_json(s: TestRunSummary) -> JsonValue {
+    json!({"discovered": s.discovered, "selected": s.selected, "executed": s.executed,
+        "passed": s.passed, "failed": s.failed, "skipped": s.skipped, "pending": s.pending,
+        "filtered": s.filtered, "runnable": s.runnable, "scope_failures": s.scope_failures,
+        "script_errors": s.script_errors, "policy_errors": s.policy_errors})
+}
+fn render_human_report(
+    report: &TestReport,
+    options: &TestOptions,
+    duration_ns: Option<u128>,
+    failed: bool,
+) {
+    let color = test_color_enabled();
+    for record in report
+        .cases
+        .iter()
+        .filter(|record| visible_case(&record.event, options))
+    {
+        let event = &record.event;
+        let case = event.case.as_ref().expect("case record");
+        let (label, tint) = if options.list {
+            ("[LIST]", TestOutputColor::Cyan)
+        } else {
+            match event.kind {
+                VmTestEventKind::Passed => ("[PASS]", TestOutputColor::Green),
+                VmTestEventKind::Failed => ("[FAIL]", TestOutputColor::Red),
+                VmTestEventKind::Skipped => ("[SKIP]", TestOutputColor::Yellow),
+                VmTestEventKind::Pending => ("[PENDING]", TestOutputColor::Yellow),
+                VmTestEventKind::Filtered => ("[FILTERED]", TestOutputColor::Cyan),
+                _ => unreachable!("execution case state"),
             }
-            Err(err) => {
-                err.emit();
-                aggregate.failed += 1;
-                aggregate.total += 1;
+        };
+        let mut detail = if options.list {
+            case.scopes
+                .iter()
+                .map(|scope| format!("{}:{}", scope.kind.as_str(), scope.name))
+                .chain(std::iter::once(case.name.clone()))
+                .collect::<Vec<_>>()
+                .join(" > ")
+        } else {
+            format_event_path(event)
+        };
+        if options.list {
+            detail.push_str(&format!(
+                " [{} {}] ({}, case {})",
+                case.declaration.as_str(),
+                event_status(&event.kind),
+                record.file,
+                case.case_index
+            ));
+        } else if event.kind == VmTestEventKind::Failed {
+            detail.push_str(&format!(" ({})", record.file));
+        }
+        if let Some(reason) = &case.reason {
+            detail.push_str(&format!(" — {reason}"));
+        }
+        if let Some(ns) = case.duration_ns {
+            detail.push_str(&format!(" ({:.3} ms)", ns as f64 / 1_000_000.0));
+        }
+        print_test_event_line(label, &detail, tint, color);
+        if let Some(diagnostic) = &record.rendered_diagnostic {
+            print!("{diagnostic}");
+            if !diagnostic.ends_with('\n') {
+                println!();
             }
+        } else if let Some(detail) = &event.detail {
+            print_note_line(detail, color);
         }
     }
-
-    if !quiet || aggregate.failed > 0 {
-        print_summary(aggregate);
+    for error in &report.errors {
+        if let Some(source) = &error.source {
+            source.emit();
+        } else {
+            print_test_event_line("[FAIL]", &error.message, TestOutputColor::Red, color);
+        }
     }
-
-    if aggregate.failed == 0 {
-        Ok(())
-    } else {
-        Err(RuneError::silent(1))
+    if !options.quiet || failed {
+        let s = report.summary;
+        let mut line = if options.list {
+            format!("test list: runnable={}", s.runnable)
+        } else {
+            summary_line(s, color)
+        };
+        line.push_str(&format!(", discovered={}, selected={}, executed={}, skipped={}, pending={}, filtered={}, scope_failures={}, script_errors={}, policy_errors={}", s.discovered, s.selected, s.executed, s.skipped, s.pending, s.filtered, s.scope_failures, s.script_errors, s.policy_errors));
+        if let Some(ns) = duration_ns {
+            line.push_str(&format!(", duration={:.3} ms", ns as f64 / 1_000_000.0));
+        }
+        println!("{line}");
     }
 }
 
@@ -734,10 +1103,6 @@ fn colorize_text(text: &str, color: TestOutputColor, enabled: bool) -> String {
     }
 }
 
-fn print_color_line(line: &str, color: TestOutputColor, enabled: bool) {
-    println!("{}", colorize_text(line, color, enabled));
-}
-
 fn test_event_line(label: &str, detail: &str, color: TestOutputColor, enabled: bool) -> String {
     format!("{} {}", colorize_text(label, color, enabled), detail)
 }
@@ -789,10 +1154,6 @@ fn summary_color(summary: TestRunSummary) -> TestOutputColor {
     }
 }
 
-fn print_summary(summary: TestRunSummary) {
-    println!("{}", summary_line(summary, test_color_enabled()));
-}
-
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -820,6 +1181,7 @@ mod tests {
             source: "assert_eq(1, 2)".to_string(),
         };
         let event = eldr::vm::VmTestEvent {
+            case: None,
             path: vec!["suite".to_string(), "failure".to_string()],
             detail: None,
             kind: eldr::vm::VmTestEventKind::Failed,
@@ -843,6 +1205,153 @@ mod tests {
             rendered,
             "Error: Global::TestAssertionFailed: expected True, got False\n  at helper.srt:4:3\n"
         );
+    }
+
+    #[test]
+    fn test_options_accept_all_1024_combinations() {
+        for bits in 0..1024 {
+            let mut args = vec![if bits & 1 == 0 { "string" } else { "--all" }.to_string()];
+            for (bit, flag) in [
+                (1, "--list"),
+                (2, "--quiet"),
+                (3, "--include-xit"),
+                (4, "--deny-pending"),
+                (5, "--timings"),
+            ] {
+                if bits & (1 << bit) != 0 {
+                    args.push(flag.into());
+                }
+            }
+            args.extend([
+                "--format".into(),
+                if bits & 64 == 0 { "human" } else { "json" }.into(),
+            ]);
+            for (bit, flag) in [(7, "--test"), (8, "--describe"), (9, "--it")] {
+                if bits & (1 << bit) != 0 {
+                    args.extend([flag.into(), "name".into()]);
+                }
+            }
+            let options = parse_test_options(&args)
+                .unwrap_or_else(|_| panic!("combination {bits}: {args:?}"));
+            assert_eq!(
+                options.mode,
+                if bits & 1 == 0 {
+                    TestMode::One("string".into())
+                } else {
+                    TestMode::All
+                }
+            );
+            assert_eq!(options.list, bits & 2 != 0);
+            assert_eq!(options.quiet, bits & 4 != 0);
+            assert_eq!(options.include_xit, bits & 8 != 0);
+            assert_eq!(options.deny_pending, bits & 16 != 0);
+            assert_eq!(options.timings, bits & 32 != 0);
+            assert_eq!(
+                options.format,
+                if bits & 64 == 0 {
+                    super::TestFormat::Human
+                } else {
+                    super::TestFormat::Json
+                }
+            );
+            assert_eq!(
+                options.test_filter.as_deref(),
+                (bits & 128 != 0).then_some("name")
+            );
+            assert_eq!(
+                options.describe_filter.as_deref(),
+                (bits & 256 != 0).then_some("name")
+            );
+            assert_eq!(
+                options.it_filter.as_deref(),
+                (bits & 512 != 0).then_some("name")
+            );
+        }
+    }
+
+    #[test]
+    fn test_options_value_forms_terminator_and_rejections() {
+        let parse = |args: &[&str]| {
+            parse_test_options(&args.iter().map(|v| v.to_string()).collect::<Vec<_>>())
+        };
+        let left = parse(&[
+            "--test",
+            " A ",
+            "--describe",
+            "B",
+            "math",
+            "--it=-name",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        let right = parse(&[
+            "--format=json",
+            "--it=-name",
+            "--describe=B",
+            "--test= A ",
+            "math",
+        ])
+        .unwrap();
+        assert_eq!(left, right);
+        assert_eq!(left.test_filter.as_deref(), Some(" A "));
+        assert_eq!(
+            parse(&["--", "--all"]).unwrap().mode,
+            TestMode::One("--all".into())
+        );
+        for args in [
+            vec!["math", "--it", "--list"],
+            vec!["math", "--it"],
+            vec!["math", "--it= "],
+            vec!["math", "--it", "-name"],
+            vec!["math", "--format=yaml"],
+            vec!["math", "--unknown"],
+            vec!["math", "--list=true"],
+            vec!["--all", "math"],
+            vec!["math", "--all"],
+            vec!["--all", "--", "--all"],
+            vec!["--", "a", "b"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        for flag in [
+            "--list",
+            "--include-xit",
+            "--deny-pending",
+            "--timings",
+            "--quiet",
+        ] {
+            assert!(parse(&["math", flag, flag]).is_err());
+        }
+        for flag in ["--test", "--describe", "--it", "--format"] {
+            let value = if flag == "--format" { "human" } else { "name" };
+            assert!(parse(&["math", flag, value, flag, value]).is_err());
+        }
+    }
+
+    #[test]
+    fn usage_format_uses_the_same_tokenization_as_validation() {
+        let format = |args: &[&str]| {
+            super::usage_test_format(&super::tokenize_test_args(
+                &args.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+            ))
+        };
+        assert_eq!(
+            format(&["--bad", "--format=json"]),
+            Some(super::TestFormat::Json)
+        );
+        assert_eq!(
+            format(&["--it", "--format", "json"]),
+            Some(super::TestFormat::Json)
+        );
+        for args in [
+            vec!["--format=json", "--format=human"],
+            vec!["--format=json", "--format"],
+            vec!["--format=yaml"],
+            vec!["--", "--format=json"],
+        ] {
+            assert_eq!(format(&args), None, "{args:?}");
+        }
     }
 
     #[test]
@@ -958,11 +1467,13 @@ mod tests {
             passed: 2,
             failed: 0,
             total: 2,
+            ..TestRunSummary::default()
         };
         let failed = TestRunSummary {
             passed: 1,
             failed: 1,
             total: 2,
+            ..TestRunSummary::default()
         };
         assert_eq!(
             summary_line(passed, false),

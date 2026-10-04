@@ -11,7 +11,14 @@ import StyledDoc;
 Build named test suites and check values, errors, documents, and captured I/O.
 Available to test files executed by `surtr test`.
 
-`test` and `describe` group cases; `it` records each case's result.
+`test` and `describe` group cases; `it` records each selected case's result.
+`xit(name, reason, body)` pauses a case; `pend(name, reason)` declares an unimplemented case.
+Reasons must be nonblank. Case declarations inside an executing case are rejected.
+Use `--test`, `--describe`, and `--it` for case-sensitive substring filters,
+`--include-xit` to run paused cases, and `--deny-pending` to reject selected pending cases.
+`--list` skips case bodies but still executes top-level and test/describe traversal.
+`--timings` measures executed cases; `--format json` produces one structured report.
+`--quiet` suppresses normal details while retaining failures and denied pending cases.
 Assertions return `Ok(())` on success or `Err(TestAssertionFailed(...))` on failure.
 Tests run serially, with separate stdin, stdout, and stderr buffers for each case.
 
@@ -41,7 +48,7 @@ defmod Test {
   @builtin def __test_capture_stdout() -> List<String>
   @builtin def __test_capture_stderr() -> List<String>
   @builtin def __test_push_stdin(input: String) -> Unit
-  @builtin def __test_begin_it() -> Unit
+  @builtin def __test_begin_case(kind: String, name: String, reason: String) -> Boolean
 
   defp _fail(detail: String) -> Result<()> {
     Err(TestAssertionFailed(detail))
@@ -109,16 +116,42 @@ defmod Test {
   }
 
   @doc """
-  Run `body` as one named test case with fresh stdin, stdout, and stderr buffers.
+  Run a selected `body` as one named test case with fresh stdin, stdout, and stderr buffers.
+  Filtered cases and list mode do not execute the body or consume I/O buffers.
   Record one pass for `Ok(())` or one failure for `Err(error)`.
   Returns `Ok(())` after either result so later cases can run.
   """
   def it(name: String, body: (-> Result<()>)) -> Result<()> {
-    __test_begin_it()
-    match body() {
-      Ok(_) => _finish_it_ok(name),
-      Err(err) => _finish_it_err(name, err),
+    _case("it", name, "", body)
+  }
+
+  defp _case(kind: String, name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
+    match __test_begin_case(kind, name, reason) {
+      True => match body() {
+        Ok(_) => _finish_it_ok(name),
+        Err(err) => _finish_it_err(name, err),
+      },
+      False => Ok(()),
     }
+  }
+
+  @doc """
+  Declare a paused case with a required nonblank reason.
+  The body runs only with `surtr test --include-xit`, subject to name filters.
+  Example: `xit("parser", "repairing nesting") { assert_true(True) }`.
+  """
+  def xit(name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
+    _case("xit", name, reason, body)
+  }
+
+  @doc """
+  Declare an unimplemented case with a required nonblank reason and no body.
+  Example: `pend("parser", "implementation pending")`.
+  `--deny-pending` rejects selected pending cases, including in list mode.
+  """
+  def pend(name: String, reason: String) -> Result<()> {
+    __test_begin_case("pend", name, reason)
+    Ok(())
   }
 
   @doc """
@@ -181,6 +214,101 @@ defmod Test {
       Err(TestAssertionFailed("expected #{inspect(expected)}, got #{inspect(actual)}")),
     )
   }
+
+  @doc """
+  Check that same-typed values differ according to Eq. Inspection is diagnostic only.
+  Example: `assert_ne(1, 2)` returns `Ok(())`.
+  """
+  def assert_ne(expected: $A, actual: $A) -> Result<()>
+  where
+    $A: Eq
+  {
+    if(Eq::eq(expected, actual), _fail("expected unequal values, got #{inspect(actual)}"), Ok(()))
+  }
+
+  @doc """
+  Check only the Ok branch, without requiring Eq for the payload.
+  Example: `assert_ok(Ok(3))` returns `Ok(())`.
+  """
+  def assert_ok(result: Result<$A>) -> Result<()> {
+    match result {
+      Ok(_) => Ok(()),
+      Err(err) => _fail("expected Ok, got Err(#{inspect(err)})"),
+    }
+  }
+
+  @doc """
+  Check only the Err branch, without comparing the error kind or payload.
+  Example: `assert_err(Err(NoneError))` returns `Ok(())`.
+  """
+  def assert_err(result: Result<$A>) -> Result<()> {
+    match result {
+      Err(_) => Ok(()),
+      Ok(actual) => _fail("expected Err, got Ok(#{inspect(actual)})"),
+    }
+  }
+
+  @doc """
+  Check Err against a concrete deferror declaration's canonical identity.
+  Payloads, messages, causes, and locations do not participate in the comparison.
+  The marker must be a declaration name, never a string, variable, or error instance.
+  Example: `assert_err_kind(NoneError, Err(NoneError))` returns `Ok(())`.
+  """
+  @builtin def assert_err_kind(marker: ErrorKind, result: Result<$A>) -> Result<()>
+
+  @doc """
+  Check that the option is Some and its content equals expected according to Eq.
+  Example: `assert_some_eq(3, Option::Some(3))` returns `Ok(())`.
+  """
+  def assert_some_eq(expected: $A, option: Option<$A>) -> Result<()>
+  where
+    $A: Eq
+  {
+    match option {
+      Option::Some(actual) => assert_eq(expected, actual),
+      Option::None => _fail("expected Some(#{inspect(expected)}), got None"),
+    }
+  }
+
+  @doc """
+  Check the None branch without requiring Eq. A failure shows the actual Some content.
+  Example: `assert_none(Option<Int>::None)` returns `Ok(())`.
+  """
+  def assert_none(option: Option<$A>) -> Result<()> {
+    match option {
+      Option::None => Ok(()),
+      Option::Some(actual) => _fail("expected None, got Some(#{inspect(actual)})"),
+    }
+  }
+
+  @doc """
+  Check a case-sensitive literal substring. The empty fragment always matches.
+  Example: `assert_contains("ell", "hello")` returns `Ok(())`.
+  """
+  def assert_contains(fragment: String, actual: String) -> Result<()> {
+    if(String::contains(actual, fragment), Ok(()), _fail("expected #{inspect(actual)} to contain #{inspect(fragment)}"))
+  }
+
+  @builtin def __test_approx_equal(expected: Float, actual: Float, tolerance: Float) -> Boolean
+
+  @doc """
+  Check absolute Float error against a nonnegative tolerance, including equality at the boundary.
+  Negative tolerance is an assertion failure. An overflowing difference also fails without aborting the VM.
+  Example: `assert_approx(1.0, 1.25, 0.25)` returns `Ok(())`.
+  """
+  def assert_approx(expected: Float, actual: Float, tolerance: Float) -> Result<()> {
+    if(tolerance < 0.0,
+      _fail("invalid negative tolerance: #{inspect(tolerance)}"),
+      if(__test_approx_equal(expected, actual, tolerance), Ok(()),
+        _fail("expected #{inspect(expected)} within tolerance #{inspect(tolerance)}, got #{inspect(actual)}")),
+    )
+  }
+
+  @doc """
+  Always return Err(TestAssertionFailed(detail)), preserving detail unchanged.
+  Example: `fail("not reached")` returns an assertion failure containing `not reached`.
+  """
+  def fail(detail: String) -> Result<()> { _fail(detail) }
 
   @doc """
   Check that `result` is `Ok(actual)` and that `actual` equals `expected` according to `Eq`.

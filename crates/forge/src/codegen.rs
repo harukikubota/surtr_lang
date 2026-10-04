@@ -330,13 +330,15 @@ fn collect_missing_singleton_calls(
         | TypedInner::BuiltinExtractorDecl(_, _, _)
         | TypedInner::StructDef(_, _, _, _, _)
         | TypedInner::RecordDef(_, _, _, _, _) => {}
-        TypedInner::EagerBoundary(inner) => collect_missing_singleton_calls(
-            inner,
-            surface_to_process,
-            available_singletons,
-            available_supervisors,
-            first_missing,
-        ),
+        TypedInner::EagerBoundary(inner) | TypedInner::AssertErrKind(_, inner) => {
+            collect_missing_singleton_calls(
+                inner,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            )
+        }
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -8137,6 +8139,22 @@ impl Codegen {
             }
             TypedInner::Cause(value, err) => {
                 self.emit_result_error_transform(node, value, err, "cause")?;
+            }
+            TypedInner::AssertErrKind(kind, value) => {
+                let kind_constant = self.add_constant(Constant::Str(kind.clone()));
+                self.emit(Opcode::LoadConst(kind_constant));
+                self.emit_node(value)?;
+                let builtin_id =
+                    Self::builtin_id("__test_assert_err_kind").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __test_assert_err_kind".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
             }
             TypedInner::RecoverKind(value, marker, handler) => {
                 self.emit_recover_kind(node, value, marker, handler)?;

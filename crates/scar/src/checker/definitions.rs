@@ -170,6 +170,18 @@ fn special_form_shape_recover_kind(
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
 }
 
+fn special_form_shape_assert_err_kind(
+    params: &[ResolvedValueParameter],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "ErrorKind")
+        && Checker::is_result_of_named(&params[1].ty, "$A")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
+}
+
 fn special_form_shape_and_or(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -779,6 +791,7 @@ impl Checker {
                 | "map_err"
                 | "cause"
                 | "recover_kind"
+                | "assert_err_kind"
                 | "and"
                 | "or"
                 | "eq"
@@ -845,6 +858,11 @@ impl Checker {
                 expected_qname: "Result::cause",
                 expected_signature: "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "assert_err_kind" => SpecialFormContract {
+                expected_qname: "Test::assert_err_kind",
+                expected_signature: "@builtin def assert_err_kind(marker: ErrorKind, result: Result<$A>) -> Result<()>",
+                shape_ok: special_form_shape_assert_err_kind,
             },
             "recover_kind" => SpecialFormContract {
                 expected_qname: "Result::recover_kind",

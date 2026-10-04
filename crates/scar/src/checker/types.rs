@@ -4521,6 +4521,9 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::AssertErrKind(marker, inner) => {
+                TypedInner::AssertErrKind(marker, self.resolve_typed_node(*inner))
+            }
             TypedInner::EagerBoundary(inner) => {
                 TypedInner::EagerBoundary(self.resolve_typed_node(*inner))
             }

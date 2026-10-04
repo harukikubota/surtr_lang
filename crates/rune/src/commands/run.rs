@@ -1080,7 +1080,7 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
     dump
 }
 
-fn stack_trace_json(stack_trace: &[RuntimeStackFrame]) -> JsonValue {
+pub(super) fn stack_trace_json(stack_trace: &[RuntimeStackFrame]) -> JsonValue {
     JsonValue::Array(
         stack_trace
             .iter()
@@ -1103,7 +1103,7 @@ fn stack_trace_json(stack_trace: &[RuntimeStackFrame]) -> JsonValue {
     )
 }
 
-fn location_json(location: Option<&sindr::runtime::Location>) -> JsonValue {
+pub(super) fn location_json(location: Option<&sindr::runtime::Location>) -> JsonValue {
     location
         .map(|location| {
             json!({
