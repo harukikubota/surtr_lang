@@ -3887,24 +3887,27 @@ impl Checker {
         Ok(typed)
     }
 
+    // Imported references retain their declaration UID; same-named local bindings do not.
+    // Select standard type-dependent behavior by that UID, never by call-site spelling.
+    fn is_standard_callable(&self, func: &Resolved, qualified_name: &str) -> bool {
+        let target = match func {
+            Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+            _ => func,
+        };
+        let Resolved::Var(_, id) = target else {
+            return false;
+        };
+        self.function_ids_by_name
+            .get(qualified_name)
+            .is_some_and(|declaration| declaration.unique_id == id.unique_id)
+    }
+
     fn is_function_on_callee(&self, func: &Resolved) -> bool {
-        matches!(
-            func,
-            Resolved::Var(_, id)
-                if id.name == "on"
-                    || id.name == "Function::on"
-                    || id.qualified_name.as_deref() == Some("Function::on")
-        )
+        self.is_standard_callable(func, "Function::on")
     }
 
     fn is_function_curry_callee(&self, func: &Resolved) -> bool {
-        matches!(
-            func,
-            Resolved::Var(_, id)
-                if id.name == "curry"
-                    || id.name == "Function::curry"
-                    || id.qualified_name.as_deref() == Some("Function::curry")
-        )
+        self.is_standard_callable(func, "Function::curry")
     }
 
     fn curry_source_captures(node: &TypedNode, out: &mut Vec<ResolvedId>) {
@@ -3932,7 +3935,6 @@ impl Checker {
     fn check_function_curry(
         &mut self,
         span: &Span,
-        _func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
         let [ResolvedRecordLitArg::Positional(source)] = args else {
@@ -10814,6 +10816,40 @@ impl Checker {
         self.check_app_with_expected(span, func, args, None)
     }
 
+    // Keep curry-only temporaries out of the recursive ordinary-call frame.
+    #[inline(never)]
+    fn check_function_curry_with_expected(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+        expected_return: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let explicit_return = if let Resolved::ReturnTypeArgumentApply(..) = func {
+            let specialized = self.check_node(func)?;
+            match specialized.ty {
+                Ty::BuiltinFunc { ret, .. } => Some(*ret),
+                _ => unreachable!("standard curry has a builtin signature"),
+            }
+        } else {
+            None
+        };
+        let typed = self.check_function_curry(span, args)?;
+        if let Some(expected) = explicit_return.as_ref().or(expected_return) {
+            self.assert_type_relation(
+                expected,
+                &typed.ty,
+                self.type_fact(SourceRole::Expected, span, expected),
+                self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                TypeDiagnosticReason::ReturnTypeMismatch,
+                DiagnosticOrigin::Call,
+                "Function::curry",
+                0,
+            )?;
+        }
+        Ok(typed)
+    }
+
     fn check_app_with_expected(
         &mut self,
         span: &Span,
@@ -10822,7 +10858,7 @@ impl Checker {
         expected_return: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         if self.is_function_curry_callee(func) {
-            return self.check_function_curry(span, func, args);
+            return self.check_function_curry_with_expected(span, func, args, expected_return);
         }
         if let Some(typed) = self.try_check_process_intrinsic_app(span, func, args)? {
             return Ok(typed);
@@ -12851,6 +12887,13 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             });
+        }
+
+        if self.is_function_curry_callee(target) {
+            return Err(TypeError::new(
+                "Function::curry cannot be captured as a function value; call it with a callable argument",
+                span.clone(),
+            ));
         }
 
         if let Some(mut typed) = self.check_constructor_capture(span, target, expected)? {

@@ -1,0 +1,4 @@
+print(to_string(Helpers::run()))
+print(to_string(Helpers::curry(99)))
+captured = &Helpers::curry
+print(to_string(captured(99)))
