@@ -1,0 +1,71 @@
+import Test;
+
+test("Duration") {
+  describe("construction") {
+    it("supports duration literals and millis access") {
+      d: Duration =? try_to::<Duration>(7)
+      do::<Result> {
+        assert_eq(250ms, 250ms)
+        assert_eq(250, 250ms.millis)
+        assert_eq(7, d.millis)
+      }
+    }
+
+    it("rejects negative durations") {
+      assert_err_contains("duration must be non-negative: -1", Duration(-1))
+    }
+  }
+
+  describe("arithmetic") {
+    it("adds durations through Add") {
+      assert_eq(30ms, 10ms + 20ms)
+    }
+
+    it("subtracts durations when the result stays non-negative") {
+      assert_ok_eq(10ms, Duration::sub(20ms, 10ms))
+    }
+
+    it("reports invalid negative subtraction") {
+      assert_err_contains("duration subtraction would be negative: 10ms - 20ms", Duration::sub(10ms, 20ms))
+    }
+  }
+
+  describe("ordering traits") {
+    it("supports equality and inequality") {
+      do::<Result> {
+        assert_true(10ms == 10ms)
+        assert_true(10ms != 20ms)
+      }
+    }
+
+    it("supports compare helpers and relational operators") {
+      do::<Result> {
+        assert_eq(Ordering::Less, compare(10ms, 20ms))
+        assert_true(lt(10ms, 20ms))
+        assert_true(lte(10ms, 20ms))
+        assert_true(gt(20ms, 10ms))
+        assert_true(gte(20ms, 20ms))
+        assert_true(10ms < 20ms)
+        assert_true(10ms <= 20ms)
+        assert_true(20ms > 10ms)
+      }
+    }
+  }
+
+  describe("pattern integration") {
+    it("extracts millis through the Duration extractor") {
+      match 20ms {
+        Duration(ms) => assert_eq(20, ms),
+      }
+    }
+
+    it("matches exact duration literals") {
+      assert_eq("hit", match 20ms {
+        20ms => "hit",
+        _ => "miss",
+      })
+    }
+  }
+
+
+}

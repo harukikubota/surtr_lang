@@ -1,0 +1,32 @@
+import File;
+import Shell;
+import Test;
+
+test("Shell") {
+  describe("cd/pwd") {
+    it("changes the VM directory and restores it after checking") {
+      before =? Shell::pwd()
+      relative =? FS::path("./tmp/sandbox/lib_test_shell")
+      root =? FS::join(before, relative.raw)
+      file =? FS::join(root, "inside.txt")
+      setup = do::<Result> { if(File::exists(file.raw), File::delete(file.raw), Ok(())); FS::mkdir_all(root) }
+      checked = do::<Result> {
+        setup
+        _ =? Shell::cd(root)
+        after =? Shell::pwd()
+        assert_true(String::ends_with(after.raw, "lib_test_shell"))
+        _ =? File::write("inside.txt", "cwd")
+        assert_ok_eq("cwd", File::read("inside.txt"))
+      }
+      restored = Shell::cd(before)
+      cleanup = do::<Result> { if(File::exists(file.raw), File::delete(file.raw), Ok(())); FS::rm(root) }
+      do::<Result> { restored; cleanup; checked }
+    }
+  }
+  describe("exec") {
+    it("returns stdout stderr and a nonzero exit as public fields") {
+      result =? Shell::exec("sh", ["-c", "printf out; printf err >&2; exit 7"])
+      do::<Result> { assert_eq("sh", result.command); assert_eq(7, result.exit_code); assert_eq("out", result.stdout); assert_eq("err", result.stderr) }
+    }
+  }
+}

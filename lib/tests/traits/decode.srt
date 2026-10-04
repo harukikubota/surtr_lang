@@ -1,0 +1,22 @@
+import Test;
+
+defrecord Payload(value: Int)
+defrecord Encoded(text: String)
+impl Decode<Payload> for Encoded {
+  def decode::<Payload>(self: Self) -> Result<Payload> { try_to::<Int>(self.text) |*> {|value| Payload(value)} }
+}
+
+test("Decode") {
+  describe("decode") {
+    it("decodes a custom payload without Eq or Show") {
+      value: Payload =? Decode::decode::<Payload>(Encoded("7"))
+      assert_eq(7, value.value)
+    }
+
+    it("preserves decoding failures") {
+      assert_err_kind(InvalidIntegerLiteral, Decode::decode::<Payload>(Encoded("invalid")))
+    }
+
+  }
+
+}

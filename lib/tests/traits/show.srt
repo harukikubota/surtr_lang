@@ -1,0 +1,16 @@
+import Test;
+
+defrecord Label(text: String)
+impl Show for Label {
+  def to_string(self: Self) -> String { "label:" ++ self.text }
+}
+
+test("Show") {
+  describe("to_string") {
+    it("uses the custom representation") {
+      assert_eq("label:surtr", Show::to_string(Label("surtr")))
+    }
+
+  }
+
+}

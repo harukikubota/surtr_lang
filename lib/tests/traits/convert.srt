@@ -1,0 +1,16 @@
+import Test;
+
+defrecord Number(value: Int)
+impl Convert<Int> for Number {
+  def to::<Int>(self: Self) -> Int { self.value }
+}
+
+test("Convert") {
+  describe("to") {
+    it("selects the output type of a custom conversion") {
+      assert_eq(7, Convert::to::<Int>(Number(7)))
+    }
+
+  }
+
+}

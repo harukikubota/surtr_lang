@@ -1,0 +1,241 @@
+include "./support/extractors.srt"
+include "./support/closures.srt"
+
+import Test;
+import PatternProbe::{positive, note};
+import ClosureProbe::{make_threshold, make_runner, run, make_checked, make_nested_checked, run_tuple, run_two};
+
+test("ExtractorClosure contract") {
+  it("creates lazily and executes each reached occurrence once") {
+
+    ext = *{|value: Int|
+      print("body")
+      MatchResult::Ok(value)
+    }
+
+    do::<Result> {
+      assert_stdout_eq([])
+      assert_eq(3, if_let(3, ext(result), result, 0))
+      assert_stdout_eq(["body"])
+      assert_eq(4, match 4 { ext(result) => result, _ => 0 })
+      assert_stdout_eq(["body"])
+      assert_eq(4, match 4 { ext(7) => 0, ext(result) => result, _ => 0 })
+      assert_stdout_eq(["body", "body"])
+      assert_false(is_match((0, 4), (positive(), ext(_))))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("captures lexical values and escapes through helper signatures") {
+    ext = make_threshold(2)
+    do::<Result> {
+      assert_ok_eq(3, run(ext, 3))
+      assert_true(is_match(run(ext, 2), Err(_)))
+      assert_false(is_match(1, ext(_)))
+    }
+  }
+
+  it("captures a closure used only as a Pattern head in an escaping callable") {
+    runner = make_runner(2)
+    do::<Result> {
+      assert_ok_eq(3, runner(3))
+      assert_true(is_match(runner(1), Err(_)))
+    }
+  }
+
+  it("resolves a local closure head before sibling Pattern bindings") {
+    ext = make_threshold(2)
+    do::<Result> {
+      (observed_1_0, observed_1_1) = match (10, 3) {
+      (ext, ext(result)) => (ext, result),
+      _ => (0, 0),
+    }
+      assert_eq(10, observed_1_0)
+      assert_eq(3, observed_1_1)
+    }
+  }
+
+  it("selects equal signatures with distinct captures through if and match") {
+    low = make_threshold(2)
+    floor = 2
+    ceiling = 8
+    high = *{|value: Int|
+      True =? and(value > floor, value > ceiling)
+      MatchResult::Ok(value)
+    }
+    from_if = if(True, low, high)
+    from_match = match False { True => low, False => high }
+    do::<Result> {
+      assert_true(is_match(5, from_if(_)))
+      assert_false(is_match(5, from_match(_)))
+      assert_true(is_match(9, from_match(_)))
+    }
+  }
+
+  it("keeps pre-argument references in the outer Pattern scope") {
+    amount = 10
+    ext = *{|offset: Int, value: Int| MatchResult::Ok(value + offset)}
+    do::<Result> {
+      do::<Result> {
+        (observed_2_0, observed_2_1) = if_let(3, ext(amount, accepted), (amount, accepted), (0, 0))
+        assert_eq(10, observed_2_0)
+        assert_eq(13, observed_2_1)
+      }
+      do::<Result> {
+        (observed_3_0, observed_3_1) = match (2, 3) {
+        (amount, ext(amount, accepted)) => (amount, accepted),
+        _ => (0, 0),
+      }
+        assert_eq(2, observed_3_0)
+        assert_eq(13, observed_3_1)
+      }
+      assert_eq(10, amount)
+    }
+  }
+
+  it("evaluates multiple pre-arguments from left to right once") {
+    ext = *{|min: Int, max: Int, value: Int|
+      print("body")
+      True =? and(value >= min, value <= max)
+      MatchResult::Ok(value)
+    }
+
+    do::<Result> {
+      assert_eq(5, match note("input", 5) {
+        ext(note("min", 2), note("max", 8), result) => result,
+        _ => 0,
+      })
+      assert_stdout_eq(["input", "min", "max", "body"])
+      assert_false(is_match((0, 5), (positive(), ext(note("skipped-min", 2), note("skipped-max", 8), _))))
+
+      assert_stdout_eq([])
+    }
+  }
+
+  it("distinguishes a tuple input from two inputs and expands tuple payloads") {
+    tuple_input = *{|pair: (Int, Int)|
+      (left, right) = pair
+      MatchResult::Ok(left + right)
+    }
+    two_inputs = *{|left: Int, right: Int| MatchResult::Ok(left + right)}
+    do::<Result> {
+      assert_eq(5, run_tuple(tuple_input))
+      assert_eq(5, run_two(two_inputs))
+      tuple_output = *{|value: Int| MatchResult::Ok((value, value + 1))}
+      do::<Result> {
+        (observed_4_0, observed_4_1) = if_let(3, tuple_output(first, second), (first, second), (0, 0))
+        assert_eq(3, observed_4_0)
+        assert_eq(4, observed_4_1)
+      }
+    }
+  }
+
+  it("uses concrete literal signatures from binding annotations") {
+    int_ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::Ok(value)}
+    string_ext: ExtractorClosure<(String -> MatchResult<String>)> = *{|value| MatchResult::Ok(value)}
+    tuple_ext: ExtractorClosure<((Int, Int) -> MatchResult<(Int, Int)>)> = *{|value| MatchResult::Ok(value)}
+    do::<Result> {
+      assert_eq(7, if_let(7, int_ext(fresh_binding), fresh_binding, 0))
+      assert_eq("text", if_let("text", string_ext(text), text, ""))
+      do::<Result> {
+        (observed_5_0, observed_5_1) = if_let((2, 3), tuple_ext(first, second), (first, second), (0, 0))
+        assert_eq(2, observed_5_0)
+        assert_eq(3, observed_5_1)
+      }
+    }
+  }
+
+  it("passes ExtractorClosure values through generic trait calls") {
+    ext = *{|value: Int| MatchResult::Ok(value + 1)}
+    wrapped = Option::Some(ext)
+    mapped = Functor::fmap(wrapped, {|value| value})
+    selected = if_let(mapped, Option::Some(value), value, ext)
+    do::<Result> {
+      assert_eq(4, if_let(3, selected(result), result, 0))
+      generated = Functor::fmap(Option::Some(3), {|_value| ext})
+      from_generated = if_let(generated, Option::Some(value), value, ext)
+      assert_eq(5, if_let(4, from_generated(result), result, 0))
+    }
+  }
+
+  it("supports omitted wildcard and annotated Unit children") {
+    ext = *{|value: Int|
+      if(value > 0, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError))
+    }
+    do::<Result> {
+      assert_true(is_match(1, ext()))
+      assert_true(is_match(1, ext(_)))
+      assert_eq((), if_let(1, ext(unit: Unit), unit, ()))
+      assert_false(is_match(0, ext()))
+    }
+  }
+
+  it("shadows named Extractors while preserving qualified identity") {
+    positive = *{|value: Int| MatchResult::Ok(value + 10)}
+    do::<Result> {
+      assert_eq(9, if_let(-1, positive(fresh_binding), fresh_binding, 0))
+      assert_false(is_match(-1, PatternProbe::positive()))
+      assert_true(is_match(1, PatternProbe::positive()))
+    }
+  }
+
+  it("preserves Result cause chains and stops after SafeBind failure") {
+    ext = make_checked()
+
+    do::<Result> {
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], run(ext, 0))
+      assert_stdout_eq([])
+      assert_ok_eq(3, run(ext, 3))
+      assert_stdout_eq(["after-closure-result"])
+    }
+  }
+
+  it("preserves nested Extractor causes and stops after its failure") {
+    ext = make_nested_checked()
+
+    do::<Result> {
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], run(ext, 0))
+      assert_stdout_eq([])
+      assert_ok_eq(3, run(ext, 3))
+      assert_stdout_eq(["after-result", "after-closure-extractor"])
+    }
+  }
+
+  it("keeps a nested ordinary callable failure inside its own Result") {
+    outer = *{|value: Int|
+      inner: (Int -> Result<Int>) = {|input: Int|
+        accepted =? PatternProbe::source(input)
+        Ok(accepted)
+      }
+      failure = inner(0)
+      MatchResult::Ok(if_let(failure, Err(_), value + 1, 0))
+    }
+    assert_eq(4, if_let(3, outer(result), result, 0))
+  }
+
+  it("keeps nested ExtractorClosure failure inside its own target") {
+    outer = *{|value: Int|
+      inner = *{|input: Int|
+        accepted =? PatternProbe::source(input)
+        MatchResult::Ok(accepted)
+      }
+      MatchResult::Ok(if_let(0, inner(_), 0, value + 2))
+    }
+    assert_eq(5, if_let(3, outer(result), result, 0))
+  }
+
+  it("keeps do failure inside the do carrier") {
+    outer = *{|value: Int|
+      failure: Result<Int> = do::<Result> {
+        accepted =? PatternProbe::source(0)
+        Ok(accepted)
+      }
+      absent: Option<Int> = do::<Option> {
+        True =? False
+        Option::Some(1)
+      }
+      MatchResult::Ok(if(and(is_match(failure, Err(_)), is_match(absent, Option::None)), value + 3, 0))
+    }
+    assert_eq(6, if_let(3, outer(result), result, 0))
+  }
+}

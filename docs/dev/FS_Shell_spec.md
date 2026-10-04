@@ -392,8 +392,8 @@ Project, Random, File, FS, IO, Shell, StyledDoc
   - `file_system.srt`: snapshot acquisition、`List::filter`、`List::sort_by`
   - `shell.srt`: `Shell::pwd()` と portable command execution
 - `integration`
-  - `surtr test file_system`
-  - `surtr test shell`
+  - `surtr test lib/tests/modules/file_system.srt`
+  - `surtr test lib/tests/modules/shell.srt`
   - cwd isolation が他 test case に漏れないこと
 
 実装後の最小 verification:

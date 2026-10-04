@@ -132,7 +132,7 @@ JSON schemaはdiagnostics正本の閉じたvariantを使い、未採用のdo専�
 - Sindr: `crates/sindr/tests/do_intrinsic_contract.rs`。
 - Spire/Sigil:各crateのsyntax、RTA、reserved marker、scope/captureテスト。
 - Scar: `crates/scar/tests/typecheck_surface.rs`のcarrier、capability、SafeBind、Facet、diagnostic境界。
-- 言語の観測結果: `lib/tests/do.srt`、`lib/tests/monad_transformers.srt`。
+- 言語の観測結果: `lib/tests/language_features/do.srt`。Transformerの観測は `lib/tests/monads/option_t.srt`、`either_t.srt`、`reader_t.srt`、`state_t.srt`（同じディレクトリ）で検証する。
 - script拒否境界: `tests/fixtures/script/fail/typecheck/do_*`。
 - human/JSON source facts: Rune binaryの`do_return_diagnostic_keeps_the_same_source_facts_in_human_and_json`。
 

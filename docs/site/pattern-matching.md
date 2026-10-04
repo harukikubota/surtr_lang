@@ -177,7 +177,7 @@ if_let(pair, (1, x) | (2, x), x, 0) # 42
 
 Result／Enum の payload や List／String の子まで、複数 arm を合成して完全に被覆する解析は行いません。子に値の制限がある Pattern や一般の Extractor を使う場合は、残りの入力を受ける arm を明示してください。標準 `Duration` の分解には、子がすべて catch-all なら単一 arm を受理する規則があります。
 
-基本例は [`lib/tests/spec.srt`](../../lib/tests/spec.srt)、OR の例は [`tests/fixtures/script/pass/patterns/`](../../tests/fixtures/script/pass/patterns/)、拒否例は [`tests/fixtures/script/fail/exhaustiveness/`](../../tests/fixtures/script/fail/exhaustiveness/) にあります。
+基本例は [`lib/tests/language_features/control.srt`](../../lib/tests/language_features/control.srt)、OR の例は [`tests/fixtures/script/pass/patterns/`](../../tests/fixtures/script/pass/patterns/)、拒否例は [`tests/fixtures/script/fail/exhaustiveness/`](../../tests/fixtures/script/fail/exhaustiveness/) にあります。
 
 ## Extractor を Pattern に使う
 

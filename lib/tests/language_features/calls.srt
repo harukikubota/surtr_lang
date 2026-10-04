@@ -1,0 +1,31 @@
+import Test;
+
+def add(x: Int, y: Int) -> Int { x + y }
+def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
+
+test("calls") {
+  describe("named arguments") {
+    it("orders two named arguments by parameter") { assert_eq(3, add(y: 2, x: 1)) }
+    it("orders three named arguments by parameter") { assert_eq(6, add3(z: 3, y: 2, x: 1)) }
+  }
+  describe("block literal") {
+    it("creates a callable without executing the body") {
+      block = { print("called"); tmp = 10; tmp * 10 }
+      do::<Result> {
+        assert_stdout_eq([])
+        assert_eq(100, block())
+        assert_stdout_eq(["called"])
+      }
+    }
+  }
+  describe("hole callable") {
+    it("accepts an ignored String argument") {
+      keep: (_ -> Int) = always(1)
+      assert_eq(1, keep("ignored"))
+    }
+    it("accepts an ignored Boolean argument") {
+      next = always(2)
+      assert_eq(2, next(False))
+    }
+  }
+}

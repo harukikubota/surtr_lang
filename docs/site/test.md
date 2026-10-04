@@ -16,22 +16,29 @@ test("addition") {
 }
 ```
 
-テストは `lib/tests/<name>.srt` に置き、`surtr test <name>` で実行します。
-`surtr test --all` はテストを辞書順に実行します。`--quiet` を付けると、成功時の出力を省きます。
+上の例を `tests/addition.srt` に保存した場合は、次のコマンドで実行します。
+
+```sh
+surtr test tests/addition.srt
+```
+
+`surtr test <file-path>` は指定したファイルを読み込みます。相対パスは起動時のCWDを基準にし、
+絶対パスや親ディレクトリを含むパス、symlinkも通常のファイル指定として扱います。
+前後の空白や区切り文字を変換せず、拡張子も補完しません。
 テストと各 `it` は直列に実行されます。
 
 ## 名前で選ぶ・一時停止する
 
 ```sh
-surtr test --all --test Parser --describe expression --it nested
-surtr test parser --include-xit --deny-pending
-surtr test --all --list --timings --format json
+surtr test tests/parser.srt --test Parser --describe expression --it nested
+surtr test tests/parser.srt --include-xit --deny-pending
+surtr test tests/parser.srt --list --timings --format json
 ```
 
 `--test` と `--describe` は、それぞれ同じ種類の祖先スコープの名前に照合します。
 `--it` は it / xit / pend 自身の名前に照合します。大文字小文字を区別する部分一致で、
 指定した種類の条件をすべて満たすケースを選びます。同じ種類の祖先は、どれか一つに一致すれば選べます。
-`--it=nested` の等号形式も使えます。フィルターを明示して全ファイルを通じて一件も一致しなければ失敗です。
+`--it=nested` の等号形式も使えます。フィルターを明示して一件も一致しなければ失敗です。
 
 ```surtr
 import Test;
@@ -69,7 +76,7 @@ test("Parser") {
 quiet では正常なケース詳細を省きますが、summary は全件を集計します。
 件数を cases 配列の長さから求めないでください。
 
-すべてのオプションは一度だけ指定できます。位置引数はファイル一件とし、`--all` と併用できません。
+すべてのオプションは一度だけ指定できます。位置引数にはファイルを一件指定します。
 `--` 以降はファイル名として解釈します。`-` で始まるフィルターには `--it=-name` の形式を使います。
 
 ## 複数のアサーション
@@ -160,7 +167,7 @@ test("expected failure") {
 | `assert_ok_eq(expected, result)` | `Ok` の成功値を `Eq` で比較 |
 | `assert_err_contains(fragment, result)` | `Err` の表示に文字列が含まれること |
 | `assert_doc_plain_eq` / `assert_doc_ansi_eq` | StyledDoc の出力 |
-| `assert_stdout_eq` / `assert_stderr_eq` | キャプチャした出力行 |
+| `assert_stdout_eq` / `assert_stderr_eq` | キャプチャした出力entry |
 
 `assert_ne` と `assert_some_eq` は Eq を要求します。inspect による代替比較は行いません。
 `assert_ok`・`assert_err`・`assert_none` は値の Eq を要求しません。

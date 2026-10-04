@@ -1,0 +1,404 @@
+defrecord GeneratorHolder(saved: Generator<Int>)
+
+
+  def fibonacci(count: Int) -> Generator<Int> {
+    Generator::unfold((0, 1, count), {|state|
+      if(state._2 > 0,
+        Option::Some((state._0, (state._1, state._0 + state._1, state._2 - 1))),
+        Option::None)
+    })
+  }
+
+  def observed_sequence() -> Generator<Int> {
+    Generator::unfold(1, {|n|
+      print("step=#{n}")
+      if(n <= 2, Option::Some((n, n + 1)), Option::None)
+    })
+  }
+
+
+
+import Test;
+
+test("Generator") {
+  describe("unfold") {
+    it("generates items from tuple state") {
+      assert_eq([0, 1, 1, 2, 3, 5], Generator::to_list(fibonacci(6)))
+    }
+
+    it("constructs and displays a sequence without evaluating its step") {
+      gen = observed_sequence()
+      shown = inspect(gen)
+      do::<Result> {
+        assert_eq("Generator(<opaque>)", shown)
+        assert_stdout_eq([])
+      }
+    }
+
+    it("produces an empty sequence when the step returns None") {
+      gen = Generator::unfold(0, {|_| Option<(Int, Int)>::None})
+      empty: List<Int> = []
+      do::<Result> {
+        assert_eq(empty, Generator::to_list(gen))
+        assert_err_kind(NoneError, Generator::next(gen))
+      }
+    }
+
+    it("treats Result items as data") {
+      gen = Generator::unfold(0, {|n|
+        if(n < 2, Option::Some((if(n == 0, Err(NoneError), Ok(7)), n + 1)), Option::None)
+      })
+      assert_eq([Err(NoneError), Ok(7)], Generator::to_list(gen))
+    }
+
+    it("treats Option items as data") {
+      gen = Generator::unfold(0, {|n|
+        if(n < 2, Option::Some((if(n == 0, Option::None, Option::Some(7)), n + 1)), Option::None)
+      })
+      assert_eq([Option::None, Option::Some(7)], Generator::to_list(gen))
+    }
+  }
+
+  describe("callable composition") {
+    it("supports capture, partial application, and pipe acquisition") {
+      captured: (Generator<Int> -> Result<(Int, Generator<Int>)>) = &Generator::next(&1)
+      partial: (Int -> (List<Int>, Generator<Int>)) = &Generator::take(Generator::range(7, 9), &1)
+      piped = Generator::range(10, 12) |> Generator::take(2)
+      do::<Result> {
+        (value, rest) =? captured(Generator::range(1, 2))
+        assert_eq(1, value)
+        assert_eq([2], Generator::to_list(rest))
+        assert_eq([7, 8], partial(2)._0)
+        assert_eq([10, 11], piped._0)
+      }
+    }
+  }
+
+  describe("next") {
+    it("returns an item and advances the returned sequence") {
+      gen = Generator::range(10, 12)
+      match Generator::next(gen) {
+        Ok((item, rest)) => {
+          do::<Result> {
+            assert_eq(10, item)
+            assert_eq([11, 12], Generator::to_list(rest))
+            assert_eq([10, 11, 12], Generator::to_list(gen))
+          }
+        },
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("does not change a sequence stored in a record, List, or Facet") {
+      gen = Generator::range(10, 12)
+      record = GeneratorHolder(gen)
+      copies = [gen, gen]
+      Generator::next(gen)
+      do::<Result> {
+        assert_eq([10, 11, 12], Generator::to_list(record.saved))
+        assert_eq([10, 11, 12], Generator::to_list(Facet::view(~record.saved)))
+        assert_eq([[10, 11, 12], [10, 11, 12]], List::map(copies, {|copy| Generator::to_list(copy)}))
+      }
+    }
+  }
+
+  describe("take") {
+    it("returns a prefix and a resumable rest") {
+      gen = fibonacci(12)
+      (first, rest) = Generator::take(gen, 5)
+      (second, remaining) = Generator::take(rest, 3)
+      do::<Result> {
+        assert_eq([0, 1, 1, 2, 3], first)
+        assert_eq([5, 8, 13], second)
+        assert_eq([21, 34, 55, 89], Generator::to_list(remaining))
+        assert_eq([0, 1, 1], Generator::take(gen, 3)._0)
+      }
+    }
+
+    it("returns empty values without evaluation for non-positive counts") {
+      gen = observed_sequence()
+      (zero, rest) = Generator::take(gen, 0)
+      (negative, _) = Generator::take(gen, -1)
+      empty: List<Int> = []
+      do::<Result> {
+        assert_eq(empty, zero)
+        assert_eq(empty, negative)
+        assert_stdout_eq([])
+        assert_eq([1, 2], Generator::to_list(rest))
+      }
+    }
+
+    it("does not look ahead after obtaining the requested count") {
+      (values, _) = Generator::take(observed_sequence(), 2)
+      do::<Result> {
+        assert_eq([1, 2], values)
+        assert_stdout_eq(["step=1", "step=2"])
+      }
+    }
+
+    it("accepts a large count for a short finite sequence") {
+      (values, rest) = Generator::take(Generator::range(1, 2), 1267650600228229401496703205376)
+      do::<Result> {
+        assert_eq([1, 2], values)
+        assert_err_kind(NoneError, Generator::next(rest))
+      }
+    }
+
+    it("returns every requested item for a large finite range") {
+      (values, _) = Generator::take(Generator::range(1, 1027), 1027)
+      do::<Result> {
+        assert_eq(1027, List::len(values))
+        assert_eq(Ok(1), List::first(values))
+        assert_eq(Ok(1027), List::last(values))
+      }
+    }
+
+    it("returns a terminal rest after a short sequence ends") {
+      (values, rest) = Generator::take(observed_sequence(), 5)
+      do::<Result> {
+        assert_eq([1, 2], values)
+        assert_stdout_eq(["step=1", "step=2", "step=3"])
+        assert_err_kind(NoneError, Generator::next(rest))
+        assert_stdout_eq([])
+      }
+    }
+
+    it("reevaluates an unconfirmed rest when reused") {
+      (_, rest) = Generator::take(observed_sequence(), 2)
+      first = Generator::next(rest)
+      second = Generator::next(rest)
+      do::<Result> {
+        assert_err_kind(NoneError, first)
+        assert_err_kind(NoneError, second)
+        assert_stdout_eq(["step=1", "step=2", "step=3", "step=3"])
+      }
+    }
+  }
+
+  describe("take_exact") {
+    it("returns the requested items and rest") {
+      gen = Generator::range(1, 3)
+      match Generator::take_exact(gen, 2) {
+        Ok((values, rest)) => {
+          do::<Result> {
+            assert_eq([1, 2], values)
+            assert_eq([3], Generator::to_list(rest))
+            assert_eq([1, 2, 3], Generator::to_list(gen))
+          }
+        },
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("does not evaluate a step after obtaining the requested count") {
+      match Generator::take_exact(observed_sequence(), 2) {
+        Ok((values, _)) => {
+          do::<Result> {
+            assert_eq([1, 2], values)
+            assert_stdout_eq(["step=1", "step=2"])
+          }
+        },
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("rejects non-positive counts before evaluating the step") {
+      result = Generator::take_exact(observed_sequence(), 0)
+      match result {
+        Err(err) => {
+          do::<Result> {
+            assert_eq("InvalidGeneratorCount", Error::kind(err))
+            assert_eq("count must be positive: 0", Error::message(err))
+            assert_stdout_eq([])
+          }
+        },
+        Ok(_) => assert_true(False),
+      }
+    }
+
+    it("reports the requested and actual counts when items are insufficient") {
+      gen = Generator::range(1, 2)
+      match Generator::take_exact(gen, 3) {
+        Err(err) => {
+          do::<Result> {
+            assert_eq("GeneratorShortage", Error::kind(err))
+            assert_eq("requested 3 items, got 2", Error::message(err))
+            assert_eq([1, 2], Generator::to_list(gen))
+          }
+        },
+        Ok(_) => assert_true(False),
+      }
+    }
+  }
+
+  describe("take_while") {
+    it("leaves the first rejected item at the start of the rest") {
+      (values, rest) = Generator::take_while(Generator::range(1, 4), {|n| n < 3})
+      do::<Result> {
+        assert_eq([1, 2], values)
+        assert_eq([3, 4], Generator::to_list(rest))
+      }
+    }
+
+    it("evaluates each predicate before adding its item") {
+      (values, _) = Generator::take_while(observed_sequence(), {|n|
+        print("predicate=#{n}")
+        n < 2
+      })
+      do::<Result> {
+        assert_eq([1], values)
+        assert_stdout_eq(["step=1", "predicate=1", "step=2", "predicate=2"])
+      }
+    }
+
+    it("returns the original position when the first item is rejected") {
+      (values, rest) = Generator::take_while(Generator::range(1, 3), {|_| False})
+      empty: List<Int> = []
+      do::<Result> {
+        assert_eq(empty, values)
+        assert_eq([1, 2, 3], Generator::to_list(rest))
+      }
+    }
+
+    it("returns a terminal rest when every item matches") {
+      (values, rest) = Generator::take_while(Generator::range(1, 3), {|_| True})
+      do::<Result> {
+        assert_eq([1, 2, 3], values)
+        assert_err_kind(NoneError, Generator::next(rest))
+      }
+    }
+  }
+
+  describe("take_until") {
+    it("stops before the first matching item") {
+      (values, rest) = Generator::take_until(Generator::range(1, 4), {|n| n >= 3})
+      do::<Result> {
+        assert_eq([1, 2], values)
+        assert_eq([3, 4], Generator::to_list(rest))
+      }
+    }
+
+    it("reevaluates the boundary when the rest is acquired again") {
+      gen = observed_sequence()
+      (first, rest) = Generator::take_until(gen, {|n| n >= 1})
+      (second, _) = Generator::take_until(rest, {|n| n >= 1})
+      empty: List<Int> = []
+      do::<Result> {
+        assert_eq(empty, first)
+        assert_eq(empty, second)
+        assert_stdout_eq(["step=1", "step=1"])
+      }
+    }
+  }
+
+  describe("to_list") {
+    it("evaluates all remaining items and observes termination once") {
+      values = Generator::to_list(observed_sequence())
+      do::<Result> {
+        assert_eq([1, 2], values)
+        assert_stdout_eq(["step=1", "step=2", "step=3"])
+      }
+    }
+  }
+
+  describe("range") {
+    it("includes both endpoints of an ascending range") {
+      assert_eq([3, 4, 5, 6], Generator::to_list(Generator::range(3, 6)))
+    }
+
+    it("produces an empty range when start exceeds stop") {
+      empty: List<Int> = []
+      assert_eq(empty, Generator::to_list(Generator::range(3, 1)))
+    }
+  }
+
+  describe("range_step") {
+    it("generates an ascending range with an explicit step") {
+      match Generator::range_step(1, 7, 2) {
+        Ok(gen) => assert_eq([1, 3, 5, 7], Generator::to_list(gen)),
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("generates a descending range with a negative step") {
+      match Generator::range_step(7, 1, -2) {
+        Ok(gen) => assert_eq([7, 5, 3, 1], Generator::to_list(gen)),
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("produces an empty range when the step points away from stop") {
+      match Generator::range_step(1, 7, -2) {
+        Ok(gen) => {
+          empty: List<Int> = []
+          assert_eq(empty, Generator::to_list(gen))
+        },
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("rejects a zero step") {
+      result = Generator::range_step(1, 5, 0)
+      do::<Result> {
+        assert_err_kind(InvalidRangeStep, result)
+        assert_err_contains("step must not be 0", result)
+      }
+    }
+  }
+
+  describe("range_char") {
+    it("generates an inclusive ascending ASCII range") {
+      match Generator::range_char("a", "c") {
+        Ok(gen) => assert_eq(["a", "b", "c"], Generator::to_list(gen)),
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("requires a single character at each endpoint") {
+      do::<Result> {
+        result = Generator::range_char("ab", "d")
+      do::<Result> {
+        assert_err_kind(InvalidCharRange, result)
+        assert_err_contains("start must be a single char", result)
+      }
+        result = Generator::range_char("a", "")
+      do::<Result> {
+        assert_err_kind(InvalidCharRange, result)
+        assert_err_contains("stop must be a single char", result)
+      }
+      }
+    }
+
+    it("requires ASCII endpoints") {
+      result = Generator::range_char("あ", "d")
+      do::<Result> {
+        assert_err_kind(InvalidCharRange, result)
+        assert_err_contains("start must be a single ASCII char", result)
+      }
+    }
+  }
+
+  describe("range_char_step") {
+    it("generates ascending ASCII characters with an explicit step") {
+      match Generator::range_char_step("a", "g", 2) {
+        Ok(gen) => assert_eq(["a", "c", "e", "g"], Generator::to_list(gen)),
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("generates descending ASCII characters with a negative step") {
+      match Generator::range_char_step("g", "a", -2) {
+        Ok(gen) => assert_eq(["g", "e", "c", "a"], Generator::to_list(gen)),
+        Err(_) => assert_true(False),
+      }
+    }
+
+    it("rejects a zero step before validating endpoints") {
+      result = Generator::range_char_step("ab", "d", 0)
+      do::<Result> {
+        assert_err_kind(InvalidRangeStep, result)
+        assert_err_contains("step must not be 0", result)
+      }
+    }
+  }
+}

@@ -1,0 +1,403 @@
+include "./support/probe.srt"
+
+import Test;
+
+def state_t_inc(value: Int) -> StateT<Int, Identity, Int> {
+  StateT::new({|state| Identity::new((value + state, state + 1))})
+}
+
+def state_t_double(value: Int) -> StateT<Int, Identity, Int> {
+  StateT::new({|state| Identity::new((value * 2 + state, state + 2))})
+}
+
+def state_t_pure(value: Int) -> StateT<Int, Identity, Int> {
+  Applicative::pure(value)
+}
+
+defstruct Holder { value: StateT<Int, Identity, Int>, }
+
+impl Holder {
+  def new(value: StateT<Int, Identity, Int>) -> Self { Holder { value } }
+}
+
+test("StateT") {
+  describe("new/run") {
+    it("observes new/run through the base carrier") {
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+      (observed_value, observed_state) = Identity::run(StateT::run(value, 3))
+      do::<Result> {
+        assert_eq(4, observed_value)
+        assert_eq(5, observed_state)
+      }
+    }
+
+  }
+
+  describe("eval") {
+    it("observes eval through the base carrier") {
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+      assert_eq(4, Identity::run(StateT::eval(value, 3)))
+    }
+
+  }
+
+  describe("exec") {
+    it("observes exec through the base carrier") {
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+      assert_eq(5, Identity::run(StateT::exec(value, 3)))
+    }
+
+  }
+
+  describe("get") {
+    it("observes get through the base carrier") {
+      current: StateT<Int, Identity, Int> = StateT::get::<Int, Identity>()
+      (observed_value, observed_state) = Identity::run(StateT::run(current, 3))
+      do::<Result> {
+        assert_eq(3, observed_value)
+        assert_eq(3, observed_state)
+      }
+    }
+
+  }
+
+  describe("gets") {
+    it("observes gets through the base carrier") {
+      projected: StateT<Int, Identity, Int> = StateT::gets::<Identity>({|state| state * 2})
+      (observed_value, observed_state) = Identity::run(StateT::run(projected, 3))
+      do::<Result> {
+        assert_eq(6, observed_value)
+        assert_eq(3, observed_state)
+      }
+    }
+
+  }
+
+  describe("put") {
+    it("observes put through the base carrier") {
+      put: StateT<Int, Identity, Unit> = StateT::put::<Identity>(9)
+      (observed_value, observed_state) = Identity::run(StateT::run(put, 3))
+      do::<Result> {
+        assert_eq((), observed_value)
+        assert_eq(9, observed_state)
+      }
+    }
+
+  }
+
+  describe("modify") {
+    it("observes modify through the base carrier") {
+      modified: StateT<Int, Identity, Unit> = StateT::modify::<Identity>({|state| state + 1})
+      (observed_value, observed_state) = Identity::run(StateT::run(modified, 3))
+      do::<Result> {
+        assert_eq((), observed_value)
+        assert_eq(4, observed_state)
+      }
+    }
+
+  }
+
+  describe("Applicative::ap") {
+    it("threads state in Applicative::ap from left to right") {
+      mapper: StateT<Int, Identity, (Int -> Int)> = StateT::new({|state|
+          Identity::new(({|item| item + state}, state + 1))
+      })
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((10, state + 10))})
+      applied: StateT<Int, Identity, Int> = Applicative::ap(mapper, value)
+      (observed_value, observed_state) = Identity::run(StateT::run(applied, 1))
+      do::<Result> {
+        assert_eq(11, observed_value)
+        assert_eq(12, observed_state)
+      }
+    }
+
+  }
+
+  describe("Monad::bind") {
+    it("threads state in Monad::bind from left to right") {
+      first: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state, state + 1))})
+      bound: StateT<Int, Identity, Int> = first |>= {|item|
+        StateT::new({|state| Identity::new((item + state, state + 10))})
+      }
+      (observed_value, observed_state) = Identity::run(StateT::run(bound, 1))
+      do::<Result> {
+        assert_eq(3, observed_value)
+        assert_eq(12, observed_state)
+      }
+    }
+
+  }
+
+  describe("Alternative::empty") {
+    it("derives Alternative only from an Alternative base") {
+      empty: StateT<Int, Option, Int> = Alternative::empty()
+      expected_none: Option<(Int, Int)> = Option::None
+      assert_eq(expected_none, StateT::run(empty, 3))
+    }
+
+  }
+
+  describe("Alternative::choose") {
+    it("derives Alternative only from an Alternative base") {
+      left: StateT<Int, Option, Int> = StateT::new({|_state| Option::None})
+      right: StateT<Int, Option, Int> = StateT::new({|state| Option::Some((state + 1, state + 2))})
+      pair: (Int, Int) =? to::<Result>(StateT::run(left <|> right, 3))
+      do::<Result> {
+        assert_eq(4, pair._0)
+        assert_eq(5, pair._1)
+      }
+    }
+
+  }
+
+  describe("Alternative::choose List") {
+    it("derives Alternative only from an Alternative base") {
+      left_list: StateT<Int, List, Int> = StateT::new({|state| [(state, state + 1)]})
+      right_list: StateT<Int, List, Int> = StateT::new({|state| [(state + 10, state + 20)]})
+      chosen_list: StateT<Int, List, Int> = left_list <|> right_list
+      assert_eq([(3, 4), (13, 23)], StateT::run(chosen_list, 3))
+    }
+
+  }
+
+  describe("Monad::bind") {
+    it("preserves base failure without producing a next state") {
+      failed: StateT<Int, Result, Int> = StateT::new({|state|
+          Err(NoneError)
+      })
+      bound: StateT<Int, Result, Int> = failed |>= {|value|
+        StateT::new({|state| Ok((value + 1, state + 1))})
+      }
+      assert_err_kind(NoneError, StateT::run(bound, 3))
+    }
+
+  }
+
+  describe("Monad left identity") {
+    it("Monad left identity") {
+      left_identity: StateT<Int, Identity, Int> = Monad::return(3) |>= &state_t_inc
+      (left_value, left_state) = Identity::run(StateT::run(state_t_inc(3), 4))
+      (right_value, right_state) = Identity::run(StateT::run(left_identity, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+  }
+
+  describe("Monad right identity") {
+    it("Monad right identity") {
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+      right_identity: StateT<Int, Identity, Int> = value |>= &state_t_pure
+      (left_value, left_state) = Identity::run(StateT::run(value, 4))
+      (right_value, right_state) = Identity::run(StateT::run(right_identity, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+  }
+
+  describe("Monad associativity") {
+    it("Monad associativity") {
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+      assoc_left: StateT<Int, Identity, Int> = (value |>= &state_t_inc) |>= &state_t_double
+      assoc_right: StateT<Int, Identity, Int> = value |>= {|item| state_t_inc(item) |>= &state_t_double}
+      (left_value, left_state) = Identity::run(StateT::run(assoc_left, 4))
+      (right_value, right_state) = Identity::run(StateT::run(assoc_right, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+  }
+
+  describe("lift pure law") {
+    it("lift pure law") {
+      lifted_pure: StateT<Int, Identity, Int> = MonadT::lift(Applicative::pure(3))
+      transformer_pure: StateT<Int, Identity, Int> = Applicative::pure(3)
+      (left_value, left_state) = Identity::run(StateT::run(lifted_pure, 4))
+      (right_value, right_state) = Identity::run(StateT::run(transformer_pure, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+  }
+
+  describe("lift bind law") {
+    it("lift bind law") {
+      base: Identity<Int> = Identity::new(3)
+      lifted: StateT<Int, Identity, Int> = MonadT::lift(base)
+      lifted_bind: StateT<Int, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+      bound_lifts: StateT<Int, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+      (left_value, left_state) = Identity::run(StateT::run(lifted_bind, 4))
+      (right_value, right_state) = Identity::run(StateT::run(bound_lifts, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+  }
+
+  describe("ordinary values") {
+    it("stores in a field collection and Facet") {
+      holder = Holder::new(StateT::gets::<Identity>({|x: Int| x + 1}))
+      updated = Facet::put(Holder.value, holder, StateT::gets::<Identity>({|x: Int| x + 9}))
+      values: List<StateT<Int, Identity, Int>> = [holder.value, updated.value]
+      second =? List::at(values, 1)
+      (observed_value, observed_state) = Identity::run(StateT::run(second, 3))
+      do::<Result> {
+        assert_eq(12, observed_value)
+        assert_eq(3, observed_state)
+      }
+    }
+
+  }
+
+  describe("base injection") {
+    it("state_get delegates to the base constructor") {
+      state_get: StateT<Int, Probe, Int> = StateT::get::<Int, Probe>()
+      assert_eq("pure", StateT::run(state_get, 1).origin)
+    }
+
+    it("state_gets delegates to the base constructor") {
+      state_gets: StateT<Int, Probe, Int> = StateT::gets::<Probe>({|value| value + 1})
+      assert_eq("pure", StateT::run(state_gets, 1).origin)
+    }
+
+    it("state_put delegates to the base constructor") {
+      state_put: StateT<Int, Probe, Unit> = StateT::put::<Probe>(2)
+      assert_eq("pure", StateT::run(state_put, 1).origin)
+    }
+
+    it("state_modify delegates to the base constructor") {
+      state_modify: StateT<Int, Probe, Unit> = StateT::modify::<Probe>({|value| value + 1})
+      assert_eq("pure", StateT::run(state_modify, 1).origin)
+    }
+
+  }
+
+  describe("Functor laws") {
+    it("identity compares original and mapped payloads") {
+      value: StateT<Int, Identity, Int> = StateT::gets::<Identity>({|state: Int| state + 3})
+      mapped: StateT<Int, Identity, Int> = value |*> {|x| x}
+      (left_value, left_state) = Identity::run(StateT::run(value, 4))
+      (right_value, right_state) = Identity::run(StateT::run(mapped, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+    it("composition compares both mappings") {
+      value: StateT<Int, Identity, Int> = StateT::gets::<Identity>({|state: Int| state + 3})
+      left: StateT<Int, Identity, Int> = (value |*> {|x| x + 1}) |*> {|x| x * 2}
+      right: StateT<Int, Identity, Int> = value |*> {|x| (x + 1) * 2}
+      (left_value, left_state) = Identity::run(StateT::run(left, 4))
+      (right_value, right_state) = Identity::run(StateT::run(right, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+  }
+
+  describe("Applicative laws") {
+    it("identity compares applied and original values") {
+      value: StateT<Int, Identity, Int> = StateT::gets::<Identity>({|state: Int| state + 3})
+      mapper: StateT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x})
+      left: StateT<Int, Identity, Int> = Applicative::ap(mapper, value)
+      (left_value, left_state) = Identity::run(StateT::run(left, 4))
+      (right_value, right_state) = Identity::run(StateT::run(value, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+    it("homomorphism compares both pure injections") {
+      mapper: StateT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      value: StateT<Int, Identity, Int> = Applicative::pure(3)
+      left: StateT<Int, Identity, Int> = Applicative::ap(mapper, value)
+      right: StateT<Int, Identity, Int> = Applicative::pure(4)
+      (left_value, left_state) = Identity::run(StateT::run(left, 4))
+      (right_value, right_state) = Identity::run(StateT::run(right, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+    it("interchange compares both applications") {
+      mapper: StateT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      value: StateT<Int, Identity, Int> = Applicative::pure(3)
+      left: StateT<Int, Identity, Int> = Applicative::ap(mapper, value)
+      apply_value: StateT<Int, Identity, ((Int -> Int) -> Int)> = Applicative::pure({|f| f(3)})
+      right: StateT<Int, Identity, Int> = Applicative::ap(apply_value, mapper)
+      (left_value, left_state) = Identity::run(StateT::run(left, 4))
+      (right_value, right_state) = Identity::run(StateT::run(right, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+    it("composition compares nested applications") {
+      compose: StateT<Int, Identity, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Applicative::pure({|f| {|g| {|x| f(g(x))}}})
+      u: StateT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      v: StateT<Int, Identity, (Int -> Int)> = Applicative::pure({|x| x * 2})
+      w: StateT<Int, Identity, Int> = StateT::gets::<Identity>({|state: Int| state + 3})
+      left: StateT<Int, Identity, Int> = compose |*| u |*| v |*| w
+      right: StateT<Int, Identity, Int> = Applicative::ap(u, Applicative::ap(v, w))
+      (left_value, left_state) = Identity::run(StateT::run(left, 4))
+      (right_value, right_state) = Identity::run(StateT::run(right, 4))
+      do::<Result> {
+        assert_eq(left_value, right_value)
+        assert_eq(left_state, right_state)
+      }
+    }
+
+  }
+
+  describe("base injection") {
+    it("pure delegates to base pure") {
+      pure: StateT<Int, Probe, Int> = Applicative::pure(7)
+      assert_eq("pure", StateT::run(pure, 4).origin)
+    }
+
+    it("return delegates to base return") {
+      returned: StateT<Int, Probe, Int> = Monad::return(7)
+      assert_eq("return", StateT::run(returned, 4).origin)
+    }
+
+  }
+
+  describe("Alternative::choose") {
+    it("runs both branches from the same initial state without undoing effects") {
+      left: StateT<Int, Option, Int> = StateT::new({|state|
+        print("left:#{state}")
+        Option::Some((state, state + 1))
+      })
+      right: StateT<Int, Option, Int> = StateT::new({|state|
+        print("right:#{state}")
+        Option::Some((state + 10, state + 20))
+      })
+      actual = StateT::run(left <|> right, 3)
+      pair: (Int, Int) =? to::<Result>(actual)
+      do::<Result> {
+        assert_eq(3, pair._0)
+        assert_eq(4, pair._1)
+        assert_stdout_eq(["left:3", "right:3"])
+      }
+    }
+
+  }
+
+}

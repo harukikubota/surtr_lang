@@ -1,0 +1,518 @@
+include "./support/probe.srt"
+
+import Test;
+
+def either_t_inc(value: Int) -> EitherT<String, Identity, Int> {
+  EitherT::right::<String, Identity>(value + 1)
+}
+
+def either_t_double(value: Int) -> EitherT<String, Identity, Int> {
+  EitherT::right::<String, Identity>(value * 2)
+}
+
+def either_t_pure(value: Int) -> EitherT<String, Identity, Int> {
+  Applicative::pure(value)
+}
+
+defstruct Holder { value: EitherT<String, Identity, Int>, }
+
+impl Holder {
+  def new(value: EitherT<String, Identity, Int>) -> Self { Holder { value } }
+}
+
+test("EitherT") {
+  describe("new/run") {
+    it("returns the new/run representation") {
+      inner: Identity<Either<String, Int>> = Identity::new(Either::Right(1))
+      wrapped: EitherT<String, Identity, Int> = EitherT::new(inner)
+      assert_eq(Identity::run(inner), Identity::run(EitherT::run(wrapped)))
+    }
+
+  }
+
+  describe("left") {
+    it("returns the left representation") {
+      left: EitherT<String, Identity, Int> = EitherT::left::<Identity, Int>("stop")
+      expected_left: Either<String, Int> = Either::Left("stop")
+      assert_eq(expected_left, Identity::run(EitherT::run(left)))
+    }
+
+  }
+
+  describe("right") {
+    it("returns the right representation") {
+      right: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
+      expected_right: Either<String, Int> = Either::Right(2)
+      assert_eq(expected_right, Identity::run(EitherT::run(right)))
+    }
+
+  }
+
+  describe("from_either") {
+    it("returns the from_either representation") {
+      from_either: EitherT<String, Identity, Int> = EitherT::from_either::<Identity>(Either::Right(3))
+      expected_from_either: Either<String, Int> = Either::Right(3)
+      assert_eq(expected_from_either, Identity::run(EitherT::run(from_either)))
+    }
+
+  }
+
+  describe("Functor::fmap") {
+    it("maps the successful payload") {
+      left: EitherT<String, Identity, Int> = EitherT::from_either::<Identity>(Either::Left("stop"))
+      mapped: EitherT<String, Identity, Int> = left |*> {|value| value + 1}
+      expected_left: Either<String, Int> = Either::Left("stop")
+      assert_eq(expected_left, Identity::run(EitherT::run(mapped)))
+    }
+
+  }
+
+  describe("base mapping") {
+    it("maps either slot through the base functor") {
+      left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      )
+      mapped_left: EitherT<Int, Probe, Int> = EitherT::map_left(left, &String::len)
+      expected_mapped_left: Either<Int, Int> = Either::Left(4)
+      assert_eq(expected_mapped_left, EitherT::run(mapped_left).value)
+    }
+
+  }
+
+  describe("preserved_right") {
+    it("maps either slot through the base functor") {
+      right: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Right(7), "input"),
+      )
+      preserved_right: EitherT<Int, Probe, Int> = EitherT::map_left(right, &String::len)
+      expected_preserved_right: Either<Int, Int> = Either::Right(7)
+      assert_eq(expected_preserved_right, EitherT::run(preserved_right).value)
+    }
+
+  }
+
+  describe("preserved_left") {
+    it("maps either slot through the base functor") {
+      left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      )
+      preserved_left: EitherT<String, Probe, String> = EitherT::map_right(left, &to_string)
+      expected_preserved_left: Either<String, String> = Either::Left("stop")
+      assert_eq(expected_preserved_left, EitherT::run(preserved_left).value)
+    }
+
+  }
+
+  describe("base mapping") {
+    it("maps either slot through the base functor") {
+      right: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Right(7), "input"),
+      )
+      mapped_right: EitherT<String, Probe, String> = EitherT::map_right(right, &to_string)
+      expected_mapped_right: Either<String, String> = Either::Right("7")
+      assert_eq(expected_mapped_right, EitherT::run(mapped_right).value)
+    }
+
+  }
+
+  describe("bimap_left") {
+    it("maps either slot through the base functor") {
+      left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      )
+      bimap_left: EitherT<Int, Probe, String> = EitherT::bimap(left, &String::len, &to_string)
+      expected_bimap_left: Either<Int, String> = Either::Left(4)
+      assert_eq(expected_bimap_left, EitherT::run(bimap_left).value)
+    }
+
+  }
+
+  describe("bimap_right") {
+    it("maps either slot through the base functor") {
+      right: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Right(7), "input"),
+      )
+      bimap_right: EitherT<Int, Probe, String> = EitherT::bimap(right, &String::len, &to_string)
+      expected_bimap_right: Either<Int, String> = Either::Right("7")
+      assert_eq(expected_bimap_right, EitherT::run(bimap_right).value)
+    }
+
+  }
+
+  describe("functor_left") {
+    it("maps either slot through the base functor") {
+      left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      )
+      preserved_left: EitherT<String, Probe, String> = EitherT::map_right(left, &to_string)
+      functor_left: EitherT<String, Probe, String> = Functor::fmap(left, &to_string)
+      assert_eq(EitherT::run(preserved_left).value, EitherT::run(functor_left).value)
+    }
+
+  }
+
+  describe("functor_right") {
+    it("maps either slot through the base functor") {
+      right: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Right(7), "input"),
+      )
+      mapped_right: EitherT<String, Probe, String> = EitherT::map_right(right, &to_string)
+      functor_right: EitherT<String, Probe, String> = Functor::fmap(right, &to_string)
+      assert_eq(EitherT::run(mapped_right).value, EitherT::run(functor_right).value)
+    }
+
+  }
+
+  describe("functor_left") {
+    it("maps either slot through the base functor") {
+      left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      )
+      preserved_left: EitherT<String, Probe, String> = EitherT::map_right(left, &to_string)
+      functor_left: EitherT<String, Probe, String> = Functor::fmap(left, &to_string)
+      assert_eq(EitherT::run(preserved_left).origin, EitherT::run(functor_left).origin)
+    }
+
+  }
+
+  describe("functor_right") {
+    it("maps either slot through the base functor") {
+      right: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Right(7), "input"),
+      )
+      mapped_right: EitherT<String, Probe, String> = EitherT::map_right(right, &to_string)
+      functor_right: EitherT<String, Probe, String> = Functor::fmap(right, &to_string)
+      assert_eq(EitherT::run(mapped_right).origin, EitherT::run(functor_right).origin)
+    }
+
+  }
+
+  describe("bimap_right") {
+    it("maps either slot through the base functor") {
+      left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      )
+      right: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Right(7), "input"),
+      )
+      mapped_left: EitherT<Int, Probe, Int> = EitherT::map_left(left, &String::len)
+      mapped_right: EitherT<String, Probe, String> = EitherT::map_right(right, &to_string)
+      bimap_right: EitherT<Int, Probe, String> = EitherT::bimap(right, &String::len, &to_string)
+      do::<Result> {
+        assert_eq("input", EitherT::run(mapped_left).origin)
+        assert_eq("input", EitherT::run(mapped_right).origin)
+        assert_eq("input", EitherT::run(bimap_right).origin)
+      }
+    }
+
+  }
+
+  describe("base mapping") {
+    it("preserves base failure while mapping either slot") {
+      failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+      mapped_left: EitherT<Int, Result, Int> = EitherT::map_left(failed, &String::len)
+      assert_err_kind(NoneError, EitherT::run(mapped_left))
+    }
+
+    it("preserves base failure while mapping either slot") {
+      failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+      mapped_right: EitherT<String, Result, String> = EitherT::map_right(failed, &to_string)
+      assert_err_kind(NoneError, EitherT::run(mapped_right))
+    }
+
+    it("preserves base failure while mapping either slot") {
+      failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+      mapped_both: EitherT<Int, Result, String> = EitherT::bimap(failed, &String::len, &to_string)
+      assert_err_kind(NoneError, EitherT::run(mapped_both))
+    }
+
+  }
+
+  describe("Functor::fmap") {
+    it("maps the successful payload") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
+      mapped: EitherT<String, Identity, Int> = value |*> {|item| item + 1}
+      expected_three: Either<String, Int> = Either::Right(3)
+      assert_eq(expected_three, Identity::run(EitherT::run(mapped)))
+    }
+
+  }
+
+  describe("Applicative::ap") {
+    it("applies a successful contextual mapper") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
+      mapper: EitherT<String, Identity, (Int -> Int)> = EitherT::right::<String, Identity>({|item| item * 3})
+      applied: EitherT<String, Identity, Int> = Applicative::ap(mapper, value)
+      expected_six: Either<String, Int> = Either::Right(6)
+      assert_eq(expected_six, Identity::run(EitherT::run(applied)))
+    }
+
+  }
+
+  describe("Monad::bind") {
+    it("binds the successful payload") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
+      bound: EitherT<String, Identity, Int> = value |>= &either_t_inc
+      expected_three: Either<String, Int> = Either::Right(3)
+      assert_eq(expected_three, Identity::run(EitherT::run(bound)))
+    }
+
+  }
+
+  describe("Monad::bind Left") {
+    it("maps applies and binds only Right payloads") {
+      left: EitherT<String, Identity, Int> = EitherT::left::<Identity, Int>("stop")
+      left_bound: EitherT<String, Identity, Int> = left |>= &either_t_inc
+      expected_left: Either<String, Int> = Either::Left("stop")
+      assert_eq(expected_left, Identity::run(EitherT::run(left_bound)))
+    }
+
+    it("keeps inner Left separate from base failure") {
+      left: EitherT<String, Result, Int> = EitherT::left::<Result, Int>("stop")
+      left_bound: EitherT<String, Result, Int> = left |>= {|item| EitherT::right::<String, Result>(item + 1)}
+      assert_ok_eq(Either<String, Int>::Left("stop"), EitherT::run(left_bound))
+    }
+
+  }
+
+  describe("Monad::bind base failure") {
+    it("keeps inner Left separate from base failure") {
+      base_failure: Result<Either<String, Int>> = Err(NoneError)
+      failed: EitherT<String, Result, Int> = EitherT::new(base_failure)
+      failed_bound: EitherT<String, Result, Int> = failed |>= {|item| EitherT::right::<String, Result>(item + 1)}
+      assert_err_kind(NoneError, EitherT::run(failed_bound))
+    }
+
+  }
+
+  describe("Applicative::ap Left") {
+    it("sequences ap in base order while Left short-circuits the value") {
+      left_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(
+        Ok(Either::Left("stop")),
+      )
+      failed_value: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+      left_ap: EitherT<String, Result, Int> = Applicative::ap(left_mapper, failed_value)
+      assert_ok_eq(Either<String, Int>::Left("stop"), EitherT::run(left_ap))
+    }
+
+  }
+
+  describe("Applicative::ap mapper failure") {
+    it("sequences ap in base order while Left short-circuits the value") {
+      failed_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(Err(NoneError))
+      right_value: EitherT<String, Result, Int> = EitherT::new(Ok(Either::Right(1)))
+      failed_mapper_ap: EitherT<String, Result, Int> = Applicative::ap(failed_mapper, right_value)
+      assert_err_kind(NoneError, EitherT::run(failed_mapper_ap))
+    }
+
+  }
+
+  describe("Applicative::ap value failure") {
+    it("sequences ap in base order while Left short-circuits the value") {
+      failed_value: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+      right_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(
+        Ok(Either::Right({|value| value + 1})),
+      )
+      failed_ap: EitherT<String, Result, Int> = Applicative::ap(right_mapper, failed_value)
+      assert_err_kind(NoneError, EitherT::run(failed_ap))
+    }
+
+  }
+
+  describe("Monad left identity") {
+    it("Monad left identity") {
+      left_identity: EitherT<String, Identity, Int> = Monad::return(3) |>= &either_t_inc
+      assert_eq(Identity::run(EitherT::run(either_t_inc(3))), Identity::run(EitherT::run(left_identity)))
+    }
+
+  }
+
+  describe("Monad right identity") {
+    it("Monad right identity") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      right_identity: EitherT<String, Identity, Int> = value |>= &either_t_pure
+      assert_eq(Identity::run(EitherT::run(value)), Identity::run(EitherT::run(right_identity)))
+    }
+
+  }
+
+  describe("Monad associativity") {
+    it("Monad associativity") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      assoc_left: EitherT<String, Identity, Int> = (value |>= &either_t_inc) |>= &either_t_double
+      assoc_right: EitherT<String, Identity, Int> = value |>= {|item| either_t_inc(item) |>= &either_t_double}
+      assert_eq(Identity::run(EitherT::run(assoc_left)), Identity::run(EitherT::run(assoc_right)))
+    }
+
+  }
+
+  describe("lift pure law") {
+    it("lift pure law") {
+      lifted_pure: EitherT<String, Identity, Int> = MonadT::lift(Applicative::pure(3))
+      transformer_pure: EitherT<String, Identity, Int> = Applicative::pure(3)
+      assert_eq(Identity::run(EitherT::run(lifted_pure)), Identity::run(EitherT::run(transformer_pure)))
+    }
+
+  }
+
+  describe("lift bind law") {
+    it("lift bind law") {
+      base: Identity<Int> = Identity::new(3)
+      lifted: EitherT<String, Identity, Int> = MonadT::lift(base)
+      lifted_bind: EitherT<String, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+      bound_lifts: EitherT<String, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+      assert_eq(Identity::run(EitherT::run(lifted_bind)), Identity::run(EitherT::run(bound_lifts)))
+    }
+
+  }
+
+  describe("ordinary values") {
+    it("stores in a field collection and Facet") {
+      holder = Holder::new(EitherT::right::<String, Identity>(1))
+      updated = Facet::put(Holder.value, holder, EitherT::right::<String, Identity>(9))
+      values: List<EitherT<String, Identity, Int>> = [holder.value, updated.value]
+      second =? List::at(values, 1)
+      assert_eq(Either<String, Int>::Right(9), Identity::run(EitherT::run(second)))
+    }
+
+  }
+
+  describe("base injection") {
+    it("either_pure delegates to the base constructor") {
+      either_pure: EitherT<String, Probe, Int> = Applicative::pure(1)
+      assert_eq("pure", EitherT::run(either_pure).origin)
+    }
+
+    it("either_left delegates to the base constructor") {
+      either_left: EitherT<String, Probe, Int> = EitherT::left::<Probe, Int>("stop")
+      assert_eq("pure", EitherT::run(either_left).origin)
+    }
+
+    it("either_right delegates to the base constructor") {
+      either_right: EitherT<String, Probe, Int> = EitherT::right::<String, Probe>(2)
+      assert_eq("pure", EitherT::run(either_right).origin)
+    }
+
+    it("either_from_right delegates to the base constructor") {
+      either_from_right: EitherT<String, Probe, Int> = EitherT::from_either::<Probe>(Either::Right(2))
+      assert_eq("pure", EitherT::run(either_from_right).origin)
+    }
+
+    it("either_from_left delegates to the base constructor") {
+      either_from_left: EitherT<String, Probe, Int> = EitherT::from_either::<Probe>(Either::Left("stop"))
+      assert_eq("pure", EitherT::run(either_from_left).origin)
+    }
+
+    it("either_bind_left delegates to the base constructor") {
+      either_bind_left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      ) |>= {|value| EitherT::right::<String, Probe>(value + 1)}
+      assert_eq("pure", EitherT::run(either_bind_left).origin)
+    }
+
+    it("either_ap_left delegates to the base constructor") {
+      either_ap_left: EitherT<String, Probe, Int> = Applicative::ap(
+        EitherT::new(Probe::new(Either::Left("stop"), "input")),
+        EitherT::right::<String, Probe>(3),
+      )
+      assert_eq("pure", EitherT::run(either_ap_left).origin)
+    }
+
+    it("either_return delegates to the base constructor") {
+      either_return: EitherT<String, Probe, Int> = Monad::return(4)
+      assert_eq("return", EitherT::run(either_return).origin)
+    }
+
+  }
+
+  describe("Functor laws") {
+    it("identity compares original and mapped payloads") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      mapped: EitherT<String, Identity, Int> = value |*> {|x| x}
+      assert_eq(Identity::run(EitherT::run(value)), Identity::run(EitherT::run(mapped)))
+    }
+
+    it("composition compares both mappings") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      left: EitherT<String, Identity, Int> = (value |*> {|x| x + 1}) |*> {|x| x * 2}
+      right: EitherT<String, Identity, Int> = value |*> {|x| (x + 1) * 2}
+      assert_eq(Identity::run(EitherT::run(left)), Identity::run(EitherT::run(right)))
+    }
+
+  }
+
+  describe("Applicative laws") {
+    it("identity compares applied and original values") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      mapper: EitherT<String, Identity, (Int -> Int)> = Applicative::pure({|x| x})
+      left: EitherT<String, Identity, Int> = Applicative::ap(mapper, value)
+      assert_eq(Identity::run(EitherT::run(left)), Identity::run(EitherT::run(value)))
+    }
+
+    it("homomorphism compares both pure injections") {
+      mapper: EitherT<String, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      value: EitherT<String, Identity, Int> = Applicative::pure(3)
+      left: EitherT<String, Identity, Int> = Applicative::ap(mapper, value)
+      right: EitherT<String, Identity, Int> = Applicative::pure(4)
+      assert_eq(Identity::run(EitherT::run(left)), Identity::run(EitherT::run(right)))
+    }
+
+    it("interchange compares both applications") {
+      mapper: EitherT<String, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      value: EitherT<String, Identity, Int> = Applicative::pure(3)
+      left: EitherT<String, Identity, Int> = Applicative::ap(mapper, value)
+      apply_value: EitherT<String, Identity, ((Int -> Int) -> Int)> = Applicative::pure({|f| f(3)})
+      right: EitherT<String, Identity, Int> = Applicative::ap(apply_value, mapper)
+      assert_eq(Identity::run(EitherT::run(left)), Identity::run(EitherT::run(right)))
+    }
+
+    it("composition compares nested applications") {
+      compose: EitherT<String, Identity, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Applicative::pure({|f| {|g| {|x| f(g(x))}}})
+      u: EitherT<String, Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      v: EitherT<String, Identity, (Int -> Int)> = Applicative::pure({|x| x * 2})
+      w: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      left: EitherT<String, Identity, Int> = compose |*| u |*| v |*| w
+      right: EitherT<String, Identity, Int> = Applicative::ap(u, Applicative::ap(v, w))
+      assert_eq(Identity::run(EitherT::run(left)), Identity::run(EitherT::run(right)))
+    }
+
+  }
+
+  describe("base injection") {
+    it("pure delegates to base pure") {
+      pure: EitherT<String, Probe, Int> = Applicative::pure(7)
+      assert_eq("pure", EitherT::run(pure).origin)
+    }
+
+    it("return delegates to base return") {
+      returned: EitherT<String, Probe, Int> = Monad::return(7)
+      assert_eq("return", EitherT::run(returned).origin)
+    }
+
+  }
+
+
+  describe("short circuit") {
+    it("Functor::fmap skips the unavailable payload") {
+      source: EitherT<String, Identity, Int> = EitherT::left::<Identity, Int>("stop")
+      actual: EitherT<String, Identity, Int> = source |*> {|value| print("unexpected"); value + 1}
+      observed = Identity::run(EitherT::run(actual))
+      do::<Result> {
+        assert_eq(Either<String, Int>::Left("stop"), observed)
+        assert_stdout_eq([])
+      }
+    }
+
+    it("Monad::bind skips the unavailable payload") {
+      source: EitherT<String, Identity, Int> = EitherT::left::<Identity, Int>("stop")
+      actual: EitherT<String, Identity, Int> = source |>= {|value| print("unexpected"); EitherT::right::<String, Identity>(value + 1)}
+      observed = Identity::run(EitherT::run(actual))
+      do::<Result> {
+        assert_eq(Either<String, Int>::Left("stop"), observed)
+        assert_stdout_eq([])
+      }
+    }
+
+  }
+
+}

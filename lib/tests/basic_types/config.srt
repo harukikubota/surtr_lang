@@ -1,0 +1,21 @@
+import Test;
+test("Config") {
+  describe("new") {
+    it("sets the name") { assert_eq("App", Config::new("App").name) }
+    it("starts with the default entrypoint") { assert_eq("Main::main", Config::new("App").entrypoint) }
+    it("starts with no paths") { assert_eq(0, List::len(Config::new("App").paths)) }
+  }
+  describe("entry_fun") {
+    it("changes only the new entrypoint") {
+      original = Config::new("Cli")
+      updated = Config::entry_fun(original, "Cli::main")
+      do::<Result> { assert_eq("Main::main", original.entrypoint); assert_eq("Cli::main", updated.entrypoint); assert_eq("Cli", updated.name); assert_eq(0, List::len(updated.paths)) }
+    }
+  }
+  describe("add_path") {
+    it("appends search paths in order") {
+      cfg = Config::add_path(Config::add_path(Config::new("Fmt"), "./lib"), "./tests")
+      assert_eq(["./lib", "./tests"], cfg.paths)
+    }
+  }
+}

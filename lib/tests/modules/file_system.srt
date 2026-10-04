@@ -1,0 +1,94 @@
+import File;
+import Test;
+
+test("FS") {
+  describe("path operations") {
+    it("observes name extension and parent") {
+      root =? FS::path("./tmp/sandbox")
+      child =? FS::join(root, "alpha.srt")
+      parent =? FS::parent(child)
+      do::<Result> {
+        assert_ok_eq("alpha.srt", FS::name(child))
+        assert_some_eq("srt", FS::extension(child))
+        assert_eq(root.raw, parent.raw)
+      }
+    }
+  }
+  describe("mkdir/ls/stat/tree_depth") {
+    it("observes one created file and removes it after checking") {
+      root =? FS::path("./tmp/sandbox/lib_test_fs_snapshot")
+      source =? FS::join(root, "alpha.srt")
+      setup = do::<Result> {
+        if(File::exists(source.raw), File::delete(source.raw), Ok(()))
+        FS::mkdir_all(root)
+      }
+      checked = do::<Result> {
+        setup
+        _ =? File::write(source.raw, "alpha")
+        snapshot =? FS::ls(root)
+        assert_eq(1, List::len(snapshot.entries))
+        assert_true(List::any(snapshot.entries, {|entry| entry.name == "alpha.srt"}))
+        assert_ok_eq(True, FS::exists(source))
+        entry =? FS::stat(source)
+        assert_eq("alpha.srt", entry.name)
+        tree =? FS::tree_depth(root, 1)
+        assert_eq(1, List::len(tree.entries))
+      }
+      cleanup = do::<Result> { if(File::exists(source.raw), File::delete(source.raw), Ok(())); FS::rm(root) }
+      do::<Result> { cleanup; checked }
+    }
+  }
+  describe("mv/cp") {
+    it("moves then copies the payload and removes both files") {
+      root =? FS::path("./tmp/sandbox/lib_test_fs_move")
+      from =? FS::join(root, "from.txt")
+      moved =? FS::join(root, "moved.txt")
+      copied =? FS::join(root, "copied.txt")
+      setup = do::<Result> {
+        if(File::exists(from.raw), File::delete(from.raw), Ok(()))
+        if(File::exists(moved.raw), File::delete(moved.raw), Ok(()))
+        if(File::exists(copied.raw), File::delete(copied.raw), Ok(()))
+        FS::mkdir_all(root)
+      }
+      checked = do::<Result> {
+        setup
+        _ =? File::write(from.raw, "payload")
+        _ =? FS::mv(from, moved)
+        assert_ok_eq(False, FS::exists(from))
+        assert_ok_eq(True, FS::exists(moved))
+        _ =? FS::cp(moved, copied)
+        assert_ok_eq("payload", File::read(copied.raw))
+      }
+      cleanup = do::<Result> {
+        if(File::exists(from.raw), File::delete(from.raw), Ok(()))
+        if(File::exists(moved.raw), File::delete(moved.raw), Ok(()))
+        if(File::exists(copied.raw), File::delete(copied.raw), Ok(()))
+        FS::rm(root)
+      }
+      do::<Result> { cleanup; checked }
+    }
+  }
+  describe("tree_depth") { it("rejects a negative depth") {
+    root =? FS::path("./tmp/sandbox")
+    assert_err_kind(FileSystemInvalidDepth, FS::tree_depth(root, -1))
+  } }
+  describe("mkdir") {
+    it("creates one directory and rejects an existing directory") {
+      root =? FS::path("./tmp/sandbox/lib_test_fs_mkdir")
+      present =? FS::exists(root)
+      setup = do::<Result> {
+        if(present, FS::rm(root), Ok(()))
+        parent =? FS::parent(root)
+        FS::mkdir_all(parent)
+      }
+      checked = do::<Result> {
+        setup
+        _ =? FS::mkdir(root)
+        assert_ok_eq(True, FS::exists(root))
+        assert_err_kind(FileSystemAlreadyExists, FS::mkdir(root))
+      }
+      cleanup = FS::rm(root)
+      do::<Result> { cleanup; checked }
+    }
+  }
+}

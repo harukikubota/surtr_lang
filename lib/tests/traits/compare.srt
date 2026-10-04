@@ -1,0 +1,46 @@
+import Test;
+
+defrecord Ranked(rank: Int)
+impl Compare for Ranked {
+  def compare(self: Self, other: Self) -> Ordering { Compare::compare(self.rank, other.rank) }
+}
+
+test("Compare") {
+  describe("compare") {
+    it("uses the implementation order") {
+      assert_eq(Ordering::Less, Compare::compare(Ranked(1), Ranked(2)))
+    }
+
+  }
+
+  describe("default predicates") {
+    it("derive all relations from Less") {
+      do::<Result> {
+        assert_true(Compare::lt(Ranked(1), Ranked(2)))
+        assert_true(Compare::lte(Ranked(1), Ranked(2)))
+        assert_false(Compare::gt(Ranked(1), Ranked(2)))
+        assert_false(Compare::gte(Ranked(1), Ranked(2)))
+      }
+    }
+
+    it("derive all relations from Equal") {
+      do::<Result> {
+        assert_false(Compare::lt(Ranked(2), Ranked(2)))
+        assert_true(Compare::lte(Ranked(2), Ranked(2)))
+        assert_false(Compare::gt(Ranked(2), Ranked(2)))
+        assert_true(Compare::gte(Ranked(2), Ranked(2)))
+      }
+    }
+
+    it("derive all relations from Greater") {
+      do::<Result> {
+        assert_false(Compare::lt(Ranked(3), Ranked(2)))
+        assert_false(Compare::lte(Ranked(3), Ranked(2)))
+        assert_true(Compare::gt(Ranked(3), Ranked(2)))
+        assert_true(Compare::gte(Ranked(3), Ranked(2)))
+      }
+    }
+
+  }
+
+}

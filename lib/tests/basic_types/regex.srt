@@ -1,0 +1,74 @@
+import Test;
+
+test("Regex") {
+  describe("compile and match") {
+    it("matches realistic issue identifiers") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      assert_true(Regex::is_match(re, "issue-runtime-42"))
+    }
+
+    it("rejects non-matching text") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      assert_false(Regex::is_match(re, "runtime-42"))
+    }
+  }
+
+  describe("captures and spans") {
+    it("returns named capture values") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      caps =? Regex::captures(re, "issue-runtime-42")
+      do::<Result> {
+        assert_eq(["team", "id"], Regex::group_names(re))
+        assert_eq("issue-runtime-42", RegexCaptures::whole(caps))
+        assert_eq(3, RegexCaptures::capture_count(caps))
+        RegexCaptures::get_name(caps, "team") |>= {|value| assert_eq("runtime", value)}
+        RegexCaptures::get(caps, 2) |>= {|value| assert_eq("42", value)}
+      }
+    }
+
+    it("returns the first match span") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      found =? Regex::find(re, "open issue-runtime-42 now")
+      do::<Result> {
+        assert_eq("issue-runtime-42", RegexMatch::text(found))
+        assert_eq(5, RegexMatch::start(found))
+        assert_eq(21, RegexMatch::end(found))
+      }
+    }
+  }
+
+  describe("rewrite helpers") {
+    it("splits and replaces repeated separators") {
+      re =? Regex::compile("-+")
+      do::<Result> {
+        assert_eq(["surtr", "compiler", "worker"], Regex::split(re, "surtr---compiler-worker"))
+        assert_eq("surtr/compiler/worker", Regex::replace_all(re, "surtr---compiler-worker", "/"))
+        assert_eq("surtr/compiler-worker", Regex::replace(re, "surtr---compiler-worker", "/"))
+      }
+    }
+
+    it("escapes plain user text") {
+      assert_eq("issue\\-runtime\\+42\\?", Regex::escape("issue-runtime+42?"))
+    }
+  }
+
+
+  describe("compile failure") { it("rejects an invalid pattern") { assert_err_kind(RegexCompileError, Regex::compile("[")) } }
+  describe("find_all") {
+    it("returns matches in input order with offsets") {
+      re =? Regex::compile("[0-9]+")
+      matches = Regex::find_all(re, "a12b3")
+      do::<Result> {
+        assert_eq(2, List::len(matches))
+        first =? List::first(matches)
+        last =? List::last(matches)
+        assert_eq("12", RegexMatch::text(first))
+        assert_eq(1, RegexMatch::start(first))
+        assert_eq(3, RegexMatch::end(first))
+        assert_eq("3", RegexMatch::text(last))
+      }
+    }
+    it("returns no matches") { re =? Regex::compile("[0-9]+"); assert_eq(0, List::len(Regex::find_all(re, "none"))) }
+  }
+
+}

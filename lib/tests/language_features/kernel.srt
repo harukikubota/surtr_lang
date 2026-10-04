@@ -1,0 +1,79 @@
+import Test;
+
+def traced_boolean(value: Boolean) -> Boolean { print("right"); value }
+
+test("Kernel") {
+  describe("guard") {
+    it("returns Unit in a successful Option") { assert_some_eq((), guard::<Option>(True)) }
+    it("returns empty Option on rejection") { assert_none(guard::<Option>(False)) }
+  }
+  describe("assert") {
+    it("accepts true") { assert_ok(assert(True, NoneError)) }
+    it("rejects false with the provided kind") { assert_err_kind(NoneError, assert(False, NoneError)) }
+  }
+  describe("ensure") {
+    it("returns an accepted value unchanged") { assert_ok_eq(3, ensure(3, {|n| n > 0}, NoneError)) }
+    it("rejects a failed predicate") { assert_err_kind(NoneError, ensure(0, {|n| n > 0}, NoneError)) }
+    it("calls the predicate once") {
+      actual = ensure(3, {|n| print("predicate"); n > 0}, NoneError)
+      do::<Result> { assert_ok_eq(3, actual); assert_stdout_eq(["predicate"]) }
+    }
+  }
+  describe("tap") {
+    it("observes and preserves the value") {
+      actual = tap(3, {|n| print(to_string(n))})
+      do::<Result> { assert_eq(3, actual); assert_stdout_eq(["3"]) }
+    }
+  }
+  describe("dup") {
+    it("copies the same input into both positions") {
+      (left, right) = dup(7)
+      do::<Result> { assert_eq(7, left); assert_eq(7, right) }
+    }
+  }
+  describe("todo") {
+    it("returns NotImplemented for the chosen success type") { assert_err_kind(NotImplemented, todo::<Int>()) }
+  }
+  describe("inspect") {
+    it("quotes and escapes String control characters") { assert_eq("\"a\\nb\"", inspect("a\nb")) }
+  }
+  describe("and") {
+    it("skips the right side after False") {
+      actual = and(False, traced_boolean(True))
+      do::<Result> { assert_false(actual); assert_stdout_eq([]) }
+    }
+    it("evaluates the right side once after True") {
+      actual = and(True, traced_boolean(False))
+      do::<Result> { assert_false(actual); assert_stdout_eq(["right"]) }
+    }
+  }
+  describe("or") {
+    it("skips the right side after True") {
+      actual = or(True, traced_boolean(False))
+      do::<Result> { assert_true(actual); assert_stdout_eq([]) }
+    }
+    it("evaluates the right side once after False") {
+      actual = or(False, traced_boolean(True))
+      do::<Result> { assert_true(actual); assert_stdout_eq(["right"]) }
+    }
+  }
+  describe("uncons") {
+    it("decomposes a nonempty List") {
+      match [1, 2, 3] {
+        uncons(head, tail) => do::<Result> { assert_eq(1, head); assert_eq([2, 3], tail) },
+        _ => fail("expected List decomposition"),
+      }
+    }
+    it("rejects an empty List") {
+      empty: List<Int> = []
+      assert_false(is_match(empty, uncons(_, _)))
+    }
+    it("decomposes a multibyte String") {
+      match "猫ab" {
+        uncons(head, tail) => do::<Result> { assert_eq("猫", head); assert_eq("ab", tail) },
+        _ => fail("expected String decomposition"),
+      }
+    }
+    it("rejects an empty String") { assert_false(is_match("", uncons(_, _))) }
+  }
+}

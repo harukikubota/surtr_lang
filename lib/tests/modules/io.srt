@@ -1,0 +1,18 @@
+import IO;
+import Test;
+test("IO") {
+  describe("get_line") {
+    it("reads supplied lines in order") { push_stdin("alpha\nbeta\n"); do::<Result> { assert_ok_eq("alpha", IO::get_line("")); assert_ok_eq("beta", IO::get_line("")) } }
+    it("emits the prompt as one entry") { push_stdin("answer\n"); actual = IO::get_line("prompt"); do::<Result> { assert_ok_eq("answer", actual); assert_stdout_eq(["prompt"]) } }
+    it("removes CRLF") { cr =? String::from_codepoints([13], StringEncoding::Utf8); push_stdin("alpha" ++ cr ++ "\n"); assert_ok_eq("alpha", IO::get_line("")) }
+    it("reports EOF") { assert_err_kind(InputError, IO::get_line("")) }
+    it("reports EOF after consuming input") { push_stdin("x\n"); do::<Result> { assert_ok_eq("x", IO::get_line("")); assert_err_kind(InputError, IO::get_line("")) } }
+  }
+  describe("get") {
+    it("reads characters in order") { push_stdin("xy"); do::<Result> { assert_ok_eq("x", IO::get("")); assert_ok_eq("y", IO::get("")) } }
+    it("reads a multibyte character") { push_stdin("猫"); assert_ok_eq("猫", IO::get("")) }
+    it("emits the prompt") { push_stdin("x"); actual = IO::get("?"); do::<Result> { assert_ok_eq("x", actual); assert_stdout_eq(["?"]) } }
+    it("reports EOF after a character") { push_stdin("x"); do::<Result> { assert_ok_eq("x", IO::get("")); assert_err_kind(InputError, IO::get("")) } }
+  }
+  describe("eprint") { it("writes the formatted error to stderr") { eprint(NoneError); assert_stderr_eq(["Error: NoneError: None Value."]) } }
+}

@@ -1,0 +1,45 @@
+defmod ClosureProbe {
+  def make_threshold(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
+    *{|value: Int|
+      True =? value > limit
+      MatchResult::Ok(value)
+    }
+  }
+
+  def run(ext: ExtractorClosure<(Int -> MatchResult<Int>)>, value: Int) -> Result<Int> {
+    ext(accepted) =? Ok(value)
+    Ok(accepted)
+  }
+
+  def make_runner(limit: Int) -> (Int -> Result<Int>) {
+    ext = make_threshold(limit)
+    {|value: Int|
+      ext(accepted) =? Ok(value)
+      Ok(accepted)
+    }
+  }
+
+  def make_checked() -> ExtractorClosure<(Int -> MatchResult<Int>)> {
+    *{|value: Int|
+      accepted =? PatternProbe::source(value)
+      print("after-closure-result")
+      MatchResult::Ok(accepted)
+    }
+  }
+
+  def make_nested_checked() -> ExtractorClosure<(Int -> MatchResult<Int>)> {
+    *{|value: Int|
+      PatternProbe::result_checked(accepted) =? Ok(value)
+      print("after-closure-extractor")
+      MatchResult::Ok(accepted)
+    }
+  }
+
+  def run_tuple(ext: ExtractorClosure<((Int, Int) -> MatchResult<Int>)>) -> Int {
+    if_let((2, 3), ext(result), result, 0)
+  }
+
+  def run_two(ext: ExtractorClosure<(Int, Int -> MatchResult<Int>)>) -> Int {
+    if_let(3, ext(2, result), result, 0)
+  }
+}

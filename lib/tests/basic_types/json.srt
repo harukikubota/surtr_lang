@@ -1,0 +1,55 @@
+import Test;
+
+test("Json") {
+  describe("parse/decode") {
+    it("parses null") { actual =? Json::parse("null"); assert_true(is_match(actual, JsonValue::Null)) }
+    it("parses Boolean") { actual =? Json::parse("true"); assert_ok_eq(True, Json::as_bool(actual)) }
+    it("parses Int") { actual =? Json::parse("42"); assert_ok_eq(42, Json::as_int(actual)) }
+    it("parses Float") { actual =? Json::parse("4.2"); assert_ok_eq(4.2, Json::as_float(actual)) }
+    it("parses String through decode") { actual =? Json::decode("\"surtr\""); assert_ok_eq("surtr", Json::as_string(actual)) }
+    it("rejects invalid input") { assert_err_kind(JsonParseError, Json::parse("{")) }
+  }
+  describe("get") {
+    it("decodes a String field") { json =? Json::parse("{\"name\":\"surtr\"}"); name =? Json::get(json, "name") |>= Decode::decode::<String>; assert_eq("surtr", name) }
+    it("rejects a missing key") { json =? Json::parse("{}"); assert_err_kind(JsonDecodeError, Json::get(json, "missing")) }
+    it("rejects a nonobject") { assert_err_kind(JsonDecodeError, Json::get(JsonValue::Int(3), "missing")) }
+  }
+  describe("at") {
+    it("selects an array entry") { json =? Json::parse("[1,2]"); item =? Json::at(json, 1); assert_ok_eq(2, Json::as_int(item)) }
+    it("rejects an index outside the array") { json =? Json::parse("[]"); assert_err_kind(JsonDecodeError, Json::at(json, 0)) }
+  }
+  describe("as_array/as_object") {
+    it("returns the public array contents") { json =? Json::parse("[1,2]"); values =? Json::as_array(json); assert_eq(2, List::len(values)) }
+    it("returns the public object contents") { json =? Json::parse("{\"x\":1}"); values =? Json::as_object(json); assert_eq(["x"], HashMap::map_keys(values)) }
+    it("rejects a different kind") { assert_err_kind(JsonDecodeError, Json::as_array(JsonValue::Null)) }
+  }
+  describe("kind") {
+    it("distinguishes each JSON constructor") {
+      do::<Result> {
+        assert_eq("null", Json::kind(JsonValue::Null))
+        assert_eq("boolean", Json::kind(JsonValue::Bool(True)))
+        assert_eq("int", Json::kind(JsonValue::Int(3)))
+        assert_eq("float", Json::kind(JsonValue::Float(1.0)))
+        assert_eq("string", Json::kind(JsonValue::String("a")))
+        assert_eq("array", Json::kind(JsonValue::Array([])))
+        object: HashMap<JsonValue> = hash![]
+        assert_eq("object", Json::kind(JsonValue::Object(object)))
+      }
+    }
+  }
+  describe("as_* rejection") {
+    it("rejects a nonString") { assert_err_kind(JsonDecodeError, Json::as_string(JsonValue::Null)) }
+    it("rejects a nonInt") { assert_err_kind(JsonDecodeError, Json::as_int(JsonValue::Null)) }
+    it("rejects a nonFloat") { assert_err_kind(JsonDecodeError, Json::as_float(JsonValue::Null)) }
+    it("rejects a nonBoolean") { assert_err_kind(JsonDecodeError, Json::as_bool(JsonValue::Null)) }
+    it("rejects a nonObject") { assert_err_kind(JsonDecodeError, Json::as_object(JsonValue::Null)) }
+  }
+  describe("stringify/encode") {
+    it("encodes deterministic object key order") {
+      value = JsonValue::Object(HashMap::map_from_entries([("b", JsonValue::Int(2)), ("a", JsonValue::Int(1))]))
+      json =? JsonValue::encode(value)
+      assert_ok_eq("{\"a\":1,\"b\":2}", Json::encode(json))
+    }
+    it("stringifies an array") { assert_ok_eq("[1,2]", Json::stringify(JsonValue::Array([JsonValue::Int(1), JsonValue::Int(2)]))) }
+  }
+}
