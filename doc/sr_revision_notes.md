@@ -13,7 +13,7 @@
 | SR-07 | 詳細仕様待ち | Pattern→Expr変換範囲と対象表記の確定が必要 |
 | SR-08 | 現行実装・既存テスト確認 | Result / Booleanの実宣言に基づくaliasを維持 |
 | SR-09 | 既存挙動確認・回帰テスト追加済み | 通常dbgと専用dbg!の共存 |
-| SR-10 | 構文選択待ち | 括弧内形式・旧表記・予約範囲を整理 |
+| SR-10 | 構文方針確定・未実装 | matchは3形式を同等に扱う。bulk_updateは引数の括弧必須、condは括弧有無を許容 |
 | SR-11 | 現行処理の責務を確認 | callee UIDは一意。型に依存する引数役割の遅延と区別 |
 | SR-12 | 可視性・拒否条件を確認 | public Constはimportなし、private Constはファイル内 |
 | SR-13 | 意図を確認・仕様整理済み | newの定義必須によるコンパイル時の呼出し先解決。実行時のResult値とは独立 |
@@ -128,19 +128,35 @@ Sigil の `special_variants_require_a_real_enum_declaration`、`canonical_specia
 
 `tests/fixtures/script/pass/functions/dbg_name_is_distinct_from_special_form.srt` で同名関数と同名引数の通常呼出し、および `dbg!(dbg(value))` の共存を固定した。Xldr の既存 `core_dbg_docs_and_signatures_resolve_from_bootstrap_source` にはローカル `dbg` の呼出しを追加し、`dbg!` の出力と Bootstrap 文書・signature が両立することを確認した。script fixture bucket 7 と、CI profile の REPL bucket 1 はそれぞれ成功した。既存挙動の回帰テストであり、意図的な Red は作っていない。
 
-## SR-10: bulk_updateのキーワード化と括弧内block
+## SR-10: match・cond・bulk_updateの関数呼出し形式
 
-`bulk_update`をキーワード化し、シャドーイングを禁止する。
+通常関数呼出しの形でも記述できるようにする構文上の拡張とする。各形式は同じ専用ASTへ接続し、既存の意味論とブロック内の文法を維持する。
 
-次の形式を受理できるようにする。
+`match`は次の3形式を等しく扱う。
 
 ```surtr
-bulk_update(user, {..})
+match ARG1 { ... }
+match(ARG1) { ... }
+match(ARG1, { ... })
 ```
 
-`{..}`は回答中のblock省略表記。現在はこの形式で落ちるとの回答であり、今回再現確認はしていない。
+`bulk_update`は値の引数を括弧で囲む。次の2形式を扱い、`bulk_update value { ... }`は禁止する。
 
-`match`、`cond`も含め、`()`内にblockを置けるようにしたい。具体的な構文・既存形式との関係は後段で仕様を詰める。
+```surtr
+bulk_update(value) { ... }
+bulk_update(value, { ... })
+```
+
+`cond`は次の括弧有無だけを許容する。
+
+```surtr
+cond { ... }
+cond({ ... })
+```
+
+`{ ... }`は各専用ブロックの内容を省略した表記。空ブロックの受理や、ブロックを一般の値として扱う機能を追加する意味ではない。named argument、パイプ注入、ブロック内区切りなどの新しい規則は今回の構文追加に含めない。
+
+以前の「一つの正規形を選び、外置きブロックを拒否する」という提案は撤回する。`bulk_update`のキーワード化・シャドーイング禁止という既存方針は維持する。現行の`Facet::bulk_update`という修飾表記の扱いは、今回確定した括弧の規則とは分けて記録する。
 
 ## SR-11: Extractorの呼出し先は一意
 
@@ -178,7 +194,7 @@ Pattern側のExtractorは、定義されていなければコンパイル時の�
 
 ## 後段タスクへの引継ぎ
 
-最初にSR-01の関数ごとのキーワード・シャドーイング・呼出し先解決の仕様を詰める。SR-07はその決定後にフローを設計する。SR-09／10の具体的な区別・構文も、仕様を整理してから改修する。
+最初にSR-01の関数ごとのキーワード・シャドーイング・呼出し先解決の仕様を詰める。SR-07はその決定後にフローを設計する。SR-09の区別は確認済み。SR-10は上記の構文方針に沿って実装する。
 
 SR-02〜04は標準環境を前提に入口とテスト構成を統一し、SR-05は内部lookup失敗を明確なエラーにする。SR-06／08／12／13は回答で示された仕様を前提に扱う。SR-11は呼出し先の一意性を前提とし、再走査を加えない。
 
