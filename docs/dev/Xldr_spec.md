@@ -89,6 +89,7 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - Trait も所属 namespace の canonical identity を保持する。callable の表示では所属 path を保ち、暗黙の `Global::` を省略する。`Global::Function` は `Function`、`Global::Add` は `Add`、`Math::Add` は `Math::Add` と表示する
 - `Result<T>` を正規表記とし、`Result<T, E>` は関数定義の直接の戻り値位置だけで許可する補助的な error contract 表記とする。値の推論型と callable 値の signature では `Result<T>` / `MatchResult<T>` と表示し、内部のエラー型を型引数として表示しない。束縛、型照会と入れ子の型にも適用する。`:sig` / `:doc` などの REPL コマンドによる宣言シグネチャの表示では、関数宣言の戻り値に明示した `Result<T, E>` と named `defextractor` の戻り値に明示した `MatchResult<T, Error>` を保持する。`ExtractorClosure` の型注釈では `MatchResult<T>` のみを受理する。定義で省略された Error 位置を補わない。値の型エラー診断と補完候補・シグネチャヘルプにも正規表記を使う。ExtractorClosure の値表示は束縛専用の特例を設けず、Eldr の共通 inspect 処理を使う。
 - constructor capture は `Capture` origin、canonical constructor 名、capture site で具体化した signature を保持し、bare capture と partial capture、再 capture、nominal/container 内の表示で同じ metadata を使う
+- `Ok` / `Err` / `True` / `False` は通常 Enum 宣言へ解決する。`:sig` / `:doc`、constructor capture の表示・定義参照は canonical 名を使う。chunk 追加・rollback・bytecode 復元後も既存 ID を保持し、新規 compiler symbol と callable は各 allocator の追加順で割り当てる。`Ok` / `Err` / `print` の固定 ID 枠は設けない。
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
 - `surtr repl --module <file>` は追加の definition source を 1 件だけ preload し、`Std + 単品 definition` として成立する場合に限って受理する
 - `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、`include` を解決したうえで declaration area を compile し、top-level expr があれば REPL 開始前に一度だけ実行する

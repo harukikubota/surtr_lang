@@ -429,9 +429,8 @@ right: Either<Int, String> = Either<Int, _>::Right("value")
 `Enum<...>::method`、struct constructor、型注釈中の `_` には広がりません。
 TypeConstructor trait や abstract `Error` など、通常の値型位置で禁止される型も明示できません。
 
-`Err(NoneError)` の成功型が外側から決まらない場合は、
-`Result<Int>::Err(NoneError)` のように明示します。この形も従来の Result constructor と同じ
-runtime 表現と Error 制約を使います。
+`Err(NoneError)` の成功型を固定したい場合は、`failed: Result<Int> = Err(NoneError)` のように
+型注釈を付けます。
 
 補足:
 

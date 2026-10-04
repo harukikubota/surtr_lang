@@ -129,7 +129,7 @@ do::<Carrier> {
 - 値生成は `Enum::Variant(...)` または `Enum<TypeArgument, ...>::Variant(...)`
 - 後者の型引数 arity は enum 宣言と一致させる。各 `_` はその位置だけを payload と expected type から推論し、明示した通常型・scope 内型変数は固定する
 - 通常の型引数位置ではTypeConstructor traitやabstract `Error`を使えない。nominal declaration parameterがTypeCtorTrait constraintを持つ位置だけは、対応する具象constructorのbare headを指定できる。call-site ReturnTypeArgumentでは完全・部分型applicationと`_`もcarrier入力として指定できる
-- `Result<T>::Ok(...)` / `Result<T>::Err(...)` は Result 専用 constructor として lower する。bare `Err(...)` の `T` が外側から決まらない場合は owner 型引数を明示する
+- `Ok(...)` / `Err(...)` は通常 Enum の variant として解決し、Result の型制約と runtime 表現を適用する。成功型を固定したい場合は `failed: Result<Int> = Err(NoneError)` のように型注釈を付ける
 - `Enum<...>::method`、struct constructor、型注釈・signature・pattern・impl target の `_` にはこの規則を適用しない
 - `match` は網羅必須
 - enum 値への field access（例: `.idx`）は不可

@@ -4,6 +4,10 @@
 
 named Extractor と ExtractorClosure は入力を1個以上取り、最後の入力を照合対象とする。戻り値の正規表記は `MatchResult<Payload>` であり、`MatchResult::Ok` と `MatchResult::Err` の二状態だけを持つ。named `defextractor` 定義の直接の戻り値位置に限り、`MatchResult<Payload, Error>` と Error を明記できる。`Option` 返却、旧 `Matcher` / `apply_matcher` 経路、暗黙変換は受理しない。Pattern AST は第一級の値ではなく、ExtractorClosure の値化と Pattern consumer は別の境界である。
 
+標準 `Result` / `Boolean` の `Ok` / `Err` / `True` / `False` Pattern は
+通常 Enum の canonical variant を参照し、網羅性・payload 規則に従う。
+別 Enum の同名 variant は別 identity として検査し、`MatchResult` の bare alias は追加しない。
+
 ## Record の構造的 Pattern
 
 `defrecord User(name: String, age: Int)` の `User(name, age)` は compiler-owned な構造的 Pattern として分解する。`User(age: selected_age, name: selected_name)` は field 名で対応付け、照合・binding は宣言順に行う。どちらも全 field が必要で、named と positional の混在、重複・未知・不足 field、field 名 shorthand は拒否する。
@@ -50,7 +54,7 @@ defenum MatchResult<$Value> {
 - 両表記を同一型へ正規化する。内部では成功 payload 型だけを型引数として保持してよい。
 - `NoMatch` variant / tag は設けない。不成功はすべて Err であり、Error を保持するか破棄するかは consumer が決める。
 - `Result` / `Option` と暗黙変換しない。variant 名や tag の類似を根拠に互換扱いしない。
-- constructor は常に qualified な `MatchResult::Ok` / `MatchResult::Err` とする。通常 Result の bare `Ok` / `Err` sugar は拡張しない。
+- constructor は常に `MatchResult::Ok` / `MatchResult::Err` とする。
 
 手書きの `MatchResult::Err(...)` の引数は具象 `deferror` 値に限定する。抽象 Error の直接構築、観測済み abstract Error の手書き constructor への再投入、裸の Error 値の一般保持、String 等の任意値による代用は許可しない。SafeBind の compiler-owned な伝播では取得済みの Error をそのまま保持する。consumer が既存 Error を保持する内部経路と、利用者の明示 constructor の入力制約を区別する。
 
@@ -249,8 +253,8 @@ def apply_pattern(value: $Value, pattern: $Pattern) -> Result<$Return>
 これは compiler-known consumer の外部 signature 表示である。`$Pattern` を一般値型として追加せず、第2引数を Pattern として解析・解決・型検査する。正規 identity は `Kernel::apply_pattern` とする。
 
 - 第1引数の値全体を照合する。Result input も自動 unwrap しない。必要なら `Ok(...)` / `Err(...)` を Pattern に明記する。
-- 全照合成功時だけ projection 結果を Result::Ok へ入れる。
-- Extractor / ExtractorClosure の Err は元の Error を Result::Err へ保持する。通常 Pattern 不一致は既存規則の Error を返す。
+- 全照合成功時だけ projection 結果を Ok へ入れる。
+- Extractor / ExtractorClosure の Err は元の Error を Err へ保持する。通常 Pattern 不一致は既存規則の Error を返す。
 - enclosing callable の Result 戻り値を要求せず、早期 return を発生させない。
 - 静的 Pattern エラーは compile error とする。利用者の Err や runtime 不一致へ変換しない。
 
@@ -308,7 +312,7 @@ result = apply_pattern([10, 20], [temporary, _1: Int])
 | `if_let_then` | branch | Error を破棄し、次の OR alternative。全候補失敗で branch 未評価の Unit |
 | `is_match` | True | Error を破棄し、False |
 | SafeBind `=?` | bind して続行 | 現在の failure target の preserve / discard policy |
-| `apply_pattern` | projection の Result::Ok | 元の Error を保持した Result::Err |
+| `apply_pattern` | projection の Ok | 元の Error を保持した Err |
 | do の partial `<-` | payload の bind と continuation | do-local failure target の preserve / discard policy |
 
 非保持 consumer は Error の kind / message / location / cause を表示・伝播・記録しない。OK 後の literal / constructor / list shape 等の子 Pattern 不一致は既存の Pattern failure である。nested Extractor が Err を返した場合、保持 consumer は実際に失敗した nested Extractor の Error を使う。
@@ -333,7 +337,7 @@ do 外の Extractor / ExtractorClosure 本文では、その本文の MatchResul
 
 | failure の起点 | 本文からの早期 return |
 |---|---|
-| RHS の canonical Result::Err(error) | MatchResult::Err(error) |
+| RHS の canonical Err(error) | MatchResult::Err(error) |
 | LHS 内の Extractor / ExtractorClosure の Err(error) | MatchResult::Err(error) |
 | literal / constructor / list shape 等の通常不一致 | 既存 Pattern Error を持つ MatchResult::Err |
 
@@ -362,7 +366,7 @@ checked = *{|source: (-> Result<Int>), value: Int|
 }
 ```
 
-上の例では source の Result::Err と apply_pattern の Result::Err を、checked 自身の MatchResult::Err へ返す。LHS に直接 Extractor を使う場合も同じ target へ返す。
+上の例では source の Err と apply_pattern の Err を、checked 自身の MatchResult::Err へ返す。LHS に直接 Extractor を使う場合も同じ target へ返す。
 
 ```surtr
 direct = *{|value: Int|
