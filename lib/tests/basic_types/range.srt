@@ -3,9 +3,10 @@ import Test;
 test("Range") {
   describe("construction helpers") {
     it("keeps new in declared order and normalized in ascending order") {
-      raw = Range(3, 1)
-      normalized = Range::normalized(3, 1)
-      do::<Result> {
+      do {
+        raw = Range(3, 1)
+        normalized = Range::normalized(3, 1)
+
         assert_eq(3, raw.min)
         assert_eq(1, raw.max)
         assert_eq(1, normalized.min)
@@ -14,9 +15,10 @@ test("Range") {
     }
 
     it("keeps constructor polymorphism across different endpoint types in one scope") {
-      raw = Range(3, 1)
-      dur = Range(10ms, 20ms)
-      do::<Result> {
+      do {
+        raw = Range(3, 1)
+        dur = Range(10ms, 20ms)
+
         assert_eq(3, raw.min)
         assert_eq(1, raw.max)
         assert_eq("10ms", to_string(dur.min))
@@ -27,11 +29,12 @@ test("Range") {
 
   describe("ordering helpers") {
     it("uses lexicographic compare plus structural equality") {
-      left = Range(1, 4)
-      right = Range(2, 0)
-      same = Range(1, 4)
-      different = Range(1, 5)
-      do::<Result> {
+      do {
+        left = Range(1, 4)
+        right = Range(2, 0)
+        same = Range(1, 4)
+        different = Range(1, 5)
+
         assert_eq(Ordering::Less, compare(left, right))
         assert_eq(Ordering::Equal, compare(left, same))
         assert_true(left == same)
@@ -40,10 +43,11 @@ test("Range") {
     }
 
     it("specializes generic ordering helpers for Range<Duration>") {
-      left = Range(10ms, 20ms)
-      right = Range(10ms, 30ms)
-      same = Range(10ms, 20ms)
-      do::<Result> {
+      do {
+        left = Range(10ms, 20ms)
+        right = Range(10ms, 30ms)
+        same = Range(10ms, 20ms)
+
         assert_eq(Ordering::Less, compare(left, right))
         assert_true(left == same)
         assert_true(left != right)
@@ -53,10 +57,11 @@ test("Range") {
 
   describe("movement helpers") {
     it("advances and retreats integer ranges without renormalizing") {
-      raw = Range(3, 1)
-      advanced = Range::advance(raw, 2)
-      retreated = Range::retreat(raw, 2)
-      do::<Result> {
+      do {
+        raw = Range(3, 1)
+        advanced = Range::advance(raw, 2)
+        retreated = Range::retreat(raw, 2)
+
         assert_eq(5, advanced.min)
         assert_eq(3, advanced.max)
         assert_eq(1, retreated.min)
@@ -67,9 +72,12 @@ test("Range") {
 
   describe("pattern integration") {
     it("supports Range(min, max) deconstruction") {
-      value = Range(4, 6)
-      (left, right) = match value { Range(min, max) => (min, max), _ => (0, 0), }
-      do::<Result> { assert_eq(4, left); assert_eq(6, right) }
+      do {
+        value = Range(4, 6)
+        (left, right) = match value { Range(min, max) => (min, max), _ => (0, 0), }
+
+        assert_eq(4, left); assert_eq(6, right)
+      }
     }
   }
 }

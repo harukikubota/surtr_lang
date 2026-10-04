@@ -10,13 +10,19 @@ where
 test("Applicative") {
   describe("constructor constraint") {
     it("preserves an Option constructor through its Functor parent") {
-      preserved: Option<Int> = preserve_applicative(Option::Some(9))
-      assert_some_eq(9, preserved)
+      do {
+        preserved: Option<Int> = preserve_applicative(Option::Some(9))
+
+        assert_some_eq(9, preserved)
+      }
     }
 
     it("preserves an empty constructor") {
-      preserved: Option<Int> = preserve_applicative(Option<Int>::None)
-      assert_none(preserved)
+      do {
+        preserved: Option<Int> = preserve_applicative(Option<Int>::None)
+
+        assert_none(preserved)
+      }
     }
 
   }

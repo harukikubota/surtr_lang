@@ -20,7 +20,7 @@ impl Eq for EqByValue {
 test("Eq") {
   describe("eq") {
     it("uses the explicitly implemented value semantics") {
-      do::<Result> {
+      do {
         assert_true(Eq::eq(EqByValue::new(7, "first"), EqByValue::new(7, "second")))
         assert_false(Eq::eq(EqByValue::new(7, "first"), EqByValue::new(8, "first")))
       }
@@ -30,7 +30,7 @@ test("Eq") {
 
   describe("neq") {
     it("negates the Eq implementation by default") {
-      do::<Result> {
+      do {
         assert_false(Eq::neq(EqByValue::new(7, "first"), EqByValue::new(7, "second")))
         assert_true(Eq::neq(EqByValue::new(7, "first"), EqByValue::new(8, "first")))
       }

@@ -35,36 +35,45 @@ impl ReaderTestHolder {
 test("Reader") {
   describe("new/run") {
     it("runs the explicit environment") {
-      constructed: Reader<Int, Int> = Reader::new({|environment| environment + 2})
-      assert_eq(12, Reader::run(constructed, 10))
+      do {
+        constructed: Reader<Int, Int> = Reader::new({|environment| environment + 2})
+
+        assert_eq(12, Reader::run(constructed, 10))
+      }
     }
 
   }
 
   describe("ask") {
     it("reads the supplied environment") {
-      asked: Reader<Int, Int> = Reader::ask::<Int>()
-      assert_eq(10, Reader::run(asked, 10))
+      do {
+        asked: Reader<Int, Int> = Reader::ask::<Int>()
+
+        assert_eq(10, Reader::run(asked, 10))
+      }
     }
 
   }
 
   describe("asks") {
     it("maps the supplied environment") {
-      asked: Reader<Int, Int> = Reader::asks({|environment| environment * 3})
-      assert_eq(30, Reader::run(asked, 10))
+      do {
+        asked: Reader<Int, Int> = Reader::asks({|environment| environment * 3})
+
+        assert_eq(30, Reader::run(asked, 10))
+      }
     }
 
   }
 
   describe("new/run") {
     it("maps and applies functions in the same environment") {
-      mapped: Reader<Int, Int> = Reader::new({|environment: Int| environment + 1}) |*> {|value: Int| value * 2}
-      mapper: Reader<Int, (Int -> Int)> = Reader::new({|environment: Int| {|value: Int| value + environment}})
-      value: Reader<Int, Int> = Reader::new({|environment: Int| environment * 2})
-      applied: Reader<Int, Int> = Applicative::ap(mapper, value)
+      do {
+        mapped: Reader<Int, Int> = Reader::new({|environment: Int| environment + 1}) |*> {|value: Int| value * 2}
+        mapper: Reader<Int, (Int -> Int)> = Reader::new({|environment: Int| {|value: Int| value + environment}})
+        value: Reader<Int, Int> = Reader::new({|environment: Int| environment * 2})
+        applied: Reader<Int, Int> = Applicative::ap(mapper, value)
 
-      do::<Result> {
         assert_eq(8, Reader::run(mapped, 3))
         assert_eq(9, Reader::run(applied, 3))
       }
@@ -74,22 +83,24 @@ test("Reader") {
 
   describe("Monad") {
     it("binds without replacing the environment with the payload") {
-      first: Reader<Int, Int> = Reader::new({|environment| environment + 1})
-      chained: Reader<Int, Int> = first |>= {|value|
-        Reader::new({|environment| value + environment})
-      }
+      do {
+        first: Reader<Int, Int> = Reader::new({|environment| environment + 1})
+        chained: Reader<Int, Int> = first |>= {|value|
+          Reader::new({|environment| value + environment})
+        }
 
-      assert_eq(11, Reader::run(chained, 5))
+        assert_eq(11, Reader::run(chained, 5))
+      }
     }
 
   }
 
   describe("new/run") {
     it("local changes only the environment seen by one Reader") {
-      original: Reader<Int, Int> = Reader::asks({|environment| environment * 2})
-      localized: Reader<Int, Int> = Reader::local(original, {|environment| environment + 10})
+      do {
+        original: Reader<Int, Int> = Reader::asks({|environment| environment * 2})
+        localized: Reader<Int, Int> = Reader::local(original, {|environment| environment + 10})
 
-      do::<Result> {
         assert_eq(6, Reader::run(original, 3))
         assert_eq(26, Reader::run(localized, 3))
         assert_eq(6, Reader::run(original, 3))
@@ -100,25 +111,27 @@ test("Reader") {
 
   describe("Applicative") {
     it("keeps pure and return equivalent") {
-      pure_value: Reader<Int, Int> = Applicative::pure(4)
-      returned_value: Reader<Int, Int> = Monad::return(4)
+      do {
+        pure_value: Reader<Int, Int> = Applicative::pure(4)
+        returned_value: Reader<Int, Int> = Monad::return(4)
 
-      assert_eq(Reader::run(pure_value, 99), Reader::run(returned_value, 99))
+        assert_eq(Reader::run(pure_value, 99), Reader::run(returned_value, 99))
+      }
     }
 
   }
 
   describe("ordinary values") {
     it("preserves Reader in properties, lists, tuples, and Facet updates") {
-      original: Reader<Int, Int> = Reader::new({|environment| environment + 1})
-      holder: ReaderTestHolder = ReaderTestHolder::new(original)
-      updated: ReaderTestHolder = Facet::put(ReaderTestHolder.value, holder, Reader::new({|environment| environment + 2}))
-      values: List<Reader<Int, Int>> = [original, updated.value]
-      first: Reader<Int, Int> =? List::at(values, 0)
-      second: Reader<Int, Int> =? List::at(values, 1)
-      pair: (Reader<Int, Int>, Reader<Int, Int>) = (first, second)
+      do {
+        original: Reader<Int, Int> = Reader::new({|environment| environment + 1})
+        holder: ReaderTestHolder = ReaderTestHolder::new(original)
+        updated: ReaderTestHolder = Facet::put(ReaderTestHolder.value, holder, Reader::new({|environment| environment + 2}))
+        values: List<Reader<Int, Int>> = [original, updated.value]
+        first: Reader<Int, Int> <- List::at(values, 0)
+        second: Reader<Int, Int> <- List::at(values, 1)
+        pair: (Reader<Int, Int>, Reader<Int, Int>) = (first, second)
 
-      do::<Result> {
         assert_eq(11, Reader::run(holder.value, 10))
         assert_eq(12, Reader::run(updated.value, 10))
         assert_eq(11, Reader::run(pair._0, 10))
@@ -130,11 +143,11 @@ test("Reader") {
 
   describe("new/run") {
     it("changes payload types without Eq or Show bounds") {
-      payload: Reader<Int, ReaderPayload> = Reader::new({|environment| ReaderPayload::new(environment)})
-      mapped: Reader<Int, Int> = payload |*> {|item| item.value + 1}
-      bound: Reader<Int, Int> = payload |>= {|item| Reader::new({|environment| item.value + environment})}
+      do {
+        payload: Reader<Int, ReaderPayload> = Reader::new({|environment| ReaderPayload::new(environment)})
+        mapped: Reader<Int, Int> = payload |*> {|item| item.value + 1}
+        bound: Reader<Int, Int> = payload |>= {|item| Reader::new({|environment| item.value + environment})}
 
-      do::<Result> {
         assert_eq(8, Reader::run(mapped, 7))
         assert_eq(14, Reader::run(bound, 7))
       }
@@ -144,57 +157,65 @@ test("Reader") {
 
   describe("finite functor laws") {
     it("satisfies identity") {
-      value: Reader<Int, Int> = Reader::new({|environment| environment + 3})
-      mapped: Reader<Int, Int> = value |*> {|item| item}
+      do {
+        value: Reader<Int, Int> = Reader::new({|environment| environment + 3})
+        mapped: Reader<Int, Int> = value |*> {|item| item}
 
-      assert_eq(Reader::run(value, 7), Reader::run(mapped, 7))
+        assert_eq(Reader::run(value, 7), Reader::run(mapped, 7))
+      }
     }
 
   }
 
   describe("finite functor laws") {
     it("satisfies composition") {
-      value: Reader<Int, Int> = Reader::new({|environment| environment + 1})
-      left: Reader<Int, Int> = (value |*> {|item| item * 2}) |*> {|item| item + 3}
-      right: Reader<Int, Int> = value |*> {|item| (item * 2) + 3}
+      do {
+        value: Reader<Int, Int> = Reader::new({|environment| environment + 1})
+        left: Reader<Int, Int> = (value |*> {|item| item * 2}) |*> {|item| item + 3}
+        right: Reader<Int, Int> = value |*> {|item| (item * 2) + 3}
 
-      assert_eq(Reader::run(left, 7), Reader::run(right, 7))
+        assert_eq(Reader::run(left, 7), Reader::run(right, 7))
+      }
     }
 
   }
 
   describe("finite functor laws") {
     it("satisfies identity") {
-      mapper: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item}})
-      value: Reader<Int, Int> = Applicative::pure(3)
-      applied: Reader<Int, Int> = Applicative::ap(mapper, value)
+      do {
+        mapper: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item}})
+        value: Reader<Int, Int> = Applicative::pure(3)
+        applied: Reader<Int, Int> = Applicative::ap(mapper, value)
 
-      assert_eq(3, Reader::run(applied, 9))
+        assert_eq(3, Reader::run(applied, 9))
+      }
     }
 
   }
 
   describe("finite applicative laws") {
     it("satisfies homomorphism") {
-      mapper: Reader<Int, (Int -> Int)> = Applicative::pure({|item| item + 1})
-      value: Reader<Int, Int> = Applicative::pure(3)
-      left: Reader<Int, Int> = Applicative::ap(mapper, value)
-      right: Reader<Int, Int> = Applicative::pure(4)
+      do {
+        mapper: Reader<Int, (Int -> Int)> = Applicative::pure({|item| item + 1})
+        value: Reader<Int, Int> = Applicative::pure(3)
+        left: Reader<Int, Int> = Applicative::ap(mapper, value)
+        right: Reader<Int, Int> = Applicative::pure(4)
 
-      assert_eq(Reader::run(left, 8), Reader::run(right, 8))
+        assert_eq(Reader::run(left, 8), Reader::run(right, 8))
+      }
     }
 
   }
 
   describe("finite applicative laws") {
     it("satisfies interchange") {
-      mapper: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item + 1}})
-      value: Reader<Int, Int> = Applicative::pure(3)
-      left: Reader<Int, Int> = Applicative::ap(mapper, value)
-      apply_to_value: Reader<Int, ((Int -> Int) -> Int)> = Reader::new({|_environment| {|function| apply(function, 3)}})
-      right: Reader<Int, Int> = Applicative::ap(apply_to_value, mapper)
+      do {
+        mapper: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item + 1}})
+        value: Reader<Int, Int> = Applicative::pure(3)
+        left: Reader<Int, Int> = Applicative::ap(mapper, value)
+        apply_to_value: Reader<Int, ((Int -> Int) -> Int)> = Reader::new({|_environment| {|function| apply(function, 3)}})
+        right: Reader<Int, Int> = Applicative::ap(apply_to_value, mapper)
 
-      do::<Result> {
         assert_eq(4, Reader::run(left, 8))
         assert_eq(Reader::run(left, 8), Reader::run(right, 8))
       }
@@ -204,16 +225,16 @@ test("Reader") {
 
   describe("finite functor laws") {
     it("satisfies composition") {
-      compose: Reader<Int, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Reader::new({|_environment|
-          {|first| {|second| {|item| apply(first, apply(second, item))}}}
-      })
-      first: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item + 1}})
-      second: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item * 2}})
-      value: Reader<Int, Int> = Reader::new({|environment| environment + 3})
-      left: Reader<Int, Int> = Applicative::ap(Applicative::ap(Applicative::ap(compose, first), second), value)
-      right: Reader<Int, Int> = Applicative::ap(first, Applicative::ap(second, value))
+      do {
+        compose: Reader<Int, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Reader::new({|_environment|
+            {|first| {|second| {|item| apply(first, apply(second, item))}}}
+        })
+        first: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item + 1}})
+        second: Reader<Int, (Int -> Int)> = Reader::new({|_environment| {|item| item * 2}})
+        value: Reader<Int, Int> = Reader::new({|environment| environment + 3})
+        left: Reader<Int, Int> = Applicative::ap(Applicative::ap(Applicative::ap(compose, first), second), value)
+        right: Reader<Int, Int> = Applicative::ap(first, Applicative::ap(second, value))
 
-      do::<Result> {
         assert_eq(17, Reader::run(left, 5))
         assert_eq(17, Reader::run(right, 5))
       }
@@ -223,31 +244,37 @@ test("Reader") {
 
   describe("finite monad laws") {
     it("satisfies left identity") {
-      left: Reader<Int, Int> = Monad::return(3) |>= &reader_increment
-      right: Reader<Int, Int> = reader_increment(3)
+      do {
+        left: Reader<Int, Int> = Monad::return(3) |>= &reader_increment
+        right: Reader<Int, Int> = reader_increment(3)
 
-      assert_eq(Reader::run(left, 5), Reader::run(right, 5))
+        assert_eq(Reader::run(left, 5), Reader::run(right, 5))
+      }
     }
 
   }
 
   describe("finite monad laws") {
     it("satisfies right identity") {
-      value: Reader<Int, Int> = Reader::new({|environment| environment + 2})
-      chained: Reader<Int, Int> = value |>= &reader_pure
+      do {
+        value: Reader<Int, Int> = Reader::new({|environment| environment + 2})
+        chained: Reader<Int, Int> = value |>= &reader_pure
 
-      assert_eq(Reader::run(value, 5), Reader::run(chained, 5))
+        assert_eq(Reader::run(value, 5), Reader::run(chained, 5))
+      }
     }
 
   }
 
   describe("finite monad laws") {
     it("satisfies associativity") {
-      value: Reader<Int, Int> = Reader::new({|environment| environment + 1})
-      left: Reader<Int, Int> = (value |>= &reader_increment) |>= &reader_double
-      right: Reader<Int, Int> = value |>= {|inner| reader_increment(inner) |>= &reader_double}
+      do {
+        value: Reader<Int, Int> = Reader::new({|environment| environment + 1})
+        left: Reader<Int, Int> = (value |>= &reader_increment) |>= &reader_double
+        right: Reader<Int, Int> = value |>= {|inner| reader_increment(inner) |>= &reader_double}
 
-      assert_eq(Reader::run(left, 5), Reader::run(right, 5))
+        assert_eq(Reader::run(left, 5), Reader::run(right, 5))
+      }
     }
 
   }

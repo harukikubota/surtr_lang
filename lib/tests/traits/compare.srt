@@ -8,14 +8,16 @@ impl Compare for Ranked {
 test("Compare") {
   describe("compare") {
     it("uses the implementation order") {
-      assert_eq(Ordering::Less, Compare::compare(Ranked(1), Ranked(2)))
+      do {
+        assert_eq(Ordering::Less, Compare::compare(Ranked(1), Ranked(2)))
+      }
     }
 
   }
 
   describe("default predicates") {
     it("derive all relations from Less") {
-      do::<Result> {
+      do {
         assert_true(Compare::lt(Ranked(1), Ranked(2)))
         assert_true(Compare::lte(Ranked(1), Ranked(2)))
         assert_false(Compare::gt(Ranked(1), Ranked(2)))
@@ -24,7 +26,7 @@ test("Compare") {
     }
 
     it("derive all relations from Equal") {
-      do::<Result> {
+      do {
         assert_false(Compare::lt(Ranked(2), Ranked(2)))
         assert_true(Compare::lte(Ranked(2), Ranked(2)))
         assert_false(Compare::gt(Ranked(2), Ranked(2)))
@@ -33,7 +35,7 @@ test("Compare") {
     }
 
     it("derive all relations from Greater") {
-      do::<Result> {
+      do {
         assert_false(Compare::lt(Ranked(3), Ranked(2)))
         assert_false(Compare::lte(Ranked(3), Ranked(2)))
         assert_true(Compare::gt(Ranked(3), Ranked(2)))

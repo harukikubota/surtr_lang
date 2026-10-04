@@ -10,6 +10,14 @@ def list_ordered_step(value: Int) -> List<Int> {
   [value, value + 10]
 }
 
+def list_ordered_do(values: List<Int>) -> List<Int> {
+  do {
+    value <- values
+    expanded <- list_ordered_step(value)
+    Monad::return(expanded)
+  }
+}
+
 defstruct EqByValue {
   value: Int,
   description: String,
@@ -31,24 +39,28 @@ impl Eq for EqByValue {
 test("List") {
   describe("cons") {
     it("prepends without changing the tail") {
-      tail = [2, 3]
-      result = List::cons(1, tail)
-      do::<Result> {
+      do {
+        tail = [2, 3]
+        result = List::cons(1, tail)
+
         assert_eq([1, 2, 3], result)
         assert_eq([2, 3], tail)
       }
     }
 
     it("prepends to empty input") {
-      assert_eq([1], List::cons(1, []))
+      do {
+        assert_eq([1], List::cons(1, []))
+      }
     }
 
   }
 
   describe("len") {
     it("counts empty and populated lists") {
-      empty: List<Int> = []
-      do::<Result> {
+      do {
+        empty: List<Int> = []
+
         assert_eq(0, List::len(empty))
         assert_eq(3, List::len([1, 2, 3]))
       }
@@ -58,116 +70,155 @@ test("List") {
 
   describe("first") {
     it("returns the first element") {
-      assert_ok_eq(1, List::first([1, 2, 3]))
+      do {
+        assert_ok_eq(1, List::first([1, 2, 3]))
+      }
     }
 
     it("returns NoneError for empty input") {
-      empty: List<Int> = []
-      assert_err_kind(NoneError, List::first(empty))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(NoneError, List::first(empty))
+      }
     }
 
   }
 
   describe("last") {
     it("returns the last element") {
-      assert_ok_eq(3, List::last([1, 2, 3]))
+      do {
+        assert_ok_eq(3, List::last([1, 2, 3]))
+      }
     }
 
     it("returns NoneError for empty input") {
-      empty: List<Int> = []
-      assert_err_kind(NoneError, List::last(empty))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(NoneError, List::last(empty))
+      }
     }
 
   }
 
   describe("at") {
     it("first index") {
-      assert_ok_eq(1, List::at([1, 2, 3], 0))
+      do {
+        assert_ok_eq(1, List::at([1, 2, 3], 0))
+      }
     }
 
     it("last index") {
-      assert_ok_eq(3, List::at([1, 2, 3], 2))
+      do {
+        assert_ok_eq(3, List::at([1, 2, 3], 2))
+      }
     }
 
     it("rejects negative index") {
-      assert_err_kind(IndexOutOfBounds, List::at([1, 2, 3], -1))
+      do {
+        assert_err_kind(IndexOutOfBounds, List::at([1, 2, 3], -1))
+      }
     }
 
     it("rejects index at length") {
-      assert_err_kind(IndexOutOfBounds, List::at([1, 2, 3], 3))
+      do {
+        assert_err_kind(IndexOutOfBounds, List::at([1, 2, 3], 3))
+      }
     }
 
     it("rejects index beyond length") {
-      assert_err_kind(IndexOutOfBounds, List::at([1, 2, 3], 9))
+      do {
+        assert_err_kind(IndexOutOfBounds, List::at([1, 2, 3], 9))
+      }
     }
 
     it("rejects an index into an empty list") {
-      empty: List<Int> = []
-      assert_err_kind(IndexOutOfBounds, List::at(empty, 0))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(IndexOutOfBounds, List::at(empty, 0))
+      }
     }
 
   }
 
   describe("append") {
     it("preserves operand order") {
-      assert_eq([1, 2, 3], List::append([1, 2], [3]))
+      do {
+        assert_eq([1, 2, 3], List::append([1, 2], [3]))
+      }
     }
 
     it("has both empty identities") {
-      do::<Result> {
+      do {
         assert_eq([1, 2], List::append([], [1, 2]))
         assert_eq([1, 2], List::append([1, 2], []))
       }
     }
 
     it("is associative") {
-      assert_eq(List::append(List::append([1], [2]), [3]), List::append([1], List::append([2], [3])))
+      do {
+        assert_eq(List::append(List::append([1], [2]), [3]), List::append([1], List::append([2], [3])))
+      }
     }
 
   }
 
   describe("concat") {
     it("preserves nested order including empty lists") {
-      assert_eq([1, 2, 3], List::concat([[1], [], [2, 3]]))
+      do {
+        assert_eq([1, 2, 3], List::concat([[1], [], [2, 3]]))
+      }
     }
 
     it("keeps empty input empty") {
-      values: List<List<Int>> = []
-      observed_list14: List<Int> = List::concat(values)
-      expected_empty: List<Int> = []
-      assert_eq(expected_empty, observed_list14)
+      do {
+        values: List<List<Int>> = []
+        observed_list14: List<Int> = List::concat(values)
+        expected_empty: List<Int> = []
+
+        assert_eq(expected_empty, observed_list14)
+      }
     }
 
   }
 
   describe("reverse") {
     it("reverses order") {
-      assert_eq([3, 2, 1], List::reverse([1, 2, 3]))
+      do {
+        assert_eq([3, 2, 1], List::reverse([1, 2, 3]))
+      }
     }
 
     it("is an involution") {
-      value = List::cons(1, [2, 3])
-      assert_eq(value, List::reverse(List::reverse(value)))
+      do {
+        value = List::cons(1, [2, 3])
+
+        assert_eq(value, List::reverse(List::reverse(value)))
+      }
     }
 
   }
 
   describe("map") {
     it("calls mapper once in input order") {
-      actual = List::map([1, 2, 3], {|value|
-          print("map=#{value}")
-          value + 1
-      })
-      do::<Result> {
+      do {
+        actual = List::map([1, 2, 3], {|value|
+            print("map=#{value}")
+            value + 1
+        })
+
         assert_eq([2, 3, 4], actual)
         assert_stdout_eq(["map=1", "map=2", "map=3"])
       }
     }
 
     it("does not call mapper on empty input") {
-      empty: List<Int> = []
-      actual = List::map(empty, {|value| print("unexpected"); value})
-      do::<Result> {
+      do {
+        empty: List<Int> = []
+        actual = List::map(empty, {|value| print("unexpected"); value})
+
         assert_eq(empty, actual)
         assert_stdout_eq([])
       }
@@ -177,12 +228,15 @@ test("List") {
 
   describe("filter") {
     it("preserves selected order") {
-      assert_eq([2, 4], List::filter([1, 2, 3, 4], {|x| Int::is_even(x)}))
+      do {
+        assert_eq([2, 4], List::filter([1, 2, 3, 4], {|x| Int::is_even(x)}))
+      }
     }
 
     it("evaluates every predicate once") {
-      actual = List::filter([1, 2, 3], {|x| print("filter=#{x}"); x > 1})
-      do::<Result> {
+      do {
+        actual = List::filter([1, 2, 3], {|x| print("filter=#{x}"); x > 1})
+
         assert_eq([2, 3], actual)
         assert_stdout_eq(["filter=1", "filter=2", "filter=3"])
       }
@@ -192,22 +246,27 @@ test("List") {
 
   describe("find") {
     it("returns first match and skips remaining callbacks") {
-      actual = List::find([1, 2, 3], {|x| print("visit=#{x}"); x > 1})
-      do::<Result> {
+      do {
+        actual = List::find([1, 2, 3], {|x| print("visit=#{x}"); x > 1})
+
         assert_ok_eq(2, actual)
         assert_stdout_eq(["visit=1", "visit=2"])
       }
     }
 
     it("returns NoneError when no callback succeeds") {
-      actual = List::find([0, 1], {|x| x > 1})
-      assert_err_kind(NoneError, actual)
+      do {
+        actual = List::find([0, 1], {|x| x > 1})
+
+        assert_err_kind(NoneError, actual)
+      }
     }
 
     it("does not visit an empty input") {
-      empty: List<Int> = []
-      actual = List::find(empty, {|x| print("unexpected"); x > 1})
-      do::<Result> {
+      do {
+        empty: List<Int> = []
+        actual = List::find(empty, {|x| print("unexpected"); x > 1})
+
         assert_err_kind(NoneError, actual)
         assert_stdout_eq([])
       }
@@ -217,22 +276,27 @@ test("List") {
 
   describe("find_map") {
     it("returns first match and skips remaining callbacks") {
-      actual = List::find_map([1, 2, 3], {|x| print("visit=#{x}"); if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
-      do::<Result> {
+      do {
+        actual = List::find_map([1, 2, 3], {|x| print("visit=#{x}"); if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
+
         assert_ok_eq(20, actual)
         assert_stdout_eq(["visit=1", "visit=2"])
       }
     }
 
     it("returns NoneError when no callback succeeds") {
-      actual = List::find_map([0, 1], {|x| if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
-      assert_err_kind(NoneError, actual)
+      do {
+        actual = List::find_map([0, 1], {|x| if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
+
+        assert_err_kind(NoneError, actual)
+      }
     }
 
     it("does not visit an empty input") {
-      empty: List<Int> = []
-      actual = List::find_map(empty, {|x| print("unexpected"); if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
-      do::<Result> {
+      do {
+        empty: List<Int> = []
+        actual = List::find_map(empty, {|x| print("unexpected"); if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
+
         assert_err_kind(NoneError, actual)
         assert_stdout_eq([])
       }
@@ -242,17 +306,19 @@ test("List") {
 
   describe("any") {
     it("stops at the decisive predicate") {
-      actual = List::any([1, 2, 3], {|x| print("visit=#{x}"); x > 1})
-      do::<Result> {
+      do {
+        actual = List::any([1, 2, 3], {|x| print("visit=#{x}"); x > 1})
+
         assert_true(actual)
         assert_stdout_eq(["visit=1", "visit=2"])
       }
     }
 
     it("has the empty identity") {
-      empty: List<Int> = []
-      actual = List::any(empty, {|x| print("unexpected"); x > 1})
-      do::<Result> {
+      do {
+        empty: List<Int> = []
+        actual = List::any(empty, {|x| print("unexpected"); x > 1})
+
         assert_false(actual)
         assert_stdout_eq([])
       }
@@ -262,17 +328,19 @@ test("List") {
 
   describe("all") {
     it("stops at the decisive predicate") {
-      actual = List::all([1, 2, 3], {|x| print("visit=#{x}"); x < 2})
-      do::<Result> {
+      do {
+        actual = List::all([1, 2, 3], {|x| print("visit=#{x}"); x < 2})
+
         assert_false(actual)
         assert_stdout_eq(["visit=1", "visit=2"])
       }
     }
 
     it("has the empty identity") {
-      empty: List<Int> = []
-      actual = List::all(empty, {|x| print("unexpected"); x < 2})
-      do::<Result> {
+      do {
+        empty: List<Int> = []
+        actual = List::all(empty, {|x| print("unexpected"); x < 2})
+
         assert_true(actual)
         assert_stdout_eq([])
       }
@@ -282,86 +350,116 @@ test("List") {
 
   describe("count") {
     it("counts selected inputs") {
-      assert_eq(2, List::count([1, 2, 3], {|x| x > 1}))
+      do {
+        assert_eq(2, List::count([1, 2, 3], {|x| x > 1}))
+      }
     }
 
     it("counts empty input as zero") {
-      empty: List<Int> = []
-      assert_eq(0, List::count(empty, {|x| x > 1}))
+      do {
+        empty: List<Int> = []
+
+        assert_eq(0, List::count(empty, {|x| x > 1}))
+      }
     }
 
   }
 
   describe("sum") {
     it("sums integer elements") {
-      assert_eq(6, List::sum([1, 2, 3]))
+      do {
+        assert_eq(6, List::sum([1, 2, 3]))
+      }
     }
 
     it("uses zero for empty input") {
-      assert_eq(0, List::sum([]))
+      do {
+        assert_eq(0, List::sum([]))
+      }
     }
 
   }
 
   describe("reduce") {
     it("folds left to right") {
-      assert_eq(123, List::reduce([1, 2, 3], 0, {|acc, x| acc * 10 + x}))
+      do {
+        assert_eq(123, List::reduce([1, 2, 3], 0, {|acc, x| acc * 10 + x}))
+      }
     }
 
     it("returns initial accumulator on empty input") {
-      empty: List<Int> = []
-      assert_eq(9, List::reduce(empty, 9, {|acc, x| acc + x}))
+      do {
+        empty: List<Int> = []
+
+        assert_eq(9, List::reduce(empty, 9, {|acc, x| acc + x}))
+      }
     }
 
   }
 
   describe("reduce_while") {
     it("stops without calling later steps") {
-      actual = List::reduce_while([1, 2, 3], 0, {|acc, x|
-          print("step=#{x}")
-          if(x < 2, ReduceStep::Resume(acc + x), ReduceStep::Stop(acc + x))
-      })
-      do::<Result> {
+      do {
+        actual = List::reduce_while([1, 2, 3], 0, {|acc, x|
+            print("step=#{x}")
+            if(x < 2, ReduceStep::Resume(acc + x), ReduceStep::Stop(acc + x))
+        })
+
         assert_eq(3, actual)
         assert_stdout_eq(["step=1", "step=2"])
       }
     }
 
     it("returns last Resume accumulator") {
-      assert_eq(6, List::reduce_while([1, 2, 3], 0, {|acc, x| ReduceStep::Resume(acc + x)}))
+      do {
+        assert_eq(6, List::reduce_while([1, 2, 3], 0, {|acc, x| ReduceStep::Resume(acc + x)}))
+      }
     }
 
     it("keeps initial accumulator for empty input") {
-      empty: List<Int> = []
-      assert_eq(9, List::reduce_while(empty, 9, {|acc, x| ReduceStep::Resume(acc + x)}))
+      do {
+        empty: List<Int> = []
+
+        assert_eq(9, List::reduce_while(empty, 9, {|acc, x| ReduceStep::Resume(acc + x)}))
+      }
     }
 
   }
 
   describe("fold") {
     it("uses the monoid operation") {
-      sum = Monoid(0, {|a, b| a + b})
-      assert_eq(6, List::fold([1, 2, 3], sum))
+      do {
+        sum = Monoid(0, {|a, b| a + b})
+
+        assert_eq(6, List::fold([1, 2, 3], sum))
+      }
     }
 
     it("returns monoid identity for empty input") {
-      sum = Monoid(0, {|a, b| a + b})
-      assert_eq(0, List::fold([], sum))
+      do {
+        sum = Monoid(0, {|a, b| a + b})
+
+        assert_eq(0, List::fold([], sum))
+      }
     }
 
   }
 
   describe("fold_map") {
     it("maps before folding") {
-      sum = Monoid(0, {|a, b| a + b})
-      assert_eq(12, List::fold_map([1, 2, 3], sum, {|x| x * 2}))
+      do {
+        sum = Monoid(0, {|a, b| a + b})
+
+        assert_eq(12, List::fold_map([1, 2, 3], sum, {|x| x * 2}))
+      }
     }
 
     it("does not map empty input") {
-      sum = Monoid(0, {|a, b| a + b})
-      empty: List<Int> = []
-      actual = List::fold_map(empty, sum, {|x| print("unexpected"); x})
-      do::<Result> {
+      do {
+        sum = Monoid(0, {|a, b| a + b})
+        empty: List<Int> = []
+        actual = List::fold_map(empty, sum, {|x| print("unexpected"); x})
+
         assert_eq(0, actual)
         assert_stdout_eq([])
       }
@@ -371,203 +469,273 @@ test("List") {
 
   describe("reduce_with") {
     it("reduces without an external identity") {
-      assert_some_eq(6, List::reduce_with([1, 2, 3], {|a, b| a + b}))
+      do {
+        assert_some_eq(6, List::reduce_with([1, 2, 3], {|a, b| a + b}))
+      }
     }
 
     it("returns None for empty input") {
-      empty: List<Int> = []
-      assert_none(List::reduce_with(empty, {|a, b| a + b}))
+      do {
+        empty: List<Int> = []
+
+        assert_none(List::reduce_with(empty, {|a, b| a + b}))
+      }
     }
 
   }
 
   describe("min") {
     it("selects the bound") {
-      assert_ok_eq(1, List::min([3, 1, 4, 2]))
+      do {
+        assert_ok_eq(1, List::min([3, 1, 4, 2]))
+      }
     }
 
     it("rejects empty input") {
-      empty: List<Int> = []
-      assert_err_kind(NoneError, List::min(empty))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(NoneError, List::min(empty))
+      }
     }
 
   }
 
   describe("max") {
     it("selects the bound") {
-      assert_ok_eq(4, List::max([3, 1, 4, 2]))
+      do {
+        assert_ok_eq(4, List::max([3, 1, 4, 2]))
+      }
     }
 
     it("rejects empty input") {
-      empty: List<Int> = []
-      assert_err_kind(NoneError, List::max(empty))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(NoneError, List::max(empty))
+      }
     }
 
   }
 
   describe("min_max") {
     it("returns both bounds") {
-      (minimum, maximum) =? List::min_max([3, 1, 4, 2])
-      do::<Result> {
+      do {
+        (minimum, maximum) <- List::min_max([3, 1, 4, 2])
+
         assert_eq(1, minimum)
         assert_eq(4, maximum)
       }
     }
 
     it("uses a singleton for both bounds") {
-      (minimum, maximum) =? List::min_max([7])
-      do::<Result> {
+      do {
+        (minimum, maximum) <- List::min_max([7])
+
         assert_eq(7, minimum)
         assert_eq(7, maximum)
       }
     }
 
     it("handles duplicates") {
-      (minimum, maximum) =? List::min_max([2, 2, 1, 2])
-      do::<Result> {
+      do {
+        (minimum, maximum) <- List::min_max([2, 2, 1, 2])
+
         assert_eq(1, minimum)
         assert_eq(2, maximum)
       }
     }
 
     it("rejects empty input") {
-      empty: List<Int> = []
-      assert_err_kind(NoneError, List::min_max(empty))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(NoneError, List::min_max(empty))
+      }
     }
 
   }
 
   describe("min_by") {
     it("uses the provided comparator") {
-      assert_ok_eq("a", List::min_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      do {
+        assert_ok_eq("a", List::min_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      }
     }
 
     it("keeps the first equal item") {
-      assert_ok_eq("ab", List::min_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      do {
+        assert_ok_eq("ab", List::min_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      }
     }
 
     it("rejects empty input") {
-      empty: List<Int> = []
-      assert_err_kind(NoneError, List::min_by(empty, &Compare::compare))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(NoneError, List::min_by(empty, &Compare::compare))
+      }
     }
 
   }
 
   describe("max_by") {
     it("uses the provided comparator") {
-      assert_ok_eq("abcd", List::max_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      do {
+        assert_ok_eq("abcd", List::max_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      }
     }
 
     it("keeps the first equal item") {
-      assert_ok_eq("ab", List::max_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      do {
+        assert_ok_eq("ab", List::max_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      }
     }
 
     it("rejects empty input") {
-      empty: List<Int> = []
-      assert_err_kind(NoneError, List::max_by(empty, &Compare::compare))
+      do {
+        empty: List<Int> = []
+
+        assert_err_kind(NoneError, List::max_by(empty, &Compare::compare))
+      }
     }
 
   }
 
   describe("sort") {
     it("sorts ascending with duplicates") {
-      assert_eq([1, 1, 2, 3], List::sort([3, 1, 2, 1]))
+      do {
+        assert_eq([1, 1, 2, 3], List::sort([3, 1, 2, 1]))
+      }
     }
 
     it("keeps empty input empty") {
-      empty: List<Int> = []
-      assert_eq(empty, List::sort(empty))
+      do {
+        empty: List<Int> = []
+
+        assert_eq(empty, List::sort(empty))
+      }
     }
 
   }
 
   describe("sort_by") {
     it("keeps original order of equal keys") {
-      assert_eq(["a", "ab", "cd", "abcd"], List::sort_by(["ab", "a", "cd", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      do {
+        assert_eq(["a", "ab", "cd", "abcd"], List::sort_by(["ab", "a", "cd", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+      }
     }
 
   }
 
   describe("take") {
     it("handles count -1") {
-      observed_list13: List<Int> = List::take([1, 2, 3], -1)
-      expected_empty: List<Int> = []
-      assert_eq(expected_empty, observed_list13)
+      do {
+        observed_list13: List<Int> = List::take([1, 2, 3], -1)
+        expected_empty: List<Int> = []
+
+        assert_eq(expected_empty, observed_list13)
+      }
     }
 
     it("handles count 0") {
-      observed_list12: List<Int> = List::take([1, 2, 3], 0)
-      expected_empty: List<Int> = []
-      assert_eq(expected_empty, observed_list12)
+      do {
+        observed_list12: List<Int> = List::take([1, 2, 3], 0)
+        expected_empty: List<Int> = []
+
+        assert_eq(expected_empty, observed_list12)
+      }
     }
 
     it("handles count 2") {
-      assert_eq([1, 2], List::take([1, 2, 3], 2))
+      do {
+        assert_eq([1, 2], List::take([1, 2, 3], 2))
+      }
     }
 
     it("handles count 10") {
-      assert_eq([1, 2, 3], List::take([1, 2, 3], 10))
+      do {
+        assert_eq([1, 2, 3], List::take([1, 2, 3], 10))
+      }
     }
 
   }
 
   describe("drop") {
     it("handles count -1") {
-      assert_eq([1, 2, 3], List::drop([1, 2, 3], -1))
+      do {
+        assert_eq([1, 2, 3], List::drop([1, 2, 3], -1))
+      }
     }
 
     it("handles count 0") {
-      assert_eq([1, 2, 3], List::drop([1, 2, 3], 0))
+      do {
+        assert_eq([1, 2, 3], List::drop([1, 2, 3], 0))
+      }
     }
 
     it("handles count 2") {
-      assert_eq([3], List::drop([1, 2, 3], 2))
+      do {
+        assert_eq([3], List::drop([1, 2, 3], 2))
+      }
     }
 
     it("handles count 10") {
-      observed_list11: List<Int> = List::drop([1, 2, 3], 10)
-      expected_empty: List<Int> = []
-      assert_eq(expected_empty, observed_list11)
+      do {
+        observed_list11: List<Int> = List::drop([1, 2, 3], 10)
+        expected_empty: List<Int> = []
+
+        assert_eq(expected_empty, observed_list11)
+      }
     }
 
   }
 
   describe("take_while") {
     it("stops at the first nonmatching element") {
-      actual = List::take_while([1, 2, 3, 1], {|x| print("visit=#{x}"); x < 3})
-      do::<Result> {
+      do {
+        actual = List::take_while([1, 2, 3, 1], {|x| print("visit=#{x}"); x < 3})
+
         assert_eq([1, 2], actual)
         assert_stdout_eq(["visit=1", "visit=2", "visit=3"])
       }
     }
 
     it("keeps empty input empty") {
-      empty: List<Int> = []
-      assert_eq(empty, List::take_while(empty, {|x| x < 3}))
+      do {
+        empty: List<Int> = []
+
+        assert_eq(empty, List::take_while(empty, {|x| x < 3}))
+      }
     }
 
   }
 
   describe("drop_while") {
     it("stops at the first nonmatching element") {
-      actual = List::drop_while([1, 2, 3, 1], {|x| print("visit=#{x}"); x < 3})
-      do::<Result> {
+      do {
+        actual = List::drop_while([1, 2, 3, 1], {|x| print("visit=#{x}"); x < 3})
+
         assert_eq([3, 1], actual)
         assert_stdout_eq(["visit=1", "visit=2", "visit=3"])
       }
     }
 
     it("keeps empty input empty") {
-      empty: List<Int> = []
-      assert_eq(empty, List::drop_while(empty, {|x| x < 3}))
+      do {
+        empty: List<Int> = []
+
+        assert_eq(empty, List::drop_while(empty, {|x| x < 3}))
+      }
     }
 
   }
 
   describe("span") {
     it("splits at the first nonmatching element") {
-      (prefix, rest) = List::span([1, 2, 3, 1], {|x| x < 3})
-      do::<Result> {
+      do {
+        (prefix, rest) = List::span([1, 2, 3, 1], {|x| x < 3})
+
         assert_eq([1, 2], prefix)
         assert_eq([3, 1], rest)
       }
@@ -577,8 +745,9 @@ test("List") {
 
   describe("partition") {
     it("preserves both selected and rejected order") {
-      (selected, rejected) = List::partition([1, 2, 3, 4], {|x| Int::is_even(x)})
-      do::<Result> {
+      do {
+        (selected, rejected) = List::partition([1, 2, 3, 4], {|x| Int::is_even(x)})
+
         assert_eq([2, 4], selected)
         assert_eq([1, 3], rejected)
       }
@@ -588,43 +757,56 @@ test("List") {
 
   describe("group_count") {
     it("counts all groups in first seen order") {
-      assert_eq([(2, 2), (1, 3)], List::group_count([2, 1, 2, 1, 1]))
+      do {
+        assert_eq([(2, 2), (1, 3)], List::group_count([2, 1, 2, 1, 1]))
+      }
     }
 
     it("has no groups for empty input") {
-      empty: List<Int> = []
-      observed_list10: List<(Int, Int)> = List::group_count(empty)
-      expected_empty: List<(Int, Int)> = []
-      assert_eq(expected_empty, observed_list10)
+      do {
+        empty: List<Int> = []
+        observed_list10: List<(Int, Int)> = List::group_count(empty)
+        expected_empty: List<(Int, Int)> = []
+
+        assert_eq(expected_empty, observed_list10)
+      }
     }
 
   }
 
   describe("dedup") {
     it("preserves first seen order") {
-      assert_eq([2, 1, 3], List::dedup([2, 1, 2, 3, 1]))
+      do {
+        assert_eq([2, 1, 3], List::dedup([2, 1, 2, 3, 1]))
+      }
     }
 
     it("keeps empty input empty") {
-      empty: List<Int> = []
-      assert_eq(empty, List::dedup(empty))
+      do {
+        empty: List<Int> = []
+
+        assert_eq(empty, List::dedup(empty))
+      }
     }
 
   }
 
   describe("zip") {
     it("stops at the shorter operand") {
-      assert_eq([(1, "a"), (2, "b")], List::zip([1, 2, 3], ["a", "b"]))
+      do {
+        assert_eq([(1, "a"), (2, "b")], List::zip([1, 2, 3], ["a", "b"]))
+      }
     }
 
     it("stops when either operand is empty") {
-      empty: List<Int> = []
-      do::<Result> {
+      do {
+        empty: List<Int> = []
         observed_list9: List<(Int, Int)> = List::zip(empty, [1])
         expected_empty: List<(Int, Int)> = []
-        assert_eq(expected_empty, observed_list9)
+
         observed_list8: List<(Int, Int)> = List::zip([1], empty)
-        expected_empty: List<(Int, Int)> = []
+
+        assert_eq(expected_empty, observed_list9)
         assert_eq(expected_empty, observed_list8)
       }
     }
@@ -633,16 +815,17 @@ test("List") {
 
   describe("flat_map") {
     it("flat_map visits each input once and preserves result order") {
-      values = List::cons(0, [1, 2, 3])
-      actual = List::flat_map(values: values, f: {|value|
-          print("visit=#{value}")
-          match value {
-            0 => [],
-            1 => [value],
-            _ => List::cons(value, [value + 10]),
-          }
-      })
-      do::<Result> {
+      do {
+        values = List::cons(0, [1, 2, 3])
+        actual = List::flat_map(values: values, f: {|value|
+            print("visit=#{value}")
+            match value {
+              0 => [],
+              1 => [value],
+              _ => List::cons(value, [value + 10]),
+            }
+        })
+
         assert_eq([1, 2, 12, 3, 13], actual)
         assert_eq([0, 1, 2, 3], values)
         assert_stdout_eq(["visit=0", "visit=1", "visit=2", "visit=3"])
@@ -650,26 +833,28 @@ test("List") {
     }
 
     it("flat_map skips callbacks for empty input") {
-      values: List<Int> = []
-      actual = List::flat_map(values, {|value|
-          print("visit=#{value}")
-          [value]
-      })
-      do::<Result> {
+      do {
+        values: List<Int> = []
+        actual = List::flat_map(values, {|value|
+            print("visit=#{value}")
+            [value]
+        })
+
         assert_eq(values, actual)
         assert_stdout_eq([])
       }
     }
 
     it("nested flat_map completes inner results in input order") {
-      actual = List::flat_map([1, 2], {|outer|
-          print("outer=#{outer}")
-          List::flat_map([3, 4], {|inner|
-              print("inner=#{outer}:#{inner}")
-              [outer * 10 + inner]
-          })
-      })
-      do::<Result> {
+      do {
+        actual = List::flat_map([1, 2], {|outer|
+            print("outer=#{outer}")
+            List::flat_map([3, 4], {|inner|
+                print("inner=#{outer}:#{inner}")
+                [outer * 10 + inner]
+            })
+        })
+
         assert_eq([13, 14, 23, 24], actual)
         assert_stdout_eq([
             "outer=1", "inner=1:3", "inner=1:4",
@@ -682,15 +867,18 @@ test("List") {
 
   describe("Alternative / return") {
     it("concatenates lists with Alternative choice") {
-      assert_eq([1, 2, 3], [1, 2] <|> [3])
+      do {
+        assert_eq([1, 2, 3], [1, 2] <|> [3])
+      }
     }
 
     it("obeys Alternative identity and associativity laws") {
-      empty: List<Int> = Alternative::empty()
-      first: List<Int> = [1]
-      second: List<Int> = [2]
-      third: List<Int> = [3]
-      do::<Result> {
+      do {
+        empty: List<Int> = Alternative::empty()
+        first: List<Int> = [1]
+        second: List<Int> = [2]
+        third: List<Int> = [3]
+
         assert_eq(first, empty <|> first)
         assert_eq(first, first <|> empty)
         assert_eq((first <|> second) <|> third, first <|> (second <|> third))
@@ -698,25 +886,30 @@ test("List") {
     }
 
     it("keeps Monad return equal to Applicative pure") {
-      pure_value: List<Int> = Applicative::pure(4)
-      returned_value: List<Int> = Monad::return(4)
-      assert_eq(pure_value, returned_value)
+      do {
+        pure_value: List<Int> = Applicative::pure(4)
+        returned_value: List<Int> = Monad::return(4)
+
+        assert_eq(pure_value, returned_value)
+      }
     }
 
   }
 
   describe("each") {
     it("each runs callbacks from left to right") {
-      result = List::each([1, 2, 3], {|n| print("n=#{to_string(n)}")})
-      do::<Result> {
+      do {
+        result = List::each([1, 2, 3], {|n| print("n=#{to_string(n)}")})
+
         assert_eq((), result)
         assert_stdout_eq(["n=1", "n=2", "n=3"])
       }
     }
 
     it("each returns Unit and does nothing for empty lists") {
-      result = List::each([], {|n: Int| print("n=#{to_string(n)}")})
-      do::<Result> {
+      do {
+        result = List::each([], {|n: Int| print("n=#{to_string(n)}")})
+
         assert_eq((), result)
         assert_stdout_eq([])
       }
@@ -726,116 +919,144 @@ test("List") {
 
   describe("Monad and Kleisli laws") {
     it("right identity keeps populated lists") {
-      values: List<Int> = [1, 2]
-      law_left6: List<Int> = values
-      law_right6: List<Int> = values |>= list_pure()
-      assert_eq(law_left6, law_right6)
+      do {
+        values: List<Int> = [1, 2]
+        law_left6: List<Int> = values
+        law_right6: List<Int> = values |>= list_pure()
+
+        assert_eq(law_left6, law_right6)
+      }
     }
 
     it("right identity keeps empty lists") {
-      values: List<Int> = []
-      law_left7: List<Int> = values
-      law_right7: List<Int> = values |>= list_pure()
-      assert_eq(law_left7, law_right7)
+      do {
+        values: List<Int> = []
+        law_left7: List<Int> = values
+        law_right7: List<Int> = values |>= list_pure()
+
+        assert_eq(law_left7, law_right7)
+      }
     }
 
     it("associativity holds on populated expansions") {
-      values: List<Int> = [1, 2]
-      composed = &list_step1 >=> &list_step2
-      sequential: List<Int> = (values |>= list_step1()) |>= list_step2()
-      composed_result: List<Int> = values |>= composed
-      assert_eq(sequential, composed_result)
+      do {
+        values: List<Int> = [1, 2]
+        composed = &list_step1 >=> &list_step2
+        sequential: List<Int> = (values |>= list_step1()) |>= list_step2()
+        composed_result: List<Int> = values |>= composed
+
+        assert_eq(sequential, composed_result)
+      }
     }
 
     it("associativity holds when branches collapse to empty") {
-      values: List<Int> = [10]
-      composed = &list_step1 >=> &list_step2
-      sequential: List<Int> = (values |>= list_step1()) |>= list_step2()
-      composed_result: List<Int> = values |>= composed
-      assert_eq(sequential, composed_result)
+      do {
+        values: List<Int> = [10]
+        composed = &list_step1 >=> &list_step2
+        sequential: List<Int> = (values |>= list_step1()) |>= list_step2()
+        composed_result: List<Int> = values |>= composed
+
+        assert_eq(sequential, composed_result)
+      }
     }
 
     it("kleisli left identity uses pure") {
-      composed = &list_pure >=> &list_step1
-      result: List<Int> = composed(2)
-      assert_eq(result, list_step1(2))
+      do {
+        composed = &list_pure >=> &list_step1
+        result: List<Int> = composed(2)
+
+        assert_eq(result, list_step1(2))
+      }
     }
 
     it("kleisli right identity uses pure") {
-      composed = &list_step1 >=> &list_pure
-      result: List<Int> = composed(2)
-      assert_eq(result, list_step1(2))
+      do {
+        composed = &list_step1 >=> &list_pure
+        result: List<Int> = composed(2)
+
+        assert_eq(result, list_step1(2))
+      }
     }
 
     it("kleisli composition is associative") {
-      left = (&list_step1 >=> &list_step2) >=> &list_step3
-      right = &list_step1 >=> (&list_step2 >=> &list_step3)
-      left_result: List<Int> = left(2)
-      right_result: List<Int> = right(2)
-      assert_eq(left_result, right_result)
+      do {
+        left = (&list_step1 >=> &list_step2) >=> &list_step3
+        right = &list_step1 >=> (&list_step2 >=> &list_step3)
+        left_result: List<Int> = left(2)
+        right_result: List<Int> = right(2)
+
+        assert_eq(left_result, right_result)
+      }
     }
 
     it("kleisli composition matches staged bind") {
-      composed = &list_step1 >=> &list_step2
-      composed_result: List<Int> = composed(2)
-      sequential: List<Int> = list_step1(2) |>= list_step2()
-      assert_eq(composed_result, sequential)
+      do {
+        composed = &list_step1 >=> &list_step2
+        composed_result: List<Int> = composed(2)
+        sequential: List<Int> = list_step1(2) |>= list_step2()
+
+        assert_eq(composed_result, sequential)
+      }
     }
 
     it("fmap matches bind with pure after mapping") {
-      values: List<Int> = [1, 2]
-      mapped: List<Int> = values |*> add_one()
-      bound: List<Int> = values |>= {|x| list_pure(add_one(x))}
-      assert_eq(mapped, bound)
+      do {
+        values: List<Int> = [1, 2]
+        mapped: List<Int> = values |*> add_one()
+        bound: List<Int> = values |>= {|x| list_pure(add_one(x))}
+
+        assert_eq(mapped, bound)
+      }
     }
 
   }
 
   describe("flat_map delegation") {
     it("List::flat_map") {
-      values = List::cons(1, [2])
-      actual: List<Int> = List::flat_map(values, &list_ordered_step)
-      do::<Result> {
+      do {
+        values = List::cons(1, [2])
+        actual: List<Int> = List::flat_map(values, &list_ordered_step)
+
         assert_eq([1, 11, 2, 12], actual)
         assert_stdout_eq(["step=1", "step=2"])
       }
     }
 
     it("Monad::bind") {
-      values = List::cons(1, [2])
-      actual: List<Int> = Monad::bind(values, &list_ordered_step)
-      do::<Result> {
+      do {
+        values = List::cons(1, [2])
+        actual: List<Int> = Monad::bind(values, &list_ordered_step)
+
         assert_eq([1, 11, 2, 12], actual)
         assert_stdout_eq(["step=1", "step=2"])
       }
     }
 
     it("values |>= list_ordered_step") {
-      values = List::cons(1, [2])
-      actual: List<Int> = values |>= list_ordered_step()
-      do::<Result> {
+      do {
+        values = List::cons(1, [2])
+        actual: List<Int> = values |>= list_ordered_step()
+
         assert_eq([1, 11, 2, 12], actual)
         assert_stdout_eq(["step=1", "step=2"])
       }
     }
 
     it("do sequences callback effects") {
-      values = List::cons(1, [2])
-      actual: List<Int> = do::<List> {
-        value <- values
-        expanded <- list_ordered_step(value)
-        Monad::return(expanded)
-      }
-      do::<Result> {
+      do {
+        values = List::cons(1, [2])
+        actual: List<Int> = list_ordered_do(values)
+
         assert_eq([1, 11, 2, 12], actual)
         assert_stdout_eq(["step=1", "step=2"])
       }
     }
 
     it("List::flat_map") {
-      values = List::cons(1, [2])
-      actual: List<Int> = List::flat_map(values, &list_pure >=> &list_ordered_step)
-      do::<Result> {
+      do {
+        values = List::cons(1, [2])
+        actual: List<Int> = List::flat_map(values, &list_pure >=> &list_ordered_step)
+
         assert_eq([1, 11, 2, 12], actual)
         assert_stdout_eq(["step=1", "step=2"])
       }
@@ -845,64 +1066,85 @@ test("List") {
 
   describe("inspect") {
     it("shows a mixed list representation") {
-      assert_eq("[1, 2, 3]", inspect(List::cons(1, [2, 3])))
+      do {
+        assert_eq("[1, 2, 3]", inspect(List::cons(1, [2, 3])))
+      }
     }
 
   }
 
   describe("Functor laws") {
     it("identity compares both values") {
-      value = List::cons(1, [2, 3])
-      assert_eq(value, Functor::fmap(value, {|x| x}))
+      do {
+        value = List::cons(1, [2, 3])
+
+        assert_eq(value, Functor::fmap(value, {|x| x}))
+      }
     }
 
     it("composition compares both mappings") {
-      value = [1, 2]
-      law_left5: List<Int> = (value |*> {|x| x + 1}) |*> {|x| x * 2}
-      law_right5: List<Int> = value |*> {|x| (x + 1) * 2}
-      assert_eq(law_left5, law_right5)
+      do {
+        value = [1, 2]
+        law_left5: List<Int> = (value |*> {|x| x + 1}) |*> {|x| x * 2}
+        law_right5: List<Int> = value |*> {|x| (x + 1) * 2}
+
+        assert_eq(law_left5, law_right5)
+      }
     }
 
   }
 
   describe("Applicative::ap") {
     it("preserves mapper-major result order") {
-      assert_eq([2, 3, 10, 20], Applicative::ap([{|x| x + 1}, {|x| x * 10}], [1, 2]))
+      do {
+        assert_eq([2, 3, 10, 20], Applicative::ap([{|x| x + 1}, {|x| x * 10}], [1, 2]))
+      }
     }
 
   }
 
   describe("Applicative laws") {
     it("identity compares applied and original values") {
-      value = [1, 2]
-      law_left4: List<Int> = value
-      law_right4: List<Int> = [{|x| x}] |*| value
-      assert_eq(law_left4, law_right4)
+      do {
+        value = [1, 2]
+        law_left4: List<Int> = value
+        law_right4: List<Int> = [{|x| x}] |*| value
+
+        assert_eq(law_left4, law_right4)
+      }
     }
 
     it("homomorphism compares injections") {
-  increment = {|value: Int| value + 1}
-  mapper: List<(Int -> Int)> = Applicative::pure(increment)
-  value: List<Int> = Applicative::pure(3)
-  left: List<Int> = Applicative::ap(mapper, value)
-  right: List<Int> = Applicative::pure(increment(3))
-  assert_eq(left, right)
-}
+      do {
+        increment = {|value: Int| value + 1}
+          mapper: List<(Int -> Int)> = Applicative::pure(increment)
+          value: List<Int> = Applicative::pure(3)
+          left: List<Int> = Applicative::ap(mapper, value)
+          right: List<Int> = Applicative::pure(increment(3))
+          assert_eq(left, right)
+      }
+    }
 
     it("interchange compares both sides") {
-      u: List<(Int -> Int)> = [{|x| x + 1}, {|x| x * 2}]
-      law_left2: List<Int> = u |*| [3]
-      law_right2: List<Int> = [{|f| f(3)}] |*| u
-      assert_eq(law_left2, law_right2)
+      do {
+        u: List<(Int -> Int)> = [{|x| x + 1}, {|x| x * 2}]
+        law_left2: List<Int> = u |*| [3]
+        law_right2: List<Int> = [{|f| f(3)}] |*| u
+
+        assert_eq(law_left2, law_right2)
+      }
     }
 
     it("composition compares both applications") {
-      u: List<(Int -> Int)> = [{|x| x + 1}]
-      v: List<(Int -> Int)> = [{|x| x * 2}]
-      w = [1, 2]
-      law_left1: List<Int> = [{|f| {|g| {|x| f(g(x))}}}] |*| u |*| v |*| w
-      law_right1: List<Int> = u |*| (v |*| w)
-      assert_eq(law_left1, law_right1)
+      do {
+        u: List<(Int -> Int)> = [{|x| x + 1}]
+        v: List<(Int -> Int)> = [{|x| x * 2}]
+        w = [1, 2]
+        law_left1: List<Int> = [{|f| {|g| {|x| f(g(x))}}}] |*| u |*| v |*| w
+        law_right1: List<Int> = u |*| (v |*| w)
+
+        assert_eq(law_left1, law_right1)
+      }
     }
 
   }
@@ -910,7 +1152,7 @@ test("List") {
 
   describe("Eq") {
     it("compares List by length order and element Eq") {
-      do::<Result> {
+      do {
         assert_true(Eq::eq([1, 2, 3], [1, 2, 3]))
         assert_false(Eq::eq([1, 2], [1, 2, 3]))
         assert_false(Eq::eq([1, 2, 3], [1, 3, 2]))

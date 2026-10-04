@@ -3,9 +3,10 @@ import Test;
 test("Random") {
   describe("host-seeded helpers") {
     it("returns values inside half-open ranges") {
-      a =? Random::int_until(10)
-      b =? Random::int_range(-3, 3)
-      do::<Result> {
+      do {
+        a <- Random::int_until(10)
+        b <- Random::int_range(-3, 3)
+
         assert_true(a >= 0)
         assert_true(a < 10)
         assert_true(b >= -3)
@@ -14,27 +15,25 @@ test("Random") {
     }
 
     it("rejects empty ranges") {
-      do::<Result> {
-        result = Random::int_until(0)
-      do::<Result> {
-        assert_err_kind(InvalidRandomRange, result)
-        assert_err_contains("random range must be non-empty: 0..0", result)
-      }
-        result = Random::int_range(4, 4)
-      do::<Result> {
-        assert_err_kind(InvalidRandomRange, result)
-        assert_err_contains("random range must be non-empty: 4..4", result)
-      }
+      do {
+        until_result = Random::int_until(0)
+        range_result = Random::int_range(4, 4)
+
+        assert_err_kind(InvalidRandomRange, until_result)
+        assert_err_contains("random range must be non-empty: 0..0", until_result)
+        assert_err_kind(InvalidRandomRange, range_result)
+        assert_err_contains("random range must be non-empty: 4..4", range_result)
       }
     }
   }
 
   describe("seeded generators") {
     it("replays the same first draw for the same seed") {
-      rng0 = Random::seed(123)
-      (v1, rng1) =? Random::next_int_range(rng0, -100, 100)
-      (v1_again, _) =? Random::next_int_range(Random::seed(123), -100, 100)
-      do::<Result> {
+      do {
+        rng0 = Random::seed(123)
+        (v1, rng1) <- Random::next_int_range(rng0, -100, 100)
+        (v1_again, _) <- Random::next_int_range(Random::seed(123), -100, 100)
+
         assert_true(v1 == v1_again)
         assert_true(v1 >= -100)
         assert_true(v1 < 100)
@@ -42,28 +41,26 @@ test("Random") {
     }
 
     it("threads the returned generator into the next draw") {
-      rng0 = Random::seed(123)
-      (_, rng1) =? Random::next_int_range(rng0, -100, 100)
-      (v2, _) =? Random::next_int_until(rng1, 10)
-      do::<Result> {
+      do {
+        rng0 = Random::seed(123)
+        (_, rng1) <- Random::next_int_range(rng0, -100, 100)
+        (v2, _) <- Random::next_int_until(rng1, 10)
+
         assert_true(v2 >= 0)
         assert_true(v2 < 10)
       }
     }
 
     it("rejects invalid seeded bounds") {
-      rng0 = Random::seed(123)
-      do::<Result> {
-        result = Random::next_int_until(rng0, 0)
-      do::<Result> {
-        assert_err_kind(InvalidRandomRange, result)
-        assert_err_contains("random range must be non-empty: 0..0", result)
-      }
-        result = Random::next_int_range(Random::seed(123), 4, 4)
-      do::<Result> {
-        assert_err_kind(InvalidRandomRange, result)
-        assert_err_contains("random range must be non-empty: 4..4", result)
-      }
+      do {
+        rng0 = Random::seed(123)
+        until_result = Random::next_int_until(rng0, 0)
+        range_result = Random::next_int_range(Random::seed(123), 4, 4)
+
+        assert_err_kind(InvalidRandomRange, until_result)
+        assert_err_contains("random range must be non-empty: 0..0", until_result)
+        assert_err_kind(InvalidRandomRange, range_result)
+        assert_err_contains("random range must be non-empty: 4..4", range_result)
       }
     }
   }

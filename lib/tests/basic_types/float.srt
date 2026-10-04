@@ -2,56 +2,164 @@ import Test;
 
 test("Float") {
   describe("abs") {
-    it("negative returns the exact value") { assert_eq(1.5, Float::abs(-1.5)) }
+    it("negative returns the exact value") {
+      do {
+        assert_eq(1.5, Float::abs(-1.5))
+      }
+    }
   }
   describe("min") {
-    it("lesser returns the exact value") { assert_eq(1.25, Float::min(2.5, 1.25)) }
+    it("lesser returns the exact value") {
+      do {
+        assert_eq(1.25, Float::min(2.5, 1.25))
+      }
+    }
   }
   describe("max") {
-    it("greater returns the exact value") { assert_eq(2.5, Float::max(2.5, 1.25)) }
+    it("greater returns the exact value") {
+      do {
+        assert_eq(2.5, Float::max(2.5, 1.25))
+      }
+    }
   }
   describe("floor") {
-    it("positive returns the exact value") { assert_eq(1.0, Float::floor(1.8)) }
-    it("negative returns the exact value") { assert_eq(-2.0, Float::floor(-1.2)) }
+    it("positive returns the exact value") {
+      do {
+        assert_eq(1.0, Float::floor(1.8))
+      }
+    }
+    it("negative returns the exact value") {
+      do {
+        assert_eq(-2.0, Float::floor(-1.2))
+      }
+    }
   }
   describe("ceil") {
-    it("positive returns the exact value") { assert_eq(2.0, Float::ceil(1.2)) }
-    it("negative returns the exact value") { assert_eq(-1.0, Float::ceil(-1.8)) }
+    it("positive returns the exact value") {
+      do {
+        assert_eq(2.0, Float::ceil(1.2))
+      }
+    }
+    it("negative returns the exact value") {
+      do {
+        assert_eq(-1.0, Float::ceil(-1.8))
+      }
+    }
   }
   describe("round") {
-    it("positive half returns the exact value") { assert_eq(2.0, Float::round(1.5)) }
-    it("negative half returns the exact value") { assert_eq(-2.0, Float::round(-1.5)) }
+    it("positive half returns the exact value") {
+      do {
+        assert_eq(2.0, Float::round(1.5))
+      }
+    }
+    it("negative half returns the exact value") {
+      do {
+        assert_eq(-2.0, Float::round(-1.5))
+      }
+    }
   }
   describe("trunc") {
-    it("positive returns the exact value") { assert_eq(1.0, Float::trunc(1.8)) }
-    it("negative returns the exact value") { assert_eq(-1.0, Float::trunc(-1.8)) }
+    it("positive returns the exact value") {
+      do {
+        assert_eq(1.0, Float::trunc(1.8))
+      }
+    }
+    it("negative returns the exact value") {
+      do {
+        assert_eq(-1.0, Float::trunc(-1.8))
+      }
+    }
   }
   describe("pi") {
-    it("constant returns the exact value") { assert_eq(3.141592653589793, Float::pi()) }
+    it("constant returns the exact value") {
+      do {
+        assert_eq(3.141592653589793, Float::pi())
+      }
+    }
   }
   describe("e") {
-    it("constant returns the exact value") { assert_eq(2.718281828459045, Float::e()) }
+    it("constant returns the exact value") {
+      do {
+        assert_eq(2.718281828459045, Float::e())
+      }
+    }
   }
-  describe("Add::add") { it("returns the arithmetic result") { assert_eq(3.5, Add::add(1.5, 2.0)) } }
-  describe("Sub::sub") { it("returns the arithmetic result") { assert_eq(2.5, Sub::sub(3.5, 1.0)) } }
-  describe("Mul::mul") { it("returns the arithmetic result") { assert_eq(3.0, Mul::mul(1.5, 2.0)) } }
+  describe("Add::add") { it("returns the arithmetic result") {
+                           do {
+                             assert_eq(3.5, Add::add(1.5, 2.0))
+                           }
+                         } }
+  describe("Sub::sub") { it("returns the arithmetic result") {
+                           do {
+                             assert_eq(2.5, Sub::sub(3.5, 1.0))
+                           }
+                         } }
+  describe("Mul::mul") { it("returns the arithmetic result") {
+                           do {
+                             assert_eq(3.0, Mul::mul(1.5, 2.0))
+                           }
+                         } }
   describe("Div::safe_div") {
-    it("returns a quotient") { assert_ok_eq(1.5, Div::safe_div(3.0, 2.0)) }
-    it("rejects zero division") { assert_err_kind(ZeroDivisionError, Div::safe_div(3.0, 0.0)) }
+    it("returns a quotient") {
+      do {
+        assert_ok_eq(1.5, Div::safe_div(3.0, 2.0))
+      }
+    }
+    it("rejects zero division") {
+      do {
+        assert_err_kind(ZeroDivisionError, Div::safe_div(3.0, 0.0))
+      }
+    }
   }
   describe("Eq") {
-    it("accepts equal values") { assert_true(eq(1.5, 1.5)) }
-    it("rejects different values") { assert_true(neq(1.5, 2.0)) }
+    it("accepts equal values") {
+      do {
+        assert_true(eq(1.5, 1.5))
+      }
+    }
+    it("rejects different values") {
+      do {
+        assert_true(neq(1.5, 2.0))
+      }
+    }
   }
   describe("Compare") {
-    it("returns Less") { assert_eq(Ordering::Less, compare(1.5, 2.0)) }
-    it("returns Equal") { assert_eq(Ordering::Equal, compare(1.5, 1.5)) }
-    it("returns Greater") { assert_eq(Ordering::Greater, compare(2.0, 1.5)) }
-    it("compares endpoints with lte and gte") { do::<Result> { assert_true(lte(1.5, 1.5)); assert_true(gte(2.0, 2.0)) } }
-    it("supports relational operators") { do::<Result> { assert_true(lt(1.5, 2.0)); assert_true(gt(2.0, 1.5)); assert_true(1.5 < 2.0); assert_true(1.5 <= 1.5); assert_true(2.0 > 1.5) } }
+    it("returns Less") {
+      do {
+        assert_eq(Ordering::Less, compare(1.5, 2.0))
+      }
+    }
+    it("returns Equal") {
+      do {
+        assert_eq(Ordering::Equal, compare(1.5, 1.5))
+      }
+    }
+    it("returns Greater") {
+      do {
+        assert_eq(Ordering::Greater, compare(2.0, 1.5))
+      }
+    }
+    it("compares endpoints with lte and gte") {
+      do {
+        assert_true(lte(1.5, 1.5)); assert_true(gte(2.0, 2.0))
+      }
+    }
+    it("supports relational operators") {
+      do {
+        assert_true(lt(1.5, 2.0)); assert_true(gt(2.0, 1.5)); assert_true(1.5 < 2.0); assert_true(1.5 <= 1.5); assert_true(2.0 > 1.5)
+      }
+    }
   }
   describe("Show/Convert") {
-    it("renders the decimal value") { assert_eq("1.5", to_string(1.5)) }
-    it("converts the decimal value to String") { assert_eq("1.5", to::<String>(1.5)) }
+    it("renders the decimal value") {
+      do {
+        assert_eq("1.5", to_string(1.5))
+      }
+    }
+    it("converts the decimal value to String") {
+      do {
+        assert_eq("1.5", to::<String>(1.5))
+      }
+    }
   }
 }

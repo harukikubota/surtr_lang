@@ -3,10 +3,18 @@ import Test;
 
 test("String") {
   describe("emptiness helpers") {
-    it("detects empty strings") { assert_true(is_empty("")) }
-    it("detects non-empty strings") { assert_true(non_empty("surtr")) }
+    it("detects empty strings") {
+      do {
+        assert_true(is_empty(""))
+      }
+    }
+    it("detects non-empty strings") {
+      do {
+        assert_true(non_empty("surtr"))
+      }
+    }
     it("reports False for the opposite branch") {
-      do::<Result> {
+      do {
         assert_false(is_empty("surtr"))
         assert_false(non_empty(""))
       }
@@ -14,33 +22,56 @@ test("String") {
   }
 
   describe("len") {
-    it("counts ascii characters") { assert_eq(5, len("surtr")) }
-    it("counts unicode surface characters") { assert_eq(2, len("あい")) }
+    it("counts ascii characters") {
+      do {
+        assert_eq(5, len("surtr"))
+      }
+    }
+    it("counts unicode surface characters") {
+      do {
+        assert_eq(2, len("あい"))
+      }
+    }
   }
 
   describe("surround") {
     it("wraps a string with prefix and suffix") {
-      assert_eq("[core]", surround("core", "[", "]"))
+      do {
+        assert_eq("[core]", surround("core", "[", "]"))
+      }
     }
   }
 
   describe("join") {
-    it("joins parts with separators") { assert_eq("a,b,c", join(["a", "b", "c"], ",")) }
-    it("returns an empty string for empty input") { assert_eq("", join([], ",")) }
+    it("joins parts with separators") {
+      do {
+        assert_eq("a,b,c", join(["a", "b", "c"], ","))
+      }
+    }
+    it("returns an empty string for empty input") {
+      do {
+        assert_eq("", join([], ","))
+      }
+    }
   }
 
   describe("repeat") {
     it("repeats a string") {
-      assert_ok_eq("nanana", repeat("na", 3))
+      do {
+        assert_ok_eq("nanana", repeat("na", 3))
+      }
     }
 
     it("accepts zero repeats") {
-      assert_ok_eq("", repeat("na", 0))
+      do {
+        assert_ok_eq("", repeat("na", 0))
+      }
     }
 
     it("rejects negative counts") {
-      result = repeat("na", -1)
-      do::<Result> {
+      do {
+        result = repeat("na", -1)
+
         assert_err_kind(NegativeRepeatCount, result)
         assert_err_contains("repeat count must be non-negative: -1", result)
       }
@@ -48,23 +79,42 @@ test("String") {
   }
 
   describe("starts_with") {
-    it("matches a valid prefix") { assert_true(starts_with("surtr", "sur")) }
-    it("rejects a missing prefix") { assert_false(starts_with("surtr", "urt")) }
+    it("matches a valid prefix") {
+      do {
+        assert_true(starts_with("surtr", "sur"))
+      }
+    }
+    it("rejects a missing prefix") {
+      do {
+        assert_false(starts_with("surtr", "urt"))
+      }
+    }
   }
 
   describe("ends_with") {
-    it("matches a valid suffix") { assert_true(ends_with("surtr", "tr")) }
-    it("rejects a missing suffix") { assert_false(ends_with("surtr", "su")) }
+    it("matches a valid suffix") {
+      do {
+        assert_true(ends_with("surtr", "tr"))
+      }
+    }
+    it("rejects a missing suffix") {
+      do {
+        assert_false(ends_with("surtr", "su"))
+      }
+    }
   }
 
   describe("strip_prefix") {
     it("removes a matching prefix") {
-      assert_ok_eq("tr", strip_prefix("surtr", "sur"))
+      do {
+        assert_ok_eq("tr", strip_prefix("surtr", "sur"))
+      }
     }
 
     it("returns NoneError for a missing prefix") {
-      result = strip_prefix("surtr", "ur")
-      do::<Result> {
+      do {
+        result = strip_prefix("surtr", "ur")
+
         assert_err_kind(NoneError, result)
         assert_err_contains("None Value.", result)
       }
@@ -73,12 +123,15 @@ test("String") {
 
   describe("strip_suffix") {
     it("removes a matching suffix") {
-      assert_ok_eq("sur", strip_suffix("surtr", "tr"))
+      do {
+        assert_ok_eq("sur", strip_suffix("surtr", "tr"))
+      }
     }
 
     it("returns NoneError for a missing suffix") {
-      result = strip_suffix("surtr", "su")
-      do::<Result> {
+      do {
+        result = strip_suffix("surtr", "su")
+
         assert_err_kind(NoneError, result)
         assert_err_contains("None Value.", result)
       }
@@ -87,18 +140,25 @@ test("String") {
 
   describe("split_once") {
     it("splits on the first match") {
-      StringSplit::Split(left, right) =? split_once("key=value", "=")
-      do::<Result> { assert_eq("key", left); assert_eq("value", right) }
+      do {
+        StringSplit::Split(left, right) <- split_once("key=value", "=")
+
+        assert_eq("key", left); assert_eq("value", right)
+      }
     }
 
     it("accepts an empty separator") {
-      StringSplit::Split(left, right) =? split_once("surtr", "")
-      do::<Result> { assert_eq("", left); assert_eq("surtr", right) }
+      do {
+        StringSplit::Split(left, right) <- split_once("surtr", "")
+
+        assert_eq("", left); assert_eq("surtr", right)
+      }
     }
 
     it("returns NoneError when not found") {
-      result = split_once("surtr", "/")
-      do::<Result> {
+      do {
+        result = split_once("surtr", "/")
+
         assert_err_kind(NoneError, result)
         assert_err_contains("None Value.", result)
       }
@@ -106,59 +166,110 @@ test("String") {
   }
 
   describe("contains") {
-    it("matches an inner substring") { assert_true(contains("surtr", "urt")) }
-    it("rejects a missing substring") { assert_false(contains("surtr", "zzz")) }
-    it("matches an empty needle") { assert_true(contains("surtr", "")) }
+    it("matches an inner substring") {
+      do {
+        assert_true(contains("surtr", "urt"))
+      }
+    }
+    it("rejects a missing substring") {
+      do {
+        assert_false(contains("surtr", "zzz"))
+      }
+    }
+    it("matches an empty needle") {
+      do {
+        assert_true(contains("surtr", ""))
+      }
+    }
   }
 
   describe("replace") {
-    it("replaces each matched substring") { assert_eq("baNANA", replace("banana", "na", "NA")) }
-    it("leaves input unchanged for an empty separator") { assert_eq("surtr", replace("surtr", "", "-")) }
-    it("uses non-overlapping matches") { assert_eq("bb", replace("aaaa", "aa", "b")) }
+    it("replaces each matched substring") {
+      do {
+        assert_eq("baNANA", replace("banana", "na", "NA"))
+      }
+    }
+    it("leaves input unchanged for an empty separator") {
+      do {
+        assert_eq("surtr", replace("surtr", "", "-"))
+      }
+    }
+    it("uses non-overlapping matches") {
+      do {
+        assert_eq("bb", replace("aaaa", "aa", "b"))
+      }
+    }
   }
 
   describe("split") {
     it("keeps empty segments around matches") {
-      assert_eq(["a", "", "b", ""], split("a,,b,", ","))
+      do {
+        assert_eq(["a", "", "b", ""], split("a,,b,", ","))
+      }
     }
 
     it("splits into characters on an empty separator") {
-      assert_eq(["s", "u", "r", "t", "r"], split("surtr", ""))
+      do {
+        assert_eq(["s", "u", "r", "t", "r"], split("surtr", ""))
+      }
     }
 
     it("returns the original string when the separator is absent") {
-      assert_eq(["surtr"], split("surtr", "/"))
+      do {
+        assert_eq(["surtr"], split("surtr", "/"))
+      }
     }
 
     it("splits on unicode separators") {
-      assert_eq(["a", "b", ""], split("aあbあ", "あ"))
+      do {
+        assert_eq(["a", "b", ""], split("aあbあ", "あ"))
+      }
     }
   }
 
   describe("lines") {
-    it("returns no lines for empty input") { assert_eq(0, List::len(lines(""))) }
-    it("splits newline-terminated text") { assert_eq(["a", "b"], lines("a\nb\n")) }
-    it("normalizes CRLF line endings") { assert_eq(["a", "b"], lines("a\u{d}\nb\u{d}\n")) }
+    it("returns no lines for empty input") {
+      do {
+        assert_eq(0, List::len(lines("")))
+      }
+    }
+    it("splits newline-terminated text") {
+      do {
+        assert_eq(["a", "b"], lines("a\nb\n"))
+      }
+    }
+    it("normalizes CRLF line endings") {
+      do {
+        assert_eq(["a", "b"], lines("a\u{d}\nb\u{d}\n"))
+      }
+    }
   }
 
   describe("chars") {
     it("splits into single-character strings") {
-      assert_eq(["あ", "b"], chars("あb"))
+      do {
+        assert_eq(["あ", "b"], chars("あb"))
+      }
     }
   }
 
   describe("from_chars") {
     it("rebuilds a valid character list") {
-      assert_ok_eq("あb", from_chars(["あ", "b"]))
+      do {
+        assert_ok_eq("あb", from_chars(["あ", "b"]))
+      }
     }
 
     it("accepts an empty character list") {
-      assert_ok_eq("", from_chars([]))
+      do {
+        assert_ok_eq("", from_chars([]))
+      }
     }
 
     it("rejects multi-character items") {
-      result = from_chars(["ab"])
-      do::<Result> {
+      do {
+        result = from_chars(["ab"])
+
         assert_err_kind(InvalidCharList, result)
         match result { Err(error) => assert_eq("expected single-character string at index 0, got \"ab\"", Error::message(error)), Ok(_) => fail("expected InvalidCharList"), }
       }
@@ -167,16 +278,21 @@ test("String") {
 
   describe("codepoints") {
     it("encodes utf8 bytes") {
-      assert_ok_eq([65, 227, 129, 130], codepoints("Aあ", StringEncoding::Utf8))
+      do {
+        assert_ok_eq([65, 227, 129, 130], codepoints("Aあ", StringEncoding::Utf8))
+      }
     }
 
     it("encodes ascii bytes") {
-      assert_ok_eq([65, 90], codepoints("AZ", StringEncoding::Ascii))
+      do {
+        assert_ok_eq([65, 90], codepoints("AZ", StringEncoding::Ascii))
+      }
     }
 
     it("rejects non-ascii characters in ascii mode") {
-      result = codepoints("あ", StringEncoding::Ascii)
-      do::<Result> {
+      do {
+        result = codepoints("あ", StringEncoding::Ascii)
+
         assert_err_kind(InvalidStringEncoding, result)
         assert_err_contains("ASCII encoding does not support character at index 0: あ", result)
       }
@@ -185,24 +301,30 @@ test("String") {
 
   describe("from_codepoints") {
     it("restores utf8 text") {
-      assert_ok_eq("Aあ", from_codepoints([65, 227, 129, 130], StringEncoding::Utf8))
+      do {
+        assert_ok_eq("Aあ", from_codepoints([65, 227, 129, 130], StringEncoding::Utf8))
+      }
     }
 
     it("restores ascii text") {
-      assert_ok_eq("AZ", from_codepoints([65, 90], StringEncoding::Ascii))
+      do {
+        assert_ok_eq("AZ", from_codepoints([65, 90], StringEncoding::Ascii))
+      }
     }
 
     it("rejects out-of-range ascii codes") {
-      result = from_codepoints([128], StringEncoding::Ascii)
-      do::<Result> {
+      do {
+        result = from_codepoints([128], StringEncoding::Ascii)
+
         assert_err_kind(InvalidStringEncoding, result)
         assert_err_contains("ASCII code out of range at index 0: 128", result)
       }
     }
 
     it("rejects invalid utf8 byte sequences") {
-      result = from_codepoints([255], StringEncoding::Utf8)
-      do::<Result> {
+      do {
+        result = from_codepoints([255], StringEncoding::Utf8)
+
         assert_err_kind(InvalidStringEncoding, result)
         assert_err_contains("invalid UTF-8 byte sequence at index 0 (len 1)", result)
       }
@@ -210,40 +332,74 @@ test("String") {
   }
 
   describe("trim") {
-    it("trims actual carriage returns") { assert_eq("core", trim("\u{d}core\u{d}")) }
-    it("preserves literal backslash-r text") { assert_eq("\\rcore\\r", trim("\\rcore\\r")) }
-    it("trims leading whitespace") { assert_eq("core", trim_start(" \n\tcore")) }
-    it("trims trailing whitespace") { assert_eq("core", trim_end("core \n\t")) }
-    it("trims both sides") { assert_eq("core", trim(" \ncore\t ")) }
+    it("trims actual carriage returns") {
+      do {
+        assert_eq("core", trim("\u{d}core\u{d}"))
+      }
+    }
+    it("preserves literal backslash-r text") {
+      do {
+        assert_eq("\\rcore\\r", trim("\\rcore\\r"))
+      }
+    }
+    it("trims leading whitespace") {
+      do {
+        assert_eq("core", trim_start(" \n\tcore"))
+      }
+    }
+    it("trims trailing whitespace") {
+      do {
+        assert_eq("core", trim_end("core \n\t"))
+      }
+    }
+    it("trims both sides") {
+      do {
+        assert_eq("core", trim(" \ncore\t "))
+      }
+    }
   }
 
   describe("TryConvert") {
     it("supports result pipeline assertions") {
-      try_to::<Int>("1") |>= {|value| assert_eq(1, value)}
+      do {
+        try_to::<Int>("1") |>= {|value| assert_eq(1, value)}
+      }
     }
 
     it("parses signed integers") {
-      try_to::<Int>("-12") |>= {|value| assert_eq(-12, value)}
+      do {
+        try_to::<Int>("-12") |>= {|value| assert_eq(-12, value)}
+      }
     }
 
     it("reports invalid integer text") {
-      assert_err_contains("invalid integer literal", try_to::<Int>("bad"))
+      do {
+        assert_err_contains("invalid integer literal", try_to::<Int>("bad"))
+      }
     }
 
     it("parses booleans") {
-      try_to::<Boolean>("true") |>= {|value| assert_true(value)}
+      do {
+        try_to::<Boolean>("true") |>= {|value| assert_true(value)}
+      }
     }
 
     it("parses alternate boolean casing") {
-      try_to::<Boolean>("False") |>= {|value| assert_false(value)}
+      do {
+        try_to::<Boolean>("False") |>= {|value| assert_false(value)}
+      }
     }
 
     it("reports invalid boolean text") {
-      assert_err_contains("invalid boolean literal", try_to::<Boolean>("maybe"))
+      do {
+        assert_err_contains("invalid boolean literal", try_to::<Boolean>("maybe"))
+      }
     }
 
     it("reads the destination type in a bind pipeline") {
-      Ok("42") |>= try_to::<Int>() |>= {|value| assert_eq(42, value)}
+      do {
+        Ok("42") |>= try_to::<Int>() |>= {|value| assert_eq(42, value)}
+      }
     }
   }
 
