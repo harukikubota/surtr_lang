@@ -277,25 +277,26 @@ test("List") {
   describe("find_map") {
     it("returns first match and skips remaining callbacks") {
       do {
-        actual = List::find_map([1, 2, 3], {|x| print("visit=#{x}"); if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
+        actual = List::find_map([1, 2, 3], {|x| print("visit=#{x}"); if(x > 1, Option::Some(x * 10), Option::None)})
 
         assert_ok_eq(20, actual)
         assert_stdout_eq(["visit=1", "visit=2"])
       }
     }
 
-    it("returns NoneError when no callback succeeds") {
+    it("returns NoneError when every callback returns None") {
       do {
-        actual = List::find_map([0, 1], {|x| if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
+        actual = List::find_map([0, 1], {|x| print("visit=#{x}"); if(x > 1, Option::Some(x * 10), Option::None)})
 
         assert_err_kind(NoneError, actual)
+        assert_stdout_eq(["visit=0", "visit=1"])
       }
     }
 
     it("does not visit an empty input") {
       do {
         empty: List<Int> = []
-        actual = List::find_map(empty, {|x| print("unexpected"); if(x > 1, Ok(x * 10), Err(ZeroDivisionError))})
+        actual = List::find_map(empty, {|x| print("unexpected"); if(x > 1, Option::Some(x * 10), Option::None)})
 
         assert_err_kind(NoneError, actual)
         assert_stdout_eq([])

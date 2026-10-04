@@ -578,7 +578,7 @@ List::cons(1, [])             # => [1]
 List::first([1, 2, 3])        # => Ok(1)
 List::len([1, 2, 3])          # => 3
 List::map([1, 2], &to_string)
-List::find_map([1, 2], &lookup)
+List::find_map([1, 2], {|n| if(n > 1, Option::Some(n), Option::None)}) # => Ok(2)
 ```
 
 固定範囲をその場で書きたいときは range literal も使えます。

@@ -427,17 +427,18 @@ impl List {
   }
 
   @doc """
-  Return the first successful mapped value.
+  Return the first `Some` mapped value as `Ok`, stopping before later callbacks.
+  Skip `None`; return `Err(NoneError)` for empty input or when every callback returns `None`.
   ## REPL
-  xldr(1)> List::find_map([1, 2, 3], {|n| if(n > 1, Ok(to_string(n)), Err(NoneError))})
+  xldr(1)> List::find_map([1, 2, 3], {|n| if(n > 1, Option::Some(to_string(n)), Option::None)})
   Ok("2")
   """
-  def find_map(values: List<$A>, f: ($A -> Result<$B>)) -> Result<$B, NoneError> {
+  def find_map(values: List<$A>, f: ($A -> Option<$B>)) -> Result<$B, NoneError> {
     match values {
       [] => Err(NoneError),
       [head, ..tail] => match f(head) {
-        Ok(value) => Ok(value),
-        Err(_) => find_map(tail, f),
+        Option::Some(value) => Ok(value),
+        Option::None => find_map(tail, f),
       },
     }
   }

@@ -14,7 +14,8 @@
 |---|---|
 | SD-03 | 実装・対象テスト完了（level1）。全体検証は他項目の統合後に記録する |
 | SD-04 | 実装・対象テスト完了（level3）。全体検証は統合後に記録する |
-| SD-07・09・11 | 実施中 |
+| SD-07 | 実装・対象テスト完了（level1）。全体検証は統合後に記録する |
+| SD-09・11 | 実施中 |
 | SD-05・08 | 確定方針どおり現行仕様を維持 |
 | SD-06 | 簡素化案のまま保留 |
 | SD-10 | 別ドラフトの未確定事項として維持 |
@@ -180,6 +181,12 @@ List::find_map([1, 2], {|n: Int| Option::None})
 ここで検索の終端（Terminal）は最初の Some であり、その後の callback は実行しない。古い `Result<$B>` を返す callback は型エラーにし、暗黙の Result→Option 変換による互換経路は残さない。変換が必要な利用者は SD-08 の明示変換を使う。
 
 `lib/types/list.srt` の宣言・実装・`@doc` と、関連する利用例・文書を更新する。最初の Some、途中の None、空 List、全 None、成功後の打ち切り、旧 callback の拒否を検証する。冒頭の ZeroDivisionError の実測例は旧契約の記録であり、新シグネチャでは受理しない。
+
+### 実施記録（2026-10-04）
+
+callback を `Option` 戻り値へ変更し、`Some` で終了、`None` で次要素へ進むようにした。`@doc` と利用者ガイドの例も更新した。旧 Result callback への互換経路はない。
+
+旧実装で Option callback が型エラーになる Red と、旧 Result callback が受理されることを確認した。変更後の `rtk proxy cargo run -- test --quiet lib/tests/monads/list.srt` は exit 0。最初の Some での打ち切り、途中の None、全 None、空入力を検証する。旧 callback の拒否は `tests/fixtures/script/fail/typecheck/list_find_map_result_callback.srt` に置き、明示的な `Result<Int>` 戻り値の関数を渡して型不一致を固定した。`rtk cargo nextest run -p rune --test integration run_srt` は9件成功（exit 0）。
 
 ## SD-08 `Result` → `Option` の Error 破棄は明示変換
 
