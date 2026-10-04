@@ -111,7 +111,8 @@ test("control") {
         value = tap(Ok(3), {|_| print("input")})
         actual = if_let(value, Ok(n), n + 1, 0)
 
-        assert_eq(4, actual); assert_stdout_eq(["input"])
+        assert_eq(4, actual)
+        assert_stdout_eq(["input"])
       }
     }
   }

@@ -141,12 +141,17 @@ test("Float") {
     }
     it("compares endpoints with lte and gte") {
       do {
-        assert_true(lte(1.5, 1.5)); assert_true(gte(2.0, 2.0))
+        assert_true(lte(1.5, 1.5))
+        assert_true(gte(2.0, 2.0))
       }
     }
     it("supports relational operators") {
       do {
-        assert_true(lt(1.5, 2.0)); assert_true(gt(2.0, 1.5)); assert_true(1.5 < 2.0); assert_true(1.5 <= 1.5); assert_true(2.0 > 1.5)
+        assert_true(lt(1.5, 2.0))
+        assert_true(gt(2.0, 1.5))
+        assert_true(1.5 < 2.0)
+        assert_true(1.5 <= 1.5)
+        assert_true(2.0 > 1.5)
       }
     }
   }

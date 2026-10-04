@@ -584,7 +584,7 @@ fn collect_missing_singleton_calls(
                 first_missing,
             );
         }
-        TypedInner::Assert(left, right) | TypedInner::Ensure(left, right, _) => {
+        TypedInner::Require(left, right) | TypedInner::Ensure(left, right, _) => {
             collect_missing_singleton_calls(
                 left,
                 surface_to_process,
@@ -2821,12 +2821,12 @@ mod tests {
     }
 
     #[test]
-    fn emit_assert_literal_bool_folds_to_single_result_path() {
+    fn emit_require_literal_bool_folds_to_single_result_path() {
         let mut gene = Codegen::new();
         let node = TypedNode {
             ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
             span: span(1, 24),
-            node: TypedInner::Assert(
+            node: TypedInner::Require(
                 Box::new(lit_node(Ty::Bool, Lit::Bool(true), span(1, 5))),
                 Box::new(TypedNode {
                     ty: Ty::Error,
@@ -2846,7 +2846,7 @@ mod tests {
         gene.state.next_slot = 1;
 
         gene.emit_node(&node)
-            .expect("assert emission should succeed");
+            .expect("require emission should succeed");
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
 
         assert!(opcodes
@@ -8128,8 +8128,8 @@ impl Codegen {
             TypedInner::If(cond, then, else_opt) => {
                 self.emit_if(cond, then, else_opt)?;
             }
-            TypedInner::Assert(cond, err) => {
-                self.emit_assert(node, cond, err)?;
+            TypedInner::Require(cond, err) => {
+                self.emit_require(node, cond, err)?;
             }
             TypedInner::Ensure(value, pred, err) => {
                 self.emit_ensure(node, value, pred, err)?;
@@ -11732,7 +11732,7 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_assert(
+    fn emit_require(
         &mut self,
         _node: &TypedNode,
         cond: &TypedNode,

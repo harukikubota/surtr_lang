@@ -1,0 +1,5 @@
+def make_error() -> Int {
+  1
+}
+
+guard = require(False, make_error())

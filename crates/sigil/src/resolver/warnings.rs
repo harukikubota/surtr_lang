@@ -206,7 +206,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_node_usage(else_branch, usage);
             }
         }
-        Resolved::Assert(_, flag, err) => {
+        Resolved::Require(_, flag, err) => {
             collect_node_usage(flag, usage);
             collect_node_usage(err, usage);
         }

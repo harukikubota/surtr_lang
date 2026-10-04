@@ -1,0 +1,2 @@
+phase: typecheck
+contains: require error branch must evaluate to Error, got Int

@@ -24,7 +24,7 @@ def parse_number(input: String) -> Result<Int> {
 }
 
 def parse_guess(input: String) -> Result<Int> {
-  assert(String::non_empty(input), EmptyGuessError)
+  require(String::non_empty(input), EmptyGuessError)
   |> then({parse_number(input)})
   |>= ensure(&in_range, OutOfRangeGuessError(input))
 }

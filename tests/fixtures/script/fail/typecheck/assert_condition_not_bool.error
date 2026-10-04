@@ -1,2 +1,0 @@
-phase: typecheck
-contains: assert condition must be Boolean

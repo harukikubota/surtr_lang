@@ -78,7 +78,7 @@ pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
         || matches!(
             name,
             "if" | "if_then"
-                | "assert"
+                | "require"
                 | "ensure"
                 | "map_err"
                 | "cause"

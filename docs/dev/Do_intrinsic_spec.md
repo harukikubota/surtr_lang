@@ -17,7 +17,8 @@ generic contextではRHSや期待型からrigid constructor variableへ統一で
 文はExtract (`pattern <- rhs`)、SafeBind (`pattern =? rhs`)、通常statementへ分類する。
 文末の `?` は独立した通常statementとして保持し、式のpostfix演算子にはしない。
 式全体の末尾だけに付けられ、複数行callも受理する。binding RHS、引数、演算途中、`??` は拒否する。
-separatorは改行または`;`。空block、末尾binding、最終Monad式不足はparse errorとする。
+式の区切りには改行を使う。`;` は通常 block と同じ Stmt として式を Unit 化し、carrier を含む値を破棄する。
+その式の Err は伝播しない。空block、末尾binding、最終Monad式不足はparse errorとする。
 blockはchild scopeを持ち、RHSをLHS bindingより先に解決し、pattern名を後続文だけへ公開する。
 capture、warning、ID rebase、Facet bulk_update等のvisitorはdo内部にも再帰する。
 bulk_updateの`<-`とは構文所有者で区別し、通常callへ曖昧にfallbackしない。
@@ -87,6 +88,8 @@ do 内では既存 do-local failure target、do 外では最も近い callable �
 match arm などの通常 Block は新しい target を作らず、成立しない位置は拒否する。
 closure に入ると自身の期待返り型、または自身の未確定返り型へ切り替える。外側 callable の target を継承せず、未確定 target の SafeBind / 文末 `?` は拒否する。
 carrier の推論元にせず、末尾の Unit を最終 Monad 値へ暗黙 wrap しない。
+文末 `?` 自体の型は Unit として扱い、Result や最終 Monad 値が必要な位置では通常の型検査で拒否する。
+ブロック末尾の `?` を一律に禁じる構文規則は追加しない。
 optional 型や FacetPath optional segment の既存 `?` と構文所有者を区別し、fallback は設けない。
 
 Result-preserving routeはRHS Err、既存pattern Errorのkind/message/location/causeを保存する。

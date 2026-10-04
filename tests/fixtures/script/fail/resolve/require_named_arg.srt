@@ -1,0 +1,1 @@
+guard = require(flag: True, err: NoneError)

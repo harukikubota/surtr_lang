@@ -32,13 +32,15 @@ option # Option::Some(21)
 - 途中のbare Monad式: payloadを捨てて次の文へ進みます。
 - 最後の式:同じcarrierのMonad値を返します。空blockや末尾bindingだけのblockは拒否されます。
 
-separatorには改行か`;`を使います。bindingはそのRHSでは見えず、後続文だけで使えます。
+式は改行で区切ります。`;` を付けた式は通常のブロックと同じく Unit になり、値を破棄します。
+`do` 直下でも Err を伝播しないため、アサーションの失敗を伝播するときは `;` を付けずに並べます。
+bindingはそのRHSでは見えず、後続文だけで使えます。
 block内で導入した名前はblock外へ漏れません。
 各binding/continuationの実行ごとにRHSを一度評価し、failureとなったその経路の後続文を実行しません。
 List等の分岐carrierでは、後続のcontinuationを各payloadについて実行します。
 
 文末の `?` は Unit 文なので、carrier を推論する根拠にはなりません。
-末尾に置くだけでは最終 Monad 値にならず、たとえば Result carrier では後に `Ok(())` が必要です。
+Unit は最終 Monad 値にはならないため、最後の処理は `?` を付けず、その Monad 値を返します。
 内側にネストした Result の Err を再帰的に探す規則もありません。
 詳しい型制約と式位置の拒否は[エラーハンドリング](./error-handling.md)を参照してください。
 

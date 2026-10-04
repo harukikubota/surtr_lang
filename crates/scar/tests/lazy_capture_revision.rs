@@ -103,7 +103,7 @@ fn single_lazy_branch_uses_standard_required_type() {
         Ty::Func(vec![Ty::Bool, thunk(Ty::Unit)], Box::new(Ty::Unit))
     );
     assert_eq!(
-        ty("guard = &assert(&1, &2)", "guard"),
+        ty("guard = &require(&1, &2)", "guard"),
         Ty::Func(
             vec![Ty::Bool, thunk(Ty::Error)],
             Box::new(Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)))

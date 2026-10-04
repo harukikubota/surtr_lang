@@ -420,7 +420,7 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Assert(left, right)
+            | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right) => recurse(left).or_else(|| recurse(right)),
             TypedInner::If(condition, then_branch, else_branch) => recurse(condition)
@@ -869,7 +869,7 @@ impl Checker {
                         .as_deref()
                         .and_then(|branch| self.find_typed_node(branch, inspect))
                 }),
-            TypedInner::Assert(cond, err) => self
+            TypedInner::Require(cond, err) => self
                 .find_typed_node(cond, inspect)
                 .or_else(|| self.find_typed_node(err, inspect)),
             TypedInner::Ensure(value, pred, err) => self
@@ -1001,7 +1001,7 @@ impl Checker {
                 | TypedInner::Pipe(left, right)
                 | TypedInner::Compose(_, left, right)
                 | TypedInner::ListCons(left, right)
-                | TypedInner::Assert(left, right)
+                | TypedInner::Require(left, right)
                 | TypedInner::MapErr(left, right)
                 | TypedInner::Cause(left, right) => {
                     collect(left, obligations);
@@ -1187,7 +1187,7 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Assert(left, right)
+            | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right)
             | TypedInner::RecoverKind(left, _, right)
@@ -1700,7 +1700,7 @@ impl Checker {
 
             Resolved::Cond(span, clauses) => self.check_cond(span, clauses, None),
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
-            Resolved::Assert(span, cond, err) => self.check_assert(span, cond, err),
+            Resolved::Require(span, cond, err) => self.check_require(span, cond, err),
             Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
             Resolved::MapErr(span, value, err) => self.check_map_err(span, value, err),
             Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
@@ -4242,7 +4242,7 @@ impl Checker {
             | Resolved::Dbg(span, _)
             | Resolved::Cond(span, _)
             | Resolved::If(span, _, _, _)
-            | Resolved::Assert(span, _, _)
+            | Resolved::Require(span, _, _)
             | Resolved::Ensure(span, _, _, _)
             | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
@@ -14106,7 +14106,7 @@ impl Checker {
                     | Resolved::EnumConstructorCall(..)
                     | Resolved::If(..)
                     | Resolved::IfLet(..)
-                    | Resolved::Assert(..)
+                    | Resolved::Require(..)
                     | Resolved::Ensure(..)
                     | Resolved::MapErr(..)
                     | Resolved::Cause(..)
@@ -14522,7 +14522,7 @@ impl Checker {
         })
     }
 
-    pub(super) fn check_assert(
+    pub(super) fn check_require(
         &mut self,
         span: &Span,
         cond: &Resolved,
@@ -14533,7 +14533,7 @@ impl Checker {
             return Err(TypeError {
                 structured: None,
                 message: format!(
-                    "assert condition must be Boolean, got {}",
+                    "require condition must be Boolean, got {}",
                     self.ty_name(&typed_cond.ty)
                 ),
                 span: typed_cond.span.clone(),
@@ -14542,12 +14542,12 @@ impl Checker {
         }
 
         let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
-        self.ensure_guard_error_value(&typed_err, "assert")?;
+        self.ensure_guard_error_value(&typed_err, "require")?;
 
         Ok(TypedNode {
             ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
             span: span.clone(),
-            node: TypedInner::Assert(Box::new(typed_cond), Box::new(typed_err)),
+            node: TypedInner::Require(Box::new(typed_cond), Box::new(typed_err)),
         })
     }
 

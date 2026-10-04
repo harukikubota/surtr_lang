@@ -178,7 +178,7 @@ fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CanonicalSpecialForm {
     If(IfKind),
-    Assert,
+    Require,
     Ensure,
     MapErr,
     Cause,
@@ -193,7 +193,7 @@ impl Resolver {
         match global_surface_name(qualified_name) {
             "Kernel::if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
             "Kernel::if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-            "Kernel::assert" => Some(CanonicalSpecialForm::Assert),
+            "Kernel::require" => Some(CanonicalSpecialForm::Require),
             "Kernel::ensure" => Some(CanonicalSpecialForm::Ensure),
             "Kernel::and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
             "Kernel::or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
@@ -234,7 +234,7 @@ impl Resolver {
         ) {
             ("Kernel", "if") => Some(CanonicalSpecialForm::If(IfKind::If3)),
             ("Kernel", "if_then") => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-            ("Kernel", "assert") => Some(CanonicalSpecialForm::Assert),
+            ("Kernel", "require") => Some(CanonicalSpecialForm::Require),
             ("Kernel", "ensure") => Some(CanonicalSpecialForm::Ensure),
             ("Kernel", "and") => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
             ("Kernel", "or") => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
@@ -252,7 +252,7 @@ impl Resolver {
             Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
                 "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
                 "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-                "assert" => Some(CanonicalSpecialForm::Assert),
+                "require" => Some(CanonicalSpecialForm::Require),
                 "ensure" => Some(CanonicalSpecialForm::Ensure),
                 "map_err" => Some(CanonicalSpecialForm::MapErr),
                 "cause" => Some(CanonicalSpecialForm::Cause),
@@ -294,7 +294,7 @@ impl Resolver {
     ) -> Result<Resolved, ResolveError> {
         match kind {
             CanonicalSpecialForm::If(if_kind) => self.resolve_if(span, args, if_kind),
-            CanonicalSpecialForm::Assert => self.resolve_assert(span, args),
+            CanonicalSpecialForm::Require => self.resolve_require(span, args),
             CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),

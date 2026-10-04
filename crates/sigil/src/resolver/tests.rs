@@ -405,7 +405,7 @@ fn deep_nested_match_blocks_resolve_on_cli_sized_stack() {
 fn bare_lazy_special_form_captures_reject_before_runtime_with_individual_guidance() {
     let modules = vec![
         staged_auto_import_module("Kernel", parse_module_ast(
-            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def assert(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
+            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
         staged_module("Result", parse_module_ast(
             "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
     ];
@@ -414,7 +414,7 @@ fn bare_lazy_special_form_captures_reject_before_runtime_with_individual_guidanc
         "or",
         "if",
         "if_then",
-        "assert",
+        "require",
         "ensure",
         "Result::map_err",
         "Result::cause",
@@ -4250,17 +4250,17 @@ fn test_is_match_rejects_binding_variable_pattern() {
 }
 
 #[test]
-fn test_assert_conversion() {
+fn test_require_conversion() {
     let resolved = parse_and_resolve(
         r#"deferror SomeError { "boom" }
-x = assert(True, SomeError)"#,
+x = require(True, SomeError)"#,
     )
     .unwrap();
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::Assert(_, _, _)));
+            assert!(matches!(rhs.as_ref(), Resolved::Require(_, _, _)));
         }
-        _ => panic!("Expected Bind with Assert"),
+        _ => panic!("Expected Bind with Require"),
     }
 }
 
@@ -5949,7 +5949,7 @@ fn test_effective_visible_entries_include_explicit_imported_short_name() {
 }
 
 #[test]
-fn test_effective_visible_entries_mark_explicit_import_shadowing_auto_import() {
+fn test_effective_visible_entries_reject_explicit_import_conflicting_with_auto_import() {
     let module_stages = vec![vec![
         staged_auto_import_module(
             "Kernel",
@@ -5962,16 +5962,9 @@ fn test_effective_visible_entries_mark_explicit_import_shadowing_auto_import() {
     ]];
     let ast = parse("import UserHelpers::helper\nhelper").expect("parse should succeed");
 
-    let visible = crate::effective_visible_entries(&module_stages, &ast, None, 0)
-        .expect("effective visible query should succeed");
-    let imported = visible
-        .iter()
-        .find(|entry| entry.visible_name == "helper" && entry.entry.module_path == "UserHelpers")
-        .expect("explicit import should expose short name");
-
-    assert!(imported.via_import);
-    assert!(!imported.via_auto_import);
-    assert!(imported.shadowed_auto_import);
+    let error = crate::effective_visible_entries(&module_stages, &ast, None, 0)
+        .expect_err("explicit import must reject auto-import conflicts");
+    assert!(error.message.contains("Import conflict"), "{error:?}");
 }
 
 #[test]
@@ -6079,7 +6072,47 @@ print(to_string(add(1, 2)))"#,
 }
 
 #[test]
-fn test_explicit_import_shadows_auto_imported_kernel_function() {
+fn imported_normal_function_can_be_shadowed_by_module_definition() {
+    for auto_import in [false, true] {
+        let prelude_ast = parse_module_ast("def helper() -> Int { 1 }", "Prelude");
+        let prelude = if auto_import {
+            staged_auto_import_module("Prelude", prelude_ast)
+        } else {
+            staged_module("Prelude", prelude_ast)
+        };
+        let source = if auto_import {
+            "def helper() -> Int { 2 }\ndef run() -> Int { helper() }"
+        } else {
+            "import Prelude\ndef helper() -> Int { 2 }\ndef run() -> Int { helper() }"
+        };
+        let modules = vec![
+            vec![prelude],
+            vec![staged_module("Local", parse_module_ast(source, "Local"))],
+        ];
+        let resolved = resolve_user_with_modules("Local::run()", &modules)
+            .expect("module definitions may shadow imported normal functions");
+        let body = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::Def(_, id, _, _, _, _, body, _)
+                    if id.qualified_name.as_deref() == Some("Local::run") =>
+                {
+                    Some(body)
+                }
+                _ => None,
+            })
+            .expect("run body");
+        let Resolved::Block(_, nodes) = body.as_ref() else {
+            panic!("expected block")
+        };
+        assert!(matches!(&nodes[0], Resolved::App(_, callee, _)
+            if matches!(callee.as_ref(), Resolved::Var(_, id)
+                if id.qualified_name.as_deref() == Some("Local::helper"))));
+    }
+}
+
+#[test]
+fn test_explicit_import_conflicts_with_auto_imported_kernel_function() {
     let module_stages = vec![
         vec![staged_module(
             "Kernel",
@@ -6091,62 +6124,13 @@ fn test_explicit_import_shadows_auto_imported_kernel_function() {
         )],
     ];
 
-    let resolved = resolve_user_with_modules(
+    let error = resolve_user_with_modules(
         r#"import Helper::add;
 print(to_string(add(7, 3)))"#,
         &module_stages,
     )
-    .expect("explicit import should shadow auto-imported function");
-
-    let helper_add_uid = resolved
-        .iter()
-        .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _, _)
-                if id.qualified_name.as_deref() == Some("Helper::add") =>
-            {
-                Some(id.unique_id)
-            }
-            _ => None,
-        })
-        .expect("helper add should be resolved");
-
-    let imported_add_uid = resolved
-        .iter()
-        .find_map(|node| match node {
-            Resolved::App(_, print_func, print_args) => {
-                if !matches!(print_func.as_ref(), Resolved::Var(_, id) if id.name == "print") {
-                    return None;
-                }
-                let call = match print_args.first()? {
-                    ResolvedRecordLitArg::Positional(inner) => inner,
-                    _ => return None,
-                };
-                let call = match call {
-                    Resolved::App(_, func, args) => {
-                        if !matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "to_string")
-                        {
-                            return None;
-                        }
-                        match args.first()? {
-                            ResolvedRecordLitArg::Positional(inner) => inner,
-                            _ => return None,
-                        }
-                    }
-                    _ => return None,
-                };
-                match call {
-                    Resolved::App(_, func, _) => match func.as_ref() {
-                        Resolved::Var(_, id) if id.name == "add" => Some(id.unique_id),
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            }
-            _ => None,
-        })
-        .expect("user call should resolve imported add");
-
-    assert_eq!(imported_add_uid, helper_add_uid);
+    .expect_err("explicit import must reject auto-import conflicts");
+    assert!(error.message.contains("Import conflict"), "{error:?}");
 }
 
 #[test]
@@ -8051,21 +8035,7 @@ def parse(line: String) -> String { trim(line) }"#,
 }
 
 #[test]
-fn test_nested_import_shadows_auto_import_within_body_only() {
-    fn find_called_uid(node: &Resolved, name: &str) -> Option<u32> {
-        match node {
-            Resolved::App(_, func, args) => match func.as_ref() {
-                Resolved::Var(_, called_id) if called_id.name == name => Some(called_id.unique_id),
-                _ => args.iter().find_map(|arg| match arg {
-                    ResolvedRecordLitArg::Positional(inner)
-                    | ResolvedRecordLitArg::Named(_, inner) => find_called_uid(inner, name),
-                }),
-            },
-            Resolved::Block(_, nodes) => nodes.iter().find_map(|node| find_called_uid(node, name)),
-            _ => None,
-        }
-    }
-
+fn test_nested_import_conflicts_with_auto_import_within_body() {
     let module_stages = vec![
         vec![staged_module(
             "Kernel",
@@ -8085,32 +8055,9 @@ def parse() -> Int { add(7, 3) }"#,
         )],
     ];
 
-    let resolved =
-        resolve_user_with_modules(r#"print(to_string(Parser::parse()))"#, &module_stages)
-            .expect("nested explicit import should shadow auto-import inside that body");
-
-    let helper_add_uid = resolved
-        .iter()
-        .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _, _)
-                if id.qualified_name.as_deref() == Some("Helper::add") =>
-            {
-                Some(id.unique_id)
-            }
-            _ => None,
-        })
-        .expect("helper add should be resolved");
-
-    let parser_add_uid = resolved.iter().find_map(|node| match node {
-        Resolved::Def(_, id, _, _, _, _, body, _)
-            if id.qualified_name.as_deref() == Some("Parser::parse") =>
-        {
-            find_called_uid(body.as_ref(), "add")
-        }
-        _ => None,
-    });
-
-    assert_eq!(parser_add_uid, Some(helper_add_uid));
+    let error = resolve_user_with_modules(r#"print(to_string(Parser::parse()))"#, &module_stages)
+        .expect_err("nested imports must reject auto-import conflicts");
+    assert!(error.message.contains("Import conflict"), "{error:?}");
 }
 
 #[test]
@@ -8124,12 +8071,12 @@ def pred(n: Int) -> Boolean {
 
 checked = Ok(3) |>= ensure(&pred, GuardError)
 flagged = True |> and(False)
-verified = Ok(True) |>= assert(GuardError)
+verified = Ok(True) |>= require(GuardError)
 replaced = Err(GuardError) |> map_err(GuardError)
 wrapped = Err(GuardError) |> cause(GuardError)"#,
         &[vec![
             staged_auto_import_module("Kernel", parse_module_ast(
-                "@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>\n@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def assert(condition: Boolean, error: Lazy<Error>) -> Result<Unit>", "Kernel")),
+                "@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>\n@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>", "Kernel")),
             staged_module("Result", parse_module_ast(
                 "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
         ]],
@@ -8181,10 +8128,10 @@ wrapped = Err(GuardError) |> cause(GuardError)"#,
             "verified" => match rhs.as_ref() {
                 Resolved::ContextBind(_, _, right) => match right.as_ref() {
                     Resolved::Closure(_, params, _, body) => {
-                        assert_eq!(params.len(), 1, "partial assert must become unary closure");
+                        assert_eq!(params.len(), 1, "partial require must become unary closure");
                         assert!(
-                            matches!(body.as_ref(), Resolved::Assert(_, _, _)),
-                            "partial assert closure body must resolve to Assert"
+                            matches!(body.as_ref(), Resolved::Require(_, _, _)),
+                            "partial require closure body must resolve to Require"
                         );
                         verified_ok = true;
                     }
@@ -9223,7 +9170,7 @@ fn lazy_eager_expression_rejects_capture_parameter_references() {
     let modules = vec![
         staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }", "")),
         staged_auto_import_module("Kernel", parse_module_ast(
-            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def assert(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
+            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
         kernel_pattern_test_module(),
         staged_module("Result", parse_module_ast(
             "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
@@ -9234,7 +9181,7 @@ fn lazy_eager_expression_rejects_capture_parameter_references() {
         "f = &if_then(&1, (print(to_string(&2))))",
         "f = &and(&1, (True == &2))",
         "f = &or(&1, (True == &2))",
-        "f = &assert(&1, (inspect(&2)))",
+        "f = &require(&1, (inspect(&2)))",
         "f = &ensure(&1, &inspect, (inspect(&2)))",
         "f = &Result::map_err(&1, (inspect(&2)))",
         "f = &Result::cause(&1, (inspect(&2)))",
@@ -9459,11 +9406,14 @@ fn autoimport_provenance_does_not_match_only_the_owner_tail() {
         ),
         staged_module(
             "Other::Prelude",
-            parse_module_ast("def greet() -> Int { 2 }", "Other::Prelude"),
+            parse_module_ast("def farewell() -> Int { 2 }", "Other::Prelude"),
         ),
     ]];
-    resolve_user_with_modules("import Other::Prelude::{greet}\nvalue = greet()", &modules)
-        .expect("an unrelated owner with the same terminal name remains importable");
+    resolve_user_with_modules(
+        "import Other::Prelude::{farewell}\nvalue = farewell()",
+        &modules,
+    )
+    .expect("an unrelated owner with the same terminal name remains importable");
 }
 
 #[test]

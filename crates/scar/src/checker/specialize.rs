@@ -531,7 +531,7 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Assert(left, right)
+            | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right) => visit(left).or_else(|| visit(right)),
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
@@ -889,7 +889,7 @@ impl Checker {
             | TypedInner::EagerBoundary(..)
             | TypedInner::AssertErrorKinds(..)
             | TypedInner::If(..)
-            | TypedInner::Assert(..)
+            | TypedInner::Require(..)
             | TypedInner::Ensure(..)
             | TypedInner::MapErr(..)
             | TypedInner::Cause(..)
@@ -1834,7 +1834,7 @@ impl Checker {
                     })
                     .transpose()?,
             ),
-            TypedInner::Assert(cond, err) => TypedInner::Assert(
+            TypedInner::Require(cond, err) => TypedInner::Require(
                 self.rewrite_specializations_in_node(
                     *cond,
                     defs_by_fun_idx,
@@ -3132,7 +3132,7 @@ impl Checker {
                     self.collect_pending_trait_receiver_tyvars_in_node(branch, ordered, seen);
                 }
             }
-            TypedInner::Assert(cond, err) => {
+            TypedInner::Require(cond, err) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
             }
@@ -3326,7 +3326,7 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(else_branch, ordered, seen);
                 }
             }
-            TypedInner::Assert(cond, err) => {
+            TypedInner::Require(cond, err) => {
                 self.collect_bound_tyvars_in_node(cond, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
@@ -3823,7 +3823,7 @@ impl Checker {
                     Box::new(self.substitute_typed_node_with_mapping(*branch, mapping))
                 }),
             ),
-            TypedInner::Assert(cond, err) => TypedInner::Assert(
+            TypedInner::Require(cond, err) => TypedInner::Require(
                 Box::new(self.substitute_typed_node_with_mapping(*cond, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
@@ -5201,7 +5201,7 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|branch| Self::typed_node_has_pending_trait_call(branch))
             }
-            TypedInner::Assert(cond, err) => {
+            TypedInner::Require(cond, err) => {
                 Self::typed_node_has_pending_trait_call(cond)
                     || Self::typed_node_has_pending_trait_call(err)
             }

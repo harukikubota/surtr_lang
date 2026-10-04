@@ -86,7 +86,7 @@ impl Resolver {
                     Some(CanonicalSpecialForm::If(IfKind::IfThen2)) => {
                         (LazyCaptureKind::IfThen, vec![1])
                     }
-                    Some(CanonicalSpecialForm::Assert) => (LazyCaptureKind::Assert, vec![1]),
+                    Some(CanonicalSpecialForm::Require) => (LazyCaptureKind::Require, vec![1]),
                     Some(CanonicalSpecialForm::Ensure) => (LazyCaptureKind::Ensure, vec![2]),
                     Some(CanonicalSpecialForm::MapErr) => (LazyCaptureKind::MapErr, vec![1]),
                     Some(CanonicalSpecialForm::Cause) => (LazyCaptureKind::Cause, vec![1]),
@@ -411,7 +411,7 @@ impl Resolver {
             Some(CanonicalSpecialForm::Logic(LogicKind::Or)) => ("or", "Use explicit placeholders: &or(&1, &2). Its right operand becomes (-> Boolean) and runs only when the left operand is False."),
             Some(CanonicalSpecialForm::If(IfKind::If3)) => ("if", "Use explicit placeholders, such as &if(&1, &2, 0), or give &if(&1, &2, &3) a concrete callable annotation. Branch placeholders require normalized zero-argument function types."),
             Some(CanonicalSpecialForm::If(IfKind::IfThen2)) => ("if_then", "Use explicit placeholders: &if_then(&1, &2). Its branch becomes (-> Unit) and runs only when the condition is True."),
-            Some(CanonicalSpecialForm::Assert) => ("assert", "Use an explicit capture with the error fixed inside it, such as &assert(&1, NoneError). Capturing the error placeholder would require (-> Error), which remains subject to Error transport restrictions."),
+            Some(CanonicalSpecialForm::Require) => ("require", "Use an explicit capture with the error fixed inside it, such as &require(&1, NoneError). Capturing the error placeholder would require (-> Error), which remains subject to Error transport restrictions."),
             Some(CanonicalSpecialForm::Ensure) => ("ensure", "Use an explicit capture with the error fixed inside it, such as `f: (Int -> Result<Int>) = &ensure(&1, {|value| True}, NoneError)`. Capturing the error placeholder would require (-> Error), which remains subject to Error transport restrictions."),
             Some(CanonicalSpecialForm::MapErr) => ("Result::map_err", "Use an explicit capture with the replacement error fixed inside it, such as `f: (Result<Int> -> Result<Int>) = &Result::map_err(&1, NoneError)`. The replacement runs only for Err; an error placeholder would require restricted (-> Error)."),
             Some(CanonicalSpecialForm::Cause) => ("Result::cause", "Use an explicit capture with the cause error fixed inside it, such as `f: (Result<Int> -> Result<Int>) = &Result::cause(&1, NoneError)`. The cause runs only for Err; an error placeholder would require restricted (-> Error)."),

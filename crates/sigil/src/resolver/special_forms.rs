@@ -85,15 +85,16 @@ impl Resolver {
         }
     }
 
-    pub(super) fn resolve_assert(
+    pub(super) fn resolve_require(
         &mut self,
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let [cond_expr, err_expr] = collect_fixed_positional_args(span.clone(), args, "assert", 2)?;
+        let [cond_expr, err_expr] =
+            collect_fixed_positional_args(span.clone(), args, "require", 2)?;
         let cond = self.resolve_node(cond_expr)?;
         let err = self.resolve_lazy_input(err_expr)?;
-        Ok(Resolved::Assert(span, Box::new(cond), Box::new(err)))
+        Ok(Resolved::Require(span, Box::new(cond), Box::new(err)))
     }
 
     pub(super) fn resolve_ensure(

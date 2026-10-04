@@ -60,12 +60,12 @@ Lazy の正規化は最大一段の wrap に限定する。正規化後の型不
 外側の注釈によって既知 branch の評価方法を変更しない。
 
 Lazyキャプチャの型不一致では、通常のreasonを維持し、解決済み標準関数の由来が確定している場合に関数別の説明・修正案を追加する。
-対象は`and`、`or`、`if`、`if_then`、`if_let`、`if_let_then`、`assert`、`ensure`、`Result::map_err`、`Result::cause`。
+対象は`and`、`or`、`if`、`if_then`、`if_let`、`if_let_then`、`require`、`ensure`、`Result::map_err`、`Result::cause`。
 案内は生成されたsignatureとplaceholderの対応に従い、引数の並べ替えも反映する。関数名や関数型の形、エラー文面から由来を推測しない。
 同じplaceholderに通常値とLazyの要求が競合する場合は番号を分ける案内とし、両branchが未知の場合は具体的な期待関数型を与える案内とする。
 Pattern bindingを伴う成功branchにはDirectExpressionの契約を適用し、通常値をthunkで包む修正案を出さない。
 入れ子callの失敗を外側のLazyキャプチャへ付け替えず、由来が確定していない通常の関数値には通常の型診断を使う。
-error placeholderを持つ`assert`、`ensure`、`Result::map_err`、`Result::cause`のcaptureにも既存のError受け渡し制約を適用する。
+error placeholderを持つ`require`、`ensure`、`Result::map_err`、`Result::cause`のcaptureにも既存のError受け渡し制約を適用する。
 通常callの拒否reasonは維持し、error式をcapture内に固定する修正案を示す。`(-> Error)`を通常引数として渡す修正で既存制約を迂回しない。
 裸の標準Lazy special formのcaptureはSigilで拒否し、引数を記述したcaptureへ案内する。Lazy markerを保持したbuiltin参照を通常の関数値として後段へ渡さない。
 
@@ -319,3 +319,10 @@ local head は選ばれた lexical identity の型を検査し、named Extractor
 型検査側が演算子の由来、ソース位置、解決済みシグネチャを構造化データとして渡し、表示側が補助ラベルを生成する。表示側でエラー文、ソース文字列、Result 型の形から由来を推測しない。未確定シグネチャを具体化済みとして表示するフォールバックは設けない。
 
 外側の演算、関数引数、型注釈、戻り値などで、型不一致に関係する演算結果だけを表示する。同じ式にある無関係な演算子は列挙しない。通常の型検査順序とエラー優先順位を変えず、fmap、do、unwrap などへの誘導、修正例、Help は追加しない。
+
+## Result を返す位置の文末 `?`
+
+文末 `?` 自体の型は Unit とする。Result を返す関数やクロージャの末尾に置いた場合は、
+必要な Result と Unit の不一致を通常の型診断で報告する。
+構文段階の末尾禁止や専用のエラー経路は設けず、暗黙の `Ok(())` も挿入しない。
+途中の Unit が受理される位置では、既存の ResultContext の制約に従って使用できる。

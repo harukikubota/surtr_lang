@@ -12,7 +12,7 @@ def build_error_detail() -> String {
   "boom"
 }
 
-print(inspect(assert(True, GuardError(build_error_detail()))))
-print(inspect(assert(False, GuardError(build_error_detail()))))
+print(inspect(require(True, GuardError(build_error_detail()))))
+print(inspect(require(False, GuardError(build_error_detail()))))
 print(inspect(ensure(next_num(), &is_even, GuardError(build_error_detail()))))
 print(inspect(ensure(3, {|n| Int::is_even(n) }, GuardError(build_error_detail()))))

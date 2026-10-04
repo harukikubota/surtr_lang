@@ -5,7 +5,6 @@ deferror TestAssertionFailed(detail: String) {
   detail
 }
 
-import StyledDoc;
 
 @doc """
 Build named test suites and check values, errors, documents, and captured I/O.
@@ -152,6 +151,161 @@ defmod Test {
   def pend(name: String, reason: String) -> Result<()> {
     __test_begin_case("pend", name, reason)
     Ok(())
+  }
+
+  @doc """
+  Require a true condition with a caller-supplied message.
+  Returns `Ok(())` or `Err(TestAssertionFailed(message))`; an empty message is preserved.
+  This is an ordinary function. Propagate its Result to fail the current case.
+
+  ```surtr
+  import Test;
+  test("assert") { it("checks a condition") { assert(1 < 2, "ordered") } }
+  ```
+  """
+  def assert(flag: Boolean, message: String) -> Result<()> {
+    Kernel::require(flag, TestAssertionFailed(message))
+  }
+
+  @doc """
+  Call `predicate(actual)` exactly once and require True.
+  The String message is evaluated normally. On failure only, inspect the actual value
+  and return `TestAssertionFailed` with the message followed by `actual: ...`.
+
+  ```surtr
+  import Test;
+  test("assert_satisfies") {
+    it("checks a predicate") { assert_satisfies(3, "positive", {|n| n > 0}) }
+  }
+  ```
+  """
+  def assert_satisfies(actual: $A, message: String, predicate: ($A -> Boolean)) -> Result<()> {
+    Kernel::require(predicate(actual), TestAssertionFailed("#{message}\nactual: #{inspect(actual)}"))
+  }
+
+  @doc """
+  Require `lhs < rhs` using Compare for two values of the same type.
+  Failure reports both values and the expected relation. No Show constraint is required.
+
+  ```surtr
+  import Test;
+  test("assert_lt") { it("compares values") { assert_lt(1, 2) } }
+  ```
+  """
+  def assert_lt(lhs: $A, rhs: $A) -> Result<()>
+  where
+    $A: Compare
+  {
+    Kernel::require(Compare::lt(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} < #{inspect(rhs)}"))
+  }
+
+  @doc """
+  Require `lhs <= rhs` using Compare for two values of the same type.
+  Failure reports both values and the expected relation. No Show constraint is required.
+
+  ```surtr
+  import Test;
+  test("assert_lte") { it("compares values") { assert_lte(2, 2) } }
+  ```
+  """
+  def assert_lte(lhs: $A, rhs: $A) -> Result<()>
+  where
+    $A: Compare
+  {
+    Kernel::require(Compare::lte(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} <= #{inspect(rhs)}"))
+  }
+
+  @doc """
+  Require `lhs > rhs` using Compare for two values of the same type.
+  Failure reports both values and the expected relation. No Show constraint is required.
+
+  ```surtr
+  import Test;
+  test("assert_gt") { it("compares values") { assert_gt(2, 1) } }
+  ```
+  """
+  def assert_gt(lhs: $A, rhs: $A) -> Result<()>
+  where
+    $A: Compare
+  {
+    Kernel::require(Compare::gt(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} > #{inspect(rhs)}"))
+  }
+
+  @doc """
+  Require `lhs >= rhs` using Compare for two values of the same type.
+  Failure reports both values and the expected relation. No Show constraint is required.
+
+  ```surtr
+  import Test;
+  test("assert_gte") { it("compares values") { assert_gte(2, 2) } }
+  ```
+  """
+  def assert_gte(lhs: $A, rhs: $A) -> Result<()>
+  where
+    $A: Compare
+  {
+    Kernel::require(Compare::gte(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} >= #{inspect(rhs)}"))
+  }
+
+  @doc """
+  Require Err and compare only Error::message with the expected String, exactly.
+  Error kind, cause, location, and full error rendering do not participate.
+  Failure shows expected and actual messages, or the unexpected Ok payload.
+
+  ```surtr
+  import Test;
+  test("assert_err_message_eq") {
+    it("checks only the message") { assert_err_message_eq("detail", Err(TestAssertionFailed("detail"))) }
+  }
+  ```
+  """
+  def assert_err_message_eq(expected: String, result: Result<$A>) -> Result<()> {
+    match result {
+      Err(err) => assert_eq(expected, Error::message(err)),
+      Ok(actual) => _fail("expected Err with message #{inspect(expected)}, got Ok(#{inspect(actual)})"),
+    }
+  }
+
+  @doc """
+  Require a case-sensitive literal prefix; an empty prefix always matches.
+  Failure shows the expected prefix and the actual String.
+
+  ```surtr
+  import Test;
+  test("assert_starts_with") { it("matches text") { assert_starts_with("hello", "hello") } }
+  ```
+  """
+  def assert_starts_with(prefix: String, actual: String) -> Result<()> {
+    Kernel::require(String::starts_with(actual, prefix), TestAssertionFailed("expected #{inspect(actual)} to start with #{inspect(prefix)}"))
+  }
+
+  @doc """
+  Require a case-sensitive literal suffix; an empty suffix always matches.
+  Failure shows the expected suffix and the actual String.
+
+  ```surtr
+  import Test;
+  test("assert_ends_with") { it("matches text") { assert_ends_with("hello", "hello") } }
+  ```
+  """
+  def assert_ends_with(suffix: String, actual: String) -> Result<()> {
+    Kernel::require(String::ends_with(actual, suffix), TestAssertionFailed("expected #{inspect(actual)} to end with #{inspect(suffix)}"))
+  }
+
+  @doc """
+  Require only the Some branch, without comparing or extracting its payload.
+  Function values and other payloads without Eq are accepted. None fails.
+
+  ```surtr
+  import Test;
+  test("assert_some") { it("accepts a function") { assert_some(Option::Some({|x: Int| x})) } }
+  ```
+  """
+  def assert_some(option: Option<$A>) -> Result<()> {
+    match option {
+      Option::Some(_) => Ok(()),
+      Option::None => _fail("expected Some, got None"),
+    }
   }
 
   @doc """
@@ -370,7 +524,6 @@ defmod Test {
 
   ```surtr
   import Test;
-  import StyledDoc;
 
   test("assert_doc_plain_eq") {
     it("compares text without styling") {
@@ -390,7 +543,6 @@ defmod Test {
 
   ```surtr
   import Test;
-  import StyledDoc;
 
   test("assert_doc_ansi_eq") {
     it("compares text with ANSI styling") {

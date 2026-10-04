@@ -5,7 +5,7 @@ or-rhs
 qualified-or
 False
 10
-imported-and-rhs
+prefix-and-rhs
 qualified-and
 True
 6

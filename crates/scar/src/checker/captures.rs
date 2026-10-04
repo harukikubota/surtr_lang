@@ -56,7 +56,7 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Assert(left, right)
+            | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right) => {
                 children.push(left);

@@ -1,5 +1,4 @@
 import Test;
-import StyledDoc;
 
 test("StyledDoc") {
   describe("plain") {

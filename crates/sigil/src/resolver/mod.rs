@@ -812,7 +812,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_node(else_branch, base, offset);
             }
         }
-        Resolved::Assert(_, flag, err) => {
+        Resolved::Require(_, flag, err) => {
             rebase_resolved_node(flag, base, offset);
             rebase_resolved_node(err, base, offset);
         }

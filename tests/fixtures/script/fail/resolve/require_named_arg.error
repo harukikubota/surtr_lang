@@ -1,0 +1,2 @@
+phase: resolve
+contains: require does not accept named argument

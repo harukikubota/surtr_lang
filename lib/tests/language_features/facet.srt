@@ -41,10 +41,7 @@ test("Facet") {
         result = bind_missing_nominal_facet()
 
         assert_err_kind(IndexOutOfBounds, result)
-        match result {
-          Err(err) => assert_eq("index 2 out of bounds for len 1", Error::message(err)),
-          Ok(_) => assert_true(False),
-        }
+        assert_err_message_eq("index 2 out of bounds for len 1", result)
         assert_stdout_eq([])
       }
     }

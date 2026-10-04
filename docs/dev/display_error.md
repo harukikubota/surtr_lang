@@ -56,6 +56,9 @@ renderer に渡す直前に byte range へ変換する。
 保存済みの stack trace から関数の正規名と呼出位置を取得し、末尾呼出しも同じ規則で扱う。
 `assert_ok_eq` などが内部で `assert_eq` を使う場合は、外側の公開アサーションの呼出式を指す。
 キャプチャしたアサーションも、そのキャプチャを実行した呼出式を指す。
+`assert`、`assert_satisfies`、比較4種、`assert_err_message_eq`、prefix/suffix 検査、`assert_some` も
+標準 Test の正規名で認識する。同じ短名の利用者関数は対象にしない。
+名前付き引数も同じ呼出式の位置規則に従う。上記のアサーションの引数に実値の label は付けない。
 Error 自体の生成位置、cause、stack trace は変更しない。
 アサーション以外の Error は、通常どおり Error の生成位置を表示する。
 

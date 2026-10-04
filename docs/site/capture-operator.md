@@ -304,7 +304,7 @@ Pattern 内の事前 Expr にある既存プレースホルダ、projection の 
 Lazy位置を直接プレースホルダにすると、通常の呼び出しで渡せる値と、生成された関数が受け取る型は異なります。
 たとえば `and(True, False)` は有効ですが、上の `both`には `both(True, {|| False})` と渡します。
 `Lazy<Error>`の正規化型は `(-> Error)` ですが、Errorを通常の関数型へ公開する制約は解除されません。
-`assert`・`ensure`・`Result::map_err`・`Result::cause`を通常の関数値として使うキャプチャでは、error式を呼び出し内へ固定してください。
+`require`・`ensure`・`Result::map_err`・`Result::cause`を通常の関数値として使うキャプチャでは、error式を呼び出し内へ固定してください。
 引数の並べ替えも型に反映され、`&and(&2, &1)` の型は `((-> Boolean), Boolean -> Boolean)` です。
 
 FacetPath 自体をプレースホルダ仮引数で受け取ることは禁止します。直接の置換や、合成の path 部分の置換もできません。

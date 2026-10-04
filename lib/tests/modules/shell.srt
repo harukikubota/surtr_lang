@@ -11,7 +11,7 @@ def check_shell_directory(root: FilePath, setup: Result<()>) -> Result<()> {
     _ <- Shell::cd(root)
     after <- Shell::pwd()
 
-    assert_true(String::ends_with(after.raw, "lib_test_shell"))
+    assert_ends_with("lib_test_shell", after.raw)
     _ <- File::write("inside.txt", "cwd")
     assert_ok_eq("cwd", File::read("inside.txt"))
   }
