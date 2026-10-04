@@ -6,6 +6,7 @@ use diagnostics::{
     TraitMethodConstraintData, TraitMethodTypeListData, TypeDiagnosticReason,
 };
 use sindr::names::TypeName;
+use std::rc::Rc;
 
 pub(super) struct MethodTypeEnvironment {
     pub bindings: HashMap<String, Ty>,
@@ -1203,29 +1204,53 @@ impl CanonicalTraitImplPatternKey {
 /// separate candidate binders from requested inference variables.
 #[derive(Default)]
 struct CanonicalUnifier {
-    bindings: HashMap<u32, CanonicalTy>,
+    bindings: HashMap<u32, Rc<CanonicalTy>>,
     allow_ignored_callable_inputs: bool,
     rigid_variables: HashSet<u32>,
 }
-impl CanonicalUnifier {
-    fn resolve(&self, ty: &CanonicalTy) -> CanonicalTy {
-        if let CanonicalTypeHead::Variable(var) = ty.head {
-            if let Some(bound) = self.bindings.get(&var) {
-                return self.resolve(bound);
-            }
+// A bound root stays alive while recursive comparisons add new bindings.
+// Unbound input trees are borrowed without copying their children.
+enum CanonicalRoot<'a> {
+    Borrowed(&'a CanonicalTy),
+    Bound(Rc<CanonicalTy>),
+}
+impl std::ops::Deref for CanonicalRoot<'_> {
+    type Target = CanonicalTy;
+
+    fn deref(&self) -> &CanonicalTy {
+        match self {
+            Self::Borrowed(ty) => ty,
+            Self::Bound(ty) => ty,
         }
+    }
+}
+impl CanonicalUnifier {
+    fn resolve_root<'a>(&self, ty: &'a CanonicalTy) -> CanonicalRoot<'a> {
+        let mut root = CanonicalRoot::Borrowed(ty);
+        while let CanonicalTypeHead::Variable(var) = root.head {
+            let Some(bound) = self.bindings.get(&var) else {
+                break;
+            };
+            root = CanonicalRoot::Bound(Rc::clone(bound));
+        }
+        root
+    }
+
+    // Materialize a fully substituted tree only when an owned result is needed.
+    fn resolve(&self, ty: &CanonicalTy) -> CanonicalTy {
+        let ty = self.resolve_root(ty);
         CanonicalTy {
             head: ty.head.clone(),
             arguments: ty.arguments.iter().map(|arg| self.resolve(arg)).collect(),
         }
     }
     fn unify(&mut self, left: &CanonicalTy, right: &CanonicalTy) -> bool {
-        let left = self.resolve(left);
-        let right = self.resolve(right);
-        if left == right {
-            return true;
-        }
+        let left = self.resolve_root(left);
+        let right = self.resolve_root(right);
         if let CanonicalTypeHead::Variable(var) = left.head {
+            if right.head == left.head {
+                return true;
+            }
             if self.rigid_variables.contains(&var) {
                 return match right.head {
                     CanonicalTypeHead::Variable(other)
@@ -1240,29 +1265,41 @@ impl CanonicalUnifier {
                 ty.head == CanonicalTypeHead::Variable(var)
                     || ty.arguments.iter().any(|arg| occurs(var, arg))
             }
+            let right = self.resolve(&right);
             if occurs(var, &right) {
                 return false;
             }
-            self.bindings.insert(var, right);
+            self.bindings.insert(var, Rc::new(right));
             return true;
         }
         if matches!(right.head, CanonicalTypeHead::Variable(_)) {
             return self.unify(&right, &left);
         }
-        left.head == right.head
-            && left.arguments.len() == right.arguments.len()
-            && left
-                .arguments
-                .iter()
-                .zip(&right.arguments)
-                .enumerate()
-                .all(|(ordinal, (a, b))| {
-                    (self.allow_ignored_callable_inputs
-                        && left.head == CanonicalTypeHead::Function
-                        && ordinal + 1 < left.arguments.len()
-                        && b.head == CanonicalTypeHead::Hole)
-                        || self.unify(a, b)
-                })
+        if left.head != right.head || left.arguments.len() != right.arguments.len() {
+            return false;
+        }
+        // Preserve the input contract at entry to this function comparison.
+        // An earlier input may bind a variable to Hole, but that must not make
+        // a later input ignored retroactively.
+        let ignored_inputs =
+            if self.allow_ignored_callable_inputs && left.head == CanonicalTypeHead::Function {
+                right
+                    .arguments
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, ty)| {
+                        ordinal + 1 < right.arguments.len()
+                            && self.resolve_root(ty).head == CanonicalTypeHead::Hole
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+        left.arguments
+            .iter()
+            .zip(&right.arguments)
+            .enumerate()
+            .all(|(ordinal, (a, b))| ignored_inputs.get(ordinal) == Some(&true) || self.unify(a, b))
     }
 
     /// Compare a constructor witness with an observed application.  `Hole`
@@ -1270,12 +1307,9 @@ impl CanonicalUnifier {
     /// head; captured and explicitly supplied mapped arguments still unify
     /// structurally.
     fn unify_constructor_identity(&mut self, expected: &CanonicalTy, actual: &CanonicalTy) -> bool {
-        let expected = self.resolve(expected);
-        let actual = self.resolve(actual);
+        let expected = self.resolve_root(expected);
+        let actual = self.resolve_root(actual);
         if expected.head == CanonicalTypeHead::Hole {
-            return true;
-        }
-        if expected == actual {
             return true;
         }
         if matches!(expected.head, CanonicalTypeHead::Variable(_))
@@ -3494,3 +3528,6 @@ mod extractor_type_contract_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod canonical_unifier_tests;
