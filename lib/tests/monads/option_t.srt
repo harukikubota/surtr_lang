@@ -1,0 +1,396 @@
+include "./support/probe.srt"
+
+import Test;
+
+def option_t_inc(value: Int) -> OptionT<Identity, Int> {
+  OptionT::some::<Identity>(value + 1)
+}
+
+def option_t_double(value: Int) -> OptionT<Identity, Int> {
+  OptionT::some::<Identity>(value * 2)
+}
+
+def option_t_pure(value: Int) -> OptionT<Identity, Int> {
+  Applicative::pure(value)
+}
+
+defstruct Holder { value: OptionT<Identity, Int>, }
+
+impl Holder {
+  def new(value: OptionT<Identity, Int>) -> Self { Holder { value } }
+}
+
+test("OptionT") {
+  describe("new/run") {
+    it("returns the new/run representation") {
+      inner: Identity<Option<Int>> = Identity::new(Option::Some(1))
+      wrapped: OptionT<Identity, Int> = OptionT::new(inner)
+      assert_eq(Identity::run(inner), Identity::run(OptionT::run(wrapped)))
+    }
+
+  }
+
+  describe("some") {
+    it("returns the some representation") {
+      some: OptionT<Identity, Int> = OptionT::some::<Identity>(2)
+      assert_eq(Option::Some(2), Identity::run(OptionT::run(some)))
+    }
+
+  }
+
+  describe("none") {
+    it("returns the none representation") {
+      none: OptionT<Identity, Int> = OptionT::none::<Identity, Int>()
+      expected_none: Option<Int> = Option::None
+      assert_eq(expected_none, Identity::run(OptionT::run(none)))
+    }
+
+  }
+
+  describe("from_option Some") {
+    it("returns the from_option Some representation") {
+      from_option: OptionT<Identity, Int> = OptionT::from_option::<Identity>(Option::Some(3))
+      assert_eq(Option::Some(3), Identity::run(OptionT::run(from_option)))
+    }
+
+  }
+
+  describe("from_option None") {
+    it("returns the from_option None representation") {
+      from_option: OptionT<Identity, Int> = OptionT::from_option::<Identity>(Option::Some(3))
+      from_none: OptionT<Identity, Int> = OptionT::from_option::<Identity>(Option::None)
+      expected_none: Option<Int> = Option::None
+      assert_eq(expected_none, Identity::run(OptionT::run(from_none)))
+    }
+
+  }
+
+  describe("Functor::fmap") {
+    it("maps the successful payload") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(2)
+      mapped: OptionT<Identity, Int> = value |*> {|item| item + 1}
+      assert_eq(Option::Some(3), Identity::run(OptionT::run(mapped)))
+    }
+
+  }
+
+  describe("Applicative::ap") {
+    it("applies a successful contextual mapper") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(2)
+      mapper: OptionT<Identity, (Int -> Int)> = OptionT::some::<Identity>({|item| item * 3})
+      applied: OptionT<Identity, Int> = Applicative::ap(mapper, value)
+      assert_eq(Option::Some(6), Identity::run(OptionT::run(applied)))
+    }
+
+  }
+
+  describe("Monad::bind") {
+    it("binds the successful payload") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(2)
+      bound: OptionT<Identity, Int> = value |>= &option_t_inc
+      assert_eq(Option::Some(3), Identity::run(OptionT::run(bound)))
+    }
+
+  }
+
+  describe("Functor::fmap None") {
+    it("maps applies and binds only Some payloads") {
+      none: OptionT<Identity, Int> = OptionT::none::<Identity, Int>()
+      none_mapped: OptionT<Identity, Int> = none |*> {|item| item + 1}
+      expected_none: Option<Int> = Option::None
+      assert_eq(expected_none, Identity::run(OptionT::run(none_mapped)))
+    }
+
+  }
+
+  describe("Monad::bind None") {
+    it("maps applies and binds only Some payloads") {
+      none: OptionT<Identity, Int> = OptionT::none::<Identity, Int>()
+      none_bound: OptionT<Identity, Int> = none |>= &option_t_inc
+      expected_none: Option<Int> = Option::None
+      assert_eq(expected_none, Identity::run(OptionT::run(none_bound)))
+    }
+
+    it("keeps inner None separate from base failure") {
+      none: OptionT<Result, Int> = OptionT::none::<Result, Int>()
+      none_bound: OptionT<Result, Int> = none |>= {|item| OptionT::some::<Result>(item + 1)}
+      assert_ok_eq(Option<Int>::None, OptionT::run(none_bound))
+    }
+
+  }
+
+  describe("Monad::bind base failure") {
+    it("keeps inner None separate from base failure") {
+      base_failure: Result<Option<Int>> = Err(NoneError)
+      failed: OptionT<Result, Int> = OptionT::new(base_failure)
+      failed_bound: OptionT<Result, Int> = failed |>= {|item| OptionT::some::<Result>(item + 1)}
+      assert_err_kind(NoneError, OptionT::run(failed_bound))
+    }
+
+  }
+
+  describe("Alternative::empty") {
+    it("uses inner None for Alternative empty and preserves List multiplicity") {
+      empty: OptionT<Result, Int> = Alternative::empty()
+      assert_ok_eq(Option<Int>::None, OptionT::run(empty))
+    }
+
+  }
+
+  describe("Alternative::empty List") {
+    it("uses inner None for Alternative empty and preserves List multiplicity") {
+      empty: OptionT<Result, Int> = Alternative::empty()
+      empty_list: OptionT<List, Int> = Alternative::empty()
+      assert_eq([Option<Int>::None], OptionT::run(empty_list))
+    }
+
+  }
+
+  describe("Alternative::choose") {
+    it("uses inner None for Alternative empty and preserves List multiplicity") {
+      left: OptionT<List, Int> = OptionT::new([
+          Option::None,
+          Option::None,
+          Option::Some(1),
+      ])
+      right: OptionT<List, Int> = OptionT::new([Option::Some(2), Option::Some(3)])
+      chosen: OptionT<List, Int> = left <|> right
+      assert_eq([Option::Some(2), Option::Some(3), Option::Some(2), Option::Some(3), Option::Some(1)], OptionT::run(chosen))
+    }
+
+  }
+
+  describe("Applicative::ap None") {
+    it("sequences ap in base order while None short-circuits the value") {
+      absent_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(Ok(Option::None))
+      failed_value: OptionT<Result, Int> = OptionT::new(Err(NoneError))
+      absent_ap: OptionT<Result, Int> = Applicative::ap(absent_mapper, failed_value)
+      assert_ok_eq(Option<Int>::None, OptionT::run(absent_ap))
+    }
+
+  }
+
+  describe("Applicative::ap mapper failure") {
+    it("sequences ap in base order while None short-circuits the value") {
+      failed_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(Err(NoneError))
+      present_value: OptionT<Result, Int> = OptionT::new(Ok(Option::Some(1)))
+      failed_mapper_ap: OptionT<Result, Int> = Applicative::ap(failed_mapper, present_value)
+      assert_err_kind(NoneError, OptionT::run(failed_mapper_ap))
+    }
+
+  }
+
+  describe("Applicative::ap value failure") {
+    it("sequences ap in base order while None short-circuits the value") {
+      failed_value: OptionT<Result, Int> = OptionT::new(Err(NoneError))
+      present_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(
+        Ok(Option::Some({|value| value + 1})),
+      )
+      failed_ap: OptionT<Result, Int> = Applicative::ap(present_mapper, failed_value)
+      assert_err_kind(NoneError, OptionT::run(failed_ap))
+    }
+
+  }
+
+  describe("Monad left identity") {
+    it("Monad left identity") {
+      left_identity: OptionT<Identity, Int> = Monad::return(3) |>= &option_t_inc
+      assert_eq(Identity::run(OptionT::run(option_t_inc(3))), Identity::run(OptionT::run(left_identity)))
+    }
+
+  }
+
+  describe("Monad right identity") {
+    it("Monad right identity") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      right_identity: OptionT<Identity, Int> = value |>= &option_t_pure
+      assert_eq(Identity::run(OptionT::run(value)), Identity::run(OptionT::run(right_identity)))
+    }
+
+  }
+
+  describe("Monad associativity") {
+    it("Monad associativity") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      assoc_left: OptionT<Identity, Int> = (value |>= &option_t_inc) |>= &option_t_double
+      assoc_right: OptionT<Identity, Int> = value |>= {|item| option_t_inc(item) |>= &option_t_double}
+      assert_eq(Identity::run(OptionT::run(assoc_left)), Identity::run(OptionT::run(assoc_right)))
+    }
+
+  }
+
+  describe("lift pure law") {
+    it("lift pure law") {
+      lifted_pure: OptionT<Identity, Int> = MonadT::lift(Applicative::pure(3))
+      transformer_pure: OptionT<Identity, Int> = Applicative::pure(3)
+      assert_eq(Identity::run(OptionT::run(lifted_pure)), Identity::run(OptionT::run(transformer_pure)))
+    }
+
+  }
+
+  describe("lift bind law") {
+    it("lift bind law") {
+      base: Identity<Int> = Identity::new(3)
+      lifted: OptionT<Identity, Int> = MonadT::lift(base)
+      lifted_bind: OptionT<Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+      bound_lifts: OptionT<Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+      assert_eq(Identity::run(OptionT::run(lifted_bind)), Identity::run(OptionT::run(bound_lifts)))
+    }
+
+  }
+
+  describe("ordinary values") {
+    it("stores in a field collection and Facet") {
+      holder = Holder::new(OptionT::some::<Identity>(1))
+      updated = Facet::put(Holder.value, holder, OptionT::some::<Identity>(9))
+      values: List<OptionT<Identity, Int>> = [holder.value, updated.value]
+      second =? List::at(values, 1)
+      assert_eq(Option::Some(9), Identity::run(OptionT::run(second)))
+    }
+
+  }
+
+  describe("base injection") {
+    it("option_pure delegates to the base constructor") {
+      option_pure: OptionT<Probe, Int> = Applicative::pure(1)
+      assert_eq("pure", OptionT::run(option_pure).origin)
+    }
+
+    it("option_some delegates to the base constructor") {
+      option_some: OptionT<Probe, Int> = OptionT::some::<Probe>(2)
+      assert_eq("pure", OptionT::run(option_some).origin)
+    }
+
+    it("option_none delegates to the base constructor") {
+      option_none: OptionT<Probe, Int> = OptionT::none::<Probe, Int>()
+      assert_eq("pure", OptionT::run(option_none).origin)
+    }
+
+    it("option_from_some delegates to the base constructor") {
+      option_from_some: OptionT<Probe, Int> = OptionT::from_option::<Probe>(Option::Some(2))
+      assert_eq("pure", OptionT::run(option_from_some).origin)
+    }
+
+    it("option_from_none delegates to the base constructor") {
+      option_from_none: OptionT<Probe, Int> = OptionT::from_option::<Probe>(Option::None)
+      assert_eq("pure", OptionT::run(option_from_none).origin)
+    }
+
+    it("option_empty delegates to the base constructor") {
+      option_empty: OptionT<Probe, Int> = Alternative::empty()
+      assert_eq("pure", OptionT::run(option_empty).origin)
+    }
+
+    it("option_bind_none delegates to the base constructor") {
+      option_bind_none: OptionT<Probe, Int> = OptionT::new(
+        Probe::new(Option::None, "input"),
+      ) |>= {|value| OptionT::some::<Probe>(value + 1)}
+      assert_eq("pure", OptionT::run(option_bind_none).origin)
+    }
+
+    it("option_ap_none delegates to the base constructor") {
+      option_ap_none: OptionT<Probe, Int> = Applicative::ap(
+        OptionT::new(Probe::new(Option::None, "input")),
+        OptionT::some::<Probe>(3),
+      )
+      assert_eq("pure", OptionT::run(option_ap_none).origin)
+    }
+
+    it("option_return delegates to the base constructor") {
+      option_return: OptionT<Probe, Int> = Monad::return(4)
+      assert_eq("return", OptionT::run(option_return).origin)
+    }
+
+  }
+
+  describe("Functor laws") {
+    it("identity compares original and mapped payloads") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      mapped: OptionT<Identity, Int> = value |*> {|x| x}
+      assert_eq(Identity::run(OptionT::run(value)), Identity::run(OptionT::run(mapped)))
+    }
+
+    it("composition compares both mappings") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      left: OptionT<Identity, Int> = (value |*> {|x| x + 1}) |*> {|x| x * 2}
+      right: OptionT<Identity, Int> = value |*> {|x| (x + 1) * 2}
+      assert_eq(Identity::run(OptionT::run(left)), Identity::run(OptionT::run(right)))
+    }
+
+  }
+
+  describe("Applicative laws") {
+    it("identity compares applied and original values") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      mapper: OptionT<Identity, (Int -> Int)> = Applicative::pure({|x| x})
+      left: OptionT<Identity, Int> = Applicative::ap(mapper, value)
+      assert_eq(Identity::run(OptionT::run(left)), Identity::run(OptionT::run(value)))
+    }
+
+    it("homomorphism compares both pure injections") {
+      mapper: OptionT<Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      value: OptionT<Identity, Int> = Applicative::pure(3)
+      left: OptionT<Identity, Int> = Applicative::ap(mapper, value)
+      right: OptionT<Identity, Int> = Applicative::pure(4)
+      assert_eq(Identity::run(OptionT::run(left)), Identity::run(OptionT::run(right)))
+    }
+
+    it("interchange compares both applications") {
+      mapper: OptionT<Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      value: OptionT<Identity, Int> = Applicative::pure(3)
+      left: OptionT<Identity, Int> = Applicative::ap(mapper, value)
+      apply_value: OptionT<Identity, ((Int -> Int) -> Int)> = Applicative::pure({|f| f(3)})
+      right: OptionT<Identity, Int> = Applicative::ap(apply_value, mapper)
+      assert_eq(Identity::run(OptionT::run(left)), Identity::run(OptionT::run(right)))
+    }
+
+    it("composition compares nested applications") {
+      compose: OptionT<Identity, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Applicative::pure({|f| {|g| {|x| f(g(x))}}})
+      u: OptionT<Identity, (Int -> Int)> = Applicative::pure({|x| x + 1})
+      v: OptionT<Identity, (Int -> Int)> = Applicative::pure({|x| x * 2})
+      w: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      left: OptionT<Identity, Int> = compose |*| u |*| v |*| w
+      right: OptionT<Identity, Int> = Applicative::ap(u, Applicative::ap(v, w))
+      assert_eq(Identity::run(OptionT::run(left)), Identity::run(OptionT::run(right)))
+    }
+
+  }
+
+  describe("base injection") {
+    it("pure delegates to base pure") {
+      pure: OptionT<Probe, Int> = Applicative::pure(7)
+      assert_eq("pure", OptionT::run(pure).origin)
+    }
+
+    it("return delegates to base return") {
+      returned: OptionT<Probe, Int> = Monad::return(7)
+      assert_eq("return", OptionT::run(returned).origin)
+    }
+
+  }
+
+
+  describe("short circuit") {
+    it("Functor::fmap skips the unavailable payload") {
+      source: OptionT<Identity, Int> = OptionT::none::<Identity, Int>()
+      actual: OptionT<Identity, Int> = source |*> {|value| print("unexpected"); value + 1}
+      observed = Identity::run(OptionT::run(actual))
+      do::<Result> {
+        assert_none(observed)
+        assert_stdout_eq([])
+      }
+    }
+
+    it("Monad::bind skips the unavailable payload") {
+      source: OptionT<Identity, Int> = OptionT::none::<Identity, Int>()
+      actual: OptionT<Identity, Int> = source |>= {|value| print("unexpected"); OptionT::some::<Identity>(value + 1)}
+      observed = Identity::run(OptionT::run(actual))
+      do::<Result> {
+        assert_none(observed)
+        assert_stdout_eq([])
+      }
+    }
+
+  }
+
+}

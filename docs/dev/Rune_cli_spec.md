@@ -67,7 +67,14 @@
 
 ## 6. Test コマンド
 
-`surtr test (<lib-relative-name> | --all) [--test TEXT] [--describe TEXT] [--it TEXT] [--include-xit] [--deny-pending] [--list] [--timings] [--quiet|-q] [--format human|json]`。
+`surtr test <file-path> [--test TEXT] [--describe TEXT] [--it TEXT] [--include-xit] [--deny-pending] [--list] [--timings] [--quiet|-q] [--format human|json]`。
+単体は実ファイルパスを受け取り、相対パスは起動時CWDを基準にする。絶対・親ディレクトリ・symlinkも通常の指定として読み込む。前後空白や区切り文字を変換せず、拡張子補完や旧selectorへのfallbackをしない。
+includeは入口の位置を基準に解決し、依存内容をfingerprintへ反映する。
+
+開発用debugビルドの標準テストでは `surtr test --all` を使う。`lib/tests/*/*.srt` の入口を辞書順に一度ずつ列挙し、カテゴリ名・basenameで除外せず、root直下と3成分以上のsupportを実行しない。対象0件は配置・対象選択エラーで終了コード1。切れたsymlinkとdirectory symlinkは共通の読み込み経路で失敗として報告する。
+単体と標準allは同じ読み込み経路と依存fingerprintを使い、各入口を独立してコンパイル・実行する。標準allはファイル異常後も次の入口へ進み、実行異常の起きたVMは再利用しない。配置と観測の方針は [テスト方針](./テスト方針.md#38-標準ライブラリ-test-script) を参照する。
+リリースビルドにおけるallの振る舞いは未確定とする。
+
 値付き引数は空白・等号の両形式を受理する。各オプションは一度だけ指定でき、`--` 以降は位置引数とする。
 フィルターは大文字小文字を区別する部分一致。種類間は AND、同種の祖先間はいずれか一致とし、名前の結合文字列では比較しない。
 `--list` とフィルターはケース本文だけを抑止する。トップレベルと test/describe の走査は実行する。
@@ -87,7 +94,6 @@ VM 異常で実行中ケースが中断した場合だけ、そのケースも F
 policy_errors は拒否された選択 Pending 一件につき一件、明示フィルターの全体一致ゼロで一件。
 走査自体が失敗した場合、一致ゼロの診断は加えない。選択された xit / pend も一致件数に含む。
 失敗・異常・ポリシー違反・usage error があれば終了コード1、それ以外は0。
-all はファイル異常後も次のファイルへ進み、実行異常の起きた VM は再利用しない。
 
 ### JSON 文書
 

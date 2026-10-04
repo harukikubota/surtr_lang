@@ -1,0 +1,294 @@
+import Test;
+
+def option_pure(value: Int) -> Option<Int> { Applicative::pure(value) }
+def option_step(value: Int) -> Option<Int> { if(value < 10, Option::Some(value + 1), Option::None) }
+
+test("Option") {
+  describe("is_some") {
+    it("recognizes Some") {
+      assert_true(Option::is_some(Option::Some(7)))
+    }
+
+    it("rejects None") {
+      assert_false(Option::is_some(Option<Int>::None))
+    }
+
+  }
+
+  describe("is_none") {
+    it("rejects Some") {
+      assert_false(Option::is_none(Option::Some(7)))
+    }
+
+    it("recognizes None") {
+      assert_true(Option::is_none(Option<Int>::None))
+    }
+
+  }
+
+  describe("wrap") {
+    it("constructs Some") {
+      assert_some_eq("wrapped", Option::wrap("wrapped"))
+    }
+
+  }
+
+  describe("Convert") {
+    it("converts Some to Ok") {
+      converted: Result<Int> = to::<Result>(Option::Some(7))
+      assert_ok_eq(7, converted)
+    }
+
+    it("converts None to NoneError") {
+      converted: Result<Int> = to::<Result>(Option<Int>::None)
+      assert_err_kind(NoneError, converted)
+    }
+
+    it("converts Ok to Some") {
+      converted: Option<Int> = to::<Option>(Ok(9))
+      assert_some_eq(9, converted)
+    }
+
+    it("converts Err to None") {
+      source: Result<Int> = Err(ZeroDivisionError)
+      converted: Option<Int> = to::<Option>(source)
+      assert_none(converted)
+    }
+
+  }
+
+  describe("traverse_result") {
+    it("maps Some through the successful Result") {
+      assert_ok_eq(Option::Some(8), Option::traverse_result(Option::Some(7), {|value| Ok(value + 1)}))
+    }
+
+    it("does not call the mapper for None") {
+      mapped = Option::traverse_result(Option<Int>::None, {|value|
+          print("unexpected")
+          Ok(value + 1)
+      })
+      do::<Result> {
+        assert_ok_eq(Option<Int>::None, mapped)
+        assert_stdout_eq([])
+      }
+    }
+
+    it("propagates a mapper error") {
+      mapped: Result<Option<Int>> = Option::traverse_result(Option::Some(7), {|_| Err(NoneError)})
+      assert_err_kind(NoneError, mapped)
+    }
+
+  }
+
+  describe("Functor::fmap") {
+    it("maps Some") {
+      assert_some_eq(8, Functor::fmap(Option::Some(7), {|value| value + 1}))
+    }
+
+    it("does not call the mapper for None") {
+      mapped = Functor::fmap(Option<Int>::None, {|value|
+          print("unexpected")
+          value + 1
+      })
+      do::<Result> {
+        assert_none(mapped)
+        assert_stdout_eq([])
+      }
+    }
+
+  }
+
+  describe("Applicative::pure/ap") {
+    it("injects Some") {
+      value: Option<Int> = Applicative::pure(4)
+      assert_some_eq(4, value)
+    }
+
+    it("applies a Some function") {
+      assert_some_eq(8, Applicative::ap(Option::Some({|value| value + 1}), Option::Some(7)))
+    }
+
+    it("keeps an absent mapper") {
+      mapper: Option<(Int -> Int)> = Option::None
+      assert_none(Applicative::ap(mapper, Option::Some(7)))
+    }
+
+    it("does not apply a mapper to None") {
+      result = Applicative::ap(Option::Some({|value: Int|
+            print("unexpected")
+            value + 1
+        }), Option::None)
+      do::<Result> {
+        assert_none(result)
+        assert_stdout_eq([])
+      }
+    }
+
+  }
+
+  describe("Monad::bind/return") {
+    it("binds a successful Some") {
+      assert_some_eq(14, Monad::bind(Option::Some(7), {|value| Option::Some(value * 2)}))
+    }
+
+    it("permits a callback to stop with None") {
+      assert_none(Monad::bind(Option::Some(10), {|value| if(value < 10, Option::Some(value), Option::None)}))
+    }
+
+    it("does not invoke a callback for None") {
+      result: Option<Int> = Monad::bind(Option::None, {|value|
+          print("unexpected")
+          Option::Some(value + 1)
+      })
+      do::<Result> {
+        assert_none(result)
+        assert_stdout_eq([])
+      }
+    }
+
+    it("return agrees with pure") {
+      pure: Option<Int> = Applicative::pure(4)
+      returned: Option<Int> = Monad::return(4)
+      assert_eq(pure, returned)
+    }
+
+  }
+
+  describe("Alternative") {
+    it("chooses the first Some") {
+      assert_some_eq(7, Option::Some(7) <|> Option::Some(9))
+    }
+
+    it("uses Some after None") {
+      assert_some_eq(9, Option::None <|> Option::Some(9))
+    }
+
+    it("keeps two None values empty") {
+      assert_none(Option<Int>::None <|> Option::None)
+    }
+
+    it("obeys identity and associativity") {
+      empty: Option<Int> = Alternative::empty()
+      a: Option<Int> = Option::Some(1)
+      b: Option<Int> = Option::Some(2)
+      c: Option<Int> = Option::Some(3)
+      do::<Result> {
+        assert_eq(a, empty <|> a)
+        assert_eq(a, a <|> empty)
+        assert_eq((a <|> b) <|> c, a <|> (b <|> c))
+      }
+    }
+
+  }
+
+  describe("Functor laws") {
+    it("identity preserves Some and None") {
+      do::<Result> {
+        law_left11: Option<Int> = Option::Some(3)
+        law_right11: Option<Int> = Option::Some(3) |*> {|value| value}
+        assert_eq(law_left11, law_right11)
+        law_left10: Option<Int> = Option<Int>::None
+        law_right10: Option<Int> = Option<Int>::None |*> {|value| value}
+        assert_eq(law_left10, law_right10)
+      }
+    }
+
+    it("composition agrees on both sides") {
+      value = Option::Some(3)
+      left = (value |*> {|x| x + 1}) |*> {|x| x * 2}
+      right = value |*> {|x| (x + 1) * 2}
+      assert_eq(left, right)
+    }
+
+  }
+
+  describe("Applicative laws") {
+    it("identity compares applied and original values") {
+      value = Option::Some(3)
+      law_left9: Option<Int> = value
+      law_right9: Option<Int> = Option::Some({|x| x}) |*| value
+      assert_eq(law_left9, law_right9)
+    }
+
+    it("homomorphism compares both injections") {
+  increment = {|value: Int| value + 1}
+  mapper: Option<(Int -> Int)> = Applicative::pure(increment)
+  value: Option<Int> = Applicative::pure(3)
+  left: Option<Int> = Applicative::ap(mapper, value)
+  right: Option<Int> = Applicative::pure(increment(3))
+  assert_eq(left, right)
+}
+
+    it("interchange compares both applications") {
+      u: Option<(Int -> Int)> = Option::Some({|x| x + 1})
+      law_left7: Option<Int> = u |*| Option::Some(3)
+      law_right7: Option<Int> = Option::Some({|f| f(3)}) |*| u
+      assert_eq(law_left7, law_right7)
+    }
+
+    it("composition compares nested applications") {
+      u: Option<(Int -> Int)> = Option::Some({|x| x + 1})
+      v: Option<(Int -> Int)> = Option::Some({|x| x * 2})
+      w = Option::Some(3)
+      law_left6: Option<Int> = Option::Some({|f| {|g| {|x| f(g(x))}}}) |*| u |*| v |*| w
+      law_right6: Option<Int> = u |*| (v |*| w)
+      assert_eq(law_left6, law_right6)
+    }
+
+  }
+
+  describe("Monad and composition laws") {
+    it("left identity compares bind with direct application") {
+      law_left5: Option<Int> = option_step(3)
+      law_right5: Option<Int> = option_pure(3) |>= &option_step
+      assert_eq(law_left5, law_right5)
+    }
+
+    it("right identity preserves Some and None") {
+      do::<Result> {
+        law_left4: Option<Int> = Option::Some(3)
+        law_right4: Option<Int> = Option::Some(3) |>= &option_pure
+        assert_eq(law_left4, law_right4)
+        law_left3: Option<Int> = Option<Int>::None
+        law_right3: Option<Int> = Option<Int>::None |>= &option_pure
+        assert_eq(law_left3, law_right3)
+      }
+    }
+
+    it("associativity compares both bind trees") {
+      value = Option::Some(3)
+      law_left2: Option<Int> = (value |>= &option_step) |>= &option_step
+      law_right2: Option<Int> = value |>= {|x| option_step(x) |>= &option_step}
+      assert_eq(law_left2, law_right2)
+    }
+
+    it("Kleisli composition agrees with bind and preserves stopped branches") {
+      composed = &option_step >=> &option_step
+      do::<Result> {
+        law_left1: Option<Int> = option_step(3) |>= &option_step
+        law_right1: Option<Int> = composed(3)
+        assert_eq(law_left1, law_right1)
+        assert_none(composed(10))
+      }
+    }
+
+    it("lifted composition maps the returned payload") {
+      composed = &option_step >* {|x| x + 1}
+      assert_some_eq(5, composed(3))
+    }
+
+  }
+
+
+  describe("Eq") {
+    it("compares variants and payloads") {
+      do::<Result> {
+        assert_true(Eq::eq(Option::Some(3), Option::Some(3)))
+        assert_false(Eq::eq(Option::Some(3), Option::Some(4)))
+        assert_false(Eq::eq(Option::Some(3), Option::None))
+      }
+    }
+
+  }
+
+}

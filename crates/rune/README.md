@@ -20,12 +20,15 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 surtr --version
 surtr check <file.srt> [--format json] [--phase-times|--phase-times-json]
 surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [--vm-stats] [--vm-stats-json] [--trace-opcode] [--trace-call] [--trace-limit <n>] [--trace-filter <csv>] [--phase-times|--phase-times-json] [--error-context verbose] [-- <arg>...]
-surtr test (<lib-relative-name> | --all) [--test TEXT] [--describe TEXT] [--it TEXT] [--include-xit] [--deny-pending] [--list] [--timings] [--quiet|-q] [--format human|json]
+surtr test <file-path> [--test TEXT] [--describe TEXT] [--it TEXT] [--include-xit] [--deny-pending] [--list] [--timings] [--quiet|-q] [--format human|json]
 surtr repl [--quiet] [--banner] [--version] [--module <file.srt>] [--script <file.srt>]
 surtr build <file.srt> [output.eldr] [--phase-times|--phase-times-json]
 surtr dump <file.eldr|entry.srt> [--format json|viewer-json] [--entry <name>] [--opcode-histogram] [--peephole-candidates] [--phase-times|--phase-times-json]
 surtr tui [file.eldr]
 ```
+
+The debug build can run the repository standard-library tests with `surtr test --all`.
+The behavior of `--all` in release builds is not yet specified.
 
 `dump --opcode-histogram` and `dump --peephole-candidates` are available only with
 `--format json`; `viewer-json` is reserved for the UI viewer model.

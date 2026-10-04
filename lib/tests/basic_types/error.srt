@@ -1,0 +1,23 @@
+import Test;
+deferror ApiError(detail: String) { detail }
+test("Error") {
+  describe("kind") { it("returns the declaration name") { assert_eq("NoneError", Error::kind(NoneError)) } }
+  describe("message") {
+    it("returns the predefined message") { assert_eq("None Value.", Error::message(NoneError)) }
+    it("returns the payload message") { assert_eq("api down", Error::message(ApiError("api down"))) }
+  }
+  describe("format") { it("includes the kind and message") { assert_eq("Error: ZeroDivisionError: division by zero", Error::format(ZeroDivisionError)) } }
+  describe("Error abstraction") { it("retains a concrete error through an OR Pattern") {
+    actual = match Err(ZeroDivisionError) {
+      Ok(value) => value,
+      Err(NoneError | ZeroDivisionError @ error: Error) => Error::kind(error),
+      Err(error) => Error::kind(error),
+    }
+    assert_eq("ZeroDivisionError", actual)
+  } }
+  describe("same_kind") {
+    it("ignores different payload messages") { assert_true(Error::same_kind(ApiError("first"), ApiError("second"))) }
+    it("distinguishes declaration identities") { assert_false(Error::same_kind(NoneError, ZeroDivisionError)) }
+  }
+
+}

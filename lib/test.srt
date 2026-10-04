@@ -22,7 +22,7 @@ Use `--test`, `--describe`, and `--it` for case-sensitive substring filters,
 Assertions return `Ok(())` on success or `Err(TestAssertionFailed(...))` on failure.
 Tests run serially, with separate stdin, stdout, and stderr buffers for each case.
 
-Example file: `lib/tests/test_examples.srt` (`surtr test test_examples`).
+Example file: `lib/tests/basic_types/int.srt` (`surtr test lib/tests/basic_types/int.srt`).
 
 ```surtr
 import Test;

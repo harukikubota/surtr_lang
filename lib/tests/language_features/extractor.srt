@@ -1,0 +1,279 @@
+include "./support/extractors.srt"
+
+import Test;
+import PatternProbe::{result_checked, nested_checked, positive, run_result, run_nested, offset, supply, between, observed_between, at_least, note, with_unit, make_offset_bind, make_offset_match};
+
+test("Extractor result contract") {
+  it("preserves the Result error chain and stops its own body") {
+
+    failure = run_result(0)
+    do::<Result> {
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], failure)
+
+      assert_stdout_eq([])
+      match failure {
+        Err(error) => do::<Result> {
+                        (observed_1_0, observed_1_1) = (Error::kind(error), Error::message(error))
+                        assert_eq("ExtractorContextError", observed_1_0)
+                        assert_eq("extractor context", observed_1_1)
+                      },
+        Ok(_) => fail("expected ExtractorContextError"),
+      }
+    }
+  }
+
+  it("preserves nested Extractor errors and only continues after success") {
+
+    failure = run_nested(0)
+    do::<Result> {
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], failure)
+      assert_stdout_eq([])
+      assert_ok_eq(3, run_nested(3))
+      assert_stdout_eq(["after-result", "after-extractor"])
+    }
+  }
+
+  it("accepts omitted and explicit Unit children") {
+    do::<Result> {
+      assert_true(is_match(1, positive()))
+      assert_true(is_match(1, positive(_)))
+      assert_eq((), if_let(1, positive(unit: Unit), unit, ()))
+      assert_false(is_match(0, positive()))
+    }
+  }
+
+  it("discards Extractor errors in branch consumers") {
+    do::<Result> {
+      assert_eq(1, if_let([], [] | [_, .._], 1, 0))
+      assert_true(is_match([], [] | [_, .._]))
+
+      assert_eq("fallback", match 0 { nested_checked(_) => "unexpected", _ => "fallback" })
+      assert_eq("fallback", if_let(0, result_checked(value), to_string(value), "fallback"))
+      if_let_then(0, result_checked(value), print(to_string(value)))
+      assert_false(is_match(0, result_checked(_)))
+
+      assert_stdout_eq([])
+    }
+  }
+
+  it("places the matched input after one or several pre-arguments") {
+    do::<Result> {
+      assert_true(is_match(3, PatternProbe::with_duration(1ms, _)))
+      increment = {|value: Int| value + 1}
+      assert_eq(4, if_let(3, PatternProbe::converted(increment, result), result, 0))
+      assert_eq(13, if_let(3, offset(10, result: Int), result, 0))
+      assert_eq(8, if_let(3, offset(2 + 3, result), result, 0))
+      assert_eq(13, if_let(ExtractorBox(3), ExtractorBox(10, result), result, 0))
+      assert_eq(5, if_let(5, between(2, 8, result), result, 0))
+      assert_false(is_match(9, between(2, 8, _)))
+      assert_true(is_match(5, at_least(2)))
+      assert_true(is_match(5, at_least(2, _)))
+      assert_eq((), if_let(5, at_least(2, unit: Unit), unit, ()))
+    }
+  }
+
+  it("evaluates reached pre-arguments and the body once in argument order") {
+
+    actual = match note("input", 5) {
+      observed_between(note("min", 2), note("max", 8), result) => result,
+      _ => 0,
+    }
+    do::<Result> {
+      assert_eq(5, actual)
+      assert_stdout_eq(["input", "min", "max", "body:5"])
+    }
+  }
+
+  it("does not evaluate pre-arguments after a failed earlier child") {
+
+    do::<Result> {
+      assert_eq("fallback", match (0, 5) {
+        (positive(), observed_between(note("unreached-min", 2), note("unreached-max", 8), _)) => "unexpected",
+        _ => "fallback",
+      })
+      assert_stdout_eq([])
+    }
+  }
+
+  it("evaluates each arm occurrence independently after child mismatch") {
+
+    actual = match 5 {
+      observed_between(note("first-min", 2), note("first-max", 8), 7) => 0,
+      observed_between(note("second-min", 2), note("second-max", 8), result) => result,
+      _ => 0,
+    }
+    do::<Result> {
+      assert_eq(5, actual)
+      assert_stdout_eq(["first-min", "first-max", "body:5", "second-min", "second-max", "body:5"])
+    }
+  }
+
+  it("resolves pre-arguments and pins in the enclosing scope") {
+    amount = 10
+    do::<Result> {
+      do::<Result> {
+        (observed_2_0, observed_2_1) = match (2, 3) {
+        (amount, offset(amount, adjusted)) => (amount, adjusted),
+        _ => (0, 0),
+      }
+        assert_eq(2, observed_2_0)
+        assert_eq(13, observed_2_1)
+      }
+      assert_eq(2, match (2, 10) {
+        (amount, ^amount) => amount,
+        _ => 0,
+      })
+      assert_eq(10, amount)
+    }
+  }
+
+  it("keeps variable pre-arguments outside branch bindings") {
+    low = 2
+    high = 8
+    do::<Result> {
+      assert_true(is_match(5, between(low, high, _)))
+      assert_eq(5, match 5 {
+        between(0, low, result) | between(low, high, result) => result,
+        _ => 0,
+      })
+    }
+  }
+
+  it("infers generic payload shape from its pre-argument") {
+    do::<Result> {
+      assert_eq("tag", if_let(1, supply("tag", result), result, "fallback"))
+      do::<Result> {
+        (observed_3_0, observed_3_1) = if_let(1, supply(("tag", 5), name, count), (name, count), ("fallback", 0))
+        assert_eq("tag", observed_3_0)
+        assert_eq(5, observed_3_1)
+      }
+    }
+  }
+
+  it("captures enclosing values referenced only by pre-arguments") {
+    bind_closure = make_offset_bind(10)
+    match_closure = make_offset_match(10)
+    do::<Result> {
+      assert_ok_eq(13, bind_closure(3))
+      assert_eq(13, match_closure(3))
+    }
+  }
+
+  it("accepts Unit as a pre-argument expression") {
+    do::<Result> {
+      assert_eq(3, if_let(3, with_unit((), value), value, 0))
+      assert_true(is_match(3, with_unit((), _)))
+    }
+  }
+
+  it("adapts a named Result callable and captured ordinary Closures") {
+    decimal = Extractor::from_result(&Int::parse)
+    do::<Result> {
+      assert_ok_eq(42, apply_pattern("42", decimal(_1: Int)))
+      assert_false(is_match("invalid", decimal(_)))
+      amount = 10
+      adjusted = Extractor::from_result({|value: Int| Ok(value + amount)})
+      assert_ok_eq(13, apply_pattern(3, adjusted(_1)))
+    }
+  }
+
+  it("preserves scalar tuple and Unit payload shapes through generic helpers") {
+    scalar = Extractor::from_result({|value: Int| Ok(to_string(value))})
+    pair = Extractor::from_result({|value: Int| Ok((value, to_string(value)))})
+    unit = Extractor::from_result({|value: Int| Ok(())})
+    do::<Result> {
+      assert_ok_eq("3", apply_pattern(3, scalar(_1)))
+      do::<Result> {
+        (observed_4_0, observed_4_1) =? apply_pattern(3, pair(_1, _2))
+        assert_eq(3, observed_4_0)
+        assert_eq("3", observed_4_1)
+      }
+      assert_true(is_match(3, unit()))
+      assert_true(is_match(3, unit(_)))
+      assert_eq((), if_let(3, unit(value: Unit), value, ()))
+      assert_ok_eq((), apply_pattern(3, unit(_1: Unit)))
+      assert_eq("3", match 3 {
+        scalar("other") => "unexpected",
+        pair(_, text) => text,
+        _ => "fallback",
+      })
+    }
+  }
+
+  it("unwraps only the outer Result and retains a nested Result payload") {
+    nested_ok = Extractor::from_result({|value: Int| Ok(Ok(value))})
+    nested_err = Extractor::from_result({|value: Int| Ok(PatternProbe::source(value))})
+    do::<Result> {
+      assert_ok_eq(Ok(3), apply_pattern(3, nested_ok(_1)))
+      assert_true(is_match(0, nested_err(Err(_))))
+      projected: Result<Result<Int>> = apply_pattern(0, nested_err(_1))
+      nested =? projected
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], nested)
+    }
+  }
+
+  it("preserves the original Error kind message source and cause chain") {
+    original = PatternProbe::source(0)
+    failure = Extractor::from_result({|value: Unit| original})
+    converted = apply_pattern((), failure(_1: Int))
+    do::<Result> {
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], converted)
+      match (original, converted) {
+        (Err(before), Err(after)) => do::<Result> {
+                                       (observed_5_0, observed_5_1, observed_5_2) = (Error::kind(after), Error::message(after), Error::format(after))
+                                       assert_eq(Error::kind(before), observed_5_0)
+                                       assert_eq(Error::message(before), observed_5_1)
+                                       assert_eq(Error::format(before), observed_5_2)
+                                     },
+        _ => fail("expected the preserved error"),
+      }
+    }
+  }
+
+  it("captures the callable once without executing its body during creation") {
+
+    observed = Extractor::from_result(PatternProbe::observed_result(10))
+    do::<Result> {
+      assert_stdout_eq(["capture"])
+      assert_eq(13, if_let(3, observed(value), value, 0))
+      assert_stdout_eq(["converted:3"])
+      assert_eq(14, if_let(4, observed(value), value, 0))
+      assert_stdout_eq(["converted:4"])
+    }
+  }
+
+  it("executes each reached occurrence once and skips unreached occurrences") {
+
+    observed = Extractor::from_result(PatternProbe::observed_result(10))
+    do::<Result> {
+      assert_stdout_eq(["capture"])
+      assert_false(is_match((0, 3), (positive(), observed(_))))
+      assert_stdout_eq([])
+      assert_eq(13, match 3 {
+        observed(99) => 0,
+        observed(value) => value,
+        _ => 0,
+      })
+      assert_stdout_eq(["converted:3", "converted:3"])
+    }
+  }
+
+  it("composes adapted Pattern results with the existing Result Monad") {
+    decimal = Extractor::from_result(&Int::parse)
+    do::<Result> {
+      assert_ok_eq(43, Monad::bind(
+        apply_pattern("42", decimal(_1)),
+        {|value: Int| Ok(value + 1)},
+      ))
+
+      rejected = Monad::bind(apply_pattern("invalid", decimal(_1)), {|value: Int|
+        print("unreached")
+        Ok(value + 1)
+      })
+      assert_true(Result::is_err(rejected))
+
+      assert_stdout_eq([])
+    }
+  }
+
+}

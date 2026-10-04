@@ -1,0 +1,34 @@
+import Test;
+
+defenum Pair<$L, $R> {
+  Pair($L, $R),
+}
+
+impl Bifunctor for Pair<$L, $R>
+where
+  $L: Bifunctor.$A
+  $R: Bifunctor.$B
+{
+  def bimap(
+    self: Pair<$A, $B>,
+    map_left: Mapper<$A, $C>,
+    map_right: Mapper<$B, $D>
+  ) -> Pair<$C, $D> {
+    match self {
+      Pair::Pair(left, right) => Pair::Pair(map_left(left), map_right(right)),
+    }
+  }
+}
+
+test("Bifunctor") {
+  describe("bimap") {
+    it("specializes a binary constructor application") {
+      mapped: Pair<String, Int> = Bifunctor::bimap(Pair::Pair(9, "abcd"), &to_string, &String::len)
+      Pair::Pair(left, right) =? mapped
+      do::<Result> {
+        assert_eq("9", left)
+        assert_eq(4, right)
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+import Test;
+
+def preserve_applicative(value: $F<$A>) -> $F<$A>
+where
+  $F: Applicative
+{
+  Functor::fmap(value, {|item| item})
+}
+
+test("Applicative") {
+  describe("constructor constraint") {
+    it("preserves an Option constructor through its Functor parent") {
+      preserved: Option<Int> = preserve_applicative(Option::Some(9))
+      assert_some_eq(9, preserved)
+    }
+
+    it("preserves an empty constructor") {
+      preserved: Option<Int> = preserve_applicative(Option<Int>::None)
+      assert_none(preserved)
+    }
+
+  }
+
+}

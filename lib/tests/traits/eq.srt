@@ -1,0 +1,41 @@
+import Test;
+
+defstruct EqByValue {
+  value: Int,
+  description: String,
+}
+
+impl EqByValue {
+  def new(value: Int, description: String) -> Self {
+    EqByValue { value: value, description: description }
+  }
+}
+
+impl Eq for EqByValue {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self.value, rhs.value)
+  }
+}
+
+test("Eq") {
+  describe("eq") {
+    it("uses the explicitly implemented value semantics") {
+      do::<Result> {
+        assert_true(Eq::eq(EqByValue::new(7, "first"), EqByValue::new(7, "second")))
+        assert_false(Eq::eq(EqByValue::new(7, "first"), EqByValue::new(8, "first")))
+      }
+    }
+
+  }
+
+  describe("neq") {
+    it("negates the Eq implementation by default") {
+      do::<Result> {
+        assert_false(Eq::neq(EqByValue::new(7, "first"), EqByValue::new(7, "second")))
+        assert_true(Eq::neq(EqByValue::new(7, "first"), EqByValue::new(8, "first")))
+      }
+    }
+
+  }
+
+}

@@ -1,0 +1,115 @@
+
+import Test;
+
+defstruct EqByValue {
+  value: Int,
+  description: String,
+}
+
+impl EqByValue {
+  def new(value: Int, description: String) -> Self {
+    EqByValue { value: value, description: description }
+  }
+}
+
+impl Eq for EqByValue {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self.value, rhs.value)
+  }
+}
+
+
+test("HashMap") {
+  describe("constructors and lookup") {
+    it("builds and inspects the empty map") {
+      empty_map: HashMap<Int> = HashMap::empty_map()
+      empty_literal: HashMap<Int> = hash![]
+      do::<Result> {
+        assert_eq(0, HashMap::map_len(empty_map))
+        assert_eq(0, HashMap::map_len(empty_literal))
+      }
+    }
+
+    it("inserts and reports entry presence") {
+      map = HashMap::map_insert(HashMap::map_insert(HashMap::empty_map(), "a", 1), "b", 2)
+      do::<Result> {
+        assert_eq(2, HashMap::map_len(map))
+        assert_true(HashMap::map_contains_key(map, "a"))
+        assert_false(HashMap::map_contains_key(map, "z"))
+      }
+    }
+
+    it("returns Ok for present keys and NoneError for missing keys") {
+      map = HashMap::map_insert(HashMap::map_insert(HashMap::empty_map(), "a", 1), "b", 2)
+      do::<Result> {
+        assert_ok_eq(1, HashMap::map_get(map, "a"))
+        result = HashMap::map_get(map, "z")
+      do::<Result> {
+        assert_err_kind(NoneError, result)
+        assert_err_contains("None Value.", result)
+      }
+      }
+    }
+  }
+
+  describe("entry normalization") {
+    it("from_entries keeps the last duplicate value") {
+      assert_eq(hash!["a" => 3, "b" => 2], HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)]))
+    }
+
+    it("remove deletes present keys and ignores missing keys") {
+      from_entries = HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)])
+      removed = HashMap::map_remove(from_entries, "b")
+      do::<Result> {
+        assert_eq(hash!["a" => 3], removed)
+        assert_eq(hash!["a" => 3], HashMap::map_remove(removed, "missing"))
+      }
+    }
+  }
+
+  describe("deterministic views") {
+    it("returns keys values and entries in sorted key order") {
+      from_entries = HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)])
+      do::<Result> {
+        assert_eq(["a", "b"], HashMap::map_keys(from_entries))
+        assert_eq([3, 2], HashMap::map_values_list(from_entries))
+        assert_eq([("a", 3), ("b", 2)], HashMap::entries(from_entries))
+      }
+    }
+
+    it("maps only the values while preserving key order") {
+      from_entries = HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)])
+      assert_eq(hash!["a" => 30, "b" => 20], HashMap::map_values(from_entries, {|v| v * 10}))
+    }
+
+
+
+    it("renders escaped keys safely") {
+      escaped = HashMap::map_from_entries([
+        ("line\nfeed", 1),
+        ("path\\to", 2),
+        ("say\"hi", 3),
+        ("tab\tchar", 4),
+      ])
+      assert_eq(
+        "hash![\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4]",
+        inspect(escaped),
+      )
+    }
+  }
+
+  describe("Eq") {
+    it("compares HashMap by keys and value Eq regardless of insertion order") {
+      left = HashMap::map_from_entries([("b", EqByValue::new(2, "two")), ("a", EqByValue::new(1, "one"))])
+      right = HashMap::map_from_entries([("a", EqByValue::new(1, "uno")), ("b", EqByValue::new(2, "dos"))])
+      do::<Result> {
+        assert_true(Eq::eq(left, right))
+        assert_false(Eq::eq(left, HashMap::map_from_entries([("a", EqByValue::new(1, "one"))])))
+        assert_false(Eq::eq(left, HashMap::map_from_entries([("a", EqByValue::new(1, "one")), ("c", EqByValue::new(2, "two"))])))
+        assert_false(Eq::eq(left, HashMap::map_from_entries([("a", EqByValue::new(1, "one")), ("b", EqByValue::new(3, "three"))])))
+      }
+    }
+
+  }
+
+}

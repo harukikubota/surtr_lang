@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::IsTerminal;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use eldr::vm::{VmTestDiagnostic, VmTestEvent, VmTestEventKind, VmTestPolicy};
 use forge::bytecode::{stable_hash_hex, Bytecode};
@@ -147,7 +147,6 @@ struct TestRunSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TestScript {
-    selector: String,
     file_path: String,
     source: String,
 }
@@ -205,16 +204,12 @@ fn parse_test_tokens(tokens: &[TestArg]) -> RuneResult<TestOptions> {
         match token {
             TestArg::Invalid(message) => return Err(RuneError::usage(message)),
             TestArg::Positional(value) => {
-                validate_test_selector(value.trim())?;
-                if value.trim().is_empty() {
-                    return Err(RuneError::usage("test: selector must not be empty"));
+                if value.is_empty() {
+                    return Err(RuneError::usage("test: file path must not be empty"));
                 }
-                if target
-                    .replace(TestMode::One(value.trim().to_string()))
-                    .is_some()
-                {
+                if target.replace(TestMode::One(value.to_string())).is_some() {
                     return Err(RuneError::usage(
-                        "test: expected exactly one lib-relative test name",
+                        "test: expected exactly one test file path",
                     ));
                 }
             }
@@ -229,7 +224,7 @@ fn parse_test_tokens(tokens: &[TestArg]) -> RuneResult<TestOptions> {
                         "--all" => {
                             if target.replace(TestMode::All).is_some() {
                                 return Err(RuneError::usage(
-                                    "test: expected exactly one lib-relative test name",
+                                    "test: expected exactly one test file path",
                                 ));
                             }
                         }
@@ -267,30 +262,9 @@ fn parse_test_tokens(tokens: &[TestArg]) -> RuneResult<TestOptions> {
             }
         }
     }
-    options.mode = target
-        .ok_or_else(|| RuneError::usage("test: expected exactly one lib-relative test name"))?;
+    options.mode =
+        target.ok_or_else(|| RuneError::usage("test: expected exactly one test file path"))?;
     Ok(options)
-}
-
-fn validate_test_selector(selector: &str) -> RuneResult<()> {
-    if selector == "--all" {
-        return Ok(());
-    }
-    let normalized = selector.replace('\\', "/");
-    let path = Path::new(&normalized);
-    if path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(RuneError::usage(
-            "test: selector must stay within lib/tests",
-        ));
-    }
-    Ok(())
 }
 
 struct TestCaseRecord {
@@ -315,14 +289,14 @@ struct TestReport {
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     let started = options.timings.then(Instant::now);
     let mut report = TestReport::default();
-    let selectors = match &options.mode {
-        TestMode::One(selector) => Ok(vec![selector.clone()]),
-        TestMode::All => collect_all_test_selectors(),
+    let paths = match &options.mode {
+        TestMode::One(file_path) => Ok(vec![file_path.clone()]),
+        TestMode::All => collect_all_test_paths(),
     };
-    match selectors {
-        Ok(selectors) => {
-            for selector in selectors {
-                execute_test_script(&selector, env, &options, &mut report);
+    match paths {
+        Ok(paths) => {
+            for file_path in paths {
+                execute_test_script(&file_path, env, &options, &mut report);
             }
         }
         Err(error) => report.script_error(error),
@@ -414,16 +388,16 @@ impl TestReport {
     }
 }
 fn execute_test_script(
-    selector: &str,
+    file_path: &str,
     env: ExecutionEnv,
     options: &TestOptions,
     report: &mut TestReport,
 ) {
-    let script = match load_test_script(selector) {
+    let script = match load_test_script(file_path) {
         Ok(script) => script,
         Err(error) => {
             report.scripts.push(
-                json!({"file": selector, "status": "aborted", "io": {"stdout": [], "stderr": []}}),
+                json!({"file": file_path, "status": "aborted", "io": {"stdout": [], "stderr": []}}),
             );
             report.script_error(error);
             return;
@@ -637,124 +611,65 @@ fn render_human_report(
     }
 }
 
-fn load_test_script(selector: &str) -> RuneResult<TestScript> {
-    let path = resolve_test_script_path(selector)?;
-    let read_error = |e| {
+fn load_test_script(file_path: &str) -> RuneResult<TestScript> {
+    let path = Path::new(file_path);
+    let source = fs::read_to_string(path).map_err(|e| {
         RuneError::message(
             1,
-            format!(
-                "test: failed to read {} for selector `{}`: {}",
-                display_path(&path),
-                selector,
-                e
-            ),
+            format!("test: failed to read {}: {}", display_path(path), e),
         )
-    };
-    let canonical_path = fs::canonicalize(&path).map_err(read_error)?;
-    let canonical_root = fs::canonicalize(Path::new("lib/tests")).map_err(read_error)?;
-    if !canonical_path.starts_with(canonical_root) {
-        return Err(RuneError::usage(
-            "test: selector must stay within lib/tests",
-        ));
-    }
-    let source = fs::read_to_string(&canonical_path).map_err(read_error)?;
-
+    })?;
     Ok(TestScript {
-        selector: selector.trim_end_matches(".srt").to_string(),
-        file_path: display_path(&path),
+        file_path: display_path(path),
         source,
     })
 }
 
-fn resolve_test_script_path(selector: &str) -> RuneResult<PathBuf> {
-    validate_test_selector(selector)?;
-    let trimmed = selector.trim().replace('\\', "/");
-    let without_prefix = trimmed.trim_start_matches("./");
-    let normalized = without_prefix.trim_start_matches("lib/tests/");
-    let has_extension = normalized.ends_with(".srt");
-    let relative = if has_extension {
-        normalized.to_string()
-    } else {
-        format!("{normalized}.srt")
-    };
-    Ok(Path::new("lib").join("tests").join(relative))
-}
-
-fn collect_all_test_selectors() -> RuneResult<Vec<String>> {
-    let root = Path::new("lib").join("tests");
+fn collect_all_test_paths() -> RuneResult<Vec<String>> {
+    let root = Path::new("lib/tests");
     let mut paths = Vec::new();
-    collect_test_script_paths(&root, &mut paths)?;
-    paths.sort();
-
-    let selectors = paths
-        .into_iter()
-        .filter(|path| !is_schema_test_path(&root, path))
-        .filter(|path| !is_spec_module_path(&root, path))
-        .filter(|path| {
-            !matches!(
-                path.file_name().and_then(|name| name.to_str()),
-                Some("prelude.srt") | Some("spec_defs.srt")
-            )
-        })
-        .filter_map(|path| selector_for_test_path(&root, &path))
-        .collect();
-    Ok(selectors)
-}
-
-fn collect_test_script_paths(dir: &Path, paths: &mut Vec<PathBuf>) -> RuneResult<()> {
-    let entries = fs::read_dir(dir).map_err(|e| {
-        RuneError::message(
-            1,
-            format!(
-                "test: failed to read test directory {}: {}",
-                display_path(dir),
-                e
-            ),
-        )
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            RuneError::message(
-                1,
-                format!("test: failed to read test directory entry: {}", e),
-            )
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_test_script_paths(&path, paths)?;
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("srt") {
-            paths.push(path);
+    for category in read_test_directory(root)? {
+        if category.is_dir() {
+            for path in read_test_directory(&category)? {
+                if (path.is_file() || path.is_symlink())
+                    && path.extension().and_then(|ext| ext.to_str()) == Some("srt")
+                {
+                    paths.push(display_path(&path));
+                }
+            }
         }
     }
-
-    Ok(())
+    paths.sort();
+    if paths.is_empty() {
+        return Err(RuneError::message(
+            1,
+            "test: no test files found in lib/tests/*/*.srt",
+        ));
+    }
+    Ok(paths)
 }
 
-fn selector_for_test_path(root: &Path, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(root).ok()?;
-    let without_extension = relative.with_extension("");
-    Some(display_path(&without_extension))
-}
-
-fn is_schema_test_path(root: &Path, path: &Path) -> bool {
-    path.strip_prefix(root)
-        .ok()
-        .and_then(|relative| relative.components().next())
-        .is_some_and(|component| component.as_os_str() == "schema")
-}
-
-fn is_spec_module_path(root: &Path, path: &Path) -> bool {
-    let mut components = match path.strip_prefix(root).ok() {
-        Some(relative) => relative.components(),
-        None => return false,
-    };
-
-    matches!(
-        (components.next(), components.next()),
-        (Some(first), Some(second))
-            if first.as_os_str() == "spec" && second.as_os_str() == "modules"
-    )
+fn read_test_directory(dir: &Path) -> RuneResult<Vec<PathBuf>> {
+    fs::read_dir(dir)
+        .map_err(|e| {
+            RuneError::message(
+                1,
+                format!(
+                    "test: failed to read test directory {}: {}",
+                    display_path(dir),
+                    e
+                ),
+            )
+        })?
+        .map(|entry| {
+            entry.map(|entry| entry.path()).map_err(|e| {
+                RuneError::message(
+                    1,
+                    format!("test: failed to read test directory entry: {}", e),
+                )
+            })
+        })
+        .collect()
 }
 
 fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Bytecode> {
@@ -1155,15 +1070,14 @@ fn summary_color(summary: TestRunSummary) -> TestOutputColor {
 }
 
 fn display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    path.to_string_lossy().into_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        colorize_text, note_line, parse_test_options, resolve_test_script_path, summary_color,
-        summary_line, test_color_enabled, test_event_line, TestMode, TestOutputColor,
-        TestRunSummary,
+        colorize_text, note_line, parse_test_options, summary_color, summary_line,
+        test_color_enabled, test_event_line, TestMode, TestOutputColor, TestRunSummary,
     };
     use std::path::Path;
     use std::sync::{Mutex, OnceLock};
@@ -1176,7 +1090,6 @@ mod tests {
     #[test]
     fn test_diagnostic_without_matching_source_keeps_only_known_location() {
         let script = super::TestScript {
-            selector: "math".to_string(),
             file_path: "lib/tests/math.srt".to_string(),
             source: "assert_eq(1, 2)".to_string(),
         };
@@ -1355,8 +1268,8 @@ mod tests {
     }
 
     #[test]
-    fn test_options_require_single_selector() {
-        let opts = parse_test_options(&["string".to_string()]).expect("selector should parse");
+    fn test_options_require_single_file_path() {
+        let opts = parse_test_options(&["string".to_string()]).expect("file_path should parse");
         assert_eq!(opts.mode, TestMode::One("string".to_string()));
         assert!(!opts.quiet);
         assert!(parse_test_options(&[]).is_err());
@@ -1403,52 +1316,19 @@ mod tests {
     }
 
     #[test]
-    fn selector_rejects_parent_components() {
-        let err =
-            parse_test_options(&["../string".to_string()]).expect_err("parent selector must fail");
-
-        assert_eq!(err.summary(), "test: selector must stay within lib/tests");
-
-        for selector in [r"..\..\lib\kernel", r"lib\tests\..\kernel"] {
-            let err = parse_test_options(&[selector.to_string()])
-                .expect_err("backslash parent selector must fail");
-            assert_eq!(err.summary(), "test: selector must stay within lib/tests");
+    fn test_options_preserve_file_paths() {
+        for path in [
+            "./string.srt",
+            "../string.srt",
+            "/tmp/string.srt",
+            " string ",
+            r"lib\tests\string.srt",
+            "result",
+        ] {
+            let opts = parse_test_options(&[path.to_string()]).expect("file path should parse");
+            assert_eq!(opts.mode, TestMode::One(path.to_string()));
         }
-    }
-
-    #[test]
-    fn selector_rejects_absolute_paths() {
-        let err = parse_test_options(&["/tmp/string".to_string()])
-            .expect_err("absolute selector must fail");
-
-        assert_eq!(err.summary(), "test: selector must stay within lib/tests");
-
-        let err = parse_test_options(&[r"\tmp\string".to_string()])
-            .expect_err("backslash absolute selector must fail");
-        assert_eq!(err.summary(), "test: selector must stay within lib/tests");
-    }
-
-    #[test]
-    fn selector_allows_all_flag_after_path_validation() {
-        let opts = parse_test_options(&["--all".to_string()]).expect("--all should parse");
-
-        assert_eq!(opts.mode, TestMode::All);
-    }
-
-    #[test]
-    fn selector_resolves_into_lib_tests() {
-        assert_eq!(
-            resolve_test_script_path("string").unwrap(),
-            Path::new("lib").join("tests").join("string.srt")
-        );
-        assert_eq!(
-            resolve_test_script_path("string.srt").unwrap(),
-            Path::new("lib").join("tests").join("string.srt")
-        );
-        assert_eq!(
-            resolve_test_script_path(r"lib\tests\spec\example.srt").unwrap(),
-            Path::new("lib").join("tests").join("spec/example.srt")
-        );
+        assert!(parse_test_options(&[String::new()]).is_err());
     }
 
     #[test]

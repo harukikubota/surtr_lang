@@ -18,9 +18,10 @@ Coverage runner:
 
 ## Fixture Suites
 
-- `lib/tests/spec.srt`
-  - Canonical aggregate PureSurtr success suite
-  - Runner: `./target/debug/surtr test spec`
+- `lib/tests/*/*.srt`
+  - Public API and language contracts in `basic_types`, `monads`, `traits`, `modules`, and `language_features`
+  - All entries: `./target/debug/surtr test --all`; one file: `./target/debug/surtr test lib/tests/monads/result.srt`
+  - Discover exactly two path components beneath `lib/tests`, in path order. Root files and deeper support definitions are excluded by depth. No category or basename exceptions apply.
 - `tests/fixtures/script/pass/**.srt` + `.expected`
   - Script-mode success fixtures for file boundary, stdmod, JSON, string, process-runtime, and usecase behavior
   - Runner: `tests/integration/run_srt.rs` (`run_srt::spec_fixtures_bucket_0..7`)

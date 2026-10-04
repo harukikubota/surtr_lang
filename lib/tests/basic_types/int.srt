@@ -1,0 +1,556 @@
+import Int::{
+  div_mod,
+  abs,
+  min,
+  max,
+  sign,
+  is_even,
+  is_odd,
+  bit_and,
+  bit_or,
+  bit_xor,
+  bit_not,
+  parse,
+  parse_dec,
+  parse_hex,
+  parse_oct,
+  parse_bin,
+  parse_literal,
+  test_bit,
+  set_bit,
+  clear_bit,
+  toggle_bit,
+  width_bits,
+  mask,
+  wrap_unsigned,
+  wrap_signed,
+  bit_not_in,
+  test_bit_in,
+  set_bit_in,
+  clear_bit_in,
+  toggle_bit_in,
+  shl_in,
+  shr_logical_in,
+  rotl_in,
+  rotr_in,
+  shl,
+  shr,
+};
+import Test;
+
+test("Int") {
+  describe("div_mod") {
+    it("returns the quotient and remainder") {
+      assert_ok_eq((2, 1), Int::div_mod(7, 3))
+    }
+
+    it("truncates toward zero for every sign combination") {
+      do::<Result> {
+        assert_ok_eq((-2, -1), Int::div_mod(-7, 3))
+        assert_ok_eq((-2, 1), Int::div_mod(7, -3))
+        assert_ok_eq((2, -1), Int::div_mod(-7, -3))
+      }
+    }
+
+    it("handles zero dividends exact division and smaller dividends") {
+      do::<Result> {
+        assert_ok_eq((0, 0), Int::div_mod(0, 3))
+        assert_ok_eq((0, 0), Int::div_mod(0, -3))
+        assert_ok_eq((3, 0), Int::div_mod(9, 3))
+        assert_ok_eq((0, -2), Int::div_mod(-2, 3))
+      }
+    }
+
+    it("preserves arbitrary precision and the division identity") {
+      value = 10000000000000000000000000000000000000001
+      divisor = 100000000000000000000
+      (quotient, remainder) =? Int::div_mod(value, divisor)
+      do::<Result> {
+        do::<Result> {
+        assert_eq(100000000000000000000, quotient)
+        assert_eq(1, remainder)
+      }
+        assert_eq(value, quotient * divisor + remainder)
+        assert_ok_eq((-100000000000000000000, -1), Int::div_mod(0 - value, divisor))
+      }
+    }
+
+    it("supports an imported callable with a concrete signature") {
+      divide: (Int, Int -> Result<(Int, Int)>) = &div_mod(&1, &2)
+      assert_ok_eq((2, 1), divide(7, 3))
+    }
+
+    it("returns ZeroDivisionError for zero divisors") {
+      expected: Result<(Int, Int)> = Err(ZeroDivisionError)
+      do::<Result> {
+        assert_eq(expected, Int::div_mod(7, 0))
+        assert_eq(expected, Int::div_mod(-7, 0))
+        assert_eq(expected, Int::div_mod(0, 0))
+      }
+    }
+  }
+
+  describe("numeric helpers") {
+    it("supports safe division and modulo") {
+      do::<Result> {
+        assert_ok_eq(4, Div::safe_div(8, 2))
+        assert_ok_eq(1, Mod::safe_mod(7, 3))
+        result = Div::safe_div(8, 0)
+      do::<Result> {
+        assert_err_kind(ZeroDivisionError, result)
+        assert_err_contains("division by zero", result)
+      }
+      }
+    }
+
+    it("supports abs min max and sign") {
+      do::<Result> {
+        assert_eq(5, abs(-5))
+        assert_eq(-2, min(4, -2))
+        assert_eq(4, max(4, -2))
+        assert_eq(-1, sign(-12))
+        assert_eq(0, sign(0))
+        assert_eq(1, sign(9))
+      }
+    }
+
+    it("supports parity helpers") {
+      do::<Result> {
+        assert_true(is_even(8))
+        assert_false(is_odd(8))
+        assert_false(is_even(-3))
+      }
+    }
+  }
+
+  describe("bit_and") {
+    it("combines shared bits") { assert_eq(2, bit_and(6, 3)) }
+  }
+
+  describe("parse") {
+    it("parses decimal text") { assert_ok_eq(123, parse("123")) }
+    it("aliases parse_dec") { assert_eq(parse_dec("123"), parse("123")) }
+    it("accepts signed decimal text") { assert_ok_eq(-42, parse("-42")) }
+  }
+
+  describe("parse_dec") {
+    it("parses plain decimal digits") { assert_ok_eq(123, parse_dec("123")) }
+    it("accepts an explicit plus sign") { assert_ok_eq(12, parse_dec("+12")) }
+    it("rejects sign-only input") {
+      result = parse_dec("-")
+      do::<Result> {
+        assert_err_kind(ParseIntError, result)
+        assert_err_contains("sign without digits", result)
+      }
+    }
+    it("rejects literal prefixes") {
+      result = parse_dec("0xff")
+      do::<Result> {
+        assert_err_kind(ParseIntError, result)
+        assert_err_contains("invalid digit for decimal integer: x at index 1", result)
+      }
+    }
+  }
+
+  describe("parse_hex") {
+    it("parses lowercase digits") { assert_ok_eq(255, parse_hex("ff")) }
+    it("parses uppercase digits") { assert_ok_eq(255, parse_hex("FF")) }
+    it("accepts a leading sign") { assert_ok_eq(-255, parse_hex("-ff")) }
+    it("rejects prefixed input") {
+      result = parse_hex("0xff")
+      do::<Result> {
+        assert_err_kind(ParseIntError, result)
+        assert_err_contains("invalid digit for hexadecimal integer: x at index 1", result)
+      }
+    }
+  }
+
+  describe("parse_oct") {
+    it("parses octal digits") { assert_ok_eq(15, parse_oct("17")) }
+    it("accepts signed octal input") { assert_ok_eq(-15, parse_oct("-17")) }
+    it("rejects invalid digits") {
+      result = parse_oct("18")
+      do::<Result> {
+        assert_err_kind(ParseIntError, result)
+        assert_err_contains("invalid digit for octal integer: 8 at index 1", result)
+      }
+    }
+  }
+
+  describe("parse_bin") {
+    it("parses binary digits") { assert_ok_eq(13, parse_bin("1101")) }
+    it("accepts a leading sign") { assert_ok_eq(-13, parse_bin("-1101")) }
+    it("rejects invalid digits") {
+      result = parse_bin("102")
+      do::<Result> {
+        assert_err_kind(ParseIntError, result)
+        assert_err_contains("invalid digit for binary integer: 2 at index 2", result)
+      }
+    }
+  }
+
+  describe("parse_literal") {
+    it("parses prefixed literals") {
+      assert_ok_eq(255, parse_literal("0xff"))
+    }
+
+    it("parses octal and binary literals") {
+      do::<Result> {
+        assert_ok_eq(15, parse_literal("0o17"))
+        assert_ok_eq(13, parse_literal("0b1101"))
+      }
+    }
+
+    it("parses explicit decimal literals") {
+      assert_ok_eq(123, parse_literal("0d123"))
+    }
+
+    it("treats unprefixed literals as decimal") {
+      assert_ok_eq(123, parse_literal("123"))
+    }
+
+    it("accepts signed literals") {
+      do::<Result> {
+        assert_ok_eq(-255, parse_literal("-0xff"))
+        assert_ok_eq(13, parse_literal("+0b1101"))
+      }
+    }
+
+    it("rejects unknown prefixes") {
+      result = parse_literal("0q123")
+      do::<Result> {
+        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_contains("unknown integer base prefix: 0q", result)
+      }
+    }
+
+    it("rejects missing digits after a prefix") {
+      result = parse_literal("0x")
+      do::<Result> {
+        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_contains("missing digits after integer base prefix: 0x", result)
+      }
+    }
+
+    it("rejects empty input") {
+      result = parse_literal("")
+      do::<Result> {
+        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_contains("empty integer literal input", result)
+      }
+    }
+
+    it("rejects sign-only input") {
+      result = parse_literal("-")
+      do::<Result> {
+        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_contains("sign without digits", result)
+      }
+    }
+  }
+
+  describe("bit_or") {
+    it("combines any set bit") { assert_eq(7, bit_or(6, 3)) }
+  }
+
+  describe("bit_xor") {
+    it("keeps differing bits") { assert_eq(5, bit_xor(6, 3)) }
+  }
+
+  describe("bit_not") {
+    it("inverts zero") { assert_eq(-1, bit_not(0)) }
+    it("inverts positive values") { assert_eq(-7, bit_not(6)) }
+  }
+
+  describe("test_bit") {
+    it("reads the lowest bit") { assert_ok_eq(True, test_bit(5, 0)) }
+    it("reads a cleared bit") { assert_ok_eq(False, test_bit(5, 1)) }
+    it("reads a higher set bit") { assert_ok_eq(True, test_bit(5, 2)) }
+    it("rejects negative indexes") {
+      result = test_bit(5, -1)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("set_bit") {
+    it("sets a bit") { assert_ok_eq(2, set_bit(0, 1)) }
+    it("rejects negative indexes") {
+      result = set_bit(5, -1)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("clear_bit") {
+    it("clears a bit") { assert_ok_eq(5, clear_bit(7, 1)) }
+    it("rejects negative indexes") {
+      result = clear_bit(5, -1)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("toggle_bit") {
+    it("toggles a bit") { assert_ok_eq(4, toggle_bit(5, 0)) }
+    it("rejects negative indexes") {
+      result = toggle_bit(5, -1)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("width_bits") {
+    it("returns named widths") { assert_ok_eq(8, width_bits(BitWidth::W8)) }
+    it("returns custom widths") { assert_ok_eq(24, width_bits(BitWidth::Any(24))) }
+    it("rejects non-positive custom widths") {
+      result = width_bits(BitWidth::Any(0))
+      do::<Result> {
+        assert_err_kind(InvalidBitWidth, result)
+        assert_err_contains("bit width must be positive: 0", result)
+      }
+    }
+  }
+
+  describe("mask") {
+    it("builds a W8 mask") { assert_ok_eq(255, mask(BitWidth::W8)) }
+    it("builds a custom-width mask") { assert_ok_eq(31, mask(BitWidth::Any(5))) }
+    it("rejects invalid custom widths") {
+      result = mask(BitWidth::Any(0))
+      do::<Result> {
+        assert_err_kind(InvalidBitWidth, result)
+        assert_err_contains("bit width must be positive: 0", result)
+      }
+    }
+  }
+
+  describe("wrap_unsigned") {
+    it("wraps negative values") {
+      assert_ok_eq(255, wrap_unsigned(-1, BitWidth::W8))
+    }
+
+    it("wraps overflowing values") {
+      assert_ok_eq(4, wrap_unsigned(260, BitWidth::W8))
+    }
+
+    it("rejects invalid widths") {
+      result = wrap_unsigned(5, BitWidth::Any(0))
+      do::<Result> {
+        assert_err_kind(InvalidBitWidth, result)
+        assert_err_contains("bit width must be positive: 0", result)
+      }
+    }
+  }
+
+  describe("wrap_signed") {
+    it("wraps into signed range") {
+      assert_ok_eq(-1, wrap_signed(255, BitWidth::W8))
+    }
+
+    it("wraps positive values with sign bit set") {
+      assert_ok_eq(-127, wrap_signed(129, BitWidth::W8))
+    }
+
+    it("keeps in-range signed values unchanged") {
+      assert_ok_eq(127, wrap_signed(127, BitWidth::W8))
+    }
+  }
+
+  describe("bit_not_in") {
+    it("inverts within W8") {
+      assert_ok_eq(249, bit_not_in(6, BitWidth::W8))
+    }
+
+    it("inverts within custom width") {
+      assert_ok_eq(30, bit_not_in(1, BitWidth::Any(5)))
+    }
+
+    it("rejects invalid widths") {
+      result = bit_not_in(1, BitWidth::Any(0))
+      do::<Result> {
+        assert_err_kind(InvalidBitWidth, result)
+        assert_err_contains("bit width must be positive: 0", result)
+      }
+    }
+  }
+
+  describe("test_bit_in") {
+    it("reads an in-range fixed-width bit") {
+      assert_ok_eq(True, test_bit_in(5, 2, BitWidth::W8))
+    }
+
+    it("rejects negative indexes") {
+      result = test_bit_in(5, -1, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+
+    it("rejects out-of-range indexes") {
+      result = test_bit_in(5, 8, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(BitIndexOutOfRange, result)
+        assert_err_contains("bit index 8 out of range for width 8", result)
+      }
+    }
+  }
+
+  describe("set_bit_in") {
+    it("sets an in-range bit") {
+      assert_ok_eq(2, set_bit_in(0, 1, BitWidth::W8))
+    }
+
+    it("rejects negative indexes") {
+      result = set_bit_in(0, -1, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("clear_bit_in") {
+    it("clears an in-range bit") {
+      assert_ok_eq(5, clear_bit_in(7, 1, BitWidth::W8))
+    }
+
+    it("rejects negative indexes") {
+      result = clear_bit_in(0, -1, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+
+    it("rejects out-of-range indexes") {
+      result = clear_bit_in(0, 8, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(BitIndexOutOfRange, result)
+        assert_err_contains("bit index 8 out of range for width 8", result)
+      }
+    }
+  }
+
+  describe("toggle_bit_in") {
+    it("toggles an in-range bit") {
+      assert_ok_eq(4, toggle_bit_in(5, 0, BitWidth::W8))
+    }
+
+    it("rejects negative indexes") {
+      result = toggle_bit_in(5, -1, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(NegativeBitIndex, result)
+        assert_err_contains("bit index must be non-negative: -1", result)
+      }
+    }
+
+    it("rejects out-of-range indexes") {
+      result = toggle_bit_in(5, 8, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(BitIndexOutOfRange, result)
+        assert_err_contains("bit index 8 out of range for width 8", result)
+      }
+    }
+  }
+
+  describe("shl_in") {
+    it("shifts left within width") {
+      assert_ok_eq(254, shl_in(255, 1, BitWidth::W8))
+    }
+
+    it("rejects negative shifts") {
+      result = shl_in(1, -1, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(NegativeShiftCount, result)
+        assert_err_contains("shift amount must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("shr_logical_in") {
+    it("shifts logically within width") {
+      assert_ok_eq(127, shr_logical_in(-1, 1, BitWidth::W8))
+    }
+
+    it("zeros values when shifting by the width") {
+      assert_ok_eq(0, shr_logical_in(255, 8, BitWidth::W8))
+    }
+
+    it("rejects negative shifts") {
+      result = shr_logical_in(1, -1, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(NegativeShiftCount, result)
+        assert_err_contains("shift amount must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("rotl_in") {
+    it("rotates left within W8") {
+      assert_ok_eq(3, rotl_in(129, 1, BitWidth::W8))
+    }
+
+    it("rotates left within custom widths") {
+      assert_ok_eq(3, rotl_in(17, 1, BitWidth::Any(5)))
+    }
+
+    it("normalizes rotation counts") {
+      assert_ok_eq(3, rotl_in(129, 9, BitWidth::W8))
+    }
+  }
+
+  describe("rotr_in") {
+    it("rotates right within W8") {
+      assert_ok_eq(192, rotr_in(129, 1, BitWidth::W8))
+    }
+
+    it("normalizes rotation counts") {
+      assert_ok_eq(192, rotr_in(129, 9, BitWidth::W8))
+    }
+
+    it("rejects negative shifts") {
+      result = rotr_in(1, -1, BitWidth::W8)
+      do::<Result> {
+        assert_err_kind(NegativeShiftCount, result)
+        assert_err_contains("shift amount must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("shl") {
+    it("shifts by one") { assert_ok_eq(2, shl(1, 1)) }
+    it("shifts by several bits") { assert_ok_eq(16, shl(1, 4)) }
+    it("shifts larger numbers") { assert_ok_eq(32, shl(8, 2)) }
+    it("rejects negative shifts") {
+      result = shl(1, -1)
+      do::<Result> {
+        assert_err_kind(NegativeShiftCount, result)
+        assert_err_contains("shift amount must be non-negative: -1", result)
+      }
+    }
+  }
+
+  describe("shr") {
+    it("shifts down by one") { assert_ok_eq(0, shr(1, 1)) }
+    it("shifts down by several bits") { assert_ok_eq(4, shr(16, 2)) }
+    it("shifts large powers") { assert_ok_eq(1, shr(1024, 10)) }
+    it("rejects negative shifts") {
+      result = shr(1, -1)
+      do::<Result> {
+        assert_err_kind(NegativeShiftCount, result)
+        assert_err_contains("shift amount must be non-negative: -1", result)
+      }
+    }
+  }
+
+
+}

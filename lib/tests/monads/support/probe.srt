@@ -1,0 +1,36 @@
+defstruct Probe<$A> {
+  value: $A,
+  origin: String,
+}
+
+impl Probe {
+  def new(value: $A, origin: String) -> Probe<$A> {
+    Probe { value, origin }
+  }
+}
+
+impl Functor for Probe<$T> {
+  def fmap(self: Probe<$A>, mapper: ($A -> $B)) -> Probe<$B> {
+    Probe { value: mapper(self.value), origin: self.origin }
+  }
+}
+
+impl Applicative for Probe<$T> {
+  def pure::<Probe<$T>>(value: $A) -> Probe<$A> {
+    Probe { value, origin: "pure" }
+  }
+
+  def ap(mapper: Probe<($A -> $B)>, value: Probe<$A>) -> Probe<$B> {
+    Probe { value: apply(mapper.value, value.value), origin: "ap" }
+  }
+}
+
+impl Monad for Probe<$T> {
+  def return::<Probe<$T>>(value: $A) -> Probe<$A> {
+    Probe { value, origin: "return" }
+  }
+
+  def bind(self: Probe<$A>, mapper: ($A -> Probe<$B>)) -> Probe<$B> {
+    mapper(self.value)
+  }
+}

@@ -1,0 +1,56 @@
+import Test;
+
+test("control") {
+  describe("if") {
+    it("selects the true value") { assert_eq(1, if(True, 1, 2)) }
+    it("selects the false value") { assert_eq(2, if(False, 1, 2)) }
+    it("runs the selected effect once") {
+      if_then(True, print("chosen"))
+      if_then(False, print("unreached"))
+      assert_stdout_eq(["chosen"])
+    }
+  }
+  describe("cond") {
+    it("selects the first true branch") {
+      assert_eq(2, cond { False => 0, False => 1, True => 2, })
+    }
+    it("skips later effects") {
+      cond { 1 == 1 => print("first"), True => print("unreached"), }
+      assert_stdout_eq(["first"])
+    }
+  }
+  describe("match") {
+    it("matches Boolean literals") { assert_eq("yes", match True { True => "yes", False => "no", }) }
+    it("uses a wildcard on no literal match") { assert_eq("F", match False { True => "T", _ => "F", }) }
+    it("matches Int literals") { assert_eq("ten", match 10 { 1 => "one", 10 => "ten", _ => "other", }) }
+    it("falls back on unmatched String literals") { assert_eq("X", match "x" { "a" => "A", "b" => "B", _ => "X", }) }
+    it("accepts either OR alternative") { assert_eq("ab", match "b" { "a" | "b" => "ab", _ => "other", }) }
+    it("accepts a true guard") { assert_eq("even", match 8 { num when Int::is_even(num) => "even", _ => "odd", }) }
+    it("rejects a false guard") { assert_eq("odd", match 7 { num when Int::is_even(num) => "even", _ => "odd", }) }
+    it("checks the upper guard endpoint") {
+      assert_eq("out", match 12 { num when 0 < num `and` num < 10 => "in", _ => "out", })
+    }
+    it("accepts an interior guard value") {
+      assert_eq("in", match 5 { num when 0 < num `and` num < 10 => "in", _ => "out", })
+    }
+    it("runs a block in the selected arm") { assert_eq(5, match 1 { 1 => { y = 2; y + 3 }, _ => 0, }) }
+  }
+  describe("if_let") {
+    it("makes payload bindings available on success") { assert_eq(42, if_let(Ok(41), Ok(n), n + 1, 0)) }
+    it("selects fallback on mismatch") { assert_eq(-1, if_let(Err(NoneError), Ok(n), n, -1)) }
+    it("executes only the matching side effect") {
+      if_let_then(Ok("alice"), Ok(name), print(name))
+      if_let_then(Err(NoneError), Ok(name), print(name))
+      assert_stdout_eq(["alice"])
+    }
+    it("evaluates input once") {
+      value = tap(Ok(3), {|_| print("input")})
+      actual = if_let(value, Ok(n), n + 1, 0)
+      do::<Result> { assert_eq(4, actual); assert_stdout_eq(["input"]) }
+    }
+  }
+  describe("is_match") {
+    it("accepts matching Result constructors") { assert_true(is_match(Ok(1), Ok(_))) }
+    it("rejects different Result constructors") { assert_false(is_match(Err(NoneError), Ok(_))) }
+  }
+}

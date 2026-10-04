@@ -1,0 +1,16 @@
+import Test;
+
+defrecord Payload(value: Int)
+impl Encode<String> for Payload {
+  def encode::<String>(self: Self) -> Result<String> { Ok("encoded:" ++ to_string(self.value)) }
+}
+
+test("Encode") {
+  describe("encode") {
+    it("uses a custom output representation") {
+      assert_ok_eq("encoded:7", Encode::encode::<String>(Payload(7)))
+    }
+
+  }
+
+}

@@ -1,0 +1,151 @@
+import Test;
+
+test("Tuple") {
+  describe("swap") {
+    it("reverses the order of a 2-tuple") {
+      assert_eq(("age", 42), Tuple::swap((42, "age")))
+    }
+  }
+
+  describe("zip_with helpers") {
+    it("zip_with2 maps each position with its own function") {
+      left = ("alice", 20)
+      right = ("bob", 18)
+      zipped = Tuple::zip_with2(
+        left,
+        right,
+        {|a, b| a ++ "/" ++ b},
+        {|a, b| a + b},
+      )
+      assert_eq(("alice/bob", 38), zipped)
+    }
+
+    it("zip_with8 scales to wider tuples") {
+      left = (1, 2, 3, 4, 5, 6, 7, 8)
+      right = (10, 20, 30, 40, 50, 60, 70, 80)
+      zipped = Tuple::zip_with8(
+        left,
+        right,
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+      )
+      assert_eq((11, 22, 33, 44, 55, 66, 77, 88), zipped)
+    }
+
+    it("zip_with2_result returns Ok when all mappers succeed") {
+      left = ("alice", 20)
+      right = ("bob", 18)
+      zipped = Tuple::zip_with2_result(
+        left,
+        right,
+        {|a, b| Ok(a ++ "/" ++ b)},
+        {|a, b| Ok(a + b)},
+      )
+      assert_ok_eq(("alice/bob", 38), zipped)
+    }
+
+    it("zip_with2_result propagates mapper errors") {
+      left = ("alice", 18)
+      right = ("bob", 20)
+      zipped = Tuple::zip_with2_result(
+        left,
+        right,
+        {|a, b| Ok(a ++ "/" ++ b)},
+        {|a, b| if(a > b, Ok(a - b), Err(NoneError))},
+      )
+      result = zipped
+      do::<Result> {
+        assert_err_kind(NoneError, result)
+        assert_err_contains("None Value.", result)
+      }
+    }
+  }
+  describe("bothN helpers") {
+    it("both3 returns a flat triple") {
+      summary = Tuple::both3(&String::len, {|text: String| text ++ "!"}, {|text: String| text ++ "?"})
+      assert_eq((3, "abc!", "abc?"), summary("abc"))
+    }
+
+    it("both3 works with compare on sort_by") {
+      users = [
+        (2, 9, 10),
+        (1, 9, 30),
+        (1, 5, 20),
+        (1, 5, 10),
+      ]
+      sorted = List::sort_by(users, &compare `on` Tuple::both3(
+        {|user: (Int, Int, Int)| user._0},
+        {|user: (Int, Int, Int)| user._1},
+        {|user: (Int, Int, Int)| user._2},
+      ))
+      assert_eq(
+        [
+          (1, 5, 10),
+          (1, 5, 20),
+          (1, 9, 30),
+          (2, 9, 10),
+        ],
+        sorted,
+      )
+    }
+  }
+  describe("first/second/both") {
+    it("maps only the first position") { mapper = Tuple::first::<String>({|n: Int| n + 1}); assert_eq((2, "x"), mapper((1, "x"))) }
+    it("maps only the second position") { mapper = Tuple::second::<String>({|n: Int| n + 1}); assert_eq(("x", 2), mapper(("x", 1))) }
+    it("maps both observations of one input") { mapper = Tuple::both({|n: Int| n + 1}, {|n: Int| n * 2}); assert_eq((4, 6), mapper(3)) }
+  }
+  describe("zip_with3") { it("maps the 3 positions independently") { assert_eq((11, 22, 33), Tuple::zip_with3((1, 2, 3), (10, 20, 30), {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y})) } }
+  describe("zip_with3_result") {
+    it("returns all successful positions") { assert_ok_eq((11, 22, 33), Tuple::zip_with3_result((1, 2, 3), (10, 20, 30), {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)})) }
+  }
+  describe("zip_with4") { it("maps the 4 positions independently") { assert_eq((11, 22, 33, 44), Tuple::zip_with4((1, 2, 3, 4), (10, 20, 30, 40), {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y})) } }
+  describe("zip_with4_result") {
+    it("returns all successful positions") { assert_ok_eq((11, 22, 33, 44), Tuple::zip_with4_result((1, 2, 3, 4), (10, 20, 30, 40), {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)})) }
+  }
+  describe("zip_with5") { it("maps the 5 positions independently") { assert_eq((11, 22, 33, 44, 55), Tuple::zip_with5((1, 2, 3, 4, 5), (10, 20, 30, 40, 50), {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y})) } }
+  describe("zip_with5_result") {
+    it("returns all successful positions") { assert_ok_eq((11, 22, 33, 44, 55), Tuple::zip_with5_result((1, 2, 3, 4, 5), (10, 20, 30, 40, 50), {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)})) }
+  }
+  describe("zip_with6") { it("maps the 6 positions independently") { assert_eq((11, 22, 33, 44, 55, 66), Tuple::zip_with6((1, 2, 3, 4, 5, 6), (10, 20, 30, 40, 50, 60), {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y})) } }
+  describe("zip_with6_result") {
+    it("returns all successful positions") { assert_ok_eq((11, 22, 33, 44, 55, 66), Tuple::zip_with6_result((1, 2, 3, 4, 5, 6), (10, 20, 30, 40, 50, 60), {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)})) }
+  }
+  describe("zip_with7") { it("maps the 7 positions independently") { assert_eq((11, 22, 33, 44, 55, 66, 77), Tuple::zip_with7((1, 2, 3, 4, 5, 6, 7), (10, 20, 30, 40, 50, 60, 70), {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y})) } }
+  describe("zip_with7_result") {
+    it("returns all successful positions") { assert_ok_eq((11, 22, 33, 44, 55, 66, 77), Tuple::zip_with7_result((1, 2, 3, 4, 5, 6, 7), (10, 20, 30, 40, 50, 60, 70), {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)})) }
+  }
+  describe("zip_with8") { it("maps the 8 positions independently") { assert_eq((11, 22, 33, 44, 55, 66, 77, 88), Tuple::zip_with8((1, 2, 3, 4, 5, 6, 7, 8), (10, 20, 30, 40, 50, 60, 70, 80), {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y}, {|x: Int, y: Int| x + y})) } }
+  describe("zip_with8_result") {
+    it("returns all successful positions") { assert_ok_eq((11, 22, 33, 44, 55, 66, 77, 88), Tuple::zip_with8_result((1, 2, 3, 4, 5, 6, 7, 8), (10, 20, 30, 40, 50, 60, 70, 80), {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)}, {|x: Int, y: Int| Ok(x + y)})) }
+  }
+  describe("both4") { it("returns the flat 4-tuple") { f = Tuple::both4({|n: Int| n + 0}, {|n: Int| n + 1}, {|n: Int| n + 2}, {|n: Int| n + 3}); assert_eq((3, 4, 5, 6), f(3)) } }
+  describe("both5") { it("returns the flat 5-tuple") { f = Tuple::both5({|n: Int| n + 0}, {|n: Int| n + 1}, {|n: Int| n + 2}, {|n: Int| n + 3}, {|n: Int| n + 4}); assert_eq((3, 4, 5, 6, 7), f(3)) } }
+  describe("both6") { it("returns the flat 6-tuple") { f = Tuple::both6({|n: Int| n + 0}, {|n: Int| n + 1}, {|n: Int| n + 2}, {|n: Int| n + 3}, {|n: Int| n + 4}, {|n: Int| n + 5}); assert_eq((3, 4, 5, 6, 7, 8), f(3)) } }
+  describe("both7") { it("returns the flat 7-tuple") { f = Tuple::both7({|n: Int| n + 0}, {|n: Int| n + 1}, {|n: Int| n + 2}, {|n: Int| n + 3}, {|n: Int| n + 4}, {|n: Int| n + 5}, {|n: Int| n + 6}); assert_eq((3, 4, 5, 6, 7, 8, 9), f(3)) } }
+  describe("both8") { it("returns the flat 8-tuple") { f = Tuple::both8({|n: Int| n + 0}, {|n: Int| n + 1}, {|n: Int| n + 2}, {|n: Int| n + 3}, {|n: Int| n + 4}, {|n: Int| n + 5}, {|n: Int| n + 6}, {|n: Int| n + 7}); assert_eq((3, 4, 5, 6, 7, 8, 9, 10), f(3)) } }
+
+
+  describe("Eq") {
+    it("compares Unit and flat tuples through arity eight") {
+      do::<Result> {
+        assert_true(Eq::eq((), ()))
+        assert_true(Eq::eq((1, 2, 3), (1, 2, 3)))
+        assert_false(Eq::eq((1, 2, 3), (1, 2, 4)))
+        assert_true(Eq::eq((1, 2, 3, 4), (1, 2, 3, 4)))
+        assert_true(Eq::eq((1, 2, 3, 4, 5), (1, 2, 3, 4, 5)))
+        assert_true(Eq::eq((1, 2, 3, 4, 5, 6), (1, 2, 3, 4, 5, 6)))
+        assert_true(Eq::eq((1, 2, 3, 4, 5, 6, 7), (1, 2, 3, 4, 5, 6, 7)))
+        assert_true(Eq::eq((1, 2, 3, 4, 5, 6, 7, 8), (1, 2, 3, 4, 5, 6, 7, 8)))
+        assert_false(Eq::eq((1, 2, 3, 4, 5, 6, 7, 8), (1, 2, 3, 4, 5, 6, 7, 9)))
+      }
+    }
+
+  }
+
+}

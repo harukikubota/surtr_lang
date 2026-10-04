@@ -1,0 +1,252 @@
+include "./support/extractors.srt"
+include "./support/closures.srt"
+import Test;
+import PatternProbe::{positive, offset, supply, at_least, observed_between, note, nested_checked};
+
+def continue_after_failure(value: Int) -> Int {
+    failed = apply_pattern(value, 7)
+    print("after-failure")
+    if(is_match(failed, Err(_)), value + 1, 0)
+  }
+
+  def make_runner(amount: Int) -> (Int -> Result<Int>) {
+    {|value: Int| apply_pattern(value, PatternProbe::offset(amount, _1))}
+  }
+
+test("apply_pattern projection contract") {
+  it("returns Unit for zero slots and a value for one slot") {
+    do::<Result> {
+      assert_ok(apply_pattern(3, 3))
+      assert_ok(apply_pattern(3, _))
+      assert_ok(apply_pattern(3, _name))
+      assert_ok(apply_pattern(3, _foo1))
+      assert_ok_eq(3, apply_pattern(3, _1: Int))
+      assert_ok_eq(3, apply_pattern(3, _01))
+    }
+  }
+
+  it("returns multiple projections in numeric order") {
+    do::<Result> {
+      do::<Result> {
+        (observed_1_0, observed_1_1, observed_1_2) =? apply_pattern(("tag", True, 3), (_2: String, _3: Boolean, _1: Int))
+        assert_eq(3, observed_1_0)
+        assert_eq("tag", observed_1_1)
+        assert_eq(True, observed_1_2)
+      }
+      do::<Result> {
+        (observed_2_0, observed_2_1) =? apply_pattern((1, 2), (_1, _2))
+        assert_eq(1, observed_2_0)
+        assert_eq(2, observed_2_1)
+      }
+      do::<Result> {
+        (observed_3_0, observed_3_1, observed_3_2, observed_3_3, observed_3_4, observed_3_5, observed_3_6, observed_3_7, observed_3_8, observed_3_9, observed_3_10, observed_3_11, observed_3_12, observed_3_13, observed_3_14, observed_3_15) =? apply_pattern((1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16), (_16, _15, _14, _13, _12, _11, _10, _9, _8, _7, _6, _5, _4, _3, _2, _1))
+        assert_eq(16, observed_3_0)
+        assert_eq(15, observed_3_1)
+        assert_eq(14, observed_3_2)
+        assert_eq(13, observed_3_3)
+        assert_eq(12, observed_3_4)
+        assert_eq(11, observed_3_5)
+        assert_eq(10, observed_3_6)
+        assert_eq(9, observed_3_7)
+        assert_eq(8, observed_3_8)
+        assert_eq(7, observed_3_9)
+        assert_eq(6, observed_3_10)
+        assert_eq(5, observed_3_11)
+        assert_eq(4, observed_3_12)
+        assert_eq(3, observed_3_13)
+        assert_eq(2, observed_3_14)
+        assert_eq(1, observed_3_15)
+      }
+    }
+  }
+
+  it("projects annotated tails and root or nested aliases") {
+    do::<Result> {
+      do::<Result> {
+        (observed_4_0, observed_4_1) =? apply_pattern([1, 2, 3], [_1: Int, .._2: List<Int>])
+        assert_eq(1, observed_4_0)
+        assert_eq([2, 3], observed_4_1)
+      }
+      do::<Result> {
+        (observed_5_0, observed_5_1, observed_5_2) =? apply_pattern([(1, 3)], [(_1: Int, 3) @ _3: (Int, Int)] @ _2: List<(Int, Int)>)
+        assert_eq(1, observed_5_0)
+        assert_eq([(1, 3)], observed_5_1)
+        assert_eq((1, 3), observed_5_2)
+      }
+    }
+  }
+
+  it("accepts Unit payload omission and explicit projection") {
+    do::<Result> {
+      assert_ok(apply_pattern(1, positive()))
+      assert_ok(apply_pattern(1, positive(unit: Unit)))
+      assert_ok(apply_pattern(1, positive(_)))
+      assert_ok(apply_pattern(1, positive(_1: Unit)))
+      assert_ok(apply_pattern(5, at_least(2)))
+      assert_ok(apply_pattern(5, at_least(2, _1: Unit)))
+      do::<Result> {
+        (observed_6_0, observed_6_1) =? apply_pattern(((), 3), (_1: Unit, _2))
+        assert_eq((), observed_6_0)
+        assert_eq(3, observed_6_1)
+      }
+    }
+  }
+
+  it("matches the whole Result input unless the Pattern selects Ok") {
+    do::<Result> {
+      assert_ok_eq(Ok(3), apply_pattern(Ok(3), _1))
+      assert_ok_eq(3, apply_pattern(Ok(3), Ok(_1)))
+      source = PatternProbe::source(0)
+      assert_ok(apply_pattern(source, Err(_)))
+    }
+  }
+
+  it("keeps ordinary bindings local to the matching operation") {
+    temporary = 99
+    do::<Result> {
+      assert_ok_eq(20, apply_pattern([10, 20], [temporary, _1: Int]))
+      assert_eq(99, temporary)
+    }
+  }
+
+  it("resolves pre-arguments and pins in the outer scope") {
+    amount = 10
+    do::<Result> {
+      assert_ok_eq(13, apply_pattern((2, 10, 3), (amount, ^amount, offset(amount, _1))))
+      assert_eq(10, amount)
+      runner = make_runner(amount)
+      assert_ok_eq(13, runner(3))
+    }
+  }
+
+  it("applies captured local ExtractorClosure values") {
+    ext = ClosureProbe::make_threshold(2)
+    do::<Result> {
+      assert_ok_eq(3, apply_pattern(3, ext(_1: Int)))
+      assert_true(is_match(apply_pattern(1, ext(_1)), Err(_)))
+      shift = 10
+      multiple = *{|amount: Int, value: Int| MatchResult::Ok((value + amount + shift, value))}
+      do::<Result> {
+        (observed_7_0, observed_7_1) =? apply_pattern(3, multiple(2, _2, _1))
+        assert_eq(3, observed_7_0)
+        assert_eq(15, observed_7_1)
+      }
+    }
+  }
+
+  it("preserves the failing Extractor error and cause chain") {
+
+    do::<Result> {
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], apply_pattern(0, nested_checked(_1)))
+      ext = ClosureProbe::make_checked()
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], apply_pattern(0, ext(_1)))
+
+      assert_stdout_eq([])
+      assert_cause_chain([ExtractorContextError, ExtractorSourceError], apply_pattern((3, 0), (_1, nested_checked(_))))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("returns ordinary mismatch errors without publishing partial projections") {
+    do::<Result> {
+      assert_true(is_match(apply_pattern(3, 4), Err(_)))
+      assert_true(is_match(apply_pattern([1], [_1, 2]), Err(_)))
+      assert_true(is_match(apply_pattern(Option::None, Option::Some(_1: Int)), Err(_)))
+      assert_true(is_match(apply_pattern((3, 4), (_1, 5)), Err(_)))
+    }
+  }
+
+  it("preserves existing ordinary Pattern failure kinds") {
+    do::<Result> {
+      match apply_pattern(3, 4) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
+      assert_err_kind(IndexOutOfBounds, apply_pattern([1], [_, _] @ _1: List<Int>))
+      assert_err_kind(IndexOutOfBounds, apply_pattern([1, 2, 3], [_1, _]))
+      assert_err_kind(EmptyList, apply_pattern([], [_1: Int, .._]))
+      match apply_pattern([2, 3], [1, _1]) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
+      match apply_pattern([2, 3, 4], [1, _1]) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
+      match apply_pattern(Option::None, Option::Some(_1: Int)) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
+    }
+  }
+
+  it("evaluates input pre-arguments and each body exactly once") {
+
+    do::<Result> {
+      assert_ok_eq(5, apply_pattern(note("input", 5), observed_between(note("min", 2), note("max", 8), _1)))
+      assert_stdout_eq(["input", "min", "max", "body:5"])
+    }
+  }
+
+  it("skips later occurrences and pre-arguments after failure") {
+
+    do::<Result> {
+      assert_true(is_match(apply_pattern((0, 5), (positive(), observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
+      assert_stdout_eq([])
+      assert_true(is_match(apply_pattern((3, 5), (4, observed_between(note("min", 2), note("max", 8), _1))), Err(_)))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("continues a non-Result callable after failure") {
+
+    do::<Result> {
+      assert_eq(4, continue_after_failure(3))
+      assert_stdout_eq(["after-failure"])
+    }
+  }
+
+  it("keeps nested apply_pattern failures inside their returned Result") {
+    do::<Result> {
+      assert_ok(apply_pattern(1, supply(apply_pattern(3, 4), Err(_))))
+      assert_ok_eq(3, apply_pattern(1, supply(apply_pattern(3, _1), Ok(_1))))
+    }
+  }
+
+  it("uses a do pre-argument's own failure target") {
+    do::<Result> {
+      assert_ok(apply_pattern(1, supply(do::<Result> {
+        accepted =? PatternProbe::source(0)
+        Ok(accepted)
+      }, Err(_))))
+      assert_ok_eq(3, apply_pattern(1, supply(do::<Result> {
+        accepted =? PatternProbe::source(3)
+        Ok(accepted)
+      }, Ok(_1))))
+    }
+  }
+
+  it("keeps failure local inside a do Alternative SafeBind input") {
+    do::<Result> {
+      assert_some_eq(7, do::<Option> {
+        False =? is_match(apply_pattern(3, 4), Ok(_))
+        Option::Some(7)
+      })
+      assert_some_eq(7, do::<Option> {
+        False =? is_match(apply_pattern(0, positive()), Ok(_))
+        Option::Some(7)
+      })
+    }
+  }
+
+  it("separates pipe Expr slots from Pattern projection slots") {
+    do::<Result> {
+      assert_ok_eq(5, 3 |> apply_pattern(offset(2, _1)))
+      assert_ok_eq(5, 3 |> apply_pattern(_1, offset(2, _1)))
+      assert_ok_eq(5, Kernel::apply_pattern(3, offset(2, _1)))
+    }
+  }
+
+  it("preserves Regex is_match ordinary call and capture") {
+    re =? Regex::compile("^issue-[0-9]+$")
+    text = "issue-42"
+    do::<Result> {
+      assert_true(Regex::is_match(re, text))
+      matches: (Regex, String -> Boolean) = &Regex::is_match
+      assert_true(matches(re, text))
+      assert_false(matches(re, "no-match"))
+      describe_match = &Regex::is_match(re, &1)
+      assert_true(describe_match("issue-42"))
+      describe_projection = &apply_pattern(&1, _1: Int)
+      assert_ok_eq(3, describe_projection(3))
+    }
+  }
+}
