@@ -530,7 +530,7 @@ Project::config({|config|
         Some(2),
         r#"type Alias = (Int -> Int)
 
-deftrait Show {
+deftrait Present {
   def show(self: Self) -> String
 }
 "#
@@ -546,9 +546,9 @@ deftrait Show {
 
     for (name, identity, kind) in [
         ("Alias", TypeIdentity::Sig, CompletionKind::TypePath),
-        ("Show", TypeIdentity::Trait, CompletionKind::TypePath),
+        ("Present", TypeIdentity::Trait, CompletionKind::TypePath),
         (
-            "Show::show",
+            "Present::show",
             TypeIdentity::Trait,
             CompletionKind::FunctionCall,
         ),
@@ -574,8 +574,15 @@ fn analysis_service_project_context_resolves_symbols_from_runner_module_stage() 
     let helper_path = src.join("helper.srt");
     let main_path = src.join("main.srt");
     let project_file = root.join("project.srt");
-    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
-        .expect("write helper");
+    let extra_declarations = (0..32)
+        .map(|index| format!("def extra_{index}() -> Int {{ {index} }}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        &helper_path,
+        format!("defmod Helper {{ def helper() -> Int {{ 1 }}\n{extra_declarations} }}"),
+    )
+    .expect("write helper");
     std::fs::write(
         &main_path,
         "import Helper::helper\ndefmod Main { def main() -> Int { helper() } }",
@@ -621,6 +628,30 @@ Project::config({|config|
 
     let snapshot = service.analyze(context);
     let diagnostics = service.diagnostics(&snapshot);
+    let resolved = snapshot
+        .resolved
+        .as_ref()
+        .unwrap_or_else(|| panic!("resolved project: {diagnostics:?}"));
+    let declaration_ids = resolved
+        .iter()
+        .filter_map(|node| match node {
+            sigil::resolved::Resolved::Def(_, id, ..) => Some((id.unique_id, id)),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for node in resolved {
+        if let sigil::resolved::Resolved::Def(_, function, _, parameters, ..) = node {
+            for parameter in parameters {
+                assert!(
+                    !declaration_ids.contains_key(&parameter.id.unique_id),
+                    "local parameter {} in {:?} collides with declaration {:?}",
+                    parameter.id.unique_id,
+                    function.qualified_name,
+                    declaration_ids.get(&parameter.id.unique_id)
+                );
+            }
+        }
+    }
 
     assert!(
         diagnostics
@@ -1961,5 +1992,90 @@ fn analysis_service_enum_constructor_definition_points_to_the_variant() {
     assert_eq!(
         locations[0].range.start.character,
         source.find("First(Int)").unwrap() as u32
+    );
+}
+
+#[test]
+fn analysis_service_standalone_uses_standard_autoimports_and_explicit_imports() {
+    for source in [
+        "print(to_string(List::len([1, 2])))",
+        "import Encode\nvalue = encode::<JsonValue>(1)",
+    ] {
+        let mut service = AnalysisService::new();
+        let path = PathBuf::from("/repo/main.srt");
+        service.update_document(path.clone(), Some(1), source.to_string());
+        let context = resolve_context(AnalysisContextRequest {
+            workspace_root: PathBuf::from("/repo"),
+            active_file: path.clone(),
+            selected_context: Some(SelectedContext::ScriptEntry(path)),
+            runner_selection: None,
+            open_documents: service.document_store().open_document_versions(),
+        });
+        let snapshot = service.analyze(context);
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{source}: {:?}",
+            snapshot.diagnostics
+        );
+        assert!(snapshot.typed.is_some(), "{source}");
+    }
+}
+
+#[test]
+fn analysis_service_standalone_rejects_unimported_standard_member() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(
+        path.clone(),
+        Some(1),
+        "value = encode::<JsonValue>(1)".to_string(),
+    );
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    assert!(
+        snapshot.diagnostics.iter().any(|diagnostic| diagnostic.kind
+            == AnalysisDiagnosticKind::Resolve
+            && diagnostic.message.contains("encode")),
+        "{:?}",
+        snapshot.diagnostics
+    );
+}
+
+#[test]
+fn analysis_service_standard_development_uses_current_document() {
+    let spec = sindr::stdlib::stdlib_module_specs(sindr::stdlib::StdlibVariant::Default)
+        .find(|spec| spec.file_name == "kernel.srt")
+        .unwrap();
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/lib/kernel.srt");
+    service.update_document(
+        path.clone(),
+        Some(1),
+        format!(
+            "{}\ndefmod AnalysisProbe {{ def probe() -> Int {{ missing_name }} }}",
+            spec.source
+        ),
+    );
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::StdlibDevelopment),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    assert!(
+        snapshot.diagnostics.iter().any(|diagnostic| diagnostic.kind
+            == AnalysisDiagnosticKind::Resolve
+            && diagnostic.path == path
+            && diagnostic.message.contains("missing_name")),
+        "{:?}",
+        snapshot.diagnostics
     );
 }

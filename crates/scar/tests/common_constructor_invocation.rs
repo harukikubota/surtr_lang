@@ -17,7 +17,7 @@ const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
     constructor_case!(arrow_uses_fixed_facet_path_contract),
     constructor_case!(trait_result_conflict_preserves_expected_and_actual_direction),
     constructor_case!(custom_functor_returns_follow_the_shared_plain_inference_policy),
-    constructor_case!(one_registered_carrier_is_not_constructor_inference_evidence),
+    constructor_case!(registered_carriers_do_not_supply_constructor_inference_evidence),
     constructor_case!(generic_receiverless_family_helpers_use_expected_return),
     constructor_case!(generic_constructor_trait_wrappers_specialize_all_method_roles),
     constructor_case!(monadt_lift_uses_trait_target_and_value_arguments_together),
@@ -153,19 +153,20 @@ impl Functor for Boxed<$T> {
     }
 }
 
-fn one_registered_carrier_is_not_constructor_inference_evidence() {
+fn registered_carriers_do_not_supply_constructor_inference_evidence() {
     let definitions = r#"
-deftrait Functor where Self: Type<$A> {
-    def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
-}
-deftrait Monad where Self: Functor {
-    def return::<Self>(value: $A) -> Self<$A>
-    def bind(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
-}
 defenum Boxed<$T> { Box($T) }
 impl Functor for Boxed<$T> {
     def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
         match self { Boxed::Box(value) => Boxed::Box(mapper(value)) }
+    }
+}
+impl Applicative for Boxed<$T> {
+    def pure::<Boxed<$T>>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+    def ap(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
+        match mapper {
+            Boxed::Box(f) => match value { Boxed::Box(item) => Boxed::Box(f(item)) }
+        }
     }
 }
 impl Monad for Boxed<$T> {
@@ -178,7 +179,7 @@ impl Monad for Boxed<$T> {
     let check = |tail| {
         let source = format!("{definitions}\n{tail}");
         let ast = spire::parse_with_context(&source, spire::ParserContext::project(0)).unwrap();
-        scar::typecheck(sigil::resolve(ast).unwrap())
+        support::typecheck(support::resolve_ast_with_builtin_prelude(ast).unwrap())
     };
     let error = check("value = Monad::return(1) |>= {|x| Monad::return(x)}")
         .expect_err("registration count supplies no source-level carrier evidence");
@@ -224,7 +225,7 @@ impl Family for Boxed<$T> {
     ] {
         let source = format!("{definitions}\nvalue: Boxed<Int> = {expression}");
         let ast = spire::parse_with_context(&source, spire::ParserContext::project(0)).unwrap();
-        scar::typecheck(sigil::resolve(ast).unwrap())
+        support::typecheck(support::resolve_ast_with_builtin_prelude(ast).unwrap())
             .expect("receiverless helpers are signature-driven");
     }
 }

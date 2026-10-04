@@ -1365,8 +1365,11 @@ mod applicability_tests {
 
     fn checker(source: &str) -> Checker {
         let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
-        let resolved = sigil::resolve(ast).unwrap();
-        let mut checker = Checker::new(TypecheckContext::default());
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
         checker.check_program(resolved).unwrap();
         checker
     }
@@ -1375,8 +1378,6 @@ mod applicability_tests {
     fn derived_method_keeps_a_synthetic_contract_identity() {
         let mut checker = checker(
             r#"
-deftrait Default { def default::<Self>() -> Self }
-impl Default for Int { def default::<Int>() -> Int { 0 } }
 @derive Default
 defstruct Wrapped { value: Int }
 impl Wrapped { def new(value: Int) -> Wrapped { Wrapped { value: value } } }
@@ -1542,8 +1543,11 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
     fn method_target_uses_the_original_declaration_index() {
         let source = "deftrait Only { def value(self: Self) -> Int }\nimpl Only for List<$A> { def value(self: Self) -> Int { 1 } }\n";
         let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
-        let resolved = sigil::resolve(ast).unwrap();
-        let mut checker = Checker::new(TypecheckContext::default());
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
         let typed = checker.check_program(resolved).unwrap();
         let key = checker.trait_impl_candidate_keys("Only").pop().unwrap();
         let method = checker.trait_impls[&key].methods["value"].clone();

@@ -38,6 +38,8 @@ Surtr の標準定義ソースは language surface の一部です。
 
 ## auto import されるもの
 
+通常の実行・解析・REPL は同じ標準環境を前提とし、auto import を無効にする実行モードはありません。明示 import が必要な定義は、引き続き import して使います。
+
 auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface / 標準 trait です。  
 それ以外の標準定義ソースは同梱されますが、名前空間としては明示 import 前提です。
 

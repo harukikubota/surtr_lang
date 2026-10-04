@@ -74,13 +74,11 @@ fn canonical_result_shape_rejects_missing_or_extra_success_slots() {
         "@builtin defenum Result { Ok(Int), Err(Error) }",
         "@builtin defenum Result<$T, $U> { Ok($T), Err(Error) }",
     ] {
-        let ast = spire::parse_with_context(
+        let result_source = include_str!("../../../lib/types/result.srt").replace(
+            "@builtin\ndefenum Result<$T> {\n  Ok($T),\n  Err(Error),\n}",
             declaration,
-            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
-        )
-        .unwrap();
-        let resolved = sigil::resolve(ast).unwrap();
-        let error = scar::typecheck(resolved)
+        );
+        let error = support::typecheck_std_modules_with_overrides(&[("Result", &result_source)])
             .expect_err("the canonical Result shape must be validated before slot registration");
         assert!(
             error.message.contains("Builtin Result enum must match"),

@@ -1,7 +1,13 @@
-use super::scope_init::initialize_scope;
+use super::imports::{apply_session_imports, ImportState};
 use super::*;
-use super::{assign_declaration_uids, declaration_uid_kind_map};
 use sindr::warning::PhaseOutput;
+
+/// Names exposed by explicit imports in the last successfully resolved chunk.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedImports {
+    pub imported_symbols: Vec<String>,
+    pub success_labels: Vec<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct SigilCheckpoint {
@@ -12,6 +18,11 @@ pub struct SigilCheckpoint {
     declaration_hidden_by_uid: HashMap<u32, bool>,
     trait_constructor_slots: HashMap<u32, Vec<String>>,
     owner_registry: OwnerRegistry,
+    import_state: ImportState,
+    explicit_function_imports: Vec<ExplicitFunctionImport>,
+    effective_auto_import_fq_names: Vec<String>,
+    shadowed_auto_import_bindings: Vec<(String, u32)>,
+    last_imports: ResolvedImports,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +35,13 @@ pub struct SigilSession {
     trait_constructor_slots: HashMap<u32, Vec<String>>,
     owner_registry: OwnerRegistry,
     current_module_path: Option<String>,
+    auto_import_modules: Vec<AutoImportModule>,
+    current_stage_index: usize,
+    import_state: ImportState,
+    explicit_function_imports: Vec<ExplicitFunctionImport>,
+    effective_auto_import_fq_names: Vec<String>,
+    shadowed_auto_import_bindings: Vec<(String, u32)>,
+    last_imports: ResolvedImports,
 }
 
 impl SigilSession {
@@ -62,21 +80,50 @@ impl SigilSession {
         Ok(())
     }
 
-    pub fn new() -> Self {
-        Self::with_module_path(None)
+    pub fn from_environment(
+        environment: &ResolveEnvironment,
+        current_module_path: Option<String>,
+        resume_state: ResolveResumeState,
+    ) -> Result<Self, ResolveError> {
+        let build = build_module_scope_with_imports(
+            &environment.global_scope,
+            &environment.auto_import_modules,
+            &environment.declaration_index,
+            &environment.declaration_uids,
+            &[],
+            current_module_path.as_deref(),
+            environment.stage_count,
+        )?;
+        let mut scope = build.scope;
+        let declaration_end = environment
+            .declaration_uids
+            .values()
+            .copied()
+            .max()
+            .map(|uid| uid + 1)
+            .unwrap_or(scope.next_id());
+        scope.advance_next_id_to(declaration_end.max(resume_state.next_local_id));
+        Ok(Self {
+            scope,
+            declaration_entries: environment.declaration_index.clone().into_iter().collect(),
+            declaration_uids: environment.declaration_uids.clone(),
+            declaration_uid_kinds: environment.declaration_uid_kinds.clone(),
+            declaration_hidden_by_uid: environment.declaration_hidden_by_uid.clone(),
+            trait_constructor_slots: environment.trait_constructor_slots.clone(),
+            owner_registry: environment.owner_registry.clone(),
+            current_module_path,
+            auto_import_modules: environment.auto_import_modules.clone(),
+            current_stage_index: environment.stage_count,
+            import_state: build.import_state,
+            explicit_function_imports: Vec::new(),
+            effective_auto_import_fq_names: build.effective_auto_import_fq_names,
+            shadowed_auto_import_bindings: build.shadowed_auto_import_bindings,
+            last_imports: ResolvedImports::default(),
+        })
     }
 
-    pub fn with_module_path(current_module_path: Option<String>) -> Self {
-        Self {
-            scope: initialize_scope(),
-            declaration_entries: HashMap::new(),
-            declaration_uids: HashMap::new(),
-            declaration_uid_kinds: HashMap::new(),
-            declaration_hidden_by_uid: HashMap::new(),
-            trait_constructor_slots: HashMap::new(),
-            owner_registry: OwnerRegistry::default(),
-            current_module_path,
-        }
+    pub fn last_imports(&self) -> &ResolvedImports {
+        &self.last_imports
     }
 
     pub fn resolve(&mut self, ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
@@ -98,7 +145,19 @@ impl SigilSession {
         let chunk_registry = precollect_owner_registry(&[owner_modules])?;
         let mut owner_registry = self.owner_registry.clone();
         owner_registry.merge(&chunk_registry)?;
-        let mut resolver = Resolver::with_scope(self.scope.clone());
+        let declaration_index = self.declaration_entries.clone().into_iter().collect();
+        let import_build = apply_session_imports(
+            self.scope.clone(),
+            &self.auto_import_modules,
+            &declaration_index,
+            &self.declaration_uids,
+            &ast,
+            self.current_stage_index,
+            self.import_state.clone(),
+            self.effective_auto_import_fq_names.clone(),
+            self.shadowed_auto_import_bindings.clone(),
+        )?;
+        let mut resolver = Resolver::with_scope(import_build.scope);
         resolver.declaration_entries = self.declaration_entries.clone();
         resolver.declaration_uids = self.declaration_uids.clone();
         resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
@@ -107,8 +166,11 @@ impl SigilSession {
         resolver.owner_registry = owner_registry;
         resolver.current_module_path = self.current_module_path.clone();
         resolver.allow_top_level_shadowing = true;
-        let resolved = resolver.resolve_program(ast)?;
-        let warnings = warnings::collect_resolution_warnings(&resolved, &[]);
+        let resolved = resolver.resolve_program(import_build.program)?;
+        let warnings = warnings::collect_resolution_warnings(
+            &resolved,
+            &import_build.explicit_function_imports,
+        );
         self.declaration_uids = resolver.declaration_uids.clone();
         self.declaration_entries = resolver.declaration_entries.clone();
         self.declaration_uid_kinds = resolver.declaration_uid_kinds.clone();
@@ -116,6 +178,12 @@ impl SigilSession {
         self.trait_constructor_slots = resolver.trait_constructor_slots.clone();
         self.owner_registry = resolver.owner_registry.clone();
         self.scope = resolver.into_scope();
+        self.import_state = import_build.import_state;
+        self.explicit_function_imports
+            .extend(import_build.explicit_function_imports);
+        self.effective_auto_import_fq_names = import_build.effective_auto_import_fq_names;
+        self.shadowed_auto_import_bindings = import_build.shadowed_auto_import_bindings;
+        self.last_imports = import_build.import_result;
         Ok(PhaseOutput::new(resolved, warnings))
     }
 
@@ -128,6 +196,11 @@ impl SigilSession {
             declaration_hidden_by_uid: self.declaration_hidden_by_uid.clone(),
             trait_constructor_slots: self.trait_constructor_slots.clone(),
             owner_registry: self.owner_registry.clone(),
+            import_state: self.import_state.clone(),
+            explicit_function_imports: self.explicit_function_imports.clone(),
+            effective_auto_import_fq_names: self.effective_auto_import_fq_names.clone(),
+            shadowed_auto_import_bindings: self.shadowed_auto_import_bindings.clone(),
+            last_imports: self.last_imports.clone(),
         }
     }
 
@@ -139,52 +212,11 @@ impl SigilSession {
         self.declaration_hidden_by_uid = checkpoint.declaration_hidden_by_uid;
         self.trait_constructor_slots = checkpoint.trait_constructor_slots;
         self.owner_registry = checkpoint.owner_registry;
-    }
-
-    pub fn replace_scope(&mut self, scope: Scope) {
-        self.scope = scope;
-    }
-
-    pub fn replace_scope_with_declarations(
-        &mut self,
-        mut scope: Scope,
-        declaration_index: &DeclarationIndex,
-    ) {
-        let declaration_uids = assign_declaration_uids(declaration_index);
-        let next_local_id = declaration_uids
-            .values()
-            .copied()
-            .max()
-            .map(|uid| uid.saturating_add(1))
-            .unwrap_or_else(|| scope.next_id());
-        scope.advance_next_id_to(next_local_id);
-        self.declaration_entries = declaration_index.clone().into_iter().collect();
-        let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
-        let declaration_hidden_by_uid = declaration_index
-            .iter()
-            .filter_map(|(fq_name, entry)| {
-                declaration_uids
-                    .get(fq_name)
-                    .copied()
-                    .map(|uid| (uid, entry.hidden))
-            })
-            .collect::<HashMap<_, _>>();
-        self.scope = scope;
-        self.declaration_uids = declaration_uids;
-        self.declaration_uid_kinds = declaration_uid_kinds;
-        self.declaration_hidden_by_uid = declaration_hidden_by_uid;
-    }
-
-    pub fn replace_scope_with_precollected_declarations(
-        &mut self,
-        scope: Scope,
-        precollected: &PrecollectedDeclarations,
-        module_stages: &[Vec<StagedModuleAst>],
-    ) {
-        self.replace_scope_with_declarations(scope, &precollected.declaration_index);
-        self.trait_constructor_slots =
-            super::collect_staged_trait_constructor_slots(module_stages, &self.declaration_uids);
-        self.owner_registry = precollected.owner_registry.clone();
+        self.import_state = checkpoint.import_state;
+        self.explicit_function_imports = checkpoint.explicit_function_imports;
+        self.effective_auto_import_fq_names = checkpoint.effective_auto_import_fq_names;
+        self.shadowed_auto_import_bindings = checkpoint.shadowed_auto_import_bindings;
+        self.last_imports = checkpoint.last_imports;
     }
 
     pub fn owner_registry(&self) -> &OwnerRegistry {
@@ -210,12 +242,12 @@ impl SigilSession {
                     .map(|entry| (*uid, entry))
             })
             .collect::<HashMap<_, _>>();
-        collect_effective_visible_entries(&self.scope, &entries_by_uid, &[], &[], &[])
-    }
-}
-
-impl Default for SigilSession {
-    fn default() -> Self {
-        Self::new()
+        collect_effective_visible_entries(
+            &self.scope,
+            &entries_by_uid,
+            &self.explicit_function_imports,
+            &self.effective_auto_import_fq_names,
+            &self.shadowed_auto_import_bindings,
+        )
     }
 }

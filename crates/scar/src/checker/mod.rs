@@ -839,6 +839,8 @@ fn initialize_env() -> TypeEnv {
         );
     }
 
+    // Only compiler-generated runtime helpers are bound before standard declarations.
+    // Public builtin functions get their UID and type from the standard source.
     for (uid, meta) in sigil::resolver::compiler_builtin_bindings() {
         let ty = builtin_ty_from_meta(meta, &mut env);
         env.bind_var(uid, ty);

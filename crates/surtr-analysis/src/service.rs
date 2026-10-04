@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use sindr::names::FacetRootKind;
 use sindr::policy::{CompileUnitKind, SourceKind};
@@ -177,10 +177,13 @@ impl AnalysisService {
         let mut syntax_outline = Vec::new();
 
         let ast = if let Some(document) = active_document.as_ref() {
-            let module_path = module_path_for_document(
-                context.context.mode.clone(),
-                &context.context.active_file,
-            );
+            let module_path = if context.context.source_kind == SourceKind::StdDefinitionSource {
+                standard_module_spec_for_path(&context, &context.context.active_file)
+                    .filter(|spec| spec.module_path == "Facet")
+                    .map(|spec| spec.module_path.to_string())
+            } else {
+                module_path_for_document(context.context.mode.clone(), &context.context.active_file)
+            };
             let compile_unit_kind = compile_unit_kind_for_active_context(&context);
             let tolerant = parse_document_tolerant(
                 &document.text,
@@ -203,27 +206,16 @@ impl AnalysisService {
                 Ok(ast) => {
                     semantic_index =
                         semantic_index_with_source_locations(&semantic_index, &document.path, &ast);
-                    if should_analyze_project_stages(&context) {
-                        analyze_project_stages(
-                            self,
-                            &context,
-                            document,
-                            Some(&ast),
-                            &mut diagnostics,
-                            &mut resolved,
-                            &mut typed,
-                            &mut semantic_index,
-                        );
-                    } else {
-                        analyze_single_document(
-                            &context,
-                            document,
-                            ast.clone(),
-                            &mut diagnostics,
-                            &mut resolved,
-                            &mut typed,
-                        );
-                    }
+                    analyze_stages(
+                        self,
+                        &context,
+                        document,
+                        Some(&ast),
+                        &mut diagnostics,
+                        &mut resolved,
+                        &mut typed,
+                        &mut semantic_index,
+                    );
                     Some(ast)
                 }
                 Err(error) => {
@@ -251,7 +243,7 @@ impl AnalysisService {
                         }));
                     }
                     if should_analyze_project_stages(&context) {
-                        analyze_project_stages(
+                        analyze_stages(
                             self,
                             &context,
                             document,
@@ -971,44 +963,76 @@ fn qualify_symbol(owner: Option<&str>, name: &str) -> String {
     sindr::names::surface_rendered_name(&qualified)
 }
 
-fn analyze_single_document(
-    context: &ResolvedAnalysisContext,
-    document: &DocumentSnapshot,
-    ast: Vec<Ast>,
-    diagnostics: &mut Vec<AnalysisDiagnostic>,
-    resolved: &mut Option<Vec<sigil::resolved::Resolved>>,
-    typed: &mut Option<Vec<scar::typed::TypedNode>>,
-) {
-    match sigil::resolve(ast) {
-        Ok(resolved_nodes) => {
-            match scar::typecheck_with_context(
-                resolved_nodes.clone(),
-                typecheck_context_for_analysis(context),
-            ) {
-                Ok(typed_nodes) => *typed = Some(typed_nodes),
-                Err(error) => diagnostics.push(diagnostic_from_span(
-                    AnalysisDiagnosticKind::Typecheck,
-                    AnalysisSeverity::Error,
-                    document,
-                    error.span.start,
-                    error.span.end,
-                    error.message,
-                )),
-            }
-            *resolved = Some(resolved_nodes);
-        }
-        Err(error) => diagnostics.push(diagnostic_from_span(
-            AnalysisDiagnosticKind::Resolve,
-            AnalysisSeverity::Error,
-            document,
-            error.span.start,
-            error.span.end,
-            error.message,
-        )),
-    }
+struct AnalysisStandardEnvironment {
+    module_stages: Vec<Vec<sigil::StagedModuleAst>>,
+    source_asts: Vec<(PathBuf, Vec<Ast>)>,
+    resolved: Vec<sigil::resolved::Resolved>,
+    typed: Vec<scar::typed::TypedNode>,
+    resolve_state: sigil::ResolveResumeState,
+    scar_checkpoint: scar::ScarCheckpoint,
 }
 
-fn analyze_project_stages(
+fn standard_environment() -> Result<&'static AnalysisStandardEnvironment, &'static String> {
+    static STANDARD: OnceLock<Result<AnalysisStandardEnvironment, String>> = OnceLock::new();
+    STANDARD
+        .get_or_init(|| {
+            let mut module_stages = vec![Vec::new(), Vec::new()];
+            let mut source_asts = Vec::new();
+            let mut source_indices = [0, 0];
+            for spec in sindr::stdlib::stdlib_module_specs(sindr::stdlib::StdlibVariant::Default) {
+                let stage = usize::from(spec.stage != sindr::stdlib::StdlibStage::Bootstrap);
+                let ast = parse_document(
+                    spec.source,
+                    0,
+                    SourceKind::StdDefinitionSource,
+                    CompileUnitKind::DefinitionCheck,
+                    (spec.module_path == "Facet").then(|| spec.module_path.to_string()),
+                )
+                .map_err(|error| format!("{}: {}", spec.file_name, error.message()))?;
+                let fallback = sigil::const_only_fallback_module_path(&ast, Some(spec.module_path));
+                let modules = sigil::staged_modules_from_source_ast(ast.clone(), fallback);
+                for mut module in modules {
+                    module.source_index = source_indices[stage];
+                    module_stages[stage].push(module);
+                }
+                source_indices[stage] += 1;
+                source_asts.push((PathBuf::from("<stdlib>").join(spec.file_name), ast));
+            }
+            let declarations =
+                sigil::precollect_declarations(&module_stages).map_err(|error| error.message)?;
+            let program = sigil::resolve_staged_program_with_state(
+                &module_stages,
+                Vec::new(),
+                &declarations.declaration_index,
+                None,
+            )
+            .map_err(|error| error.message)?;
+            let resolved = program.resolved.clone();
+            let resolve_state = program.resume_state;
+            let mut scar = scar::ScarSession::new();
+            let typed = scar
+                .typecheck_staged_program_in_place_with_context(
+                    program,
+                    scar::TypecheckContext::from_source_policy(
+                        SourceKind::StdDefinitionSource
+                            .policy(CompileUnitKind::DefinitionCheck, None),
+                    ),
+                )
+                .map_err(|error| error.message)?
+                .nodes;
+            Ok(AnalysisStandardEnvironment {
+                module_stages,
+                source_asts,
+                resolved,
+                typed,
+                resolve_state,
+                scar_checkpoint: scar.checkpoint(),
+            })
+        })
+        .as_ref()
+}
+
+fn analyze_stages(
     service: &AnalysisService,
     context: &ResolvedAnalysisContext,
     active_document: &DocumentSnapshot,
@@ -1018,13 +1042,35 @@ fn analyze_project_stages(
     typed: &mut Option<Vec<scar::typed::TypedNode>>,
     semantic_index: &mut SemanticIndex,
 ) {
-    let Some(runner) = context.runner.as_ref() else {
-        return;
+    let source_stages = analysis_source_stages(context);
+    // A cached prefix's local IDs begin after its complete declaration index.
+    // Additional stages extend that index, so they must resolve and typecheck
+    // the standard prefix together with the project to keep IDs disjoint.
+    let standard = if context.context.source_kind == SourceKind::StdDefinitionSource
+        || source_stages.len() != 2
+    {
+        None
+    } else {
+        match standard_environment() {
+            Ok(standard) => Some(standard),
+            Err(message) => {
+                diagnostics.push(AnalysisDiagnostic {
+                    kind: AnalysisDiagnosticKind::Typecheck,
+                    severity: AnalysisSeverity::Error,
+                    path: PathBuf::from("<stdlib>"),
+                    range: None,
+                    message: message.clone(),
+                    related: Vec::new(),
+                });
+                return;
+            }
+        }
     };
     let Some(module_stages) = build_staged_modules(
         service,
         context,
-        runner,
+        &source_stages,
+        standard,
         active_document,
         diagnostics,
         semantic_index,
@@ -1046,14 +1092,26 @@ fn analyze_project_stages(
         &visible_ast,
         current_module_path.as_deref(),
     );
-    let user_ast = project_user_ast_for_active_document(context, active_ast);
+    let active_is_stage = source_stages.iter().any(|stage| {
+        stage
+            .files
+            .iter()
+            .any(|file| file.path == active_document.path)
+    });
+    let user_ast = if active_is_stage {
+        Vec::new()
+    } else if context.script_project.is_some() {
+        project_user_ast_for_active_document(context, active_ast)
+    } else {
+        active_ast.unwrap_or(&[]).to_vec()
+    };
 
     let prefix_declarations = match sigil::precollect_declarations(&module_stages) {
         Ok(precollected) => precollected,
         Err(error) => {
             diagnostics.push(diagnostic_from_project_resolve_error(
                 service,
-                runner,
+                &source_stages,
                 active_document,
                 &error,
             ));
@@ -1066,7 +1124,7 @@ fn analyze_project_stages(
             Err(error) => {
                 diagnostics.push(diagnostic_from_project_resolve_error(
                     service,
-                    runner,
+                    &source_stages,
                     active_document,
                     &error,
                 ));
@@ -1082,22 +1140,36 @@ fn analyze_project_stages(
         &module_stages,
         &visible_ast,
         current_module_path.as_deref(),
-        active_stage_index_for_document(runner, active_document),
+        active_stage_index_for_document(&source_stages, active_document),
     );
 
-    match sigil::resolve_staged_program_with_state(
+    match sigil::resolve_staged_program_from_state(
         &module_stages,
         user_ast,
         &prefix_declarations.declaration_index,
         None,
+        standard.map_or(0, |prefix| prefix.module_stages.len()),
+        standard.map_or_else(sigil::ResolveResumeState::default, |prefix| {
+            prefix.resolve_state
+        }),
     ) {
         Ok(resolved_program) => {
-            let resolved_nodes = resolved_program.resolved.clone();
-            match scar::typecheck_staged_program_with_context(
+            let mut resolved_nodes =
+                standard.map_or_else(Vec::new, |prefix| prefix.resolved.clone());
+            resolved_nodes.extend(resolved_program.resolved.clone());
+            let mut scar = scar::ScarSession::new();
+            if let Some(prefix) = standard {
+                scar.rollback(prefix.scar_checkpoint.clone());
+            }
+            match scar.typecheck_staged_program_in_place_with_context(
                 resolved_program,
                 typecheck_context_for_analysis(context),
             ) {
-                Ok(typed_program) => *typed = Some(typed_program.nodes),
+                Ok(typed_program) => {
+                    let mut nodes = standard.map_or_else(Vec::new, |prefix| prefix.typed.clone());
+                    nodes.extend(typed_program.nodes);
+                    *typed = Some(nodes);
+                }
                 Err(error) => diagnostics.push(diagnostic_from_span(
                     AnalysisDiagnosticKind::Typecheck,
                     AnalysisSeverity::Error,
@@ -1211,11 +1283,10 @@ fn semantic_index_with_declarations(
 }
 
 fn active_stage_index_for_document(
-    runner: &crate::RunnerContext,
+    source_stages: &[crate::ModuleStage],
     active_document: &DocumentSnapshot,
 ) -> usize {
-    runner
-        .module_stages
+    source_stages
         .iter()
         .enumerate()
         .find_map(|(stage_index, stage)| {
@@ -1225,7 +1296,7 @@ fn active_stage_index_for_document(
                 .any(|file| file.path == active_document.path)
                 .then_some(stage_index)
         })
-        .unwrap_or_else(|| runner.module_stages.len().saturating_sub(1))
+        .unwrap_or(source_stages.len())
 }
 
 fn completion_module_path_for_ast(ast: &[Ast]) -> Option<String> {
@@ -1256,39 +1327,95 @@ fn completion_module_path_for_ast(ast: &[Ast]) -> Option<String> {
     (module_paths.len() == 1).then(|| module_paths.into_iter().next().unwrap())
 }
 
+fn analysis_source_stages(context: &ResolvedAnalysisContext) -> Vec<crate::ModuleStage> {
+    use sindr::stdlib::{stdlib_module_specs, StdlibStage, StdlibVariant};
+    let mut stages = vec![crate::ModuleStage { files: Vec::new() }; 2];
+    for spec in stdlib_module_specs(StdlibVariant::Default) {
+        let stage = usize::from(spec.stage != StdlibStage::Bootstrap);
+        let development_path = context
+            .context
+            .workspace_root
+            .join("lib")
+            .join(spec.file_name);
+        let path = if context.context.source_kind == SourceKind::StdDefinitionSource
+            && development_path == context.context.active_file
+        {
+            development_path
+        } else {
+            PathBuf::from("<stdlib>").join(spec.file_name)
+        };
+        stages[stage].files.push(crate::ModuleFileFingerprint {
+            path,
+            source_kind: SourceKind::StdDefinitionSource,
+            content_hash: String::new(),
+        });
+    }
+    if should_analyze_project_stages(context) {
+        stages.extend(
+            context
+                .runner
+                .as_ref()
+                .expect("project stage context has a runner")
+                .module_stages
+                .clone(),
+        );
+    }
+    stages
+}
+
 fn build_staged_modules(
     service: &AnalysisService,
     context: &ResolvedAnalysisContext,
-    runner: &crate::RunnerContext,
+    source_stages: &[crate::ModuleStage],
+    standard: Option<&AnalysisStandardEnvironment>,
     active_document: &DocumentSnapshot,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
     semantic_index: &mut SemanticIndex,
 ) -> Option<Vec<Vec<sigil::StagedModuleAst>>> {
     let compile_unit_kind = compile_unit_kind_for_mode(&context.context.mode);
-    let mut module_stages = Vec::new();
-    for stage in &runner.module_stages {
+    let mut module_stages = standard.map_or_else(Vec::new, |prefix| prefix.module_stages.clone());
+    if let Some(prefix) = standard {
+        for (path, ast) in &prefix.source_asts {
+            *semantic_index = semantic_index_with_source_locations(semantic_index, path, ast);
+        }
+    }
+    for stage in source_stages.iter().skip(module_stages.len()) {
         let mut staged_modules = Vec::new();
         for (source_index, file) in stage.files.iter().enumerate() {
             let Some(source) = source_for_module_file(service, &file.path) else {
                 continue;
             };
+            let standard_module = standard_module_spec_for_path(context, &file.path);
+            let parser_module_path = standard_module
+                .filter(|spec| spec.module_path == "Facet")
+                .map(|spec| spec.module_path.to_string());
             let ast = if file.path == active_document.path {
                 parse_document(
                     &active_document.text,
                     0,
                     file.source_kind,
                     compile_unit_kind,
-                    None,
+                    parser_module_path.clone(),
                 )
             } else {
-                parse_document(&source, 0, file.source_kind, compile_unit_kind, None)
+                parse_document(
+                    &source,
+                    0,
+                    file.source_kind,
+                    compile_unit_kind,
+                    parser_module_path.clone(),
+                )
             };
             match ast {
                 Ok(ast) => {
                     *semantic_index =
                         semantic_index_with_source_locations(semantic_index, &file.path, &ast);
-                    let fallback_module_path =
-                        fallback_module_path_for_const_only_project_file(&file.path, &ast);
+                    let fallback_module_path = if let Some(spec) = standard_module {
+                        sigil::const_only_fallback_module_path(&ast, Some(spec.module_path))
+                            .map(str::to_string)
+                    } else {
+                        fallback_module_path_for_const_only_project_file(&file.path, &ast)
+                    };
                     let mut source_modules =
                         sigil::staged_modules_from_source_ast(ast, fallback_module_path.as_deref());
                     for module in &mut source_modules {
@@ -1319,7 +1446,28 @@ fn build_staged_modules(
     Some(module_stages)
 }
 
+fn standard_module_spec_for_path(
+    context: &ResolvedAnalysisContext,
+    path: &Path,
+) -> Option<&'static sindr::stdlib::StdlibModuleSpec> {
+    let relative = path.strip_prefix("<stdlib>").ok().or_else(|| {
+        (context.context.source_kind == SourceKind::StdDefinitionSource)
+            .then(|| {
+                path.strip_prefix(context.context.workspace_root.join("lib"))
+                    .ok()
+            })
+            .flatten()
+    })?;
+    sindr::stdlib::stdlib_module_specs(sindr::stdlib::StdlibVariant::Default)
+        .find(|spec| Path::new(spec.file_name) == relative)
+}
+
 fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<String> {
+    if let Ok(relative) = path.strip_prefix("<stdlib>") {
+        return sindr::stdlib::stdlib_module_specs(sindr::stdlib::StdlibVariant::Default)
+            .find(|spec| Path::new(spec.file_name) == relative)
+            .map(|spec| spec.source.to_string());
+    }
     service
         .documents
         .get(path)
@@ -1329,15 +1477,14 @@ fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<Stri
 
 fn source_for_resolve_provenance(
     service: &AnalysisService,
-    runner: &RunnerContext,
+    source_stages: &[crate::ModuleStage],
     active_document: &DocumentSnapshot,
     provenance: sigil::error::ResolveSourceProvenance,
 ) -> Option<(PathBuf, String)> {
-    if provenance.stage_index == runner.module_stages.len() && provenance.source_index == 0 {
+    if provenance.stage_index == source_stages.len() && provenance.source_index == 0 {
         return Some((active_document.path.clone(), active_document.text.clone()));
     }
-    let path = runner
-        .module_stages
+    let path = source_stages
         .get(provenance.stage_index)?
         .files
         .get(provenance.source_index)?
@@ -1353,7 +1500,7 @@ fn source_for_resolve_provenance(
 
 fn diagnostic_from_project_resolve_error(
     service: &AnalysisService,
-    runner: &RunnerContext,
+    source_stages: &[crate::ModuleStage],
     active_document: &DocumentSnapshot,
     error: &sigil::error::ResolveError,
 ) -> AnalysisDiagnostic {
@@ -1364,7 +1511,7 @@ fn diagnostic_from_project_resolve_error(
     let Some((primary_path, primary_source)) = primary_label_index
         .and_then(|index| error.related_labels[index].source)
         .and_then(|provenance| {
-            source_for_resolve_provenance(service, runner, active_document, provenance)
+            source_for_resolve_provenance(service, source_stages, active_document, provenance)
         })
     else {
         return diagnostic_from_span(
@@ -1395,7 +1542,7 @@ fn diagnostic_from_project_resolve_error(
         .filter_map(|(_, label)| {
             let provenance = label.source?;
             let (path, source) =
-                source_for_resolve_provenance(service, runner, active_document, provenance)?;
+                source_for_resolve_provenance(service, source_stages, active_document, provenance)?;
             let line_index = LineIndex::new(&source);
             Some(AnalysisDiagnosticRelated {
                 path,
@@ -1694,7 +1841,7 @@ mod tests {
         }
         let mut service = AnalysisService::new();
         service.update_document(path.clone(), Some(1), source.into());
-        service.set_semantic_index(index);
+        service.set_semantic_index(index.clone());
         let query_path = PathBuf::from("/repo/main.srt");
         let queries = sindr::names::SPECIAL_ENUM_VARIANT_METAS
             .iter()
@@ -1708,7 +1855,8 @@ mod tests {
             runner_selection: None,
             open_documents: service.document_store().open_document_versions(),
         });
-        let snapshot = service.analyze(context);
+        let mut snapshot = service.analyze(context);
+        snapshot.semantic_index = index;
         for (index, pair) in queries.chunks_exact(2).enumerate() {
             let definition = |offset| {
                 service.definition(

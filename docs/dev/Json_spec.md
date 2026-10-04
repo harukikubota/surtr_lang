@@ -137,7 +137,7 @@ schema-level encode は `impl Encode<JsonValue> for T` を明示実装して書�
 
 compile 側は `Bootstrap` stage、test extension を必要に応じて含む shared standard stage、ユーザ拡張の順で読む。
 モジュールの完全な inventory と順序は
-[`STDLIB_MODULE_SPECS`](../../crates/xldr/src/loader.rs) を正本とする。
+[`STDLIB_MODULE_SPECS`](../../crates/sindr/src/stdlib.rs) を正本とする。
 
 - `Encode` / `Decode` は `Convert` / `TryConvert` の後、`Json` の前にロードする
 - `JsonValue` は `Json` module 側で定義し、helper trait 側から参照される

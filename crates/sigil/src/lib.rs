@@ -16,8 +16,9 @@ pub use resolver::{
     resolve_with_warnings, staged_modules_from_source_ast, user_type_symbol_identity_info,
     DeclarationEntry, DeclarationIndex, DeclarationKind, DeclarationOrdering,
     EffectiveVisibleEntry, LoweredModuleAst, OwnerDescriptor, OwnerEntry, OwnerKind, OwnerRef,
-    OwnerRegistry, OwnerSourceForm, PrecollectedDeclarations, ResolveResumeState,
-    ResolvedStagedProgram, SigilCheckpoint, SigilSession, StageOrderedDeclaration, StagedModuleAst,
+    OwnerRegistry, OwnerSourceForm, PrecollectedDeclarations, ResolveEnvironment,
+    ResolveResumeState, ResolvedImports, ResolvedStagedProgram, SigilCheckpoint, SigilSession,
+    StageOrderedDeclaration, StagedModuleAst,
 };
 pub use semantic_metadata::{
     collect_doc_entries, collect_doc_entries_with_base, collect_signature_entries,

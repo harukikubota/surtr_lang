@@ -11,20 +11,20 @@ fn check(source: &str) -> Result<Vec<TypedNode>, TypeError> {
     support::typecheck_with_rules(source, RuntimeSourcePolicy::script())
 }
 
-const OPTION_T: &str = r#"
-defstruct OptionT<$M, $A>
+const FIXTURE_OPTION_T: &str = r#"
+defstruct FixtureOptionT<$M, $A>
 where
   $M: Monad
 {
   inner: $M<Option<$A>>,
 }
 
-impl OptionT {
-  def new(inner: $M<Option<$A>>) -> OptionT<$M, $A>
+impl FixtureOptionT {
+  def new(inner: $M<Option<$A>>) -> FixtureOptionT<$M, $A>
   where
     $M: Monad
   {
-    OptionT { inner: inner }
+    FixtureOptionT { inner: inner }
   }
 }
 "#;
@@ -32,11 +32,11 @@ impl OptionT {
 #[test]
 fn nominal_constructor_parameter_applies_known_unary_head_in_nested_field() {
     check(&format!(
-        r#"{OPTION_T}
-value: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))
-inner: Result<Option<Int>> = Facet::view(OptionT.inner, value)
-optional: OptionT<Option, Int> = OptionT(Option::Some(Option::Some(2)))
-listed: OptionT<List, Int> = OptionT([Option::Some(3)])
+        r#"{FIXTURE_OPTION_T}
+value: FixtureOptionT<Result, Int> = FixtureOptionT(Ok(Option::Some(1)))
+inner: Result<Option<Int>> = Facet::view(FixtureOptionT.inner, value)
+optional: FixtureOptionT<Option, Int> = FixtureOptionT(Option::Some(Option::Some(2)))
+listed: FixtureOptionT<List, Int> = FixtureOptionT([Option::Some(3)])
 "#
     ))
     .expect("a bound nominal constructor parameter should apply Result to Option<Int>");
@@ -157,8 +157,8 @@ defstruct Invalid<$M, $A, $B> where $M: Monad {
 #[test]
 fn nominal_constructor_parameter_does_not_treat_underscore_as_constructor_inference() {
     let error = check(&format!(
-        r#"{OPTION_T}
-def reject(value: OptionT<_, Int>) -> Unit {{ () }}"#
+        r#"{FIXTURE_OPTION_T}
+def reject(value: FixtureOptionT<_, Int>) -> Unit {{ () }}"#
     ))
     .expect_err("a normal type annotation must not infer a constructor parameter from `_`");
     assert!(
@@ -188,8 +188,8 @@ defstruct Invalid<$M, $A> where $M: Marker {
 #[test]
 fn nominal_constructor_parameter_requires_explicit_rigid_bound() {
     let error = check(&format!(
-        r#"{OPTION_T}
-def keep(value: OptionT<$M, $A>) -> OptionT<$M, $A> {{ value }}
+        r#"{FIXTURE_OPTION_T}
+def keep(value: FixtureOptionT<$M, $A>) -> FixtureOptionT<$M, $A> {{ value }}
 "#
     ))
     .expect_err("using the nominal type must not infer a Monad bound for $M");
@@ -228,12 +228,12 @@ defstruct Invalid<$M> {
 #[test]
 fn nested_nominal_declaration_accepts_forwarded_constructor_bound() {
     check(&format!(
-        r#"{OPTION_T}
+        r#"{FIXTURE_OPTION_T}
 defstruct Wrapped<$M> where $M: Monad {{
-  value: OptionT<$M, Int>,
+  value: FixtureOptionT<$M, Int>,
 }}
 impl Wrapped {{
-  def new(value: OptionT<$M, Int>) -> Wrapped<$M>
+  def new(value: FixtureOptionT<$M, Int>) -> Wrapped<$M>
   where
     $M: Monad
   {{
@@ -248,9 +248,9 @@ impl Wrapped {{
 #[test]
 fn trait_method_nominal_constructor_parameter_requires_explicit_bound() {
     let error = check(&format!(
-        r#"{OPTION_T}
+        r#"{FIXTURE_OPTION_T}
 deftrait Invalid {{
-  def use(value: OptionT<$M, Int>) -> Unit
+  def use(value: FixtureOptionT<$M, Int>) -> Unit
 }}
 "#
     ))
@@ -267,9 +267,9 @@ deftrait Invalid {{
 #[test]
 fn trait_impl_target_nominal_constructor_parameter_requires_explicit_bound() {
     let error = check(&format!(
-        r#"{OPTION_T}
+        r#"{FIXTURE_OPTION_T}
 deftrait Keep {{ def keep(self: Self) -> Self }}
-impl Keep for OptionT<$M, Int> {{
+impl Keep for FixtureOptionT<$M, Int> {{
   def keep(self: Self) -> Self {{ self }}
 }}
 "#
@@ -287,11 +287,11 @@ impl Keep for OptionT<$M, Int> {{
 #[test]
 fn extractor_nominal_constructor_parameter_requires_explicit_bound() {
     let error = check(&format!(
-        r#"{OPTION_T}
+        r#"{FIXTURE_OPTION_T}
 defstruct Matchers {{}}
 impl Matchers {{
   def new() -> Matchers {{ Matchers {{}} }}
-  defextractor read(value: OptionT<$M, Int>) -> MatchResult<Int> {{ MatchResult::Err(NoneError) }}
+  defextractor read(value: FixtureOptionT<$M, Int>) -> MatchResult<Int> {{ MatchResult::Err(NoneError) }}
 }}
 "#
     ))
@@ -305,11 +305,11 @@ impl Matchers {{
     );
 
     check(&format!(
-        r#"{OPTION_T}
+        r#"{FIXTURE_OPTION_T}
 defstruct ConcreteMatchers {{}}
 impl ConcreteMatchers {{
   def new() -> ConcreteMatchers {{ ConcreteMatchers {{}} }}
-  defextractor read(value: OptionT<Result, Int>) -> MatchResult<Int> {{ MatchResult::Err(NoneError) }}
+  defextractor read(value: FixtureOptionT<Result, Int>) -> MatchResult<Int> {{ MatchResult::Err(NoneError) }}
 }}
 "#
     ))
@@ -319,8 +319,8 @@ impl ConcreteMatchers {{
 #[test]
 fn nominal_constructor_parameter_checks_return_destination_bound() {
     let error = check(&format!(
-        r#"{OPTION_T}
-def invalid::<$M, $A>() -> OptionT<$M, $A> {{ () }}
+        r#"{FIXTURE_OPTION_T}
+def invalid::<$M, $A>() -> FixtureOptionT<$M, $A> {{ () }}
 "#
     ))
     .expect_err("a return-only constructor variable still needs an explicit bound");
@@ -336,8 +336,8 @@ def invalid::<$M, $A>() -> OptionT<$M, $A> {{ () }}
 #[test]
 fn nominal_constructor_parameter_consumes_explicit_rigid_bound_for_well_formedness() {
     check(&format!(
-        r#"{OPTION_T}
-def keep(value: OptionT<$M, $A>) -> OptionT<$M, $A>
+        r#"{FIXTURE_OPTION_T}
+def keep(value: FixtureOptionT<$M, $A>) -> FixtureOptionT<$M, $A>
 where
   $M: Monad
 {{
@@ -351,9 +351,9 @@ where
 #[test]
 fn nominal_constructor_parameter_rejects_head_without_declared_capability() {
     let error = check(&format!(
-        r#"{OPTION_T}
+        r#"{FIXTURE_OPTION_T}
 defenum Plain<$A> {{ Plain($A), }}
-def reject(value: OptionT<Plain, Int>) -> Unit {{ () }}
+def reject(value: FixtureOptionT<Plain, Int>) -> Unit {{ () }}
 "#
     ))
     .expect_err("a concrete constructor head must satisfy the nominal declaration constraint");
@@ -369,9 +369,9 @@ def reject(value: OptionT<Plain, Int>) -> Unit {{ () }}
 #[test]
 fn facet_rebuild_preserves_constructor_head_and_checks_destination_bound() {
     check(&format!(
-        r#"{OPTION_T}
-source: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))
-updated: OptionT<Result, String> = Facet::put(OptionT.inner, source, Ok(Option::Some("one")))
+        r#"{FIXTURE_OPTION_T}
+source: FixtureOptionT<Result, Int> = FixtureOptionT(Ok(Option::Some(1)))
+updated: FixtureOptionT<Result, String> = Facet::put(FixtureOptionT.inner, source, Ok(Option::Some("one")))
 "#
     ))
     .expect("Facet should rebuild the payload while preserving the Result constructor head");
@@ -380,9 +380,9 @@ updated: OptionT<Result, String> = Facet::put(OptionT.inner, source, Ok(Option::
 #[test]
 fn facet_rebuild_rejects_a_different_constructor_head() {
     let error = check(&format!(
-        r#"{OPTION_T}
-source: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))
-Facet::put(OptionT.inner, source, Option::Some(Option::Some("one")))
+        r#"{FIXTURE_OPTION_T}
+source: FixtureOptionT<Result, Int> = FixtureOptionT(Ok(Option::Some(1)))
+Facet::put(FixtureOptionT.inner, source, Option::Some(Option::Some("one")))
 "#
     ))
     .expect_err("Facet must not silently replace the nominal constructor parameter");
@@ -390,7 +390,7 @@ Facet::put(OptionT.inner, source, Option::Some(Option::Some("one")))
     assert!(
         error
             .message
-            .contains("changes the constructor family of OptionT"),
+            .contains("changes the constructor family of FixtureOptionT"),
         "{error:?}"
     );
 }

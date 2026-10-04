@@ -1,8 +1,11 @@
+#[allow(dead_code)]
+mod support;
+
 use diagnostics::TypeDiagnosticReason;
 
 fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
-    scar::typecheck(sigil::resolve(ast).expect("resolve"))
+    support::typecheck(support::resolve_ast_with_builtin_prelude(ast).expect("resolve"))
 }
 
 #[test]
@@ -78,8 +81,8 @@ fn alpha_renamed_nested_signature_is_accepted() {
     check(r#"
 defstruct Box<$T> { val: $T }
 impl Box { def new(val: $T) -> Box<$T> { Box { val: val } } }
-deftrait Identity { def identity(self: Self, value: (Box<$A>, ($A -> $A))) -> (Box<$A>, ($A -> $A)) }
-impl Identity for Int { def identity(self: Self, value: (Box<$Z>, ($Z -> $Z))) -> (Box<$Z>, ($Z -> $Z)) { value } }
+deftrait MethodIdentity { def identity(self: Self, value: (Box<$A>, ($A -> $A))) -> (Box<$A>, ($A -> $A)) }
+impl MethodIdentity for Int { def identity(self: Self, value: (Box<$Z>, ($Z -> $Z))) -> (Box<$Z>, ($Z -> $Z)) { value } }
 "#).expect("alpha equivalent recursive signature");
 }
 
@@ -88,8 +91,8 @@ fn method_constraint_mismatch_is_structured() {
     let error = check(
         r#"
 deftrait Marker {}
-deftrait Identity { def identity(self: Self, value: $A) -> $A where $A: Marker }
-impl Identity for Int { def identity(self: Self, value: $Z) -> $Z { value } }
+deftrait MethodIdentity { def identity(self: Self, value: $A) -> $A where $A: Marker }
+impl MethodIdentity for Int { def identity(self: Self, value: $Z) -> $Z { value } }
 "#,
     )
     .expect_err("constraints must match");
@@ -143,8 +146,8 @@ fn constraints_are_an_alpha_renamed_order_independent_set() {
     check(r#"
 deftrait First { def first(self: Self) -> Self }
 deftrait Second { def second(self: Self) -> Self }
-deftrait Identity { def identity(self: Self, value: $A) -> $A where $A: First + Second }
-impl Identity for Int { def identity(self: Self, value: $Z) -> $Z where $Z: Second + First { First::first(Second::second(value)) } }
+deftrait MethodIdentity { def identity(self: Self, value: $A) -> $A where $A: First + Second }
+impl MethodIdentity for Int { def identity(self: Self, value: $Z) -> $Z where $Z: Second + First { First::first(Second::second(value)) } }
 "#).expect("constraint order and generic spelling are irrelevant");
 }
 
@@ -153,8 +156,8 @@ fn constraints_are_substituted_through_trait_arguments() {
     check(r#"
 deftrait Marker { def mark(self: Self) -> Self }
 impl Marker for Int { def mark(self: Self) -> Self { self } }
-deftrait Identity<$A> { def identity(self: Self, value: $A) -> $A where $A: Marker }
-impl Identity<Int> for Int { def identity(self: Self, value: Int) -> Int where Self: Marker { Marker::mark(value) } }
+deftrait MethodIdentity<$A> { def identity(self: Self, value: $A) -> $A where $A: Marker }
+impl MethodIdentity<Int> for Int { def identity(self: Self, value: Int) -> Int where Self: Marker { Marker::mark(value) } }
 "#).expect("contract head arguments also substitute constraint subjects");
 }
 
@@ -181,8 +184,8 @@ fn impl_head_variable_remains_anchored_even_without_receiver() {
         r#"
 defstruct Box<$T> { val: $T }
 impl Box { def new(val: $T) -> Box<$T> { Box { val: val } } }
-deftrait Identity<$A> { def identity(value: $A) -> $A }
-impl Identity<$T> for Box<$T> { def identity(value: $Z) -> $Z { value } }
+deftrait MethodIdentity<$A> { def identity(value: $A) -> $A }
+impl MethodIdentity<$T> for Box<$T> { def identity(value: $Z) -> $Z { value } }
 "#,
     )
     .expect_err("impl head relationships cannot be freshened away");
@@ -308,8 +311,8 @@ impl Same for Int { def same(self: Self, value: $X) -> List<$X> { [value] } }
 fn duplicate_method_constraints_do_not_change_the_canonical_set() {
     check(r#"
 deftrait Marker { def mark(self: Self) -> Self }
-deftrait Identity { def identity(self: Self, value: $A) -> $A where $A: Marker }
-impl Identity for Int { def identity(self: Self, value: $Z) -> $Z where $Z: Marker + Marker { Marker::mark(value) } }
+deftrait MethodIdentity { def identity(self: Self, value: $A) -> $A where $A: Marker }
+impl MethodIdentity for Int { def identity(self: Self, value: $Z) -> $Z where $Z: Marker + Marker { Marker::mark(value) } }
 "#).expect("where constraints are a set");
 }
 

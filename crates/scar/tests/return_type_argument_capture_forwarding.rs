@@ -1,10 +1,14 @@
+#[allow(dead_code)]
+mod support;
+
 use diagnostics::TypeDiagnosticReason;
 
 fn typecheck(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
         .expect("capture forwarding source should parse");
-    let resolved = sigil::resolve(ast).expect("capture forwarding source should resolve");
-    scar::typecheck(resolved)
+    let resolved = support::resolve_ast_with_builtin_prelude(ast)
+        .expect("capture forwarding source should resolve");
+    support::typecheck(resolved)
 }
 
 fn assert_generic_capture_forwarding(capture: &str) {

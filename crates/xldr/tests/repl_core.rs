@@ -3603,15 +3603,22 @@ defmod Math {
 fn core_imports_non_autoimport_trait_and_rejects_autoimport_trait() {
     let mut engine = engine();
 
+    let failed = engine.handle_line("import Add\n1 + \"bad\"");
+    assert!(matches!(failed.output, ReplOutput::EvalError { .. }));
+
     let imported = engine.handle_line("import Add");
     assert!(rendered_text(&imported).contains("Imported Add"));
 
     let result = engine.handle_line("add(1, 2)");
     assert!(rendered_text(&result).contains("3"));
 
+    let duplicate = engine.handle_line("import Add");
+    assert!(rendered_text(&duplicate).contains("Duplicate import"));
+
     let rejected = engine.handle_line("import Compare");
-    assert!(rendered_text(&rejected)
-        .contains("Compare` is auto-imported and cannot be explicitly imported"));
+    assert!(
+        rendered_text(&rejected).contains("Compare` is already imported by file-start autoimport")
+    );
 }
 
 fn core_script_preload_imports_non_autoimport_trait() {

@@ -71,13 +71,13 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
     let path = workspace.join("main.srt");
     let uri = path_to_file_uri(&path);
     let mut host = LspAnalysisHost::new(workspace);
-    host.did_open(uri.clone(), Some(1), "pri".to_string());
+    host.did_open(uri.clone(), Some(1), "fix".to_string());
     host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
     host.set_semantic_index(SemanticIndex::from_symbols(vec![CompletionSymbol {
-        label: "print".to_string(),
-        replacement: "print".to_string(),
+        label: "fixture_print".to_string(),
+        replacement: "fixture_print".to_string(),
         kind: CompletionKind::FunctionCall,
-        detail: Some("print(a: String) -> Unit".to_string()),
+        detail: Some("fixture_print(a: String) -> Unit".to_string()),
         documentation: None,
         sort_text: None,
         origin: None,
@@ -95,11 +95,14 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
     );
 
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].label, "print");
+    assert_eq!(items[0].label, "fixture_print");
     assert_eq!(items[0].kind, CompletionItemKind::Function);
-    assert_eq!(items[0].detail.as_deref(), Some("print(a: String) -> Unit"));
+    assert_eq!(
+        items[0].detail.as_deref(),
+        Some("fixture_print(a: String) -> Unit")
+    );
     assert_eq!(items[0].documentation.as_deref(), None);
-    assert_eq!(items[0].sort_text.as_deref(), Some("1:print"));
+    assert_eq!(items[0].sort_text.as_deref(), Some("1:fixture_print"));
     assert_eq!(
         items[0].text_edit.range,
         LspRange {
@@ -113,7 +116,7 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
             },
         }
     );
-    assert_eq!(items[0].text_edit.new_text, "print");
+    assert_eq!(items[0].text_edit.new_text, "fixture_print");
 }
 
 #[test]

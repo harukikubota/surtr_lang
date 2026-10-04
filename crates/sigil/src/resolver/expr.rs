@@ -1,8 +1,8 @@
 use super::captures::collect_captures;
 use super::declarations::{ast_ty_key, trait_instance_key};
 use super::scope_init::{
-    initialize_scope, is_doc_only_builtin_decl, is_runtime_builtin_decl,
-    is_special_form_builtin_decl, resolve_decl_attrs,
+    is_doc_only_builtin_decl, is_runtime_builtin_decl, is_special_form_builtin_decl,
+    resolve_decl_attrs,
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
@@ -2176,9 +2176,10 @@ impl Resolver {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn new() -> Self {
         Self {
-            scope: initialize_scope(),
+            scope: super::scope_init::initialize_scope(),
             capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
@@ -2573,9 +2574,9 @@ impl Resolver {
 
     pub(super) fn resolve_program(
         &mut self,
-        stmts: Vec<Ast>,
+        program: super::imports::ImportsResolvedProgram,
     ) -> Result<Vec<Resolved>, ResolveError> {
-        let stmts = super::derive::expand_derive_annotations(stmts)?;
+        let stmts = super::derive::expand_derive_annotations(program.into_statements())?;
         let stmts = self.lower_impl_defs(stmts)?;
         self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
@@ -2588,8 +2589,8 @@ impl Resolver {
                 || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
                 || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _, _) if is_doc_only_builtin_decl(name))
             {
-                // `import` declarations are consumed by resolver-side module/import handling.
-                // Until full module resolution lands, they are intentionally no-op here.
+                // ImportsResolvedProgram guarantees file imports were applied before resolution.
+                // Import declarations do not emit value IR.
                 continue;
             }
             resolved.push(self.resolve_node(stmt)?);

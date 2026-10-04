@@ -1,62 +1,63 @@
-#[path = "support/special_enum_declarations.rs"]
-mod special_enum_declarations;
+#[allow(dead_code)]
+mod support;
 
 use diagnostics::TypeDiagnosticReason;
 use scar::typed::{TypedInner, TypedPattern};
 use sigil::resolved::Resolved;
 
-fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
-    let ast = special_enum_declarations::parse_with_canonical_special_enums(source)
-        .expect("source should parse without the standard prelude");
-    sigil::resolve(ast).expect("source should resolve without the standard prelude")
+fn resolve_with_standard_environment(source: &str) -> Vec<Resolved> {
+    let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+        .expect("source should parse with the standard environment");
+    support::resolve_ast_with_builtin_prelude(ast)
+        .expect("source should resolve with the standard environment")
 }
 
 fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
-    scar::typecheck(resolve_without_std_prelude(source))
+    support::typecheck(resolve_with_standard_environment(source))
 }
 
 const USER_MONAD_T: &str = r#"
-deftrait Monad
+deftrait FixtureMonad
 where
   Self: Type<$A>
 {}
 
-deftrait MonadT<$M>
+deftrait FixtureMonadT<$M>
 where
-  $M: Monad
-  Self: Monad
+  $M: FixtureMonad
+  Self: FixtureMonad
 {
   def lift::<Self>(value: $M<$A>) -> Self<$A>
 }
 
 defenum Base<$A> { Base($A), }
-impl Monad for Base<$T> where $T: Monad.$A {}
+impl FixtureMonad for Base<$T> where $T: FixtureMonad.$A {}
 
 defstruct Wrap<$M, $A>
 where
-  $M: Monad
+  $M: FixtureMonad
 {
   inner: $M<$A>
 }
 impl Wrap {
   def new(inner: $M<$A>) -> Wrap<$M, $A>
   where
-    $M: Monad
+    $M: FixtureMonad
   {
     Wrap { inner: inner }
   }
 }
 
-impl Monad for Wrap<$M, $T>
+impl FixtureMonad for Wrap<$M, $T>
 where
-  $M: Monad
-  $T: Monad.$A
+  $M: FixtureMonad
+  $T: FixtureMonad.$A
 {}
 
-impl MonadT<$M> for Wrap<$M, $T>
+impl FixtureMonadT<$M> for Wrap<$M, $T>
 where
-  $M: Monad
-  $T: MonadT.$A
+  $M: FixtureMonad
+  $T: FixtureMonadT.$A
 {
   def lift::<Wrap<$M, $T>>(value: $M<$A>) -> Wrap<$M, $A>
   {
@@ -70,7 +71,7 @@ fn user_defined_parameterized_constructor_trait_lifts_from_argument_into_expecte
     check(&format!(
         r#"{USER_MONAD_T}
 source: Base<Int> = Base::Base(1)
-value: Wrap<Base, Int> = MonadT::lift(source)
+value: Wrap<Base, Int> = FixtureMonadT::lift(source)
 "#
     ))
     .expect("base and transformer carriers should be inferred from independent inputs");
@@ -81,7 +82,7 @@ fn full_constructor_rta_preserves_its_mapped_payload_constraint() {
     let error = check(&format!(
         r#"{USER_MONAD_T}
 source: Base<Int> = Base::Base(1)
-value = MonadT::lift::<Wrap<Base, String>>(source)
+value = FixtureMonadT::lift::<Wrap<Base, String>>(source)
 "#
     ))
     .expect_err("a full constructor RTA must not erase its concrete mapped payload");
@@ -102,9 +103,9 @@ fn full_constructor_rta_rejects_a_captured_base_mismatch() {
     let error = check(&format!(
         r#"{USER_MONAD_T}
 defenum Other<$A> {{ Other($A), }}
-impl Monad for Other<$T> where $T: Monad.$A {{}}
+impl FixtureMonad for Other<$T> where $T: FixtureMonad.$A {{}}
 source: Base<Int> = Base::Base(1)
-value = MonadT::lift::<Wrap<Other, _>>(source)
+value = FixtureMonadT::lift::<Wrap<Other, _>>(source)
 "#
     ))
     .expect_err("a full carrier RTA must not rewrite its captured base from the value argument");
@@ -120,7 +121,7 @@ fn parameterized_constructor_trait_does_not_choose_an_output_carrier_from_impl_c
     let error = check(&format!(
         r#"{USER_MONAD_T}
 source: Base<Int> = Base::Base(1)
-value = MonadT::lift(source)
+value = FixtureMonadT::lift(source)
 "#
     ))
     .expect_err("an absent output constraint must remain ambiguous");
@@ -134,16 +135,16 @@ value = MonadT::lift(source)
 #[test]
 fn parameterized_constructor_trait_direct_signature_surface_is_not_added() {
     let error = check(
-        r#"deftrait Monad
+        r#"deftrait FixtureMonad
 where
   Self: Type<$A>
 {}
-deftrait MonadT<$M>
+deftrait FixtureMonadT<$M>
 where
-  $M: Monad
-  Self: Monad
+  $M: FixtureMonad
+  Self: FixtureMonad
 {}
-def invalid(value: MonadT<Result>) -> Unit { () }"#,
+def invalid(value: FixtureMonadT<Result>) -> Unit { () }"#,
     )
     .expect_err("parameterized TypeCtorTrait direct signatures are outside N04");
     assert!(
@@ -155,12 +156,12 @@ def invalid(value: MonadT<Result>) -> Unit { () }"#,
 #[test]
 fn receiverless_lift_matches_trait_argument_target_and_value_together() {
     let source = r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {}
-deftrait MonadT<$M>
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {}
+deftrait FixtureMonadT<$M>
 where
-  $M: Monad
-  Self: Monad
+  $M: FixtureMonad
+  Self: FixtureMonad
 {
   def lift::<Self>(value: $M<$A>) -> Self<$A>
 }
@@ -168,61 +169,61 @@ where
 defenum Base<$A> { Base($A), }
 defenum Other<$A> { Other($A), }
 defenum Wrap<$A> { Wrap($A), }
-impl Functor for Base<$T> where $T: Functor.$A {}
-impl Monad for Base<$T> where $T: Monad.$A {}
-impl Functor for Other<$T> where $T: Functor.$A {}
-impl Monad for Other<$T> where $T: Monad.$A {}
-impl Functor for Wrap<$T> where $T: Functor.$A {}
-impl Monad for Wrap<$T> where $T: Monad.$A {}
+impl FixtureFunctor for Base<$T> where $T: FixtureFunctor.$A {}
+impl FixtureMonad for Base<$T> where $T: FixtureMonad.$A {}
+impl FixtureFunctor for Other<$T> where $T: FixtureFunctor.$A {}
+impl FixtureMonad for Other<$T> where $T: FixtureMonad.$A {}
+impl FixtureFunctor for Wrap<$T> where $T: FixtureFunctor.$A {}
+impl FixtureMonad for Wrap<$T> where $T: FixtureMonad.$A {}
 
-impl MonadT<Base> for Wrap<$T> {
+impl FixtureMonadT<Base> for Wrap<$T> {
   def lift::<Wrap<$T>>(value: Base<$A>) -> Wrap<$A> {
     match value { Base::Base(item) => Wrap::Wrap(item), }
   }
 }
-impl MonadT<Other> for Wrap<$T> {
+impl FixtureMonadT<Other> for Wrap<$T> {
   def lift::<Wrap<$T>>(value: Other<$A>) -> Wrap<$A> {
     match value { Other::Other(item) => Wrap::Wrap(item), }
   }
 }
 
 source: Base<Int> = Base::Base(1)
-value: Wrap<Int> = MonadT::lift(source)
+value: Wrap<Int> = FixtureMonadT::lift(source)
 "#;
-    check(source).expect("the concrete input selects the matching MonadT Trait argument");
+    check(source).expect("the concrete input selects the matching FixtureMonadT Trait argument");
 }
 
 #[test]
 fn unique_monad_impl_does_not_infer_an_underconstrained_lift_base() {
     let error = check(
         r#"
-deftrait Monad where Self: Type<$A> {
+deftrait FixtureMonad where Self: Type<$A> {
   def return::<Self>(value: $A) -> Self<$A>
 }
-deftrait MonadT<$M>
+deftrait FixtureMonadT<$M>
 where
-  $M: Monad
-  Self: Monad
+  $M: FixtureMonad
+  Self: FixtureMonad
 {
   def lift::<Self>(value: $M<$A>) -> Self<$A>
 }
 defenum Base<$A> { Base($A), }
-impl Monad for Base<$T> {
+impl FixtureMonad for Base<$T> {
   def return::<Base<$T>>(value: $A) -> Base<$A> { Base::Base(value) }
 }
 defenum Wrap<$A> { Wrap($A), }
-impl Monad for Wrap<$T> {
+impl FixtureMonad for Wrap<$T> {
   def return::<Wrap<$T>>(value: $A) -> Wrap<$A> { Wrap::Wrap(value) }
 }
-impl MonadT<Base> for Wrap<$T> {
+impl FixtureMonadT<Base> for Wrap<$T> {
   def lift::<Wrap<$T>>(value: Base<$A>) -> Wrap<$A> {
     match value { Base::Base(item) => Wrap::Wrap(item), }
   }
 }
-value = MonadT::lift(Monad::return(1))
+value = FixtureMonadT::lift(FixtureMonad::return(1))
 "#,
     )
-    .expect_err("a unique Monad impl is not evidence for the base of return");
+    .expect_err("a unique FixtureMonad impl is not evidence for the base of return");
     assert_eq!(
         error.reason(),
         Some(TypeDiagnosticReason::AmbiguousReturnTypeArgument),
@@ -234,45 +235,45 @@ value = MonadT::lift(Monad::return(1))
 fn receiverless_lift_requires_the_value_static_monad_capability() {
     let error = check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {}
-deftrait MonadT<$M>
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {}
+deftrait FixtureMonadT<$M>
 where
-  $M: Monad
-  Self: Monad
+  $M: FixtureMonad
+  Self: FixtureMonad
 {
   def lift::<Self>(value: $M<$A>) -> Self<$A>
 }
 defenum Base<$A> { Base($A), }
-impl Functor for Base<$T> where $T: Functor.$A {}
-impl Monad for Base<$T> where $T: Monad.$A {}
-defenum Wrap<$M, $A> where $M: Monad { Wrap($M<$A>), }
-impl Functor for Wrap<$M, $T>
+impl FixtureFunctor for Base<$T> where $T: FixtureFunctor.$A {}
+impl FixtureMonad for Base<$T> where $T: FixtureMonad.$A {}
+defenum Wrap<$M, $A> where $M: FixtureMonad { Wrap($M<$A>), }
+impl FixtureFunctor for Wrap<$M, $T>
 where
-  $M: Monad
-  $T: Functor.$A
+  $M: FixtureMonad
+  $T: FixtureFunctor.$A
 {}
-impl Monad for Wrap<$M, $T>
+impl FixtureMonad for Wrap<$M, $T>
 where
-  $M: Monad
-  $T: Monad.$A
+  $M: FixtureMonad
+  $T: FixtureMonad.$A
 {}
-impl MonadT<$M> for Wrap<$M, $T>
+impl FixtureMonadT<$M> for Wrap<$M, $T>
 where
-  $M: Monad
-  $T: MonadT.$A
+  $M: FixtureMonad
+  $T: FixtureMonadT.$A
 {
   def lift::<Wrap<$M, $T>>(value: $M<$A>) -> Wrap<$M, $A> {
     Wrap::Wrap(value)
   }
 }
-def retain(value: $F<Int>) -> $F<Int> where $F: Functor { value }
+def retain(value: $F<Int>) -> $F<Int> where $F: FixtureFunctor { value }
 source: Base<Int> = Base::Base(1)
 view = retain(source)
-lifted: Wrap<Base, Int> = MonadT::lift(view)
+lifted: Wrap<Base, Int> = FixtureMonadT::lift(view)
 "#,
     )
-    .expect_err("a Functor-only static view cannot provide Monad for lift's base");
+    .expect_err("a FixtureFunctor-only static view cannot provide FixtureMonad for lift's base");
     assert_eq!(
         error.reason(),
         Some(TypeDiagnosticReason::MissingTypeConstructorCapability),
@@ -280,25 +281,28 @@ lifted: Wrap<Base, Int> = MonadT::lift(view)
     );
     assert_eq!(
         error.structured.as_ref().unwrap().data_json()["required_capability"],
-        "Monad"
+        "FixtureMonad"
     );
 }
 
 #[test]
 fn declared_return_expectation_reaches_pipe_list_and_tuple_contents() {
     let declarations = r#"
-deftrait Monad where Self: Type<$A> {
+deftrait FixtureMonad where Self: Type<$A> {
   def return::<Self>(value: $A) -> Self<$A>
 }
-impl Monad for List<$T> where $T: Monad.$A {
+impl FixtureMonad for List<$T> where $T: FixtureMonad.$A {
   def return::<List<$T>>(value: $A) -> List<$A> { [value] }
 }
 "#;
     for (return_ty, body) in [
-        ("List<List<Int>>", "[Monad::return(1)]"),
-        ("List<Int>", "1 |> Monad::return()"),
-        ("(List<Int>, Int)", "(Monad::return(1), 0)"),
-        ("List<Int>", "if (True, Monad::return(1), Monad::return(2))"),
+        ("List<List<Int>>", "[FixtureMonad::return(1)]"),
+        ("List<Int>", "1 |> FixtureMonad::return()"),
+        ("(List<Int>, Int)", "(FixtureMonad::return(1), 0)"),
+        (
+            "List<Int>",
+            "if (True, FixtureMonad::return(1), FixtureMonad::return(2))",
+        ),
     ] {
         check(&format!(
             "{declarations}\ndef make() -> {return_ty} {{ {body} }}"
@@ -312,7 +316,7 @@ fn full_constructor_rta_binding_pattern_has_concrete_specialized_type() {
     let typed = check(&format!(
         r#"{USER_MONAD_T}
 source: Base<Int> = Base::Base(1)
-full = MonadT::lift::<Wrap<Base, Int>>(source)
+full = FixtureMonadT::lift::<Wrap<Base, Int>>(source)
 "#
     ))
     .expect("the explicit constructor application typechecks");

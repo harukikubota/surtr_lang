@@ -20,7 +20,7 @@ Surtr は、全仕様を一枚の集約文書へ複製しません。現行挙�
 | 標準 API | `../../lib/**/*.srt` の宣言と `@doc` |
 | parser / resolver / typecheck / codegen / VM の責務 | 各 `../../crates/*/README.md` と本ディレクトリの対象 spec |
 | builtin 名・signature・ID 順 | `../../crates/sindr/src/builtin.rs` の `BUILTIN_METAS` |
-| 標準定義の stage・ロード順 | `../../crates/xldr/src/loader.rs` の `STDLIB_MODULE_SPECS` |
+| 標準定義の stage・ロード順 | `../../crates/sindr/src/stdlib.rs` の `STDLIB_MODULE_SPECS` |
 | source kind と compile policy | `../../crates/sindr/src/policy.rs` |
 | 診断構造と span | [`diagnostics.md`](./diagnostics.md) |
 | エラー表示・実行時オプション・REPL の表示レベル | [`display_error.md`](./display_error.md) |

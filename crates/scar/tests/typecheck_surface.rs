@@ -28,14 +28,17 @@ const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 const SURFACE_WORKER_COUNT: usize = 1;
 const SURFACE_BUCKET_COUNT: usize = 8;
 
-fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
+fn resolve_with_standard_environment(source: &str) -> Vec<Resolved> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
-        .expect("source should parse without the std prelude");
-    sigil::resolve(ast).expect("source should resolve without the std prelude")
+        .expect("source should parse with the standard environment");
+    support::resolve_ast_with_builtin_prelude(ast)
+        .expect("source should resolve with the standard environment")
 }
 
-fn typecheck_without_std_prelude(source: &str) -> Result<Vec<TypedNode>, scar::error::TypeError> {
-    scar::typecheck(resolve_without_std_prelude(source))
+fn typecheck_with_standard_environment(
+    source: &str,
+) -> Result<Vec<TypedNode>, scar::error::TypeError> {
+    support::typecheck(resolve_with_standard_environment(source))
 }
 
 macro_rules! surface_case {
@@ -4411,7 +4414,7 @@ where
 }
 
 fn parameterized_parent_trait_bounds_cover_the_parent_family() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Parent<$Tag> {
   def parent(self: Self) -> String
 }
@@ -4437,7 +4440,7 @@ impl Child<String> for Boxed<$A> {
     )
     .expect("a bare Parent bound should require any Parent family instance for the target");
 
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Parent<$Tag> {
   def parent(self: Self) -> String
 }
@@ -4494,7 +4497,7 @@ print(right)"#,
 }
 
 fn where_constraint_kinds_survive_in_typed_metadata() {
-    let typed = typecheck_without_std_prelude(
+    let typed = typecheck_with_standard_environment(
         r#"deftrait Marker
 where
   Self: Type<$Slot>
@@ -4721,7 +4724,7 @@ where
 }
 
 fn malformed_resolved_type_shape_requires_self_lhs() {
-    let mut resolved = resolve_without_std_prelude(
+    let mut resolved = resolve_with_standard_environment(
         r#"deftrait Shape
 where
   Self: Type<$A>
@@ -4738,7 +4741,8 @@ where
         .expect("Shape should retain its resolved where constraint");
     constraint.subject = AstTy::Named(constraint.span.clone(), "$A".into());
 
-    let err = scar::typecheck(resolved).expect_err("Type<...> must require a Self subject in Scar");
+    let err =
+        support::typecheck(resolved).expect_err("Type<...> must require a Self subject in Scar");
     assert!(
         err.message.contains("only allowed") && err.message.contains("Self: Type"),
         "{err:?}"
@@ -4746,7 +4750,7 @@ where
 }
 
 fn malformed_resolved_type_shape_is_rejected_outside_trait_definition_where() {
-    let mut function = resolve_without_std_prelude(
+    let mut function = resolve_with_standard_environment(
         r#"deftrait Marker {}
 
 def keep(value: $A) -> $A
@@ -4769,10 +4773,11 @@ where
         span: constraint.span.clone(),
         slots: vec![AstTy::Named(constraint.span.clone(), "$A".into())],
     };
-    let err = scar::typecheck(function).expect_err("function where must reject Type<...> in Scar");
+    let err =
+        support::typecheck(function).expect_err("function where must reject Type<...> in Scar");
     assert!(err.message.contains("trait definition where"), "{err:?}");
 
-    let mut trait_impl = resolve_without_std_prelude(
+    let mut trait_impl = resolve_with_standard_environment(
         r#"deftrait Marker {}
 
 defenum LocalList<$A> {
@@ -4798,10 +4803,10 @@ where
         slots: vec![AstTy::Named(constraint.span.clone(), "$A".into())],
     };
     let err =
-        scar::typecheck(trait_impl).expect_err("trait impl where must reject Type<...> in Scar");
+        support::typecheck(trait_impl).expect_err("trait impl where must reject Type<...> in Scar");
     assert!(err.message.contains("trait definition where"), "{err:?}");
 
-    let mut trait_method = resolve_without_std_prelude(
+    let mut trait_method = resolve_with_standard_environment(
         r#"deftrait Marker {}
 
 deftrait HasMethod {
@@ -4825,13 +4830,13 @@ deftrait HasMethod {
         span: constraint.span.clone(),
         slots: vec![AstTy::Named(constraint.span.clone(), "$A".into())],
     };
-    let err = scar::typecheck(trait_method)
+    let err = support::typecheck(trait_method)
         .expect_err("trait method where must reject Type<...> in Scar");
     assert!(err.message.contains("trait definition where"), "{err:?}");
 }
 
 fn type_constructor_shape_must_be_unique_in_a_trait_definition() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait InvalidShape
 where
   Self: Type<$A> + Type<$B>
@@ -4842,7 +4847,7 @@ where
 }
 
 fn inherited_constructor_trait_accepts_captured_head_parameters() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Direct<$Tag>
 where
   Self: Type<$A>
@@ -4850,7 +4855,7 @@ where
     )
     .expect("a direct constructor trait may capture a distinct trait-head parameter");
 
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait RootShape
 where
   Self: Type<$A>
@@ -4890,7 +4895,7 @@ where
   $Right: PairShape.$Right
 {{}}"#
     );
-    let err = typecheck_without_std_prelude(&nested)
+    let err = typecheck_with_standard_environment(&nested)
         .expect_err("a nested target variable cannot own a constructor slot");
     assert!(
         err.message.contains("not a top-level type parameter"),
@@ -4905,7 +4910,7 @@ where
   $Left: PairShape.$Left
 {{}}"#
     );
-    let err = typecheck_without_std_prelude(&incomplete)
+    let err = typecheck_with_standard_environment(&incomplete)
         .expect_err("every constructor slot must be mapped");
     assert!(
         err.message.contains("map every constructor slot"),
@@ -4914,7 +4919,7 @@ where
 }
 
 fn plain_inherent_owner_expands_self_applications_to_its_target() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"defstruct Box<$A> {
   value: $A,
 }
@@ -4946,14 +4951,14 @@ fn canonical_builtin_inherent_owners_expand_self_applications_to_their_targets()
   def keep(value: Self<$A>) -> Self<$A> {{ value }}
 }}"#
         );
-        typecheck_without_std_prelude(&source).unwrap_or_else(|err| {
+        typecheck_with_standard_environment(&source).unwrap_or_else(|err| {
             panic!("Self<$A> in canonical builtin owner {owner} should expand: {err:?}")
         });
     }
 }
 
 fn trait_contract_self_substitution_preserves_captured_target_parameters() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait ReplaceRight
 where
   Self: Type<$A>
@@ -4980,7 +4985,7 @@ where
 }
 
 fn same_trait_constructor_parameters_share_one_witness() {
-    let error = typecheck_without_std_prelude(
+    let error = typecheck_with_standard_environment(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -5017,7 +5022,7 @@ accept(Left::Left(1), Right::Right("ok"))"#,
 }
 
 fn constructor_application_result_shares_the_input_witness() {
-    let error = typecheck_without_std_prelude(
+    let error = typecheck_with_standard_environment(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -5056,7 +5061,7 @@ result: Right<String> = replace(Left::Left(1))"#,
 }
 
 fn constructor_application_result_accepts_the_shared_abstract_input_witness() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -5068,7 +5073,7 @@ def preserve(value: Context<Int>) -> Context<Int> { value }"#,
 }
 
 fn constructor_application_result_rejects_mixed_concrete_constructors() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -5142,8 +5147,8 @@ where
     ];
 
     for (label, case) in cases {
-        let err =
-            typecheck_without_std_prelude(&format!("{declarations}\n\n{case}")).expect_err(label);
+        let err = typecheck_with_standard_environment(&format!("{declarations}\n\n{case}"))
+            .expect_err(label);
         assert!(
             err.message.contains("ConstructorTraitApplicationPosition"),
             "{label}: {err:?}"
@@ -5157,10 +5162,7 @@ where
   Self: Type<$A>
 {}
 
-defenum Option<$T> {
-  Some($T),
-  None,
-}"#;
+"#;
     let cases = [
         (
             "builtin extractor parameter",
@@ -5185,9 +5187,12 @@ impl Owner {
                 spire::ParserContext::project(0).with_rules(spire::ParseRules::std_module()),
             )
             .expect("builtin extractor source should parse under std rules");
-            scar::typecheck(sigil::resolve(ast).expect("builtin extractor source should resolve"))
+            support::typecheck(
+                support::resolve_ast_with_builtin_prelude(ast)
+                    .expect("builtin extractor source should resolve"),
+            )
         } else {
-            typecheck_without_std_prelude(&source)
+            typecheck_with_standard_environment(&source)
         };
         let err = result.expect_err(label);
         assert!(
@@ -5198,7 +5203,7 @@ impl Owner {
 }
 
 fn trait_default_contextual_result_requires_constructor_trait_membership() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -5222,7 +5227,7 @@ deftrait Maker {
 }
 
 fn trait_impl_contextual_result_requires_constructor_trait_membership() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -5250,7 +5255,7 @@ impl Maker for Int {
 }
 
 fn trait_impl_contextual_result_accepts_an_implementing_constructor() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -5277,26 +5282,26 @@ impl Maker for Int {
 }
 
 fn bare_capability_is_consumed_by_a_full_parameterized_trait_obligation() {
-    let typed = typecheck_without_std_prelude(
-        r#"deftrait Convert<$To> {
+    let typed = typecheck_with_standard_environment(
+        r#"deftrait FixtureConvert<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
-impl Convert<String> for Int {
+impl FixtureConvert<String> for Int {
   def convert::<String>(self: Int) -> String { "converted" }
 }
 
 def convert_to_string(value: $From) -> String
 where
-  $From: Convert
+  $From: FixtureConvert
 {
-  Convert::convert::<String>(value)
+  FixtureConvert::convert::<String>(value)
 }
 
 result: String = convert_to_string(1)"#,
     )
     .expect(
-        "the bare family capability must authorize forwarding a full Convert<String> obligation",
+        "the bare family capability must authorize forwarding a full FixtureConvert<String> obligation",
     );
 
     let obligation = typed.iter().find_map(|node| match &node.node {
@@ -5318,7 +5323,7 @@ result: String = convert_to_string(1)"#,
     });
     let (obligation, dispatch) =
         obligation.expect("the trait call must retain its structural obligation");
-    assert!(obligation.trait_id.ends_with("Convert"));
+    assert!(obligation.trait_id.ends_with("FixtureConvert"));
     assert_eq!(obligation.trait_args, vec![Ty::Str]);
     assert_eq!(obligation.receiver, Ty::Int);
     assert!(matches!(dispatch, scar::typed::TraitDispatch::Static(_)));
@@ -5336,7 +5341,7 @@ where
   ()
 }"#;
     let marker_start = source.find("Marker\n{").expect("bound marker span");
-    let err = typecheck_without_std_prelude(source)
+    let err = typecheck_with_standard_environment(source)
         .expect_err("a bare capability that creates no full obligation must be rejected");
 
     assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
@@ -5344,7 +5349,7 @@ where
 }
 
 fn unused_trait_method_capability_is_rejected_at_its_bound() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Marker {
   def mark(self: Self) -> Unit
 }
@@ -5363,7 +5368,7 @@ deftrait Consumer {
 }
 
 fn unused_trait_impl_method_capability_is_rejected_at_its_bound() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Marker {
   def mark(self: Self) -> Unit
 }
@@ -5388,7 +5393,7 @@ impl Consumer for Int {
 }
 
 fn unused_trait_impl_block_capability_is_rejected_after_all_methods() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Marker {
   def mark(self: Self) -> Unit
 }
@@ -5413,16 +5418,8 @@ where
 }
 
 fn operator_obligation_consumes_a_bare_capability() {
-    typecheck_without_std_prelude(
-        r#"deftrait Add {
-  def add(self: Self, rhs: Self) -> Self
-}
-
-impl Add for Int {
-  def add(self: Int, rhs: Int) -> Int { self }
-}
-
-def duplicate(value: $T) -> $T
+    typecheck_with_standard_environment(
+        r#"def duplicate(value: $T) -> $T
 where
   $T: Add
 {
@@ -5435,7 +5432,7 @@ result: Int = duplicate(1)"#,
 }
 
 fn generic_call_forwards_and_consumes_a_bare_capability() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Marker {
   def mark(self: Self) -> Unit
 }
@@ -5464,7 +5461,7 @@ forward(1)"#,
 }
 
 fn different_constructor_roots_keep_independent_parameter_witnesses() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait LeftContext
 where
   Self: Type<$A>
@@ -6313,7 +6310,7 @@ fn nested_ordinary_match_blocks_typecheck() {
             expression = format!("match 1 {{ _ => {{ {expression} }} }}");
         }
         let source = format!("value = {expression}");
-        let typed = typecheck_without_std_prelude(&source)
+        let typed = typecheck_with_standard_environment(&source)
             .expect("legal nested ordinary blocks must typecheck on the CLI stack budget");
         assert_eq!(typed_bind_rhs(&typed, "value").ty, Ty::Int);
 
@@ -6323,7 +6320,7 @@ fn nested_ordinary_match_blocks_typecheck() {
         }
         let source =
             format!("def layer(body: (-> Int)) -> Int {{ body() }}\nvalue: Int = {expression}");
-        let typed = typecheck_without_std_prelude(&source)
+        let typed = typecheck_with_standard_environment(&source)
             .expect("legal nested closure blocks must fit the CLI compiler stack");
         assert_eq!(typed_bind_rhs(&typed, "value").ty, Ty::Int);
     });
@@ -7870,15 +7867,12 @@ guard = require(False, bad_code())"#,
 }
 
 fn kernel_and_contract_rejects_eager_signature() {
-    let err = typecheck_std_modules_with_overrides(&[(
-        "Kernel",
-        r#"@autoimport
-defmod Kernel {
-  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
-  @builtin def and(left: Boolean, right: Boolean) -> Boolean
-}"#,
-    )])
-    .expect_err("eager signature should violate canonical contract");
+    let kernel_source = include_str!("../../../lib/kernel.srt").replace(
+        "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+        "@builtin def and(left: Boolean, right: Boolean) -> Boolean",
+    );
+    let err = typecheck_std_modules_with_overrides(&[("Kernel", &kernel_source)])
+        .expect_err("eager signature should violate canonical contract");
     assert!(err
         .message
         .contains("@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean"));
@@ -10370,7 +10364,6 @@ self != rhs
 }"#,
         ),
         ("StyledDoc", "defmod StyledDoc {}"),
-        ("Test", "defmod Test {}"),
     ];
 
     let err = typecheck_std_modules_with_overrides(&overrides)
@@ -11269,26 +11262,26 @@ again: Int = convert_fn("")"#,
 }
 
 fn enum_constructor_partial_type_arguments_constrain_only_their_own_slots() {
-    typecheck_without_std_prelude(
-        r#"defenum Either<$L, $R> { Left($L), Right($R), Pair($L, $R) }
+    typecheck_with_standard_environment(
+        r#"defenum FixtureEither<$L, $R> { Left($L), Right($R), Pair($L, $R) }
 defenum Maybe<$T> { Some($T), None }
 def generic_none::<$T>() -> Maybe<$T> { Maybe<$T>::None }
-left_text: Either<String, Int> = Either<_, Int>::Left("term")
-left_int: Either<Int, Int> = Either<_, Int>::Left(1)
-none: Either<Int, String> = Either<Int, _>::Right("none")
-pair: Either<String, Int> = Either<_, _>::Pair("pair", 2)
+left_text: FixtureEither<String, Int> = FixtureEither<_, Int>::Left("term")
+left_int: FixtureEither<Int, Int> = FixtureEither<_, Int>::Left(1)
+none: FixtureEither<Int, String> = FixtureEither<Int, _>::Right("none")
+pair: FixtureEither<String, Int> = FixtureEither<_, _>::Pair("pair", 2)
 generic: Maybe<String> = generic_none::<String>()"#,
     )
     .expect("payload and expected type should infer only constructor `_` slots");
 
-    let mismatch = typecheck_without_std_prelude(
-        r#"defenum Either<$L, $R> { Left($L), Right($R) }
-bad = Either<String, Int>::Left(1)"#,
+    let mismatch = typecheck_with_standard_environment(
+        r#"defenum FixtureEither<$L, $R> { Left($L), Right($R) }
+bad = FixtureEither<String, Int>::Left(1)"#,
     )
     .expect_err("an explicit constructor type argument must remain fixed");
     assert!(mismatch.message.contains("String"), "{mismatch:?}");
 
-    let rigid = typecheck_without_std_prelude(
+    let rigid = typecheck_with_standard_environment(
         r#"defenum Maybe<$T> { Some($T), None }
 def bad::<$T>() -> Maybe<$T> { Maybe<$T>::Some(1) }"#,
     )
@@ -11298,9 +11291,9 @@ def bad::<$T>() -> Maybe<$T> { Maybe<$T>::Some(1) }"#,
         "{rigid:?}"
     );
 
-    let annotation = typecheck_without_std_prelude(
-        r#"defenum Either<$L, $R> { Left($L), Right($R) }
-bad: Either<_, Int> = Either::Left("term")"#,
+    let annotation = typecheck_with_standard_environment(
+        r#"defenum FixtureEither<$L, $R> { Left($L), Right($R) }
+bad: FixtureEither<_, Int> = FixtureEither::Left("term")"#,
     )
     .expect_err("`_` must remain unavailable in ordinary annotations");
     assert!(
@@ -11394,32 +11387,33 @@ bad: Int = identity::<Int>(1)"#,
 }
 
 fn bare_trait_capability_controls_full_parameterized_dispatch() {
-    let missing = r#"deftrait Convert<$To> {
+    let missing = r#"deftrait FixtureConvert<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
 def hidden(value: $A) -> Int {
-  Convert::convert::<Int>(value)
+  FixtureConvert::convert::<Int>(value)
 }"#;
-    let err = typecheck_without_std_prelude(missing)
+    let err = typecheck_with_standard_environment(missing)
         .expect_err("missing bare capability must be rejected");
     assert!(err.message.contains("MissingGenericBound"), "{err:?}");
     assert!(
-        err.message.contains("$A must implement Convert<Int>"),
+        err.message
+            .contains("$A must implement FixtureConvert<Int>"),
         "{err:?}"
     );
 
-    let bounded = r#"deftrait Convert<$To> {
+    let bounded = r#"deftrait FixtureConvert<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
 def hidden(value: $A) -> Int
 where
-  $A: Convert
+  $A: FixtureConvert
 {
-  Convert::convert::<Int>(value)
+  FixtureConvert::convert::<Int>(value)
 }"#;
-    typecheck_without_std_prelude(bounded)
+    typecheck_with_standard_environment(bounded)
         .expect("bare capability must permit a full parameterized dispatch");
 }
 
@@ -11440,7 +11434,7 @@ where
 }
 
 result: List<Int> = mark_list("ok")"#;
-    typecheck_without_std_prelude(source)
+    typecheck_with_standard_environment(source)
         .expect("trait-head and expression arguments must stay structural");
 }
 
@@ -11472,7 +11466,7 @@ where
 
 value: Box<Int> = Box::Box(1)
 result = Use::use(value)"#;
-    typecheck_without_std_prelude(satisfied)
+    typecheck_with_standard_environment(satisfied)
         .expect("the full expression obligation must be proved");
 
     let mismatched = r#"deftrait Marker<$Tag> {
@@ -11502,7 +11496,7 @@ where
 
 value: Box<Int> = Box::Box(1)
 result = Use::use(value)"#;
-    let err = typecheck_without_std_prelude(mismatched)
+    let err = typecheck_with_standard_environment(mismatched)
         .expect_err("a same-name trait with different arguments must not prove an obligation");
     assert_eq!(
         err.reason(),
@@ -11544,7 +11538,7 @@ where
 
 value: Box<Tagged<String>> = Box::Box(Tagged::Tagged("generic"))
 result = Use::use(value)"#;
-    typecheck_without_std_prelude(generic)
+    typecheck_with_standard_environment(generic)
         .expect("a generic trait argument must unify with the requested argument");
 }
 

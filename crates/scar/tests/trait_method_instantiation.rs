@@ -1,15 +1,13 @@
-use scar::error::TypeError;
+#[allow(dead_code)]
+mod support;
+
 use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner};
 use scar::types::{NominalType, Ty};
 
 fn check(source: &str) -> Vec<scar::typed::TypedNode> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
-    scar::typecheck(sigil::resolve(ast).expect("resolve")).expect("typecheck")
-}
-
-fn check_error(source: &str) -> TypeError {
-    let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
-    scar::typecheck(sigil::resolve(ast).expect("resolve")).expect_err("typecheck must fail")
+    support::typecheck(support::resolve_ast_with_builtin_prelude(ast).expect("resolve"))
+        .expect("typecheck")
 }
 
 #[test]
@@ -84,8 +82,6 @@ fn default_self_comes_from_explicit_or_expected_return() {
     ] {
         check(&format!(
             r#"
-deftrait Default {{ def default::<Self>() -> Self }}
-impl Default for Int {{ def default::<Int>() -> Int {{ 0 }} }}
 {call}
 "#
         ));
@@ -96,9 +92,9 @@ impl Default for Int {{ def default::<Int>() -> Int {{ 0 }} }}
 fn user_trait_method_is_not_replaced_by_a_matching_builtin_name() {
     let nodes = check(
         r#"
-deftrait Show { def to_string(self: Self) -> String }
-impl Show for Int { def to_string(self: Self) -> String { "custom" } }
-Show::to_string(1)
+deftrait FixtureShow { def to_string(self: Self) -> String }
+impl FixtureShow for Int { def to_string(self: Self) -> String { "custom" } }
+FixtureShow::to_string(1)
 "#,
     );
     let call = nodes
@@ -121,8 +117,6 @@ Show::to_string(1)
 fn builtin_trait_method_keeps_the_canonical_metadata_id() {
     let nodes = check(
         r#"
-deftrait Add { def add(self: Self, rhs: Self) -> Self }
-impl Add for Int { @builtin def add(self: Self, rhs: Self) -> Self }
 Add::add(1, 2)
 "#,
     );
@@ -153,8 +147,6 @@ Add::add(1, 2)
 fn builtin_show_trait_method_keeps_the_to_string_metadata_id() {
     let nodes = check(
         r#"
-deftrait Show { def to_string(self: Self) -> String }
-impl Show for Int { @builtin def to_string(self: Self) -> String }
 Show::to_string(1)
 "#,
     );
@@ -176,21 +168,15 @@ Show::to_string(1)
 
 #[test]
 fn builtin_trait_method_rejects_runtime_signature_drift() {
-    for source in [
-        r#"
-deftrait Show { def to_string(self: Self) -> Int }
-impl Show for Int { @builtin def to_string(self: Self) -> Int }
-"#,
-        r#"
-deftrait Show { def to_string(self: Self, extra: Self) -> String }
-impl Show for Int { @builtin def to_string(self: Self, extra: Self) -> String }
-"#,
-        r#"
-deftrait Show { def to_string(value: String) -> String }
-impl Show for Int { @builtin def to_string(value: String) -> String }
-"#,
+    for declaration in [
+        "@builtin def to_string(self: Self) -> Int",
+        "@builtin def to_string(self: Self, extra: Self) -> String",
+        "@builtin def to_string(value: String) -> String",
     ] {
-        let error = check_error(source);
+        let int_source = include_str!("../../../lib/types/int.srt")
+            .replace("@builtin def to_string(self: Self) -> String", declaration);
+        let error = support::typecheck_std_modules_with_overrides(&[("Int", &int_source)])
+            .expect_err("builtin signature drift must fail in the real standard environment");
         assert!(
             error.message.contains("canonical runtime signature"),
             "{error:?}"
@@ -202,9 +188,9 @@ impl Show for Int { @builtin def to_string(value: String) -> String }
 fn trait_argument_is_distinct_from_dispatch_subject() {
     let nodes = check(
         r#"
-deftrait TryConvert<$Source> { def try_to::<Self>(value: $Source) -> Self }
-impl TryConvert<Int> for String { def try_to::<String>(value: Int) -> String { "converted" } }
-TryConvert::try_to::<String>(1)
+deftrait FixtureTryConvert<$Source> { def try_to::<Self>(value: $Source) -> Self }
+impl FixtureTryConvert<Int> for String { def try_to::<String>(value: Int) -> String { "converted" } }
+FixtureTryConvert::try_to::<String>(1)
 "#,
     );
     let call = nodes
@@ -264,8 +250,6 @@ Keep::keep::<Int>(Box::new(1))
 fn derived_generic_method_substitutes_field_obligation() {
     check(
         r#"
-deftrait Default { def default::<Self>() -> Self }
-impl Default for Int { def default::<Int>() -> Int { 0 } }
 @derive Default
 defstruct Wrapped<$T> { value: $T }
 impl Wrapped { def new(value: $T) -> Wrapped<$T> { Wrapped { value: value } } }

@@ -7,7 +7,7 @@
 | 項目 | 状況 | 次の作業・根拠 |
 |---|---|---|
 | SR-01 | 確定範囲の設計済み | canonical identity と元エラー保持は実施可能。新規予約の範囲は未確定 |
-| SR-02〜04 | 実装着手 | [標準環境の統一計画](sr_standard_environment_plan.md)にAPI・移行順・受入条件を整理 |
+| SR-02〜04 | 実装・検証済み | [標準環境の統一計画](sr_standard_environment_plan.md)にAPI・移行順・受入条件を整理 |
 | SR-05 | 実装・局所検証済み | 未登録builtin metadataで内部エラー |
 | SR-06 | 既存挙動確認・回帰テスト追加済み | 関数宣言のshadowと中置固定先を区別 |
 | SR-07 | 詳細仕様待ち | Pattern→Expr変換範囲と対象表記の確定が必要 |
@@ -47,6 +47,21 @@ autoimportと明示importを含め、呼出し解決に必要な環境を用意�
 特定のsymbolだけを初期scopeへ先に置く構成を改修する。
 
 コンパイラが型特有の情報を持ち、stdを読み込んだ結果とマージする構成は許容する。テストも標準環境をベースに実施する。
+
+### SR-02〜04の実施記録（2026-10-04、level4）
+
+3項目は宣言UID・初期scope・import状態を共有するため、一つの移行として実装した。
+
+- 標準source inventoryを `crates/sindr/src/stdlib.rs` へ移し、Xldr・Sigilテスト・Scar / Forge helper・解析側が同じ順序と宣言を使うようにした。属性の `auto_import` を一律にtrueへ変更していない。
+- `ResolveEnvironment` を必須とする単独名前解決APIとsession初期化へ統一した。内部の `resolve_program` はimport検査済みの型だけを受け取り、未処理importを無条件に捨てる公開入口を削除した。
+- REPL / preload の独自import処理を撤去し、Sigilが導入済み状態・scope・表示用の適用結果を管理する。失敗時は同じcheckpointへ戻す。`import Add::add` がREPLだけで使えた差も、canonical trait ownerのmember解決へ統一した。修正後はscriptでも `add(1, 2)` が3を返すことを確認した。
+- `print`、`to_string`、`inspect`、`eprint`、`set_exit_code` の初期登録と、その登録をautoimportで上書きする旧分岐を削除した。型固有情報とcompiler生成runtime関数は維持した。
+- 標準なしの通常ソース用テスト入口を標準helperへ移行した。標準と同名のfixtureは目的を保って改名し、標準の模造や重複挿入を削除した。内部scopeや宣言契約の直接テストは残した。
+- 単独文書・project解析も標準stage付きに統一した。固定標準だけの解析ではprocess内でprefixを再利用し、project stage追加時・標準文書編集時は全stageを解析する。異なる宣言表のcheckpointを合成しない。
+
+Redで確認した境界は、単独入口による未知importの誤受理、初期scopeの5関数、解析側の標準autoimport、trait memberの明示importである。独立レビューで見つかった解析cacheのUID衝突は、32個のproject宣言を追加すると標準 `Function::on` の引数とproject関数がUID961を共有する例で再現した。追加stageに標準のみのcheckpointを使わない設計へ修正し、UID一意性のテストを通した。
+
+局所検証はSigil315件、Forge95件、XldrのREPL12bucketが成功。Scarは全体検証で残った標準名衝突等を修正し、該当46件を再確認した。解析側は全144件と追加の標準文書編集・UID境界テストが成功した。workspace全体の最終結果は末尾に記録する。
 
 ## SR-05: builtin lookup失敗を明確な内部エラーにする
 
@@ -158,3 +173,12 @@ Sigil `build_global_scope`はpublic Constを裸名・修飾名で導入し、pri
 SR-02〜04は標準環境を前提に入口とテスト構成を統一し、SR-05は内部lookup失敗を明確なエラーにする。SR-06／08／12／13は回答で示された仕様を前提に扱う。SR-11は呼出し先の一意性を前提とし、再走査を加えない。
 
 完了の判断は各項目の実施記録による。構文・予約範囲の未確定事項と、実装の内部選択だけで進められる項目を区別し、未確定仕様を実装済みとして扱わない。
+
+## 最終検証（2026-10-04）
+
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace --test-threads 4`: 2292件成功、56バイナリ、exit 0。
+- `SURTR_TEST_CACHE=1 rtk proxy cargo run -- test --quiet --all`: exit 0。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。
+- 独立レビュー: canonical identity、環境・import共通化、rollback、標準helper、解析cacheの最終コード差分について未解決の指摘なし。
+
+最初の全体検証で見つかったLSPテストの標準 `print` との名前衝突は、テスト用symbolを `fixture_print` へ変えて修正した。同時実行時の15秒timeoutは並列数を4へ下げて全件を再実行し、成功を確認した。テストの除外・ignored化・時間上限の変更は行っていない。

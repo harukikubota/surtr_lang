@@ -1,31 +1,32 @@
-#[path = "support/special_enum_declarations.rs"]
-mod special_enum_declarations;
+#[allow(dead_code)]
+mod support;
 
 use diagnostics::TypeDiagnosticReason;
 use scar::typed::TypedInner;
 use sigil::resolved::Resolved;
 
-fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
-    let ast = special_enum_declarations::parse_with_canonical_special_enums(source)
-        .expect("source should parse without the standard prelude");
-    sigil::resolve(ast).expect("source should resolve without the standard prelude")
+fn resolve_with_standard_environment(source: &str) -> Vec<Resolved> {
+    let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+        .expect("source should parse with the standard environment");
+    support::resolve_ast_with_builtin_prelude(ast)
+        .expect("source should resolve with the standard environment")
 }
 
-fn typecheck_without_std_prelude(
+fn typecheck_with_standard_environment(
     source: &str,
 ) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
-    scar::typecheck(resolve_without_std_prelude(source))
+    support::typecheck(resolve_with_standard_environment(source))
 }
 
 fn assert_reason(source: &str, expected: TypeDiagnosticReason) -> scar::error::TypeError {
-    let error = typecheck_without_std_prelude(source).expect_err("source must be rejected");
+    let error = typecheck_with_standard_environment(source).expect_err("source must be rejected");
     assert_eq!(error.reason(), Some(expected), "unexpected error: {error}");
     error
 }
 
 #[test]
 fn accepts_declared_return_only_input() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Factory {
   def make::<$A>() -> $A
 }"#,
@@ -45,21 +46,21 @@ fn recursively_finds_missing_return_only_input() {
 #[test]
 fn rejects_input_introduced_by_value_and_return_type_argument() {
     for source in [
-        r#"deftrait Functor
+        r#"deftrait FixtureFunctor
 where
   Self: Type<$A>
 {}
 
 def duplicate::<$F>(value: $F<$A>) -> $F<$A>
 where
-  $F: Functor
+  $F: FixtureFunctor
 { value }"#,
-        r#"deftrait Functor
+        r#"deftrait FixtureFunctor
 where
   Self: Type<$A>
 {}
 
-def duplicate::<Functor>(value: Functor<$A>) -> Functor<$A> { value }"#,
+def duplicate::<FixtureFunctor>(value: FixtureFunctor<$A>) -> FixtureFunctor<$A> { value }"#,
     ] {
         let error = assert_reason(
             source,
@@ -99,8 +100,8 @@ fn rejects_constructor_variable_without_constructor_trait_constraint() {
 
 #[test]
 fn accepts_constructor_variable_with_constructor_trait_constraint() {
-    typecheck_without_std_prelude(
-        r#"deftrait Functor
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureFunctor
 where
   Self: Type<$A>
 {}
@@ -108,7 +109,7 @@ where
 deftrait Keeper {
   def keep(value: $F<$A>) -> $F<$A>
   where
-    $F: Functor
+    $F: FixtureFunctor
 }"#,
     )
     .expect("a constrained constructor variable application should be accepted");
@@ -117,29 +118,29 @@ deftrait Keeper {
 #[test]
 fn rejects_trait_name_as_where_constraint_subject() {
     let error = assert_reason(
-        r#"deftrait Add {}
+        r#"deftrait FixtureAdd {}
 
-deftrait Applicative
+deftrait FixtureApplicative
 where
   Self: Type<$A>
 {}
 
 def invalid_subject::<$F>() -> $F<Unit>
 where
-  Applicative: Add
+  FixtureApplicative: FixtureAdd
 { 0 }"#,
         TypeDiagnosticReason::InvalidTraitConstraintSubject,
     );
     assert_eq!(
         error.message,
-        "trait `Applicative` cannot be used as a constraint subject"
+        "trait `FixtureApplicative` cannot be used as a constraint subject"
     );
 }
 
 #[test]
 fn recursive_value_occurrences_do_not_require_return_type_arguments() {
-    typecheck_without_std_prelude(
-        r#"deftrait Mapper {
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureMapper {
   def map(mapper: ($A -> $B)) -> ($A -> $B)
 }"#,
     )
@@ -148,14 +149,14 @@ fn recursive_value_occurrences_do_not_require_return_type_arguments() {
 
 #[test]
 fn direct_type_constructor_trait_return_type_argument_is_accepted() {
-    typecheck_without_std_prelude(
-        r#"deftrait Alternative
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureAlternative
 where
   Self: Type<$A>
 {}
 
 deftrait GuardFactory {
-  def guard::<Alternative>(condition: Boolean) -> Alternative<Unit>
+  def guard::<FixtureAlternative>(condition: Boolean) -> FixtureAlternative<Unit>
 }"#,
     )
     .expect("direct TypeCtorTrait syntax should normalize as one constructor input");
@@ -163,18 +164,18 @@ deftrait GuardFactory {
 
 #[test]
 fn direct_type_constructor_trait_uses_one_typed_witness() {
-    let typed = typecheck_without_std_prelude(
-        r#"deftrait Alternative
+    let typed = typecheck_with_standard_environment(
+        r#"deftrait FixtureAlternative
 where
   Self: Type<$A>
 {}
 
-impl Alternative for List<$T>
+impl FixtureAlternative for List<$T>
 where
-  $T: Alternative.$A
+  $T: FixtureAlternative.$A
 {}
 
-def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
+def guard::<FixtureAlternative>(condition: Boolean) -> FixtureAlternative<Unit> {
   []
 }"#,
     )
@@ -210,7 +211,7 @@ make()"#,
 
 #[test]
 fn accepts_return_only_input_inferred_from_expected_result() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
 value: List<Int> = make()"#,
     )
@@ -228,7 +229,7 @@ value = make()"#,
 
 #[test]
 fn accepts_return_only_input_forwarded_by_an_outer_generic_result() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
 def forward::<$A>() -> List<$A> { make() }"#,
     )
@@ -242,38 +243,38 @@ fn forwards_return_only_where_obligation_through_outer_generic_bound() {
         "if(True, inner(), inner())",
         "match 0 { 0 => inner(), _ => inner() }",
     ] {
-        let source = r#"deftrait Default {
+        let source = r#"deftrait FixtureDefault {
   def default::<Self>() -> Self
 }
 
-impl Default for Int {
+impl FixtureDefault for Int {
   def default::<Int>() -> Int { 0 }
 }
 
 def inner::<$A>() -> $A
 where
-  $A: Default
+  $A: FixtureDefault
 {
-  Default::default()
+  FixtureDefault::default()
 }
 
 def outer::<$A>() -> $A
 where
-  $A: Default
+  $A: FixtureDefault
 {
   BODY
 }
 
 value: Int = outer()"#
             .replace("BODY", tail);
-        typecheck_without_std_prelude(&source)
+        typecheck_with_standard_environment(&source)
             .unwrap_or_else(|error| panic!("generic proof forwarding failed for {tail}: {error}"));
     }
 }
 
 #[test]
 fn callable_result_binding_requires_a_concrete_return_type_argument() {
-    let error = typecheck_without_std_prelude(
+    let error = typecheck_with_standard_environment(
         r#"def identity::<$A>() -> ($A -> $A) { {|value| value} }
 callable = identity()
 result: Int = callable(42)"#,
@@ -286,7 +287,7 @@ result: Int = callable(42)"#,
         "{error:?}"
     );
 
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"def identity::<$A>() -> ($A -> $A) { {|value| value} }
 callable: (Int -> Int) = identity()
 result: Int = callable(42)"#,
@@ -296,7 +297,7 @@ result: Int = callable(42)"#,
 
 #[test]
 fn accepts_explicit_return_type_argument_on_ordinary_callable() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
 value: List<Int> = make::<Int>()"#,
     )
@@ -305,7 +306,7 @@ value: List<Int> = make::<Int>()"#,
 
 #[test]
 fn ordinary_return_type_argument_requires_a_complete_type() {
-    let error = typecheck_without_std_prelude(
+    let error = typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
 value = make::<List>()"#,
     )
@@ -318,15 +319,15 @@ value = make::<List>()"#,
 
 #[test]
 fn trait_method_return_type_argument_accepts_a_structural_bare_target_head() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"defenum Source<$A> { Source($A), }
 defenum Target<$A> { Target($A), }
 
-deftrait Convert<$To> {
+deftrait FixtureConvert<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
-impl Convert<Target<$A>> for Source<$A> {
+impl FixtureConvert<Target<$A>> for Source<$A> {
   def convert::<Target<$A>>(self: Self) -> Target<$A> {
     match self {
       Source::Source(value) => Target::Target(value),
@@ -335,23 +336,23 @@ impl Convert<Target<$A>> for Source<$A> {
 }
 
 source: Source<Int> = Source::Source(1)
-bare: Target<Int> = Convert::convert::<Target>(source)
-full: Target<Int> = Convert::convert::<Target<Int>>(source)"#,
+bare: Target<Int> = FixtureConvert::convert::<Target>(source)
+full: Target<Int> = FixtureConvert::convert::<Target<Int>>(source)"#,
     )
     .expect("the matching impl must share its payload variable from source to target");
 }
 
 #[test]
 fn trait_method_bare_target_head_rejects_an_unshared_argument() {
-    let error = typecheck_without_std_prelude(
+    let error = typecheck_with_standard_environment(
         r#"defenum Source<$A> { Source($A), }
 defenum Target<$L, $A> { Target($A), }
 
-deftrait Convert<$To> {
+deftrait FixtureConvert<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
-impl Convert<Target<$L, $A>> for Source<$A> {
+impl FixtureConvert<Target<$L, $A>> for Source<$A> {
   def convert::<Target<$L, $A>>(self: Self) -> Target<$L, $A> {
     match self {
       Source::Source(value) => Target::Target(value),
@@ -360,7 +361,7 @@ impl Convert<Target<$L, $A>> for Source<$A> {
 }
 
 source: Source<Int> = Source::Source(1)
-value = Convert::convert::<Target>(source)"#,
+value = FixtureConvert::convert::<Target>(source)"#,
     )
     .expect_err("a bare head must not infer a captured argument from impl count or order");
     assert!(
@@ -377,20 +378,20 @@ value = Convert::convert::<Target>(source)"#,
 
 #[test]
 fn trait_method_top_level_underscore_uses_expected_return_inference() {
-    typecheck_without_std_prelude(
-        r#"deftrait Default {
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureDefault {
   def default::<Self>() -> Self
 }
 
-impl Default for Int {
+impl FixtureDefault for Int {
   def default::<Int>() -> Int { 0 }
 }
 
-value: Int = Default::default::<_>()"#,
+value: Int = FixtureDefault::default::<_>()"#,
     )
     .expect("a zero-argument Trait method's `_` RTA should defer to the expected result");
 
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Maker {
   def make::<$A>(self: Self) -> List<$A>
 }
@@ -406,97 +407,97 @@ value: List<Int> = Maker::make::<_>(())"#,
 
 #[test]
 fn constructor_return_type_argument_accepts_bare_full_and_partial_carriers() {
-    typecheck_without_std_prelude(
-        r#"deftrait Alternative
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureAlternative
 where
   Self: Type<$A>
 {}
 
-impl Alternative for List<$T>
+impl FixtureAlternative for List<$T>
 where
-  $T: Alternative.$A
+  $T: FixtureAlternative.$A
 {}
 
-def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> { [] }
+def guard::<FixtureAlternative>(condition: Boolean) -> FixtureAlternative<Unit> { [] }
 value: List<Unit> = guard::<List>(True)"#,
     )
     .expect("a direct constructor input should accept its bare constructor head");
 
-    typecheck_without_std_prelude(
-        r#"deftrait Alternative
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureAlternative
 where
   Self: Type<$A>
 {}
 
-impl Alternative for List<$T>
+impl FixtureAlternative for List<$T>
 where
-  $T: Alternative.$A
+  $T: FixtureAlternative.$A
 {}
 
-def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> { [] }
+def guard::<FixtureAlternative>(condition: Boolean) -> FixtureAlternative<Unit> { [] }
 value: List<Unit> = guard::<List<Unit>>(True)"#,
     )
     .expect("a constructor input should accept a fully applied carrier");
 
-    typecheck_without_std_prelude(
-        r#"deftrait Applicative
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureApplicative
 where
   Self: Type<$A>
 {}
 
-defenum Either<$L, $R> {
+defenum FixtureEither<$L, $R> {
   Left($L),
   Right($R),
 }
 
-impl Applicative for Either<$L, $R>
+impl FixtureApplicative for FixtureEither<$L, $R>
 where
-  $R: Applicative.$A
+  $R: FixtureApplicative.$A
 {}
 
-def pure::<Applicative>(value: $A) -> Applicative<$A> { Either::Right(value) }
-value: Either<String, Int> = pure::<Either<String, _>>(10)"#,
+def pure::<FixtureApplicative>(value: $A) -> FixtureApplicative<$A> { FixtureEither::Right(value) }
+value: FixtureEither<String, Int> = pure::<FixtureEither<String, _>>(10)"#,
     )
     .expect("a constructor input should infer only the underscore position");
 }
 
 #[test]
 fn applied_constructor_return_type_argument_accepts_enclosing_fixed_type_variable() {
-    typecheck_without_std_prelude(
-        r#"deftrait Applicative
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureApplicative
 where
   Self: Type<$A>
 {
   def pure::<Self>(value: $A) -> Self<$A>
 }
 
-defenum Either<$L, $R> {
+defenum FixtureEither<$L, $R> {
   Left($L),
   Right($R),
 }
 
-impl Applicative for Either<$L, $R>
+impl FixtureApplicative for FixtureEither<$L, $R>
 where
-  $R: Applicative.$A
+  $R: FixtureApplicative.$A
 {
-  def pure::<Either<$L, $R>>(value: $A) -> Either<$L, $A> {
-    Either::Right(value)
+  def pure::<FixtureEither<$L, $R>>(value: $A) -> FixtureEither<$L, $A> {
+    FixtureEither::Right(value)
   }
 }
 
-def wrap(value: $L) -> Either<$L, Int> {
-  Applicative::pure::<Either<$L, _>>(1)
+def wrap(value: $L) -> FixtureEither<$L, Int> {
+  FixtureApplicative::pure::<FixtureEither<$L, _>>(1)
 }
 
-value: Either<String, Int> = wrap("tag")"#,
+value: FixtureEither<String, Int> = wrap("tag")"#,
     )
     .expect("an applied carrier may use an enclosing ordinary type variable as a fixed argument");
 }
 
 #[test]
 fn constructor_return_type_argument_rejects_an_outer_constructor_variable() {
-    let error = typecheck_without_std_prelude(
-        r#"deftrait Applicative
+    let error = typecheck_with_standard_environment(
+        r#"deftrait FixtureApplicative
 where
   Self: Type<$A>
 {
@@ -505,9 +506,9 @@ where
 
 def invalid(value: $F<Int>) -> $F<Int>
 where
-  $F: Applicative
+  $F: FixtureApplicative
 {
-  Applicative::pure::<$F>(1)
+  FixtureApplicative::pure::<$F>(1)
 }"#,
     )
     .expect_err("the carrier identity cannot be supplied by an outer constructor variable");
@@ -550,10 +551,10 @@ where
 }
 
 value: Bounded<Int, EXPECTED> = Maker::make::<Bounded<Int, _>>()"#;
-    typecheck_without_std_prelude(&source.replace("EXPECTED", "Int"))
+    typecheck_with_standard_environment(&source.replace("EXPECTED", "Int"))
         .expect("an RTA-local `_` should be checked after expected-result inference");
 
-    let error = typecheck_without_std_prelude(&source.replace("EXPECTED", "String"))
+    let error = typecheck_with_standard_environment(&source.replace("EXPECTED", "String"))
         .expect_err("the deferred declaration constraint must reject an invalid inferred type");
     assert!(
         error
@@ -566,38 +567,38 @@ value: Bounded<Int, EXPECTED> = Maker::make::<Bounded<Int, _>>()"#;
 #[test]
 fn rejects_constructor_head_with_an_unresolved_fixed_argument() {
     assert_reason(
-        r#"deftrait Alternative
+        r#"deftrait FixtureAlternative
 where
   Self: Type<$A>
 {}
 
-defenum Either<$L, $R> {
+defenum FixtureEither<$L, $R> {
   Left($L),
   Right($R),
 }
 
-impl Alternative for Either<$L, $R>
+impl FixtureAlternative for FixtureEither<$L, $R>
 where
-  $R: Alternative.$A
+  $R: FixtureAlternative.$A
 {}
 
-def choose::<Alternative>() -> Alternative<Unit> { Either::Right(()) }
-value = choose::<Either>()"#,
+def choose::<FixtureAlternative>() -> FixtureAlternative<Unit> { FixtureEither::Right(()) }
+value = choose::<FixtureEither>()"#,
         TypeDiagnosticReason::AmbiguousReturnTypeArgument,
     );
 }
 
 #[test]
 fn alternative_empty_allows_a_user_defined_captured_carrier_representation() {
-    typecheck_without_std_prelude(
-        r#"deftrait Applicative
+    typecheck_with_standard_environment(
+        r#"deftrait FixtureApplicative
 where
   Self: Type<$A>
 {}
 
-deftrait Alternative
+deftrait FixtureAlternative
 where
-  Self: Applicative
+  Self: FixtureApplicative
 {
   def empty::<Self>() -> Self
   def choose(left: Self<$A>, right: Self<$A>) -> Self<$A>
@@ -608,12 +609,12 @@ defenum Choice<$L, $A> {
   Value($A),
 }
 
-impl Applicative for Choice<$L, $T>
+impl FixtureApplicative for Choice<$L, $T>
 where
-  $T: Applicative.$A
+  $T: FixtureApplicative.$A
 {}
 
-impl Alternative for Choice<String, $T> {
+impl FixtureAlternative for Choice<String, $T> {
   def empty::<Choice<String, $T>>() -> Choice<String, $T> {
     Choice::Empty("missing")
   }
@@ -623,24 +624,26 @@ impl Alternative for Choice<String, $T> {
   }
 }
 
-empty: Choice<String, Int> = Alternative::empty::<Choice<String, Int>>()
+empty: Choice<String, Int> = FixtureAlternative::empty::<Choice<String, Int>>()
 first: Choice<String, Int> = Choice::Value(1)
-value: Choice<String, Int> = Alternative::choose(empty, first)"#,
+value: Choice<String, Int> = FixtureAlternative::choose(empty, first)"#,
     )
-    .expect("Alternative::empty must use the user impl rather than a representation allowlist");
+    .expect(
+        "FixtureAlternative::empty must use the user impl rather than a representation allowlist",
+    );
 }
 
 #[test]
 fn alternative_empty_rejects_an_unresolved_mapped_slot_inside_a_carrier_rta() {
     assert_reason(
-        r#"deftrait Applicative
+        r#"deftrait FixtureApplicative
 where
   Self: Type<$A>
 {}
 
-deftrait Alternative
+deftrait FixtureAlternative
 where
-  Self: Applicative
+  Self: FixtureApplicative
 {
   def empty::<Self>() -> Self
 }
@@ -650,18 +653,18 @@ defenum Choice<$L, $A> {
   Value($A),
 }
 
-impl Applicative for Choice<$L, $T>
+impl FixtureApplicative for Choice<$L, $T>
 where
-  $T: Applicative.$A
+  $T: FixtureApplicative.$A
 {}
 
-impl Alternative for Choice<String, $T> {
+impl FixtureAlternative for Choice<String, $T> {
   def empty::<Choice<String, $T>>() -> Choice<String, $T> {
     Choice::Empty("missing")
   }
 }
 
-value = Alternative::empty::<Choice<String, _>>()"#,
+value = FixtureAlternative::empty::<Choice<String, _>>()"#,
         TypeDiagnosticReason::AmbiguousReturnTypeArgument,
     );
 }
@@ -669,23 +672,23 @@ value = Alternative::empty::<Choice<String, _>>()"#,
 #[test]
 fn rejects_captured_constructor_head_with_an_unresolved_fixed_argument() {
     assert_reason(
-        r#"deftrait Alternative
+        r#"deftrait FixtureAlternative
 where
   Self: Type<$A>
 {}
 
-defenum Either<$L, $R> {
+defenum FixtureEither<$L, $R> {
   Left($L),
   Right($R),
 }
 
-impl Alternative for Either<$L, $R>
+impl FixtureAlternative for FixtureEither<$L, $R>
 where
-  $R: Alternative.$A
+  $R: FixtureAlternative.$A
 {}
 
-def choose::<Alternative>() -> Alternative<Unit> { Either::Right(()) }
-factory = &choose::<Either>"#,
+def choose::<FixtureAlternative>() -> FixtureAlternative<Unit> { FixtureEither::Right(()) }
+factory = &choose::<FixtureEither>"#,
         TypeDiagnosticReason::AmbiguousReturnTypeArgument,
     );
 }
@@ -724,14 +727,14 @@ where
 def choose::<Factory>() -> Factory<Unit> {{ Factory::make() }}
 value: Second<Unit> = choose()"#
         );
-        typecheck_without_std_prelude(&source)
+        typecheck_with_standard_environment(&source)
             .expect("expected return type must select Second regardless of impl order");
     }
 }
 
 #[test]
 fn omitted_and_underscore_return_type_arguments_share_inference() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
 omitted: List<Int> = make()
 underscore: List<Int> = make::<_>()"#,
@@ -807,7 +810,7 @@ value = choose::<Int, _>()"#,
 
 #[test]
 fn accepts_explicit_return_type_argument_capture_with_expected_shape() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
 factory: (-> List<Int>) = &make::<Int>"#,
     )
@@ -852,7 +855,7 @@ factory = &make"#,
 
 #[test]
 fn expected_generic_result_allows_err_only_self_match_arm() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"def map_result(value: Result<$A>, mapper: ($A -> $B)) -> Result<$B> {
   match value {
     Ok(inner) => Ok(mapper(inner)),

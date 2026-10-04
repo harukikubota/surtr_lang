@@ -31,7 +31,12 @@ Sigil does not check types and does not generate bytecode.
 ## Usage
 
 ```rust
-use sigil::resolve;
+use sigil::{resolve, ResolveEnvironment};
 
-let resolved = resolve(ast)?;
+let environment = ResolveEnvironment::from_stages(&loaded_module_stages)?;
+let resolved = resolve(ast, &environment)?;
 ```
+
+The loader supplies the standard stages and user modules. Single-source resolution and
+REPL sessions require this environment and apply the same import rules. Sigil does not
+load source files or provide an alternative source entry point without imports.
