@@ -419,9 +419,12 @@ defmod Kernel {
   @builtin def inspect(a: $A) -> String
 
   @doc """
-  Return a placeholder failure for a `Result`-returning code path.
-  This is useful for generated stubs and partial implementations where the
-  surrounding API already returns `Result<...>`.
+  Mark an unimplemented function that returns `Result` by returning `Err(NotImplemented)`.
+
+  ## Examples
+  def load_config() -> Result<String> {
+    todo()
+  }
 
   ## REPL
   xldr(1)> inspect(todo())
