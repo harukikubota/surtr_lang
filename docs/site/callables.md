@@ -1,11 +1,16 @@
 # 関数コールと関数値
 
-Surtr では、見た目が似ていても次の 4 つは役割が違います。
+Surtr では、次の式や値を区別します。
 
-- call 式: `add(1, 2)`
-- capture: `&add`, `&User`, `&User::get_name`, `&add(&1, 10)`, `&`+``, `&`Boolean::not``
-- closure: `{|x| x + 1}`
-- backtick FuncLiteral: ``1 `add` 2``, ``1 `+` 2``
+| 用語 | 意味・例 |
+|---|---|
+| 関数呼出し | 必要な引数をすべて満たした呼出し。`add(1, 2)` |
+| クロージャリテラル | `{|x| x + 1}` のように関数値を作る式 |
+| キャプチャ | `&add` や `&add(&1, 10)` のように関数値を作る式 |
+| 関数値変数 | クロージャやキャプチャなどの関数値を格納した変数 |
+| 引数待ち受け呼出し | パイプ右辺で、注入される引数を待つ呼出し。`2 |> add(1)` の `add(1)` |
+
+backtick FuncLiteral の ``1 `add` 2`` や ``1 `+` 2`` は、中置形式の関数呼出しです。
 
 このページでは「いつ値になるか」「どこで呼ばれるか」をまとめます。
 
@@ -13,9 +18,9 @@ Surtr では、見た目が似ていても次の 4 つは役割が違います�
 
 - 裸の関数名は関数値になりません
 - 関数値がほしいときは `&...` か closure を使います
-- `add(1, 2)` は call、`&add` は capture です
-- backtick FuncLiteral は中置 call の書き換えであり、関数値にはなりません
-- compose 系演算子 `>>`, `>*`, `>=>` は call ではなく関数値を要求します
+- `add(1, 2)` は関数呼出し、`&add` はキャプチャです
+- backtick FuncLiteral は中置形式の関数呼出しで、呼び出した関数の結果を返します
+- 合成演算子 `>>`, `>*`, `>=>` は、評価後の値が型契約を満たす関数値であることを要求します。引数の注入はしません
 - unqualified infix `` `on` `` は常に `Function::on` を呼びます
 - closure / capture 内の trait helper は、期待 callable 型がある場所まで解決を遅延できます
 - local callable を変数へ束縛するときは concrete な signature が必要です
@@ -32,7 +37,7 @@ print(to_string(add(1, 2)))
 print(to_string(User::get_name(user)))
 ```
 
-call はその場で実行され、結果の値を返します。
+関数呼出しは結果の値を返します。通常の引数に別の関数呼出しを含む式を渡す場合も、その式を評価した値を渡します。Lazy 引数には専用の評価規則があります。
 
 ```surtr
 sum = add(1, 2)              # Int
@@ -56,14 +61,18 @@ text = apply("surtr", {|x| x})
 
 generic 関数の capture も同じです。`&identity` を変数へ置くなら concrete な callable 注釈が必要ですが、`apply(1, &identity)` のような直接引数では expected type から具体化できます。
 
-一方で、compose 系が欲しいのは「実行結果」ではなく「あとで呼べる値」です。
+合成にはキャプチャ、クロージャリテラル、関数値変数のほか、関数値を返す関数呼出しも使えます。
 
 ```surtr
-pipeline = &trim >> &render   # OK
-pipeline = trim() >> render() # NG
+def make_add(n: Int) -> (Int -> Int) { {|x: Int| x + n} }
+def double(x: Int) -> Int { x * 2 }
+pipeline = make_add(1) >> &double
+pipeline(2) # 6
 ```
 
-## apply 系での call 式
+`make_add(1)` は引数が満たされた関数呼出しで、返った関数値を合成します。合成では括弧で囲む必要はありません。`add(1) >> &double` は `add` の引数が不足するため拒否されます。`2 |> add(1)` の引数待ち受け呼出しとは異なり、合成による引数注入はありません。
+
+## apply 系での引数待ち受け呼出し
 
 `|>`, `|*>`, `|>=` の右辺では、call 式に左辺値が第 1 引数として注入されます。
 `|*|` は call 式への注入ではなく、文脈内 callable と文脈内 value の適用です。
@@ -252,6 +261,7 @@ left `concat` right
 - unqualified ``left `on` right`` は `Function::on(left, right)` として扱います
 - ``left `Function::on` right`` も同じ意味で、flow 演算子より低優先度です
 - ``left `Other::on` right`` は通常どおり `Other::on(left, right)` です
+- 通常の `on(...)`、`&on`、パイプ右辺の `on(...)` は名前解決で選ばれた関数を使います。同名の関数宣言で標準の `on` を隠しても、裸の中置 `` `on` `` の呼出し先は `Function::on` のままです
 
 `on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名です。変数・引数・Patternの束縛名・フィールド名には使えませんが、関数の宣言名には使えます。import規則は変わりません。標準の `and` / `or` は短絡評価を維持し、裸の比較関数6名は比較演算子と同じ優先度です。`MyMod::and` などの修飾中置Callは通常のCallとして引数を評価します。
 

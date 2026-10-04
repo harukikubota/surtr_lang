@@ -2973,7 +2973,7 @@ impl VM {
             .collect()
     }
 
-    pub fn process_runtime_snapshot(&self) -> VmProcessRuntimeSnapshot {
+    pub fn process_runtime_snapshot(&self) -> Result<VmProcessRuntimeSnapshot, RuntimeError> {
         let specs = self
             .process_runtime
             .specs_by_id
@@ -3009,7 +3009,7 @@ impl VM {
                             target: context.target.label(),
                         }
                     });
-                    VmProcessInstanceSnapshot {
+                    Ok(VmProcessInstanceSnapshot {
                         pid: process.pid,
                         process_name,
                         spec_id: process.spec_id,
@@ -3020,11 +3020,12 @@ impl VM {
                         state_value: process
                             .state_value
                             .as_ref()
-                            .map(|value| crate::builtin::inspect_value(self, value)),
+                            .map(|value| crate::builtin::inspect_value(self, value))
+                            .transpose()?,
                         execution_context,
-                    }
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, RuntimeError>>()?;
         let worker_sets = self
             .process_runtime
             .worker_sets
@@ -3085,24 +3086,26 @@ impl VM {
             .process_runtime
             .futures
             .values()
-            .map(|future| VmFutureSnapshot {
-                future_id: future.id,
-                owner: future.owner,
-                state: future.state.label().into(),
-                value: match &future.state {
-                    FutureState::Ready(value) | FutureState::Cancelled(value) => {
-                        Some(crate::builtin::inspect_value(self, value))
-                    }
-                    FutureState::Running => None,
-                },
-                deadline_tick: future.deadline_tick,
-                waiter_count: future.waiters.len(),
-                cancel_on_timeout: future.cancel_on_timeout,
-                correlation_id: future.correlation_id,
+            .map(|future| {
+                Ok(VmFutureSnapshot {
+                    future_id: future.id,
+                    owner: future.owner,
+                    state: future.state.label().into(),
+                    value: match &future.state {
+                        FutureState::Ready(value) | FutureState::Cancelled(value) => {
+                            Some(crate::builtin::inspect_value(self, value)?)
+                        }
+                        FutureState::Running => None,
+                    },
+                    deadline_tick: future.deadline_tick,
+                    waiter_count: future.waiters.len(),
+                    cancel_on_timeout: future.cancel_on_timeout,
+                    correlation_id: future.correlation_id,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, RuntimeError>>()?;
 
-        VmProcessRuntimeSnapshot {
+        Ok(VmProcessRuntimeSnapshot {
             counters: self.process_runtime.counters(),
             specs,
             singleton_slots: self.process_runtime.singleton_by_name.clone(),
@@ -3112,7 +3115,7 @@ impl VM {
             replies,
             deadlines,
             futures,
-        }
+        })
     }
 
     /// Read a local slot value (used by REPL display logic).
@@ -4653,16 +4656,18 @@ impl VM {
             .args
             .iter()
             .zip(values)
-            .map(|(arg, value)| DbgRenderArg {
-                span_start: arg.span_start,
-                span_end: arg.span_end,
-                label: format!(
-                    "{}: {}",
-                    arg.ty_name,
-                    crate::builtin::inspect_value(self, value)
-                ),
+            .map(|(arg, value)| {
+                Ok(DbgRenderArg {
+                    span_start: arg.span_start,
+                    span_end: arg.span_end,
+                    label: format!(
+                        "{}: {}",
+                        arg.ty_name,
+                        crate::builtin::inspect_value(self, value)?
+                    ),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, RuntimeError>>()?;
 
         Ok(render_dbg_report(&file, source, &template, &args))
     }
@@ -11842,7 +11847,7 @@ mod tests {
         vm.process_runtime
             .mark_process_waiting(pid, ProcessWaitReason::Reply(correlation_id));
 
-        let snapshot = vm.process_runtime_snapshot();
+        let snapshot = vm.process_runtime_snapshot().unwrap();
         assert_eq!(snapshot.specs.len(), 1);
         assert_eq!(snapshot.specs[0].type_name, "Counter");
         assert_eq!(snapshot.singleton_slots.get("Counter"), Some(&pid));
@@ -11860,6 +11865,21 @@ mod tests {
         assert_eq!(snapshot.futures.len(), 1);
         assert_eq!(snapshot.futures[0].state, "running");
         assert_eq!(snapshot.futures[0].owner, Some(pid));
+    }
+
+    #[test]
+    fn process_runtime_snapshot_propagates_display_errors() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let future_id = vm.process_runtime.allocate_future(None, None, false);
+        let future = vm.process_runtime.futures.get_mut(&future_id).unwrap();
+        future.state = super::FutureState::Ready(Value::Tagged {
+            tag: 9999,
+            fields: vec![],
+        });
+        assert_eq!(
+            vm.process_runtime_snapshot().unwrap_err().message,
+            "unknown runtime tag: 9999"
+        );
     }
 
     #[test]
@@ -12267,7 +12287,7 @@ mod tests {
                 .expect("task cast should succeed");
         }
 
-        let snapshot = vm.process_runtime_snapshot();
+        let snapshot = vm.process_runtime_snapshot().unwrap();
         assert_eq!(
             snapshot.counters.process_spec_count,
             singleton_count as usize + 1

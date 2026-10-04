@@ -45,7 +45,7 @@ test("StyledDoc") {
 
     it("indents each line including blank ones") {
       do {
-        doc = StyledDoc::indent(
+        doc <- StyledDoc::indent(
         StyledDoc::append(
         StyledDoc::line("one"),
         StyledDoc::append(StyledDoc::newline(), StyledDoc::line("two")),
@@ -54,6 +54,24 @@ test("StyledDoc") {
         )
 
         assert_doc_plain_eq("  one\n  \n  two", doc)
+      }
+    }
+
+    it("rejects negative indentation widths without hiding the repeat error") {
+      do {
+        result = StyledDoc::indent(StyledDoc::text("x"), -1)
+        assert_err_kind(NegativeRepeatCount, result)
+        assert_err_contains("repeat count must be non-negative: -1", result)
+      }
+    }
+
+    it("preserves content for zero width and accepts empty documents") {
+      do {
+        unchanged <- StyledDoc::indent(StyledDoc::text("one\n\ntwo"), 0)
+        empty <- StyledDoc::indent(StyledDoc::empty(), 2)
+        assert_doc_plain_eq("one\n\ntwo", unchanged)
+        assert_doc_plain_eq("", empty)
+        assert_err_kind(NegativeRepeatCount, StyledDoc::indent(StyledDoc::empty(), -1))
       }
     }
 

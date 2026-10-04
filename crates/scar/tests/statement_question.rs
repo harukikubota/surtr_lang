@@ -179,11 +179,8 @@ fn question_does_not_accept_nominal_result_lookalikes() {
 
 #[test]
 fn question_preserves_result_effect_targets_in_callable_and_do() {
-    let source = format!(
-        "{}\ndef run() -> OptionT<Result, Int> {{ Ok(())?\n OptionT::some::<Result>(1) }}\nresult = do::<OptionT<Result, _>> {{ Ok(())?; OptionT::some::<Result>(1) }}",
-        include_str!("../../../lib/types/monad_transformer/option_t.srt"),
-    );
-    let typed = typecheck_with_builtin_prelude(&source);
+    let source = "def run() -> OptionT<Result, Int> { Ok(())?\n OptionT::some::<Result>(1) }\nresult = do::<OptionT<Result, _>> { Ok(())?; OptionT::some::<Result>(1) }";
+    let typed = typecheck_with_builtin_prelude(source);
     let rhs = result_binding_rhs(&typed);
     let TypedInner::DoSafeBind(control) = &rhs.node else {
         panic!("question in Result-effect do must preserve do-local control")

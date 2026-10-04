@@ -18,7 +18,6 @@ use eldr::value::{TypeKind, Value};
 use scar::typed::{TypedInner, TypedNode, TypedPattern};
 use scar::types::Ty;
 use serde::{Deserialize, Serialize};
-use sigil::error::ResolveError;
 use sindr::builtin::builtin_function_metas;
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::names::SymbolCapabilities;
@@ -473,12 +472,6 @@ impl ReplSessionPhase {
     }
 }
 
-#[derive(Debug, Default)]
-struct ReplImportResult {
-    imported_symbols: Vec<String>,
-    success_labels: Vec<String>,
-}
-
 #[derive(Debug, Clone, Default)]
 enum ReplReloadSeed {
     #[default]
@@ -915,15 +908,16 @@ impl ReplEngine {
             }
         }
 
+        let bootstrap_state = default_repl_bootstrap_state()
+            .map_err(repl_load_error_into_load_error)
+            .map_err(EldrLoadError::Load)?;
         let mut engine = Self {
             sources: repl_sources.sources,
             module_stages: repl_sources.module_stages,
             declaration_index: Default::default(),
             repl_source_id: repl_sources.repl_source_id,
             repl_module_path: repl_sources.repl_module_path.clone(),
-            sigil_session: sigil::SigilSession::with_module_path(Some(
-                repl_sources.repl_module_path,
-            )),
+            sigil_session: bootstrap_state.sigil_session.clone(),
             scar_session: scar::ScarSession::new(),
             forge_session,
             vm,
@@ -1195,297 +1189,6 @@ impl ReplEngine {
         self.sync_scar_fun_index_with_vm();
         self.process_metadata = state.process_metadata.clone();
         Ok(())
-    }
-
-    fn bind_import_name(
-        &mut self,
-        short_name: &str,
-        uid: u32,
-        module_name: &str,
-        span: &Span,
-        imported_symbols: &mut Vec<String>,
-    ) -> Result<(), ResolveError> {
-        if let Some(existing_uid) = self.sigil_session.lookup_uid(short_name) {
-            if existing_uid == uid {
-                return Ok(());
-            }
-            return Err(ResolveError {
-                message: format!(
-                    "Import conflict for `{}` from module `{}`",
-                    short_name, module_name
-                ),
-                span: span.clone(),
-                diagnostic: sigil::error::ResolveErrorDiagnostic {
-                    reason: sigil::error::ResolveErrorReason::Import,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            });
-        }
-
-        self.sigil_session.define_with_id(short_name, uid);
-        if !imported_symbols.iter().any(|name| name == short_name) {
-            imported_symbols.push(short_name.to_string());
-        }
-        Ok(())
-    }
-
-    fn import_module_all(
-        &mut self,
-        module_name: &str,
-        span: &Span,
-        imported_symbols: &mut Vec<String>,
-    ) -> Result<(), ResolveError> {
-        if let Some(trait_entry) = self.declaration_index.values().find(|entry| {
-            entry.kind == sigil::DeclarationKind::Trait
-                && (entry.name == module_name
-                    || crate::surface_path_name(&entry.fq_name) == module_name)
-        }) {
-            let trait_fq_name = trait_entry.fq_name.clone();
-            let trait_name = trait_entry.name.clone();
-            let trait_uid = self
-                .sigil_session
-                .lookup_uid(&trait_fq_name)
-                .ok_or_else(|| ResolveError {
-                    message: format!(
-                        "Import target `{}` is not available in the current stage",
-                        trait_fq_name
-                    ),
-                    span: span.clone(),
-                    diagnostic: sigil::error::ResolveErrorDiagnostic {
-                        reason: sigil::error::ResolveErrorReason::Import,
-                        subject: None,
-                    },
-                    related_labels: Vec::new(),
-                })?;
-            self.bind_import_name(&trait_name, trait_uid, module_name, span, imported_symbols)?;
-
-            let method_prefix = format!("{}::", trait_fq_name);
-            let methods = self
-                .declaration_index
-                .values()
-                .filter(|entry| {
-                    entry.kind == sigil::DeclarationKind::TraitMethod
-                        && entry.fq_name.starts_with(&method_prefix)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            for method_entry in methods {
-                let method_uid = self
-                    .sigil_session
-                    .lookup_uid(&method_entry.fq_name)
-                    .ok_or_else(|| ResolveError {
-                        message: format!(
-                            "Import target `{}` is not available in the current stage",
-                            method_entry.fq_name
-                        ),
-                        span: span.clone(),
-                        diagnostic: sigil::error::ResolveErrorDiagnostic {
-                            reason: sigil::error::ResolveErrorReason::Import,
-                            subject: None,
-                        },
-                        related_labels: Vec::new(),
-                    })?;
-                self.bind_import_name(
-                    &method_entry.name,
-                    method_uid,
-                    module_name,
-                    span,
-                    imported_symbols,
-                )?;
-                if let Some(short_method_name) = method_entry.name.rsplit("::").next() {
-                    self.bind_import_name(
-                        short_method_name,
-                        method_uid,
-                        module_name,
-                        span,
-                        imported_symbols,
-                    )?;
-                }
-            }
-            return Ok(());
-        }
-
-        let mut imported_any = false;
-        let mut blocked_by_stage = false;
-        let current_stage_index = self.module_stages.len();
-        let entries = self
-            .declaration_index
-            .values()
-            .filter(|entry| crate::surface_path_name(&entry.module_path) == module_name)
-            .cloned()
-            .collect::<Vec<_>>();
-
-        for entry in entries {
-            if entry.stage_index >= current_stage_index {
-                blocked_by_stage = true;
-                continue;
-            }
-            let Some(uid) = self.sigil_session.lookup_uid(&entry.fq_name) else {
-                blocked_by_stage = true;
-                continue;
-            };
-            self.bind_import_name(&entry.name, uid, module_name, span, imported_symbols)?;
-            imported_any = true;
-        }
-
-        if imported_any {
-            Ok(())
-        } else if blocked_by_stage {
-            Err(ResolveError {
-                message: format!(
-                    "Import target `{}` is not available in the current stage",
-                    module_name
-                ),
-                span: span.clone(),
-                diagnostic: sigil::error::ResolveErrorDiagnostic {
-                    reason: sigil::error::ResolveErrorReason::Import,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            })
-        } else {
-            Err(ResolveError {
-                message: format!("Unknown module import: {}", module_name),
-                span: span.clone(),
-                diagnostic: sigil::error::ResolveErrorDiagnostic {
-                    reason: sigil::error::ResolveErrorReason::Import,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            })
-        }
-    }
-
-    fn import_module_member(
-        &mut self,
-        module_name: &str,
-        name: &str,
-        span: &Span,
-        imported_symbols: &mut Vec<String>,
-    ) -> Result<(), ResolveError> {
-        let fq_name = format!("{}::{}", module_name, name);
-        let Some(entry) = self.declaration_index.get(&fq_name).or_else(|| {
-            self.declaration_index.values().find(|entry| {
-                crate::surface_path_name(&entry.fq_name) == fq_name
-                    || (crate::surface_path_name(&entry.module_path) == module_name
-                        && entry.name == name)
-            })
-        }) else {
-            let module_exists = self
-                .declaration_index
-                .values()
-                .any(|entry| crate::surface_path_name(&entry.module_path) == module_name);
-            return Err(ResolveError {
-                message: if module_exists {
-                    format!("Unknown import member: {}", fq_name)
-                } else {
-                    format!("Unknown module import: {}", module_name)
-                },
-                span: span.clone(),
-                diagnostic: sigil::error::ResolveErrorDiagnostic {
-                    reason: sigil::error::ResolveErrorReason::Import,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            });
-        };
-
-        if entry.stage_index >= self.module_stages.len() {
-            return Err(ResolveError {
-                message: format!(
-                    "Import target `{}` is not available in the current stage",
-                    fq_name
-                ),
-                span: span.clone(),
-                diagnostic: sigil::error::ResolveErrorDiagnostic {
-                    reason: sigil::error::ResolveErrorReason::Import,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            });
-        }
-
-        let uid = self
-            .sigil_session
-            .lookup_uid(&entry.fq_name)
-            .ok_or_else(|| ResolveError {
-                message: format!(
-                    "Import target `{}` is not available in the current stage",
-                    fq_name
-                ),
-                span: span.clone(),
-                diagnostic: sigil::error::ResolveErrorDiagnostic {
-                    reason: sigil::error::ResolveErrorReason::Import,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            })?;
-        self.bind_import_name(name, uid, module_name, span, imported_symbols)
-    }
-
-    fn apply_repl_imports(&mut self, ast: &[Ast]) -> Result<ReplImportResult, ResolveError> {
-        let mut result = ReplImportResult::default();
-        let auto_import_traits = self
-            .declaration_index
-            .values()
-            .filter(|entry| entry.kind == sigil::DeclarationKind::Trait && entry.auto_import)
-            .map(|entry| entry.name.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        for stmt in ast {
-            let Ast::Import(span, path, spec) = stmt else {
-                continue;
-            };
-            let module_name = path.segments.join("::");
-            if self.auto_import_modules.contains(&module_name)
-                || auto_import_traits.contains(&module_name)
-            {
-                return Err(ResolveError {
-                    message: format!(
-                        "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
-                        module_name
-                    ),
-                    span: span.clone(),
-                    diagnostic: sigil::error::ResolveErrorDiagnostic {
-                        reason: sigil::error::ResolveErrorReason::Import,
-                        subject: None,
-                    },
-                    related_labels: Vec::new(),
-                });
-            }
-
-            match spec {
-                ImportSpec::All => {
-                    self.import_module_all(&module_name, span, &mut result.imported_symbols)?;
-                    result.success_labels.push(module_name);
-                }
-                ImportSpec::Single(name) => {
-                    self.import_module_member(
-                        &module_name,
-                        name,
-                        span,
-                        &mut result.imported_symbols,
-                    )?;
-                    result
-                        .success_labels
-                        .push(format!("{}::{}", module_name, name));
-                }
-                ImportSpec::List(names) => {
-                    for name in names {
-                        self.import_module_member(
-                            &module_name,
-                            name,
-                            span,
-                            &mut result.imported_symbols,
-                        )?;
-                        result
-                            .success_labels
-                            .push(format!("{}::{}", module_name, name));
-                    }
-                }
-            }
-        }
-        Ok(result)
     }
 
     pub fn completion_symbols(&self) -> Vec<String> {
@@ -3049,27 +2752,17 @@ impl ReplEngine {
         }
     }
 
-    fn report_main_result_error_if_any(&self, value: &Value) -> Option<Vec<String>> {
-        // E-3 note:
-        // Unlike CLI `run`, REPL keeps the session alive after `Result::Err`.
-        // This stays local to REPL entry handling by design.
+    fn report_main_result_error_if_any(
+        &self,
+        value: &Value,
+    ) -> Result<Option<Vec<String>>, eldr::RuntimeError> {
+        // A valid language Err keeps the REPL alive; malformed values are runtime traps.
         match value {
             Value::Tagged { tag: 1, fields } => {
-                if let Some(err_value) = fields.first() {
-                    Some(self.report_error_value(err_value))
-                } else {
-                    let text = error_display::invalid_result_missing_payload_text(
-                        self.vm.source(),
-                        self.vm.source_file(),
-                        self.vm.runtime_error_location(),
-                    );
-                    Some(error_display::lines_for_mode(
-                        &text,
-                        self.error_display_mode,
-                    ))
-                }
+                inspect_value(self.vm.as_vm(), value)?;
+                Ok(Some(self.report_error_value(&fields[0])))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -7959,33 +7652,6 @@ impl ReplEngine {
         let sigil_cp = self.sigil_session.checkpoint();
         let scar_cp = self.scar_session.checkpoint();
         let forge_cp = self.forge_session.checkpoint();
-        let import_result = match self.apply_repl_imports(&ast) {
-            Ok(result) => result,
-            Err(e) => {
-                self.sigil_session.rollback(sigil_cp);
-                self.scar_session.rollback(scar_cp);
-                self.forge_session.rollback(forge_cp);
-                let (source_id, spec) = self.resolve_diagnostic_for_repl(&e, self.repl_source_id);
-                let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                self.history_entries.push(ReplHistoryEntry {
-                    line: committed_line,
-                    source: self.pending.clone(),
-                });
-                self.pending.clear();
-                self.bump_line(None, None);
-                return ReplResult::ok(ReplOutput::EvalError {
-                    idx,
-                    source,
-                    rendered,
-                });
-            }
-        };
-
         let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
         let signatures =
             crate::collect_signature_entries(&[], &ast, Some(self.repl_module_path.as_str()));
@@ -8018,6 +7684,8 @@ impl ReplEngine {
                 });
             }
         };
+
+        let import_result = self.sigil_session.last_imports().clone();
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
@@ -8127,13 +7795,19 @@ impl ReplEngine {
             self.vm.set_source(source_str, file_name);
         }
 
-        match self.execute_vm_chunk(chunk, ReplSessionPhase::Live) {
-            Ok(execution) => {
-                let committed_source = self.pending.clone();
+        let execution = self
+            .execute_vm_chunk(chunk, ReplSessionPhase::Live)
+            .and_then(|execution| {
                 let value = eval::committed_chunk_value(execution);
+                let main_error = self.report_main_result_error_if_any(&value)?;
+                Ok((value, main_error))
+            });
+        match execution {
+            Ok((value, main_error)) => {
+                let committed_source = self.pending.clone();
                 self.sync_scar_fun_index_with_vm();
                 self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
-                if let Some(rendered) = self.report_main_result_error_if_any(&value) {
+                if let Some(rendered) = main_error {
                     let (stdout, stderr) = self.take_repl_host_io_lines();
                     self.history_entries.push(ReplHistoryEntry {
                         line: committed_line,
@@ -8151,7 +7825,34 @@ impl ReplEngine {
                 }
 
                 let rendered =
-                    render::format_result_lines(self.vm.as_vm(), Some(&value), Some(&meta));
+                    match render::format_result_lines(self.vm.as_vm(), Some(&value), Some(&meta)) {
+                        Ok(rendered) => rendered,
+                        Err(error) => {
+                            let rendered =
+                                error_display::runtime_error_lines_with_registry_and_stack_trace(
+                                    &error,
+                                    &self.sources,
+                                    self.repl_source_id,
+                                    self.vm.runtime_error_location(),
+                                    self.error_display_mode,
+                                    self.stack_trace_display_mode,
+                                );
+                            let (stdout, stderr) = self.take_repl_host_io_lines();
+                            self.history_entries.push(ReplHistoryEntry {
+                                line: committed_line,
+                                source: committed_source,
+                            });
+                            self.bump_line(None, None);
+                            self.pending.clear();
+                            return ReplResult::exit(ReplOutput::EvalError {
+                                idx,
+                                source,
+                                rendered,
+                            })
+                            .with_stdout(stdout)
+                            .with_stderr(stderr);
+                        }
+                    };
 
                 let (stdout, stderr) = self.take_repl_host_io_lines();
                 let mut all_rendered = rendered;
@@ -8394,11 +8095,24 @@ impl ReplEngine {
         }
 
         match self.results[line_num - 1].clone() {
-            Some(value) => {
-                let displayed = inspect_value(self.vm.as_vm(), &value);
-                self.bump_line(Some(value), None);
-                Self::plain(vec![displayed])
-            }
+            Some(value) => match inspect_value(self.vm.as_vm(), &value) {
+                Ok(displayed) => {
+                    self.bump_line(Some(value), None);
+                    Self::plain(vec![displayed])
+                }
+                Err(error) => {
+                    let rendered = error_display::runtime_error_lines_with_registry_and_stack_trace(
+                        &error,
+                        &self.sources,
+                        self.repl_source_id,
+                        self.vm.runtime_error_location(),
+                        self.error_display_mode,
+                        self.stack_trace_display_mode,
+                    );
+                    self.bump_line(None, None);
+                    ReplResult::exit(ReplOutput::PlainText { lines: rendered })
+                }
+            },
             None => {
                 self.bump_line(None, None);
                 Self::plain(vec![format!("Line {} has no value", line_num)])
@@ -8565,20 +8279,14 @@ fn compile_repl_preload_from_module_stages(
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
 
-    let mut sigil_session =
-        sigil::SigilSession::with_module_path(Some(repl_sources.repl_module_path.clone()));
-    let mut scope = sigil::build_scope_for_module(
-        &module_stage_asts,
-        Some(compile_sources.user_module_path.as_str()),
-        module_stage_asts.len(),
+    let environment =
+        sigil::ResolveEnvironment::from_precollected(&module_stage_asts, &precollected);
+    let mut sigil_session = sigil::SigilSession::from_environment(
+        &environment,
+        Some(repl_sources.repl_module_path.clone()),
+        staged_program.resume_state,
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
-    scope.advance_next_id_to(staged_program.resume_state.next_local_id);
-    sigil_session.replace_scope_with_precollected_declarations(
-        scope,
-        &precollected,
-        &module_stage_asts,
-    );
 
     let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
@@ -8602,20 +8310,13 @@ fn compile_repl_preload_from_module_stages(
                 ),
             });
         }
-        preload_imported = apply_preload_imports(
-            &mut sigil_session,
-            &declaration_index,
-            &raw_module_stages,
-            &module_stage_asts,
-            &user_ast,
-            &snapshot.auto_import_modules,
-        )?;
         let user_resolved = sigil_session
             .resolve(crate::rebase_module_ast_spans(
                 user_ast.clone(),
                 user_source_id,
             ))
             .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+        preload_imported = sigil_session.last_imports().imported_symbols.clone();
         bind_preload_script_qualified_names(
             &mut sigil_session,
             &user_ast,
@@ -9335,192 +9036,6 @@ fn unresolved_repl_binding_issue(typed: &[TypedNode]) -> Option<(Span, Vec<Strin
     typed.iter().find_map(visit_stmt)
 }
 
-fn apply_preload_imports(
-    sigil_session: &mut sigil::SigilSession,
-    declaration_index: &sigil::DeclarationIndex,
-    raw_module_stages: &[Vec<StagedModule>],
-    module_stage_asts: &[Vec<sigil::StagedModuleAst>],
-    user_ast: &[Ast],
-    auto_import_modules: &BTreeSet<String>,
-) -> Result<Vec<String>, ReplLoadError> {
-    let mut imported_symbols = Vec::new();
-    let current_stage_index = raw_module_stages.len().max(module_stage_asts.len());
-    let auto_import_traits = declaration_index
-        .values()
-        .filter(|entry| entry.kind == sigil::DeclarationKind::Trait && entry.auto_import)
-        .map(|entry| entry.name.clone())
-        .collect::<BTreeSet<_>>();
-
-    for stmt in user_ast {
-        let Ast::Import(_span, path, spec) = stmt else {
-            continue;
-        };
-        let module_name = path.segments.join("::");
-        let canonical_module_name =
-            preload_import_module_name(declaration_index, auto_import_modules, &module_name);
-        if auto_import_modules.contains(&canonical_module_name)
-            || auto_import_traits.contains(&module_name)
-        {
-            return Err(ReplLoadError::Load(LoadError::BootstrapFailed {
-                phase: "resolve".into(),
-                file_name: "<repl-preload>".into(),
-                message: format!(
-                    "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
-                    module_name
-                ),
-            }));
-        }
-
-        match spec {
-            ImportSpec::All => {
-                if let Some(trait_entry) = declaration_index.values().find(|entry| {
-                    entry.kind == sigil::DeclarationKind::Trait
-                        && (entry.name == module_name
-                            || crate::surface_path_name(&entry.fq_name) == module_name)
-                }) {
-                    let trait_fq_name = trait_entry.fq_name.clone();
-                    let trait_uid = sigil_session.lookup_uid(&trait_fq_name).ok_or_else(|| {
-                        ReplLoadError::Load(LoadError::BootstrapFailed {
-                            phase: "resolve".into(),
-                            file_name: "<repl-preload>".into(),
-                            message: format!(
-                                "Import target `{}` is not available in the current stage",
-                                trait_fq_name
-                            ),
-                        })
-                    })?;
-                    sigil_session.define_with_id(&trait_entry.name, trait_uid);
-                    imported_symbols.push(trait_entry.name.clone());
-
-                    let method_prefix = format!("{}::", trait_fq_name);
-                    let methods = declaration_index
-                        .values()
-                        .filter(|entry| {
-                            entry.kind == sigil::DeclarationKind::TraitMethod
-                                && entry.fq_name.starts_with(&method_prefix)
-                                && entry.stage_index < current_stage_index
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    for method_entry in methods {
-                        let method_uid = sigil_session
-                            .lookup_uid(&method_entry.fq_name)
-                            .ok_or_else(|| {
-                                ReplLoadError::Load(LoadError::BootstrapFailed {
-                                    phase: "resolve".into(),
-                                    file_name: "<repl-preload>".into(),
-                                    message: format!(
-                                        "Import target `{}` is not available in the current stage",
-                                        method_entry.fq_name
-                                    ),
-                                })
-                            })?;
-                        sigil_session.define_with_id(&method_entry.name, method_uid);
-                        imported_symbols.push(method_entry.name.clone());
-                        if let Some(short_method_name) = method_entry.name.rsplit("::").next() {
-                            sigil_session.define_with_id(short_method_name, method_uid);
-                            imported_symbols.push(short_method_name.to_string());
-                        }
-                    }
-                    continue;
-                }
-                for entry in declaration_index.values().filter(|entry| {
-                    entry.module_path == canonical_module_name
-                        && entry.stage_index < current_stage_index
-                }) {
-                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
-                        ReplLoadError::Load(LoadError::BootstrapFailed {
-                            phase: "resolve".into(),
-                            file_name: "<repl-preload>".into(),
-                            message: format!(
-                                "Import target `{}` is not available in the current stage",
-                                entry.fq_name
-                            ),
-                        })
-                    })?;
-                    sigil_session.define_with_id(&entry.name, uid);
-                    imported_symbols.push(entry.name.clone());
-                }
-            }
-            ImportSpec::Single(name) => {
-                let fq_name = format!("{}::{}", canonical_module_name, name);
-                let entry = declaration_index.get(&fq_name).ok_or_else(|| {
-                    ReplLoadError::Load(LoadError::BootstrapFailed {
-                        phase: "resolve".into(),
-                        file_name: "<repl-preload>".into(),
-                        message: format!("Unknown import member: {}::{}", module_name, name),
-                    })
-                })?;
-                let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
-                    ReplLoadError::Load(LoadError::BootstrapFailed {
-                        phase: "resolve".into(),
-                        file_name: "<repl-preload>".into(),
-                        message: format!(
-                            "Import target `{}` is not available in the current stage",
-                            fq_name
-                        ),
-                    })
-                })?;
-                sigil_session.define_with_id(name, uid);
-                imported_symbols.push(name.clone());
-            }
-            ImportSpec::List(names) => {
-                for name in names {
-                    let fq_name = format!("{}::{}", canonical_module_name, name);
-                    let entry = declaration_index.get(&fq_name).ok_or_else(|| {
-                        ReplLoadError::Load(LoadError::BootstrapFailed {
-                            phase: "resolve".into(),
-                            file_name: "<repl-preload>".into(),
-                            message: format!("Unknown import member: {}::{}", module_name, name),
-                        })
-                    })?;
-                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
-                        ReplLoadError::Load(LoadError::BootstrapFailed {
-                            phase: "resolve".into(),
-                            file_name: "<repl-preload>".into(),
-                            message: format!(
-                                "Import target `{}` is not available in the current stage",
-                                fq_name
-                            ),
-                        })
-                    })?;
-                    sigil_session.define_with_id(name, uid);
-                    imported_symbols.push(name.clone());
-                }
-            }
-        }
-    }
-
-    Ok(imported_symbols)
-}
-
-fn preload_import_module_name(
-    declaration_index: &sigil::DeclarationIndex,
-    auto_import_modules: &BTreeSet<String>,
-    module_name: &str,
-) -> String {
-    if auto_import_modules.contains(module_name)
-        || declaration_index
-            .values()
-            .any(|entry| entry.module_path == module_name)
-    {
-        return module_name.to_string();
-    }
-    if module_name.contains("::") {
-        return module_name.to_string();
-    }
-    let canonical_name = format!("Global::{module_name}");
-    if auto_import_modules.contains(&canonical_name)
-        || declaration_index
-            .values()
-            .any(|entry| entry.module_path == canonical_name)
-    {
-        canonical_name
-    } else {
-        module_name.to_string()
-    }
-}
-
 fn apply_preload_visible_names(user_ast: &[Ast], mut visible: Vec<String>) -> Vec<String> {
     for stmt in user_ast {
         match stmt {
@@ -9902,6 +9417,30 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn final_err_display_rejects_missing_and_extra_payload() {
+        let engine = ReplEngine::new().expect("REPL engine should initialize");
+        for field_count in [0, 2] {
+            let value = Value::Tagged {
+                tag: 1,
+                fields: vec![Value::Unit; field_count],
+            };
+            let error = engine
+                .report_main_result_error_if_any(&value)
+                .expect_err("malformed Err must be a RuntimeError");
+            assert!(
+                error.message.contains("invalid runtime payload for tag 1"),
+                "{error:?}"
+            );
+            assert!(
+                error
+                    .message
+                    .contains(&format!("expected 1 fields, got {field_count}")),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn repl_source_spans_reject_overlapping_and_unrepresentable_offsets() {
         use diagnostics::SourceId;
         assert!(super::repl_source_span_fits(SourceId(0), 999_999));
@@ -10145,8 +9684,8 @@ supervisor_init {
             "each owned VM should boot exactly once"
         );
 
-        let first_runtime = first.vm.as_vm().process_runtime_snapshot();
-        let second_runtime = second.vm.as_vm().process_runtime_snapshot();
+        let first_runtime = first.vm.as_vm().process_runtime_snapshot().unwrap();
+        let second_runtime = second.vm.as_vm().process_runtime_snapshot().unwrap();
         assert!(
             first_runtime
                 .singleton_slots

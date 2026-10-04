@@ -664,7 +664,15 @@ pub fn runtime_value_error_text_from_vm(vm: &eldr::VM, value: &Value) -> String 
                 value_error_text_without_source(rich)
             }
         }
-        other => format!("Error: {}", inspect_value(vm, other)),
+        other => match inspect_value(vm, other) {
+            Ok(rendered) => format!("Error: {}", rendered),
+            Err(error) => runtime_error_text(
+                &error,
+                vm.source(),
+                vm.source_file(),
+                vm.runtime_error_location(),
+            ),
+        },
     }
 }
 
@@ -685,7 +693,15 @@ pub fn runtime_value_error_text_with_registry(
                 value_error_text_without_source(rich)
             }
         }
-        other => format!("Error: {}", inspect_value(vm, other)),
+        other => match inspect_value(vm, other) {
+            Ok(rendered) => format!("Error: {}", rendered),
+            Err(error) => runtime_error_text_with_registry(
+                &error,
+                sources,
+                _source_id,
+                vm.runtime_error_location(),
+            ),
+        },
     }
 }
 

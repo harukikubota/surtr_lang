@@ -5035,10 +5035,10 @@ mod tests {
 
     #[test]
     fn value_relation_and_callable_context_preserve_bare_return_origin() {
-        let source = "deftrait Functor where Self: Type<$A> {}\nimpl Functor for List<$T> {}";
-        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
-        let mut checker = Checker::new(TypecheckContext::default());
-        checker.check_program(sigil::resolve(ast).unwrap()).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
         let Ty::Var(occurrence) = checker.env.fresh_tyvar() else {
             unreachable!()
         };

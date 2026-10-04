@@ -17,10 +17,10 @@ print(inspect(score_map.[String::trim(raw_name)]))
 
 book2 =? Facet::set(ScoreBook.scores.[index + 1], book, 99)
 book3 =? Facet::over(ScoreBook.by_kind.[String::trim(raw_name)], book2, &inc)
-book4 =? Facet::bulk_update(book3) {
+book4 =? bulk_update(book3, {
   scores.[index + 1] <- set(100)
   by_kind.[normalize_key(raw_name)] <- over(&inc)
-}
+})
 
 print(inspect(book2.scores))
 print(inspect(HashMap::map_get(book3.by_kind, "talk")))

@@ -73,7 +73,7 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 ### 3.2 初期化
 
 - セッション開始時に標準 definition source を `Bootstrap` stage、その後の shared standard stage の順で読み込む。test extension は variant が有効な場合に shared standard stage へ追加する
-- 標準モジュールの完全な inventory、順序、stage 分割は [`STDLIB_MODULE_SPECS`](../../crates/xldr/src/loader.rs) を正本とし、本書へ重複列挙しない
+- 標準モジュールの完全な inventory、順序、stage 分割は [`STDLIB_MODULE_SPECS`](../../crates/sindr/src/stdlib.rs) を正本とし、本書へ重複列挙しない
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `SpecialTypes` source では `Unit`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `DoBlock<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ErrorKind`, `StandbyInit<$T>` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
@@ -123,6 +123,8 @@ metadata は維持する。`:doc Bootstrap` は module documentation を返し�
 一覧 surface は追加しない。
 
 `Bootstrap` / `Kernel` と、`@autoimport` が付いた標準 trait / 標準 `impl Type` owner helper surface は REPL でも auto import 対象とし、`Bootstrap` / `Kernel` への明示 `import` は compile error とする。
+
+REPL と preload の明示 import は Sigil の共通環境で一度だけ検査・適用する。Xldr は適用結果から表示・completion を更新する。導入済み module / member の状態は scope と同じ checkpoint に含め、同じ compile unit の重複 import を拒否する。
 
 ### 3.3 失敗時の扱い
 
@@ -174,6 +176,7 @@ escape途中の入力を次の行で完成できることは保証しない。�
 - 評価結果は `> ` プレフィクス付きで表示する
 - バインド結果は `> name: Type = value` 形式で表示する
 - Stringの束縛・単独評価・`:v` による履歴値表示と入れ子の表示は、Eldrの `inspect` とSindrの共通引用処理を使う。ESCと `a` を持つ値は `"\u{1b}a"` とし、値由来の生のC0・DEL・C1制御文字を引用表示に残さない。色なしでも同じ可視表記を使い、CLIの色付け用ANSI列は維持する。端末別の引用処理は設けない。入力との往復保証は[文字列リテラルの実装契約](./String_literal_spec.md#共通の引用表示)に従う
+- 評価結果・束縛値・`:v` の表示で未知 tag や payload 数不一致を検出した場合は、RuntimeError としてセッションを終了する。正常な `Err` 値の診断表示ではセッションを継続する。最終 `Err` の payload も表示前に検証し、欠損や余剰を通常の言語エラーとして扱わない。
 - 型定義評価は `> TypeName` 形式で表示する
 - 表示対象のない `Unit` は表示しない
 - `:doc` / `:sig` は evaluator result と同じ `> ` プレフィクスを付けず、presenter が専用レイアウトで表示する

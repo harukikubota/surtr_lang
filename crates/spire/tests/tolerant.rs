@@ -143,3 +143,16 @@ fn tolerant_statement_question_preserves_nodes_and_recovers_after_invalid_rhs() 
         .all(|node| matches!(node, Ast::StatementQuestion(..))));
     assert_eq!(text_for_span(source, result.ast[1].span()), "next()?");
 }
+
+#[test]
+fn tolerant_bulk_update_uses_keyword_and_special_block_grammar() {
+    let source = "bulk_update(value, { name <- set(1) })";
+    let result = parse_tolerant_with_context(source, ParserContext::script(0), None);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(matches!(&result.ast[0], Ast::BulkUpdate(..)));
+    assert!(result
+        .tokens
+        .iter()
+        .any(|token| token.kind == SyntaxTokenKind::Keyword
+            && text_for_span(source, &token.span) == "bulk_update"));
+}

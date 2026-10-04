@@ -115,6 +115,7 @@ TCO が効いた実行では `return_count` や `max_frame_depth` が非最適�
 - dump には終了状態、exit code、最終 `pc` / opcode、stack / frame 深さ、VM observation、process runtime snapshot を含む
 - `stats.branch` に conditional branch outcome counters を含む
 - compile error で VM 実行に到達しなかった場合は dump を生成しない
+- 最終値・process state・future value の表示が未知 tag や payload 数不一致で失敗した場合は RuntimeError を返し、dump の書き込みへ進まない。不正値を空文字や省略値に置き換えた JSON は保存しない。
 
 process runtime snapshot の `worker_sets` は次の JSON 形状を持つ。
 

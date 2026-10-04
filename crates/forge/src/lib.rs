@@ -76,241 +76,28 @@ mod tests {
         }
     }
 
-    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
-    const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/types/special_types.srt");
-    const FUNCTION_PRELUDE_SOURCE: &str = include_str!("../../../lib/function.srt");
-    const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
-    const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/add.srt");
-    const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/sub.srt");
-    const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mul.srt");
-    const DIV_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/div.srt");
-    const MOD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mod.srt");
-    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/traits/show.srt");
-    const DEFAULT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/default.srt");
-    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
-    const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compare.srt");
-    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
-    const CONVERT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/convert.srt");
-    const TRY_CONVERT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_convert.srt");
-    const ENCODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/encode.srt");
-    const DECODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/decode.srt");
-    const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
-    const BIFUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/bifunctor.srt");
-    const APPLICATIVE_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/applicative.srt");
-    const MONAD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/monad.srt");
-    const MONAD_T_MODULE_SOURCE: &str = include_str!("../../../lib/traits/monad_t.srt");
-    const IDENTITY_MODULE_SOURCE: &str = include_str!("../../../lib/types/identity.srt");
-    const READER_MODULE_SOURCE: &str = include_str!("../../../lib/types/reader.srt");
-    const STATE_MODULE_SOURCE: &str = include_str!("../../../lib/types/state.srt");
-    const ALTERNATIVE_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/alternative.srt");
-    const MONOID_MODULE_SOURCE: &str = include_str!("../../../lib/types/monoid.srt");
-    const INT_MODULE_SOURCE: &str = include_str!("../../../lib/types/int.srt");
-    const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/types/string.srt");
-    const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/types/regex.srt");
-    const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/types/boolean.srt");
-    const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/types/ordering.srt");
-    const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/types/error.srt");
-    const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/types/list.srt");
-    const TUPLE_MODULE_SOURCE: &str = include_str!("../../../lib/types/tuple.srt");
-    const GENERATOR_MODULE_SOURCE: &str = include_str!("../../../lib/types/generator.srt");
-    const INFINITE_GENERATOR_MODULE_SOURCE: &str =
-        include_str!("../../../lib/types/infinite_generator.srt");
-    const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/types/hash_map.srt");
-    const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/types/result.srt");
-    const DURATION_MODULE_SOURCE: &str = include_str!("../../../lib/types/duration.srt");
-    const RANGE_MODULE_SOURCE: &str = include_str!("../../../lib/types/range.srt");
-    const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
-    const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
-    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/facet.srt");
-    const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
-    const JSON_MODULE_SOURCE: &str = include_str!("../../../lib/types/json.srt");
-    const RANDOM_MODULE_SOURCE: &str = include_str!("../../../lib/Random.srt");
-    const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
-    const TEST_MODULE_SOURCE: &str = include_str!("../../../lib/test.srt");
-
-    fn parse_std_module_stage(
-        source: &str,
-        fallback_module_path: &str,
-    ) -> Vec<sigil::StagedModuleAst> {
+    fn parse_std_module_stage(source: &str, module_path: &str) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             source,
-            spire::ParserContext::module(
-                0,
-                (fallback_module_path == "Facet").then(|| fallback_module_path.into()),
-            )
-            .with_rules(spire::ParseRules::std_module()),
+            spire::ParserContext::module(0, (module_path == "Facet").then(|| module_path.into()))
+                .with_rules(spire::ParseRules::std_module()),
         )
-        .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
-
-        let shared_imports = ast
-            .iter()
-            .filter_map(|stmt| match stmt {
-                Ast::Import(_, _, _) => Some(stmt.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let mut lowered = Vec::new();
-        let mut shared_global_defs = Vec::new();
-
-        for stmt in ast {
-            match stmt {
-                Ast::Defmod(span, module_path, body, attrs) => {
-                    let mut module_ast = shared_imports.clone();
-                    module_ast.extend(body);
-                    lowered.push(sigil::StagedModuleAst {
-                        source_index: 0,
-                        owner: Some(sigil::OwnerDescriptor::new(
-                            module_path.clone(),
-                            span,
-                            sigil::OwnerSourceForm::Defmod,
-                        )),
-                        module_path,
-                        doc_module_path: None,
-                        ast: module_ast,
-                        module_doc: attrs.doc,
-                        auto_import: attrs.auto_import,
-                        process_spec: None,
-                    });
-                }
-                Ast::Defagent(span, module_path, body, process_spec, attrs)
-                | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
-                | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
-                | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
-                    let source_form = match process_spec.kind {
-                        spire::ast::ProcessKind::Agent => sigil::OwnerSourceForm::Defagent,
-                        spire::ast::ProcessKind::GenServer => sigil::OwnerSourceForm::Defgenserver,
-                        spire::ast::ProcessKind::DynamicSupervisor => {
-                            sigil::OwnerSourceForm::DefdynamicSupervisor
-                        }
-                        spire::ast::ProcessKind::Supervisor
-                        | spire::ast::ProcessKind::RuntimeSupervisor => {
-                            sigil::OwnerSourceForm::Defsupervisor
-                        }
-                        spire::ast::ProcessKind::Task => sigil::OwnerSourceForm::Defagent,
-                    };
-                    let mut module_ast = shared_imports.clone();
-                    module_ast.extend(body);
-                    lowered.push(sigil::StagedModuleAst {
-                        source_index: 0,
-                        owner: Some(sigil::OwnerDescriptor::new(
-                            module_path.clone(),
-                            span,
-                            source_form,
-                        )),
-                        module_path,
-                        doc_module_path: None,
-                        ast: module_ast,
-                        module_doc: attrs.doc,
-                        auto_import: attrs.auto_import,
-                        process_spec: Some(process_spec),
-                    });
-                }
-                Ast::ImplDef(span, target, target_span, methods, attrs) => {
-                    let mut module_ast = shared_imports.clone();
-                    module_ast.push(Ast::ImplDef(
-                        span,
-                        target.clone(),
-                        target_span,
-                        methods,
-                        attrs.clone(),
-                    ));
-                    lowered.push(sigil::StagedModuleAst {
-                        source_index: 0,
-                        module_path: target,
-                        doc_module_path: None,
-                        ast: module_ast,
-                        owner: None,
-                        module_doc: attrs.doc,
-                        auto_import: attrs.auto_import,
-                        process_spec: None,
-                    });
-                }
-                Ast::Import(_, _, _) => {}
-                other => shared_global_defs.push(other),
-            }
-        }
-
-        if !shared_global_defs.is_empty() {
-            let mut global_ast = shared_imports;
-            global_ast.extend(shared_global_defs);
-            lowered.push(sigil::StagedModuleAst {
-                source_index: 0,
-                module_path: String::new(),
-                doc_module_path: None,
-                ast: global_ast,
-                owner: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-
-        lowered
+        .unwrap_or_else(|error| panic!("standard module {module_path} should parse: {error:?}"));
+        let fallback = sigil::const_only_fallback_module_path(&ast, Some(module_path));
+        sigil::staged_modules_from_source_ast(ast, fallback)
     }
 
     fn std_module_stages() -> Vec<Vec<sigil::StagedModuleAst>> {
-        vec![
-            parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
-            [
-                ("SpecialTypes", SPECIAL_TYPES_SOURCE),
-                ("Function", FUNCTION_PRELUDE_SOURCE),
-                ("Kernel", KERNEL_PRELUDE_SOURCE),
-                ("Add", ADD_MODULE_SOURCE),
-                ("Sub", SUB_MODULE_SOURCE),
-                ("Mul", MUL_MODULE_SOURCE),
-                ("Div", DIV_MODULE_SOURCE),
-                ("Mod", MOD_MODULE_SOURCE),
-                ("Eq", EQ_MODULE_SOURCE),
-                ("Compare", COMPARE_MODULE_SOURCE),
-                ("Concat", CONCAT_MODULE_SOURCE),
-                ("Show", SHOW_MODULE_SOURCE),
-                ("Default", DEFAULT_MODULE_SOURCE),
-                ("Ordering", ORDERING_MODULE_SOURCE),
-                ("Convert", CONVERT_MODULE_SOURCE),
-                ("TryConvert", TRY_CONVERT_MODULE_SOURCE),
-                ("Encode", ENCODE_MODULE_SOURCE),
-                ("Decode", DECODE_MODULE_SOURCE),
-                ("Functor", FUNCTOR_MODULE_SOURCE),
-                ("Bifunctor", BIFUNCTOR_MODULE_SOURCE),
-                ("Applicative", APPLICATIVE_MODULE_SOURCE),
-                ("Monad", MONAD_MODULE_SOURCE),
-                ("MonadT", MONAD_T_MODULE_SOURCE),
-                ("Identity", IDENTITY_MODULE_SOURCE),
-                ("Reader", READER_MODULE_SOURCE),
-                ("State", STATE_MODULE_SOURCE),
-                ("Alternative", ALTERNATIVE_MODULE_SOURCE),
-                ("Monoid", MONOID_MODULE_SOURCE),
-                ("Int", INT_MODULE_SOURCE),
-                ("String", STRING_MODULE_SOURCE),
-                ("Regex", REGEX_MODULE_SOURCE),
-                ("Boolean", BOOLEAN_MODULE_SOURCE),
-                ("Error", ERROR_MODULE_SOURCE),
-                ("List", LIST_MODULE_SOURCE),
-                ("Tuple", TUPLE_MODULE_SOURCE),
-                ("Generator", GENERATOR_MODULE_SOURCE),
-                ("InfiniteGenerator", INFINITE_GENERATOR_MODULE_SOURCE),
-                ("HashMap", HASH_MAP_MODULE_SOURCE),
-                ("Result", RESULT_MODULE_SOURCE),
-                ("Option", OPTION_MODULE_SOURCE),
-                ("Duration", DURATION_MODULE_SOURCE),
-                ("Range", RANGE_MODULE_SOURCE),
-                ("Process", PROCESS_MODULE_SOURCE),
-                ("Facet", LENS_MODULE_SOURCE),
-                ("Float", FLOAT_MODULE_SOURCE),
-                ("Json", JSON_MODULE_SOURCE),
-                ("Random", RANDOM_MODULE_SOURCE),
-                ("StyledDoc", STYLED_DOC_MODULE_SOURCE),
-            ]
-            .into_iter()
-            .flat_map(|(name, source)| parse_std_module_stage(source, name))
-            .collect(),
-            [("Test", TEST_MODULE_SOURCE)]
-                .into_iter()
-                .flat_map(|(name, source)| parse_std_module_stage(source, name))
-                .collect(),
-        ]
+        use sindr::stdlib::{stdlib_module_specs, StdlibStage, StdlibVariant};
+        let mut stages = vec![Vec::new(), Vec::new()];
+        for spec in stdlib_module_specs(StdlibVariant::TestEnabled) {
+            let stage_index = match spec.stage {
+                StdlibStage::Bootstrap => 0,
+                StdlibStage::Main | StdlibStage::TestExtension => 1,
+            };
+            stages[stage_index].extend(parse_std_module_stage(spec.source, spec.module_path));
+        }
+        stages
     }
 
     struct CachedStdCompilePrefix {

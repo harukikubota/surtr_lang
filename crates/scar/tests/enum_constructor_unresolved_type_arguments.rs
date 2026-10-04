@@ -1,15 +1,16 @@
+#[allow(dead_code)]
+mod support;
+
 use scar::typed::TypedNode;
 
 fn typecheck(source: &str) -> Result<Vec<TypedNode>, scar::error::TypeError> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
         .expect("source should parse");
-    let resolved = sigil::resolve(ast).expect("source should resolve");
-    scar::typecheck(resolved)
+    let resolved = support::resolve_ast_with_builtin_prelude(ast).expect("source should resolve");
+    support::typecheck(resolved)
 }
 
 const DECLARATIONS: &str = r#"
-defenum Option<$T> { Some($T), None }
-defenum Either<$L, $R> { Left($L), Right($R) }
 def is_some(value: Option<$T>) -> Int { 1 }
 def is_left(value: Either<$L, $R>) -> Int { 1 }
 "#;

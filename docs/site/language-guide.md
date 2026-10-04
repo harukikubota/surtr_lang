@@ -228,9 +228,9 @@ config =? Decode::decode::<Config>(json)
 
 Surtr では、次の見た目がそれぞれ別物です。
 
-- call 式: `add(1, 2)`
-- capture: `&add`, `&User::get_name`, `&add(&1, 10)`
-- closure: `{|x| x + 1}`
+- 関数呼出し: `add(1, 2)`
+- キャプチャ: `&add`, `&User::get_name`, `&add(&1, 10)`
+- クロージャリテラル: `{|x| x + 1}`
 - backtick FuncLiteral: ``1 `add` 2``
 
 まず普通の call はその場で実行されます。
@@ -241,8 +241,7 @@ def add(x: Int, y: Int) -> Int { x + y }
 sum = add(1, 2)
 ```
 
-一方で、関数演算子の compose 系が欲しいのは「実行結果」ではなく「あとで呼ぶ値」です。  
-そのため、関数値が欲しいときは capture か closure を使います。
+関数合成には関数値を渡します。キャプチャ、クロージャリテラル、関数値変数に加え、必要な引数を満たして関数値を返す関数呼出しも使えます。引数待ち受け呼出しへパイプのように引数を注入することはありません。
 
 ```surtr
 inc = &add(&1, 1)
@@ -578,7 +577,7 @@ List::cons(1, [])             # => [1]
 List::first([1, 2, 3])        # => Ok(1)
 List::len([1, 2, 3])          # => 3
 List::map([1, 2], &to_string)
-List::find_map([1, 2], &lookup)
+List::find_map([1, 2], {|n| if(n > 1, Option::Some(n), Option::None)}) # => Ok(2)
 ```
 
 固定範囲をその場で書きたいときは range literal も使えます。
@@ -735,15 +734,24 @@ parser >=> validator
 normalizer = &String::trim >> {|text| "[" ++ text ++ "]"}
 ```
 
-次のような call 式は compose できません。
+合成では引数を注入しないため、必要な引数が不足した呼出しは使えません。
 
 ```surtr
-parse() >=> validate()   # 不可
-parse() >* render()      # 不可
-inc() >> render()        # 不可
+def add(x: Int, y: Int) -> Int { x + y }
+def double(x: Int) -> Int { x * 2 }
+2 |> add(1)           # 3。引数待ち受け呼出しへ注入する
+add(1) >> &double     # 引数不足で拒否される
 ```
 
-理由は単純で、`parse()` は compose 位置では関数値として扱わないからです。関数値を返す call 式を使いたい場合は `(make_parser()) >=> (make_validator())` のように括弧で明示します。
+必要な引数を満たした関数呼出しが、型契約に合う関数値を返す場合は合成できます。括弧で囲む必要はありません。
+
+```surtr
+def make_add(n: Int) -> (Int -> Int) { {|x: Int| x + n} }
+pipeline = make_add(1) >> &double
+pipeline(2) # 6
+```
+
+この規則は `>*` / `>=>` でも同じです。パイプ右辺の括弧が引数注入を抑止する規則とは区別してください。
 
 ### 10.5 裸の関数参照は使わない
 

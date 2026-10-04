@@ -232,6 +232,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "do" => Token::Do,
                 "when" => Token::When,
                 "cond" => Token::Cond,
+                "bulk_update" => Token::BulkUpdate,
                 "private" => Token::Private,
                 "public" => Token::Public,
                 "readonly" => Token::Readonly,

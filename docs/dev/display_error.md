@@ -10,7 +10,7 @@ VM の Error 生成・伝播は [EldrVM_spec.md](EldrVM_spec.md) を正本とす
 | 対象 | 内容 | 表示の入口 |
 |---|---|---|
 | 静的診断 | parse / resolve / typecheck / codegen の失敗 | Rune のコンパイル処理、Xldr の入力評価 |
-| VM の実行エラー | `eldr::RuntimeError`。message と実行時 context を持つ | VM 実行・background task の失敗 |
+| VM の実行エラー | `eldr::RuntimeError`。message と実行時 context を持つ | VM 実行・background task・runtime 値の表示検証の失敗 |
 | 言語レベルの Error | `deferror` などが生成する `RichError`。kind、message、location、cause、diagnostic、stack trace を持つ | `run` の最終 Error / `Err(...)`、REPL の評価結果、明示的な `eprint` |
 
 `Result::Err` は値として扱える。途中で生成した `Err` をすべて自動表示する規則ではない。

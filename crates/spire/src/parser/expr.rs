@@ -1154,6 +1154,10 @@ impl Parser<'_> {
 
             // Cond expression
             Token::Cond => self.parse_cond_expr(),
+            Token::BulkUpdate => {
+                self.advance();
+                self.parse_bulk_update_call(sp.start)
+            }
 
             // Compiler-owned monadic sequencing expression
             Token::Do => self.parse_do_expr(sp),
@@ -1884,7 +1888,7 @@ impl Parser<'_> {
         let mut path_segments = vec![name.clone()];
         let mut path_end = name_span.end;
         while self.has_path_separator()
-            && matches!(
+            && (matches!(
                 self.peek_n(2),
                 Some(
                     Token::Ident(_)
@@ -1893,10 +1897,15 @@ impl Parser<'_> {
                         | Token::True
                         | Token::False
                 )
-            )
+            ) || (path_segments.as_slice() == ["Facet"]
+                && matches!(self.peek_n(2), Some(Token::BulkUpdate))))
         {
             self.consume_path_separator()?;
-            let (seg, seg_span) = self.expect_member_ident()?;
+            let (seg, seg_span) = if matches!(self.peek(), Token::BulkUpdate) {
+                ("bulk_update".into(), self.advance().span)
+            } else {
+                self.expect_member_ident()?
+            };
             path_end = seg_span.end;
             path_segments.push(seg);
         }
@@ -1955,6 +1964,9 @@ impl Parser<'_> {
 
         if let Some(mut path_expr) = path_ast {
             let path_name = path_segments.join("::");
+            if path_name == "Facet::bulk_update" {
+                return self.parse_bulk_update_call(name_span.start);
+            }
             if self.explicit_type_args_start() {
                 if path_last_is_uppercase {
                     return Err(ParseError::syntax(
@@ -1970,43 +1982,6 @@ impl Parser<'_> {
                 let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                if path_name == "Facet::bulk_update" {
-                    if args.len() != 1
-                        || args
-                            .iter()
-                            .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
-                    {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::ExpressionSyntax,
-                            "Facet::bulk_update expects exactly 1 positional argument before its update block",
-                            Span {
-                                start: name_span.start,
-                                end: end_span.end,
-                            },
-                        ));
-                    }
-                    if !matches!(self.peek(), Token::LBrace) {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::ExpressionSyntax,
-                            "Facet::bulk_update requires a special update block",
-                            self.peek_span(),
-                        ));
-                    }
-                    let source = match <[RecordLitArg; 1]>::try_from(args) {
-                        Ok([RecordLitArg::Positional(expr)]) => expr,
-                        _ => {
-                            return Err(ParseError::syntax(
-                                crate::error::ParseErrorReason::ExpressionSyntax,
-                                "Facet::bulk_update expects exactly 1 positional argument before its update block",
-                                Span {
-                                    start: name_span.start,
-                                    end: end_span.end,
-                                },
-                            ));
-                        }
-                    };
-                    return self.parse_bulk_update_expr(name_span.start, source);
-                }
                 if path_last_is_uppercase {
                     self.reject_constructor_trailing_block()?;
                     let span = Span {
@@ -3008,7 +2983,21 @@ impl Parser<'_> {
     pub(super) fn parse_match_expr(&mut self) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Match)?;
-        let scrutinee = self.with_trailing_call_block_disabled(|parser| parser.parse_expr())?;
+        self.skip_newlines();
+        let block_inside_call = self.match_has_parenthesized_arm_block();
+        let scrutinee = if block_inside_call {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            let target = self.with_trailing_call_block_disabled(|parser| parser.parse_expr())?;
+            self.skip_newlines();
+            self.expect(&Token::Comma)?;
+            target
+        } else {
+            match self.with_trailing_call_block_disabled(|parser| parser.parse_expr())? {
+                Ast::Grouped(_, target) => *target,
+                target => target,
+            }
+        };
         self.skip_newlines();
         let lbrace = self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -3048,7 +3037,10 @@ impl Parser<'_> {
                 self.skip_newlines();
             }
         }
-        let end = self.expect(&Token::RBrace)?;
+        let mut end = self.expect(&Token::RBrace)?;
+        if block_inside_call {
+            end = self.finish_special_block_call()?;
+        }
         Ok(Ast::Match(
             Span {
                 start: sp.start,
@@ -3057,6 +3049,101 @@ impl Parser<'_> {
             Box::new(scrutinee),
             arms,
         ))
+    }
+
+    // The top-level arm arrow distinguishes an arm block from a closure in
+    // an existing tuple target such as `match (value, { 1 }) { ... }`.
+    fn match_has_parenthesized_arm_block(&self) -> bool {
+        if !matches!(self.peek(), Token::LParen) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut offset = 1;
+        while let Some(token) = self.peek_n(offset) {
+            match token {
+                Token::LParen | Token::LBrack | Token::LBrace => depth += 1,
+                Token::RParen | Token::RBrack | Token::RBrace if depth == 0 => return false,
+                Token::RParen | Token::RBrack | Token::RBrace => depth -= 1,
+                Token::Comma if depth == 0 => {
+                    offset += 1;
+                    while matches!(self.peek_n(offset), Some(Token::Newline)) {
+                        offset += 1;
+                    }
+                    if !matches!(self.peek_n(offset), Some(Token::LBrace)) {
+                        return false;
+                    }
+                    offset += 1;
+                    while matches!(self.peek_n(offset), Some(Token::Newline)) {
+                        offset += 1;
+                    }
+                    if matches!(self.peek_n(offset), Some(Token::RBrace)) {
+                        return true;
+                    }
+                    while let Some(token) = self.peek_n(offset) {
+                        match token {
+                            Token::FatArrow if depth == 0 => return true,
+                            Token::LParen | Token::LBrack | Token::LBrace => depth += 1,
+                            Token::RParen | Token::RBrack | Token::RBrace if depth == 0 => {
+                                return false
+                            }
+                            Token::RParen | Token::RBrack | Token::RBrace => depth -= 1,
+                            Token::Eof => return false,
+                            _ => {}
+                        }
+                        offset += 1;
+                    }
+                    return false;
+                }
+                Token::Eof => return false,
+                _ => {}
+            }
+            offset += 1;
+        }
+        false
+    }
+
+    fn finish_special_block_call(&mut self) -> Result<Span, ParseError> {
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+        }
+        self.expect(&Token::RParen)
+    }
+
+    fn parse_bulk_update_call(&mut self, start: usize) -> Result<Ast, ParseError> {
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let source = match self.parse_record_lit_arg()? {
+            RecordLitArg::Positional(source) => source,
+            RecordLitArg::Named(_, _) => {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
+                    "bulk_update expects exactly 1 positional source argument",
+                    self.peek_span(),
+                ))
+            }
+        };
+        self.skip_newlines();
+        let block_inside_call = if matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            !matches!(self.peek(), Token::RParen)
+        } else {
+            false
+        };
+        if !block_inside_call {
+            self.expect(&Token::RParen)?;
+        }
+        let mut update = self.parse_bulk_update_expr(start, source)?;
+        if block_inside_call {
+            let end = self.finish_special_block_call()?;
+            let Ast::BulkUpdate(span, _, _) = &mut update else {
+                unreachable!()
+            };
+            span.end = end.end;
+        }
+        Ok(update)
     }
 
     fn parse_bulk_update_expr(&mut self, start: usize, source: Ast) -> Result<Ast, ParseError> {
@@ -3363,6 +3450,11 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Cond)?;
         self.skip_newlines();
+        let block_inside_call = matches!(self.peek(), Token::LParen);
+        if block_inside_call {
+            self.advance();
+            self.skip_newlines();
+        }
         let lbrace = self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -3390,7 +3482,10 @@ impl Parser<'_> {
                 self.skip_newlines();
             }
         }
-        let end = self.expect(&Token::RBrace)?;
+        let mut end = self.expect(&Token::RBrace)?;
+        if block_inside_call {
+            end = self.finish_special_block_call()?;
+        }
 
         for (idx, (cond, _)) in clauses.iter().enumerate() {
             if Self::is_true_literal(cond) && idx + 1 != clauses.len() {

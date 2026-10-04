@@ -32,21 +32,6 @@ where
 }
 
 impl HashMap {
-  defp _map_values_go(
-    source: HashMap<$A>,
-    remaining_keys: List<String>,
-    f: ($A -> $B),
-    acc: HashMap<$B>,
-  ) -> HashMap<$B> {
-    match remaining_keys {
-      [] => acc,
-      [key, ..tail] => match map_get(source, key) {
-        Ok(value) => _map_values_go(source, tail, f, map_insert(acc, key, f(value))),
-        Err(_) => _map_values_go(source, tail, f, acc),
-      },
-    }
-  }
-
   @doc """
   Return the empty map.
   ## REPL
@@ -135,12 +120,12 @@ impl HashMap {
 
   @doc """
   Return a new map with the same keys and transformed values.
-  The visible order remains deterministic and sorted by key.
+  Apply the callback once per value in sorted key order; an empty map never calls it.
+  Runtime failures propagate without returning a partial map.
+  Result values, including Err, are stored as ordinary transformed values.
   ## REPL
   xldr(1)> HashMap::map_values(HashMap::map_from_entries([("a", 1), ("b", 2)]), {|n| n + 1})
   hash!["a" => 2, "b" => 3]
   """
-  def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B> {
-    _map_values_go(map, map_keys(map), f, empty_map())
-  }
+  @builtin def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B>
 }

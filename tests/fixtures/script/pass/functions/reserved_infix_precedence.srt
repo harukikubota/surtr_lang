@@ -1,3 +1,4 @@
+def on(left: Int, right: Int) -> Int { left + right }
 def note(tag: String, value: Boolean) -> Boolean { print(tag); value }
 def key(value: Int) -> Int { value + 1 }
 
@@ -15,3 +16,8 @@ compare_by_key = &eq `on` &key
 compare_by_qualified_key = &eq `Function::on` &key
 print(to_string(compare_by_key(2, 2)))
 print(to_string(compare_by_qualified_key(2, 3)))
+
+print(to_string(on(20, 22)))
+ordinary_on: (Int, Int -> Int) = &on
+print(to_string(ordinary_on(10, 2)))
+print(to_string(1 |> on(2)))

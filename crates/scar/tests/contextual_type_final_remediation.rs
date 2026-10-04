@@ -1,21 +1,23 @@
-#[path = "support/special_enum_declarations.rs"]
-mod special_enum_declarations;
+#[allow(dead_code)]
+mod support;
 
 use scar::typed::TypedNode;
-use scar::ScarSession;
 use sigil::resolved::{Resolved, ResolvedWhereConstraintRhs};
 
-fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
-    let ast = special_enum_declarations::parse_with_canonical_special_enums(source)
-        .expect("source should parse without the std prelude");
-    sigil::resolve(ast).expect("source should resolve without the std prelude")
+fn resolve_with_standard_environment(source: &str) -> Vec<Resolved> {
+    let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+        .expect("source should parse with the standard environment");
+    support::resolve_ast_with_builtin_prelude(ast)
+        .expect("source should resolve with the standard environment")
 }
 
-fn typecheck_without_std_prelude(source: &str) -> Result<Vec<TypedNode>, scar::error::TypeError> {
-    scar::typecheck(resolve_without_std_prelude(source))
+fn typecheck_with_standard_environment(
+    source: &str,
+) -> Result<Vec<TypedNode>, scar::error::TypeError> {
+    support::typecheck(resolve_with_standard_environment(source))
 }
 
-const FUNCTOR: &str = r#"deftrait Functor
+const FUNCTOR: &str = r#"deftrait FixtureFunctor
 where
   Self: Type<$A>
 {
@@ -25,12 +27,12 @@ where
 
 #[test]
 fn scar_defensively_rejects_trait_slot_mapping_in_a_method_where_clause() {
-    let mut resolved = resolve_without_std_prelude(&format!(
+    let mut resolved = resolve_with_standard_environment(&format!(
         r#"{FUNCTOR}
 defenum Boxed<$A> {{ Boxed($A) }}
-impl Functor for Boxed<$A>
+impl FixtureFunctor for Boxed<$A>
 where
-  $A: Functor.$A
+  $A: FixtureFunctor.$A
 {{
   def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {{
     match self {{ Boxed::Boxed(value) => Boxed::Boxed(mapper(value)) }}
@@ -46,7 +48,7 @@ where
     });
     assert!(moved, "test setup must find the resolved trait impl");
 
-    let err = scar::typecheck(resolved)
+    let err = support::typecheck(resolved)
         .expect_err("Scar must reject malformed resolved Trait.$Slot placement");
     assert!(
         err.message.contains("trait implementation where clause"),
@@ -56,7 +58,7 @@ where
 
 #[test]
 fn self_impl_capability_is_not_an_arity_zero_candidate_obligation() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait Marker<$Tag> {
   def mark::<$Tag>(self: Self) -> $Tag
 }
@@ -83,7 +85,7 @@ result = Use::use(1)"#,
 
 #[test]
 fn unused_self_impl_capability_is_reported_at_the_bound() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Marker {
   def mark(self: Self) -> Int
 }
@@ -110,32 +112,32 @@ where
 
 #[test]
 fn enum_constructor_application_uses_only_the_declared_mapped_slot() {
-    typecheck_without_std_prelude(&format!(
+    typecheck_with_standard_environment(&format!(
         r#"{FUNCTOR}
 defenum Pair<$L, $R> {{ Pair($L, $R) }}
 
-impl Functor for Pair<$L, $R>
+impl FixtureFunctor for Pair<$L, $R>
 where
-  $R: Functor.$A
+  $R: FixtureFunctor.$A
 {{
   def fmap(self: Pair<$L, $A>, mapper: ($A -> $B)) -> Pair<$L, $B> {{
     match self {{ Pair::Pair(left, right) => Pair::Pair(left, mapper(right)) }}
   }}
 }}
 
-def accept(value: Functor<Int>) -> Int {{ 1 }}
-def make::<Functor>() -> Functor<Int> {{ Pair::Pair("left", 1) }}
+def accept(value: FixtureFunctor<Int>) -> Int {{ 1 }}
+def make::<FixtureFunctor>() -> FixtureFunctor<Int> {{ Pair::Pair("left", 1) }}
 
 pair = Pair::Pair("left", 1)
 from_parameter: Int = accept(pair)
 from_return: Pair<String, Int> = make()"#
     ))
-    .expect("Pair's left capture must not be treated as a Functor slot");
+    .expect("Pair's left capture must not be treated as a FixtureFunctor slot");
 }
 
 #[test]
 fn struct_constructor_application_uses_only_the_declared_mapped_slot() {
-    typecheck_without_std_prelude(&format!(
+    typecheck_with_standard_environment(&format!(
         r#"{FUNCTOR}
 defstruct Pair<$L, $R> {{ left: $L, right: $R }}
 
@@ -143,16 +145,16 @@ impl Pair {{
   def new(left: $L, right: $R) -> Pair<$L, $R> {{ Pair {{ left: left, right: right }} }}
 }}
 
-impl Functor for Pair<$L, $R>
+impl FixtureFunctor for Pair<$L, $R>
 where
-  $R: Functor.$A
+  $R: FixtureFunctor.$A
 {{
   def fmap(self: Pair<$L, $A>, mapper: ($A -> $B)) -> Pair<$L, $B> {{
     Pair {{ left: self.left, right: mapper(self.right) }}
   }}
 }}
 
-def accept(value: Functor<Int>) -> Int {{ 1 }}
+def accept(value: FixtureFunctor<Int>) -> Int {{ 1 }}
 pair = Pair("left", 1)
 result: Int = accept(pair)"#
     ))
@@ -161,9 +163,9 @@ result: Int = accept(pair)"#
 
 #[test]
 fn alias_expansion_cannot_hide_a_forbidden_constructor_application() {
-    let err = typecheck_without_std_prelude(&format!(
+    let err = typecheck_with_standard_environment(&format!(
         r#"{FUNCTOR}
-type HiddenContext = (Functor<Int> -> Int)
+type HiddenContext = (FixtureFunctor<Int> -> Int)
 defstruct Holder {{ callback: HiddenContext }}"#
     ))
     .expect_err("a function-signature alias must not hide a nested constructor application");
@@ -176,11 +178,11 @@ defstruct Holder {{ callback: HiddenContext }}"#
 
 #[test]
 fn inherent_method_does_not_count_as_an_ordinary_function_position() {
-    let err = typecheck_without_std_prelude(&format!(
+    let err = typecheck_with_standard_environment(&format!(
         r#"{FUNCTOR}
 defenum Boxed<$A> {{ Boxed($A) }}
 impl Boxed {{
-  def forbidden(value: Functor<Int>) -> Int {{ 1 }}
+  def forbidden(value: FixtureFunctor<Int>) -> Int {{ 1 }}
 }}"#
     ))
     .expect_err("an inherent method is not an ordinary function signature");
@@ -192,16 +194,8 @@ impl Boxed {{
 
 #[test]
 fn specialized_generic_pin_pattern_has_a_static_dispatch() {
-    let typed = typecheck_without_std_prelude(
-        r#"deftrait Eq {
-  def eq(self: Self, rhs: Self) -> Int
-}
-
-impl Eq for Int {
-  def eq(self: Int, rhs: Int) -> Int { self }
-}
-
-def pinned_equal(value: $A, pinned: $A) -> Int
+    let typed = typecheck_with_standard_environment(
+        r#"def pinned_equal(value: $A, pinned: $A) -> Int
 where
   $A: Eq
 {
@@ -228,30 +222,30 @@ result: Int = pinned_equal(1, 1)"#,
 
 #[test]
 fn contextual_return_reconstructs_only_the_declared_enum_slot() {
-    typecheck_without_std_prelude(&format!(
+    typecheck_with_standard_environment(&format!(
         r#"{FUNCTOR}
 defenum Pair<$L, $R> {{ Pair($L, $R) }}
 
-impl Functor for Pair<$L, $R>
+impl FixtureFunctor for Pair<$L, $R>
 where
-  $R: Functor.$A
+  $R: FixtureFunctor.$A
 {{
   def fmap(self: Pair<$L, $A>, mapper: ($A -> $B)) -> Pair<$L, $B> {{
     match self {{ Pair::Pair(left, right) => Pair::Pair(left, mapper(right)) }}
   }}
 }}
 
-result: Pair<String, Boolean> = Functor::fmap(
+result: Pair<String, Boolean> = FixtureFunctor::fmap(
   Pair::Pair("left", 1),
   {{|item| True}}
 )"#
     ))
-    .expect("changing the Functor slot must preserve Pair's unmapped left argument");
+    .expect("changing the FixtureFunctor slot must preserve Pair's unmapped left argument");
 }
 
 #[test]
 fn fresh_contextual_witness_preserves_its_trait_among_same_arity_traits() {
-    typecheck_without_std_prelude(
+    typecheck_with_standard_environment(
         r#"deftrait LeftMap
 where
   Self: Type<$A>
@@ -298,9 +292,9 @@ result: Int = transform(Pair::Pair("left", 1))"#,
 
 #[test]
 fn builtin_declaration_is_not_an_ordinary_function_position() {
-    let mut resolved = resolve_without_std_prelude(&format!(
+    let mut resolved = resolve_with_standard_environment(&format!(
         r#"{FUNCTOR}
-def forbidden(value: Functor<Int>) -> Int {{ 1 }}"#
+def forbidden(value: FixtureFunctor<Int>) -> Int {{ 1 }}"#
     ));
     let converted = resolved.iter_mut().any(|node| {
         let Resolved::Def(span, id, _, params, ret, where_clause, _, attrs) = node.clone() else {
@@ -317,7 +311,7 @@ def forbidden(value: Functor<Int>) -> Int {{ 1 }}"#
         "test setup must create a resolved builtin declaration"
     );
 
-    let err = scar::typecheck(resolved)
+    let err = support::typecheck(resolved)
         .expect_err("builtin declarations cannot use contextual constructor applications");
     assert!(
         err.message.contains("ConstructorTraitApplicationPosition"),
@@ -327,17 +321,17 @@ def forbidden(value: Functor<Int>) -> Int {{ 1 }}"#
 
 #[test]
 fn inherent_owner_from_an_earlier_batch_is_not_an_ordinary_function_position() {
-    let mut resolved = resolve_without_std_prelude(&format!(
+    let mut resolved = resolve_with_standard_environment(&format!(
         r#"{FUNCTOR}
 defenum Boxed<$A> {{ Boxed($A) }}
 impl Boxed {{
-  def forbidden(value: Functor<Int>) -> Int {{ 1 }}
+  def forbidden(value: FixtureFunctor<Int>) -> Int {{ 1 }}
 }}"#
     ));
     let inherent_impl = resolved
         .pop()
         .expect("test setup must retain the inherent impl");
-    let mut session = ScarSession::new();
+    let mut session = support::session_from_cached_std_prelude();
     session
         .typecheck(resolved)
         .expect("the first batch should register the trait and nominal owner");
@@ -353,7 +347,7 @@ impl Boxed {{
 
 #[test]
 fn same_head_receiver_does_not_consume_a_distinct_self_capability() {
-    let err = typecheck_without_std_prelude(
+    let err = typecheck_with_standard_environment(
         r#"deftrait Marker {
   def mark(self: Self) -> String
 }
@@ -390,7 +384,7 @@ where
 
 #[test]
 fn scar_rejects_slot_map_owned_by_a_different_constructor_trait() {
-    let err = typecheck_without_std_prelude(&format!(
+    let err = typecheck_with_standard_environment(&format!(
         r#"{FUNCTOR}
 deftrait Other
 where
@@ -400,7 +394,7 @@ defenum Boxed<$A> {{ Boxed($A) }}
 
 impl Other for Boxed<$A>
 where
-  $A: Functor.$A
+  $A: FixtureFunctor.$A
 {{}}"#
     ))
     .expect_err("a slot map must belong to the enclosing constructor trait impl");
@@ -409,14 +403,14 @@ where
 
 #[test]
 fn scar_rejects_slot_map_on_a_non_constructor_trait_impl() {
-    let mut resolved = resolve_without_std_prelude(&format!(
+    let mut resolved = resolve_with_standard_environment(&format!(
         r#"{FUNCTOR}
 deftrait Plain {{}}
 defenum Boxed<$A> {{ Boxed($A) }}
 
 impl Plain for Boxed<$A>
 where
-  $A: Functor.$A
+  $A: FixtureFunctor.$A
 {{}}"#
     ));
     let mutated = resolved.iter_mut().any(|node| {
@@ -433,7 +427,7 @@ where
     });
     assert!(mutated, "test setup must retarget the resolved slot owner");
 
-    let err = scar::typecheck(resolved)
+    let err = support::typecheck(resolved)
         .expect_err("a non-constructor enclosing trait cannot own slot mappings");
     assert!(err.message.contains("TypeConstructor trait"), "{err:?}");
 }
@@ -450,10 +444,8 @@ fn generic_eq_pin_instantiates_the_selected_method_body() {
         }
     }
 
-    let typed = typecheck_without_std_prelude(
+    let typed = typecheck_with_standard_environment(
         r#"
-deftrait Eq { def eq(self: Self, rhs: Self) -> Boolean }
-impl Eq for Int { def eq(self: Self, rhs: Self) -> Boolean { True } }
 defstruct Box<$T> { val: $T }
 impl Box { def new(val: $T) -> Box<$T> { Box { val: val } } }
 impl Eq for Box<$T>

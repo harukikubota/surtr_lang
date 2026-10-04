@@ -31,6 +31,8 @@ defmod Bounds {
 
 named Extractor の本体は Pattern 位置でのみ実行する。通常 call、capture、値化は拒否する。Extractor は常に partial Pattern であり、本体が常に `OK` を返しても通常 Bind `=` には使えない。qualified head、型 head に付属する `deconstruct` の解決規則は既存の Pattern 規則に従う。
 
+Struct の `new` 必須条件は、式位置の `Type(...)` から `Type::new` へ呼出し先をコンパイル時に解決するための契約である。`new` が実行時に返す `Result<Self, E>` の成功・失敗とは独立している。Pattern 位置の `Type(...)` は attached Extractor `Type::deconstruct` を要求し、未定義なら名前解決エラーにする。フィールドの直接分解や別の Extractor への切替で救済しない。
+
 Extractor 本体の計算量、Effect、Process messaging、IO handler 呼び出しは制限しない。高コストな実装の実行コストは定義者の責任とする。言語が保証する安全性は、入力・payload・外部 API 間の値受け渡しが静的型を通ることと immutable な値／型付き Process interface に限定する。純粋性、計算量、zero-cost abstraction は安全性の保証対象ではない。
 
 ## MatchResult

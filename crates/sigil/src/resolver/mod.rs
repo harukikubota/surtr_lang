@@ -28,7 +28,9 @@ mod pattern_consumers;
 mod patterns;
 mod scope_init;
 pub use scope_init::compiler_builtin_bindings;
+mod environment;
 mod session;
+pub use environment::ResolveEnvironment;
 mod special_forms;
 #[cfg(test)]
 mod tests;
@@ -43,7 +45,7 @@ pub use self::declarations::{
     OwnerRegistry, OwnerSourceForm, PrecollectedDeclarations, StageOrderedDeclaration,
     StagedModuleAst,
 };
-pub use self::session::{SigilCheckpoint, SigilSession};
+pub use self::session::{ResolvedImports, SigilCheckpoint, SigilSession};
 
 use self::declarations::{
     assign_declaration_uids, collect_stage_impl_target_resolutions, declaration_uid_kind_map,
@@ -170,6 +172,7 @@ pub fn declaration_symbol_identity_info(
 }
 
 /// Autoimport provenance includes the defining stage even for empty modules.
+#[derive(Debug, Clone)]
 struct AutoImportModule {
     name: String,
     stage_index: usize,
@@ -277,22 +280,20 @@ fn collect_staged_trait_constructor_slots(
     result
 }
 
-/// Resolve all identifiers in the AST to unique references.
-pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
-    resolve_with_warnings(ast).map(|output| output.value)
+/// Resolve a source unit using its loader-provided declaration and import environment.
+pub fn resolve(
+    ast: Vec<Ast>,
+    environment: &ResolveEnvironment,
+) -> Result<Vec<Resolved>, ResolveError> {
+    resolve_with_warnings(ast, environment).map(|output| output.value)
 }
 
-pub fn resolve_with_warnings(ast: Vec<Ast>) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
-    let mut resolver = Resolver::new();
-    let staged = ast
-        .iter()
-        .cloned()
-        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
-        .collect::<Vec<_>>();
-    resolver.owner_registry = precollect_owner_registry(&[staged])?;
-    let resolved = resolver.resolve_program(ast)?;
-    let warnings = collect_resolution_warnings(&resolved, &[]);
-    Ok(PhaseOutput::new(resolved, warnings))
+pub fn resolve_with_warnings(
+    ast: Vec<Ast>,
+    environment: &ResolveEnvironment,
+) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
+    SigilSession::from_environment(environment, None, ResolveResumeState::default())?
+        .resolve_with_warnings(ast)
 }
 
 pub fn resolve_staged_program(
@@ -415,7 +416,23 @@ pub fn resolve_staged_program_from_state_with_warnings(
     start_stage_index: usize,
     resume_state: ResolveResumeState,
 ) -> Result<PhaseOutput<ResolvedStagedProgram>, ResolveError> {
-    let mut owner_registry = precollect_owner_registry(module_stages)?;
+    let environment = ResolveEnvironment::from_precollected(
+        module_stages,
+        &PrecollectedDeclarations {
+            declaration_index: declaration_index.clone(),
+            owner_registry: precollect_owner_registry(module_stages)?,
+        },
+    );
+    let ResolveEnvironment {
+        mut owner_registry,
+        declaration_uids,
+        declaration_uid_kinds,
+        declaration_hidden_by_uid,
+        trait_constructor_slots,
+        global_scope,
+        auto_import_modules,
+        ..
+    } = environment;
     if !user_ast.is_empty() {
         let user_owner_modules = user_ast
             .iter()
@@ -427,21 +444,6 @@ pub fn resolve_staged_program_from_state_with_warnings(
         let user_owner_registry = precollect_owner_registry(&[user_owner_modules])?;
         owner_registry.merge(&user_owner_registry)?;
     }
-    let declaration_uids = assign_declaration_uids(declaration_index);
-    let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
-    let trait_constructor_slots =
-        collect_staged_trait_constructor_slots(module_stages, &declaration_uids);
-    let declaration_hidden_by_uid = declaration_index
-        .iter()
-        .filter_map(|(fq_name, entry)| {
-            declaration_uids
-                .get(fq_name)
-                .copied()
-                .map(|uid| (uid, entry.hidden))
-        })
-        .collect::<HashMap<_, _>>();
-    let global_scope = build_global_scope(declaration_index, &declaration_uids);
-    let auto_import_modules = auto_import_module_names(module_stages);
     let mut resolved = Vec::new();
     let mut explicit_function_imports = Vec::new();
     let mut process_specs = Vec::new();
@@ -555,7 +557,6 @@ pub fn resolve_staged_program_from_state_with_warnings(
             &auto_import_modules,
             declaration_index,
             &declaration_uids,
-            &declaration_uid_kinds,
             &user_ast,
             user_module_path.as_deref(),
             module_stages.len(),
@@ -572,7 +573,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
         user_resolver.owner_registry = owner_registry;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
-        resolved.extend(user_resolver.resolve_program(user_ast)?);
+        resolved.extend(user_resolver.resolve_program(user_scope_build.program)?);
         next_local_id = user_resolver.scope.next_id();
     }
 
@@ -637,7 +638,6 @@ fn resolve_stage_modules_parallel(
                         auto_import_modules,
                         declaration_index,
                         declaration_uids,
-                        declaration_uid_kinds,
                         &module.ast,
                         Some(module.module_path.as_str()),
                         stage_index,
@@ -654,7 +654,7 @@ fn resolve_stage_modules_parallel(
                     resolver.owner_registry = owner_registry.clone();
                     resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
                     resolver.allow_top_level_shadowing = true;
-                    let resolved = resolver.resolve_program(module.ast.clone())?;
+                    let resolved = resolver.resolve_program(module_scope_build.program)?;
                     let local_id_count = resolver.scope.next_id().saturating_sub(stage_local_base);
                     Ok(StageModuleResolveResult {
                         resolved,
@@ -1081,7 +1081,6 @@ pub fn build_scope_for_module(
 ) -> Result<Scope, ResolveError> {
     let declaration_index = precollect_declaration_index(module_stages)?;
     let declaration_uids = assign_declaration_uids(&declaration_index);
-    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
     let global_scope = build_global_scope(&declaration_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     build_module_scope(
@@ -1089,7 +1088,6 @@ pub fn build_scope_for_module(
         &auto_import_modules,
         &declaration_index,
         &declaration_uids,
-        &declaration_uid_kinds,
         &[],
         current_module_path,
         current_stage_index,
@@ -1103,7 +1101,6 @@ pub fn effective_auto_import_entries(
 ) -> Result<Vec<DeclarationEntry>, ResolveError> {
     let declaration_index = precollect_declaration_index(module_stages)?;
     let declaration_uids = assign_declaration_uids(&declaration_index);
-    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
     let global_scope = build_global_scope(&declaration_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let build = build_module_scope_with_imports(
@@ -1111,7 +1108,6 @@ pub fn effective_auto_import_entries(
         &auto_import_modules,
         &declaration_index,
         &declaration_uids,
-        &declaration_uid_kinds,
         &[],
         current_module_path,
         current_stage_index,
@@ -1191,7 +1187,6 @@ pub fn effective_visible_entries(
 ) -> Result<Vec<EffectiveVisibleEntry>, ResolveError> {
     let declaration_index = precollect_declaration_index(module_stages)?;
     let declaration_uids = assign_declaration_uids(&declaration_index);
-    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
     let global_scope = build_global_scope(&declaration_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let build = build_module_scope_with_imports(
@@ -1199,7 +1194,6 @@ pub fn effective_visible_entries(
         &auto_import_modules,
         &declaration_index,
         &declaration_uids,
-        &declaration_uid_kinds,
         stmts,
         current_module_path,
         current_stage_index,

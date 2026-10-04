@@ -432,25 +432,87 @@ pub enum CallableOrigin {
     Capture,
 }
 
+/// Invalid runtime representation encountered while displaying a value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueDisplayError {
+    message: String,
+}
+
+impl ValueDisplayError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ValueDisplayError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ValueDisplayError {}
+
+impl TypeRegistry {
+    /// Check the shape before either diagnostic display or VM inspect renders fields.
+    pub fn validate_display_fields(
+        &self,
+        tag: RuntimeTag,
+        fields: &[Value],
+    ) -> Result<(), ValueDisplayError> {
+        let expected = match self.lookup(tag) {
+            Some(entry) => {
+                entry.field_names.len() + usize::from(entry.kind == TypeKind::EnumVariant)
+            }
+            None if tag == 0 || tag == 1 => 1,
+            None => {
+                return Err(ValueDisplayError::new(format!(
+                    "unknown runtime tag: {tag}"
+                )))
+            }
+        };
+        if fields.len() != expected {
+            return Err(ValueDisplayError::new(format!(
+                "invalid runtime payload for tag {tag}: expected {expected} fields, got {}",
+                fields.len()
+            )));
+        }
+        if let Some(entry) = self.lookup(tag) {
+            if entry.kind == TypeKind::EnumVariant && !matches!(fields.first(), Some(Value::Int(_)))
+            {
+                return Err(ValueDisplayError::new(format!(
+                    "invalid enum discriminant for tag {tag}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Value {
     fn render_named_value(
         type_name: &str,
         field_names: &[String],
         fields: &[Value],
         registry: &TypeRegistry,
-    ) -> String {
+    ) -> Result<String, ValueDisplayError> {
         let parts = field_names
             .iter()
             .zip(fields.iter())
-            .map(|(name, val)| format!("{}: {}", name, val.to_display_string(registry)))
-            .collect::<Vec<_>>();
+            .map(|(name, val)| Ok(format!("{}: {}", name, val.to_display_string(registry)?)))
+            .collect::<Result<Vec<_>, ValueDisplayError>>()?;
 
-        format!("{}({})", surface_path_name(type_name), parts.join(", "))
+        Ok(format!(
+            "{}({})",
+            surface_path_name(type_name),
+            parts.join(", ")
+        ))
     }
 
     /// Generic value display for runtime diagnostics.
-    pub fn to_display_string(&self, registry: &TypeRegistry) -> String {
-        match self {
+    pub fn to_display_string(&self, registry: &TypeRegistry) -> Result<String, ValueDisplayError> {
+        Ok(match self {
             Value::Int(n) => n.to_string(),
             Value::Tag(tag) => format!("<tag:{}>", tag),
             Value::Float(f) => {
@@ -474,25 +536,25 @@ impl Value {
                 let inner = handle
                     .iter()
                     .map(|item| item.to_display_string(registry))
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, ValueDisplayError>>()?
                     .join(", ");
                 format!("[{}]", inner)
             }
             Value::HashMap(handle) => {
                 if handle.entries.is_empty() {
-                    return "hash![]".to_string();
+                    return Ok("hash![]".to_string());
                 }
                 let inner = handle
                     .sorted_entries()
                     .into_iter()
                     .map(|(key, value)| {
-                        format!(
+                        Ok(format!(
                             "{} => {}",
                             quote_surtr_string_literal(&key),
-                            value.to_display_string(registry)
-                        )
+                            value.to_display_string(registry)?
+                        ))
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, ValueDisplayError>>()?
                     .join(", ");
                 format!("hash![{inner}]")
             }
@@ -500,15 +562,16 @@ impl Value {
                 let inner = items
                     .iter()
                     .map(|item| item.to_display_string(registry))
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, ValueDisplayError>>()?
                     .join(", ");
                 format!("({inner})")
             }
             Value::Tagged { tag, fields } => {
+                registry.validate_display_fields(*tag, fields)?;
                 if let Some(entry) = registry.lookup(*tag) {
                     if surface_path_name(&entry.name) == "Duration" {
                         if let Some(Value::Int(ms)) = fields.first() {
-                            return format!("{ms}ms");
+                            return Ok(format!("{ms}ms"));
                         }
                     }
                     match entry.kind {
@@ -517,13 +580,13 @@ impl Value {
                             &entry.field_names,
                             fields,
                             registry,
-                        ),
+                        )?,
                         TypeKind::EnumVariant => {
                             let payload = fields
                                 .iter()
                                 .skip(1)
                                 .map(|val| val.to_display_string(registry))
-                                .collect::<Vec<_>>()
+                                .collect::<Result<Vec<_>, ValueDisplayError>>()?
                                 .join(", ");
                             if payload.is_empty() {
                                 surface_path_name(&entry.name).to_string()
@@ -533,26 +596,17 @@ impl Value {
                         }
                     }
                 } else {
-                    // Fallback for reserved tags and unknown runtime tags.
                     match *tag {
-                        0 => format!(
-                            "Ok({})",
-                            fields
-                                .first()
-                                .map(|v| v.to_display_string(registry))
-                                .unwrap_or_default()
-                        ),
-                        1 => format!(
-                            "{}",
-                            fields
-                                .first()
-                                .map(|v| match v {
-                                    Value::Error(rich) => rich.to_result_display_string(),
-                                    _ => format!("Err({})", v.to_display_string(registry)),
-                                })
-                                .unwrap_or_default()
-                        ),
-                        _ => format!("Tagged({}, {:?})", tag, fields),
+                        0 => format!("Ok({})", fields[0].to_display_string(registry)?),
+                        1 => match &fields[0] {
+                            Value::Error(rich) => rich.to_result_display_string(),
+                            value => format!("Err({})", value.to_display_string(registry)?),
+                        },
+                        _ => {
+                            return Err(ValueDisplayError::new(format!(
+                                "unknown runtime tag: {tag}"
+                            )))
+                        }
                     }
                 }
             }
@@ -594,7 +648,7 @@ impl Value {
             }
             Value::TaskHandle(future_id) => format!("TaskHandle#{future_id}"),
             Value::PendingFuture(future_id) => format!("<pending:future#{future_id}>"),
-        }
+        })
     }
 }
 
@@ -1025,6 +1079,93 @@ mod tests {
     }
 
     #[test]
+    fn display_rejects_invalid_tagged_values() {
+        let registry = TypeRegistry::from_entries(vec![
+            TypeEntry {
+                tag: 10,
+                name: "Row".into(),
+                kind: TypeKind::Record,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 11,
+                name: "Box".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 12,
+                name: "Choice::Some".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+        ]);
+        for (tag, fields) in [
+            (0, vec![]),
+            (1, vec![]),
+            (9999, vec![]),
+            (0, vec![Value::Unit, Value::Unit]),
+            (10, vec![]),
+            (10, vec![Value::Unit, Value::Unit]),
+            (11, vec![]),
+            (11, vec![Value::Unit, Value::Unit]),
+            (12, vec![Value::Int(int(0))]),
+            (12, vec![Value::Unit, Value::Unit]),
+        ] {
+            let value = Value::Tagged { tag, fields };
+            assert!(
+                value.to_display_string(&registry).is_err(),
+                "invalid runtime value must fail display: {value:?}"
+            );
+        }
+        let invalid = Value::Tagged {
+            tag: 9999,
+            fields: vec![],
+        };
+        for value in [
+            Value::Tuple(vec![invalid.clone()]),
+            Value::List(ListHandle::from_items(vec![invalid.clone()])),
+            Value::HashMap(HashMapHandle::empty().insert("key".into(), invalid.clone())),
+            Value::Tagged {
+                tag: 0,
+                fields: vec![invalid.clone()],
+            },
+            Value::Tagged {
+                tag: 1,
+                fields: vec![invalid.clone()],
+            },
+            Value::Tagged {
+                tag: 10,
+                fields: vec![invalid.clone()],
+            },
+            Value::Tagged {
+                tag: 11,
+                fields: vec![invalid.clone()],
+            },
+            Value::Tagged {
+                tag: 12,
+                fields: vec![Value::Int(int(0)), invalid],
+            },
+        ] {
+            assert_eq!(
+                value.to_display_string(&registry).unwrap_err().to_string(),
+                "unknown runtime tag: 9999"
+            );
+        }
+        let valid = Value::Tagged {
+            tag: 12,
+            fields: vec![Value::Int(int(0)), Value::Unit],
+        };
+        assert_eq!(
+            valid.to_display_string(&registry).unwrap(),
+            "Choice::Some(())"
+        );
+    }
+
+    #[test]
     fn display_for_reserved_result_tags() {
         let registry = TypeRegistry::new();
         let ok = Value::Tagged {
@@ -1035,8 +1176,8 @@ mod tests {
             tag: 1,
             fields: vec![Value::Str("bad".into())],
         };
-        assert_eq!(ok.to_display_string(&registry), "Ok(42)");
-        assert_eq!(err.to_display_string(&registry), "Err(bad)");
+        assert_eq!(ok.to_display_string(&registry).unwrap(), "Ok(42)");
+        assert_eq!(err.to_display_string(&registry).unwrap(), "Err(bad)");
     }
 
     #[test]
@@ -1078,12 +1219,15 @@ mod tests {
         };
 
         assert_eq!(
-            user.to_display_string(&registry),
+            user.to_display_string(&registry).unwrap(),
             "User(name: alice, age: 20)"
         );
-        assert_eq!(pair.to_display_string(&registry), "Pair(left: 1, right: 2)");
         assert_eq!(
-            secret_user.to_display_string(&registry),
+            pair.to_display_string(&registry).unwrap(),
+            "Pair(left: 1, right: 2)"
+        );
+        assert_eq!(
+            secret_user.to_display_string(&registry).unwrap(),
             "SecretUser(name: alice, password: s3cr3t)"
         );
     }
@@ -1137,7 +1281,10 @@ mod tests {
             diagnostic: None,
             stack_trace: Vec::new(),
         }));
-        assert_eq!(value.to_display_string(&registry), "TestError(\"boom\")");
+        assert_eq!(
+            value.to_display_string(&registry).unwrap(),
+            "TestError(\"boom\")"
+        );
     }
 
     #[test]
@@ -1191,7 +1338,7 @@ mod tests {
 
         let rendered = Value::Error(Box::new(value));
         assert_eq!(
-            rendered.to_display_string(&registry),
+            rendered.to_display_string(&registry).unwrap(),
             "Outer(\"outer\")\n|_ Inner(\"inner\")\n   |_ Leaf(\"leaf\")"
         );
     }
@@ -1204,7 +1351,7 @@ mod tests {
             Value::Int(int(2)),
             Value::Int(int(3)),
         ]));
-        assert_eq!(value.to_display_string(&registry), "[1, 2, 3]");
+        assert_eq!(value.to_display_string(&registry).unwrap(), "[1, 2, 3]");
     }
 
     #[test]
@@ -1241,7 +1388,7 @@ mod tests {
             ("tab\tchar".into(), Value::Int(int(4))),
         ]));
         assert_eq!(
-            value.to_display_string(&registry),
+            value.to_display_string(&registry).unwrap(),
             "hash![\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4]"
         );
     }
@@ -1471,7 +1618,10 @@ mod tests {
         assert_eq!(nested(packed.clone()), nested(cons.clone()));
         let registry = TypeRegistry::new();
         for list in [packed, cons, mixed] {
-            assert_eq!(Value::List(list).to_display_string(&registry), "[1, 2]");
+            assert_eq!(
+                Value::List(list).to_display_string(&registry).unwrap(),
+                "[1, 2]"
+            );
         }
     }
 
@@ -1549,13 +1699,13 @@ mod tests {
             lexical_captures: vec![Value::Unit, Value::Bool(true)],
             metadata: CallableMetadata::default(),
         });
-        assert_eq!(builtin.to_display_string(&registry), "<builtin:3>");
+        assert_eq!(builtin.to_display_string(&registry).unwrap(), "<builtin:3>");
         assert_eq!(
-            function.to_display_string(&registry),
+            function.to_display_string(&registry).unwrap(),
             "<function:7; lexical_captures=1>"
         );
         assert_eq!(
-            template.to_display_string(&registry),
+            template.to_display_string(&registry).unwrap(),
             "<template:11; lexical_captures=2>"
         );
     }
@@ -1582,7 +1732,7 @@ mod tests {
             }))],
         };
         assert_eq!(
-            value.to_display_string(&registry),
+            value.to_display_string(&registry).unwrap(),
             "Err(NoneError(\"null\"))"
         );
     }
@@ -1626,7 +1776,7 @@ mod tests {
             fields: vec![Value::Error(Box::new(rich))],
         };
         assert_eq!(
-            value.to_display_string(&registry),
+            value.to_display_string(&registry).unwrap(),
             "Err(Higher(\"higher\"))\n|_ Lower(\"lower\")"
         );
     }

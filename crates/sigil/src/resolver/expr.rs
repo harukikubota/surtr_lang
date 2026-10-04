@@ -1,8 +1,8 @@
 use super::captures::collect_captures;
 use super::declarations::{ast_ty_key, trait_instance_key};
 use super::scope_init::{
-    initialize_scope, is_doc_only_builtin_decl, is_runtime_builtin_decl,
-    is_special_form_builtin_decl, resolve_decl_attrs,
+    is_doc_only_builtin_decl, is_runtime_builtin_decl, is_special_form_builtin_decl,
+    resolve_decl_attrs,
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
@@ -213,77 +213,9 @@ impl Resolver {
         let Resolved::Var(_, id) = resolved_func else {
             return None;
         };
-        if let Some(qualified_name) = id.qualified_name.as_deref() {
-            if let Some(kind) = Self::canonical_special_form_from_qname(qualified_name) {
-                return Some(kind);
-            }
-        }
-        let entry = self.declaration_entry_for_uid(id.unique_id)?;
-        if let Some(kind) = Self::canonical_special_form_from_qname(&entry.fq_name) {
-            return Some(kind);
-        }
-        if entry.auto_import && is_special_form_builtin_decl(entry.name.as_str()) {
-            return Self::fallback_special_form_from_surface(&Ast::Var(
-                id.span.clone(),
-                entry.name.clone(),
-            ));
-        }
-        match (
-            global_surface_name(entry.module_path.as_str()),
-            entry.name.as_str(),
-        ) {
-            ("Kernel", "if") => Some(CanonicalSpecialForm::If(IfKind::If3)),
-            ("Kernel", "if_then") => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-            ("Kernel", "require") => Some(CanonicalSpecialForm::Require),
-            ("Kernel", "ensure") => Some(CanonicalSpecialForm::Ensure),
-            ("Kernel", "and") => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
-            ("Kernel", "or") => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
-            ("Result", "map_err") => Some(CanonicalSpecialForm::MapErr),
-            ("Result", "cause") => Some(CanonicalSpecialForm::Cause),
-            ("Result", "recover_kind") => Some(CanonicalSpecialForm::RecoverKind),
-            ("Test", "assert_err_kind") => Some(CanonicalSpecialForm::AssertErrKind),
-            ("Test", "assert_cause_chain") => Some(CanonicalSpecialForm::AssertCauseChain),
-            _ => None,
-        }
-    }
-
-    fn fallback_special_form_from_surface(func: &Ast) -> Option<CanonicalSpecialForm> {
-        match func {
-            Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
-                "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
-                "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
-                "require" => Some(CanonicalSpecialForm::Require),
-                "ensure" => Some(CanonicalSpecialForm::Ensure),
-                "map_err" => Some(CanonicalSpecialForm::MapErr),
-                "cause" => Some(CanonicalSpecialForm::Cause),
-                "recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
-                "and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
-                "or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
-                _ => None,
-            },
-            Ast::Path(_, path)
-                if path.segments.len() == 2
-                    && path.segments[0] == "Result"
-                    && path.segments[1] == "map_err" =>
-            {
-                Some(CanonicalSpecialForm::MapErr)
-            }
-            Ast::Path(_, path)
-                if path.segments.len() == 2
-                    && path.segments[0] == "Result"
-                    && path.segments[1] == "cause" =>
-            {
-                Some(CanonicalSpecialForm::Cause)
-            }
-            Ast::Path(_, path)
-                if path.segments.len() == 2
-                    && path.segments[0] == "Result"
-                    && path.segments[1] == "recover_kind" =>
-            {
-                Some(CanonicalSpecialForm::RecoverKind)
-            }
-            _ => None,
-        }
+        // The resolver stamps the selected declaration identity onto the callee.
+        // Generated closures retain it even when they do not carry a declaration registry.
+        Self::canonical_special_form_from_qname(id.qualified_name.as_deref()?)
     }
 
     fn resolve_canonical_special_form_call(
@@ -2176,9 +2108,10 @@ impl Resolver {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn new() -> Self {
         Self {
-            scope: initialize_scope(),
+            scope: super::scope_init::initialize_scope(),
             capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
@@ -2573,9 +2506,9 @@ impl Resolver {
 
     pub(super) fn resolve_program(
         &mut self,
-        stmts: Vec<Ast>,
+        program: super::imports::ImportsResolvedProgram,
     ) -> Result<Vec<Resolved>, ResolveError> {
-        let stmts = super::derive::expand_derive_annotations(stmts)?;
+        let stmts = super::derive::expand_derive_annotations(program.into_statements())?;
         let stmts = self.lower_impl_defs(stmts)?;
         self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
@@ -2588,8 +2521,8 @@ impl Resolver {
                 || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
                 || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _, _) if is_doc_only_builtin_decl(name))
             {
-                // `import` declarations are consumed by resolver-side module/import handling.
-                // Until full module resolution lands, they are intentionally no-op here.
+                // ImportsResolvedProgram guarantees file imports were applied before resolution.
+                // Import declarations do not emit value IR.
                 continue;
             }
             resolved.push(self.resolve_node(stmt)?);
@@ -3163,10 +3096,6 @@ impl Resolver {
                         resolved_func
                     }
                     Err(err) => {
-                        if let Some(kind) = Self::fallback_special_form_from_surface(func.as_ref())
-                        {
-                            return self.resolve_canonical_special_form_call(span, args, kind);
-                        }
                         return Err(self.map_undefined_callable_error(err, &func, args.len()));
                     }
                 };
@@ -5306,4 +5235,71 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod special_form_identity_tests {
+    use super::*;
+
+    #[test]
+    fn autoimport_does_not_grant_special_form_identity() {
+        let mut resolver = Resolver::new();
+        let name = "Global::User::map_err".to_string();
+        let uid = resolver.scope.define("map_err", Span { start: 0, end: 7 });
+        resolver.declaration_uids.insert(name.clone(), uid);
+        resolver.declaration_entries.insert(
+            name.clone(),
+            DeclarationEntry {
+                module_path: "Global::User".into(),
+                name: "map_err".into(),
+                fq_name: name.clone(),
+                kind: DeclarationKind::Def,
+                stage_index: 0,
+                registration_order: 0,
+                auto_import: true,
+                hidden: false,
+                visibility: spire::ast::Visibility::Public,
+                user_importable: true,
+                user_callable: true,
+                value_parameter_count: Some(2),
+            },
+        );
+        let callee = Resolved::Var(
+            Span { start: 0, end: 7 },
+            ResolvedId {
+                name: "map_err".into(),
+                qualified_name: Some(name),
+                unique_id: uid,
+                compiler_generated: false,
+                symbol_info: None,
+                span: Span { start: 0, end: 7 },
+            },
+        );
+        assert!(resolver
+            .classify_canonical_special_form_callee(&callee)
+            .is_none());
+    }
+
+    #[test]
+    fn missing_special_form_identity_keeps_the_callee_error() {
+        let span = Span { start: 0, end: 2 };
+        let mut resolver = Resolver::new();
+        let call = Ast::App(
+            span.clone(),
+            Box::new(Ast::Var(span.clone(), "if".into())),
+            (1..=3)
+                .map(|value| {
+                    RecordLitArg::Positional(Ast::Lit(
+                        span.clone(),
+                        spire::ast::Lit::Int(value.into()),
+                    ))
+                })
+                .collect(),
+        );
+        let error = resolver
+            .resolve_node(call)
+            .expect_err("an unresolved callee must not become a special form");
+        assert!(error.message.contains("Undefined"), "{}", error.message);
+        assert_eq!(error.span, span);
+    }
 }

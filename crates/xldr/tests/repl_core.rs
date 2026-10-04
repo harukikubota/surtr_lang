@@ -3603,15 +3603,22 @@ defmod Math {
 fn core_imports_non_autoimport_trait_and_rejects_autoimport_trait() {
     let mut engine = engine();
 
+    let failed = engine.handle_line("import Add\n1 + \"bad\"");
+    assert!(matches!(failed.output, ReplOutput::EvalError { .. }));
+
     let imported = engine.handle_line("import Add");
     assert!(rendered_text(&imported).contains("Imported Add"));
 
     let result = engine.handle_line("add(1, 2)");
     assert!(rendered_text(&result).contains("3"));
 
+    let duplicate = engine.handle_line("import Add");
+    assert!(rendered_text(&duplicate).contains("Duplicate import"));
+
     let rejected = engine.handle_line("import Compare");
-    assert!(rendered_text(&rejected)
-        .contains("Compare` is auto-imported and cannot be explicitly imported"));
+    assert!(
+        rendered_text(&rejected).contains("Compare` is already imported by file-start autoimport")
+    );
 }
 
 fn core_script_preload_imports_non_autoimport_trait() {
@@ -6413,6 +6420,21 @@ fn core_quit_command_sets_exit_without_ui_work() {
 
 fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
     let mut engine = engine();
+
+    let binding = engine.handle_line("dbg = {|value: Int| value + 1}");
+    assert!(
+        matches!(binding.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&binding)
+    );
+    let call = engine.handle_line("dbg!(dbg(3))");
+    assert!(
+        matches!(call.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&call)
+    );
+    let stderr = strip_ansi(&call.stderr.join("\n"));
+    assert!(stderr.contains("Int: 4"), "{stderr}");
 
     let doc = engine.handle_line(":doc dbg!");
     assert_eq!(doc_target(&doc).0, "Bootstrap::dbg!");

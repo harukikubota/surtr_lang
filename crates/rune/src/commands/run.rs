@@ -573,40 +573,55 @@ fn execute_bytecode(
         return Err(RuneError::silent(1));
     }
 
-    if let Err(e) = vm.drain_background_tasks() {
-        let location = e
-            .context
-            .call_site
-            .clone()
-            .or_else(|| vm.runtime_error_location());
-        match runtime_sources.as_ref() {
-            Some((sources, source_id)) => xldr::error_display::emit_runtime_error_with_registry(
-                &e,
-                sources,
-                *source_id,
-                location.clone(),
-                xldr::ErrorDisplayMode::Full,
-            ),
-            None => xldr::error_display::emit_runtime_error(
-                &e,
-                vm.source(),
-                vm.source_file(),
-                location,
-                xldr::ErrorDisplayMode::Full,
-            ),
+    let final_result_error = vm.drain_background_tasks().and_then(|()| {
+        if matches!(env, ExecutionEnv::Run) {
+            report_final_result_error_if_any(&vm, runtime_sources.as_ref())
+        } else {
+            Ok(false)
         }
-        if matches!(error_context, ErrorContextMode::Verbose) {
-            emit_verbose_runtime_context(&vm, &e);
+    });
+    let final_result_error = match final_result_error {
+        Ok(has_error) => has_error,
+        Err(e) => {
+            let location = e
+                .context
+                .call_site
+                .clone()
+                .or_else(|| vm.runtime_error_location());
+            match runtime_sources.as_ref() {
+                Some((sources, source_id)) => {
+                    xldr::error_display::emit_runtime_error_with_registry(
+                        &e,
+                        sources,
+                        *source_id,
+                        location.clone(),
+                        xldr::ErrorDisplayMode::Full,
+                    )
+                }
+                None => xldr::error_display::emit_runtime_error(
+                    &e,
+                    vm.source(),
+                    vm.source_file(),
+                    location,
+                    xldr::ErrorDisplayMode::Full,
+                ),
+            }
+            if matches!(error_context, ErrorContextMode::Verbose) {
+                emit_verbose_runtime_context(&vm, &e);
+            }
+            emit_phase_times_if_requested(
+                &mut measurement,
+                phase_output,
+                total_start,
+                execute_start,
+            );
+            emit_observation_if_requested(&vm, observation_options);
+            write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
+            return Err(RuneError::silent(1));
         }
-        emit_phase_times_if_requested(&mut measurement, phase_output, total_start, execute_start);
-        emit_observation_if_requested(&vm, observation_options);
-        write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
-        return Err(RuneError::silent(1));
-    }
+    };
 
-    if matches!(env, ExecutionEnv::Run)
-        && report_final_result_error_if_any(&vm, runtime_sources.as_ref())
-    {
+    if final_result_error {
         if matches!(error_context, ErrorContextMode::Verbose) {
             emit_verbose_vm_context(&vm);
         }
@@ -880,7 +895,8 @@ fn write_vm_dump_if_needed(
         return Ok(());
     }
 
-    let dump_json = build_vm_dump_json(vm, &outcome);
+    let dump_json = build_vm_dump_json(vm, &outcome)
+        .map_err(|error| RuneError::message(1, eldr::format_runtime_error(&error)))?;
     write_vm_dump_file(&vm_dump.path, &dump_json)
 }
 
@@ -908,7 +924,10 @@ fn write_vm_dump_file(path: &str, dump_json: &JsonValue) -> RuneResult<()> {
     })
 }
 
-fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue {
+fn build_vm_dump_json(
+    vm: &eldr::VM,
+    outcome: &RuntimeOutcome<'_>,
+) -> Result<JsonValue, eldr::RuntimeError> {
     let pc = vm.pc();
     let success_opcode = pc
         .checked_sub(1)
@@ -947,14 +966,14 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
         _ => None,
     };
     let observation = vm.observation().unwrap_or_default();
-    let process_runtime = vm.process_runtime_snapshot();
+    let process_runtime = vm.process_runtime_snapshot()?;
 
     let mut dump = json!({
         "schema_version": 1,
         "result": {
             "status": outcome.status(),
             "exit_code": vm.exit_code(),
-            "last_value": vm.last_value().map(|value| eldr::builtin::inspect_value(vm, value)),
+            "last_value": vm.last_value().map(|value| eldr::builtin::inspect_value(vm, value)).transpose()?,
             "runtime_error": runtime_error,
             "error": result_error,
         },
@@ -1077,7 +1096,7 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
         }
     });
     surface_strip_global_prefixes(&mut dump);
-    dump
+    Ok(dump)
 }
 
 pub(super) fn stack_trace_json(stack_trace: &[RuntimeStackFrame]) -> JsonValue {
@@ -1140,7 +1159,7 @@ fn runtime_call_kind_label(kind: &sindr::runtime::RuntimeCallKind) -> &'static s
 fn report_final_result_error_if_any(
     vm: &eldr::VM,
     runtime_sources: Option<&(diagnostics::SourceRegistry, diagnostics::SourceId)>,
-) -> bool {
+) -> Result<bool, eldr::RuntimeError> {
     let emit_value_error = |value| match runtime_sources {
         Some((sources, source_id)) => xldr::error_display::emit_runtime_value_error_with_registry(
             vm,
@@ -1155,32 +1174,53 @@ fn report_final_result_error_if_any(
             xldr::ErrorDisplayMode::Full,
         ),
     };
-    match vm.last_value() {
+    Ok(match vm.last_value() {
         Some(value @ Value::Error(_)) => {
             emit_value_error(value);
             true
         }
-        Some(Value::Tagged { tag: 1, fields }) => {
-            if let Some(err_value) = fields.first() {
-                emit_value_error(err_value);
-            } else {
-                xldr::error_display::emit_invalid_result_missing_payload(
-                    vm.source(),
-                    vm.source_file(),
-                    vm.runtime_error_location(),
-                    xldr::ErrorDisplayMode::Full,
-                );
-            }
+        Some(value @ Value::Tagged { tag: 1, fields }) => {
+            eldr::builtin::inspect_value(vm, value)?;
+            emit_value_error(&fields[0]);
             true
         }
         _ => false,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{parse_run_options, source_registry_from_bytecode, MeasurementOutput, VmDumpMode};
     use forge::bytecode::{Bytecode, SourceFileEntry};
+
+    #[test]
+    fn final_err_display_rejects_missing_and_extra_payload() {
+        use sindr::ir::{Constant, Opcode};
+
+        for field_count in [0, 2] {
+            let mut opcodes = vec![Opcode::LoadConst(0)];
+            opcodes.extend((0..field_count).map(|_| Opcode::LoadConst(1)));
+            opcodes.extend([Opcode::StructNew { field_count }, Opcode::Halt]);
+            let mut vm = eldr::VM::new(Bytecode {
+                opcodes,
+                constants: vec![Constant::Tag(1), Constant::Unit],
+                ..Bytecode::default()
+            });
+            vm.run().expect("construct malformed internal result");
+            let error = super::report_final_result_error_if_any(&vm, None)
+                .expect_err("malformed Err must be a RuntimeError");
+            assert!(
+                error.message.contains("invalid runtime payload for tag 1"),
+                "{error:?}"
+            );
+            assert!(
+                error
+                    .message
+                    .contains(&format!("expected 1 fields, got {field_count}")),
+                "{error:?}"
+            );
+        }
+    }
 
     #[test]
     fn run_options_parses_entry() {

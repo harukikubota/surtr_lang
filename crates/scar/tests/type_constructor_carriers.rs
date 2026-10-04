@@ -1,12 +1,9 @@
-#[path = "support/special_enum_declarations.rs"]
-mod special_enum_declarations;
-
 #[allow(dead_code)]
 mod support;
 
 fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
-    let ast = special_enum_declarations::parse_with_canonical_special_enums(source).expect("parse");
-    scar::typecheck(sigil::resolve(ast).expect("resolve"))
+    let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
+    support::typecheck(support::resolve_ast_with_builtin_prelude(ast).expect("resolve"))
 }
 
 #[test]
@@ -22,18 +19,18 @@ deftrait Joined where Self: Left + Right {}
 }
 
 const FAMILY: &str = r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {}
-defenum Either<$L, $R> { Pair($L, $R), }
-impl Functor for Either<$L, $R> where $R: Functor.$A {}
-impl Monad for Either<$L, $R> where $R: Monad.$A {}
-def accept(a: Functor<Int>, b: Monad<Boolean>) -> Unit { () }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {}
+defenum FixtureEither<$L, $R> { Pair($L, $R), }
+impl FixtureFunctor for FixtureEither<$L, $R> where $R: FixtureFunctor.$A {}
+impl FixtureMonad for FixtureEither<$L, $R> where $R: FixtureMonad.$A {}
+def accept(a: FixtureFunctor<Int>, b: FixtureMonad<Boolean>) -> Unit { () }
 "#;
 
 #[test]
 fn payload_changes_preserve_captured_argument() {
     check(&format!(
-        "{FAMILY}\naccept(Either::Pair(\"left\", 1), Either::Pair(\"left\", True))"
+        "{FAMILY}\naccept(FixtureEither::Pair(\"left\", 1), FixtureEither::Pair(\"left\", True))"
     ))
     .expect("mapped payloads are independent");
 }
@@ -41,7 +38,7 @@ fn payload_changes_preserve_captured_argument() {
 #[test]
 fn different_direct_captured_arguments_are_independent() {
     check(&format!(
-        "{FAMILY}\naccept(Either::Pair(\"left\", 1), Either::Pair(2, True))"
+        "{FAMILY}\naccept(FixtureEither::Pair(\"left\", 1), FixtureEither::Pair(2, True))"
     ))
     .expect("separate direct parameters have independent captured carrier arguments");
 }
@@ -50,12 +47,12 @@ fn different_direct_captured_arguments_are_independent() {
 fn unrelated_families_allow_distinct_carriers() {
     check(
         r#"
-deftrait Monad where Self: Type<$A> {}
+deftrait FixtureMonad where Self: Type<$A> {}
 deftrait Monad2 where Self: Type<$A> {}
 defenum Box<$T> { Box($T), }
-impl Monad for List<$T> where $T: Monad.$A {}
+impl FixtureMonad for List<$T> where $T: FixtureMonad.$A {}
 impl Monad2 for Box<$T> where $T: Monad2.$A {}
-def accept(a: Monad<Int>, b: Monad2<Boolean>) -> Unit { () }
+def accept(a: FixtureMonad<Int>, b: Monad2<Boolean>) -> Unit { () }
 accept([1], Box::Box(True))
 "#,
     )
@@ -219,9 +216,9 @@ value: Pair<String, Int> = Factory::make::<Pair>()
 fn nested_direct_constructor_trait_application_is_rejected() {
     let error = check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {}
-def invalid(value: Functor<Monad<Int>>) -> Unit { () }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {}
+def invalid(value: FixtureFunctor<FixtureMonad<Int>>) -> Unit { () }
 "#,
     )
     .expect_err("a TypeCtorTrait application is only valid at a direct signature position");
@@ -273,30 +270,30 @@ input: PhantomCarrier<Int, Int> = PhantomCarrier::new::<Int>(1)
 #[test]
 fn independent_direct_positions_keep_their_declared_capabilities() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor { def run(self: Self<Int>) -> Int }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
-impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+impl FixtureFunctor for Box<$T> {}
+impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
 "#;
-    check(&format!("{declarations}\ndef use(a: Functor<Int>, b: Monad<Int>) -> Int {{ Monad::run(b) }}\nuse(Box::Box(1), Box::Box(2))"))
-        .expect("the Monad position keeps its own capability");
-    check(&format!("{declarations}\ndef use(a: Functor<Int>, b: Monad<Int>) -> Int {{ Monad::run(a) }}\nuse(Box::Box(1), Box::Box(2))"))
-        .expect_err("a concrete Monad value must not grant capability beyond the direct position's Functor contract");
+    check(&format!("{declarations}\ndef use(a: FixtureFunctor<Int>, b: FixtureMonad<Int>) -> Int {{ FixtureMonad::run(b) }}\nuse(Box::Box(1), Box::Box(2))"))
+        .expect("the FixtureMonad position keeps its own capability");
+    check(&format!("{declarations}\ndef use(a: FixtureFunctor<Int>, b: FixtureMonad<Int>) -> Int {{ FixtureMonad::run(a) }}\nuse(Box::Box(1), Box::Box(2))"))
+        .expect_err("a concrete FixtureMonad value must not grant capability beyond the direct position's FixtureFunctor contract");
 }
 
 #[test]
 fn unannotated_alias_preserves_constructor_capability() {
     let error = check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor { def run(self: Self<Int>) -> Int }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
-impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
-def use(a: Functor<Int>, b: Monad<Int>) -> Int {
+impl FixtureFunctor for Box<$T> {}
+impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def use(a: FixtureFunctor<Int>, b: FixtureMonad<Int>) -> Int {
   alias = a
-  Monad::run(alias)
+  FixtureMonad::run(alias)
 }
 use(Box::Box(1), Box::Box(2))
 "#,
@@ -309,22 +306,22 @@ use(Box::Box(1), Box::Box(2))
     );
     let data = error.structured.as_ref().unwrap().data_json();
     assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
-    assert_eq!(data["required_capability"], "Monad");
+    assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
 #[test]
 fn generic_identity_result_preserves_constructor_capability() {
     let error = check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor { def run(self: Self<Int>) -> Int }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
-impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+impl FixtureFunctor for Box<$T> {}
+impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
 def identity(value: $T) -> $T { value }
-def use(a: Functor<Int>) -> Int {
+def use(a: FixtureFunctor<Int>) -> Int {
   alias = identity(a)
-  Monad::run(alias)
+  FixtureMonad::run(alias)
 }
 use(Box::Box(1))
 "#,
@@ -337,7 +334,7 @@ use(Box::Box(1))
     );
     let data = error.structured.as_ref().unwrap().data_json();
     assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
-    assert_eq!(data["required_capability"], "Monad");
+    assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
 #[test]
@@ -469,13 +466,13 @@ use(Box::Box(1), Box::Box(2))"#
 fn ordinary_callable_argument_checks_constructor_capability() {
     let error = check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor { def run(self: Self<Int>) -> Int }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
-impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
-def stronger(value: Monad<Int>) -> Int { Monad::run(value) }
-def use(a: Functor<Int>) -> Int { stronger(a) }
+impl FixtureFunctor for Box<$T> {}
+impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def stronger(value: FixtureMonad<Int>) -> Int { FixtureMonad::run(value) }
+def use(a: FixtureFunctor<Int>) -> Int { stronger(a) }
 use(Box::Box(1))
 "#,
     )
@@ -487,23 +484,23 @@ use(Box::Box(1))
     );
     let data = error.structured.as_ref().unwrap().data_json();
     assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
-    assert_eq!(data["required_capability"], "Monad");
+    assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
 #[test]
 fn every_trait_method_constructor_argument_checks_capability() {
     let error = check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {
   def combine(left: Self<Int>, right: Self<Int>) -> Int
 }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
-impl Monad for Box<$T> {
+impl FixtureFunctor for Box<$T> {}
+impl FixtureMonad for Box<$T> {
   def combine(left: Self<Int>, right: Self<Int>) -> Int { 1 }
 }
-def use(a: Functor<Int>, b: Monad<Int>) -> Int { Monad::combine(b, a) }
+def use(a: FixtureFunctor<Int>, b: FixtureMonad<Int>) -> Int { FixtureMonad::combine(b, a) }
 use(Box::Box(1), Box::Box(2))
 "#,
     )
@@ -515,18 +512,18 @@ use(Box::Box(1), Box::Box(2))
     );
     let data = error.structured.as_ref().unwrap().data_json();
     assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
-    assert_eq!(data["required_capability"], "Monad");
+    assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
 #[test]
 fn bare_occurrences_keep_mapped_payloads_independent() {
     check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {}
-impl Functor for List<$T> {}
-impl Monad for List<$T> {}
-def accept(a: Functor, b: Monad) -> Unit { () }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {}
+impl FixtureFunctor for List<$T> {}
+impl FixtureMonad for List<$T> {}
+def accept(a: FixtureFunctor, b: FixtureMonad) -> Unit { () }
 accept([1], [True])
 "#,
     )
@@ -537,9 +534,9 @@ accept([1], [True])
 fn repeated_bare_trait_occurrences_keep_mapped_payloads_independent() {
     check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-impl Functor for List<$T> {}
-def accept(a: Functor, b: Functor) -> Unit { () }
+deftrait FixtureFunctor where Self: Type<$A> {}
+impl FixtureFunctor for List<$T> {}
+def accept(a: FixtureFunctor, b: FixtureFunctor) -> Unit { () }
 accept([1], [True])
 "#,
     )
@@ -550,12 +547,12 @@ accept([1], [True])
 fn bare_occurrences_infer_captured_arguments_independently() {
     check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {}
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {}
 defenum Carrier<$L, $R> { Pair($L, $R), }
-impl Functor for Carrier<$L, $R> where $R: Functor.$A {}
-impl Monad for Carrier<$L, $R> where $R: Monad.$A {}
-def accept(a: Functor, b: Monad) -> Unit { () }
+impl FixtureFunctor for Carrier<$L, $R> where $R: FixtureFunctor.$A {}
+impl FixtureMonad for Carrier<$L, $R> where $R: FixtureMonad.$A {}
+def accept(a: FixtureFunctor, b: FixtureMonad) -> Unit { () }
 accept(Carrier::Pair([True], 1), Carrier::Pair(["left"], 2))
 "#,
     )
@@ -589,14 +586,14 @@ accept(Pair::Pair(1, "a"), Pair::Pair(2, "b"))
 fn different_direct_trait_names_keep_result_independent() {
     check(
         r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor {}
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor {}
 defenum Box<$T> { Box($T), }
-impl Functor for List<$T> {}
-impl Monad for List<$T> {}
-impl Functor for Box<$T> {}
-impl Monad for Box<$T> {}
-def replace(value: Functor<Int>) -> Monad<String> { Box::Box("wrong") }
+impl FixtureFunctor for List<$T> {}
+impl FixtureMonad for List<$T> {}
+impl FixtureFunctor for Box<$T> {}
+impl FixtureMonad for Box<$T> {}
+def replace(value: FixtureFunctor<Int>) -> FixtureMonad<String> { Box::Box("wrong") }
 result: Box<String> = replace([1])
 "#,
     )
@@ -661,9 +658,6 @@ value: List<String> = Factory::make::<List, Int>()
 #[test]
 fn helper_operator_and_capture_preserve_the_same_constructor_relation() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> {
-  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
-}
 defenum Box<$Value> { Box($Value), }
 impl Functor for Box<$Value> {
   def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> {
@@ -736,17 +730,17 @@ fn branch_and_block_results_preserve_constructor_capability() {
     ] {
         let source = format!(
             r#"
-deftrait Functor where Self: Type<$A> {{}}
-deftrait Monad where Self: Functor {{ def run(self: Self<Int>) -> Int }}
+deftrait FixtureFunctor where Self: Type<$A> {{}}
+deftrait FixtureMonad where Self: FixtureFunctor {{ def run(self: Self<Int>) -> Int }}
 defenum Box<$T> {{ Box($T), }}
-impl Functor for Box<$T> {{}}
-impl Monad for Box<$T> {{ def run(self: Self<Int>) -> Int {{ 1 }} }}
-def stronger(value: Monad<Int>) -> Int {{ 1 }}
-def use(a: $F<Int>, b: $F<Int>) -> Int where $F: Functor {{ evidence = Monad::run(a); choice = {expression}; stronger(choice) }}
+impl FixtureFunctor for Box<$T> {{}}
+impl FixtureMonad for Box<$T> {{ def run(self: Self<Int>) -> Int {{ 1 }} }}
+def stronger(value: FixtureMonad<Int>) -> Int {{ 1 }}
+def use(a: $F<Int>, b: $F<Int>) -> Int where $F: FixtureFunctor {{ evidence = FixtureMonad::run(a); choice = {expression}; stronger(choice) }}
 use(Box::Box(1), Box::Box(2))
 "#
         );
-        check(&source.replace("$F: Functor", "$F: Monad"))
+        check(&source.replace("$F: FixtureFunctor", "$F: FixtureMonad"))
             .unwrap_or_else(|error| panic!("{expression}: sufficient capability: {error:?}"));
         let error = check(&source)
             .expect_err("derived expressions must preserve the input capability restriction");
@@ -761,13 +755,13 @@ use(Box::Box(1), Box::Box(2))
 #[test]
 fn nominal_annotation_cannot_choose_an_abstract_constructor() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor { def run(self: Self<Int>) -> Int }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
-impl Functor for List<$T> {}
-impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
-def stronger(value: Monad<Int>) -> Int { 1 }
+impl FixtureFunctor for Box<$T> {}
+impl FixtureFunctor for List<$T> {}
+impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def stronger(value: FixtureMonad<Int>) -> Int { 1 }
 "#;
     for body in [
         "stronger(value)",
@@ -778,7 +772,7 @@ def stronger(value: Monad<Int>) -> Int { 1 }
     ] {
         let source = format!(
             r#"{declarations}
-def use(a: Functor<Int>) -> Int {{
+def use(a: FixtureFunctor<Int>) -> Int {{
     value: Box<Int> = a
     {body}
 }}
@@ -786,7 +780,7 @@ def use(a: Functor<Int>) -> Int {{
         );
         check(&format!(
             "{}\nuse(Box::Box(1))",
-            source.replace("a: Functor<Int>", "a: Box<Int>")
+            source.replace("a: FixtureFunctor<Int>", "a: Box<Int>")
         ))
         .expect("an already concrete carrier can retain its nominal annotation");
         for input in ["Box::Box(1)", "[1]"] {
@@ -804,12 +798,12 @@ def use(a: Functor<Int>) -> Int {{
 #[test]
 fn provenance_intersection_proves_every_extracted_source() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> {}
-deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+deftrait FixtureFunctor where Self: Type<$A> {}
+deftrait FixtureMonad where Self: FixtureFunctor { def run(self: Self<Int>) -> Int }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
-impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
-def stronger(value: Monad<Int>) -> Int { 1 }
+impl FixtureFunctor for Box<$T> {}
+impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def stronger(value: FixtureMonad<Int>) -> Int { 1 }
 "#;
     let source = |capability: &str| {
         format!(
@@ -817,15 +811,16 @@ def stronger(value: Monad<Int>) -> Int { 1 }
 def use(a: $F<Int>, b: $F<Int>) -> Int where $F: {capability} {{
     pair = (a, 1)
     choice = match pair {{ (item, _) => if (True, item, b), }}
-    evidence = Monad::run(a)
+    evidence = FixtureMonad::run(a)
     stronger(choice)
 }}
 use(Box::Box(1), Box::Box(2))
 "#
         )
     };
-    check(&source("Monad")).expect("extracted sources retain their declared sufficient capability");
-    let error = check(&source("Functor"))
+    check(&source("FixtureMonad"))
+        .expect("extracted sources retain their declared sufficient capability");
+    let error = check(&source("FixtureFunctor"))
         .expect_err("an unknown source cannot be omitted from intersection");
     assert_eq!(
         error.reason(),
@@ -838,7 +833,7 @@ use(Box::Box(1), Box::Box(2))
     .expect("fresh concrete branches prove their capability independently");
     check(&format!(
         r#"{declarations}
-def retain(value: $F<Int>) -> $F<Int> where $F: Monad {{ evidence = Monad::run(value); value }}
+def retain(value: $F<Int>) -> $F<Int> where $F: FixtureMonad {{ evidence = FixtureMonad::run(value); value }}
 stronger(if (True, Box::Box(1), retain(Box::Box(2))))
 "#
     ))
@@ -848,13 +843,13 @@ stronger(if (True, Box::Box(1), retain(Box::Box(2))))
 #[test]
 fn specialized_return_views_survive_value_projections() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
-deftrait Monad where Self: Functor {}
+deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait FixtureMonad where Self: FixtureFunctor {}
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
-impl Monad for Box<$T> {}
-def retain(value: $F<Int>) -> $F<Int> where $F: Functor { Functor::fmap(value, {|x| x}) }
-def stronger(value: Monad<Int>) -> Int { 1 }
+impl FixtureFunctor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl FixtureMonad for Box<$T> {}
+def retain(value: $F<Int>) -> $F<Int> where $F: FixtureFunctor { FixtureFunctor::fmap(value, {|x| x}) }
+def stronger(value: FixtureMonad<Int>) -> Int { 1 }
 deferror Marker { "marker" }
 def wrap(value: $T) -> Result<List<$T>, Marker> { Ok([value]) }
 defenum Maybe<$T> { Some($T), None, }
@@ -890,21 +885,21 @@ impl Holder { def new(value: $T) -> Holder<$T> { Holder { value: value } } }
 #[test]
 fn specialized_return_views_follow_generic_callable_dependencies() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
-deftrait Monad where Self: Functor {}
+deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait FixtureMonad where Self: FixtureFunctor {}
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
-impl Monad for Box<$T> {}
-def retain(value: $F<Int>) -> $F<Int> where $F: Functor { Functor::fmap(value, {|x| x}) }
-def stronger(value: Monad<Int>) -> Int { 1 }
+impl FixtureFunctor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl FixtureMonad for Box<$T> {}
+def retain(value: $F<Int>) -> $F<Int> where $F: FixtureFunctor { FixtureFunctor::fmap(value, {|x| x}) }
+def stronger(value: FixtureMonad<Int>) -> Int { 1 }
 def id(value: $T) -> $T { value }
-def preserve(values: $F<$T>) -> $F<$T> where $F: Functor { Functor::fmap(values, {|x| x}) }
+def preserve(values: $F<$T>) -> $F<$T> where $F: FixtureFunctor { FixtureFunctor::fmap(values, {|x| x}) }
 "#;
     for expression in [
         "stronger(a |> id())",
         r#"identity: (Box<Int> -> Box<Int>) = &id
 stronger(identity(a))"#,
-        r#"mapped: Box<Box<Int>> = Functor::fmap(Box::Box(0), {|x: Int| a})
+        r#"mapped: Box<Box<Int>> = FixtureFunctor::fmap(Box::Box(0), {|x: Int| a})
 match mapped { Box::Box(item) => stronger(item), }"#,
         r#"wrapped = preserve(Box::Box(a))
 match wrapped { Box::Box(item) => stronger(item), }"#,
@@ -925,27 +920,27 @@ match wrapped { Box::Box(item) => stronger(item), }"#,
 #[test]
 fn specialized_return_views_survive_receiverless_and_joined_calls() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
-deftrait Monad where Self: Functor { def return::<Self>(value: $A) -> Self<$A> }
+deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait FixtureMonad where Self: FixtureFunctor { def return::<Self>(value: $A) -> Self<$A> }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
-impl Monad for Box<$T> { def return::<Box<$T>>(value: $A) -> Box<$A> { Box::Box(value) } }
-def retain(value: $F<Int>) -> $F<Int> where $F: Functor { Functor::fmap(value, {|x| x}) }
-def stronger(value: Monad<Int>) -> Int { 1 }
+impl FixtureFunctor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl FixtureMonad for Box<$T> { def return::<Box<$T>>(value: $A) -> Box<$A> { Box::Box(value) } }
+def retain(value: $F<Int>) -> $F<Int> where $F: FixtureFunctor { FixtureFunctor::fmap(value, {|x| x}) }
+def stronger(value: FixtureMonad<Int>) -> Int { 1 }
 def id(value: $T) -> $T { value }
 def factory(sample: $T) -> ($T -> $T) { {|value| value} }
 def callback_factory::<$T>() -> ((Unit -> $T) -> $T) { {|f: (Unit -> $T)| f(())} }
-def preserve(values: $F<$T>) -> $F<$T> where $F: Functor { Functor::fmap(values, {|x| x}) }
+def preserve(values: $F<$T>) -> $F<$T> where $F: FixtureFunctor { FixtureFunctor::fmap(values, {|x| x}) }
 defenum Wrap<$T> { Wrap($T), }
-impl Functor for Wrap<$T> { def fmap(self: Wrap<$A>, mapper: ($A -> $B)) -> Wrap<$B> { match self { Wrap::Wrap(x) => Wrap::Wrap(mapper(x)), } } }
-impl Monad for Wrap<$T> { def return::<Wrap<$T>>(value: $A) -> Wrap<$A> { Wrap::Wrap(value) } }
+impl FixtureFunctor for Wrap<$T> { def fmap(self: Wrap<$A>, mapper: ($A -> $B)) -> Wrap<$B> { match self { Wrap::Wrap(x) => Wrap::Wrap(mapper(x)), } } }
+impl FixtureMonad for Wrap<$T> { def return::<Wrap<$T>>(value: $A) -> Wrap<$A> { Wrap::Wrap(value) } }
 deftrait Nest where Self: Type<$A> { def wrap::<Self>(values: List<$A>) -> Self<List<$A>> }
 impl Nest for Wrap<$T> { def wrap::<Wrap<$T>>(values: List<$A>) -> Wrap<List<$A>> { Wrap::Wrap(values) } }
 "#;
     for expression in [
         r#"identity = factory(Box::Box(0)); stronger(identity(a))"#,
         r#"apply: ((Unit -> Box<Int>) -> Box<Int>) = callback_factory(); stronger(apply({|u: Unit| a}))"#,
-        r#"wrapped: Wrap<Box<Int>> = Monad::return(a)
+        r#"wrapped: Wrap<Box<Int>> = FixtureMonad::return(a)
 match wrapped { Wrap::Wrap(item) => stronger(item), }"#,
         r#"nested: Wrap<List<Box<Int>>> = Nest::wrap([a])
 match nested {
@@ -973,16 +968,16 @@ stronger(identity(a))"#,
 #[test]
 fn constructor_method_result_provenance_uses_the_declared_self_receiver() {
     let declarations = r#"
-deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
-deftrait Monad where Self: Functor {}
+deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait FixtureMonad where Self: FixtureFunctor {}
 deftrait Extract where Self: Type<$A> { def extract(self: Self<$A>) -> $A }
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
-impl Monad for Box<$T> {}
+impl FixtureFunctor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl FixtureMonad for Box<$T> {}
 defenum Outer<$T> { Outer($T), }
 impl Extract for Outer<$T> { def extract(self: Outer<$A>) -> $A { match self { Outer::Outer(value) => value, } } }
-def retain(value: $F<Int>) -> $F<Int> where $F: Functor { Functor::fmap(value, {|x| x}) }
-def stronger(value: Monad<Int>) -> Int { 1 }
+def retain(value: $F<Int>) -> $F<Int> where $F: FixtureFunctor { FixtureFunctor::fmap(value, {|x| x}) }
+def stronger(value: FixtureMonad<Int>) -> Int { 1 }
 "#;
 
     check(&format!(
@@ -1021,7 +1016,7 @@ fn captured_generic_callable_keeps_its_required_constructor_capability() {
         let error = check(&format!(
         "{RESTRICTED_RETURN_PROJECTIONS}\nmapper: (Box<Int> -> Int) = {capture}\nmapper(retain(Box::Box(1)))"
     ))
-    .expect_err("capturing a generic function must not erase its original Monad requirement");
+    .expect_err("capturing a generic function must not erase its original FixtureMonad requirement");
         assert_eq!(
             error.reason(),
             Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),

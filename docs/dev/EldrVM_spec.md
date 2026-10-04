@@ -178,6 +178,8 @@ VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk
 
 ### 3.9 Builtin / callback の継続実行
 
+`HashMap::map_values` は builtin として元 map の全キーを保ち、決定的なキー順で各値へ callback を一度ずつ適用する。空 map では callback を呼ばない。map の内部異常と callback の RuntimeError は伝播し、部分 map を成功として返さない。callback が返す言語の Result 値（`Err` を含む）はそのまま新しい値として格納する。
+
 builtin の内部結果は、完了、継続可能、callback 要求、Future 待機、RuntimeError を区別する。
 継続状態は VM の実行コンテキストが所有し、利用者の `Value` や bytecode に格納しない。
 即時完了する builtin も同じ dispatch へ接続する。
@@ -226,6 +228,9 @@ Eldr が扱う値の概念カテゴリ:
 - 呼び出し可能値: `Callable`
 - 言語エラー値: `Error(RichError)`
 - process capability: `PID`（runtime が発行する opaque handle）
+
+値の表示と `inspect` は、未知の tag、reserved Result（tag 0/1）の payload 数不一致、既知の struct / record / enum variant のフィールド数不一致を RuntimeError とする。enum variant の先頭フィールドは Int の discriminant を必須とし、runtime のフィールド数は payload を記録する `TypeEntry.field_names` の数に 1 を足した値とする。比較 builtin が生成する `Ordering` も通常の enum 表現に従い、Less / Equal / Greater はそれぞれ discriminant 0 / 1 / 2 を持つ。未知 tag の `Tagged(...)` 表示、欠損 payload の `Ok()` 表示、空文字による救済は行わない。正規の reserved Result は registry entry がなくても表示できる。
+List / tuple / HashMap / tagged value のフィールドも再帰的に検証し、内部値の表示失敗を保持する。Sindr の表示エラーは Eldr の境界で RuntimeError に変換する。`print` / `inspect` / REPL / `dbg!` / runtime snapshot の呼出し側まで伝播し、言語の `Err` 値や panic で代用しない。
 
 `inspect` における `Callable` 表示は runtime metadata に従い、closure は
 `Closure(sig)`、capture は `FnCapture(module: M, name: f, sig: sig)` を返す。
@@ -440,7 +445,8 @@ Opcode は以下のカテゴリを持つ。
 
 ## 7. 組込み関数と型情報
 
-- 組込み関数メタデータは単一テーブルで管理する
+- 組込み関数メタデータは `BUILTIN_METAS` を正本とし、runtime ID は正本の名前検索で定義順から求める。コピーした metadata も同じ ID を得る
+- metadata から runtime ID を要求して解決できなければ、builtin 名を含む `internal compiler error` の invariant panic で直ちに停止する。代替 ID による処理継続は認めない。一般の検索 API が未登録名を `None` として返す契約は維持する
 - `Bootstrap` module の `@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
 - `Facet<K, S, A, T, B>` は compile-time capability であり runtime value を持たない。`Facet::view` / `Facet::preview` / `Facet::put` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::compose` / Facet `->` 合成 は compile-time lowering 対象で、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
@@ -480,7 +486,7 @@ Opcode は以下のカテゴリを持つ。
 - `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
 
 標準モジュールの inventory、順序、stage 分割は compile 側の
-[`STDLIB_MODULE_SPECS`](../../crates/xldr/src/loader.rs) を正本とする。同一 stage 内の import は
+[`STDLIB_MODULE_SPECS`](../../crates/sindr/src/stdlib.rs) を正本とする。同一 stage 内の import は
 file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。
 Eldr は解決済みの bytecode を受け取り、VM 内で追加の import 解決を行わない。
 

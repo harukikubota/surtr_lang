@@ -27,6 +27,8 @@ defmod Bootstrap {
 
   @doc """
   Compose two unary callables from left to right.
+  Fully supplied function calls may return either callable operand.
+  Composition does not inject missing arguments or require extra parentheses.
 
   ## Examples
   {|n: Int| n + 1} >> {|n| n * 2}
@@ -35,7 +37,8 @@ defmod Bootstrap {
 
   @doc """
   Compose a contextual unary callable with a plain mapper. The result
-  carrier must implement Functor.
+  carrier must implement Functor. Fully supplied function calls may return
+  the operands; composition does not inject missing arguments.
 
   ## Examples
   {|n: Int| [n]} >* {|n| n + 1}
@@ -44,7 +47,8 @@ defmod Bootstrap {
 
   @doc """
   Compose two contextual unary callables. The result carrier must implement
-  Monad.
+  Monad. Fully supplied function calls may return the operands; composition
+  does not inject missing arguments.
 
   ## Examples
   {|n: Int| [n]} >=> {|n| [n, n + 1]}
@@ -188,6 +192,9 @@ defmod Bootstrap {
 
   `match value { pattern => expr, ... }` evaluates the scrutinee once and then
   tries each arm from top to bottom.
+  `match(value) { ... }` and `match(value, { ... })` have the same meaning.
+  The braces contain dedicated match arms in all three forms, not an ordinary
+  block value. Evaluation order, guards, and exhaustiveness are unchanged.
   Each left-hand side is interpreted as a MatchBlock pattern.
   Structural patterns, literal patterns, constructor patterns, list/string
   decomposition, as-patterns, and Extractors may all appear there.
@@ -241,6 +248,9 @@ defmod Bootstrap {
   `cond { cond1 => expr1, ..., True => exprN }` evaluates each condition from
   top to bottom and returns the body of the first clause whose condition is
   `True`.
+
+  `cond({ ... })` has the same meaning as `cond { ... }`. The braces contain
+  dedicated conditional clauses, not an ordinary block value.
 
   Every non-final clause condition must return `Boolean`.
   The final clause must use the literal `True`, and that `True` clause may

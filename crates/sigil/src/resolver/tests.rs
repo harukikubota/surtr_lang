@@ -5,6 +5,71 @@ use sindr::warning::WarningKind;
 use spire::ast::{AstPath, AstTy, BinOp, ImportSpec, Lit};
 use spire::parse;
 
+fn standard_test_stages() -> &'static Vec<Vec<StagedModuleAst>> {
+    static STAGES: std::sync::OnceLock<Vec<Vec<StagedModuleAst>>> = std::sync::OnceLock::new();
+    STAGES.get_or_init(|| {
+        let mut stages = vec![Vec::new(), Vec::new()];
+        for (index, spec) in
+            sindr::stdlib::stdlib_module_specs(sindr::stdlib::StdlibVariant::Default).enumerate()
+        {
+            let ast = spire::parse_with_context(
+                spec.source,
+                spire::ParserContext::module(
+                    index as u32 + 1,
+                    (spec.module_path == "Facet").then(|| spec.module_path.to_string()),
+                )
+                .with_rules(spire::ParseRules::std_module()),
+            )
+            .expect("standard source parses");
+            let fallback =
+                const_only_fallback_module_path(&ast, Some(spec.module_path)).map(str::to_owned);
+            let stage_index = usize::from(spec.stage != sindr::stdlib::StdlibStage::Bootstrap);
+            stages[stage_index].extend(staged_modules_from_source_ast(ast, fallback.as_deref()));
+        }
+        stages
+    })
+}
+
+fn standard_test_environment() -> &'static ResolveEnvironment {
+    static ENV: std::sync::OnceLock<ResolveEnvironment> = std::sync::OnceLock::new();
+    ENV.get_or_init(|| {
+        ResolveEnvironment::from_stages(standard_test_stages()).expect("standard environment")
+    })
+}
+
+fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+    super::resolve(ast, standard_test_environment())
+}
+
+fn resolve_with_warnings(ast: Vec<Ast>) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
+    super::resolve_with_warnings(ast, standard_test_environment())
+}
+
+fn test_session() -> SigilSession {
+    SigilSession::from_environment(
+        standard_test_environment(),
+        None,
+        ResolveResumeState::default(),
+    )
+    .unwrap()
+}
+
+// Internal declaration tests inspect the resolver directly, after the same import validation.
+fn prepare_internal_program(ast: Vec<Ast>) -> super::imports::ImportsResolvedProgram {
+    let env = standard_test_environment();
+    build_module_scope_with_imports(
+        &env.global_scope,
+        &env.auto_import_modules,
+        &env.declaration_index,
+        &env.declaration_uids,
+        &ast,
+        None,
+        env.stage_count,
+    )
+    .expect("internal program imports")
+    .program
+}
+
 fn resolve_on_cli_sized_stack(source: String) -> Vec<Resolved> {
     std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
@@ -15,15 +80,59 @@ fn resolve_on_cli_sized_stack(source: String) -> Vec<Resolved> {
 }
 
 #[test]
-fn special_variants_require_a_real_enum_declaration() {
+fn standard_trait_member_imports_use_canonical_owner() {
+    assert!(parse_and_resolve("add(1, 2)").is_err());
+    for source in ["import Add::add\nadd(1, 2)", "import Add::{add}\nadd(1, 2)"] {
+        parse_and_resolve(source).expect("standard trait member import");
+        let mut session = test_session();
+        session
+            .resolve(parse(source).unwrap())
+            .expect("session trait member import");
+        assert_eq!(session.lookup_uid("add"), session.lookup_uid("Add::add"));
+        assert_eq!(session.last_imports().success_labels, vec!["Add::add"]);
+        assert!(session.resolve(parse("import Add::add").unwrap()).is_err());
+    }
+}
+
+#[test]
+fn session_imports_are_atomic_and_rollback_with_scope() {
+    let mut session = test_session();
+    let before = session.checkpoint();
+    session.resolve(parse("import Add::add").unwrap()).unwrap();
+    assert!(session.lookup_uid("add").is_some());
+    assert_eq!(session.last_imports().imported_symbols, vec!["add"]);
+    session.rollback(before);
+    assert!(session.lookup_uid("add").is_none());
+    assert!(session.last_imports().success_labels.is_empty());
+    assert!(session
+        .resolve(parse("import Add::add\nmissing_name").unwrap())
+        .is_err());
+    assert!(session.lookup_uid("add").is_none());
+    session
+        .resolve(parse("import Add::add\nadd(1, 2)").unwrap())
+        .unwrap();
+    assert!(session.resolve(parse("import Add::add").unwrap()).is_err());
+}
+
+#[test]
+fn standalone_and_session_reject_unknown_imports() {
+    let ast = parse("import MissingModule").expect("import parses");
+    assert!(
+        resolve(ast.clone()).is_err(),
+        "standalone must validate imports"
+    );
+    let mut session = test_session();
+    assert!(
+        session.resolve(ast).is_err(),
+        "session must validate imports"
+    );
+}
+
+#[test]
+fn special_variants_use_standard_enum_declarations() {
     for source in ["Ok(1)", "Err(1)", "Result::Ok(1)", "Boolean::True"] {
-        let error = resolve(parse(source).expect("input parses"))
-            .expect_err("isolated resolver must not invent constructors");
-        assert!(
-            error.message.contains("Undefined"),
-            "{source}: {}",
-            error.message
-        );
+        resolve(parse(source).expect("input parses"))
+            .expect("standard enum declaration is available");
     }
 }
 
@@ -39,10 +148,8 @@ fn compiler_builtin_symbols_use_only_the_registered_allocator_slots() {
 
 #[test]
 fn canonical_special_variants_share_alias_and_capture_targets() {
-    let mut session = SigilSession::new();
-    session
-        .resolve(canonical_test_enum_declarations())
-        .expect("real enum registration");
+    let mut session = test_session();
+
     for meta in sindr::names::SPECIAL_ENUM_VARIANT_METAS {
         assert_eq!(
             session.lookup_uid(meta.bare_alias),
@@ -142,7 +249,6 @@ fn special_variant_import_aliases_reject_foreign_enum_identity() {
         for include_canonical in [false, true] {
             let index = variant_import_registry(target, include_canonical);
             let uids = assign_declaration_uids(&index);
-            let kinds = declaration_uid_kind_map(&index, &uids);
             let scope = build_global_scope(&index, &uids);
             let (owner, alias) = target.rsplit_once("::").unwrap();
             for spec in [
@@ -155,18 +261,10 @@ fn special_variant_import_aliases_reject_foreign_enum_identity() {
                     variant_import_path(owner),
                     spec,
                 )];
-                let error = build_module_scope_with_imports(
-                    &scope,
-                    &[],
-                    &index,
-                    &uids,
-                    &kinds,
-                    &imports,
-                    None,
-                    0,
-                )
-                .err()
-                .expect("foreign import cannot shadow a reserved variant alias");
+                let error =
+                    build_module_scope_with_imports(&scope, &[], &index, &uids, &imports, None, 0)
+                        .err()
+                        .expect("foreign import cannot shadow a reserved variant alias");
                 assert_eq!(
                     error.diagnostic.reason,
                     crate::error::ResolveErrorReason::Declaration,
@@ -183,18 +281,10 @@ fn special_variant_import_aliases_reject_foreign_enum_identity() {
                 name: owner.into(),
                 stage_index: 0,
             }];
-            let error = build_module_scope_with_imports(
-                &scope,
-                &auto_imports,
-                &index,
-                &uids,
-                &kinds,
-                &[],
-                None,
-                0,
-            )
-            .err()
-            .expect("foreign auto-import cannot shadow a reserved variant alias");
+            let error =
+                build_module_scope_with_imports(&scope, &auto_imports, &index, &uids, &[], None, 0)
+                    .err()
+                    .expect("foreign auto-import cannot shadow a reserved variant alias");
             assert_eq!(
                 error.diagnostic.reason,
                 crate::error::ResolveErrorReason::Declaration,
@@ -208,7 +298,6 @@ fn special_variant_import_aliases_reject_foreign_enum_identity() {
 fn special_variant_import_aliases_preserve_canonical_uid_and_duplicate_rule() {
     let index = variant_import_registry("Result::Ok", true);
     let uids = assign_declaration_uids(&index);
-    let kinds = declaration_uid_kind_map(&index, &uids);
     let scope = build_global_scope(&index, &uids);
     let uid = scope.lookup("Result::Ok").unwrap();
     for spec in [
@@ -222,7 +311,7 @@ fn special_variant_import_aliases_preserve_canonical_uid_and_duplicate_rule() {
             spec,
         )];
         let imported =
-            build_module_scope_with_imports(&scope, &[], &index, &uids, &kinds, &imports, None, 0)
+            build_module_scope_with_imports(&scope, &[], &index, &uids, &imports, None, 0)
                 .expect("canonical variant may retain its own alias");
         assert_eq!(imported.scope.lookup("Ok"), Some(uid));
         assert_eq!(imported.scope.lookup("Result::Ok"), Some(uid));
@@ -236,10 +325,9 @@ fn special_variant_import_aliases_preserve_canonical_uid_and_duplicate_rule() {
         );
         2
     ];
-    let error =
-        build_module_scope_with_imports(&scope, &[], &index, &uids, &kinds, &imports, None, 0)
-            .err()
-            .expect("same target does not bypass explicit duplicate imports");
+    let error = build_module_scope_with_imports(&scope, &[], &index, &uids, &imports, None, 0)
+        .err()
+        .expect("same target does not bypass explicit duplicate imports");
     assert_eq!(
         error.diagnostic.reason,
         crate::error::ResolveErrorReason::Import
@@ -249,18 +337,25 @@ fn special_variant_import_aliases_preserve_canonical_uid_and_duplicate_rule() {
 
 #[test]
 fn session_variant_allocation_follows_declaration_order_and_rollback() {
-    let mut session = SigilSession::new();
-    let ordinary = parse("defenum First { Value }").unwrap();
-    session.resolve(ordinary).unwrap();
+    let mut session = test_session();
+    let standard_ok = session.lookup_uid("Result::Ok");
+    session
+        .resolve(parse("defenum First { Value }").unwrap())
+        .unwrap();
     let first = session.lookup_uid("First::Value").unwrap();
     let checkpoint = session.checkpoint();
-    session.resolve(canonical_test_enum_declarations()).unwrap();
-    let ok = session.lookup_uid("Result::Ok").unwrap();
-    assert!(ok > first);
+    session
+        .resolve(parse("defenum Second { Value }").unwrap())
+        .unwrap();
+    let second = session.lookup_uid("Second::Value").unwrap();
+    assert!(second > first);
     session.rollback(checkpoint);
-    assert_eq!(session.lookup_uid("Ok"), None);
-    session.resolve(canonical_test_enum_declarations()).unwrap();
-    assert_eq!(session.lookup_uid("Result::Ok"), Some(ok));
+    assert_eq!(session.lookup_uid("Second::Value"), None);
+    assert_eq!(session.lookup_uid("Result::Ok"), standard_ok);
+    session
+        .resolve(parse("defenum Second { Value }").unwrap())
+        .unwrap();
+    assert_eq!(session.lookup_uid("Second::Value"), Some(second));
 }
 
 #[test]
@@ -469,26 +564,10 @@ fn canonical_test_enum_declarations() -> Vec<Ast> {
     ).expect("canonical enum declarations parse")
 }
 
-fn add_test_enum_declarations(mut ast: Vec<Ast>) -> (Vec<Ast>, usize) {
-    let mut declarations = canonical_test_enum_declarations();
-    declarations.retain(|candidate| {
-        let Ast::EnumDef(_, candidate_name, ..) = candidate else {
-            unreachable!()
-        };
-        !ast.iter()
-            .any(|node| matches!(node, Ast::EnumDef(_, name, ..) if name == candidate_name))
-    });
-    let count = declarations.len();
-    declarations.append(&mut ast);
-    (declarations, count)
-}
-
 fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     let ast =
         spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
-    let (ast, count) = add_test_enum_declarations(ast);
-    let mut resolved = resolve(ast)?;
-    Ok(resolved.split_off(count))
+    resolve(ast)
 }
 
 fn kernel_pattern_test_module() -> StagedModuleAst {
@@ -509,10 +588,7 @@ fn parse_and_resolve_with_warnings(
 ) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
     let ast =
         spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
-    let (ast, count) = add_test_enum_declarations(ast);
-    let mut output = resolve_with_warnings(ast)?;
-    output.value = output.value.split_off(count);
-    Ok(output)
+    resolve_with_warnings(ast)
 }
 
 #[test]
@@ -2610,30 +2686,30 @@ impl User {
 #[test]
 fn test_resolve_trait_def_and_impl_preserve_nodes() {
     let ast = parse_module_ast(
-        r#"deftrait Add {
+        r#"deftrait TestAdd {
   def add(self: Self, rhs: Self) -> Self
 }
 
-impl Add for Int {
+impl TestAdd for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
 }"#,
-        "Add",
+        "TestAdd",
     );
 
     let resolved = resolve(ast).expect("trait nodes should resolve");
     assert!(matches!(
         &resolved[0],
         Resolved::TraitDef(_, id, _, _, methods, _)
-            if id.name == "Add"
+            if id.name == "TestAdd"
                 && methods.len() == 1
-                && methods[0].id.qualified_name.as_deref() == Some("Add::add")
+                && methods[0].id.qualified_name.as_deref() == Some("TestAdd::add")
     ));
     assert!(matches!(
         &resolved[1],
         Resolved::TraitImplDef(_, _, id, _, AstTy::Named(_, target), _, methods)
-            if id.name == "Add" && target == "Global::Int" && methods.len() == 1
+            if id.name == "TestAdd" && target == "Global::Int" && methods.len() == 1
     ));
 }
 
@@ -2746,7 +2822,7 @@ fn test_direct_constructor_signature_identity_is_canonical_and_order_independent
 
 #[test]
 fn test_resolved_type_alias_carries_sig_identity_across_ir_boundary() {
-    let resolved = parse_and_resolve("type Mapper<$A, $B> = ($A -> $B)")
+    let resolved = parse_and_resolve("type TestMapper<$A, $B> = ($A -> $B)")
         .expect("signature alias should resolve");
     let alias = resolved
         .iter()
@@ -2771,7 +2847,7 @@ fn test_resolved_type_alias_carries_sig_identity_across_ir_boundary() {
 #[test]
 fn test_generic_trait_impl_member_uses_target_head_owner_identity() {
     let ast = parse_module_ast(
-        r#"deftrait Functor
+        r#"deftrait TestFunctor
 where
   Self: Type<$A>
 {
@@ -2780,7 +2856,7 @@ where
 
 defstruct Boxed<$T> { value: $T }
 
-impl Functor for Boxed<$T> {
+impl TestFunctor for Boxed<$T> {
   def fmap(self: Self<$A>) -> Self<$A> { self }
 }"#,
         "GenericOwners",
@@ -3016,7 +3092,7 @@ fn test_resolve_where_clauses_preserve_constraint_kinds_and_trait_ids() {
   def equal(self: Self, rhs: Self) -> Boolean
 }
 
-deftrait Functor
+deftrait TestFunctor
 where
   Self: Type<$A>
 {
@@ -3036,9 +3112,9 @@ defstruct Boxed<$T> {
   value: $T,
 }
 
-impl Functor for Boxed<$T>
+impl TestFunctor for Boxed<$T>
 where
-  $T: Functor.$A
+  $T: TestFunctor.$A
 {
   def fmap(self: Self, mapper: ($A -> $B)) -> Boxed<$B>
   where
@@ -3062,8 +3138,8 @@ where
     let functor_id = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitDef(_, id, _, where_clause, methods, _) if id.name == "Functor" => {
-                let clause = where_clause.as_ref().expect("Functor where clause");
+            Resolved::TraitDef(_, id, _, where_clause, methods, _) if id.name == "TestFunctor" => {
+                let clause = where_clause.as_ref().expect("TestFunctor where clause");
                 assert!(matches!(
                     clause.constraints[0].bounds.as_slice(),
                     [ResolvedWhereConstraintRhs::TypeConstructor { slots, .. }]
@@ -3082,7 +3158,7 @@ where
             }
             _ => None,
         })
-        .expect("Functor trait id");
+        .expect("TestFunctor trait id");
 
     let function_clause = resolved
         .iter()
@@ -3141,7 +3217,7 @@ where
 #[test]
 fn test_resolve_rejects_unknown_trait_constructor_slot() {
     let ast = parse_module_ast(
-        r#"deftrait Functor
+        r#"deftrait TestFunctor
 where
   Self: Type<$A>
 {
@@ -3152,9 +3228,9 @@ defenum Boxed<$T> {
   Box($T),
 }
 
-impl Functor for Boxed<$T>
+impl TestFunctor for Boxed<$T>
 where
-  $T: Functor.$Missing
+  $T: TestFunctor.$Missing
 {
   def fmap(self: Self, mapper: ($A -> $B)) -> Boxed<$B> { self }
 }"#,
@@ -3290,28 +3366,28 @@ where
 #[test]
 fn test_resolve_preserves_full_arguments_for_trait_heads_impl_heads_and_calls() {
     let resolved = parse_and_resolve(
-        r#"deftrait Convert<$To> {
+        r#"deftrait TestConvert<$To> {
   def convert(self: Self) -> $To
 }
 
-impl Convert<String> for Int {
+impl TestConvert<String> for Int {
   def convert(self: Self) -> String { "ok" }
 }
 
-value = Convert::convert::<String>(1)"#,
+value = TestConvert::convert::<String>(1)"#,
     )
     .expect("parameterized trait declarations and calls should resolve");
 
     assert!(matches!(
         &resolved[0],
         Resolved::TraitDef(_, id, type_params, _, _, _)
-            if id.name == "Convert"
+            if id.name == "TestConvert"
                 && matches!(type_params.as_slice(), [ResolvedTypeParam { name, .. }] if name == "$To")
     ));
     assert!(matches!(
         &resolved[1],
         Resolved::TraitImplDef(_, _, id, trait_args, _, _, _)
-            if id.name == "Convert"
+            if id.name == "TestConvert"
                 && matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String")
     ));
     assert!(matches!(
@@ -3369,11 +3445,7 @@ fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
 #[test]
 fn test_resolve_trait_impl_builtin_method_preserves_private_name() {
     let ast = parse_module_ast(
-        r#"deftrait Add {
-  def add(self: Self, rhs: Self) -> Self
-}
-
-impl Add for Int {
+        r#"impl Add for Int {
   @builtin def add(self: Self, rhs: Self) -> Self
 }"#,
         "Add",
@@ -3381,7 +3453,7 @@ impl Add for Int {
 
     let resolved = resolve(ast).expect("trait impl builtin method should resolve");
     assert!(matches!(
-        &resolved[1],
+        &resolved[0],
         Resolved::TraitImplDef(_, _, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add"
                 && target == "Global::Int"
@@ -3480,10 +3552,12 @@ fn test_builtin_decl_resolution() {
     .expect("std module should parse builtin declarations");
     let mut resolver = Resolver::new();
     let resolved = resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("builtin declaration should resolve");
     let call = resolver
-        .resolve_program(spire::parse("print(\"value\")").unwrap())
+        .resolve_program(prepare_internal_program(
+            spire::parse("print(\"value\")").unwrap(),
+        ))
         .expect("declared builtin reference should resolve");
     match &resolved[0] {
         Resolved::BuiltinDecl(_, id, _, params, ret_ty, _, attrs) => {
@@ -3517,7 +3591,7 @@ fn test_builtin_decl_resolution() {
 }
 
 #[test]
-fn result_effect_attrs_keep_canonical_traits_across_source_order() {
+fn result_effect_attrs_use_standard_canonical_traits() {
     let resolved = parse_and_resolve(
         r#"@result_effect
 defstruct Carrier<$M, $A>
@@ -3526,16 +3600,7 @@ where
 {
   inner: $M<$A>
 }
-
-deftrait Monad
-where
-  Self: Type<$A>
-{}
-
-deftrait MonadT<$M>
-where
-  Self: Monad
-{}"#,
+"#,
     )
     .expect("source should resolve");
 
@@ -3580,7 +3645,7 @@ fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
     .expect("std module should parse hidden builtin declarations");
     let mut resolver = Resolver::new();
     let resolved = resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("hidden builtin declaration should resolve");
     match &resolved[0] {
         Resolved::BuiltinDecl(_, id, _, _, _, _, attrs) => {
@@ -3654,7 +3719,7 @@ fn test_duration_literal_resolves_as_compiler_generated_struct_lit() {
     .expect("duration literal should parse");
     let mut resolver = Resolver::new();
     let resolved = resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("duration literal should resolve");
     let lowered = resolved
         .iter()
@@ -3695,7 +3760,7 @@ impl User {
     .expect("struct shorthand should parse");
     let mut resolver = Resolver::new();
     let resolved = resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("struct shorthand should resolve");
     let lowered = resolved
         .iter()
@@ -3734,7 +3799,7 @@ fn test_builtin_type_decl_resolution() {
     .expect("std module should parse builtin type declarations");
     let mut resolver = Resolver::new();
     let resolved = resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("builtin type declaration should resolve");
     match &resolved[0] {
         Resolved::BuiltinTypeDecl(_, id, params, attrs) => {
@@ -3761,7 +3826,7 @@ fn test_struct_readonly_metadata_and_fields_resolve() {
     .expect("readonly struct should parse");
     let mut resolver = Resolver::new();
     let resolved = resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("readonly struct should resolve");
 
     match &resolved[0] {
@@ -3789,7 +3854,7 @@ fn test_generic_struct_type_params_and_fields_resolve() {
     .expect("generic struct should parse");
     let mut resolver = Resolver::new();
     let resolved = resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("generic struct should resolve");
 
     match &resolved[0] {
@@ -4531,19 +4596,15 @@ deftrait Eq {
 #[test]
 fn derive_expands_struct_into_trait_impl_nodes() {
     let resolved = parse_and_resolve(
-        r#"def if(flag: Boolean, then_branch: $A, else_branch: $A) -> $A { then_branch }
-deftrait Eq {
-  def eq(self: Self, rhs: Self) -> Boolean
-}
-@derive Eq
+        r#"@derive Eq
 defstruct User { name: String }
 "#,
     )
     .expect("derive should resolve");
 
-    assert!(matches!(resolved[2], Resolved::StructDef(..)));
+    assert!(matches!(resolved[0], Resolved::StructDef(..)));
     assert!(matches!(
-        resolved[3],
+        resolved[1],
         Resolved::TraitImplDef(_, _, ref trait_id, _, _, _, _)
             if trait_id.name == "Eq"
     ));
@@ -6287,7 +6348,7 @@ captured = &print"#,
 
 #[test]
 fn test_sigil_session_basic_resolve() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     let ast = spire::parse("x = 1").expect("parse failed");
     let resolved = session.resolve(ast).expect("resolve failed");
     assert_eq!(resolved.len(), 1);
@@ -6298,7 +6359,7 @@ fn test_sigil_session_basic_resolve() {
 
 #[test]
 fn test_sigil_session_scope_persists_across_calls() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
 
     let ast1 = spire::parse("x = 1").expect("parse failed");
     session.resolve(ast1).expect("first resolve failed");
@@ -6313,7 +6374,7 @@ fn test_sigil_session_scope_persists_across_calls() {
 
 #[test]
 fn test_sigil_session_assigns_fresh_ids_to_empty_impls_across_chunks() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     let first = spire::parse(
         r#"deftrait Marker {}
 defstruct FirstMarker {}
@@ -6358,7 +6419,12 @@ impl Marker for FirstMarker {}"#,
 
 #[test]
 fn test_sigil_session_top_level_def_cannot_capture_prior_value_binding() {
-    let mut session = SigilSession::with_module_path(Some("__Repl::Session".to_string()));
+    let mut session = SigilSession::from_environment(
+        standard_test_environment(),
+        Some("__Repl::Session".to_string()),
+        ResolveResumeState::default(),
+    )
+    .unwrap();
     let first = spire::parse("x = 1").expect("parse failed");
     session.resolve(first).expect("bind should resolve");
 
@@ -6376,7 +6442,7 @@ fn test_sigil_session_top_level_def_cannot_capture_prior_value_binding() {
 
 #[test]
 fn test_sigil_session_lookup_uid_returns_bound_id() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     let ast = spire::parse("answer = 42").expect("parse failed");
     let resolved = session.resolve(ast).expect("resolve failed");
 
@@ -6390,7 +6456,7 @@ fn test_sigil_session_lookup_uid_returns_bound_id() {
 
 #[test]
 fn test_sigil_session_checkpoint_rollback_removes_later_bindings() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
 
     // Define x
     let ast1 = spire::parse("x = 1").expect("parse failed");
@@ -6426,7 +6492,7 @@ fn test_sigil_session_checkpoint_rollback_removes_later_bindings() {
 
 #[test]
 fn test_sigil_session_checkpoint_rollback_restores_owner_registry() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     let checkpoint = session.checkpoint();
 
     session
@@ -6446,7 +6512,7 @@ fn test_sigil_session_checkpoint_rollback_restores_owner_registry() {
 
 #[test]
 fn test_sigil_session_rejects_cross_chunk_owner_collision() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     session
         .resolve(spire::parse("defrecord Shared(value: Int)").expect("parse failed"))
         .expect("first owner should resolve");
@@ -6467,7 +6533,7 @@ fn assert_cross_session_trait_collision(
     first_identity: &str,
     conflicting_identity: &str,
 ) {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     session
         .resolve(spire::parse(first_chunk).expect("first trait chunk should parse"))
         .expect("first trait chunk should resolve");
@@ -6547,7 +6613,7 @@ where
 
 #[test]
 fn test_sigil_session_promotes_inherited_constructor_traits_across_chunks() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     session
         .resolve(
             spire::parse(
@@ -6605,7 +6671,7 @@ where
 
 #[test]
 fn test_sigil_session_failed_resolve_does_not_pollute_scope() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
 
     // Define x
     let ast1 = spire::parse("x = 1").expect("parse failed");
@@ -6633,7 +6699,7 @@ fn test_sigil_session_failed_resolve_does_not_pollute_scope() {
 
 #[test]
 fn test_sigil_session_allows_top_level_shadowing_of_imported_name() {
-    let mut session = SigilSession::new();
+    let mut session = test_session();
     session.define_with_id("add", 99);
 
     let ast = spire::parse("def add(x: Int, y: Int) -> Int { x + y }").expect("parse failed");
@@ -6686,23 +6752,19 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
         },
     );
 
-    let declaration_uids = assign_declaration_uids(&declaration_index);
-    let mut scope = Scope::new();
-    scope.define_with_id(
+    let mut precollected = precollect_declarations(standard_test_stages()).unwrap();
+    precollected.declaration_index.extend(declaration_index);
+    let environment = ResolveEnvironment::from_precollected(standard_test_stages(), &precollected);
+    let mut session =
+        SigilSession::from_environment(&environment, None, ResolveResumeState::default()).unwrap();
+    session.define_with_id(
         "helper",
-        *declaration_uids
-            .get("Global::Helper::helper")
-            .expect("helper uid should exist"),
+        environment.declaration_uids["Global::Helper::helper"],
     );
-    scope.define_with_id(
+    session.define_with_id(
         "hidden_pid",
-        *declaration_uids
-            .get("Global::Kernel::hidden_pid")
-            .expect("hidden uid should exist"),
+        environment.declaration_uids["Global::Kernel::hidden_pid"],
     );
-
-    let mut session = SigilSession::new();
-    session.replace_scope_with_declarations(scope, &declaration_index);
 
     let visible = session.visible_declaration_entries();
 
@@ -8281,14 +8343,14 @@ fn = &identity::<Int>"#,
 #[test]
 fn enum_constructor_type_arguments_resolve_only_for_the_declared_variant_owner() {
     parse_and_resolve(
-        r#"defenum Either<$L, $R> { Left($L), Right($R) }
-left = Either<_, Int>::Left("term")"#,
+        r#"defenum TestEither<$L, $R> { Left($L), Right($R) }
+left = TestEither<_, Int>::Left("term")"#,
     )
     .expect("an enum owner and its declared variant should resolve");
 
     let arity = parse_and_resolve(
-        r#"defenum Either<$L, $R> { Left($L), Right($R) }
-left = Either<Int>::Left(1)"#,
+        r#"defenum TestEither<$L, $R> { Left($L), Right($R) }
+left = TestEither<Int>::Left(1)"#,
     )
     .expect_err("enum constructor type arguments must match the owner arity");
     assert!(arity.message.contains("expects 2 type argument(s), got 1"));
@@ -8301,9 +8363,9 @@ value = Box<Int>::new(1)"#,
     assert!(non_enum.message.contains("is not an enum type"));
 
     let error = parse_and_resolve(
-        r#"defenum Either<$L, $R> { Left($L), Right($R) }
-impl Either { def is_left(value: Either<$L, $R>) -> Boolean { True } }
-value = Either<_, Int>::is_left(Either::Left("term"))"#,
+        r#"defenum TestEither<$L, $R> { Left($L), Right($R) }
+impl TestEither { def is_left(value: TestEither<$L, $R>) -> Boolean { True } }
+value = TestEither<_, Int>::is_left(TestEither::Left("term"))"#,
     )
     .expect_err("an enum method must not be accepted as a constructor variant");
     assert!(error.message.contains("enum variant"), "{error:?}");
@@ -8355,16 +8417,16 @@ fn ordinary_definition_rejects_a_concrete_named_return_type_argument() {
 #[test]
 fn direct_type_constructor_trait_return_type_argument_preserves_source_shape_and_origin() {
     let resolved = parse_and_resolve(
-        r#"deftrait Alternative
+        r#"deftrait TestAlternative
 where
   Self: Type<$A>
 {}
 
-def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
+def guard::<TestAlternative>(condition: Boolean) -> TestAlternative<Unit> {
   ()
 }
 
-def accept_context(value: Alternative<Int>) -> Unit {
+def accept_context(value: TestAlternative<Int>) -> Unit {
   ()
 }"#,
     )
@@ -8387,8 +8449,8 @@ def accept_context(value: Alternative<Int>) -> Unit {
     let AstTy::Named(type_span, direct_trait_name) = &return_type_argument.ty.syntax else {
         panic!("expected a direct constructor trait name");
     };
-    assert_eq!(direct_trait_name, "Alternative");
-    assert_eq!(return_head, "Alternative");
+    assert_eq!(direct_trait_name, "TestAlternative");
+    assert_eq!(return_head, "TestAlternative");
     assert_eq!(return_type_argument.ordinal, 0);
     assert_eq!(return_type_argument.span, *type_span);
     let rta_trait = return_type_argument
@@ -8405,10 +8467,10 @@ def accept_context(value: Alternative<Int>) -> Unit {
     let trait_id = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitDef(_, id, ..) if id.name == "Alternative" => Some(id),
+            Resolved::TraitDef(_, id, ..) if id.name == "TestAlternative" => Some(id),
             _ => None,
         })
-        .expect("Alternative Trait definition");
+        .expect("TestAlternative Trait definition");
     assert_eq!(rta_trait.unique_id, trait_id.unique_id);
 
     let parameter_trait = resolved
@@ -8427,14 +8489,14 @@ def accept_context(value: Alternative<Int>) -> Unit {
 #[test]
 fn value_parameter_names_do_not_shadow_constructor_trait_signature_identity() {
     let resolved = parse_and_resolve(
-        r#"deftrait Functor
+        r#"deftrait TestFunctor
 where
   Self: Type<$A>
 {}
 
 def accept_context(
-  Functor: Functor<Int>,
-  later: Functor<String>,
+  TestFunctor: TestFunctor<Int>,
+  later: TestFunctor<String>,
 ) -> Unit {
   ()
 }"#,
@@ -8444,10 +8506,10 @@ def accept_context(
     let trait_id = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitDef(_, id, ..) if id.name == "Functor" => Some(id),
+            Resolved::TraitDef(_, id, ..) if id.name == "TestFunctor" => Some(id),
             _ => None,
         })
-        .expect("Functor Trait definition");
+        .expect("TestFunctor Trait definition");
     let parameters = resolved
         .iter()
         .find_map(|node| match node {
@@ -8472,21 +8534,21 @@ def accept_context(
 #[test]
 fn impl_method_value_scope_does_not_shadow_constructor_trait_signature_identity() {
     let resolved = parse_and_resolve(
-        r#"deftrait Functor
+        r#"deftrait TestFunctor
 where
   Self: Type<$A>
 {}
 
-deftrait Convert {
+deftrait TestConvert {
   def convert(value: Int) -> Int
 }
 
-impl Convert for Int {
-  def convert(Functor: Functor<Int>) -> Functor<String>
+impl TestConvert for Int {
+  def convert(TestFunctor: TestFunctor<Int>) -> TestFunctor<String>
   where
-    $F: Functor
+    $F: TestFunctor
   {
-    shadow = Functor
+    shadow = TestFunctor
     shadow
   }
 }"#,
@@ -8496,17 +8558,17 @@ impl Convert for Int {
     let trait_id = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitDef(_, id, ..) if id.name == "Functor" => Some(id),
+            Resolved::TraitDef(_, id, ..) if id.name == "TestFunctor" => Some(id),
             _ => None,
         })
-        .expect("Functor Trait definition");
+        .expect("TestFunctor Trait definition");
     let method = resolved
         .iter()
         .find_map(|node| match node {
             Resolved::TraitImplDef(_, _, _, _, _, _, methods) => methods.first(),
             _ => None,
         })
-        .expect("Convert implementation method");
+        .expect("TestConvert implementation method");
     let parameter_trait = method.value_parameters[0]
         .ty
         .direct_constructor_trait
@@ -8553,8 +8615,8 @@ fn trait_impl_self_call_id(body: &Resolved) -> &ResolvedId {
 fn trait_impl_self_call_resolves_contract_instead_of_concrete_method() {
     let resolved = parse_and_resolve(
         r#"
-deftrait Convert<$To> { def convert::<$To>(self: Self) -> $To }
-impl Convert<Int> for String {
+deftrait TestConvert<$To> { def convert::<$To>(self: Self) -> $To }
+impl TestConvert<Int> for String {
   def convert::<Int>(self: Self) -> Int { convert::<Int>(1) }
 }
 "#,
@@ -8951,7 +9013,7 @@ fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
     .unwrap();
     let mut resolver = Resolver::new();
     resolver
-        .resolve_program(ast)
+        .resolve_program(prepare_internal_program(ast))
         .expect("standard enum should resolve");
     let ok = resolver
         .scope

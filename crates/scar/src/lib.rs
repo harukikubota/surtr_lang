@@ -11,3 +11,11 @@ pub use checker::{
     typecheck_with_context_with_warnings, typecheck_with_warnings, ScarCheckpoint, ScarSession,
     TypecheckContext,
 };
+
+#[cfg(test)]
+extern crate self as scar;
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;

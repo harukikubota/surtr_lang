@@ -1,6 +1,8 @@
 # Lazy special formの実装契約
 
 `Lazy<T>`は標準special formの引数専用マーカーであり、通常の値型ではない。
+
+Sigilは通常の名前解決でcallee UIDを確定し、対応する標準宣言のcanonical identityからspecial formを選ぶ。autoimport属性や呼出しの綴りだけでspecial formへ分類しない。callee解決が失敗した場合は元の診断を返し、通常呼出し・パイプのどちらでも綴りによる救済を行わない。各名称の予約・シャドーイング規則は維持する。
 利用者のparameter・return・annotation・field・containerには公開せず、実行するbranchは通常の0引数関数として正規化する。
 標準signatureの正本は`crates/sindr/src/builtin.rs`の`BUILTIN_METAS`と対応する標準定義である。
 利用者向けの規則と関数別の例は[Lazy evaluation](../site/lazy-evaluation.md)、標準APIの説明は`lib/kernel.srt`・`lib/types/result.srt`の`@doc`に置く。

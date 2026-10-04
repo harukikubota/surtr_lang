@@ -138,7 +138,6 @@ pub(super) fn build_module_scope(
     auto_import_modules: &[AutoImportModule],
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
-    declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
     stmts: &[Ast],
     current_module_path: Option<&str>,
     current_stage_index: usize,
@@ -148,7 +147,6 @@ pub(super) fn build_module_scope(
         auto_import_modules,
         declaration_index,
         declaration_uids,
-        declaration_uid_kinds,
         stmts,
         current_module_path,
         current_stage_index,
@@ -161,6 +159,9 @@ pub(super) struct ModuleScopeBuild {
     pub explicit_function_imports: Vec<ExplicitFunctionImport>,
     pub effective_auto_import_fq_names: Vec<String>,
     pub shadowed_auto_import_bindings: Vec<(String, u32)>,
+    pub import_state: ImportState,
+    pub import_result: ResolvedImports,
+    pub program: ImportsResolvedProgram,
 }
 
 pub(super) fn build_module_scope_with_imports(
@@ -168,7 +169,6 @@ pub(super) fn build_module_scope_with_imports(
     auto_import_modules: &[AutoImportModule],
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
-    declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
     stmts: &[Ast],
     current_module_path: Option<&str>,
     current_stage_index: usize,
@@ -188,7 +188,6 @@ pub(super) fn build_module_scope_with_imports(
         auto_import_modules: &auto_import_module_set,
         declaration_index,
         declaration_uids,
-        declaration_uid_kinds,
         current_stage_index,
         auto_import_traits: &auto_import_traits,
         import_state: &mut import_state,
@@ -223,11 +222,7 @@ pub(super) fn build_module_scope_with_imports(
         )?;
     }
 
-    for stmt in stmts {
-        if let Ast::Import(span, path, spec) = stmt {
-            apply_import_to_scope(&mut scope, &mut import_context, path, spec, span.clone())?;
-        }
-    }
+    let import_result = apply_explicit_import_statements(&mut scope, &mut import_context, stmts)?;
 
     if let Some(module_path) = current_module_path {
         for entry in declaration_index.values() {
@@ -257,14 +252,100 @@ pub(super) fn build_module_scope_with_imports(
         explicit_function_imports,
         effective_auto_import_fq_names,
         shadowed_auto_import_bindings,
+        import_state,
+        import_result,
+        program: ImportsResolvedProgram(stmts.to_vec()),
     })
+}
+
+/// A program whose file imports were validated and applied by this module.
+pub(super) struct ImportsResolvedProgram(Vec<Ast>);
+
+impl ImportsResolvedProgram {
+    pub(super) fn into_statements(self) -> Vec<Ast> {
+        self.0
+    }
+}
+
+pub(super) fn apply_session_imports(
+    mut scope: Scope,
+    auto_import_modules: &[AutoImportModule],
+    declaration_index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+    stmts: &[Ast],
+    current_stage_index: usize,
+    mut import_state: ImportState,
+    mut effective_auto_import_fq_names: Vec<String>,
+    mut shadowed_auto_import_bindings: Vec<(String, u32)>,
+) -> Result<ModuleScopeBuild, ResolveError> {
+    let auto_import_traits = auto_import_trait_names(declaration_index, current_stage_index);
+    let auto_import_module_set = auto_import_modules
+        .iter()
+        .filter(|module| module.stage_index <= current_stage_index)
+        .map(|module| module.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut explicit_function_imports = Vec::new();
+    let mut import_context = ImportContext {
+        auto_import_modules: &auto_import_module_set,
+        declaration_index,
+        declaration_uids,
+        current_stage_index,
+        auto_import_traits: &auto_import_traits,
+        import_state: &mut import_state,
+        explicit_function_imports: &mut explicit_function_imports,
+        effective_auto_import_fq_names: &mut effective_auto_import_fq_names,
+        shadowed_auto_import_bindings: &mut shadowed_auto_import_bindings,
+    };
+    let import_result = apply_explicit_import_statements(&mut scope, &mut import_context, stmts)?;
+    Ok(ModuleScopeBuild {
+        scope,
+        explicit_function_imports,
+        effective_auto_import_fq_names,
+        shadowed_auto_import_bindings,
+        import_state,
+        import_result,
+        program: ImportsResolvedProgram(stmts.to_vec()),
+    })
+}
+
+fn apply_explicit_import_statements(
+    scope: &mut Scope,
+    context: &mut ImportContext<'_>,
+    stmts: &[Ast],
+) -> Result<ResolvedImports, ResolveError> {
+    let before = scope
+        .bindings()
+        .map(|(name, uid)| (name.to_string(), uid))
+        .collect::<HashMap<_, _>>();
+    let mut result = ResolvedImports::default();
+    for stmt in stmts {
+        if let Ast::Import(span, path, spec) = stmt {
+            apply_import_to_scope(scope, context, path, spec, span.clone())?;
+            let owner = path.segments.join("::");
+            match spec {
+                spire::ast::ImportSpec::All => result.success_labels.push(owner),
+                spire::ast::ImportSpec::Single(name) => {
+                    result.success_labels.push(format!("{owner}::{name}"))
+                }
+                spire::ast::ImportSpec::List(names) => result
+                    .success_labels
+                    .extend(names.iter().map(|name| format!("{owner}::{name}"))),
+            }
+        }
+    }
+    result.imported_symbols = scope
+        .bindings()
+        .filter(|(name, uid)| !name.contains("::") && before.get(*name) != Some(uid))
+        .map(|(name, _)| name.to_string())
+        .collect();
+    result.imported_symbols.sort();
+    Ok(result)
 }
 
 struct ImportContext<'a> {
     auto_import_modules: &'a HashSet<&'a str>,
     declaration_index: &'a DeclarationIndex,
     declaration_uids: &'a HashMap<String, u32>,
-    declaration_uid_kinds: &'a HashMap<u32, DeclarationKind>,
     current_stage_index: usize,
     auto_import_traits: &'a HashSet<String>,
     import_state: &'a mut ImportState,
@@ -283,6 +364,29 @@ fn lookup_trait_entry<'a>(
             .values()
             .find(|entry| entry.kind == DeclarationKind::Trait && entry.name == trait_name),
     }
+}
+
+fn import_owner_exists(index: &DeclarationIndex, owner: &str) -> bool {
+    lookup_trait_entry(index, owner).is_some()
+        || index
+            .values()
+            .any(|entry| global_surface_name(&entry.module_path) == owner)
+}
+
+fn lookup_import_member<'a>(
+    index: &'a DeclarationIndex,
+    owner: &str,
+    name: &str,
+) -> Option<&'a DeclarationEntry> {
+    if let Some(trait_entry) = lookup_trait_entry(index, owner) {
+        return index
+            .get(&format!("{}::{name}", trait_entry.fq_name))
+            .filter(|entry| entry.kind == DeclarationKind::TraitMethod);
+    }
+    index.values().find(|entry| {
+        global_surface_name(&entry.module_path) == owner
+            && (entry.name == name || entry.name.rsplit("::").next() == Some(name))
+    })
 }
 
 fn special_non_importable_member(
@@ -305,7 +409,7 @@ fn apply_import_to_scope(
     spec: &spire::ast::ImportSpec,
     span: Span,
 ) -> Result<(), ResolveError> {
-    let module_name = path.segments.join("::");
+    let module_name = global_surface_name(&path.segments.join("::")).to_string();
     // Every file conceptually begins with import_all from its available
     // autoimport sources. Validate that provenance before visiting members:
     // same-UID aliases and module contents cannot turn a duplicate into success.
@@ -400,10 +504,7 @@ fn import_list_into_scope(
     names: &[String],
     span: Span,
 ) -> Result<(), ResolveError> {
-    let module_exists = import_context
-        .declaration_index
-        .values()
-        .any(|entry| global_surface_name(&entry.module_path) == module_name);
+    let module_exists = import_owner_exists(import_context.declaration_index, module_name);
     if !module_exists {
         return Err(ResolveError {
             message: format!("Unknown module import: {}", module_name),
@@ -423,15 +524,8 @@ fn import_list_into_scope(
             .record_member_import(module_name, name, &span)?;
 
         let fq_name = format!("{}::{}", module_name, name);
-        let Some(entry) = import_context.declaration_index.values().find(|entry| {
-            global_surface_name(&entry.module_path) == module_name
-                && (entry.name == *name
-                    || entry
-                        .name
-                        .rsplit("::")
-                        .next()
-                        .is_some_and(|tail| tail == name))
-        }) else {
+        let Some(entry) = lookup_import_member(import_context.declaration_index, module_name, name)
+        else {
             if special_non_importable_member(import_context.declaration_index, module_name, name) {
                 issues.not_importable.push(fq_name);
                 continue;
@@ -839,15 +933,8 @@ fn import_single_into_scope(
         .record_member_import(module_name, name, &span)?;
 
     let fq_name = format!("{}::{}", module_name, name);
-    let Some(entry) = import_context.declaration_index.values().find(|entry| {
-        global_surface_name(&entry.module_path) == module_name
-            && (entry.name == name
-                || entry
-                    .name
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|tail| tail == name))
-    }) else {
+    let Some(entry) = lookup_import_member(import_context.declaration_index, module_name, name)
+    else {
         if special_non_importable_member(import_context.declaration_index, module_name, name) {
             return Err(ResolveError {
                 message: format!("Import target `{}` is not importable", fq_name),
@@ -859,10 +946,7 @@ fn import_single_into_scope(
                 related_labels: Vec::new(),
             });
         }
-        let module_exists = import_context
-            .declaration_index
-            .values()
-            .any(|entry| global_surface_name(&entry.module_path) == module_name);
+        let module_exists = import_owner_exists(import_context.declaration_index, module_name);
         return Err(ResolveError {
             message: if module_exists {
                 format!("Unknown import member: {}", fq_name)
@@ -1056,26 +1140,6 @@ fn bind_import_name(
             }
             return Ok(());
         }
-        if auto_import
-            && !import_context
-                .declaration_uid_kinds
-                .contains_key(&existing_uid)
-        {
-            scope.define_with_id(short_name, uid);
-            record_effective_auto_import_binding(import_context, uid, short_name);
-            return Ok(());
-        }
-        if auto_import
-            && module_name == "Show"
-            && short_name == "to_string"
-            && !import_context
-                .declaration_uid_kinds
-                .contains_key(&existing_uid)
-        {
-            scope.define_with_id(short_name, uid);
-            record_effective_auto_import_binding(import_context, uid, short_name);
-            return Ok(());
-        }
         if auto_import {
             let existing_name = import_context
                 .declaration_uids
@@ -1132,7 +1196,7 @@ fn bind_import_name(
 }
 
 #[derive(Debug, Clone, Default)]
-struct ImportState {
+pub(super) struct ImportState {
     imported_modules: HashSet<String>,
     imported_members: HashSet<(String, String)>,
 }

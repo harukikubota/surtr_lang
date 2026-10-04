@@ -9,5 +9,6 @@ pub mod policy;
 pub mod primitives;
 pub mod runtime;
 pub mod signature;
+pub mod stdlib;
 pub mod viewer;
 pub mod warning;

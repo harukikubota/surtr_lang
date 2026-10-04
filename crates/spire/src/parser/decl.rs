@@ -5758,6 +5758,10 @@ impl Parser<'_> {
                 self.advance();
                 "cond".to_string()
             }
+            Token::BulkUpdate => {
+                self.advance();
+                "bulk_update".to_string()
+            }
             Token::Do => {
                 self.advance();
                 "do".to_string()

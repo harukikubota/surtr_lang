@@ -360,6 +360,14 @@ impl Facet {
   `Facet::bulk_update(source) { ... }` is a language-provided update form for
   applying multiple Facet-based updates to one state value in source order.
 
+  The keyword forms `bulk_update(source) { ... }` and
+  `bulk_update(source, { ... })` have the same meaning. The existing qualified
+  form `Facet::bulk_update(source) { ... }` remains available; its block can
+  also be placed inside the parentheses as `Facet::bulk_update(source, { ... })`.
+  Parentheses around the source argument are required; `bulk_update source
+  { ... }` is invalid. `bulk_update` is a keyword and cannot be shadowed by a
+  declaration or binding. The source is evaluated once in every form.
+
   Each entry targets a relative path from `source` and must use one of these
   update shapes:
 
@@ -379,11 +387,18 @@ impl Facet {
   `bulk_update` is not an ordinary callable block argument. The update block is
   a dedicated special-form surface, similar to `match`.
   Entries are separated by newlines, not commas.
+  This is intentional for the qualified form as well: `Facet::bulk_update`
+  selects the syntax and is not resolved as an ordinary outer function value.
+  Moving the update block inside parentheses does not make it a block value
+  or make `bulk_update` available as a first-class function.
 
   `bulk_update` lowers to ordinary `Facet::set` / `Facet::over` /
   `Facet::over_result` / `Facet::case_set` / `Facet::case_over` calls and
   returns `Result<$S>`.
   Each later entry sees the latest updated state produced so far.
+  Update failures propagate as `Err`; they are not replaced with success
+  values. Resolution or type errors in the generated Facet calls remain
+  compile errors.
   List / HashMap bracket segments use the same dynamic-expression rules as
   ordinary Facet APIs, including plain `Int` / `String` requirements.
 

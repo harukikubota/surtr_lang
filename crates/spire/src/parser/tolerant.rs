@@ -762,6 +762,7 @@ fn keyword_token(text: &str) -> (Token, SyntaxTokenKind) {
         "do" => Some(Token::Do),
         "when" => Some(Token::When),
         "cond" => Some(Token::Cond),
+        "bulk_update" => Some(Token::BulkUpdate),
         "private" => Some(Token::Private),
         "public" => Some(Token::Public),
         "readonly" => Some(Token::Readonly),

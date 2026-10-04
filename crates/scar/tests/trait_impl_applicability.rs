@@ -1,6 +1,9 @@
+#[allow(dead_code)]
+mod support;
+
 fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
-    scar::typecheck(sigil::resolve(ast).expect("resolve"))
+    support::typecheck(support::resolve_ast_with_builtin_prelude(ast).expect("resolve"))
 }
 
 #[test]
