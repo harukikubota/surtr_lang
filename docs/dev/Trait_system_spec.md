@@ -511,6 +511,11 @@ ReturnTypeArguments、expected return、captured impl-target argumentsを含め�
 | applicability | 1 instance | candidate head と全 impl `where` obligation が成立する |
 | parent coverage | 全称 | child の全 instance を 1 parent impl が cover し、parent `where` を証明できる |
 
+`CanonicalUnifier` の構造比較は変数の束縛先だけをたどり、型部分木を各深さで再コピーしない。
+所有する解決済み型は束縛の追加時と結果の取り出し時に構築する。ignored callable input の判定は、
+その関数型の比較開始時の束縛に基づく。前の入力の照合で変数が `Hole` になっても、後続の入力を
+遡って ignored input にはしない。
+
 ### 3.1 Coherence
 
 同じ base Trait の pattern は、trait argument 列と target を同一 unification 環境で再帰照合する。
