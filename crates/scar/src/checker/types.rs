@@ -4533,7 +4533,7 @@ impl Checker {
                 self.resolve_typed_node(*then),
                 else_opt.map(|node| self.resolve_typed_node(*node)),
             ),
-            TypedInner::Assert(cond, err) => TypedInner::Assert(
+            TypedInner::Require(cond, err) => TypedInner::Require(
                 self.resolve_typed_node(*cond),
                 self.resolve_typed_node(*err),
             ),

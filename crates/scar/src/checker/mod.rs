@@ -2069,7 +2069,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(else_node, rewrites);
                 }
             }
-            TypedInner::Assert(left, right) => {
+            TypedInner::Require(left, right) => {
                 Self::rewrite_fun_indices_in_node(left, rewrites);
                 Self::rewrite_fun_indices_in_node(right, rewrites);
             }
@@ -3496,7 +3496,7 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(else_branch);
                 }
             }
-            TypedInner::Assert(cond, err)
+            TypedInner::Require(cond, err)
             | TypedInner::MapErr(cond, err)
             | TypedInner::Cause(cond, err) => {
                 self.collect_unused_value_warnings_in_node(cond);
@@ -4570,7 +4570,7 @@ impl Checker {
             | Resolved::KleisliCompose(_, left, right)
             | Resolved::ListCons(_, left, right)
             | Resolved::RangeLiteral(_, left, right)
-            | Resolved::Assert(_, left, right)
+            | Resolved::Require(_, left, right)
             | Resolved::MapErr(_, left, right)
             | Resolved::Cause(_, left, right) => {
                 self.validate_constructor_body_positions(left, constructor_traits)?;
@@ -5065,7 +5065,7 @@ impl Checker {
             Resolved::Cond(..) => "Cond".to_string(),
             Resolved::If(..) => "If".to_string(),
             Resolved::Ensure(..) => "Ensure".to_string(),
-            Resolved::Assert(..) => "Assert".to_string(),
+            Resolved::Require(..) => "Require".to_string(),
             Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
             Resolved::RecoverKind(..) => "RecoverKind".to_string(),
@@ -5099,7 +5099,7 @@ impl Checker {
             Resolved::Cond(..) => "Cond",
             Resolved::If(..) => "If",
             Resolved::Ensure(..) => "Ensure",
-            Resolved::Assert(..) => "Assert",
+            Resolved::Require(..) => "Require",
             Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
             Resolved::RecoverKind(..) => "RecoverKind",

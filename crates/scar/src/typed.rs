@@ -456,7 +456,7 @@ pub enum TypedInner {
     /// An explicit parenthesized eager boundary at a `Lazy<T>` argument site.
     EagerBoundary(Box<TypedNode>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
-    Assert(Box<TypedNode>, Box<TypedNode>),
+    Require(Box<TypedNode>, Box<TypedNode>),
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     MapErr(Box<TypedNode>, Box<TypedNode>),
     Cause(Box<TypedNode>, Box<TypedNode>),

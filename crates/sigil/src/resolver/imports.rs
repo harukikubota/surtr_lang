@@ -197,12 +197,6 @@ pub(super) fn build_module_scope_with_imports(
         shadowed_auto_import_bindings: &mut shadowed_auto_import_bindings,
     };
 
-    for stmt in stmts {
-        if let Ast::Import(span, path, spec) = stmt {
-            apply_import_to_scope(&mut scope, &mut import_context, path, spec, span.clone())?;
-        }
-    }
-
     for module in auto_import_modules
         .iter()
         .filter(|module| module.stage_index <= current_stage_index)
@@ -227,6 +221,12 @@ pub(super) fn build_module_scope_with_imports(
             true,
             Span { start: 0, end: 0 },
         )?;
+    }
+
+    for stmt in stmts {
+        if let Ast::Import(span, path, spec) = stmt {
+            apply_import_to_scope(&mut scope, &mut import_context, path, spec, span.clone())?;
+        }
     }
 
     if let Some(module_path) = current_module_path {
@@ -1109,22 +1109,6 @@ fn bind_import_name(
                 },
                 related_labels: Vec::new(),
             });
-        }
-        let existing_name = import_context
-            .declaration_uids
-            .iter()
-            .find_map(|(fq_name, known_uid)| (*known_uid == existing_uid).then_some(fq_name))
-            .cloned()
-            .unwrap_or_else(|| format!("<uid:{}>", existing_uid));
-        let existing_is_auto_imported =
-            declaration_is_auto_imported(import_context, &existing_name);
-        if existing_is_auto_imported {
-            scope.define_with_id(short_name, uid);
-            import_context
-                .shadowed_auto_import_bindings
-                .push((short_name.to_string(), uid));
-            record_effective_auto_import_binding(import_context, uid, short_name);
-            return Ok(());
         }
         return Err(ResolveError {
             message: format!(

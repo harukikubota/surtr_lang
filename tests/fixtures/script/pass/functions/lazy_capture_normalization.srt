@@ -26,7 +26,7 @@ print("before reverse retained thunk")
 print(to_string(shallow_reverse()))
 select: ((-> Int), (-> Int) -> Int) = &if(False, &1, &2)
 print(to_string(select({|| print("wrong branch"); 1}, {|| 12})))
-print(to_string(Result::is_err(assert(False, {|| NoneError()}))))
+print(to_string(Result::is_err(require(False, {|| NoneError()}))))
 
 deferred = if(True, produce(), {|| {|| 0}})
 print("before deferred call")

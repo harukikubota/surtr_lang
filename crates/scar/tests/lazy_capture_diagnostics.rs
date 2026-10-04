@@ -171,7 +171,7 @@ fn ordinary_functions_inner_errors_and_direct_expression_do_not_get_lazy_help() 
     );
     support::typecheck_with_rules("f = &and(and(True, &1), &1)", RuntimeSourcePolicy::script())
         .expect("nested Lazy uses are compatible");
-    let fixed_error = error("f: (Error -> Result<Unit>) = &assert(&1, NoneError)");
+    let fixed_error = error("f: (Error -> Result<Unit>) = &require(&1, NoneError)");
     assert!(
         !fixed_error.hint.as_deref().is_some_and(
             |hint| hint.contains("error placeholder") || hint.contains("inside the capture")
@@ -195,7 +195,7 @@ fn ordinary_functions_inner_errors_and_direct_expression_do_not_get_lazy_help() 
 #[test]
 fn error_lazy_capture_explains_existing_transport_restriction() {
     for (source, function) in [
-        ("f = &assert(&1, &2)\nf(True, 1)", "assert"),
+        ("f = &require(&1, &2)\nf(True, 1)", "require"),
         ("f = &ensure(1, &1, &2)\nf({|x| True}, 1)", "ensure"),
         ("f = &Result::map_err(Ok(1), &1)\nf(1)", "Result::map_err"),
         ("f = &Result::cause(Ok(1), &1)\nf(1)", "Result::cause"),
@@ -216,12 +216,12 @@ fn error_lazy_capture_explains_existing_transport_restriction() {
         );
         assert!(!hint.contains("{ ||"), "{hint}");
     }
-    let error = error("f: (Boolean, (-> Error) -> Result<Unit>) = &assert(&1, &2)");
+    let error = error("f: (Boolean, (-> Error) -> Result<Unit>) = &require(&1, &2)");
     assert!(
         error
             .hint
             .as_deref()
-            .is_some_and(|hint| hint.contains("assert") && hint.contains("inside the capture")),
+            .is_some_and(|hint| hint.contains("require") && hint.contains("inside the capture")),
         "{error:?}"
     );
 }

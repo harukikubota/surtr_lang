@@ -218,7 +218,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(else_branch, bound, free);
             }
         }
-        Resolved::Assert(_, cond, err) => {
+        Resolved::Require(_, cond, err) => {
             collect_captures_inner(cond, bound, free);
             collect_captures_inner(err, bound, free);
         }

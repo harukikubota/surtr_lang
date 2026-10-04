@@ -1,2 +1,2 @@
 phase: resolve
-contains: canonical Kernel consumer
+contains: Import conflict for `is_match` from module `Regex`

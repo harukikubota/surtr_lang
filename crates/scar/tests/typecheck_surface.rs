@@ -626,8 +626,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         set_exit_code_entry_only_policy_allows_only_entrypoint_function as fn(),
     ),
     (
-        "assert_special_form_typechecks_to_result_unit",
-        assert_special_form_typechecks_to_result_unit as fn(),
+        "require_special_form_typechecks_to_result_unit",
+        require_special_form_typechecks_to_result_unit as fn(),
     ),
     (
         "bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid",
@@ -670,8 +670,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         ensure_rejects_call_expression_predicate as fn(),
     ),
     (
-        "assert_rejects_non_concrete_error_expression",
-        assert_rejects_non_concrete_error_expression as fn(),
+        "require_rejects_non_concrete_error_expression",
+        require_rejects_non_concrete_error_expression as fn(),
     ),
     (
         "kernel_and_contract_rejects_eager_signature",
@@ -698,16 +698,16 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         user_lazy_annotation_is_rejected as fn(),
     ),
     (
-        "assert_accepts_lazy_error_branch",
-        assert_accepts_lazy_error_branch as fn(),
+        "require_accepts_lazy_error_branch",
+        require_accepts_lazy_error_branch as fn(),
     ),
     (
         "ensure_accepts_lazy_error_branch",
         ensure_accepts_lazy_error_branch as fn(),
     ),
     (
-        "assert_accepts_existing_error_value",
-        assert_accepts_existing_error_value as fn(),
+        "require_accepts_existing_error_value",
+        require_accepts_existing_error_value as fn(),
     ),
     (
         "ensure_accepts_existing_error_value",
@@ -7647,12 +7647,12 @@ fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
     assert!(err.message.contains("only allowed inside entrypoint"));
 }
 
-fn assert_special_form_typechecks_to_result_unit() {
-    let typed = typecheck_with_builtin_prelude("guard = assert(True, NoneError())");
+fn require_special_form_typechecks_to_result_unit() {
+    let typed = typecheck_with_builtin_prelude("guard = require(True, NoneError())");
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
         TypedInner::Bind(_, rhs) => {
-            assert!(matches!(rhs.node, TypedInner::Assert(_, _)));
+            assert!(matches!(rhs.node, TypedInner::Require(_, _)));
             assert!(matches!(
                 rhs.ty,
                 scar::types::Ty::Result(ref ok, ref err)
@@ -7857,16 +7857,16 @@ guard = ensure(4, is_even(), NoneError)"#,
     assert!(err.message.contains("ensure requires a closure or capture"));
 }
 
-fn assert_rejects_non_concrete_error_expression() {
+fn require_rejects_non_concrete_error_expression() {
     let err = typecheck_with_rules(
         r#"def bad_code() -> Int { 1 }
-guard = assert(False, bad_code())"#,
+guard = require(False, bad_code())"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("non-Error expression must fail");
     assert!(err
         .message
-        .contains("assert error branch must evaluate to Error, got Int"));
+        .contains("require error branch must evaluate to Error, got Int"));
 }
 
 fn kernel_and_contract_rejects_eager_signature() {
@@ -7949,16 +7949,16 @@ fn user_lazy_annotation_is_rejected() {
         .contains("Lazy<T> is reserved for std-module special-form declarations"));
 }
 
-fn assert_accepts_lazy_error_branch() {
+fn require_accepts_lazy_error_branch() {
     let typed = typecheck_with_rules(
         r#"deferror SomeError(detail: String) { detail }
-guard = assert(False, {|| SomeError("boom") })"#,
+guard = require(False, {|| SomeError("boom") })"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("lazy error branch should typecheck");
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
-        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Assert(_, _))),
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Require(_, _))),
         other => panic!("expected bind, got {:?}", other),
     }
 }
@@ -7978,11 +7978,11 @@ guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
     }
 }
 
-fn assert_accepts_existing_error_value() {
+fn require_accepts_existing_error_value() {
     let typed = typecheck_with_rules(
         r#"guard = match Err(NoneError) {
-  Ok(_) => assert(False, NoneError),
-  Err(e) => assert(False, e),
+  Ok(_) => require(False, NoneError),
+  Err(e) => require(False, e),
 }"#,
         RuntimeSourcePolicy::script(),
     )
@@ -9536,7 +9536,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                     || has_pending_trait_call(then_branch)
                     || else_branch.as_deref().is_some_and(has_pending_trait_call)
             }
-            TypedInner::Assert(cond, err) => {
+            TypedInner::Require(cond, err) => {
                 has_pending_trait_call(cond) || has_pending_trait_call(err)
             }
             TypedInner::Ensure(value, pred, err) => {
@@ -9662,7 +9662,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
                     || has_pending_trait_call(then_branch)
                     || else_branch.as_deref().is_some_and(has_pending_trait_call)
             }
-            TypedInner::Assert(cond, err) => {
+            TypedInner::Require(cond, err) => {
                 has_pending_trait_call(cond) || has_pending_trait_call(err)
             }
             TypedInner::Ensure(value, pred, err) => {

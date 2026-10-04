@@ -286,31 +286,32 @@ defmod Kernel {
   Guard a precondition and return `Result<Unit>`.
 
   The declared type is:
-  `assert(Boolean, Lazy<Error>) -> Result<Unit>`
+  `require(Boolean, Lazy<Error>) -> Result<Unit>`
 
   Like `if`, this is a special form. The error branch is evaluated only when
   the condition is `False`, so success does not pay to build diagnostics.
   Call sites may construct a fresh `deferror` or forward an existing `Error`
-  value obtained elsewhere.
+  value obtained elsewhere. The returned Err preserves the supplied Error, including
+  its kind, message, origin, cause, and call history.
 
   Parenthesizing the error expression evaluates it once before the condition
   is checked. An error placeholder normalizes to `(-> Error)`, giving
-  `&assert(&1, &2)` the shape `(Boolean, (-> Error) -> Result<Unit>)`.
+  `&require(&1, &2)` the shape `(Boolean, (-> Error) -> Result<Unit>)`.
   Existing Error restrictions prevent calling or forwarding that capture as
   an ordinary function value. Fix the error expression inside the capture:
-  `&assert(&1, NoneError())` has type `(Boolean -> Result<Unit>)`.
+  `&require(&1, NoneError())` has type `(Boolean -> Result<Unit>)`.
 
   Ordinary expression form stays available:
-  `assert(user.age >= 0, InvalidUserAge(user.age))`
+  `require(user.age >= 0, InvalidUserAge(user.age))`
 
   ## REPL
-  xldr(1)> assert(True, NoneError)
+  xldr(1)> require(True, NoneError)
   Ok(())
-  xldr(2)> check = &assert(&1, NoneError())
+  xldr(2)> check = &require(&1, NoneError())
   xldr(3)> check(True)
   Ok(())
   """
-  @builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>
+  @builtin def require(flag: Boolean, err: Lazy<Error>) -> Result<Unit>
 
   @doc """
   Validate a value and return it unchanged on success.

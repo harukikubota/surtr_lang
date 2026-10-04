@@ -54,7 +54,7 @@ impl LazyCaptureText for LazyCaptureKind {
             Self::IfThen => "if_then",
             Self::IfLet => "if_let",
             Self::IfLetThen => "if_let_then",
-            Self::Assert => "assert",
+            Self::Require => "require",
             Self::Ensure => "ensure",
             Self::MapErr => "Result::map_err",
             Self::Cause => "Result::cause",
@@ -71,7 +71,7 @@ impl LazyCaptureText for LazyCaptureKind {
             Self::IfLet if source_ordinal == 2 => "if_let captures a binding-free success branch as a normalized zero-argument function; it runs only when the Pattern matches.",
             Self::IfLet => "if_let captures its failure branch as a normalized zero-argument function; it runs only when the Pattern does not match.",
             Self::IfLetThen => "if_let_then captures a binding-free success branch as (-> Unit); it runs only when the Pattern matches.",
-            Self::Assert => "assert captures its error argument as (-> Error); it runs only when the condition is False.",
+            Self::Require => "require captures its error argument as (-> Error); it runs only when the condition is False.",
             Self::Ensure => "ensure captures its error argument as (-> Error); it runs only when the predicate returns False.",
             Self::MapErr => "Result::map_err captures the replacement error as (-> Error); it runs only for Err.",
             Self::Cause => "Result::cause captures the cause error as (-> Error); it runs only for Err.",
@@ -214,7 +214,7 @@ impl Checker {
         let output = match metadata.kind {
             LazyCaptureKind::And | LazyCaptureKind::Or => Ty::Bool,
             LazyCaptureKind::IfThen | LazyCaptureKind::IfLetThen => Ty::Unit,
-            LazyCaptureKind::Assert => Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            LazyCaptureKind::Require => Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
             LazyCaptureKind::If | LazyCaptureKind::IfLet => match self.resolve_ty(required) {
                 Ty::Func(_, ret) => *ret,
                 _ => Ty::Hole,
@@ -366,7 +366,7 @@ impl Checker {
             return error;
         }
         let (kind, correction) = match kind {
-            Some(kind @ LazyCaptureKind::Assert) => (kind, "Fix the error expression inside the capture, for example &assert(&1, NoneError)."),
+            Some(kind @ LazyCaptureKind::Require) => (kind, "Fix the error expression inside the capture, for example &require(&1, NoneError)."),
             Some(kind @ LazyCaptureKind::Ensure) => (kind, "Fix the error expression inside the capture, for example `f: (Int -> Result<Int>) = &ensure(&1, {|value| True}, NoneError)`."),
             Some(kind @ LazyCaptureKind::MapErr) => (kind, "Fix the replacement error inside the capture, for example `f: (Result<Int> -> Result<Int>) = &Result::map_err(&1, NoneError)`."),
             Some(kind @ LazyCaptureKind::Cause) => (kind, "Fix the cause error inside the capture, for example `f: (Result<Int> -> Result<Int>) = &Result::cause(&1, NoneError)`."),

@@ -4,14 +4,20 @@ def traced_boolean(value: Boolean) -> Boolean { print("right"); value }
 
 def assert_list_decomposition(value: List<Int>) -> Result<()> {
   match value {
-    uncons(head, tail) => do { assert_eq(1, head); assert_eq([2, 3], tail) },
+    uncons(head, tail) => do {
+      assert_eq(1, head)
+      assert_eq([2, 3], tail)
+    },
     _ => fail("expected List decomposition"),
   }
 }
 
 def assert_string_decomposition(value: String) -> Result<()> {
   match value {
-    uncons(head, tail) => do { assert_eq("猫", head); assert_eq("ab", tail) },
+    uncons(head, tail) => do {
+      assert_eq("猫", head)
+      assert_eq("ab", tail)
+    },
     _ => fail("expected String decomposition"),
   }
 }
@@ -29,15 +35,15 @@ test("Kernel") {
       }
     }
   }
-  describe("assert") {
+  describe("require") {
     it("accepts true") {
       do {
-        assert_ok(assert(True, NoneError))
+        assert_ok(require(True, NoneError))
       }
     }
     it("rejects false with the provided kind") {
       do {
-        assert_err_kind(NoneError, assert(False, NoneError))
+        assert_err_kind(NoneError, require(False, NoneError))
       }
     }
   }
@@ -56,7 +62,8 @@ test("Kernel") {
       do {
         actual = ensure(3, {|n| print("predicate"); n > 0}, NoneError)
 
-        assert_ok_eq(3, actual); assert_stdout_eq(["predicate"])
+        assert_ok_eq(3, actual)
+        assert_stdout_eq(["predicate"])
       }
     }
   }
@@ -65,7 +72,8 @@ test("Kernel") {
       do {
         actual = tap(3, {|n| print(to_string(n))})
 
-        assert_eq(3, actual); assert_stdout_eq(["3"])
+        assert_eq(3, actual)
+        assert_stdout_eq(["3"])
       }
     }
   }
@@ -74,7 +82,8 @@ test("Kernel") {
       do {
         (left, right) = dup(7)
 
-        assert_eq(7, left); assert_eq(7, right)
+        assert_eq(7, left)
+        assert_eq(7, right)
       }
     }
   }
@@ -97,14 +106,16 @@ test("Kernel") {
       do {
         actual = and(False, traced_boolean(True))
 
-        assert_false(actual); assert_stdout_eq([])
+        assert_false(actual)
+        assert_stdout_eq([])
       }
     }
     it("evaluates the right side once after True") {
       do {
         actual = and(True, traced_boolean(False))
 
-        assert_false(actual); assert_stdout_eq(["right"])
+        assert_false(actual)
+        assert_stdout_eq(["right"])
       }
     }
   }
@@ -113,14 +124,16 @@ test("Kernel") {
       do {
         actual = or(True, traced_boolean(False))
 
-        assert_true(actual); assert_stdout_eq([])
+        assert_true(actual)
+        assert_stdout_eq([])
       }
     }
     it("evaluates the right side once after False") {
       do {
         actual = or(False, traced_boolean(True))
 
-        assert_true(actual); assert_stdout_eq(["right"])
+        assert_true(actual)
+        assert_stdout_eq(["right"])
       }
     }
   }

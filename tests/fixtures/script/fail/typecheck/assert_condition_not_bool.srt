@@ -1,1 +1,0 @@
-guard = assert(1, NoneError)
