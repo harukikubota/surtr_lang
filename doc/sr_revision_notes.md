@@ -79,6 +79,12 @@ lookup失敗はコンパイラバグとして、明確なエラーで処理を�
 
 `dbg!`と変数・関数の`dbg`を区別するように改修する。具体的な名前解決・シャドーイングの境界は、後段の仕様整理で扱う。
 
+### 現行確認と実施記録（2026-10-04）
+
+現行 parser は `dbg` と `!` を組み合わせた専用構文を `Ast::Dbg` にし、通常の `dbg` は通常の名前解決へ渡す。Bootstrap の `dbg!` 宣言は文書・signature の参照先として保持し、通常関数の symbol にはしない。処理系の変更は不要だった。
+
+`tests/fixtures/script/pass/functions/dbg_name_is_distinct_from_special_form.srt` で同名関数と同名引数の通常呼出し、および `dbg!(dbg(value))` の共存を固定した。Xldr の既存 `core_dbg_docs_and_signatures_resolve_from_bootstrap_source` にはローカル `dbg` の呼出しを追加し、`dbg!` の出力と Bootstrap 文書・signature が両立することを確認した。script fixture bucket 7 と、CI profile の REPL bucket 1 はそれぞれ成功した。既存挙動の回帰テストであり、意図的な Red は作っていない。
+
 ## SR-10: bulk_updateのキーワード化と括弧内block
 
 `bulk_update`をキーワード化し、シャドーイングを禁止する。
