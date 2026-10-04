@@ -54,6 +54,15 @@ lookup失敗はコンパイラバグとして、明確なエラーで処理を�
 
 ただし`on`はキーワードレベルではない。他の呼出し形式ではシャドーイングされる。この区別を維持する。
 
+### 現行確認と実施記録（2026-10-04）
+
+`crates/spire/src/parser/expr.rs` の `canonical_infix_callee` は裸の中置 `on` だけを `Function::on` へ変換する。通常呼出し・キャプチャ・パイプ右辺は通常の名前解決を使う。同名の `def on` を置いた source を実行し、通常呼出しが `42`、キャプチャ経由が `12`、パイプ経由が `3` を返す一方、中置の比較関数が標準 `Function::on` として動作することを確認した。
+
+この境界を既存 `tests/fixtures/script/pass/functions/reserved_infix_precedence.srt` と `.expected` に追加し、出力一致・exit 0 を確認した。`docs/site/callables.md` も説明を補った。処理系は変更していないため、意図的な Red は作っていない。
+
+注意する区別: `on` は専用 keyword token ではないが、現行の `ReservedCallName` に含まれ、変数・引数・field の束縛名としては予約される。今回確認した shadow は関数宣言によるもの。変数名としての予約解除までをこの項目の実施済みに含めない。
+
+
 ## SR-07: Pattern consumerのフローを見直す
 
 他への影響が大きいため、フロー自体を修正する。SR-01でキーワードごとの振る舞いを決めた後に取り組む。

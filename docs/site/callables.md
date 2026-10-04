@@ -261,6 +261,7 @@ left `concat` right
 - unqualified ``left `on` right`` は `Function::on(left, right)` として扱います
 - ``left `Function::on` right`` も同じ意味で、flow 演算子より低優先度です
 - ``left `Other::on` right`` は通常どおり `Other::on(left, right)` です
+- 通常の `on(...)`、`&on`、パイプ右辺の `on(...)` は名前解決で選ばれた関数を使います。同名の関数宣言で標準の `on` を隠しても、裸の中置 `` `on` `` の呼出し先は `Function::on` のままです
 
 `on`、`and`、`or`、`eq`、`neq`、`lt`、`lte`、`gt`、`gte` は予約名です。変数・引数・Patternの束縛名・フィールド名には使えませんが、関数の宣言名には使えます。import規則は変わりません。標準の `and` / `or` は短絡評価を維持し、裸の比較関数6名は比較演算子と同じ優先度です。`MyMod::and` などの修飾中置Callは通常のCallとして引数を評価します。
 
