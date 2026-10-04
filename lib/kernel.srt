@@ -398,17 +398,17 @@ defmod Kernel {
   @builtin def print(a: String) -> Unit
 
   @doc """
-  値の構造を確認するための文字列表現を返します。
-  Stringは引用符で囲み、制御文字と補間開始の文字列をエスケープします。
-  String単体の引用表示は、通常の文字列リテラルとして再入力すると元の値に戻ります。
-  LFとTABは `\n`・`\t`、ESCなどその他の制御文字は `\u{1b}` のように表示します。
-  `print`へ直接渡した文字列はエスケープされません。
-  構造体はprivateフィールドも含め、全フィールドの名前と値を定義順に表示します。
-  入れ子の構造体も同じ規則に従い、呼び出し側のスコープやShowの有無で表示を変えません。
-  privateは情報の秘匿を保証せず、表示からフィールドへのアクセスや更新権限は得られません。
-  構造体の構築経路やErrorの表示は文字列リテラルと異なるため、inspect全体の再入力は保証しません。
-  to_stringはShowの契約に従い、inspectによる暗黙の代用は行いません。
-  bare callableは、runtime metadataがある場合にmodule・name・signatureを表示します。
+  Return a string representation for inspecting the structure of a value.
+  Strings are quoted, with control characters and interpolation openers escaped.
+  A quoted standalone String reproduces the original value when entered as a regular string literal.
+  LF and TAB appear as `\n` and `\t`; other control characters, such as ESC, appear as `\u{1b}`.
+  Strings passed directly to `print` are not escaped.
+  Structs display the names and values of all fields, including private fields, in definition order.
+  Nested structs follow the same rules, regardless of the caller's scope or whether Show is implemented.
+  Private visibility does not guarantee secrecy, and the display does not grant permission to access or update fields.
+  Struct construction and Error displays differ from string literals, so re-entering the full inspect output is not guaranteed to reproduce the value.
+  to_string follows the Show contract and does not implicitly substitute inspect.
+  Bare callables display their module, name, and signature when runtime metadata is available.
 
   ## REPL
   xldr(1)> ("alice", 42)
