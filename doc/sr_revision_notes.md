@@ -16,7 +16,7 @@
 | SR-10 | 構文選択待ち | 括弧内形式・旧表記・予約範囲を整理 |
 | SR-11 | 現行処理の責務を確認 | callee UIDは一意。型に依存する引数役割の遅延と区別 |
 | SR-12 | 可視性・拒否条件を確認 | public Constはimportなし、private Constはファイル内 |
-| SR-13 | 回答と現行契約の差を確認 | Resultを返すnewは現行で許可。未定義deconstructはエラー |
+| SR-13 | 意図を確認・仕様整理済み | newの定義必須によるコンパイル時の呼出し先解決。実行時のResult値とは独立 |
 
 SR-01・07・10・11の具体的な根拠、未確定事項、受入条件は[呼出し解決・構文の計画](sr_call_resolution_syntax_plan.md)にまとめた。
 
@@ -162,7 +162,9 @@ Sigil `build_global_scope`はpublic Constを裸名・修飾名で導入し、pri
 
 ## SR-13: Structのnewとdeconstructは明確な言語仕様
 
-言語仕様で明確に定められている。`new`は確実に成功し、Pattern側のExtractorは定義されていなければエラーで処理を止められる。
+`new`の定義を必須にすることで、コンストラクタ表記から呼出し先をコンパイル時に解決できることを保証する。「確実に成功する」はこの呼出し先解決を指す。実行時に返す`Result`値とは関係しない。
+
+Pattern側のExtractorは、定義されていなければコンパイル時のエラーで処理を止める。
 
 この仕様を維持し、未定義Extractorを別の分解経路で救済しない。
 
@@ -170,7 +172,7 @@ Sigil `build_global_scope`はpublic Constを裸名・修飾名で導入し、pri
 
 `docs/site/structs.md`は `new -> Result<Self, Error>` を許可し、Scar の `struct_new_accepts_result_self_return_type` / `struct_constructor_call_accepts_result_return_type` がこの境界を検証する。実際に `new(value)` が負数で `Err(NoneError)` を返す Struct を実行し、constructor呼出しが `Err(NoneError("None Value."))` を返すことを確認した。
 
-したがって回答の「確実に成功」が「newの解決先が保証される」を意味するのか、「実行時にもErrを返せない」を意味するのかで仕様が異なる。後者は現行の正本・成功テストの変更を要するため、今回の修正には含めない。
+利用者の補足により、「確実に成功する」はコンパイル時の呼出し先解決を意味すると確認した。前回の調査では実行時の成功保証との解釈を未確定事項にしたが、その扱いを訂正する。上記の`Result`を返す契約と矛盾せず、実行時の戻り値や成功・失敗の規則を変更する必要はない。
 
 一方、`new`を定義し`deconstruct`を定義しないStructをPattern headに使うと、Sigilは `requires attached extractor ... but it is not defined` で停止した。構造分解への救済は追加しない。
 
