@@ -15,7 +15,8 @@
 | SD-03 | 実装・対象テスト完了（level1）。全体検証は他項目の統合後に記録する |
 | SD-04 | 実装・対象テスト完了（level3）。全体検証は統合後に記録する |
 | SD-07 | 実装・対象テスト完了（level1）。全体検証は統合後に記録する |
-| SD-09・11 | 実施中 |
+| SD-09 | 実施中 |
+| SD-11 | 文書修正完了 |
 | SD-05・08 | 確定方針どおり現行仕様を維持 |
 | SD-06 | 簡素化案のまま保留 |
 | SD-10 | 別ドラフトの未確定事項として維持 |
@@ -323,6 +324,12 @@ add(1) >> &double
 修正時は `docs/site/`、`docs/dev/`、`lib/` の `@doc` を横断して用語を合わせる。優先して確認する記述は `docs/site/function-operators.md:172` の「call 式は不許可」、`docs/site/callables.md:18,59` の「実行結果ではなく」、`docs/site/language-reference.md:408` と `docs/site/language-guide.md:745` の括弧に関する説明。
 
 通常の呼出しで引数の値を先に求めることと、パイプ両辺の一律な評価順は別の契約である。今回の文書修正でパイプ全体の新しい評価順は約束しない。Lazy の専用規則と、パイプ RHS の括弧が注入を抑止する規則も、通常呼出しや合成の説明に混ぜない。
+
+### 実施記録（2026-10-04）
+
+`docs/site/callables.md`、`function-operators.md`、`language-reference.md`、`language-guide.md`、`docs/dev/テスト方針.md`、`lib/bootstrap.srt` の `@doc` を更新した。関数呼出し、クロージャリテラル、キャプチャ、関数値変数、引数待ち受け呼出しを区別し、合成は引数を注入せず、評価後に型契約を満たす関数値を受け取ると明記した。関数値を返す関数呼出しへの不要な括弧要求を削除した。パイプ全体の評価順に新しい契約は追加していない。
+
+既存の `compose_accepts_calls_returning_function_values` と `compose_rejects_non_function_call_results_after_typechecking_call` が実装上の受理・拒否境界を固定していることを確認した。製品コードは変更せず、`git diff --check` が成功した。全体検証の結果は統合検証記録へ追記する。
 
 ## 検証記録
 

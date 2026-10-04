@@ -27,6 +27,8 @@ defmod Bootstrap {
 
   @doc """
   Compose two unary callables from left to right.
+  Fully supplied function calls may return either callable operand.
+  Composition does not inject missing arguments or require extra parentheses.
 
   ## Examples
   {|n: Int| n + 1} >> {|n| n * 2}
@@ -35,7 +37,8 @@ defmod Bootstrap {
 
   @doc """
   Compose a contextual unary callable with a plain mapper. The result
-  carrier must implement Functor.
+  carrier must implement Functor. Fully supplied function calls may return
+  the operands; composition does not inject missing arguments.
 
   ## Examples
   {|n: Int| [n]} >* {|n| n + 1}
@@ -44,7 +47,8 @@ defmod Bootstrap {
 
   @doc """
   Compose two contextual unary callables. The result carrier must implement
-  Monad.
+  Monad. Fully supplied function calls may return the operands; composition
+  does not inject missing arguments.
 
   ## Examples
   {|n: Int| [n]} >=> {|n| [n, n + 1]}

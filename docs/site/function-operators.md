@@ -169,7 +169,13 @@ check = &String::trim >> {|text| text != ""}
 
 - `(A -> B) >> (B -> C) -> (A -> C)`
 
-compose なので、`trim() >> render()` のような call 式は不許可です。
+合成は引数を注入しません。`trim` と `render` が引数を必要とする場合、`trim() >> render()` は引数不足で拒否されます。必要な引数を満たした関数呼出しが関数値を返す場合は、その値を合成できます。
+
+```surtr
+def make_add(n: Int) -> (Int -> Int) { {|x: Int| x + n} }
+pipeline = make_add(1) >> {|x| x * 2}
+pipeline(2) # 6
+```
 
 ```surtr
 def trim(text: String) -> String { String::trim(text) }
@@ -319,13 +325,13 @@ expanded = [1, 2, 3] |>= duplicate()
 ```surtr
 value |> normalize          # 不可
 pipeline = parse >=> check  # 不可
-parse() >=> check()         # 不可
+parse() >=> check()         # parse / check に必要な引数が不足していれば不可
 ```
 
 理由は次です。
 
 - 裸の関数参照は関数値として扱わない
-- compose は関数の「実行結果」ではなく関数値同士をつなぐ
+- 合成は評価後の関数値同士をつなぐ。関数値を返す関数呼出しも使えるが、引数待ち受け呼出しへの注入はしない
 
 一方で、operator capture と placeholder capture は使えます。
 
