@@ -160,7 +160,7 @@ def check_value(value: Int) -> Result<()> {
 `?` は独立した文に付けます。`value = operation()?`、`consume(operation()?)`、
 `operation()? + 1`、`operation()??` は使えません。
 成功値を取り出す場合は次節の `value =? operation()` を使います。
-optional 型や FacetPath の optional segment の `?` は別の構文です。
+型位置の `Ty?` は `Option<Ty>` を表します。Boolean 関数名の `predicate?` も文末アンラップとは別の構文です。FacetPath の optional segment は廃止されているため使えません。
 
 ネストした Result では外側一段だけを検査します。`Result<Result<()>>` の
 `Ok(Err(error))` は外側が Ok なので、内側の値を捨てて次へ進みます。

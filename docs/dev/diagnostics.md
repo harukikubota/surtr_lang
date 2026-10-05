@@ -326,3 +326,9 @@ local head は選ばれた lexical identity の型を検査し、named Extractor
 必要な Result と Unit の不一致を通常の型診断で報告する。
 構文段階の末尾禁止や専用のエラー経路は設けず、暗黙の `Ok(())` も挿入しない。
 途中の Unit が受理される位置では、既存の ResultContext の制約に従って使用できる。
+
+## Boolean 関数名の suffix
+
+関数名末尾の `?` は Spire が関数名位置だけで受理する。変数・束縛・フィールド・Extractor 名などの不正な位置は構文エラーとし、名前解決や型検査の結果を使った再解析は行わない。suffix 名の解決失敗は通常の名前解決診断を維持し、suffix を取り除いて再検索しない。
+
+Scar は解決・正規化した署名の返り型が canonical Boolean でない宣言を拒否し、宣言の span に Boolean 制約と実際の返り型を示す。未確定型・コンテナ型・関数型は拒否する。型 alias の既存規則は変更しない。`predicate?(value)?` の最後の `?` に対する拒否は、既存の文末アンラップ診断を維持する。廃止済み OptionalSelector も構文位置で拒否する。

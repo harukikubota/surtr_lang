@@ -31,6 +31,7 @@ API 一覧、builtin 一覧、標準モジュールの完全なロード順な�
 
 ## 仕様書
 
+- [関数名の `?` suffix](./Callable_name_spec.md)
 - [文字列リテラルの実装契約](./String_literal_spec.md)
 - [EldrVM spec](./EldrVM_spec.md)
 - [FS / Shell spec](./FS_Shell_spec.md)
