@@ -4832,12 +4832,9 @@ fn parses_container_root_facet_paths() {
 }
 
 #[test]
-fn parses_optional_enum_facet_segment() {
-    let ast = parse("print(inspect(Facet::view(Option.Some?, option)))").unwrap();
-    let Ast::App(_, _, print_args) = &ast[0] else {
-        panic!("expected print call");
-    };
-    assert_eq!(print_args.len(), 1);
+fn rejects_optional_enum_facet_segment() {
+    let error = parse("print(inspect(Facet::view(Option.Some?, option)))").unwrap_err();
+    assert!(error.message().contains("OptionalSelector"));
 }
 
 #[test]
@@ -4849,12 +4846,12 @@ fn parses_boolean_variant_facet_segment() {
 }
 
 #[test]
-fn parses_bulk_update_index_key_optional_and_case_actions() {
+fn parses_bulk_update_index_key_and_case_actions() {
     let ast = parse(
         r#"user2 =? Facet::bulk_update(user) {
   score.["talk"] <- over({|score| Ok(score + 1)})
   scores.[1] <- set(500)
-  nickname.Some? <- case_over({|name| Ok(name ++ "!")})
+  nickname.Some <- case_over({|name| Ok(name ++ "!")})
   phone.Some <- case_set("090")
 }"#,
     )
@@ -8115,8 +8112,8 @@ fn statement_question_rejects_expression_positions_and_repeated_suffixes() {
 }
 
 #[test]
-fn statement_question_retains_optional_type_and_facet_suffixes() {
-    let ast = parse("value: Int? = input\nconsume(Option.Some?, value)?").unwrap();
+fn statement_question_retains_optional_type_and_plain_facet() {
+    let ast = parse("value: Int? = input\nconsume(Option.Some, value)?").unwrap();
     assert!(
         matches!(&ast[0], Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, _)), _) if name == "Option")
     );
@@ -8128,11 +8125,7 @@ fn statement_question_retains_optional_type_and_facet_suffixes() {
     };
     assert!(matches!(
         &args[0],
-        RecordLitArg::Positional(Ast::FacetSegmentAccess(
-            _,
-            _,
-            FacetPathSegment::Field { optional: true, .. }
-        ))
+        RecordLitArg::Positional(Ast::FieldAccess(_, _, name)) if name == "Some"
     ));
 }
 
@@ -8447,4 +8440,206 @@ fn pattern_consumer_names_reject_ordinary_qualified_callables() {
             }
         }
     }
+}
+
+#[test]
+fn boolean_function_suffix_call_surfaces() {
+    for source in [
+        "def predicate?(value: Int) -> Boolean { value > 0 }",
+        "defp predicate?() -> Boolean { True }",
+        "answer = predicate?(1)",
+        "predicate?::<Int>(1)",
+        "M::predicate?(1)",
+        "M::predicate?::<Int>(1)",
+        "f = &predicate?",
+        "f = &M::predicate?",
+        "`predicate?`(1)",
+        "1 `predicate?` 2",
+        "1 `M::predicate?` 2",
+        "import M::predicate?",
+        "import M::{predicate?, plain}",
+    ] {
+        let ast = parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert!(
+            format!("{ast:?}").contains("predicate?"),
+            "{source}: {ast:?}"
+        );
+    }
+    let ast = parse("predicate?(1)?").unwrap();
+    assert!(
+        matches!(&ast[0], Ast::StatementQuestion(_, call) if matches!(call.as_ref(), Ast::App(_, callee, _) if matches!(callee.as_ref(), Ast::Var(_, name) if name == "predicate?")))
+    );
+    assert!(matches!(
+        &parse("value ?").unwrap()[0],
+        Ast::StatementQuestion(..)
+    ));
+    assert!(matches!(
+        &parse("value?").unwrap()[0],
+        Ast::StatementQuestion(..)
+    ));
+}
+
+#[test]
+fn boolean_function_suffix_rejects_non_callable_positions() {
+    for source in [
+        "def predicate??() -> Boolean { True }",
+        "def predicate ?() -> Boolean { True }",
+        "def ordinary(value?: Int) -> Boolean { True }",
+        "value? = True",
+        "[value?] = input",
+        "predicate?() = rhs",
+        "M::predicate?() = rhs",
+        "predicate ?(1)",
+        "import M?::predicate",
+        "1 `M?::predicate` 2",
+        "match value { predicate?() => 1 }",
+    ] {
+        assert!(parse(source).is_err(), "must reject {source}");
+    }
+}
+
+#[test]
+fn boolean_function_suffix_in_extractor_pre_argument() {
+    let ast = parse("extract(predicate?(1), item) = value").unwrap();
+    assert!(
+        matches!(&ast[0], Ast::Bind(_, AstPattern::Call(..), _)),
+        "{ast:?}"
+    );
+    assert!(format!("{ast:?}").contains("predicate?"));
+}
+
+#[test]
+fn boolean_function_suffix_rejects_optional_selectors() {
+    for source in [
+        "value.field?",
+        "value.field ?",
+        "Boolean.True?",
+        "Option.Some?",
+        "Facet::view(Option.Some?, value)",
+    ] {
+        assert!(parse(source).is_err(), "must reject {source}");
+    }
+}
+
+#[test]
+fn boolean_function_suffix_declarations_and_tolerant_parser() {
+    for source in [
+        "deftrait Check { def predicate?(self) -> Boolean }",
+        "def predicate?() -> Boolean { True }\npredicate?()",
+        "1 `M::predicate?` 2",
+        "import M::{predicate?, plain}",
+    ] {
+        let strict = parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+        assert!(
+            tolerant.diagnostics.is_empty(),
+            "{source}: {:?}",
+            tolerant.diagnostics
+        );
+        assert_eq!(strict, tolerant.ast, "{source}");
+    }
+    for source in [
+        "impl Int { def predicate?(self) -> Boolean { True } }",
+        "impl Check for Int { def predicate?(self) -> Boolean { True } }",
+    ] {
+        let ast = parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert!(format!("{ast:?}").contains("predicate?"));
+    }
+    let source = "@builtin def predicate?(value: Int) -> Boolean";
+    let context = ParserContext::module(1, None).with_rules(ParseRules::std_module());
+    let strict = parse_with_context(source, context.clone()).unwrap();
+    let tolerant = parse_tolerant_with_context(source, context, None);
+    assert!(
+        tolerant.diagnostics.is_empty(),
+        "{:?}",
+        tolerant.diagnostics
+    );
+    assert_eq!(strict, tolerant.ast);
+}
+
+#[test]
+fn tolerant_impl_methods_reuse_strict_signatures_and_recover() {
+    for source in [
+        "impl Int { def predicate(self) -> Boolean { True } }",
+        "impl Int { def predicate?(self) -> Boolean { True } }",
+        "impl Int { @doc \"\"\"Predicate.\"\"\" def predicate?(self) -> Boolean { True } }",
+    ] {
+        let strict = parse(source).unwrap();
+        let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+        assert!(
+            tolerant.diagnostics.is_empty(),
+            "{source}: {:?}",
+            tolerant.diagnostics
+        );
+        assert_eq!(strict, tolerant.ast, "{source}");
+    }
+    let source = "impl Int { @builtin def predicate?(value: Int) -> Boolean }";
+    let context = ParserContext::module(1, None).with_rules(ParseRules::std_module());
+    let strict = parse_with_context(source, context.clone()).unwrap();
+    let tolerant = parse_tolerant_with_context(source, context, None);
+    assert!(
+        tolerant.diagnostics.is_empty(),
+        "{:?}",
+        tolerant.diagnostics
+    );
+    assert_eq!(strict, tolerant.ast);
+    let source = "impl Int {\n def bad?(value: Int, self) -> Boolean { True }\n def good?(self) -> Boolean { True }\n}";
+    let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+    assert_eq!(tolerant.diagnostics.len(), 1, "{:?}", tolerant.diagnostics);
+    assert!(
+        format!("{:?}", tolerant.ast).contains("good?"),
+        "{:?}",
+        tolerant.ast
+    );
+    assert!(!format!("{:?}", tolerant.ast).contains("bad?"));
+}
+
+#[test]
+fn statement_question_keeps_numbered_facet_access() {
+    let ast = parse("tuple._0?").unwrap();
+    assert!(matches!(&ast[0], Ast::StatementQuestion(_, expression)
+        if matches!(expression.as_ref(), Ast::FieldAccess(_, _, name) if name == "_0")));
+}
+
+#[test]
+fn boolean_function_suffix_self_name_keeps_receiver_boundary() {
+    for source in [
+        "def self?() -> Boolean { True }\nself?()",
+        "def self?(value: Int) -> Boolean { True }\nf = &self?",
+        "def self?(left: Int, right: Int) -> Boolean { True }\n1 `self?` 2",
+    ] {
+        let strict = parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        assert!(format!("{strict:?}").contains("self?"));
+        let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+        assert!(
+            tolerant.diagnostics.is_empty(),
+            "{source}: {:?}",
+            tolerant.diagnostics
+        );
+        assert_eq!(strict, tolerant.ast);
+    }
+    for source in [
+        "self",
+        "self()",
+        "self?",
+        "self::predicate()",
+        "self::predicate?()",
+    ] {
+        let error = parse(source).expect_err(source);
+        assert!(
+            error
+                .message()
+                .contains("`self` can only be used inside impl methods"),
+            "{source}: {error:?}"
+        );
+    }
+    let source = "impl Int { def same(self) -> Self { self } }";
+    let strict = parse(source).unwrap();
+    assert!(matches!(&strict[0], Ast::ImplDef(_, _, _, methods, _)
+        if matches!(&methods[0], Ast::Def(_, _, _, _, _, _, body, _)
+            if matches!(body.as_ref(), Ast::Block(_, stmts)
+                if matches!(stmts.as_slice(), [Ast::Var(_, name)] if name == "self")))));
+    let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+    assert!(tolerant.diagnostics.is_empty());
+    assert_eq!(strict, tolerant.ast);
 }

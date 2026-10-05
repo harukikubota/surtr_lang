@@ -124,7 +124,7 @@ pub(crate) fn func_literal_operator_token(token: &Token) -> Option<&'static str>
 }
 
 pub(crate) fn is_func_literal_ident(body: &str) -> bool {
-    let mut chars = body.chars();
+    let mut chars = body.strip_suffix('?').unwrap_or(body).chars();
     matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
@@ -135,9 +135,10 @@ pub(crate) fn parse_func_literal_path(body: &str) -> Option<Vec<String>> {
     }
     let segments = body.split("::").collect::<Vec<_>>();
     if segments.len() < 2
-        || !segments
-            .iter()
-            .all(|segment| is_func_literal_ident(segment))
+        || !segments.iter().enumerate().all(|(index, segment)| {
+            is_func_literal_ident(segment)
+                && (index + 1 == segments.len() || !segment.ends_with('?'))
+        })
     {
         return None;
     }

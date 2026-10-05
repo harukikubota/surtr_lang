@@ -20,6 +20,8 @@ operation()?
 - 文末の `?` は式の一部に組み込めず、成功時の型は Unit。詳しくは[エラーハンドリング](./error-handling.md)を参照
 - `Unit` を返す closure が期待される場所では、最後の式に `;` を付ければよい
 
+Tuple の番号 selector（`tuple._0?` など）の末尾の `?` は、従来どおり文末アンラップとして扱います。番号 selector は廃止済み OptionalSelector の対象には含めません。
+
 ### `const`
 
 ```surtr
@@ -38,6 +40,10 @@ private const PROFILE_NAME = User.profile -> Profile.name
 ```surtr
 def name(args...) -> Ty { expr }
 ```
+
+Boolean を返す関数は `def positive?(value: Int) -> Boolean { value > 0 }` のように名前の末尾へ隣接する `?` を1個付けられます。`positive?(1)` で呼び出し、`&positive?` で capture します。未確定の返り型や `Result<Boolean>`、`Option<Boolean>` は対象外です。変数・引数・Pattern 束縛・フィールド・型・モジュール・Extractor の名前には付けられません。
+
+suffix call は LHS の Extractor にはなりません。`positive?(1)?` の最後の `?` は既存の文末アンラップとして読み、Boolean に対する型エラーになります。型位置の `Ty?` は `Option<Ty>` のままです。`EXPR . Identity ?` は廃止済み OptionalSelector として拒否します。
 
 Surtr では、関数はすべて明示または暗黙の namespace に属します。
 

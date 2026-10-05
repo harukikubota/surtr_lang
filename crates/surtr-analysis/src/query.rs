@@ -741,11 +741,16 @@ fn looks_like_type_expr(input: &str) -> bool {
 }
 
 fn is_callable_ref(input: &str) -> bool {
-    !input.is_empty()
-        && !input.chars().any(char::is_whitespace)
-        && input
-            .split("::")
-            .all(|segment| !segment.is_empty() && is_callable_segment(segment))
+    if input.is_empty() || input.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let mut segments = input.rsplit("::");
+    let member = segments.next().expect("nonempty callable reference");
+    let valid_member = match member.strip_suffix('?') {
+        Some(name) => is_simple_name(name),
+        None => is_callable_segment(member),
+    };
+    valid_member && segments.all(is_callable_segment)
 }
 
 fn is_callable_segment(segment: &str) -> bool {
@@ -758,6 +763,21 @@ fn is_callable_segment(segment: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boolean_function_suffix_typed_queries_keep_binding_names_plain() {
+        for source in ["predicate?(Int)", "Predicates::predicate?(value)"] {
+            let query = parse_command_query(source).expect("suffix callable query");
+            assert!(matches!(query, CommandQuery::TypedCall(_)));
+        }
+        for source in [
+            "Predicates?::predicate(Int)",
+            "predicate??(Int)",
+            "predicate?(value?)",
+        ] {
+            assert!(parse_command_query(source).is_err(), "{source}");
+        }
+    }
 
     #[test]
     fn completion_signature_normalizes_nested_carriers_without_changing_declarations() {

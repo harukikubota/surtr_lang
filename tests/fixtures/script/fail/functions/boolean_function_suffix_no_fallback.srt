@@ -1,0 +1,2 @@
+def positive(value: Int) -> Boolean { value > 0 }
+print(inspect(positive?(1)))

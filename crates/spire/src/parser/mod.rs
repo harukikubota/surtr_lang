@@ -300,6 +300,15 @@ impl<'a> Parser<'a> {
         self.expect_ident()
     }
 
+    /// Only callable positions opt into suffix parsing; ordinary identifiers stay unchanged.
+    fn parse_callable_suffix(&mut self, mut name: Symbol, mut span: Span) -> (Symbol, Span) {
+        if matches!(self.peek(), Token::Question) && span.end == self.peek_span().start {
+            name.push('?');
+            span.end = self.advance().span.end;
+        }
+        (name, span)
+    }
+
     fn expect_member_ident(&mut self) -> Result<(Symbol, Span), ParseError> {
         if matches!(self.peek(), Token::True | Token::False) {
             let token = self.advance();

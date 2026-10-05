@@ -1,0 +1,1 @@
+def typed?::<$A>(value: $A) -> Boolean { True }

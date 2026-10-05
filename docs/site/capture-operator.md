@@ -37,6 +37,8 @@ f = &add1
 print(to_string(f(41)))
 ```
 
+Boolean を返す suffix 関数も `&positive?` のように、`?` を名前に含めてキャプチャできます。名前に続く `?` は文末アンラップにはなりません。
+
 qualified path も同じです。
 
 ```surtr

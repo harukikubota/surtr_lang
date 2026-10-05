@@ -1443,7 +1443,7 @@ fn build_genserver_cast_wrapper(
 }
 
 impl Parser<'_> {
-    fn canonicalize_impl_target_name(name: String) -> String {
+    pub(super) fn canonicalize_impl_target_name(name: String) -> String {
         if name.contains("::") {
             name
         } else {
@@ -1576,7 +1576,8 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::RBrace) {
                 break;
             }
-            let (name, _span) = self.expect_member_ident()?;
+            let (name, span) = self.expect_member_ident()?;
+            let (name, _) = self.parse_callable_suffix(name, span);
             names.push(name);
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
@@ -1654,6 +1655,7 @@ impl Parser<'_> {
                         },
                     ));
                 };
+                let (name, selected_span) = self.parse_callable_suffix(name, selected_span);
                 let module_end = qualified
                     .last()
                     .map(|(_, span)| span.end)
@@ -1979,7 +1981,8 @@ impl Parser<'_> {
                 ));
             }
         };
-        let (name, _) = self.expect_callable_ident()?;
+        let (name, name_span) = self.expect_callable_ident()?;
+        let (name, _) = self.parse_callable_suffix(name, name_span);
         let return_type_arguments = self.parse_return_type_arguments_for_context(
             Some(target.to_string()),
             trait_impl_substitution,
@@ -2147,7 +2150,8 @@ impl Parser<'_> {
                 ));
             }
         };
-        let (name, _) = self.expect_builtin_decl_name()?;
+        let (name, name_span) = self.expect_builtin_decl_name()?;
+        let (name, _) = self.parse_callable_suffix(name, name_span);
         let return_type_arguments = self.parse_return_type_arguments_for_context(
             Some(target.to_string()),
             trait_impl_substitution,
@@ -2726,7 +2730,8 @@ impl Parser<'_> {
                 ));
             }
         };
-        let (name, _) = self.expect_callable_ident()?;
+        let (name, name_span) = self.expect_callable_ident()?;
+        let (name, _) = self.parse_callable_suffix(name, name_span);
         let return_type_arguments = self.parse_return_type_arguments()?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
@@ -3530,6 +3535,7 @@ impl Parser<'_> {
         } else {
             self.expect_callable_ident()?
         };
+        let (name, name_span) = self.parse_callable_suffix(name, name_span);
         if !allow_builtin_keyword_name {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Function name")?;
         }

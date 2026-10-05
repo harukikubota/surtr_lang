@@ -73,6 +73,37 @@ impl Parser<'_> {
     }
 
     pub(super) fn is_pattern_bind_stmt_start(&self) -> bool {
+        // Inspect only the leading callable path, never `?` inside Pattern arguments.
+        let mut index = self.pos;
+        while matches!(
+            self.tokens.get(index).map(|item| &item.token),
+            Some(Token::Ident(_) | Token::ReservedCallName(_) | Token::PatternConsumer(_))
+        ) {
+            let end = self.tokens[index].span.end;
+            index += 1;
+            if matches!(
+                self.tokens.get(index).map(|item| &item.token),
+                Some(Token::Question)
+            ) && self.tokens[index].span.start == end
+                && matches!(
+                    self.tokens.get(index + 1).map(|item| &item.token),
+                    Some(Token::LParen | Token::Unit | Token::Colon)
+                )
+            {
+                return false;
+            }
+            if matches!(
+                self.tokens.get(index).map(|item| &item.token),
+                Some(Token::Colon)
+            ) && matches!(
+                self.tokens.get(index + 1).map(|item| &item.token),
+                Some(Token::Colon)
+            ) {
+                index += 2;
+            } else {
+                break;
+            }
+        }
         matches!(
             self.peek(),
             Token::LBrack

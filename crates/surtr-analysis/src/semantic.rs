@@ -2454,7 +2454,7 @@ fn symbol_token(input: &str, cursor: usize) -> Option<(usize, usize, String)> {
 }
 
 fn completion_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '?')
 }
 
 fn facet_path_token_char(ch: char) -> bool {

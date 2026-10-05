@@ -908,8 +908,11 @@ impl Parser<'_> {
             Token::Ident(_) => {
                 let (name, name_span) = self.expect_ident()?;
                 if matches!(self.peek(), Token::Question) {
-                    let question_span = self.advance().span;
-                    Ok((FacetPathSegment::optional_field(name), question_span))
+                    Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
+                        "OptionalSelector is no longer supported",
+                        self.peek_span(),
+                    ))
                 } else {
                     Ok((FacetPathSegment::field(name), name_span))
                 }
@@ -922,10 +925,10 @@ impl Parser<'_> {
                     _ => unreachable!("matched Boolean variant token"),
                 };
                 if matches!(self.peek(), Token::Question) {
-                    let question_span = self.advance().span;
-                    Ok((
-                        FacetPathSegment::optional_field(name.to_string()),
-                        question_span,
+                    Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
+                        "OptionalSelector is no longer supported",
+                        self.peek_span(),
                     ))
                 } else {
                     Ok((FacetPathSegment::field(name.to_string()), token.span))
@@ -1884,8 +1887,8 @@ impl Parser<'_> {
     /// - otherwise → Var
     pub(super) fn parse_ident_continuation(
         &mut self,
-        name: Symbol,
-        name_span: Span,
+        mut name: Symbol,
+        mut name_span: Span,
         pipe_outer_call: bool,
     ) -> Result<Ast, ParseError> {
         if sindr::names::is_reserved_value_name(&name)
@@ -1906,14 +1909,6 @@ impl Parser<'_> {
         }
         if name == "hash" && matches!(self.peek(), Token::Bang) {
             return self.parse_hash_map_literal(name_span);
-        }
-
-        if name == "self" && self.impl_target_stack.is_empty() {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::ExpressionSyntax,
-                "`self` can only be used inside impl methods",
-                name_span,
-            ));
         }
 
         let mut path_segments = vec![name.clone()];
@@ -1939,6 +1934,34 @@ impl Parser<'_> {
             };
             path_end = seg_span.end;
             path_segments.push(seg);
+        }
+
+        // A suffix belongs to a callable only when the following syntax is a call
+        // or an explicit return-type application. Bare `value?` remains statement unwrap.
+        if matches!(self.peek(), Token::Question)
+            && path_end == self.peek_span().start
+            && (matches!(self.peek_n(1), Some(Token::LParen | Token::Unit))
+                || (matches!(self.peek_n(1), Some(Token::Colon))
+                    && matches!(self.peek_n(2), Some(Token::Colon))
+                    && matches!(self.peek_n(3), Some(Token::Lt))))
+        {
+            let last = path_segments
+                .last_mut()
+                .expect("identifier path is nonempty");
+            last.push('?');
+            path_end = self.advance().span.end;
+            if path_segments.len() == 1 {
+                name = path_segments[0].clone();
+                name_span.end = path_end;
+            }
+        }
+
+        if name == "self" && self.impl_target_stack.is_empty() {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
+                "`self` can only be used inside impl methods",
+                name_span,
+            ));
         }
 
         Self::validate_pattern_consumer_path(
@@ -2840,6 +2863,22 @@ impl Parser<'_> {
                     path_end = seg_span.end;
                     path_segments.push(seg);
                 }
+
+                let last = path_segments.last_mut().expect("capture path is nonempty");
+                let (suffixed, suffix_span) = self.parse_callable_suffix(
+                    last.clone(),
+                    Span {
+                        start: name_span.start,
+                        end: path_end,
+                    },
+                );
+                *last = suffixed;
+                path_end = suffix_span.end;
+                let name = path_segments[0].clone();
+                let name_span = Span {
+                    start: name_span.start,
+                    end: path_end,
+                };
 
                 Self::validate_pattern_consumer_path(
                     &path_segments,

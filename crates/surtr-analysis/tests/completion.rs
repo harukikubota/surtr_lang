@@ -2458,3 +2458,34 @@ fn reserved_variant_alias_lookup_requires_its_canonical_declaration() {
         "reserved alias must not use a tail fallback"
     );
 }
+
+#[test]
+fn boolean_function_suffix_is_preserved_in_completion_hover_and_signature_help() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "Predicates::positive?".into(),
+        replacement: "Predicates::positive?".into(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("positive?(value: Int) -> Boolean".into()),
+        documentation: Some("Tests whether a value is positive.".into()),
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: None,
+    }]);
+    let source = "answer = Predicates::positive?";
+    let completion = complete_prefix(CompletionRequest {
+        index: &index,
+        source,
+        cursor: source.len(),
+    });
+    assert_eq!(completion.replace_start, "answer = ".len());
+    assert_eq!(completion.candidates.len(), 1);
+    let lookup = lookup_symbol_at_cursor(&index, source, source.len()).expect("suffix hover");
+    assert_eq!(lookup.symbol.label, "Predicates::positive?");
+    assert_eq!(lookup.end, source.len());
+    let call = "Predicates::positive?(1";
+    let signature = signature_help_at_cursor(&index, call, call.len()).expect("suffix signature");
+    assert_eq!(signature.signature, "positive?(value: Int) -> Boolean");
+    assert_eq!(signature.callee_end, "Predicates::positive?".len());
+    assert!(lookup_symbol_at_cursor(&index, "positive", 8).is_none());
+}
