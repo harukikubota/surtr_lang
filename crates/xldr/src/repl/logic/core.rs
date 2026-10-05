@@ -9287,7 +9287,7 @@ pub(crate) fn completion_token(input: &str, cursor: usize) -> (usize, usize, Str
 }
 
 fn completion_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '?')
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9417,6 +9417,15 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn boolean_function_suffix_completion_token_keeps_the_full_name() {
+        let source = ":sig Predicates::positive?";
+        assert_eq!(
+            completion_token(source, source.len()),
+            (5, source.len(), "Predicates::positive?".into())
+        );
+    }
+
     #[test]
     fn final_err_display_rejects_missing_and_extra_payload() {
         let engine = ReplEngine::new().expect("REPL engine should initialize");
