@@ -399,13 +399,6 @@ impl FacetPathSegment {
         }
     }
 
-    pub fn optional_field(name: impl Into<Symbol>) -> Self {
-        Self::Field {
-            name: name.into(),
-            optional: true,
-        }
-    }
-
     pub fn display_label(&self) -> String {
         match self {
             Self::Field { name, optional } => {

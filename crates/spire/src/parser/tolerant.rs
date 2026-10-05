@@ -610,7 +610,11 @@ fn parse_tolerant_defmod(
     parser.skip_newlines();
     parser.expect(&Token::LBrace)?;
 
-    let body = parse_tolerant_module_like_body(parser, Some(name.clone()), diagnostics)?;
+    let body = parse_tolerant_member_body(
+        parser,
+        TolerantMemberBody::Module(name.clone()),
+        diagnostics,
+    )?;
     let end = parser.expect(&Token::RBrace)?;
     Ok(Ast::Defmod(
         Span {
@@ -639,29 +643,37 @@ fn parse_tolerant_plain_impl(
     }
     parser.skip_newlines();
     parser.expect(&Token::LBrace)?;
-    let body = parse_tolerant_module_like_body(parser, Some(head.clone()), diagnostics)?;
+    let body =
+        parse_tolerant_member_body(parser, TolerantMemberBody::Impl(head.clone()), diagnostics)?;
     let end = parser.expect(&Token::RBrace)?;
     Ok(Ast::ImplDef(
         Span {
             start: sp.start,
             end: end.end,
         },
-        head,
+        Parser::canonicalize_impl_target_name(head),
         head_span,
         body,
         DeclAttrs::default(),
     ))
 }
 
-fn parse_tolerant_module_like_body(
+enum TolerantMemberBody {
+    Module(String),
+    Impl(String),
+}
+
+fn parse_tolerant_member_body(
     parser: &mut Parser<'_>,
-    module_path: Option<String>,
+    member_body: TolerantMemberBody,
     diagnostics: &mut Vec<ParseDiagnostic>,
 ) -> Result<Vec<Ast>, ParseError> {
     let prev_context = parser.context.clone();
     parser.context.level = DeclLevel::Top;
     parser.context.unit_kind = ParseUnitKind::Module;
-    parser.context.module_path = module_path;
+    if let TolerantMemberBody::Module(module_path) = &member_body {
+        parser.context.module_path = Some(module_path.clone());
+    }
     parser.context.parse_rules = if prev_context
         .parse_rules
         .allowed_top_level_decl_kinds
@@ -677,7 +689,20 @@ fn parse_tolerant_module_like_body(
     while !matches!(parser.peek(), Token::RBrace | Token::Eof) {
         let start_pos = parser.pos;
         parser.synthetic_tokens.clear();
-        match parser.parse_stmt() {
+        let parsed = match &member_body {
+            TolerantMemberBody::Module(_) => parser.parse_stmt(),
+            TolerantMemberBody::Impl(target) => match parser.peek() {
+                Token::Import => parser.parse_import(),
+                Token::Annotator(_) => parser.parse_annotated_impl_method(target, false),
+                Token::Def | Token::Defp | Token::Defextractor => parser.parse_impl_method(target),
+                _ => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "impl body may only contain `def` / `defp` / `defextractor` declarations",
+                    parser.peek_span(),
+                )),
+            },
+        };
+        match parsed {
             Ok(stmt) => match parser.ensure_stmt_boundary(&stmt, true) {
                 Ok(()) => body.push(stmt),
                 Err(error) => {

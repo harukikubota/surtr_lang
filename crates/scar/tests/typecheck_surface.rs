@@ -240,10 +240,6 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_const_dynamic_container_segments_require_literals as fn(),
     ),
     (
-        "facet_optional_marker_rejected_on_non_enum_segment",
-        facet_optional_marker_rejected_on_non_enum_segment as fn(),
-    ),
-    (
         "facet_case_api_requires_enum_path_and_records_modes",
         facet_case_api_requires_enum_path_and_records_modes as fn(),
     ),
@@ -2554,19 +2550,6 @@ const PATH: Facet<List<Int>, Int> = List.[index]"#,
     assert!(err
         .message
         .contains("const Facet path bracket segments must use literal Int or String values"));
-}
-
-fn facet_optional_marker_rejected_on_non_enum_segment() {
-    let err = typecheck_with_rules(
-        r#"defrecord User(name: String)
-user = User("alice")
-Facet::set(User.name?, user, "bob")"#,
-        RuntimeSourcePolicy::script(),
-    )
-    .expect_err("optional marker on a field should fail");
-    assert!(err
-        .message
-        .contains("optional Facet selectors are no longer supported"));
 }
 
 fn facet_case_api_requires_enum_path_and_records_modes() {

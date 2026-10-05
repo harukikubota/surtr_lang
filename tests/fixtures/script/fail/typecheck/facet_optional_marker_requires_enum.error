@@ -1,2 +1,2 @@
-phase: typecheck
-contains: optional Facet selectors are no longer supported
+phase: parse
+contains: OptionalSelector is no longer supported
