@@ -791,7 +791,29 @@ pub(super) fn coalesce_direct_constructor_inputs(
     }
 }
 
+pub(super) fn validate_boolean_function_suffix(
+    checker: &Checker,
+    id: &sigil::resolved::ResolvedId,
+    return_ty: &Ty,
+) -> Result<(), TypeError> {
+    if id.name.ends_with('?') {
+        let return_ty = checker.resolve_ty(return_ty);
+        if return_ty != Ty::Bool {
+            return Err(TypeError::new(
+                format!(
+                    "function `{}` with a '?' suffix must return Boolean, got {}",
+                    id.qualified_name.as_deref().unwrap_or(&id.name),
+                    checker.ty_name(&return_ty),
+                ),
+                id.span.clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn canonical_callable_signature(
+    checker: &Checker,
     id: &sigil::resolved::ResolvedId,
     return_type_arguments: &[ResolvedReturnTypeArgument],
     value_parameters: &[ResolvedValueParameter],
@@ -802,6 +824,7 @@ pub(super) fn canonical_callable_signature(
     runtime_target: RuntimeTarget,
     declaration_kind: CallableDeclarationKind,
 ) -> Result<CallableSignature<Ty>, TypeError> {
+    validate_boolean_function_suffix(checker, id, &return_ty)?;
     validate_canonical_role_list(
         id,
         "return type argument",
@@ -1536,6 +1559,37 @@ mod tests {
             compiler_generated: false,
             symbol_info: None,
             span: Span { start: 4, end: 10 },
+        }
+    }
+
+    #[test]
+    fn boolean_suffix_validates_all_canonical_declaration_kinds() {
+        let checker = Checker::new(super::super::TypecheckContext::default());
+        let mut id = resolved_id();
+        id.name = "predicate?".into();
+        for kind in [
+            CallableDeclarationKind::Function,
+            CallableDeclarationKind::TraitMethod,
+            CallableDeclarationKind::Builtin,
+        ] {
+            let signature = |return_ty| {
+                canonical_callable_signature(
+                    &checker,
+                    &id,
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    return_ty,
+                    CanonicalConstraintSet::default(),
+                    RuntimeTarget::UserFunction(0),
+                    kind.clone(),
+                )
+            };
+            signature(Ty::Bool).expect("canonical Boolean is accepted");
+            let error = signature(Ty::Var(0)).expect_err("unresolved return is rejected");
+            assert!(error.message.contains("must return Boolean"));
+            assert_eq!(error.span, id.span);
         }
     }
 

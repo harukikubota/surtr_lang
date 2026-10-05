@@ -3637,6 +3637,7 @@ impl Checker {
                     self.callable_signatures.insert(
                         method.id.unique_id,
                         super::signatures::canonical_callable_signature(
+                            self,
                             &method.id,
                             &method.return_type_arguments,
                             &method.value_parameters,
@@ -4538,10 +4539,12 @@ impl Checker {
                             where_clause.as_ref(),
                             &mut tyvars,
                         )?;
+                    super::signatures::validate_boolean_function_suffix(self, id, &ret)?;
                     if let Some(meta) = meta {
                         self.callable_signatures.insert(
                             id.unique_id,
                             super::signatures::canonical_callable_signature(
+                                self,
                                 id,
                                 return_type_arguments,
                                 params,
@@ -4758,6 +4761,7 @@ impl Checker {
                     self.callable_signatures.insert(
                         id.unique_id,
                         super::signatures::canonical_callable_signature(
+                            self,
                             id,
                             return_type_arguments,
                             params,
@@ -4931,6 +4935,7 @@ impl Checker {
                 self.callable_signatures.insert(
                     method.function_id.unique_id,
                     super::signatures::canonical_callable_signature(
+                        self,
                         &method.function_id,
                         &method.return_type_arguments,
                         &method.value_parameters,

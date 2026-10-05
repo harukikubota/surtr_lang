@@ -1,0 +1,11 @@
+  def positive?(value: Int) -> Boolean { value > 0 }
+  def same?(left: Int, right: Int) -> Boolean { left == right }
+  def ignored?(value: $A) -> Boolean { True }
+
+print(inspect(positive?(1)))
+print(inspect(positive?(-1)))
+check = &positive?
+print(inspect(check(3)))
+print(inspect(2 `same?` 2))
+print(inspect(`same?`(1, 2)))
+print(inspect(ignored?("text")))

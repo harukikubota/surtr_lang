@@ -351,6 +351,7 @@ impl Checker {
         self.callable_signatures.insert(
             id.unique_id,
             super::signatures::canonical_callable_signature(
+                self,
                 id,
                 return_type_arguments,
                 params,
@@ -1819,6 +1820,7 @@ impl Checker {
         self.callable_signatures.insert(
             id.unique_id,
             super::signatures::canonical_callable_signature(
+                self,
                 id,
                 return_type_arguments,
                 params,

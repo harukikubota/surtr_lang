@@ -1,0 +1,5 @@
+defmod Predicates {
+  def positive?(value: Int) -> Boolean { value > 0 }
+  def same?(left: Int, right: Int) -> Boolean { left == right }
+  def ignored?(value: $A) -> Boolean { True }
+}

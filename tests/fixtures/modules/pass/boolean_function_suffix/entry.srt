@@ -1,0 +1,9 @@
+import Predicates::positive?
+
+print(inspect(positive?(1)))
+print(inspect(Predicates::positive?(-1)))
+check = &Predicates::positive?
+print(inspect(check(3)))
+print(inspect(2 `Predicates::same?` 2))
+print(inspect(`Predicates::same?`(1, 2)))
+print(inspect(Predicates::ignored?("text")))
