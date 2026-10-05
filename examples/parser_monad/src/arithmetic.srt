@@ -1,0 +1,103 @@
+# BNF (tokens consume trailing ASCII whitespace):
+# <input>      ::= <ws> <expression> EOF
+# <expression> ::= <term> <add-tail>
+# <add-tail>   ::= "+" <ws> <term> <add-tail>
+#                | "-" <ws> <term> <add-tail> | epsilon
+# <term>       ::= <factor> <mul-tail>
+# <mul-tail>   ::= "*" <ws> <factor> <mul-tail>
+#                | "/" <ws> <factor> <mul-tail> | epsilon
+# <factor>     ::= <integer> | "(" <ws> <expression> ")" <ws>
+# <integer>    ::= <digit> <digits> <ws>
+# <digits>     ::= <digit> <digits> | epsilon
+# <digit>      ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+# <ws>         ::= " " <ws> | "\t" <ws> | "\n" <ws> | "\u{d}" <ws> | epsilon
+# Binary operators fold left. Integer division uses Surtr's Int division.
+@derive Eq
+defenum ArithmeticOp { Add, Subtract, Multiply, Divide }
+@derive Eq
+defenum ArithmeticExpr {
+  Number(Int),
+  Binary(ArithmeticOp, ArithmeticExpr, ArithmeticExpr),
+}
+
+defmod Arithmetic {
+  defp _spaces() -> Parser<List<String>> {
+    Parser::many(Parser::satisfy({|ch| String::contains(" \t\n\u{d}", ch)}, "whitespace"))
+  }
+
+  defp _token(parser: Parser<$A>) -> Parser<$A> {
+    Parser::before(parser, _spaces())
+  }
+
+  defp _integer() -> Parser<ArithmeticExpr> {
+    digits = Parser::some(Parser::satisfy({|ch| String::contains("0123456789", ch)}, "digit"))
+    Monad::bind(_token(digits), {|parts|
+      # This conversion is checked even though the parser accepts only digits.
+      match String::try_to_int(String::join(parts, "")) {
+        Ok(value) => Parser::pure(ArithmeticExpr::Number(value)),
+        Err(_) => Parser::fail::<ArithmeticExpr>("integer"),
+      }
+    })
+  }
+
+  defp _factor() -> Parser<ArithmeticExpr> {
+    nested = Parser::between(
+      _token(Parser::char("(")),
+      Parser::lazy({|_| _expression()}),
+      _token(Parser::char(")")),
+    )
+    Parser::choice(_integer(), nested)
+  }
+
+  defp _fold(first: ArithmeticExpr, tail: List<(ArithmeticOp, ArithmeticExpr)>) -> ArithmeticExpr {
+    match tail {
+      [] => first,
+      [(operator, right), ..rest] => _fold(ArithmeticExpr::Binary(operator, first, right), rest),
+    }
+  }
+
+  defp _term() -> Parser<ArithmeticExpr> {
+    operator = Parser::choice(
+      _token(Parser::char("*")) |*> {|_| ArithmeticOp::Multiply},
+      _token(Parser::char("/")) |*> {|_| ArithmeticOp::Divide},
+    )
+    do::<Parser> {
+      first <- _factor()
+      tail <- Parser::many(Parser::pair(operator, _factor()))
+      Parser::pure(_fold(first, tail))
+    }
+  }
+
+  defp _expression() -> Parser<ArithmeticExpr> {
+    operator = Parser::choice(
+      _token(Parser::char("+")) |*> {|_| ArithmeticOp::Add},
+      _token(Parser::char("-")) |*> {|_| ArithmeticOp::Subtract},
+    )
+    do::<Parser> {
+      first <- _term()
+      tail <- Parser::many(Parser::pair(operator, _term()))
+      Parser::pure(_fold(first, tail))
+    }
+  }
+
+  def parser() -> Parser<ArithmeticExpr> {
+    Parser::after(_spaces(), _expression())
+  }
+
+  # Evaluation errors remain Result errors; they do not trigger backtracking.
+  def evaluate(tree: ArithmeticExpr) -> Result<Int> {
+    match tree {
+      ArithmeticExpr::Number(value) => Ok(value),
+      ArithmeticExpr::Binary(operator, left, right) => {
+        lhs =? evaluate(left)
+        rhs =? evaluate(right)
+        match operator {
+          ArithmeticOp::Add => Ok(lhs + rhs),
+          ArithmeticOp::Subtract => Ok(lhs - rhs),
+          ArithmeticOp::Multiply => Ok(lhs * rhs),
+          ArithmeticOp::Divide => lhs / rhs,
+        }
+      },
+    }
+  }
+}

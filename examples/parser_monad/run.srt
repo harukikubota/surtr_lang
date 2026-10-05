@@ -1,0 +1,5 @@
+include './src/parser.srt'
+include './src/arithmetic.srt'
+include './main.srt'
+
+ParserExample::main()

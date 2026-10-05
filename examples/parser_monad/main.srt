@@ -1,0 +1,20 @@
+defmod ParserExample {
+  defp _show(text: String) -> Unit {
+    print("input: " ++ inspect(text))
+    match Parser::parse_all(Arithmetic::parser(), text) {
+      ParseReply::Success(tree, _) => {
+        print("AST: " ++ inspect(tree))
+        print("value: " ++ inspect(Arithmetic::evaluate(tree)))
+      },
+      ParseReply::Failure(issue) => print("parse error at scalar " ++ to_string(issue.offset) ++ ": expected " ++ issue.expected),
+    }
+  }
+
+  def main() -> Unit {
+    _show("2 + 3 * 4")
+    _show("(2 + 3) * 4")
+    _show("20 / 2 / 5")
+    _show("1 +")
+    _show("1 / 0")
+  }
+}

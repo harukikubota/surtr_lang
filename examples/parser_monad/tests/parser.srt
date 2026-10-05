@@ -1,0 +1,108 @@
+include '../src/parser.srt'
+import Test
+
+test("ParserMonad") {
+  it("consumes one Unicode scalar and preserves remaining input") {
+    assert_eq(
+      ParseReply::Success("猫", ParseInput::new("ab", 1)),
+      Parser::parse(Parser::item(), "猫ab"),
+    )
+  }
+
+  it("pure and eof preserve input; full parsing rejects trailing text") {
+    assert_eq(ParseReply::Success(7, ParseInput::new("x", 0)), Parser::parse(Parser::pure(7), "x"))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(1, "end of input", False)), Parser::parse_all(Parser::item(), "ab"))?
+    assert_eq(ParseReply::Success((), ParseInput::new("", 0)), Parser::parse(Parser::eof(), ""))
+  }
+  it("item and satisfy fail at the current position") {
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "character", False)), Parser::parse(Parser::item(), ""))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "a", False)), Parser::parse(Parser::char("a"), "b"))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "char requires one Unicode scalar", True)), Parser::parse(Parser::char("ab"), "ab"))
+  }
+  it("literal reports the mismatching scalar position") {
+    assert_eq(ParseReply::Success("猫犬", ParseInput::new("!", 2)), Parser::parse(Parser::literal("猫犬"), "猫犬!"))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(1, "犬", False)), Parser::parse(Parser::literal("猫犬"), "猫鳥"))
+  }
+  it("bind changes payload type and threads input through do") {
+    action: Parser<(String, Int)> = do::<Parser> {
+      first <- Parser::item()
+      second <- Parser::item()
+      Parser::pure((first ++ second, 2))
+    }
+    assert_eq(ParseReply::Success(("ab", 2), ParseInput::new("c", 2)), Parser::parse(action, "abc"))
+  }
+  it("fmap and applicative operators sequence functions before arguments") {
+    function: Parser<(String -> String)> = Parser::char("a") |*> {|prefix| {|suffix| prefix ++ suffix}}
+    action = function |*| Parser::char("b")
+    assert_eq(ParseReply::Success("ab", ParseInput::new("!", 2)), Parser::parse(action, "ab!"))?
+    value: Parser<Int> = Applicative::pure(9)
+    assert_eq(Parser::parse(Parser::pure(9), "x"), Parser::parse(value, "x"))
+  }
+  it("choice backtracks consumed failure and keeps the left success") {
+    action = Parser::choice(Parser::literal("ab"), Parser::literal("ac"))
+    assert_eq(ParseReply::Success("ac", ParseInput::new("!", 2)), Parser::parse(action, "ac!"))?
+    preferred = Parser::choice(Parser::literal("a"), Parser::literal("ab"))
+    assert_eq(ParseReply::Success("a", ParseInput::new("b", 1)), Parser::parse(preferred, "ab"))
+  }
+  it("choice keeps the furthest failure and the left diagnostic on ties") {
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(2, "c", False)), Parser::parse(Parser::choice(Parser::literal("abc"), Parser::literal("ax")), "ab!"))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(1, "b", False)), Parser::parse(Parser::choice(Parser::literal("ab"), Parser::literal("ac")), "a!"))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(2, "c", False)), Parser::parse(Parser::choice(Parser::literal("ax"), Parser::literal("abc")), "ab!"))
+  }
+  it("many and some preserve order and require progress") {
+    assert_eq(ParseReply::Success(["a", "a"], ParseInput::new("!", 2)), Parser::parse(Parser::many(Parser::char("a")), "aa!"))?
+    assert_eq(ParseReply<List<String>>::Success([], ParseInput::new("!", 0)), Parser::parse(Parser::many(Parser::char("a")), "!"))?
+    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(0, "a", False)), Parser::parse(Parser::some(Parser::char("a")), "!"))?
+    assert_eq(ParseReply<List<Int>>::Failure(ParseIssue::new(0, "repeated parser must consume input", True)), Parser::parse(Parser::many(Parser::pure(1)), ""))
+  }
+  it("many propagates partial matches and fatal errors through choice") {
+    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(3, "b", False)), Parser::parse(Parser::many(Parser::literal("ab")), "aba!"))?
+    broken = Parser::many(Parser::literal(""))
+    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(0, "repeated parser must consume input", True)), Parser::parse(Parser::choice(broken, Parser::pure([])), "x"))?
+    assert_eq(ParseReply<List<Option<String>>>::Failure(ParseIssue::new(0, "repeated parser must consume input", True)), Parser::parse(Parser::many(Parser::optional(Parser::item())), ""))
+  }
+  it("optional backtracks while keeping present payloads") {
+    assert_eq(ParseReply::Success(Option::Some("ab"), ParseInput::new("!", 2)), Parser::parse(Parser::optional(Parser::literal("ab")), "ab!"))?
+    assert_eq(ParseReply::Success(Option<String>::None, ParseInput::new("ac", 0)), Parser::parse(Parser::optional(Parser::literal("ab")), "ac"))
+  }
+  it("pair and delimiters compose values of different types") {
+    action = Parser::between(Parser::char("("), Parser::pair(Parser::item(), Parser::pure(7)), Parser::char(")"))
+    assert_eq(ParseReply::Success(("x", 7), ParseInput::new("!", 3)), Parser::parse(action, "(x)!"))?
+    assert_eq(ParseReply<(String, Int)>::Failure(ParseIssue::new(2, ")", False)), Parser::parse(action, "(x!"))
+  }
+  it("separated lists reject missing items after separators") {
+    action = Parser::sep_by(Parser::char("a"), Parser::char(","))
+    assert_eq(ParseReply::Success(["a", "a"], ParseInput::new("!", 3)), Parser::parse(action, "a,a!"))?
+    assert_eq(ParseReply<List<String>>::Success([], ParseInput::new("!", 0)), Parser::parse(action, "!"))?
+    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(2, "a", False)), Parser::parse(action, "a,!"))?
+    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(0, "a", False)), Parser::parse(Parser::sep_by1(Parser::char("a"), Parser::char(",")), "!"))?
+    partial = Parser::sep_by(Parser::literal("ab"), Parser::char(","))
+    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(1, "b", False)), Parser::parse(partial, "a!"))
+  }
+  it("Monad laws hold for consuming parsers on success and failure") {
+    f = {|text: String| Functor::fmap(Parser::item(), {|next| text ++ next})}
+    g = {|text: String| Parser::before(Parser::pure(text ++ "!"), Parser::char("c"))}
+    initial: Parser<String> = Monad::return("a")
+    assert_eq(Parser::parse(f("a"), "bc"), Parser::parse(Monad::bind(initial, f), "bc"))?
+    action = Parser::item()
+    assert_eq(Parser::parse(action, "abc"), Parser::parse(Monad::bind(action, {|v| Parser::pure(v)}), "abc"))?
+    assert_eq(Parser::parse(action, ""), Parser::parse(Monad::bind(action, {|v| Parser::pure(v)}), ""))?
+    left = Monad::bind(Monad::bind(action, f), g)
+    right = Monad::bind(action, {|v| Monad::bind(f(v), g)})
+    assert_eq(Parser::parse(left, "abc"), Parser::parse(right, "abc"))?
+    assert_eq(Parser::parse(left, "ab!"), Parser::parse(right, "ab!"))
+  }
+
+  it("map can build contextual payloads without consuming extra input") {
+    action = Parser::map(Parser::item(), {|ch| [ch]})
+    assert_eq(ParseReply::Success(["猫"], ParseInput::new("!", 1)), Parser::parse(action, "猫!"))
+  }
+  it("failure skips mapper and continuation; right choice preserves fatal errors") {
+    failed = Parser::fail::<String>("custom")
+    mapped = Parser::map(failed, {|text| text ++ "!"})
+    bound = Parser::and_then(failed, {|_| Parser::item()})
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "custom", False)), Parser::parse(mapped, "x"))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "custom", False)), Parser::parse(bound, "x"))?
+    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "char requires one Unicode scalar", True)), Parser::parse(Parser::choice(failed, Parser::char("")), "x"))
+  }
+}

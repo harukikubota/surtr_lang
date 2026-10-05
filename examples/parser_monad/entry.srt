@@ -1,0 +1,8 @@
+include './src/parser.srt'
+include './src/arithmetic.srt'
+include './main.srt'
+
+def main() -> Result<()> {
+  ParserExample::main()
+  Ok(())
+}

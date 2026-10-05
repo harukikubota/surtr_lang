@@ -1,0 +1,45 @@
+include '../src/parser.srt'
+include '../src/arithmetic.srt'
+import Test
+
+def evaluate_example(text: String) -> Result<Int> {
+  match Parser::parse_all(Arithmetic::parser(), text) {
+    ParseReply::Success(tree, _) => Arithmetic::evaluate(tree),
+    ParseReply::Failure(issue) => Err(ExampleSyntaxError(issue.offset, issue.expected)),
+  }
+}
+deferror ExampleSyntaxError(offset: Int, expected: String) {
+  "at #{offset}: expected #{expected}"
+}
+
+test("Arithmetic grammar") {
+  it("respects precedence, parentheses and left associativity") {
+    assert_eq(Ok(14), evaluate_example("2 + 3 * 4"))?
+    assert_eq(Ok(20), evaluate_example("(2 + 3) * 4"))?
+    assert_eq(Ok(5), evaluate_example("10 - 3 - 2"))?
+    assert_eq(Ok(2), evaluate_example("20 / 2 / 5"))?
+    assert_eq(Ok(7), evaluate_example("7 / 2 + 4"))
+  }
+  it("accepts ASCII whitespace, zero and arbitrary precision integers") {
+    assert_eq(Ok(12), evaluate_example(" \t(2 +\n4) * 2\u{d} "))?
+    assert_eq(Ok(0), evaluate_example("0"))?
+    assert_eq(Ok(1000000000000000000000000000000), evaluate_example("999999999999999999999999999999 + 1"))
+  }
+  it("builds an AST and consumes the complete input") {
+    expected = ArithmeticExpr::Binary(ArithmeticOp::Add, ArithmeticExpr::Number(2), ArithmeticExpr::Binary(ArithmeticOp::Multiply, ArithmeticExpr::Number(3), ArithmeticExpr::Number(4)))
+    assert_eq(ParseReply::Success(expected, ParseInput::new("", 5)), Parser::parse_all(Arithmetic::parser(), "2+3*4"))
+  }
+  it("rejects empty input and missing operands") {
+    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(0, "digit", False)), Parser::parse_all(Arithmetic::parser(), ""))?
+    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "digit", False)), Parser::parse_all(Arithmetic::parser(), "1+"))?
+    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "digit", False)), Parser::parse_all(Arithmetic::parser(), "2**3"))
+  }
+  it("rejects missing parentheses and trailing text") {
+    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(4, ")", False)), Parser::parse_all(Arithmetic::parser(), "(1+2"))?
+    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "end of input", False)), Parser::parse_all(Arithmetic::parser(), "1 x"))?
+    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "end of input", False)), Parser::parse_all(Arithmetic::parser(), "1 2"))
+  }
+  it("reports division by zero during evaluation") {
+    assert_eq(True, Result::is_err(evaluate_example("1 / (2 - 2)")))
+  }
+}
