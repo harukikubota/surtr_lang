@@ -43,7 +43,7 @@ payload型は文ごとに変化できる。family所属だけからcarrier同一
 `pure` / `return` / `guard`は通常callとして検査し、名前でcheckerの分岐を作らない。
 
 返り値にだけ現れるconstructor入力は、通常callの型引数の具体化結果を使ってcapabilityを検査する。
-たとえば`guard::<List>(...)`の返り値は`List<Unit>`としてMonadの実装を確認できる。
+たとえば`Alternative::guard::<List>(...)`の返り値は`List<Unit>`としてMonadの実装を確認できる。
 値引数から受け継いだcapabilityは、同じnominal型へ具体化されても強めない。
 `<-` のpayloadも、通常のgeneric callback引数と同じく入力値の由来を保持する。
 生成したcallbackの仮引数へ由来を渡してから本文を検査し、束縛パターンの型注釈や
@@ -61,7 +61,7 @@ Monadは常に要求する。total `<-`はMonadだけでsequenceする。
 partial `<-`と合法なSafeBindのfailure targetは共通FailureEffectで、
 `MonadFail > Alternative > Monad`の順に選択する。
 
-- canonical `MonadFail` を実装する carrier: 通常の `fail(error)` 呼出しで元の Error を保持する。
+- canonical `MonadFail` を実装する carrier: 通常の `MonadFail::fail(error)` 呼出しで元の Error を保持する。
 - MonadFailなし、Alternativeあり: resolved `Alternative::empty`へ接続する。
 - どちらもなし: capability error。Monad単独ではfailure targetを構築しない。
 

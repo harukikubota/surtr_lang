@@ -579,7 +579,7 @@ print(inspect(OptionT::run(result)))"#,
 
 fn do_guard_keeps_option_t_result_alternative_semantics() {
     assert_output(
-        r#"blocked: OptionT<Result, Unit> = guard(False)
+        r#"blocked: OptionT<Result, Unit> = Alternative::guard(False)
 print(inspect(OptionT::run(blocked)))"#,
         &["Ok(Option::None)"],
     );

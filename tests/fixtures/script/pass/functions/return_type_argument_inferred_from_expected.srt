@@ -1,2 +1,2 @@
-value: Option<Unit> = guard(True)
+value: Option<Unit> = Alternative::guard(True)
 print(inspect(value))

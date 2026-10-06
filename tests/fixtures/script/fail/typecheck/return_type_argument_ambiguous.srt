@@ -1,1 +1,1 @@
-value = guard(True)
+value = Alternative::guard(True)

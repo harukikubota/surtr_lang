@@ -4,7 +4,7 @@ def outer::<$A>() -> (-> List<$A>) { &make }
 factory: (-> List<Int>) = &make::<Int>
 print(inspect(factory()))
 
-guard_option: (Boolean -> Option<Unit>) = &guard::<Option>
+guard_option: (Boolean -> Option<Unit>) = &Alternative::guard::<Option>
 print(inspect(guard_option(True)))
 
 forwarded: (-> List<Int>) = outer::<Int>()

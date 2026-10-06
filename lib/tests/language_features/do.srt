@@ -95,7 +95,7 @@ def list_nested_do() -> List<Int> {
 def list_guard_safebind_do() -> List<Int> {
   do::<List> {
     value <- [1, 2, 3]
-    guard::<List>(value > 1)
+    Alternative::guard::<List>(value > 1)
     result =? if(value == 2, Ok(value), Err(NoneError))
     traced = print("safe=#{result}")
     [result]
@@ -211,6 +211,19 @@ def probe_do(source: DoProbe<Int>) -> DoProbe<Int> {
 }
 
 test("do carrier integration") {
+  describe("guard") {
+    it("returns Unit in a successful Option") {
+      do {
+        assert_some_eq((), Alternative::guard::<Option>(True))
+      }
+    }
+    it("returns empty Option on rejection") {
+      do {
+        assert_none(Alternative::guard::<Option>(False))
+      }
+    }
+  }
+
   describe("standard carriers") {
     it("matches the Option pipeline") {
       do {
@@ -275,8 +288,8 @@ test("do carrier integration") {
 
     it("sequences bound List Unit values and skips blocked continuations") {
       do {
-        allowed: List<Unit> = guard::<List>(True)
-        blocked: List<Unit> = guard::<List>(False)
+        allowed: List<Unit> = Alternative::guard::<List>(True)
+        blocked: List<Unit> = Alternative::guard::<List>(False)
         accepted: List<Int> = list_bound_unit_do(allowed)
         rejected: List<Int> = list_blocked_unit_do(blocked)
         empty: List<Int> = []
@@ -387,7 +400,7 @@ test("do carrier integration") {
 
     it("keeps guard on ordinary OptionT Alternative semantics") {
       do {
-        blocked: OptionT<Result, Unit> = guard(False)
+        blocked: OptionT<Result, Unit> = Alternative::guard(False)
         actual <- OptionT::run(blocked)
 
         assert_none(actual)

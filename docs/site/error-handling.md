@@ -209,14 +209,14 @@ SafeBind は右辺の `Err(error)`、パターンの不一致、Extractor の失
 新しい Error で wrap すると、その新しい Error の構築位置を表示し、元 Error は cause に残ります。
 呼び出し経路はスタックトレースで確認できます。
 
-`do` 内では `MonadFail` があれば元の Error を保持し、なければ `Alternative::empty()` を使います。
+`do` 内では `MonadFail` があれば `MonadFail::fail(error)` で元の Error を保持し、なければ `Alternative::empty()` を使います。
 partial `<-` のパターン不一致も同じ規則です。どちらの能力もなければコンパイルエラーになります。
 常に一致するパターンの `<-` は `Monad` だけで利用できます。
 `do` の外で使う SafeBind は、その関数やクロージャ自身の返り型に `MonadFail` を要求します。
 
 `OptionT<Result, A>` のパターン不一致や SafeBind の失敗は `Ok(None)` になります。
 一方、`<-` の右辺にある base の `Err(error)` は bind がそのまま保持します。
-`guard` は常に `Alternative` の操作です。`guard(False)` も `OptionT` では `Ok(None)` になります。
+`guard` は常に `Alternative` の操作です。`Alternative::guard(False)` も `OptionT` では `Ok(None)` になります。
 
 ```surtr
 Option::Some(value) =? Option::Some(1) # value は Int

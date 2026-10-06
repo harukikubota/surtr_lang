@@ -85,7 +85,7 @@ SafeBind RHSだけからdo carrierをResultへ決定する規則もありませ�
 `MonadFail > Alternative > Monad`の順で決まります。Monadだけではfailure targetを提供できません。
 
 MonadFailを実装しないcarrierでは`Alternative`が必要で、failureのError/messageを破棄して
-そのcarrierの`empty`へ接続します。Optionなら`None`、Listなら空Listです。
+そのcarrierの`Alternative::empty`へ接続します。Optionなら`None`、Listなら空Listです。
 
 ```surtr
 absent: Option<Int> = do::<Option> {
@@ -122,7 +122,7 @@ OptionT::run(sequenced) # Ok(Option::Some(21))
 ```
 
 `OptionT`にはMonadFail実装がありません。do内のSafeBindとpartial `<-`の失敗は、
-baseによらずAlternativeの`empty`へ接続します。Result baseでは`Ok(None)`です。
+baseによらず`Alternative::empty`へ接続します。Result baseでは`Ok(None)`です。
 
 ```surtr
 checked: OptionT<Result, Int> = do::<OptionT<Result, _>> {
@@ -137,18 +137,18 @@ mismatch: OptionT<Result, Int> = do::<OptionT<Result, _>> {
 }
 OptionT::run(mismatch) # Ok(Option::None)
 
-blocked: OptionT<Result, Unit> = guard(False)
+blocked: OptionT<Result, Unit> = Alternative::guard(False)
 OptionT::run(blocked) # Ok(Option::None)
 ```
 
 `guard`は通常のAlternative関数で、MonadFailを参照しません。
-`guard::<List>(condition)`が返す`List<Unit>`も、そのまま途中の式としてsequenceできます。
+`Alternative::guard::<List>(condition)`が返す`List<Unit>`も、そのまま途中の式としてsequenceできます。
 `True`なら後続文へ進み、`False`ならその経路の後続文を評価せず空Listを返します。
 
 ```surtr
 selected: List<Int> = do::<List> {
   value <- [1, 2, 3]
-  guard::<List>(value > 1)
+  Alternative::guard::<List>(value > 1)
   [value]
 }
 selected # [2, 3]

@@ -1805,8 +1805,41 @@ impl Checker {
                         &deferred_self,
                     )?;
                     if let Some(body) = &method.body {
-                        let mut tyvars = HashMap::from([("Self".into(),deferred_self.clone())]);
-                        for (param, resolved) in method.value_parameters.iter().zip(params.iter()) {
+                        // Default bodies need an application witness for abstract
+                        // Self, just as generic constructor parameters do.
+                        let (body_self, slot_vars) = if trait_info.constructor_slots.is_empty() {
+                            (deferred_self.clone(), Vec::new())
+                        } else {
+                            let witness = self.env.fresh_tyvar();
+                            let Ty::Var(variable) = witness else { unreachable!() };
+                            self.register_tyvar_bound(variable, &trait_key);
+                            self.constructor_witness_traits.insert(variable, trait_key.clone());
+                            let mut application = vec![Ty::Hole, witness];
+                            let mut slots = Vec::new();
+                            for _ in &trait_info.constructor_slots {
+                                let slot = self.env.fresh_tyvar();
+                                let Ty::Var(variable) = slot else { unreachable!() };
+                                slots.push(variable);
+                                application.push(slot);
+                            }
+                            (Ty::SelfApp(application), slots)
+                        };
+                        let (body_params, body_ret) = if trait_info.constructor_slots.is_empty() {
+                            (params.clone(), ret_ty.clone())
+                        } else {
+                            let (body_params, body_ret, _, _, _) = self.resolve_trait_method_signature(
+                                &trait_info,
+                                method_info,
+                                &body_self,
+                            )?;
+                            let body_params = body_params.into_iter()
+                                .map(|ty| self.expand_trait_self_apps(ty, &body_self, &slot_vars))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let body_ret = self.expand_trait_self_apps(body_ret, &body_self, &slot_vars)?;
+                            (body_params, body_ret)
+                        };
+                        let mut tyvars = HashMap::from([("Self".into(), body_self)]);
+                        for (param, resolved) in method.value_parameters.iter().zip(body_params.iter()) {
                             self.collect_signature_ty_bindings(
                                 &param.ty,
                                 resolved,
@@ -1815,7 +1848,7 @@ impl Checker {
                         }
                         self.collect_signature_ty_bindings(
                             &method.ret_ty,
-                            &ret_ty,
+                            &body_ret,
                             &mut tyvars,
                         );
                         self.seed_missing_method_type_params(&method.type_params, &mut tyvars);
@@ -1826,7 +1859,7 @@ impl Checker {
                         let local_bindings = method
                             .value_parameters
                             .iter()
-                            .zip(params.iter())
+                            .zip(body_params.iter())
                             .map(|(param, ty)| (param.id.unique_id, ty.clone()))
                             .collect::<Vec<_>>();
                         let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
@@ -1837,7 +1870,7 @@ impl Checker {
                             &mut [],
                             tyvars.clone(),
                             rigid_tyvars.clone(),
-                            ret_ty.clone(),
+                            body_ret.clone(),
                             Self::ast_ty_span(method.ret_ty.syntax()),
                             method.id.name.clone(),
                             None,
@@ -1847,7 +1880,7 @@ impl Checker {
                         )?;
                         if let Some(concrete) = self.resolve_contextual_return_body(
                             &method.ret_ty,
-                            &ret_ty,
+                            &body_ret,
                             &typed_body,
                             &rigid_tyvars,
                         )? {

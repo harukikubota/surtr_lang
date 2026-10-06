@@ -23,18 +23,6 @@ def assert_string_decomposition(value: String) -> Result<()> {
 }
 
 test("Kernel") {
-  describe("guard") {
-    it("returns Unit in a successful Option") {
-      do {
-        assert_some_eq((), guard::<Option>(True))
-      }
-    }
-    it("returns empty Option on rejection") {
-      do {
-        assert_none(guard::<Option>(False))
-      }
-    }
-  }
   describe("require") {
     it("accepts true") {
       do {

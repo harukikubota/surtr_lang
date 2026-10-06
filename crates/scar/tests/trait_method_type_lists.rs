@@ -354,3 +354,22 @@ impl Make for Int { def make(self: Self) -> Alias<String> { {|value| []} } }
         Some("(Int -> List<Phantom<String>>)")
     );
 }
+
+#[test]
+fn constructor_default_methods_use_self_witness_and_independent_payloads() {
+    let declarations = r#"
+deftrait DefaultContext where Self: Applicative {
+  def unit::<Self>() -> Self<Unit> { Applicative::pure(()) }
+  def label::<Self>() -> Self<String> { Applicative::pure("label") }
+}
+impl DefaultContext for Option<$T> where $T: DefaultContext.$A {}
+"#;
+    check(&format!(
+        "{declarations}\ndef unit_probe() -> Option<Unit> {{ DefaultContext::unit() }}\ndef label_probe() -> Option<String> {{ DefaultContext::label() }}"
+    ))
+    .expect("default methods share Self identity without sharing their payload types");
+    check(&format!(
+        "{declarations}\ndef wrong_payload() -> Option<Int> {{ DefaultContext::unit() }}"
+    ))
+    .expect_err("the default method's Unit payload must not become Int");
+}

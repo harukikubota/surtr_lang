@@ -86,7 +86,7 @@ safe: FailureChoice<Int> = do::<FailureChoice> {
 report(safe)
 
 blocked: FailureChoice<Int> = do::<FailureChoice> {
-  guard::<FailureChoice>(False)
+  Alternative::guard::<FailureChoice>(False)
   print("unexpected guard continuation")
   FailureChoice::new(Ok(3))
 }
@@ -101,3 +101,18 @@ match Identity::run(ResultT::run(bound)) {
   Ok(_) => print("unexpected ResultT success"),
   Err(error) => print(Error::kind(error)),
 }
+
+# do resolves Alternative::empty without importing the trait helpers.
+partial_option: Option<Int> = do::<Option> {
+  2 <- Option::Some(1)
+  print("unexpected Option pattern continuation")
+  Option::Some(3)
+}
+print(inspect(partial_option))
+
+safe_option: Option<Int> = do::<Option> {
+  value =? source()
+  print("unexpected Option SafeBind continuation")
+  Option::Some(value)
+}
+print(inspect(safe_option))

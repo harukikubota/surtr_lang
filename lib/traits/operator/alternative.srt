@@ -12,6 +12,25 @@ where
   # selected explicitly or from the expected result type.
   def empty::<Self>() -> Self
 
+  @doc """
+  Construct Unit in this Alternative context when condition is True;
+  otherwise return the context's empty value. This operation always uses
+  Alternative, including when the carrier also implements MonadFail.
+
+  Use Alternative::guard without an import, or import Alternative::guard
+  to call it by its bare name. The carrier is selected by a ReturnTypeArgument
+  or inferred from the expected result type.
+
+  ## REPL
+  xldr(1)> Alternative::guard::<Option>(True)
+  Option::Some(())
+  xldr(2)> Alternative::guard::<List>(False)
+  []
+  """
+  def guard::<Self>(condition: Boolean) -> Self<Unit> {
+    if(condition, Applicative::pure(()), Alternative::empty())
+  }
+
   # Choose between two values in the same contextual family.
   def choose(left: Self<$A>, right: Self<$A>) -> Self<$A>
 }

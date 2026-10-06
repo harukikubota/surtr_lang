@@ -1,4 +1,4 @@
-option_value = guard::<Option>(True)
-list_value = guard::<List>(True)
+option_value = Alternative::guard::<Option>(True)
+list_value = Alternative::guard::<List>(True)
 print(inspect(option_value))
 print(inspect(list_value))

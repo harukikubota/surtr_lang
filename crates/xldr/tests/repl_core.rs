@@ -466,7 +466,7 @@ fn core_do_monad_fail_safebind_and_alternative_boundaries() {
     ] {
         assert_repl_pattern_mismatch(&mut engine, source);
     }
-    let blocked = engine.handle_line("blocked: OptionT<Result, Unit> = guard(False)");
+    let blocked = engine.handle_line("blocked: OptionT<Result, Unit> = Alternative::guard(False)");
     assert!(
         matches!(blocked.output, ReplOutput::EvalSuccess { .. }),
         "{}",

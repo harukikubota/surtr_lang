@@ -6549,12 +6549,12 @@ fn do_total_extract_allows_mapped_payload_changes() {
 
 fn do_sequences_unit_payloads() {
     for source in [
-        "f: (Unit -> List<Int>) = {|_| do::<List> { value <- [1, 2]; guard::<List>(value > 1); [value] }}",
-        "result: List<Int> = do::<List> { value <- [1, 2]; guard::<List>(value > 1); [value] }",
-        "result: List<Int> = do::<List> { guard::<List>(True); [1] }",
+        "f: (Unit -> List<Int>) = {|_| do::<List> { value <- [1, 2]; Alternative::guard::<List>(value > 1); [value] }}",
+        "result: List<Int> = do::<List> { value <- [1, 2]; Alternative::guard::<List>(value > 1); [value] }",
+        "result: List<Int> = do::<List> { Alternative::guard::<List>(True); [1] }",
         "source: List<Unit> = [()]; result: List<Int> = do::<List> { _ <- source; [1] }",
         "result: List<Int> = Monad::bind([()], {|_| [1]})",
-        "result: Option<Int> = do::<Option> { guard::<Option>(True); Option::Some(1) }",
+        "result: Option<Int> = do::<Option> { Alternative::guard::<Option>(True); Option::Some(1) }",
     ] {
         typecheck_with_rules(source, RuntimeSourcePolicy::script())
             .unwrap_or_else(|error| panic!("Unit payload must sequence: {source}: {error:?}"));
