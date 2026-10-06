@@ -1,4 +1,4 @@
-handler = {|err| eprint(err)}
+handler = {|err| print(Error::message(err))}
 value = match Err(NoneError) {
   Ok(_) => (),
   Err(err) => handler(err),

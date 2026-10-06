@@ -886,7 +886,7 @@ pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMet
         .map(|meta| meta.identity)
         .unwrap_or(TypeIdentity::Type);
     let facet_root_path = match type_name {
-        TypeName::Boolean => Some(FacetRootKind::TypeRoot),
+        TypeName::Boolean | TypeName::Error => Some(FacetRootKind::TypeRoot),
         TypeName::List => Some(FacetRootKind::List),
         TypeName::HashMap => Some(FacetRootKind::HashMap),
         _ => None,

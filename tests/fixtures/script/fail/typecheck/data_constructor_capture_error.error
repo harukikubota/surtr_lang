@@ -1,2 +1,2 @@
-phase: resolve
+phase: typecheck
 contains: constructor capture is forbidden

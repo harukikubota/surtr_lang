@@ -99,7 +99,6 @@ pub(super) fn typecheck_context_for_mode(mode: TestCompileMode) -> scar::Typeche
             TestCompileMode::Project => RuntimeSourcePolicy::project(),
         },
         enforce_builtin_type_contracts: true,
-        allow_error_function_params: false,
         allow_private_facet_inspection: false,
     }
 }
@@ -121,7 +120,6 @@ pub(super) fn std_typecheck_context_for_mode(mode: TestCompileMode) -> scar::Typ
             None,
         ),
         enforce_builtin_type_contracts: true,
-        allow_error_function_params: true,
         allow_private_facet_inspection: false,
     }
 }

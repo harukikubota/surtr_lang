@@ -65,8 +65,7 @@ Lazyキャプチャの型不一致では、通常のreasonを維持し、解決�
 同じplaceholderに通常値とLazyの要求が競合する場合は番号を分ける案内とし、両branchが未知の場合は具体的な期待関数型を与える案内とする。
 Pattern bindingを伴う成功branchにはDirectExpressionの契約を適用し、通常値をthunkで包む修正案を出さない。
 入れ子callの失敗を外側のLazyキャプチャへ付け替えず、由来が確定していない通常の関数値には通常の型診断を使う。
-error placeholderを持つ`require`、`ensure`、`Result::map_err`、`Result::cause`のcaptureにも既存のError受け渡し制約を適用する。
-通常callの拒否reasonは維持し、error式をcapture内に固定する修正案を示す。`(-> Error)`を通常引数として渡す修正で既存制約を迂回しない。
+error placeholder を持つ capture は、正規化後の `(-> Error)` を通常の callable として受け渡せる。Error の運搬を理由とする拒否診断は設けず、通常の引数型の不一致を報告する。
 裸の標準Lazy special formのcaptureはSigilで拒否し、引数を記述したcaptureへ案内する。Lazy markerを保持したbuiltin参照を通常の関数値として後段へ渡さない。
 
 Sigilはcanonical calleeの種類、直接placeholderの引数位置・span、通常Expr内での使用を生成parameterへ記録する。
@@ -100,7 +99,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `InvalidResultEffectAnnotation`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
+| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `InvalidResultEffectAnnotation`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
@@ -196,7 +195,7 @@ do専用の未採用JSON fieldを一般診断schemaへ混入させない。詳�
 - `assert_eq` の LHS/RHS term は比較対象の span を指すため label、失敗の説明は `help` に置く。
 - contextual type syntax では、`Trait<...>` を where RHS に置いた parser diagnostic、Trait-head / nominal binderへ constraint を併記した位置違反、通常型注釈などでの constructor application の位置違反、`Self::...` / `Type::...` の owner-path 違反を parser phase にする。TypeCtorTrait の call-site ReturnTypeArgument 内の完全・部分型applicationと`_`は合法な型入力として扱う。position rule は `notes`、bare constraint や許可された位置への書換えは `help` に置く。
 - `Enum<...>::Variant` は Spire で callable の `::<...>` と別の expression として保持する。owner が enum でない、variant が owner に属さない、owner 型引数 arity が一致しない場合は Sigil の resolve diagnostic とする。payload または expected type と明示型引数が一致しない場合は Scar の既存 type relation / argument diagnostic とする。
-- `Ok` / `Err` / `True` / `False` は通常 Enum の解決済み variant を診断 subject にする。再定義・shadowing は共有予約名規則で拒否する。`Err` の concrete Error 制約と通常 callable への Error 公開禁止は、解決済み variant metadata に基づいて検査する。
+- `Ok` / `Err` / `True` / `False` は通常 Enum の解決済み variant を診断 subject にする。再定義・shadowing は共有予約名規則で拒否する。`Err` の引数は Error 型として検査し、既存 Error の再格納も受理する。
 - constructor capture の禁止 policy は resolver の `ConstructorCaptureForbidden` reason とし、通常の `Capture` reason や表示 message の文字列判定へ fallback しない。constructor identity と source span は診断 producer が保持する。
 - bare または `_` を含む通常 enum constructor の型引数が Scar の finalization まで未確定なら `UnresolvedEnumConstructorTypeArgument` とする。`DiagnosticOrigin::EnumConstructor` と constructor span、未確定 ordinal、`Insufficient` constraint status を保持する。`Err` の失敗値が保持する未確定の成功 slot は多相性として許可する。constructor capture の callable signature は既存の具体化規則で検査する。
 - bare capability の未使用、fresh result witness の未確定、full obligation / pending dispatch の未解決は typecheck phase にする。position rule は `notes`、constraint の削除または必要な式の利用は `help` に置く。
@@ -289,7 +288,8 @@ cargo nextest run --workspace
 
 named `defextractor` の戻り型は `MatchResult<P>` を正規表記とし、`MatchResult<P, Error>` も受理する。ExtractorClosure の型注釈は `MatchResult<P>` のみを受理する。
 旧 Option / 通常 Result、第二型引数の非 abstract Error、一般の値位置、通常 Closure の
-返却・構築、abstract Error の手書き Err 再投入を静的拒否する。
+返却・構築を静的拒否する。`MatchResult::Err` の引数は Error 型で検査し、
+既存の Error も具象 constructor の生成値と同じ規則で受理する。
 Unit payload の子 Pattern は0または1であり、arity / annotation 不一致は型エラーとする。
 入力の末尾を照合対象、それ以前を事前引数として検査する。signature から引数領域を
 確定し、総 arity の不足・余剰を拒否してから、事前引数の型と payload の子 Pattern を

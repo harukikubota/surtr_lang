@@ -1191,24 +1191,24 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         tap_err_accepts_error_observer_captures_and_composition as fn(),
     ),
     (
-        "error_observer_binding_cannot_escape_as_plain_value",
-        error_observer_binding_cannot_escape_as_plain_value as fn(),
+        "error_observer_binding_can_escape_as_plain_value",
+        error_observer_binding_can_escape_as_plain_value as fn(),
     ),
     (
-        "error_observer_binding_cannot_be_called_directly",
-        error_observer_binding_cannot_be_called_directly as fn(),
+        "error_observer_binding_can_be_called_directly",
+        error_observer_binding_can_be_called_directly as fn(),
     ),
     (
-        "error_observer_binding_cannot_use_error_annotation",
-        error_observer_binding_cannot_use_error_annotation as fn(),
+        "error_observer_binding_can_use_error_annotation",
+        error_observer_binding_can_use_error_annotation as fn(),
     ),
     (
-        "error_observer_closure_param_cannot_use_error_annotation",
-        error_observer_closure_param_cannot_use_error_annotation as fn(),
+        "error_observer_closure_param_can_use_error_annotation",
+        error_observer_closure_param_can_use_error_annotation as fn(),
     ),
     (
-        "error_observer_binding_cannot_flow_through_generic_identity",
-        error_observer_binding_cannot_flow_through_generic_identity as fn(),
+        "error_observer_binding_can_flow_through_generic_identity",
+        error_observer_binding_can_flow_through_generic_identity as fn(),
     ),
     (
         "type_kinds_map_to_compile_space_identities",
@@ -11171,16 +11171,15 @@ named = Result::tap_err(Err(NoneError), &Error::kind >> &print)"#,
     assert!(!typed.is_empty());
 }
 
-fn error_observer_binding_cannot_escape_as_plain_value() {
+fn error_observer_binding_can_escape_as_plain_value() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
 escaped = handler"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding must not escape");
-    assert!(err.message.contains("Error observer closure cannot escape"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_be_called_directly() {
+fn error_observer_binding_can_be_called_directly() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
 value = match Err(NoneError) {
@@ -11188,43 +11187,32 @@ value = match Err(NoneError) {
   Err(err) => handler(err),
 }"#,
     );
-    let err =
-        typecheck(resolved).expect_err("Error observer binding must not be callable directly");
-    assert!(err
-        .message
-        .contains("Error observer closure can only be passed"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_use_error_annotation() {
+fn error_observer_binding_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler: (Error -> Unit) = {|err| eprint(err)}
 value = Result::tap_err(Err(NoneError), handler)"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding annotation must fail");
-    assert!(err
-        .message
-        .contains("Error cannot be used as a user-defined function parameter type"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_closure_param_cannot_use_error_annotation() {
+fn error_observer_closure_param_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err: Error| eprint(err)}
 value = Result::tap_err(Err(NoneError), handler)"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer closure param annotation must fail");
-    assert!(err
-        .message
-        .contains("Error cannot be used as a user-defined function parameter type"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_flow_through_generic_identity() {
+fn error_observer_binding_can_flow_through_generic_identity() {
     let resolved = resolve_with_builtin_prelude(
         r#"def id(value: $A) -> $A { value }
 handler = {|err| eprint(err)}
 value = Result::tap_err(Err(NoneError), id(handler))"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding must be a direct argument");
-    assert!(err.message.contains("Error observer closure cannot escape"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
@@ -11289,15 +11277,8 @@ bad: FixtureEither<_, Int> = FixtureEither::Left("term")"#,
     );
     assert!(!closure_payload.is_empty());
 
-    let abstract_error =
-        typecheck_with_rules("value = Option<Error>::None", RuntimeSourcePolicy::script())
-            .expect_err("abstract Error must remain unavailable as an ordinary enum type argument");
-    assert!(
-        abstract_error
-            .message
-            .contains("Error cannot be used as an enum constructor type argument"),
-        "{abstract_error:?}"
-    );
+    typecheck_with_rules("value = Option<Error>::None", RuntimeSourcePolicy::script())
+        .expect("Error is an ordinary enum type argument");
 
     let result_nodes = typecheck_with_rules(
         r#"ok: Result<Int> = Result<Int>::Ok(1)
@@ -11329,9 +11310,7 @@ err: Result<Int> = Result<Int>::Err(NoneError)"#,
         typecheck_with_rules("err = Result<Int>::Err(1)", RuntimeSourcePolicy::script())
             .expect_err("an explicit Result constructor must retain the concrete Error constraint");
     assert!(
-        invalid_err
-            .message
-            .contains("requires a concrete deferror value"),
+        invalid_err.message.contains("requires an Error value"),
         "{invalid_err:?}"
     );
 
@@ -11659,7 +11638,6 @@ fn match_result_extractor_rejects_ordinary_value_uses() {
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { f = {|x| MatchResult::Ok(x)}\n MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int, Int> { MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::Err(v) } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::Ok(v) } } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::Ok(v))\n MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::Ok(v), _), MatchResult::Ok(v), MatchResult::Ok(v)) } }",
     ] {

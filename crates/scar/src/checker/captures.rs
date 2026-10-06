@@ -14,6 +14,7 @@ impl Checker {
                     TypedFacetSegment::MapKey { key, .. } => children.push(key),
                     TypedFacetSegment::Field { .. }
                     | TypedFacetSegment::Tuple { .. }
+                    | TypedFacetSegment::ReadonlyBuiltin { .. }
                     | TypedFacetSegment::Variant { .. } => {}
                 }
             }

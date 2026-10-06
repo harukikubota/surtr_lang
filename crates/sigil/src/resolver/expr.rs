@@ -90,6 +90,7 @@ const INT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 11;
 const FLOAT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 12;
 const BOOLEAN_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 13;
 const FUNCTION_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 14;
+const ERROR_TYPE_ROOT_UID: u32 = u32::MAX - 15;
 
 fn ast_ty_owner_head(ty: &AstTy) -> Option<&str> {
     match ty {
@@ -143,6 +144,9 @@ fn synthetic_builtin_symbol_uid(name: &str, info: &SymbolIdentityInfo) -> Option
             Some(BOOLEAN_PRIMITIVE_ROOT_UID)
         }
         ("Function", None) if info.capabilities.module_owner => Some(FUNCTION_PRIMITIVE_ROOT_UID),
+        ("Error", Some(FacetRootKind::TypeRoot)) if info.capabilities.module_owner => {
+            Some(ERROR_TYPE_ROOT_UID)
+        }
         _ => None,
     }
 }
@@ -172,6 +176,7 @@ fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
             | FLOAT_PRIMITIVE_ROOT_UID
             | BOOLEAN_PRIMITIVE_ROOT_UID
             | FUNCTION_PRIMITIVE_ROOT_UID
+            | ERROR_TYPE_ROOT_UID
     )
 }
 

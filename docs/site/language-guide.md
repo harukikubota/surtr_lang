@@ -426,7 +426,7 @@ right: Either<Int, String> = Either<Int, _>::Right("value")
 
 型引数の個数は enum 宣言と一致させます。この構文は enum variant の値生成専用で、
 `Enum<...>::method`、struct constructor、型注釈中の `_` には広がりません。
-TypeConstructor trait や abstract `Error` など、通常の値型位置で禁止される型も明示できません。
+TypeConstructor trait など、通常の値型位置で禁止される型も明示できません。
 
 `Err(NoneError)` の成功型を固定したい場合は、`failed: Result<Int> = Err(NoneError)` のように
 型注釈を付けます。

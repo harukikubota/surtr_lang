@@ -42,9 +42,12 @@ fn special_enum_result_owner_arguments_constrain_payload_and_failure() {
 }
 
 #[test]
-fn special_enum_result_capture_keeps_error_private() {
+fn special_enum_result_capture_accepts_existing_errors() {
     for capture in ["&Err", "&Result<Int>::Err", "&Result<Int>::Err(&1)"] {
-        check(&format!("wrap = {capture}")).expect_err("ordinary callable cannot expose Error");
+        check(&format!(
+            "wrap: (Error -> Result<Int>) = {capture}\nvalue = wrap(NoneError)"
+        ))
+        .expect("ordinary callable transports Error");
     }
     check("deferror NumberError(value: Int) { \"number\" }\nwrap: (Int -> Result<Int>) = &Result<Int>::Err(NumberError(&1))\nvalue = wrap(2)").expect("fixed concrete Error expression is allowed");
 }

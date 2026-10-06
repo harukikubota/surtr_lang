@@ -227,6 +227,8 @@ pub enum ComparisonOperator {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedFacetSegment {
+    /// A public observation API, never a runtime representation field.
+    ReadonlyBuiltin { field_name: String, builtin_id: u16 },
     Field {
         field_name: String,
         /// Authored positional Record selector. Access still uses field_index.

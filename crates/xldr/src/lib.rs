@@ -813,7 +813,6 @@ fn build_stdlib_snapshot(
         SourceKind::StdDefinitionSource.policy(CompileUnitKind::DefinitionCheck, None),
     );
     typecheck_context.enforce_builtin_type_contracts = true;
-    typecheck_context.allow_error_function_params = true;
     let typed = scar_session
         .typecheck_staged_program_with_context(resolved, typecheck_context)
         .map_err(|e| LoadError::BootstrapFailed {

@@ -41,6 +41,8 @@ Error を破棄して empty を返す。この場合、伝播した Error の表
 
 呼出し経路はスタックトレースで追跡する。先頭 frame の位置で Error の生成位置を上書きしない。
 Error 名、message、carrier 名から位置を推測する経路は設けない。
+具象 deferror constructor の capture は通常の callable / closure 経路を使い、
+専用の生成位置や stack trace の補正を設けない。
 
 REPL も script と同じ契約を使う。入力単位の元ソースを保持し、後続入力から関数や Extractor を
 呼び出しても、Error を生成した入力内の行・列を表示する。複数行入力にも同じ規則を適用する。

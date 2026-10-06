@@ -120,7 +120,8 @@ extra invocation.
 A capture placeholder receives the normalized callable type, and `(&N)` means
 the same as `&N`. Write a complete call such as `&and(&1, &2)`; a bare capture
 of a standard Lazy special form such as `&and` is rejected.
-Existing Error placement restrictions remain in force for `Lazy<Error>`.
+A normalized `(-> Error)` callable follows the same storage and argument rules
+as other callable values; Error remains opaque.
 
 ## REPL
 xldr(1)> both = &and(&1, &2)

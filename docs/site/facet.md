@@ -474,6 +474,8 @@ normalized =? Facet::over(User.nickname, user, {|name|
 - owner の `impl User` 本体では `Facet::set(User.profile, self, next_profile)` のような property そのものの置換だけが許可されます
 - `@readonly defstruct Profile { ... }` は readonly root になり、`Facet::set(Profile.name, profile, ...)` のような mutable Facet operation を owner を含めて拒否します
 
+`Error.kind` と `Error.message` は常に読み取り専用です。`error.kind` / `error.message` の値アクセスも、標準の `Error::kind` / `Error::message` と同じ読み取りを使います。他の型の Error field を通る path や合成・capture 後の path でも、`set`、`over`、bulk update はコンパイルエラーになります。宣言元や標準コードにも更新権限はありません。具象 `deferror` 型名は path root に使えず、payload や cause、location は公開 field ではありません。
+
 ## private field path
 
 private field を path root にした `Facet` は、スコープ外では作れません。

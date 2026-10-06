@@ -371,9 +371,6 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 );
             }
         }
-        TypeDiagnosticReason::ErrorValueMustBeWrapped => {
-            return "Error values must be wrapped with Err(...)".into();
-        }
         TypeDiagnosticReason::FacetSafeBindForbidden => {
             return "Facet values cannot be bound with `=?`".into();
         }

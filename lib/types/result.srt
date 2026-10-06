@@ -105,9 +105,9 @@ impl Result {
 
   An error placeholder normalizes to `(-> Error)`. For `Result<Int>`,
   `&Result::map_err(&1, &2)` has the shape
-  `(Result<Int>, (-> Error) -> Result<Int>)`, but existing Error restrictions
-  prevent calling or forwarding that capture as an ordinary function value.
-  Fix the error expression inside the capture to expose only the Result input.
+  `(Result<Int>, (-> Error) -> Result<Int>)`. This capture can be stored,
+  called, or forwarded as an ordinary function value. Fixing the error
+  expression inside the capture exposes only the Result input.
 
   Use `cause(...)` when the previous error should remain in the chain.
   ## REPL
@@ -131,9 +131,9 @@ impl Result {
 
   An error placeholder normalizes to `(-> Error)`. For `Result<Int>`,
   `&Result::cause(&1, &2)` has the shape
-  `(Result<Int>, (-> Error) -> Result<Int>)`, which existing Error restrictions
-  prevent using as an ordinary function value. Fix the error expression inside
-  the capture instead. Unlike `map_err`, the new error keeps the old error in
+  `(Result<Int>, (-> Error) -> Result<Int>)` and is an ordinary function value.
+  The error expression can also be fixed inside the capture.
+  Unlike `map_err`, the new error keeps the old error in
   its cause chain; the expression still runs only for `Err`.
 
   This keeps `Error` runtime-managed and opaque while still allowing domain layering.

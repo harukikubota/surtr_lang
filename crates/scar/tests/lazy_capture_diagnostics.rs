@@ -193,35 +193,21 @@ fn ordinary_functions_inner_errors_and_direct_expression_do_not_get_lazy_help() 
 }
 
 #[test]
-fn error_lazy_capture_explains_existing_transport_restriction() {
-    for (source, function) in [
-        ("f = &require(&1, &2)\nf(True, 1)", "require"),
-        ("f = &ensure(1, &1, &2)\nf({|x| True}, 1)", "ensure"),
-        ("f = &Result::map_err(Ok(1), &1)\nf(1)", "Result::map_err"),
-        ("f = &Result::cause(Ok(1), &1)\nf(1)", "Result::cause"),
+fn error_lazy_capture_uses_ordinary_callable_argument_rules() {
+    for source in [
+        "f = &require(&1, &2)\nf(True, 1)",
+        "f = &Result::map_err(Ok(1), &1)\nf(1)",
+        "f = &Result::cause(Ok(1), &1)\nf(1)",
     ] {
         let error = error(source);
         assert_eq!(
-            error.message,
-            "Error observer closure can only be passed to Error-observation APIs"
+            error.reason(),
+            Some(TypeDiagnosticReason::ArgumentTypeMismatch)
         );
-        assert_eq!(error.reason(), None);
-        let hint = error.hint.as_deref().expect("Error capture guide");
-        assert!(
-            hint.contains(function)
-                && hint.contains("(-> Error)")
-                && hint.contains("signature")
-                && hint.contains("inside the capture"),
-            "{hint}"
-        );
-        assert!(!hint.contains("{ ||"), "{hint}");
     }
-    let error = error("f: (Boolean, (-> Error) -> Result<Unit>) = &require(&1, &2)");
-    assert!(
-        error
-            .hint
-            .as_deref()
-            .is_some_and(|hint| hint.contains("require") && hint.contains("inside the capture")),
-        "{error:?}"
-    );
+    support::typecheck_with_rules(
+        "f: (Boolean, (-> Error) -> Result<Unit>) = &require(&1, &2)\nf(True, {|| NoneError()})",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Error-producing closures are ordinary values");
 }

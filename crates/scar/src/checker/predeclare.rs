@@ -4663,14 +4663,6 @@ impl Checker {
                                 param_ty,
                                 &direct_constructor_inputs,
                             );
-                            if !self.allow_error_function_params
-                                && !Self::allows_std_error_function_param_exception(id)
-                                && Self::ty_exposes_error_value(&param_ty)
-                            {
-                                return Err(self.error_function_param_not_allowed_error(
-                                    Self::ast_ty_span(&param.ty),
-                                ));
-                            }
                             Ok(param_ty)
                         })
                         .collect::<Result<Vec<_>, _>>()?;

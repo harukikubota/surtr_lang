@@ -136,7 +136,7 @@ do::<Carrier> {
 - `defenum` で定義する
 - 値生成は `Enum::Variant(...)` または `Enum<TypeArgument, ...>::Variant(...)`
 - 後者の型引数 arity は enum 宣言と一致させる。各 `_` はその位置だけを payload と expected type から推論し、明示した通常型・scope 内型変数は固定する
-- 通常の型引数位置ではTypeConstructor traitやabstract `Error`を使えない。nominal declaration parameterがTypeCtorTrait constraintを持つ位置だけは、対応する具象constructorのbare headを指定できる。call-site ReturnTypeArgumentでは完全・部分型applicationと`_`もcarrier入力として指定できる
+- 通常の型引数位置ではTypeConstructor traitを使えない。nominal declaration parameterがTypeCtorTrait constraintを持つ位置だけは、対応する具象constructorのbare headを指定できる。call-site ReturnTypeArgumentでは完全・部分型applicationと`_`もcarrier入力として指定できる
 - `Ok(...)` / `Err(...)` は通常 Enum の variant として解決し、Result の型制約と runtime 表現を適用する。成功型を固定したい場合は `failed: Result<Int> = Err(NoneError)` のように型注釈を付ける
 - `Enum<...>::method`、struct constructor、型注釈・signature・pattern・impl target の `_` にはこの規則を適用しない
 - `match` は網羅必須
@@ -211,7 +211,9 @@ variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使�
 - `deferror` で定義した具体 error がここへ流れ込む
 - `Error` 自体をユーザーが直接具体化する前提ではない
 - source で `Error` が見えても、runtime 実体は常に具体 `deferror`
-- user-defined parameter / return / local annotation に `Error` は持ち出さない
+- 引数、戻り値、型注釈、field、container、closure で通常値として運べる
+- `kind` / `message` だけを readonly field と Facet として読める
+- `Error(...)` / `&Error`、payload 分解、Error 自体への Trait impl は拒否する
 
 ## 3. リテラル
 

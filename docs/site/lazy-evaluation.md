@@ -123,7 +123,7 @@ Lazyキャプチャの型不一致には、元の標準関数に応じた説明�
 案内のシグネチャと引数番号には、プレースホルダの並べ替えと正規化後の型が反映されます。
 
 `and`・`or`などでは0引数関数を渡す例、同じ番号の要求型が衝突する場合は番号を分ける例、両branchが未知の場合は具体的な期待関数型を与える例を示します。
-Error系は既存のError制約に従い、error式をキャプチャ内へ固定する案内になります。
+Error を返す遅延引数も、通常の0引数関数として受け渡せます。
 通常の型判定や評価規則は変わりません。入れ子の別callで起きたエラーや、Lazyキャプチャ由来と確定できない関数値には、通常の型診断を使います。
 
 ## Pattern bindingと成功branch
@@ -250,9 +250,7 @@ bindingを作るPatternの成功branchは、`if_let`と同じく成功scopeに�
 
 flagが `False` の場合だけerrorを実行して `Err` を返します。`True` なら `Ok(())` を返します。
 errorのプレースホルダの正規化型は `(-> Error)` です。
-ただし、`&require(&1, &2)` が要求する `(Boolean, (-> Error) -> Result<Unit>)` は、Errorを通常の関数引数へ公開します。
-既存のError制約により、この生成関数を通常の関数値として呼び出したり受け渡したりすることはできません。
-キャプチャではerror式を固定してください。
+`&require(&1, &2)` は `(Boolean, (-> Error) -> Result<Unit>)` として使えます。error 式を固定したキャプチャも作れます。
 
 ```surtr
 require(True, NoneError) # Ok(())
@@ -264,7 +262,7 @@ check(True) # Ok(())
 ### `ensure`
 
 valueを一回評価してpredicateへ渡し、成功なら `Ok(value)` を返します。失敗時だけerrorを実行して `Err` を返します。
-predicateは通常の1引数関数です。errorのプレースホルダの正規化型は `(-> Error)` ですが、Errorを公開する通常の関数型としては使えません。
+predicateは通常の1引数関数です。errorのプレースホルダの正規化型は `(-> Error)` です。
 error式を固定すると、入力データだけを受け取る関数を作れます。
 
 ```surtr
@@ -276,8 +274,7 @@ positive(3) # Ok(3)
 ### `Result::map_err`
 
 `Err`の場合だけerrorを実行して新しいerrorへ置き換え、以前のcauseを保持しません。`Ok`はそのまま返します。
-errorのプレースホルダの正規化型は `(-> Error)` ですが、Errorを通常の関数引数へ公開する制約は解除されません。
-error式を固定してキャプチャします。
+errorのプレースホルダの正規化型は `(-> Error)` です。error式を固定したキャプチャも作れます。
 
 ```surtr
 Result::map_err(Ok(1), EmptyList) # Ok(1)
@@ -288,7 +285,7 @@ replace_error(Ok(1)) # Ok(1)
 ### `Result::cause`
 
 `Err`の場合だけerrorを実行し、新しいerrorのcauseに以前のerrorを追加します。`Ok`はそのまま返します。
-errorのプレースホルダの正規化型は `(-> Error)` です。`map_err`と同じく、通常の関数値として呼び出すキャプチャではerror式を固定します。
+errorのプレースホルダの正規化型は `(-> Error)` です。`map_err`と同じく、error を返す関数を渡すか、error 式を固定できます。
 
 ```surtr
 Result::cause(Ok(1), EmptyList) # Ok(1)
@@ -297,7 +294,7 @@ add_cause(Ok(1)) # Ok(1)
 ```
 
 errorを受け取る各関数でも、通常の呼び出しでerror式を括弧で囲むと、判定前に一度評価します。
-Errorの保持・受け渡しに関する既存の制約は、Lazyの正規化後も適用されます。
+Error は通常の値として保持・受け渡しできます。遅延引数であることによって Error の情報は変わりません。
 
 ## `recover_kind`のErrorKind
 

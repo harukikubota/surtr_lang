@@ -5136,7 +5136,8 @@ fn facet_segment_label(segment: &TypedFacetSegment) -> String {
             origin_index: Some(index),
             ..
         } => format!("_{index}"),
-        TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+        TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+        | TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
         TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
         TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
         TypedFacetSegment::ListIndex { display, .. }
@@ -5221,6 +5222,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
             for segment in &path.segments {
                 let label = facet_segment_label(segment);
                 let focus_ty = match segment {
+                    TypedFacetSegment::ReadonlyBuiltin { .. } => Ty::Str,
                     TypedFacetSegment::Field { .. } | TypedFacetSegment::Tuple { .. } => {
                         match &current_source {
                             Ty::Tuple(items) => match segment {
@@ -5300,6 +5302,9 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     _ => prefix.push_str(&label),
                 }
                 let (kind, fallible, reason, policy) = match segment {
+                    TypedFacetSegment::ReadonlyBuiltin { .. } => {
+                        ("observation", false, "builtin observation", "readonly")
+                    }
                     TypedFacetSegment::Field {
                         readonly,
                         private,
@@ -5464,10 +5469,13 @@ fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
         apis.push("preview: unavailable (concrete update slots)".to_string());
     }
     let readonly_boundary = path.source_readonly_root
-        || path
-            .segments
-            .iter()
-            .any(|segment| matches!(segment, TypedFacetSegment::Field { readonly: true, .. }));
+        || path.segments.iter().any(|segment| {
+            matches!(
+                segment,
+                TypedFacetSegment::ReadonlyBuiltin { .. }
+                    | TypedFacetSegment::Field { readonly: true, .. }
+            )
+        });
     if path.is_infallible_structural() && !readonly_boundary {
         apis.push("put: available when replacement B derives T".to_string());
     }
@@ -8852,6 +8860,12 @@ impl Codegen {
         }
 
         match &path.segments[segment_idx] {
+            TypedFacetSegment::ReadonlyBuiltin { .. } => {
+                return Err(CodegenError {
+                    message: "Readonly Facet update reached code generation".into(),
+                    span: span.clone(),
+                })
+            }
             TypedFacetSegment::Field {
                 field_index,
                 container_field_count,
@@ -9309,6 +9323,11 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         for (segment_idx, segment) in path.segments.iter().enumerate() {
             match segment {
+                TypedFacetSegment::ReadonlyBuiltin { builtin_id, .. } => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit_trait_builtin(sindr::signature::BuiltinId(*builtin_id), 1, span)?;
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
                 TypedFacetSegment::Field { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetField {
@@ -9474,7 +9493,8 @@ impl Codegen {
                 origin_index: Some(index),
                 ..
             } => format!("._{index}"),
-            TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
+            TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+            | TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
             TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
             TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
             TypedFacetSegment::ListIndex { display, .. }

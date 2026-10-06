@@ -813,14 +813,14 @@ match ret {
     assert_eq!(stderr, vec!["Error: MyE: hoge"]);
 }
 
-fn deferror_rejects_raw_error_binding() {
-    assert_compile_error(
+fn deferror_accepts_raw_error_binding() {
+    assert_output(
         r#"deferror PageNotFound(html: String) {
   "Page Not Found. #{html}"
 }
-
-bad = PageNotFound("404")"#,
-        "Error values must be wrapped with Err(...)",
+error = PageNotFound("404")
+print(error.message)"#,
+        &["Page Not Found. 404"],
     );
 }
 
@@ -1122,8 +1122,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             match_err_eprint_with_wildcard_arm as fn(),
         ),
         (
-            "deferror_rejects_raw_error_binding",
-            deferror_rejects_raw_error_binding as fn(),
+            "deferror_accepts_raw_error_binding",
+            deferror_accepts_raw_error_binding as fn(),
         ),
         (
             "result_ok_case_prints_value",

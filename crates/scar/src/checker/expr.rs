@@ -34,10 +34,7 @@ enum OrderedCallArgument<'a> {
 
 #[derive(Clone, Copy)]
 enum CallArgumentMode {
-    User {
-        allow_error_observer: bool,
-        defer_constructor_conflicts: bool,
-    },
+    User { defer_constructor_conflicts: bool },
     Positional,
 }
 
@@ -1396,11 +1393,6 @@ impl Checker {
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
-                    if self.error_observer_bindings.contains(&id.unique_id)
-                        && self.allow_error_observer_value_use == 0
-                    {
-                        return Err(self.error_observer_escape_error(span));
-                    }
                     if matches!(ty, Ty::Facet(..)) {
                         if let Some(path) = self.facet_bindings.get(&id.unique_id).cloned() {
                             return Ok(match path {
@@ -1557,11 +1549,6 @@ impl Checker {
                 let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    if Self::ty_exposes_error_value(&expected) {
-                        return Err(self.lazy_error_transport_error(self.error_function_param_not_allowed_error(
-                            Self::ast_ty_span(ast_ty),
-                        ), rhs));
-                    }
                     let relation = ExpectedTypeRelation::annotation(Self::ast_ty_span(ast_ty));
                     let mut typed_rhs = self.check_node_with_expected_relation(
                         rhs,
@@ -1611,19 +1598,6 @@ impl Checker {
                 } else {
                     None
                 };
-                if matches!(typed_rhs.ty, Ty::Error) {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::ErrorValueMustBeWrapped,
-                        diagnostics::TypePolicy::ErrorValuePlacement,
-                        Some("Error".into()),
-                        None,
-                        Some(&typed_rhs.ty),
-                        None,
-                        None,
-                        &typed_rhs.span,
-                        None,
-                    ));
-                }
                 let inherited_constructor_provenance =
                     self.constructor_capability_for_node(&typed_rhs);
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
@@ -2048,7 +2022,6 @@ impl Checker {
             args,
             span,
             Some(&callable_hint),
-            false,
         )?;
         let substitution =
             match self.complete_call_constraint_set(&mut constraints, &typed_args, span, None) {
@@ -7905,7 +7878,6 @@ impl Checker {
         params: &[Ty],
         args: &[ResolvedRecordLitArg],
         callable_hint: Option<&str>,
-        allow_error_observer_args: bool,
         defer_constructor_conflicts: bool,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let has_named = args
@@ -8028,7 +8000,6 @@ impl Checker {
                 &ordered,
                 callable_hint,
                 CallArgumentMode::User {
-                    allow_error_observer: allow_error_observer_args,
                     defer_constructor_conflicts,
                 },
             );
@@ -8070,7 +8041,6 @@ impl Checker {
             &ordered,
             callable_hint,
             CallArgumentMode::User {
-                allow_error_observer: allow_error_observer_args,
                 defer_constructor_conflicts,
             },
         )
@@ -8409,7 +8379,6 @@ impl Checker {
     ) -> Result<(TypedNode, bool), TypeError> {
         Ok(match mode {
             CallArgumentMode::User {
-                allow_error_observer,
                 defer_constructor_conflicts,
             } => {
                 let defer = defer_constructor_conflicts
@@ -8417,11 +8386,7 @@ impl Checker {
                 let typed = if defer {
                     self.check_node(expr)?
                 } else {
-                    self.check_argument_node_with_error_observer_context(
-                        expr,
-                        expected_ty,
-                        allow_error_observer,
-                    )?
+                    self.check_node_with_expected(expr, Some(expected_ty))?
                 };
                 self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
                 self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
@@ -8502,50 +8467,6 @@ impl Checker {
             .is_some_and(|identity| identity != resolved)
     }
 
-    fn typed_callee_allows_error_observer_arg(&self, typed_func: &TypedNode) -> bool {
-        let TypedInner::Var(id) = &typed_func.node else {
-            return false;
-        };
-        matches!(
-            Self::surface_qualified_name(id.qualified_name.as_deref()),
-            Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
-        )
-    }
-
-    fn check_argument_node_with_error_observer_context(
-        &mut self,
-        expr: &Resolved,
-        expected_ty: &Ty,
-        allow_error_observer_args: bool,
-    ) -> Result<TypedNode, TypeError> {
-        let allow = allow_error_observer_args
-            && Self::ty_is_error_observer_callable(&self.resolve_ty(expected_ty));
-        let allow_restricted_binding =
-            allow && self.resolved_is_error_observer_binding_reference(expr);
-        if allow_restricted_binding {
-            self.allow_error_observer_value_use =
-                self.allow_error_observer_value_use.saturating_add(1);
-        }
-        let result = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
-            self.check_node(expr)
-        } else {
-            self.check_node_with_expected(expr, Some(expected_ty))
-        };
-        if allow_restricted_binding {
-            self.allow_error_observer_value_use =
-                self.allow_error_observer_value_use.saturating_sub(1);
-        }
-        result
-    }
-
-    fn resolved_is_error_observer_binding_reference(&self, expr: &Resolved) -> bool {
-        match expr {
-            Resolved::Var(_, id) => self.error_observer_bindings.contains(&id.unique_id),
-            Resolved::Grouped(_, inner) => self.resolved_is_error_observer_binding_reference(inner),
-            _ => false,
-        }
-    }
-
     fn facet_intrinsic_kind(&self, func: &Resolved) -> Option<&'static str> {
         let Resolved::Var(_, id) = func else {
             return None;
@@ -8573,7 +8494,8 @@ impl Checker {
                 origin_index: Some(index),
                 ..
             } => format!("_{index}"),
-            TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+            TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+            | TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
             TypedFacetSegment::ListIndex { index, display, .. } => {
@@ -10628,6 +10550,12 @@ impl Checker {
         for (index, segment) in path.segments.iter().enumerate() {
             let is_final = index + 1 == path.segments.len();
             match segment {
+                TypedFacetSegment::ReadonlyBuiltin { field_name, .. } => {
+                    return Err(TypeError::new(
+                        format!("{facet_name} cannot update readonly Error.{field_name}"),
+                        span.clone(),
+                    ));
+                }
                 TypedFacetSegment::Field {
                     field_name,
                     container_type_name,
@@ -10885,13 +10813,6 @@ impl Checker {
             );
         }
 
-        if let Resolved::Var(call_span, id) = func {
-            if self.error_observer_bindings.contains(&id.unique_id) {
-                return Err(self
-                    .lazy_error_transport_error(self.error_observer_call_error(call_span), func));
-            }
-        }
-
         let result = (|| {
             let explicit_type_arguments = Self::explicit_type_args(func);
             let call_target = match func {
@@ -11011,7 +10932,6 @@ impl Checker {
                                 args,
                                 span,
                                 callable_hint.as_deref(),
-                                false,
                             )?
                         } else {
                             self.typecheck_positional_call_args(
@@ -11207,8 +11127,6 @@ impl Checker {
                                 explicit_type_arguments.as_deref(),
                             )?;
                         }
-                        let allow_error_observer_args =
-                            self.typed_callee_allows_error_observer_arg(&typed_func);
                         let typed_args = if let Some(signature) = application_constraints
                             .as_ref()
                             .map(|constraints| &constraints.signature)
@@ -11239,7 +11157,6 @@ impl Checker {
                                 args,
                                 span,
                                 callable_hint.as_deref(),
-                                allow_error_observer_args,
                             )?
                         } else {
                             self.typecheck_user_function_args(
@@ -11249,7 +11166,6 @@ impl Checker {
                                 params,
                                 args,
                                 callable_hint.as_deref(),
-                                allow_error_observer_args,
                                 false,
                             )?
                         };
@@ -11359,7 +11275,6 @@ impl Checker {
         args: &[ResolvedRecordLitArg],
         span: &Span,
         callable_hint: Option<&str>,
-        allow_error_observer_args: bool,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let params = signature
             .value_parameters
@@ -11373,7 +11288,6 @@ impl Checker {
             &params,
             args,
             callable_hint,
-            allow_error_observer_args,
             true,
         )?;
 
@@ -12481,11 +12395,6 @@ impl Checker {
                 let param_ty = if let Some(ast_ty) = &param.ty {
                     let annotated =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    if Self::ty_exposes_error_value(&annotated) {
-                        return Err(
-                            self.error_function_param_not_allowed_error(Self::ast_ty_span(ast_ty))
-                        );
-                    }
                     self.assert_type_relation(
                         param_ty,
                         &annotated,
@@ -12812,17 +12721,7 @@ impl Checker {
                                 hint: None,
                             });
                         }
-                        crate::env::TypeKind::ConcreteError => {
-                            return Err(TypeError {
-                                structured: None,
-                                message: format!(
-                                    "constructor capture is forbidden for `{}`",
-                                    id.name
-                                ),
-                                span: span.clone(),
-                                hint: None,
-                            });
-                        }
+                        crate::env::TypeKind::ConcreteError => def.fields.len(),
                     };
                     (
                         Resolved::ConstructorCall(span.clone(), id.clone(), Vec::new()),
@@ -15040,6 +14939,22 @@ impl Checker {
             });
         }
         match self.resolve_ty(source_ty) {
+            Ty::Error if matches!(field.as_str(), "kind" | "message") => {
+                let builtin_id =
+                    sindr::builtin::builtin_meta_for_decl(field, Some(&format!("Error::{field}")))
+                        .map(|meta| meta.runtime_id())
+                        .ok_or_else(|| {
+                            TypeError::new("Missing Error observation builtin", span.clone())
+                        })?;
+                Ok((
+                    TypedFacetSegment::ReadonlyBuiltin {
+                        field_name: field.clone(),
+                        builtin_id,
+                    },
+                    Ty::Str,
+                    false,
+                ))
+            }
             Ty::Tuple(items) => {
                 let index = field
                     .strip_prefix('_')
@@ -15456,6 +15371,7 @@ impl Checker {
             Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.as_str(),
             Ty::Bool => "Boolean",
             Ty::Result(_, _) => "Result",
+            Ty::Error => "Error",
             _ => return false,
         };
         Self::canonical_user_type_name(authored_owner)
@@ -15495,8 +15411,19 @@ impl Checker {
                 (expected_source_ty, Some(focus.as_ref().clone()))
             }
             _ => {
-                let typed_root = self.check_node(expr)?;
-                (self.resolve_ty(&typed_root.ty), None)
+                if let Resolved::Var(_, id) = expr {
+                    if sindr::names::builtin_type_name(Self::surface_name(
+                        id.qualified_name.as_deref().unwrap_or(&id.name),
+                    )) == Some(sindr::names::TypeName::Error)
+                    {
+                        (Ty::Error, None)
+                    } else {
+                        let typed_root = self.check_node(expr)?;
+                        (self.resolve_ty(&typed_root.ty), None)
+                    }
+                } else {
+                    unreachable!("type-root Facet paths are resolved variables")
+                }
             }
         };
         let (segment, focus_ty, may_fail) =
@@ -16134,6 +16061,29 @@ mod tests {
             focus_readonly_root,
             focus_type_name: focus_type_name.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn error_observation_facet_has_no_owner_update_exception() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker.current_impl_struct_target = Some("Error".into());
+        let path = TypedFacetPath {
+            source_ty: Ty::Error,
+            focus_ty: Ty::Str,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![TypedFacetSegment::ReadonlyBuiltin {
+                field_name: "message".into(),
+                builtin_id: sindr::builtin::builtin_id_by_name("message").unwrap(),
+            }],
+        };
+        let error = checker
+            .check_mutating_facet_path_permissions("Facet::set", &path, &test_span())
+            .expect_err("Error observations remain readonly in the owner scope");
+        assert!(error.message.contains("readonly Error.message"));
     }
 
     #[test]

@@ -300,8 +300,8 @@ defmod Kernel {
   Parenthesizing the error expression evaluates it once before the condition
   is checked. An error placeholder normalizes to `(-> Error)`, giving
   `&require(&1, &2)` the shape `(Boolean, (-> Error) -> Result<Unit>)`.
-  Existing Error restrictions prevent calling or forwarding that capture as
-  an ordinary function value. Fix the error expression inside the capture:
+  That capture is an ordinary function value; pass a zero-argument Error
+  callable for the placeholder. The error may also be fixed in the capture:
   `&require(&1, NoneError())` has type `(Boolean -> Result<Unit>)`.
 
   Ordinary expression form stays available:
@@ -327,9 +327,8 @@ defmod Kernel {
   The error branch is evaluated only when validation fails. Call sites may
   construct a fresh `deferror` or forward an existing `Error` value.
   A captured error placeholder normalizes to `(-> Error)`; the predicate
-  remains an ordinary unary callable. Existing Error restrictions prevent
-  exposing that thunk as an ordinary function parameter. Fix the error
-  expression instead: for an `Int` input,
+  remains an ordinary unary callable. Both callables can be stored and passed
+  as ordinary arguments. The error expression can also be fixed: for an `Int` input,
   `&ensure(&1, {|n| n > 0}, NoneError())` has type `(Int -> Result<Int>)`.
 
   The predicate must be a unary callable value such as a capture or closure:

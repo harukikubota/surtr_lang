@@ -486,18 +486,6 @@ impl Checker {
         }
     }
 
-    pub(super) fn error_function_param_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            structured: None,
-            message: "Error cannot be used as a user-defined function parameter type".into(),
-            span: span.clone(),
-            hint: Some(
-                "Keep Error inside Err(...), and inspect it only from an Err(...) match arm."
-                    .into(),
-            ),
-        }
-    }
-
     fn lazy_type_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             structured: None,
@@ -508,87 +496,6 @@ impl Checker {
                     .into(),
             ),
         }
-    }
-
-    pub(super) fn ty_exposes_error_value(ty: &Ty) -> bool {
-        match ty {
-            Ty::Error => true,
-            Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
-            Ty::List(inner)
-            | Ty::MatchResult(inner)
-            | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::ty_exposes_error_value(inner),
-            Ty::Facet(_, source, focus, update_source, update_focus) => {
-                Self::ty_exposes_error_value(source)
-                    || Self::ty_exposes_error_value(focus)
-                    || Self::ty_exposes_error_value(update_source)
-                    || Self::ty_exposes_error_value(update_focus)
-            }
-            Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
-                items.iter().any(Self::ty_exposes_error_value)
-            }
-            Ty::Func(params, ret) => {
-                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
-            }
-            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
-                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
-            }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                nominal.arguments.iter().any(Self::ty_exposes_error_value)
-                    || nominal
-                        .iter()
-                        .any(|(_, field_ty)| Self::ty_exposes_error_value(field_ty))
-            }
-            Ty::Int
-            | Ty::Float
-            | Ty::Str
-            | Ty::Bool
-            | Ty::Unit
-            | Ty::Hole
-            | Ty::Var(_)
-            | Ty::Pid(_) => false,
-        }
-    }
-
-    pub(super) fn ty_is_error_observer_callable(ty: &Ty) -> bool {
-        match ty {
-            Ty::Func(params, ret)
-            | Ty::BuiltinFunc { params, ret, .. }
-            | Ty::UserFunc { params, ret, .. } => {
-                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
-            }
-            _ => false,
-        }
-    }
-
-    pub(super) fn error_observer_escape_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            structured: None,
-            message: "Error observer closure cannot escape its Error-observation call".into(),
-            span: span.clone(),
-            hint: Some(
-                "Pass the closure directly to Result::tap_err or another Error-observation API; do not store, return, or rebind it."
-                    .into(),
-            ),
-        }
-    }
-
-    pub(super) fn error_observer_call_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            structured: None,
-            message: "Error observer closure can only be passed to Error-observation APIs".into(),
-            span: span.clone(),
-            hint: Some(
-                "Use Result::tap_err(value, handler) instead of calling handler directly.".into(),
-            ),
-        }
-    }
-
-    pub(super) fn allows_std_error_function_param_exception(id: &ResolvedId) -> bool {
-        matches!(
-            Self::surface_qualified_name(id.qualified_name.as_deref()),
-            Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
-        )
     }
 
     pub(super) fn ensure_no_match_result_value(

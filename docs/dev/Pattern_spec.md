@@ -58,7 +58,7 @@ defenum MatchResult<$Value> {
 - `Result` / `Option` と暗黙変換しない。variant 名や tag の類似を根拠に互換扱いしない。
 - constructor は常に `MatchResult::Ok` / `MatchResult::Err` とする。
 
-手書きの `MatchResult::Err(...)` の引数は具象 `deferror` 値に限定する。抽象 Error の直接構築、観測済み abstract Error の手書き constructor への再投入、裸の Error 値の一般保持、String 等の任意値による代用は許可しない。SafeBind の compiler-owned な伝播では取得済みの Error をそのまま保持する。consumer が既存 Error を保持する内部経路と、利用者の明示 constructor の入力制約を区別する。
+`MatchResult::Err(...)` の引数は Error 型で検査する。具象 constructor の生成値と既存の Error を同じ規則で受理し、元の情報を保持する。抽象 Error の直接構築や String 等による代用は拒否する。MatchResult 自体の専用型位置と protocol は維持する。
 
 Error の kind / message / location / cause は既存 Error / RichError 契約に従う。定義側が返した Error を compiler が共通 PatternMismatch で上書きしたり、Extractor 名や型名から message を再構成したりしない。builtin Extractor も同じ契約を持つ。空の list / string に対する `uncons` の Error は標準定義 / builtin の契約が選び、Forge の名前判定に置かない。
 

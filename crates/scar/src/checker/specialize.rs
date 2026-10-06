@@ -5093,6 +5093,7 @@ impl Checker {
             }
             TypedFacetSegment::Field { .. }
             | TypedFacetSegment::Tuple { .. }
+            | TypedFacetSegment::ReadonlyBuiltin { .. }
             | TypedFacetSegment::Variant { .. } => false,
         }
     }

@@ -96,7 +96,6 @@ mod process_boundary_policy_tests {
             ExitCodePolicy::EntryOnly
         );
         assert!(!context.enforce_builtin_type_contracts);
-        assert!(!context.allow_error_function_params);
     }
 }
 
@@ -780,7 +779,6 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
 pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
-    pub allow_error_function_params: bool,
     /// REPL `:facet` inspects structurally valid paths even when a private
     /// segment is not consumable from the current source scope.
     pub allow_private_facet_inspection: bool,
@@ -791,7 +789,6 @@ impl Default for TypecheckContext {
         Self {
             runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
-            allow_error_function_params: false,
             allow_private_facet_inspection: false,
         }
     }
@@ -802,7 +799,6 @@ impl TypecheckContext {
         Self {
             runtime_policy: policy.runtime_policy,
             enforce_builtin_type_contracts: false,
-            allow_error_function_params: false,
             allow_private_facet_inspection: false,
         }
     }
@@ -1262,7 +1258,6 @@ struct PersistentCheckerState {
     consts: HashMap<u32, ConstMeta>,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
-    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     /// Canonical signature registry shared by ordinary and builtin callables.
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
@@ -1289,7 +1284,6 @@ impl PersistentCheckerState {
             consts: HashMap::new(),
             facet_bindings: HashMap::new(),
             lazy_capture_bindings: HashMap::new(),
-            error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
             callable_signatures: HashMap::new(),
             impl_method_uids: HashMap::new(),
@@ -1315,7 +1309,6 @@ impl PersistentCheckerState {
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
-            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
@@ -1344,7 +1337,6 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             consts: checkpoint.consts,
             facet_bindings: checkpoint.facet_bindings,
             lazy_capture_bindings: checkpoint.lazy_capture_bindings,
-            error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
             callable_signatures: checkpoint.callable_signatures,
             impl_method_uids: checkpoint.impl_method_uids,
@@ -1373,7 +1365,6 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     #[serde(default)]
-    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     #[serde(default)]
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
@@ -1878,6 +1869,7 @@ impl ScarSession {
                 }
                 TypedFacetSegment::Field { .. }
                 | TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::ReadonlyBuiltin { .. }
                 | TypedFacetSegment::Variant { .. } => {}
             }
         }
@@ -2806,7 +2798,6 @@ struct Checker {
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
-    error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
@@ -2840,9 +2831,7 @@ struct Checker {
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
-    allow_error_function_params: bool,
     allow_private_facet_inspection: bool,
-    allow_error_observer_value_use: usize,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     facet_path_kind_decls: HashMap<String, Vec<String>>,
     traits: HashMap<String, TraitInfo>,
@@ -2971,7 +2960,6 @@ impl Checker {
             facet_bindings: state.facet_bindings,
             lazy_capture_bindings: state.lazy_capture_bindings,
             active_lazy_capture: None,
-            error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
             callable_signatures: state.callable_signatures,
@@ -2992,9 +2980,7 @@ impl Checker {
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
-            allow_error_function_params: context.allow_error_function_params,
             allow_private_facet_inspection: context.allow_private_facet_inspection,
-            allow_error_observer_value_use: 0,
             seen_builtin_type_decls: HashMap::new(),
             facet_path_kind_decls: HashMap::new(),
             traits: state.traits,
@@ -3021,7 +3007,6 @@ impl Checker {
             TypecheckContext {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
-                allow_error_function_params: self.allow_error_function_params,
                 allow_private_facet_inspection: self.allow_private_facet_inspection,
             },
         );
@@ -3037,7 +3022,6 @@ impl Checker {
         checker.safe_operator_results = self.safe_operator_results.clone();
         checker.lazy_capture_bindings = self.lazy_capture_bindings.clone();
         checker.active_lazy_capture = self.active_lazy_capture.clone();
-        checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
         checker.active_capabilities = self.active_capabilities.clone();
@@ -4157,7 +4141,6 @@ impl Checker {
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
-            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
@@ -4183,7 +4166,6 @@ impl Checker {
             consts: self.consts,
             facet_bindings: self.facet_bindings,
             lazy_capture_bindings: self.lazy_capture_bindings,
-            error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
             callable_signatures: self.callable_signatures,
             impl_method_uids: self.impl_method_uids,

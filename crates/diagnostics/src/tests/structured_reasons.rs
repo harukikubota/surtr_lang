@@ -244,14 +244,6 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: None,
             entrypoint: None,
         }),
-        ErrorValueMustBeWrapped => DiagnosticData::Policy(PolicyData {
-            policy: TypePolicy::ErrorValuePlacement,
-            subject: Some("error value".into()),
-            expected_type: Some("Result::Err(error)".into()),
-            actual_type: Some("Error".into()),
-            stage: None,
-            entrypoint: None,
-        }),
         FacetSafeBindForbidden => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::SafeBindFacet,
             subject: Some("facet path".into()),
@@ -455,7 +447,6 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         NonExhaustiveMatch,
         SafeBindErrorTypeMismatch,
         SafeBindRequiresResultTarget,
-        ErrorValueMustBeWrapped,
         FacetSafeBindForbidden,
         FacetPatternBindingForbidden,
         FacetOperationPolicyViolation,

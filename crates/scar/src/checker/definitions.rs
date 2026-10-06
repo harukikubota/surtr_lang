@@ -1487,14 +1487,6 @@ impl Checker {
                     hint: None,
                 });
             }
-            if !self.allow_error_function_params
-                && !Self::allows_std_error_function_param_exception(id)
-                && Self::ty_exposes_error_value(&param_ty)
-            {
-                return Err(
-                    self.error_function_param_not_allowed_error(Self::ast_ty_span(&param.ty))
-                );
-            }
             if self.ty_contains_facet(&param_ty) {
                 return Err(TypeError {
                     structured: None,
@@ -3270,9 +3262,9 @@ impl Checker {
                 let payload = match variant.short_name.as_str() {
                     "Ok" => inner.ty.clone(),
                     "Err" => {
-                        if !self.is_concrete_error_value(&inner) {
+                        if !self.types_compatible(&inner.ty, &Ty::Error) {
                             return Err(TypeError::new(
-                                "MatchResult::Err requires a concrete deferror value",
+                                "MatchResult::Err requires an Error value",
                                 inner.span.clone(),
                             ));
                         }
@@ -3383,10 +3375,10 @@ impl Checker {
                     if !matches!(inner.ty, Ty::Error) {
                         return Err(TypeError {
                             structured: None,
-                            message: "Err(...) requires a concrete deferror value.".into(),
+                            message: "Err(...) requires an Error value.".into(),
                             span: inner.span.clone(),
                             hint: Some(
-                                "Use a deferror-defined value in Err(...), not a plain value."
+                                "Use an existing Error or a deferror constructor in Err(...)."
                                     .into(),
                             ),
                         });
@@ -3494,7 +3486,6 @@ impl Checker {
                         params,
                         args,
                         Some(callable_hint.as_str()),
-                        false,
                         false,
                     )?;
                     return Ok(TypedNode {
@@ -3832,19 +3823,6 @@ impl Checker {
                     Ok(self.env.fresh_tyvar())
                 } else {
                     let ty = self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
-                    if Self::ty_exposes_error_value(&ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message:
-                                "Error cannot be used as an enum constructor type argument"
-                                    .into(),
-                            span: Self::ast_ty_span(ast_ty).clone(),
-                            hint: Some(
-                                "Keep Error inside Result<..., Error>; enum constructor type arguments describe ordinary values."
-                                    .into(),
-                            ),
-                        });
-                    }
                     Ok(ty)
                 }
             })

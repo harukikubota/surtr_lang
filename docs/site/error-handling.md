@@ -29,34 +29,20 @@ ret: Result<Int> = Err(InvalidPort(0))
 
 このとき `Err(...)` の中に入っている実値は `InvalidPort(0)` であり、`Error(...)` のような別の concrete value が存在するわけではありません。
 
-あわせて、`Error` は user-owned な一般データ型としては使えません。
-
-- ユーザー定義関数の引数型に `Error` は書けない
-- ユーザー定義関数の戻り値型に `Error` は書けない
-- 変数や field の型注釈に `Error` は書けない
-- `Error` が生きられるのは `Err(...)` の内側、`match` の `Err(err)` で取り出したスコープ、標準定義ソース内の `Error` を受ける helper の中だけ
-
-つまり、ユーザーコードが `Error` を保存したり運び回ったりするのではなく、具象 error を `Result` の失敗枝として流し、その観測だけを抽象 `Error` 越しに行うのが Surtr の流儀です。
+`Error` は内部表現を公開しない通常値です。引数、戻り値、型注釈、field、container、closure に保存して渡せます。`Err(err)` で取り出した Error もスコープの外へ返せます。
 
 ```surtr
-def parse_port(text: String) -> Result<Int> {
-  value: Int =? try_to::<Int>(text)
-  if(value > 0, Ok(value), Err(InvalidPort(value)))
-}
+deferror InvalidPort(port: Int) { "invalid port" }
+def relay(error: Error) -> Error { error }
+error: Error = relay(InvalidPort(0))
+errors: List<Error> = [error]
+saved: Result<Error> = Ok(error)
 ```
 
-上は「失敗したらその地点で抜ける」コードですが、例外を投げているわけではありません。  
-概念的には次の `match` に近い動きです。
+`Ok(error)` は成功です。`value =? Ok(error)` は Error を束縛して続行します。
+抽象 `Error` の直接構築、具象 error の payload 分解、Error 自体への Trait impl はできません。
 
-```surtr
-def parse_port(text: String) -> Result<Int> {
-  parsed = try_to::<Int>(text)
-  match parsed {
-    Ok(value) => if(value > 0, Ok(value), Err(InvalidPort(value))),
-    _ => parsed,
-  }
-}
-```
+`error.kind` と `error.message` は、それぞれ `Error::kind(error)` と `Error::message(error)` と同じ文字列を返します。`Error.kind` と `Error.message` は読み取り専用の Facet path です。他の型の Error field を経由する `Failure.error.message` も読み取り専用で、`set`・`over`・bulk update は使えません。cause や location などの内部 field は公開しません。
 
 ## Result の variant と型推論
 
@@ -71,7 +57,7 @@ wrap: (Int -> Result<Int>) = &Ok
 
 成功型は payload と期待型から推論できます。`value: Result<Int> = Ok("text")` は型不一致で拒否されます。
 `err = Err(NoneError)` のような失敗値は成功型の多相性を保持します。
-Error の制約は capture でも変わりません。詳細は [constructor capture](./capture-operator.md#result-と-boolean) を参照してください。
+具象 error constructor と `Err` は通常の capture を使えます。詳細は [constructor capture](./capture-operator.md#result-と-boolean) を参照してください。
 
 ## `Result` が標準、`Option` は別コンテナ
 
