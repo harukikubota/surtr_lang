@@ -380,6 +380,9 @@ impl Checker {
             }
         }
         let recurse = |child: &TypedNode| self.unresolved_executable_constructor_application(child);
+        if let Some(found) = node.monad_fail_call().and_then(recurse) {
+            return Some(found);
+        }
         match &node.node {
             TypedInner::TraitCall {
                 receiver_ty, args, ..
@@ -465,8 +468,6 @@ impl Checker {
             } => recurse(source).or_else(|| recurse(update_fun)),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -813,6 +814,12 @@ impl Checker {
         {
             return Some(pending);
         }
+        if let Some(found) = node
+            .monad_fail_call()
+            .and_then(|call| self.find_typed_node(call, inspect))
+        {
+            return Some(found);
+        }
         match &node.node {
             TypedInner::TraitCall { args, .. } => args
                 .iter()
@@ -925,8 +932,6 @@ impl Checker {
                 .or_else(|| self.find_typed_node(update_fun, inspect)),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -944,6 +949,9 @@ impl Checker {
 
     pub(super) fn full_trait_obligations(node: &TypedNode) -> Vec<TraitObligation> {
         fn collect(node: &TypedNode, obligations: &mut Vec<TraitObligation>) {
+            if let Some(call) = node.monad_fail_call() {
+                collect(call, obligations);
+            }
             for expr in Checker::pattern_expression_nodes(node) {
                 collect(expr, obligations);
             }
@@ -1090,6 +1098,21 @@ impl Checker {
         for expr in Self::pattern_expression_nodes_mut(node) {
             self.concretize_pending_trait_calls_in_place(expr)?;
         }
+        match &mut node.node {
+            TypedInner::SafeBind(
+                _,
+                _,
+                _,
+                SafeBindFailureTarget::EnclosingMonadFail(target)
+                | SafeBindFailureTarget::DoMonadFail(target),
+            ) => self.concretize_pending_trait_calls_in_place(&mut target.call)?,
+            TypedInner::DoSafeBind(control) => {
+                if let SafeBindFailureTarget::DoMonadFail(target) = &mut control.failure_target {
+                    self.concretize_pending_trait_calls_in_place(&mut target.call)?;
+                }
+            }
+            _ => {}
+        }
         node.ty = self.resolve_ty(&node.ty);
         match &mut node.node {
             TypedInner::TraitCall {
@@ -1118,14 +1141,6 @@ impl Checker {
                     args,
                     dispatch,
                 )?;
-            }
-            TypedInner::DeferredDoFailure(deferred) => {
-                deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
-                deferred.propagated_error_tys = deferred
-                    .propagated_error_tys
-                    .iter()
-                    .map(|ty| self.resolve_ty(ty))
-                    .collect();
             }
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)
@@ -3486,57 +3501,17 @@ impl Checker {
             let (_, err_tag) = self.match_result_variant_tags(span)?;
             SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
         } else if let Some(ret_ty) = self.function_return_ty.clone() {
-            let target = match self.resolve_result_effect(&ret_ty) {
-                ResultEffectResolution::Preserve(target) => target,
-                ResultEffectResolution::Unavailable | ResultEffectResolution::Deferred => {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::SafeBindRequiresResultTarget,
-                        diagnostics::TypePolicy::SafeBindRequiresResultTarget,
-                        Some("=?".into()),
-                        None,
-                        Some(&ret_ty),
-                        None,
-                        None,
-                        span,
-                        None,
-                    ));
-                }
-                ResultEffectResolution::InvalidMetadata(subject) => {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::TypecheckInvariantViolation,
-                        diagnostics::TypePolicy::ProducerContract,
-                        Some(subject.into()),
-                        None,
-                        Some(&ret_ty),
-                        None,
-                        None,
-                        span,
-                        None,
-                    ));
-                }
-            };
-
             self.collect_pattern_result_error_types(
                 &checked.typed_pattern,
                 &mut checked.propagated_error_tys,
             );
-
-            for propagated in checked.propagated_error_tys {
-                if !self.types_compatible(&target.error_ty, &propagated) {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::SafeBindErrorTypeMismatch,
-                        diagnostics::TypePolicy::SafeBindFailureTarget,
-                        Some("=?".into()),
-                        Some(&target.error_ty),
-                        Some(&propagated),
-                        None,
-                        None,
-                        &checked.typed_rhs.span,
-                        None,
-                    ));
-                }
-            }
-            SafeBindFailureTarget::EnclosingResultContext(Box::new(target))
+            self.resolve_pattern_failure_target(
+                &ret_ty,
+                &checked.propagated_error_tys,
+                span,
+                None,
+                false,
+            )?
         } else {
             SafeBindFailureTarget::TopLevel
         };
@@ -3688,7 +3663,25 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if Self::can_use_expected_callable_context(node) {
             let expected = self.expected_callable_ty(contract);
-            self.check_node_with_expected(node, Some(&expected))
+            let typed = self.check_node_with_expected(node, Some(&expected))?;
+            // Connect contextual output variables to the checked callable before
+            // its pending method calls are finalized by the enclosing expression.
+            // Input compatibility remains the composition operator's obligation.
+            if let Some(output) = &contract.ret {
+                let (_, actual_output) =
+                    self.unary_function_parts(&typed.ty, op_name, &typed.span)?;
+                self.assert_value_type_relation(
+                    output,
+                    &actual_output,
+                    self.type_fact(SourceRole::Expected, &typed.span, output),
+                    self.type_fact(SourceRole::Value, &typed.span, &actual_output),
+                    TypeDiagnosticReason::ReturnTypeMismatch,
+                    DiagnosticOrigin::Return,
+                    op_name,
+                    0,
+                )?;
+            }
+            Ok(typed)
         } else {
             self.check_operator_compose_callable(node, op_name)
         }
@@ -5547,6 +5540,22 @@ impl Checker {
             }
         }
 
+        // Return-only inputs cannot be inferred from value arguments. Report
+        // that missing context before dispatch so branch checking can supply its
+        // expected result through the ordinary ReturnTypeArgument protocol.
+        if explicit_type_args.is_none()
+            && expected_ret_ty.is_none()
+            && explicit_slots.iter().any(|slot| {
+                let mut variables = Vec::new();
+                Self::collect_ty_vars(&self.resolve_ty(slot), &mut variables);
+                variables
+                    .iter()
+                    .any(|variable| !self.rigid_tyvars.contains(variable))
+            })
+        {
+            return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+        }
+
         let declared_param_tys = param_tys.clone();
         let mut constructor_receiver_index = None;
         let mut prepared_args = vec![None; args.len()];
@@ -6046,6 +6055,10 @@ impl Checker {
                 };
                 let typed = self
                     .with_callback_parameter_provenance(expr, &inputs, |checker| {
+                        if checker.trait_parameter_is_lazy(call.trait_name, call.method_name, index)
+                        {
+                            return checker.check_trait_lazy_argument(expr, expected, call.span);
+                        }
                         checker.check_invocation_argument(
                             expr,
                             expected,
@@ -6904,6 +6917,95 @@ impl Checker {
                 ordinal,
             )
         }
+    }
+
+    fn trait_parameter_is_lazy(&self, trait_name: &str, method_name: &str, index: usize) -> bool {
+        self.traits
+            .get(trait_name)
+            .filter(|declaration| declaration.standard_lazy_contract)
+            .and_then(|declaration| declaration.methods.get(method_name))
+            .and_then(|method| method.value_parameters.get(index))
+            .is_some_and(|parameter| Self::lazy_parameter_inner(parameter.ty.syntax()).is_some())
+    }
+
+    /// Trait bodies receive the same normalized shell as special forms, but
+    /// consume it themselves. Hoist an explicit eager boundary before creating it.
+    fn check_trait_lazy_argument(
+        &mut self,
+        expression: &Resolved,
+        expected: &Ty,
+        span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        let Ty::Func(parameters, result) = self.resolve_ty(expected) else {
+            return Err(TypeError::new(
+                "Invalid normalized Lazy parameter contract",
+                span.clone(),
+            ));
+        };
+        if !parameters.is_empty() {
+            return Err(TypeError::new(
+                "Lazy parameter requires a zero-argument callable",
+                span.clone(),
+            ));
+        }
+        if matches!(expression, Resolved::Grouped(..)) && !Self::is_lazy_placeholder(expression) {
+            if let Some(reference) = sigil::collect_resolved_closure_captures(expression, &[])
+                .into_iter()
+                .find(|id| id.compiler_generated && id.name.starts_with("__cap_"))
+            {
+                return Err(TypeError::new(
+                    "capture placeholder is not available in a Lazy eager expression",
+                    reference.span,
+                ));
+            }
+        }
+        let mut input = self.check_lazy_input(expression, Some(&result), span)?;
+        let mut eager_binding = None;
+        let mut outer_ids = self
+            .env
+            .vars
+            .iter()
+            .filter_map(|(id, ty)| {
+                (!matches!(ty, Ty::UserFunc { .. } | Ty::BuiltinFunc { .. })
+                    && !self.env.type_constructor_ids.contains(id))
+                .then_some(*id)
+            })
+            .collect::<HashSet<_>>();
+        if let TypedInner::EagerBoundary(inner) = &input.node.node {
+            let id = ResolvedId {
+                name: "__lazy_eager".into(),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            };
+            outer_ids.insert(id.unique_id);
+            eager_binding = Some(TypedNode {
+                ty: Ty::Unit,
+                span: input.node.span.clone(),
+                node: TypedInner::Bind(
+                    TypedPattern::Var(inner.ty.clone(), id.clone()),
+                    inner.clone(),
+                ),
+            });
+            input.node.node = TypedInner::Var(id);
+        }
+        let body = self.normalize_lazy_single(input, &result, span)?;
+        let captures = Self::finalized_closure_captures(&body, &outer_ids);
+        let closure = TypedNode {
+            ty: Ty::Func(vec![], Box::new(body.ty.clone())),
+            span: span.clone(),
+            node: TypedInner::Closure(vec![], captures, Box::new(body)),
+        };
+        Ok(match eager_binding {
+            Some(binding) => TypedNode {
+                ty: closure.ty.clone(),
+                span: span.clone(),
+                node: TypedInner::Block(vec![binding, closure]),
+            },
+            None => closure,
+        })
     }
 
     fn check_invocation_argument(
@@ -12820,7 +12922,19 @@ impl Checker {
             }
         }
 
-        if self.trait_method_ref(target).is_some() {
+        if let Some((_, trait_name, method_name)) = self.trait_method_ref(target) {
+            let declaration = &self.traits[&trait_name];
+            if declaration.standard_lazy_contract
+                && declaration.methods[&method_name]
+                    .value_parameters
+                    .iter()
+                    .any(|parameter| Self::lazy_parameter_inner(parameter.ty.syntax()).is_some())
+            {
+                return Err(TypeError::new(
+                    format!("{trait_name}::{method_name} has Lazy arguments and cannot be captured without explicit arguments"),
+                    span.clone(),
+                ));
+            }
             let Some(expected_ty) = expected else {
                 if let Resolved::Var(_, id) = target {
                     return Err(self.policy_error(
@@ -13789,7 +13903,7 @@ impl Checker {
         })
     }
 
-    fn next_synthetic_range_uid() -> u32 {
+    pub(super) fn next_synthetic_range_uid() -> u32 {
         SYNTHETIC_RANGE_UID.fetch_add(1, Ordering::Relaxed)
     }
 
@@ -15856,6 +15970,7 @@ mod tests {
             test_span(),
             sindr::intrinsic::IntrinsicId::Do,
             sigil::resolved::ResolvedDoContract {
+                monad_fail_trait: None,
                 monad_trait: None,
                 alternative_trait: None,
             },

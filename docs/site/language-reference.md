@@ -86,10 +86,8 @@ impl Show for Int {
 }
 ```
 
-`@result_effect` は `Monad` と `MonadT<$M>` を実装する `defstruct` にだけ指定できる
-compiler-owned annotationです。対象は単一のpublic fieldを持ち、そのfieldの最外
-constructorが`MonadT`のcaptured base `$M`と一致しなければなりません。具体化された
-baseがcanonical `Result`へ直接一致する場合だけResult effectを提供します。
+失敗を Error として保持する型は `MonadFail` を実装します。`Result`、`Either<Error, A>`、
+`ResultT` などが標準で対応します。構造体の field の形から失敗処理を推測する規則はありません。
 
 ### 制御構造
 
@@ -469,8 +467,8 @@ Option::Some(saved) =? Option::Some(1)
 - Result 以外の RHS は値と型を変えず、constructor / literal / list / string / Extractor などの partial patternが値全体を明示検査するときだけ受理する
 - total pattern + non-Result RHS は、非MonadとResult以外のMonadを区別したSafeBind compile errorにする
 - 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
-- `do` 外の通常関数・Closureでは、enclosing callableがcanonical `Result`または有効なResult-effect carrierを返す必要がある。Extractor・ExtractorClosure本文では、その本文自身の `MatchResult::Err` へ元Errorを保持して返す
-- `do` 内では、do-local carrierのResult effectを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
+- `do` 外の通常関数・Closureでは、enclosing callableが`MonadFail` を実装した型を返す必要がある。Extractor・ExtractorClosure本文では、その本文自身の `MatchResult::Err` へ元Errorを保持して返す
+- `do` 内では、do-local carrierのMonadFailを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
 - Extractor の `MatchResult::Err` は元 Error を保持する。一般の不一致は `PatternMismatch`、list/string 等の構造 pattern 固有 Error は維持する
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
@@ -492,9 +490,9 @@ result: Option<Int> = do::<Option> {
 
 - total patternの`<-`は`Monad`だけを要求する
 - literal、constructor、list/string、Extractor等のpartial patternを使う`<-`はfailure matcherになる
-- failure targetは`Result effect > Alternative > Monad`の順で選び、`Monad`単独ではfailure targetを提供しない
+- failure targetは`MonadFail > Alternative > Monad`の順で選び、`Monad`単独ではfailure targetを提供しない
 - SafeBind `=?` もdo-local failure targetを使うが、RHSだけからdo carrierを推論しない
-- `guard`は通常の`Alternative`関数であり、Result effectを参照しない
+- `guard`は通常の`Alternative`関数であり、MonadFailを参照しない
 - base Monad値をTransformerへ暗黙liftせず、`MonadT::lift`を明示する
 - nested `do` はそれぞれ自身のcarrierだけでfailure targetを決める
 

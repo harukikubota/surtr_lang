@@ -99,7 +99,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `InvalidResultEffectAnnotation`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
+| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
@@ -144,18 +144,15 @@ canonical Monad proofが成立すれば`SafeBindTotalPatternNonResultMonadRhs`�
 既存structured failureをこの二reasonへ畳み込まない。どちらのheadlineもcanonical Resultだけが
 外側一段の自動分解対象であることを本文に含め、変換APIのhelpは生成しない。
 
-SafeBind/failureMatcher の ResultContext は `ResultEffect > Alternative > Monad` の順で解決する。
-canonical `Result` または検証済み `@result_effect` carrier は既存 Error を保持し、Result effect がない場合だけ
-`Alternative::empty` へ置換する。`Monad` 単独は sequencing capability であり failure target ではない。
-failureMatcher/partial `<-` は Result effect があれば Error を保持し、なければ `Alternative::empty`、どちらもなければ
-capability error とする。total `<-` は Monad のみを要求し、`guard` は Result effect を参照しない通常の Alternative
-call として扱う。annotation、carrier、policy が未確定な場合は `Deferred` を保持し、候補数や登録順で
-Result/Alternativeを選ばない。
+Pattern failure の処理先は通常 callable では `MonadFail`、do では `MonadFail > Alternative` の順で解決する。
+MonadFail は元の Error を通常の `fail(error)` 呼出しへ渡す。Alternative は `empty()` に置き換える。
+Monad 単独は失敗を構築しない。total `<-` は Monad だけを要求し、guard は常に Alternative の通常呼出しとする。
+返り型が未確定の通常 closure は外側の能力を借りず拒否する。do の未確定 carrier は Deferred obligation として
+保持し、候補数や登録順で選ばない。generic の能力は宣言した bound に限る。
 
-`InvalidResultEffectAnnotation` は annotation span を primary とし、sole field、visibility、canonical Monad / MonadT
-impl、captured base relation のうち失敗根拠となる宣言 span を related fact として保持する。必要 metadata の
-欠落を annotation 無視や `Alternative` route への切り替えで隠さない。SafeBind/failureMatcher では元の `=?`、
-pattern、RHS、return/do result span と Error の kind、message、location、cause を、Result-preserving target まで保持する。
+必要 metadata の欠落や不正、曖昧な dispatch を Alternative への切替えで隠さない。
+SafeBind / partial `<-` は元の operator、pattern、RHS、return / do result span と Error の
+kind、message、location、cause を保持する。失敗処理先の Trait 呼出しで Error を再生成しない。
 
 constructor-context経路の`CandidateFailureData`は候補ごとの型と失敗detailを保持する。通常のTrait候補選択は
 閉じた`CandidateRejection`からrelated factsとsummary noteを構築する。どちらも候補の失敗をtyped dataとして保持し、
@@ -223,7 +220,7 @@ list の長さや空入力など構造自体の不一致は、失敗した構造
 入れ子の失敗を親 Pattern、alias、SafeBind の RHS、外側の呼出し位置へ置き換えない。
 関数、named Extractor、ExtractorClosure による区別は設けない。
 
-`Err` / `MatchResult::Err` への格納、SafeBind、および Result-effect context の partial `<-` は、
+`Err` / `MatchResult::Err` への格納、SafeBind、および MonadFail context の partial `<-` は、
 元 Error の kind / message / location / cause を保持する。新しい Error で wrap した場合は、
 新しい Error の構築位置を主キャプションとし、元 Error の位置は cause に保持する。
 呼出し経路は stack trace で追跡し、stack trace の先頭で生成位置を上書きしない。
@@ -325,7 +322,7 @@ local head は選ばれた lexical identity の型を検査し、named Extractor
 文末 `?` 自体の型は Unit とする。Result を返す関数やクロージャの末尾に置いた場合は、
 必要な Result と Unit の不一致を通常の型診断で報告する。
 構文段階の末尾禁止や専用のエラー経路は設けず、暗黙の `Ok(())` も挿入しない。
-途中の Unit が受理される位置では、既存の ResultContext の制約に従って使用できる。
+途中の Unit が受理される位置では、最も近い callable / do の失敗処理能力の制約に従って使用できる。
 
 ## Boolean 関数名の suffix
 

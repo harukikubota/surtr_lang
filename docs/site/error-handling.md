@@ -152,17 +152,16 @@ def check_value(value: Int) -> Result<()> {
 `Ok(Err(error))` は外側が Ok なので、内側の値を捨てて次へ進みます。
 内側の Err も検査する場合は、`=?` で内側の Result を取り出して検査してください。
 
-`do` の外で `?` を使う関数やクロージャは、Result または Result-effect に対応した型を返す必要があります。
+`do` の外で `?` を使う関数やクロージャは、`MonadFail` を実装した型を返す必要があります。
 クロージャの場合も、そのクロージャ自身の返り型が型注釈や呼び出し先の引数型から決まっている必要があります。
 `do` の中で失敗した場合は、その `do` の処理を止めます。詳しくは [Monad の逐次処理](./do.md)を参照してください。
 [テストを書く](./test.md)では、複数のアサーションを並べる例を紹介しています。
 
 ## `=?` SafeBind と早期リターン
 
-`=?` は「`Ok` を取り出し、`Err` ならその場で返す」ための束縛です。通常は
-canonical `Result` を返す関数で使いますが、`@result_effect` が有効な
-Result-effect carrier を返す関数でも使えます。その場合は `Err(error)` を
-carrier の最終 failure として保持します。
+`=?` は右辺の `Result` から成功値を取り出し、失敗時はその場で返す束縛です。
+関数やクロージャの返り型には `MonadFail` が必要です。`Result`、`Either<Error, A>`、
+`ResultT` などが対応しており、失敗時は元の Error を `MonadFail::fail` に渡します。
 
 ```surtr
 def parse_and_increment(text: String) -> Result<Int> {
@@ -196,13 +195,12 @@ def load_pair(a: String, b: String) -> Result<Int> {
 SafeBind が自動分解する RHS は canonical `Result` の外側一段だけです。Result 以外の値は、
 partial pattern が値全体を明示的に検査するときだけ利用できます。
 
-RHS の自動分解と failure target の選択は別の規則です。`OptionT<Result, A>` の
-ような Result-effect carrier でも、RHS が `OptionT` なら payload を暗黙に取り出し
-ません。SafeBind が外側一段を自動分解するのは canonical `Result` だけです。
+右辺からの取り出しと、失敗を返す型は別の規則です。たとえば `ResultT` を返す関数でも、
+右辺の `ResultT` を暗黙に取り出すことはありません。`run` で明示的に取り出します。
 
-Result-effect carrier の SafeBind では、RHS の `Err(error)`、pattern failure、
-Extractor の `MatchResult::Err(error)` が保持する元 Error を
-`inner: Err(error)` として保持します。
+SafeBind は右辺の `Err(error)`、パターンの不一致、Extractor の失敗を返り先へ渡します。
+`ResultT<Result, A>` では内側に Error を保持するため、`run` の結果は `Ok(Err(error))` です。
+`Error` 自体は通常値なので、`value =? Ok(error)` は Error を value に束縛して続行します。
 
 エラー表示の主キャプションは、Error を生成した位置を指します。明示的に Error を作った場合は
 その構築式、パターンの不一致は失敗した子パターンを表示します。list の長さなど構造自体が
@@ -211,17 +209,14 @@ Extractor の `MatchResult::Err(error)` が保持する元 Error を
 新しい Error で wrap すると、その新しい Error の構築位置を表示し、元 Error は cause に残ります。
 呼び出し経路はスタックトレースで確認できます。
 
-`do` 内では、Result effect がない carrier の同じ failure を
-`Alternative::empty()` へ変換します。failureMatcher となる partial `<-` も同じ規則で、
-do-local ResultContext の能力判定は `Result effect > Alternative > Monad` です。
-ただし `Monad` 単独では failure target を構築できないため、SafeBind / partial `<-` では
-capability error になります。total `<-` の sequencing は `Monad` のみを要求します。
-`do` 外の SafeBind は、enclosing callable 自身に canonical `Result` または有効な
-Result-effect return target を要求し、通常の `Alternative` returnへは接続しません。
+`do` 内では `MonadFail` があれば元の Error を保持し、なければ `Alternative::empty()` を使います。
+partial `<-` のパターン不一致も同じ規則です。どちらの能力もなければコンパイルエラーになります。
+常に一致するパターンの `<-` は `Monad` だけで利用できます。
+`do` の外で使う SafeBind は、その関数やクロージャ自身の返り型に `MonadFail` を要求します。
 
-`guard` はこの規則の対象外です。通常の `Alternative` 関数なので、
-`OptionT<Result, A>` でも `guard(False)` は `OptionT::empty()`（`Ok(None)`）となり、
-Result の `Err` を保持しません。
+`OptionT<Result, A>` のパターン不一致や SafeBind の失敗は `Ok(None)` になります。
+一方、`<-` の右辺にある base の `Err(error)` は bind がそのまま保持します。
+`guard` は常に `Alternative` の操作です。`guard(False)` も `OptionT` では `Ok(None)` になります。
 
 ```surtr
 Option::Some(value) =? Option::Some(1) # value は Int
@@ -381,8 +376,8 @@ def require_port(text: String) -> Result<Int> {
 
 ## 使い分けの目安
 
-複数のMonad値を順に扱う場合は[do](./do.md)を使います。Result / Result-effect carrierではErrorを保持し、
-Result effectのないAlternative carrierではfailure matcher / SafeBindのErrorを破棄してそのcarrierのemptyになります。
+複数のMonad値を順に扱う場合は[do](./do.md)を使います。MonadFail を実装した型ではErrorを保持し、
+MonadFailのないAlternative carrierではfailure matcher / SafeBindのErrorを破棄してそのcarrierのemptyになります。
 
 - 分岐を明示したいときは `match`
 - 失敗をそのまま流したいときは `=?`

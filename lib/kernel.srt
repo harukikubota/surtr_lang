@@ -35,8 +35,8 @@ defmod Kernel {
   The declared type is:
   `if_then(Boolean, Lazy<Unit>) -> Unit`
 
-  `Lazy<T>` is a compiler marker used only in std builtin declarations to
-  express delayed evaluation. This does not mean everyday source code must wrap
+  `Lazy<T>` is a compiler marker declared by standard APIs to express
+  delayed evaluation. This does not mean everyday source code must wrap
   the argument in an explicit closure.
 
   Ordinary expression form stays available:

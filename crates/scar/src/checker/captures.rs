@@ -20,6 +20,7 @@ impl Checker {
             }
         }
         let mut children = Self::pattern_expression_nodes(node);
+        children.extend(node.monad_fail_call());
         match &node.node {
             TypedInner::TraitCall { args, .. } => children.extend(args),
             TypedInner::App(function, args)
@@ -147,8 +148,6 @@ impl Checker {
             | TypedInner::ExtractorClosure(..)
             | TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }

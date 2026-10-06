@@ -1013,10 +1013,7 @@ fn standard_environment() -> Result<&'static AnalysisStandardEnvironment, &'stat
             let typed = scar
                 .typecheck_staged_program_in_place_with_context(
                     program,
-                    scar::TypecheckContext::from_source_policy(
-                        SourceKind::StdDefinitionSource
-                            .policy(CompileUnitKind::DefinitionCheck, None),
-                    ),
+                    standard_typecheck_context(),
                 )
                 .map_err(|error| error.message)?
                 .nodes;
@@ -1044,8 +1041,8 @@ fn analyze_stages(
 ) {
     let source_stages = analysis_source_stages(context);
     // A cached prefix's local IDs begin after its complete declaration index.
-    // Additional stages extend that index, so they must resolve and typecheck
-    // the standard prefix together with the project to keep IDs disjoint.
+    // Additional stages extend that index, so rebuild the standard prefix
+    // against the complete project index to keep IDs disjoint.
     let standard = if context.context.source_kind == SourceKind::StdDefinitionSource
         || source_stages.len() != 2
     {
@@ -1142,6 +1139,72 @@ fn analyze_stages(
         current_module_path.as_deref(),
         active_stage_index_for_document(&source_stages, active_document),
     );
+
+    // Project declarations extend the global UID space. Rebuild the standard
+    // prefix against that complete index, but check it with its own declaration
+    // authority before entering any user stage.
+    let rebuilt_standard = if standard.is_none() {
+        let standard_stage_count = source_stages
+            .iter()
+            .take_while(|stage| {
+                !stage.files.is_empty()
+                    && stage
+                        .files
+                        .iter()
+                        .all(|file| file.source_kind == SourceKind::StdDefinitionSource)
+            })
+            .count();
+        let prefix_stages = module_stages[..standard_stage_count].to_vec();
+        let program = match sigil::resolve_staged_program_with_state(
+            &prefix_stages,
+            Vec::new(),
+            &prefix_declarations.declaration_index,
+            None,
+        ) {
+            Ok(program) => program,
+            Err(error) => {
+                diagnostics.push(diagnostic_from_span(
+                    AnalysisDiagnosticKind::Resolve,
+                    AnalysisSeverity::Error,
+                    active_document,
+                    error.span.start,
+                    error.span.end,
+                    error.message,
+                ));
+                return;
+            }
+        };
+        let resolved = program.resolved.clone();
+        let resolve_state = program.resume_state;
+        let mut scar = scar::ScarSession::new();
+        let typed = match scar
+            .typecheck_staged_program_in_place_with_context(program, standard_typecheck_context())
+        {
+            Ok(program) => program.nodes,
+            Err(error) => {
+                diagnostics.push(diagnostic_from_span(
+                    AnalysisDiagnosticKind::Typecheck,
+                    AnalysisSeverity::Error,
+                    active_document,
+                    error.span.start,
+                    error.span.end,
+                    error.message,
+                ));
+                return;
+            }
+        };
+        Some(AnalysisStandardEnvironment {
+            module_stages: prefix_stages,
+            source_asts: Vec::new(),
+            resolved,
+            typed,
+            resolve_state,
+            scar_checkpoint: scar.checkpoint(),
+        })
+    } else {
+        None
+    };
+    let standard = standard.or(rebuilt_standard.as_ref());
 
     match sigil::resolve_staged_program_from_state(
         &module_stages,
@@ -1775,6 +1838,16 @@ fn should_analyze_project_stages(context: &ResolvedAnalysisContext) -> bool {
             .entry_file
             .as_ref()
             .is_some_and(|entry| entry == &context.context.active_file)
+}
+
+fn standard_typecheck_context() -> scar::TypecheckContext {
+    scar::TypecheckContext {
+        runtime_policy: SourceKind::StdDefinitionSource
+            .policy(CompileUnitKind::DefinitionCheck, None)
+            .runtime_policy,
+        enforce_builtin_type_contracts: true,
+        allow_private_facet_inspection: false,
+    }
 }
 
 fn typecheck_context_for_analysis(context: &ResolvedAnalysisContext) -> scar::TypecheckContext {

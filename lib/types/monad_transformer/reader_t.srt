@@ -291,3 +291,14 @@ where
     })
   }
 }
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for ReaderT<$R, $M, $T>
+where
+  $M: MonadFail
+  $T: MonadFail.$A
+{
+  def fail::<ReaderT<$R, $M, $T>>(error: Error) -> ReaderT<$R, $M, $T> {
+    ReaderT::new({|_environment| MonadFail::fail(error)})
+  }
+}

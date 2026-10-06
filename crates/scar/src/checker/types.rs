@@ -1728,6 +1728,45 @@ impl Checker {
         )
     }
 
+    pub(super) fn lazy_parameter_inner(ast: &AstTy) -> Option<&AstTy> {
+        match ast {
+            AstTy::Generic(_, name, arguments)
+                if Self::builtin_type_is_lazy_signature_surface_only(name)
+                    && arguments.len() == 1 =>
+            {
+                Some(&arguments[0])
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn resolve_trait_parameter_contract(
+        &mut self,
+        signature: &sigil::resolved::ResolvedSignatureTy,
+        self_ty: &Ty,
+        tyvars: &mut HashMap<String, Ty>,
+        allows_lazy: bool,
+    ) -> Result<Ty, TypeError> {
+        if let Some(inner) = Self::lazy_parameter_inner(signature.syntax()) {
+            if !allows_lazy {
+                return Err(self.lazy_type_not_allowed_error(Self::ast_ty_span(signature.syntax())));
+            }
+            let result = self.resolve_trait_signature_ast_ty_in_context(
+                inner,
+                TypeSyntaxContext::General,
+                self_ty,
+                tyvars,
+            )?;
+            return Ok(Ty::Func(vec![], Box::new(result)));
+        }
+        self.resolve_trait_signature_ty_in_context(
+            signature,
+            TypeSyntaxContext::General,
+            self_ty,
+            tyvars,
+        )
+    }
+
     pub(super) fn resolve_trait_signature_ty_in_context(
         &mut self,
         signature_ty: &sigil::resolved::ResolvedSignatureTy,
@@ -4159,20 +4198,6 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
-            TypedInner::ResultEffectFailure(mut target) => {
-                target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                target.error_ty = self.resolve_ty(&target.error_ty);
-                TypedInner::ResultEffectFailure(target)
-            }
-            TypedInner::DeferredDoFailure(mut deferred) => {
-                deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
-                deferred.propagated_error_tys = deferred
-                    .propagated_error_tys
-                    .iter()
-                    .map(|ty| self.resolve_ty(ty))
-                    .collect();
-                TypedInner::DeferredDoFailure(deferred)
-            }
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -4285,19 +4310,19 @@ impl Checker {
                     }
                 },
                 match failure_target {
-                    SafeBindFailureTarget::EnclosingResultContext(mut target) => {
+                    SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
                         target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                        target.error_ty = self.resolve_ty(&target.error_ty);
-                        SafeBindFailureTarget::EnclosingResultContext(target)
+                        target.call = self.resolve_typed_node(*target.call);
+                        SafeBindFailureTarget::EnclosingMonadFail(target)
                     }
                     SafeBindFailureTarget::EnclosingMatchResultContext { err_tag } => {
                         SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
-                    SafeBindFailureTarget::DoResultContext(mut target) => {
+                    SafeBindFailureTarget::DoMonadFail(mut target) => {
                         target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                        target.error_ty = self.resolve_ty(&target.error_ty);
-                        SafeBindFailureTarget::DoResultContext(target)
+                        target.call = self.resolve_typed_node(*target.call);
+                        SafeBindFailureTarget::DoMonadFail(target)
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         SafeBindFailureTarget::DoAlternative {
@@ -4342,10 +4367,10 @@ impl Checker {
                         }
                     },
                     failure_target: match failure_target {
-                        SafeBindFailureTarget::DoResultContext(mut target) => {
+                        SafeBindFailureTarget::DoMonadFail(mut target) => {
                             target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                            target.error_ty = self.resolve_ty(&target.error_ty);
-                            SafeBindFailureTarget::DoResultContext(target)
+                            target.call = self.resolve_typed_node(*target.call);
+                            SafeBindFailureTarget::DoMonadFail(target)
                         }
                         SafeBindFailureTarget::DoAlternative { empty } => {
                             SafeBindFailureTarget::DoAlternative {
@@ -4932,6 +4957,8 @@ mod tests {
                 span: Span { start: 0, end: 1 },
             },
             compiler_owned_equality: false,
+            compiler_owned_failure: false,
+            standard_lazy_contract: false,
             type_params: Vec::new(),
             where_clause: None,
             constructor_slots: vec!["$A".into()],

@@ -295,3 +295,14 @@ where
     EitherT::new(Functor::fmap(value, {|item| Either::Right(item)}))
   }
 }
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for EitherT<Error, $M, $T>
+where
+  $M: Monad
+  $T: MonadFail.$A
+{
+  def fail::<EitherT<Error, $M, $T>>(error: Error) -> EitherT<Error, $M, $T> {
+    EitherT::left(error)
+  }
+}

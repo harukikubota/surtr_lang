@@ -244,9 +244,8 @@ pipeline = &parse_int >=> &require_small
 ## `=?` SafeBind
 
 `=?` は失敗しうる値から成功側だけを束縛し、失敗はそのまま返す構文です。
-通常の user code では、`Result<T>` または有効な `@result_effect` carrier を返す
-関数の中で使います。Result effect がある場合、RHS の失敗と pattern failure は
-最終 carrier の Result failure として保持されます。
+通常の関数では、返り型がMonadFailを実装しているときに使えます。
+RHSの失敗とPattern不一致で生じたErrorを、返り型の`fail`に渡します。
 REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
 
 ```surtr
@@ -260,18 +259,11 @@ Option::Some(saved) =? Option::Some(1)
 Result 以外の RHS は、constructor、literal、list/string、Extractor などの partial pattern が
 値全体を明示検査するときだけそのまま渡されます。Monad payload の暗黙取り出しはありません。
 
-`@result_effect` は Monad / `MonadT<$M>`、単一 public field、field の最外
-constructor と captured base `$M` の一致を満たす struct 宣言にだけ指定できます。
-具体化された base が canonical `Result` の場合だけ有効で、`T<U<Result, _>, A>` や
-annotation のない wrapper の内部から Result を探索することはありません。
-
-`do` 内の Result-context failure target は `Result effect > Alternative > Monad` の順で
-判定されます。Result effect がなければ `Alternative::empty()` に進み、`Monad` 単独では
-failure target を構築できないため compile error です。`do` 外の SafeBind は enclosing
-callable 自身に canonical `Result` または有効な Result-effect return target を要求し、
-通常の `Alternative` returnへは接続しません。`guard` は通常の `Alternative` 関数なので、
-この選択に参加せず、Result effect carrier でも `guard(False)` はその carrier の `empty`
-になります。
+`do`内では`MonadFail > Alternative`の順に失敗を処理します。
+MonadFailがなければ`Alternative::empty()`を使い、どちらもなければコンパイルエラーです。
+`do`外の通常の関数やclosureは、自身の返り型にMonadFailを要求します。
+内側のcallableやdoは、外側の失敗処理能力を引き継ぎません。
+`guard`はFalseのとき、常にAlternativeの`empty`を使います。
 
 `Option::Some(saved) =? Option::Some(1)` は Option 全体を明示的に検査するため有効です。
 一方、`saved =? Option::Some(1)` のような total pattern は、RHS が Result 以外の Monad なので

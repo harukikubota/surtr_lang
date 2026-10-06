@@ -101,15 +101,14 @@ targets, or module/type declarations.
 @builtin type BulkUpdateEntries<$State>
 
 @doc """
-Compiler-reserved delayed-evaluation marker for special forms.
-Use level: std builtin declaration marker only.
-`Lazy<$T>` exists so builtin signatures can describe operands that the
-language evaluates conditionally, such as `if`, `and`, `or`, and related
-special forms.
-It is not an ordinary first-class wrapper type for user data.
-Do not use it in user-defined parameters, bindings, fields, container elements,
-return types, or type annotations. Use an ordinary `(-> T)` parameter when a
-user-defined function needs delayed work.
+Compiler-reserved delayed-evaluation marker for standard declarations.
+Standard builtins and Trait methods can declare `Lazy<$T>` arguments. A user
+impl inherits the argument contract of the corresponding standard Trait
+method, including when it overrides a default method.
+It is not an ordinary first-class wrapper type for user data. Independent
+user functions and Traits cannot introduce Lazy arguments. Bindings, fields,
+container elements and return types cannot store Lazy. Use an ordinary
+`(-> T)` parameter when a user-defined function needs delayed work.
 
 A direct call in a Lazy argument is delayed regardless of its return type;
 a parenthesized expression is evaluated before branch selection. The compiler

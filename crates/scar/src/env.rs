@@ -69,17 +69,7 @@ pub struct TypeDefInfo {
     pub private_fields: HashSet<Symbol>,
     pub readonly_fields: HashSet<Symbol>,
     pub readonly_root: bool,
-    /// Present only after Scar has validated the compiler-owned
-    /// `@result_effect` contract against canonical Monad/MonadT impl metadata.
-    pub result_effect: Option<ResultEffectTypeInfo>,
     pub state: TypeDefState,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResultEffectTypeInfo {
-    pub base_parameter_index: usize,
-    pub annotation_span: spire::ast::Span,
-    pub field_span: spire::ast::Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,7 +249,6 @@ impl TypeEnv {
                 private_fields: HashSet::new(),
                 readonly_fields: HashSet::new(),
                 readonly_root: false,
-                result_effect: None,
                 state: TypeDefState::Declared,
             },
         );

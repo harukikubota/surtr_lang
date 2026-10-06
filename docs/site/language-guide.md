@@ -493,8 +493,8 @@ def pick() -> Result<Int> {
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
 `=?` は「Result-style の失敗を伝播しながら pattern を適用する束縛」の入口です。
-通常の user code では `Result<T>` または有効な `@result_effect` carrier を返す関数の
-中で使います。canonical `Result` RHSだけを外側一段分解し、`Err`を failure target
+通常の関数では、返り型がMonadFailを実装しているときに使えます。
+canonical `Result` RHSだけを外側一段分解し、`Err`を failure target
 へ伝播します。Result以外のRHSは、値全体を明示検査するpartial patternにだけ渡されます。
 Monadのpayloadを暗黙に取り出す規則はありません。
 
@@ -540,19 +540,15 @@ result: Option<Int> = do::<Option> {
 print(inspect(result)) # => Option::Some(42)
 ```
 
-通常のMonad処理には`Monad` capabilityが必要です。部分patternで値を取り出す場合、Result effect がなければ
-失敗先として同じcarrierの`Alternative`も必要です。ResultContext の能力判定は `Result effect > Alternative > Monad`
-ですが、SafeBind / failureMatcher となる partial `<-` は Result effect または
-`Alternative` がなければ capability error になります。total `<-` の sequencing は
-`Monad` のみを要求します。Transformerも通常のMonad carrierとして使えますが、base carrier
-の値を自動でliftしません。必要な値には`MonadT::lift`を明示してください。
+通常の逐次処理とtotal `<-`にはMonadが必要です。SafeBindやpartial `<-`の失敗は、
+carrierがMonadFailを実装していれば`fail(error)`へ渡します。MonadFailがなければ
+Alternativeの`empty()`を使い、どちらもなければコンパイルエラーになります。
+Transformerも同じ規則に従います。baseの値を接続するときは`MonadT::lift`を明示します。
 
-`@result_effect` は `Monad` と `MonadT<$M>` を実装する単一 public field の struct に
-だけ指定でき、field の最外 constructor は captured base `$M` と一致しなければなりません。
-具体化された base が canonical `Result` に直接一致するときだけ有効です。たとえば
-`OptionT<Result, A>` は SafeBind と failureMatcher となる partial `<-` の Error を保持し、
-`OptionT<List, A>` は `Alternative::empty()` を使います。`guard` は常に通常の
-`Alternative` semantics で、`OptionT<Result, A>` の `guard(False)` は `Ok(None)` です。
+ResultTと`EitherT<Error, M, A>`は内側の失敗にErrorを保持します。ReaderTとStateTは、
+baseがMonadFailを実装するときにその`fail`を使います。OptionTにはMonadFail実装がないため、
+do内のPattern不一致はAlternativeの`empty()`になります。Result baseでは`Ok(None)`です。
+`guard`も常にAlternativeを使います。baseのErrをbindが短絡する動作は変わりません。
 
 `Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
 あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。

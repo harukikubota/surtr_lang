@@ -2397,43 +2397,18 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (
-                param_tys,
-                mut expected_ret,
+            let ResolvedImplMethodSignature {
+                params: param_tys,
+                result: mut expected_ret,
                 type_params,
-                return_type_argument_tys,
-                raw_environment,
-            ) = self.resolve_trait_impl_method_signature(
-                &trait_info,
-                trait_args,
-                &method,
-                target_ast_ty,
-                &trait_method.ret_ty,
-                impl_info.where_clause.as_ref(),
-                impl_info.generated_derive,
-            )?;
-
-            let contract = self.impl_method_instantiation_contract(
-                &impl_info.declaration_key.pattern,
-                &trait_info,
-                trait_args,
-                target_ast_ty,
-                &method,
-                &trait_method.ret_ty,
-                &param_tys,
-                &expected_ret,
-                &return_type_argument_tys,
-                &raw_environment,
-                impl_info.where_clause.as_ref(),
-                &impl_info.constructor_slot_positions,
-            )?;
-            self.trait_impls
-                .get_mut(&impl_info.declaration_key.pattern)
-                .expect("registered impl")
-                .methods
-                .get_mut(&method.method_name)
-                .expect("registered method")
-                .instantiation_contract = Some(contract);
+                return_type_arguments: return_type_argument_tys,
+                environment: raw_environment,
+            } = method.resolved_signature.clone().ok_or_else(|| {
+                TypeError::new(
+                    "Validated impl method is missing its declaration signature",
+                    method.span.clone(),
+                )
+            })?;
 
             let mut typed_params = Vec::new();
             let mut local_bindings = Vec::new();

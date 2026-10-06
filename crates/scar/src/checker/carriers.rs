@@ -1,51 +1,193 @@
 use super::*;
+use diagnostics::TypeDiagnosticReason;
 
 impl Checker {
-    pub(super) fn resolve_result_effect(&self, carrier: &Ty) -> ResultEffectResolution {
+    pub(super) fn do_failure_carrier_is_rigid_variable(&self, carrier: &Ty) -> bool {
+        match self.resolve_ty(carrier) {
+            Ty::Var(variable) => self.rigid_tyvars.contains(&variable),
+            Ty::SelfApp(items) => Self::constructor_application_parts(&items)
+                .is_some_and(|(constructor, _)| {
+                    matches!(constructor, Ty::Var(variable) if self.rigid_tyvars.contains(variable))
+                }),
+            _ => false,
+        }
+    }
+
+    pub(super) fn resolve_monad_fail(
+        &mut self,
+        carrier: &Ty,
+        span: &Span,
+    ) -> Result<MonadFailResolution, TypeError> {
         let carrier = self.resolve_ty(carrier);
-        if let Ty::Result(_, error_ty) = &carrier {
-            return ResultEffectResolution::Preserve(ResultPreserveTarget {
-                carrier_ty: carrier.clone(),
-                error_ty: error_ty.as_ref().clone(),
-                construction: ResultPreserveConstruction::CanonicalResult,
-            });
+        let Some(key) = self
+            .traits
+            .values()
+            .find(|info| info.compiler_owned_failure)
+            .map(|info| self.trait_key(&info.id))
+        else {
+            return Ok(MonadFailResolution::InvalidMetadata(
+                "canonical MonadFail declaration is missing",
+            ));
+        };
+        match self.prove_trait_capability(&key, &carrier)? {
+            ApplicabilityProof::Unsatisfied => return Ok(MonadFailResolution::Unavailable),
+            ApplicabilityProof::Deferred(_) => {
+                // The failure capability belongs to the constructor. Its mapped
+                // payload may still be inferred from the remainder of a closure;
+                // captured parameters and implementation constraints must already
+                // be proved by the normal constructor projection contract.
+                if !matches!(
+                    self.constructor_head_projection(&key, &carrier),
+                    ConstructorProjectionOutcome::Applicable { .. }
+                ) {
+                    return Ok(MonadFailResolution::Deferred);
+                }
+            }
+            ApplicabilityProof::Satisfied(_) => {}
         }
-        let Ty::Struct(name, nominal) = &carrier else {
-            return if type_contains_unresolved_vars(&carrier) {
-                ResultEffectResolution::Deferred
-            } else {
-                ResultEffectResolution::Unavailable
-            };
+        let error_id = ResolvedId {
+            name: "__failure_error".into(),
+            qualified_name: None,
+            symbol_info: None,
+            unique_id: Self::next_synthetic_range_uid(),
+            compiler_generated: true,
+            span: span.clone(),
         };
-        let Some(definition) = self.env.lookup_type_def(name) else {
-            return ResultEffectResolution::Unavailable;
-        };
-        let Some(annotation) = definition.result_effect.as_ref() else {
-            return ResultEffectResolution::Unavailable;
-        };
-        let Some(base) = nominal.arguments.get(annotation.base_parameter_index) else {
-            return ResultEffectResolution::InvalidMetadata(
-                "validated Result effect base argument is missing",
-            );
-        };
-        let base = self.resolve_ty(base);
-        if type_contains_unresolved_vars(&base) && !matches!(base, Ty::Result(_, _)) {
-            return ResultEffectResolution::Deferred;
-        }
-        if !matches!(base, Ty::Result(_, _)) {
-            return ResultEffectResolution::Unavailable;
-        }
-        let Some((_, Ty::Result(_, field_error_ty))) = nominal.fields.first() else {
-            return ResultEffectResolution::InvalidMetadata(
-                "validated Result effect field is not instantiated as canonical Result",
-            );
-        };
-        let error_ty = self.resolve_ty(field_error_ty);
-        let tag = definition.tag;
-        ResultEffectResolution::Preserve(ResultPreserveTarget {
+        self.env.push_var_scope();
+        self.env.bind_var(error_id.unique_id, Ty::Error);
+        let call = self.check_trait_invocation(
+            span,
+            &key,
+            sindr::intrinsic::CanonicalTraitMethodIdentity::MonadFailFail.method_name(),
+            &[ResolvedRecordLitArg::Positional(Resolved::Var(
+                span.clone(),
+                error_id.clone(),
+            ))],
+            None,
+            Some(&carrier),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        self.env.pop_var_scope();
+        Ok(MonadFailResolution::Preserve(MonadFailTarget {
             carrier_ty: carrier,
-            error_ty,
-            construction: ResultPreserveConstruction::AnnotatedStruct { tag },
+            error_id,
+            call: Box::new(call?),
+        }))
+    }
+
+    /// Pattern execution produces an Error; only the enclosing context chooses
+    /// how to consume it. A rigid generic context never gains a new capability
+    /// from a later concrete instantiation.
+    pub(super) fn resolve_pattern_failure_target(
+        &mut self,
+        carrier: &Ty,
+        propagated: &[Ty],
+        span: &Span,
+        alternative: Option<(&str, &str)>,
+        allow_deferred: bool,
+    ) -> Result<SafeBindFailureTarget, TypeError> {
+        let carrier = self.resolve_ty(carrier);
+        match self.resolve_monad_fail(&carrier, span)? {
+            MonadFailResolution::Preserve(target) => {
+                for error_ty in propagated {
+                    if !self.types_compatible(&Ty::Error, error_ty) {
+                        return Err(self.policy_error(
+                            TypeDiagnosticReason::SafeBindErrorTypeMismatch,
+                            diagnostics::TypePolicy::SafeBindFailureTarget,
+                            Some("Pattern failure".into()),
+                            Some(&Ty::Error),
+                            Some(error_ty),
+                            None,
+                            None,
+                            span,
+                            None,
+                        ));
+                    }
+                }
+                return Ok(if alternative.is_some() {
+                    SafeBindFailureTarget::DoMonadFail(Box::new(target))
+                } else {
+                    SafeBindFailureTarget::EnclosingMonadFail(Box::new(target))
+                });
+            }
+            MonadFailResolution::InvalidMetadata(subject) => {
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some(subject.into()),
+                    None,
+                    Some(&carrier),
+                    None,
+                    None,
+                    span,
+                    None,
+                ));
+            }
+            MonadFailResolution::Deferred
+                if alternative.is_some()
+                    && allow_deferred
+                    && !self.do_failure_carrier_is_rigid_variable(&carrier) =>
+            {
+                let (trait_key, method_name) = alternative.expect("do failure context");
+                return Ok(SafeBindFailureTarget::Deferred(Box::new(
+                    DeferredDoFailureTarget {
+                        carrier_ty: carrier,
+                        alternative_trait_key: trait_key.into(),
+                        alternative_method_name: method_name.into(),
+                        propagated_error_tys: propagated.to_vec(),
+                        failure_span: span.clone(),
+                    },
+                )));
+            }
+            MonadFailResolution::Deferred if alternative.is_some() && !allow_deferred => {
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some("deferred do failure policy remained unresolved".into()),
+                    None,
+                    Some(&carrier),
+                    None,
+                    None,
+                    span,
+                    None,
+                ));
+            }
+            MonadFailResolution::Unavailable | MonadFailResolution::Deferred => {}
+        }
+        let Some((trait_key, method_name)) = alternative else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::SafeBindRequiresMonadFailTarget,
+                diagnostics::TypePolicy::SafeBindRequiresMonadFailTarget,
+                Some("=?".into()),
+                None,
+                Some(&carrier),
+                None,
+                None,
+                span,
+                None,
+            ));
+        };
+        let empty = self.check_trait_invocation(
+            span,
+            trait_key,
+            method_name,
+            &[],
+            None,
+            Some(&carrier),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        Ok(SafeBindFailureTarget::DoAlternative {
+            empty: Box::new(empty),
         })
     }
 

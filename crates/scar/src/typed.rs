@@ -440,12 +440,6 @@ pub enum TypedInner {
     /// Both failure routes produce the do carrier value without escaping the
     /// enclosing callable or relying on codegen context.
     DoSafeBind(Box<TypedDoSafeBind>),
-    /// Compiler-owned failure value for a Result effect. This is introduced
-    /// only after Scar has resolved and validated the exact carrier metadata.
-    ResultEffectFailure(Box<ResultPreserveTarget>),
-    /// A do-local failure whose ResultEffect/Alternative policy is waiting on
-    /// carrier specialization. This never reaches Forge unresolved.
-    DeferredDoFailure(Box<DeferredDoFailureTarget>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     Pipe(Box<TypedNode>, Box<TypedNode>),
     Compose(ComposeFlavor, Box<TypedNode>, Box<TypedNode>),
@@ -684,17 +678,13 @@ pub enum SafeBindRhsProjection {
     },
 }
 
+/// Resolved ordinary Trait call; the generated argument binding receives the
+/// original Pattern/Result Error without reconstructing its metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ResultPreserveConstruction {
-    CanonicalResult,
-    AnnotatedStruct { tag: u32 },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResultPreserveTarget {
+pub struct MonadFailTarget {
     pub carrier_ty: Ty,
-    pub error_ty: Ty,
-    pub construction: ResultPreserveConstruction,
+    pub error_id: ResolvedId,
+    pub call: Box<TypedNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -708,10 +698,10 @@ pub struct DeferredDoFailureTarget {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SafeBindFailureTarget {
-    EnclosingResultContext(Box<ResultPreserveTarget>),
+    EnclosingMonadFail(Box<MonadFailTarget>),
     EnclosingMatchResultContext { err_tag: u32 },
     TopLevel,
-    DoResultContext(Box<ResultPreserveTarget>),
+    DoMonadFail(Box<MonadFailTarget>),
     DoAlternative { empty: Box<TypedNode> },
     Deferred(Box<DeferredDoFailureTarget>),
 }
@@ -1023,6 +1013,25 @@ impl TypedPattern {
         match self {
             Self::Located(_, inner) => inner.unlocated(),
             other => other,
+        }
+    }
+}
+
+impl TypedNode {
+    /// The embedded ordinary call is a child for specialization and validation.
+    pub fn monad_fail_call(&self) -> Option<&TypedNode> {
+        match &self.node {
+            TypedInner::SafeBind(_, _, _, target) => target.monad_fail_call(),
+            TypedInner::DoSafeBind(control) => control.failure_target.monad_fail_call(),
+            _ => None,
+        }
+    }
+}
+impl SafeBindFailureTarget {
+    pub fn monad_fail_call(&self) -> Option<&TypedNode> {
+        match self {
+            Self::EnclosingMonadFail(target) | Self::DoMonadFail(target) => Some(&target.call),
+            _ => None,
         }
     }
 }

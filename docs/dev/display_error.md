@@ -28,9 +28,9 @@ CLI 起動時のエラーと終了処理は [Rune_cli_spec.md](Rune_cli_spec.md)
 - list の長さ不一致など、構造自体の失敗はその構造 Pattern 全体を指す。
 - 関数、named Extractor、ExtractorClosure、`apply_pattern` で同じ位置規則を使う。
 
-`Err` / `MatchResult::Err` への格納、SafeBind、Result-effect context の partial `<-` は、
+`Err` / `MatchResult::Err` への格納、SafeBind、MonadFail context の partial `<-` は、
 元 Error の kind、message、location、cause を保持する。
-Result effect のない Option / List などの partial `<-` は、既存の Alternative の規則に従い
+MonadFail のない Option / List などの partial `<-` は、既存の Alternative の規則に従い
 Error を破棄して empty を返す。この場合、伝播した Error の表示は生じない。
 詳細は [Pattern_spec.md](Pattern_spec.md) と [Do_intrinsic_spec.md](Do_intrinsic_spec.md) を参照する。
 

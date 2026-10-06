@@ -104,7 +104,7 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 - [`Reader`](./reader.md): 同じ環境を計算へ渡す
 - [`State`](./state.md): 次状態を左から右へ引き継ぐ
 
-`OptionT`、`EitherT`、`ReaderT`、`StateT` も通常の source 型です。base の
+`OptionT`、`EitherT`、`ResultT`、`ReaderT`、`StateT` も通常の source 型です。base の
 `Monad` と外側の計算を `MonadT::lift` で明示的に接続します。API と capability 条件は
 [`Monad transformers`](./monad-transformers.md) を参照してください。
 

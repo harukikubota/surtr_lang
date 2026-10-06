@@ -236,8 +236,8 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: None,
             entrypoint: None,
         }),
-        SafeBindRequiresResultTarget => DiagnosticData::Policy(PolicyData {
-            policy: TypePolicy::SafeBindRequiresResultTarget,
+        SafeBindRequiresMonadFailTarget => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::SafeBindRequiresMonadFailTarget,
             subject: Some("safe bind target".into()),
             expected_type: Some("Result<T>".into()),
             actual_type: Some("Option<T>".into()),
@@ -306,14 +306,6 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             expected_type: Some("Monad".into()),
             actual_type: Some("Plain".into()),
             stage: Some("OptionT".into()),
-            entrypoint: None,
-        }),
-        InvalidResultEffectAnnotation => DiagnosticData::Policy(PolicyData {
-            policy: TypePolicy::ResultEffectAnnotation,
-            subject: Some("@result_effect requires one public base field".into()),
-            expected_type: Some("MonadT base field".into()),
-            actual_type: Some("invalid declaration".into()),
-            stage: Some("Wrapper".into()),
             entrypoint: None,
         }),
         TraitImplementationForbidden => DiagnosticData::Policy(PolicyData {
@@ -446,7 +438,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         ExtractorArityMismatch,
         NonExhaustiveMatch,
         SafeBindErrorTypeMismatch,
-        SafeBindRequiresResultTarget,
+        SafeBindRequiresMonadFailTarget,
         FacetSafeBindForbidden,
         FacetPatternBindingForbidden,
         FacetOperationPolicyViolation,

@@ -49,3 +49,7 @@ Err(NoneError("None Value."))
 then-next
 Ok("next")
 Err(NoneError("None Value."))
+Err(NoneError("None Value."))
+Err(NoneError("None Value."))
+Err(NoneError("None Value."))
+Err(NoneError("None Value."))
