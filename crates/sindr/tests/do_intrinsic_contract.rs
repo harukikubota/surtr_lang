@@ -1,9 +1,9 @@
 use sindr::builtin::builtin_type_meta_by_name;
 use sindr::intrinsic::{
     do_intrinsic_contract, CanonicalTraitIdentity, CanonicalTraitMethodIdentity,
-    DoCapabilityPredicate, DoRouteLowering, FailureEffectAction, IntrinsicCarrierSource,
-    IntrinsicId, IntrinsicOwner, IntrinsicType, ReturnTypeArgumentRole, SafeBindInputAction,
-    SafeBindInputMatcher, SafeBindRejection,
+    DoCapabilityPredicate, DoRouteLowering, IntrinsicCarrierSource, IntrinsicId, IntrinsicOwner,
+    IntrinsicType, ReturnTypeArgumentRole, SafeBindInputAction, SafeBindInputMatcher,
+    SafeBindRejection,
 };
 use sindr::names::{builtin_type_name, builtin_type_usage_policy, BuiltinTypeUsage, TypeName};
 
@@ -83,27 +83,25 @@ fn do_contract_closes_signature_carrier_capabilities_and_lowering() {
     assert_eq!(
         contract.routes[1].lowering,
         DoRouteLowering::FailureEffect(sindr::intrinsic::FailureEffectContract {
-            result_effect_action: FailureEffectAction::PreserveResultEffectFailure,
+            monad_fail_method: CanonicalTraitMethodIdentity::MonadFailFail,
             fallback_capability: CanonicalTraitIdentity::Alternative,
-            fallback_action: FailureEffectAction::OverrideWith(
-                CanonicalTraitMethodIdentity::AlternativeEmpty,
-            ),
+            fallback_method: CanonicalTraitMethodIdentity::AlternativeEmpty,
         })
     );
     let DoRouteLowering::FailureEffect(failure) = contract.routes[2].lowering else {
         panic!("SafeBind route must own its failure lowering")
     };
     assert_eq!(
-        failure.result_effect_action,
-        FailureEffectAction::PreserveResultEffectFailure
+        failure.monad_fail_method,
+        CanonicalTraitMethodIdentity::MonadFailFail
     );
     assert_eq!(
         failure.fallback_capability,
         CanonicalTraitIdentity::Alternative
     );
     assert_eq!(
-        failure.fallback_action,
-        FailureEffectAction::OverrideWith(CanonicalTraitMethodIdentity::AlternativeEmpty)
+        failure.fallback_method,
+        CanonicalTraitMethodIdentity::AlternativeEmpty
     );
 }
 

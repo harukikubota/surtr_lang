@@ -2079,3 +2079,32 @@ fn analysis_service_standard_development_uses_current_document() {
         snapshot.diagnostics
     );
 }
+
+#[test]
+fn analysis_service_standard_prefix_does_not_authorize_user_lazy_declarations() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(
+        path.clone(),
+        Some(1),
+        "deftrait Local { def fail_if(value: Lazy<Self>) -> Self { value() } }".into(),
+    );
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path.clone())),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    assert!(
+        snapshot.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == AnalysisDiagnosticKind::Typecheck
+                && diagnostic.path == path
+                && diagnostic.message.contains("Lazy")
+        }),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert!(snapshot.typed.is_none());
+}

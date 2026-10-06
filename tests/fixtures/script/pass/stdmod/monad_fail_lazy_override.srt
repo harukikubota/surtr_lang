@@ -1,0 +1,45 @@
+deferror Stopped { "stop" }
+
+impl MonadFail for Either<String, $T>
+where
+  $T: MonadFail.$A
+{
+  def fail::<Either<String, $T>>(error: Error) -> Either<String, $T> {
+    Either::Left(Error::message(error))
+  }
+
+  def fail_if(condition: Boolean, err: Lazy<Error>, then: Lazy<Either<String, $T>>) -> Either<String, $T> {
+    if(condition, Either::Left(Error::message(err())), then())
+  }
+}
+
+def make_error() -> Error {
+  print("error")
+  Stopped
+}
+
+def make_success() -> Either<String, Int> {
+  print("success")
+  Either::Right(3)
+}
+
+def make_result() -> Result<Int> {
+  print("result-success")
+  Ok(5)
+}
+
+failed: Either<String, Int> = MonadFail::fail_if(True, make_error(), make_success())
+print(inspect(failed))
+succeeded: Either<String, Int> = MonadFail::fail_if(False, make_error(), make_success())
+print(inspect(succeeded))
+eager_error: Either<String, Int> = MonadFail::fail_if(False, (make_error()), make_success())
+print(inspect(eager_error))
+eager_success: Either<String, Int> = MonadFail::fail_if(True, make_error(), (make_success()))
+print(inspect(eager_success))
+choose: (Boolean, (-> Error), (-> Either<String, Int>) -> Either<String, Int>) = &MonadFail::fail_if(&1, &2, &3)
+print(inspect(choose(False, &make_error, &make_success)))
+
+default_failed: Result<Int> = MonadFail::fail_if(True, make_error(), make_result())
+print(inspect(Result::is_err(default_failed)))
+default_succeeded: Result<Int> = MonadFail::fail_if(False, make_error(), make_result())
+print(inspect(default_succeeded))

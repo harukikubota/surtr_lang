@@ -333,3 +333,14 @@ where
     })
   }
 }
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for StateT<$S, $M, $T>
+where
+  $M: MonadFail
+  $T: MonadFail.$A
+{
+  def fail::<StateT<$S, $M, $T>>(error: Error) -> StateT<$S, $M, $T> {
+    StateT::new({|_state| MonadFail::fail(error)})
+  }
+}

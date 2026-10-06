@@ -1,6 +1,5 @@
 use scar::typed::{
-    ResultPreserveConstruction, SafeBindFailureTarget, SafeBindRhsProjection, TypedInner,
-    TypedNode, TypedPattern,
+    SafeBindFailureTarget, SafeBindRhsProjection, TypedInner, TypedNode, TypedPattern,
 };
 use scar::types::Ty;
 use sindr::warning::WarningKind;
@@ -90,7 +89,7 @@ fn question_uses_nearest_callable_target() {
         assert!(
             error
                 .message
-                .contains("requires an enclosing ResultContext return type"),
+                .contains("requires an enclosing MonadFail return type"),
             "{error:?}"
         );
     }
@@ -124,7 +123,7 @@ fn question_inside_do_uses_do_local_failure_target() {
     ));
     assert!(matches!(
         control.failure_target,
-        SafeBindFailureTarget::DoResultContext(_)
+        SafeBindFailureTarget::DoMonadFail(_)
     ));
     assert!(matches!(
         control.projection,
@@ -178,17 +177,23 @@ fn question_does_not_accept_nominal_result_lookalikes() {
 }
 
 #[test]
-fn question_preserves_result_effect_targets_in_callable_and_do() {
-    let source = "def run() -> OptionT<Result, Int> { Ok(())?\n OptionT::some::<Result>(1) }\nresult = do::<OptionT<Result, _>> { Ok(())?; OptionT::some::<Result>(1) }";
-    let typed = typecheck_with_builtin_prelude(source);
+fn question_uses_option_t_alternative_only_inside_do() {
+    let error = typecheck(resolve_with_builtin_prelude(
+        "def run() -> OptionT<Result, Int> { Ok(())?\n OptionT::some::<Result>(1) }",
+    ))
+    .expect_err("OptionT has no MonadFail for an ordinary callable");
+    assert!(error.message.contains("MonadFail"), "{error:?}");
+
+    let typed = typecheck_with_builtin_prelude(
+        "result = do::<OptionT<Result, _>> { Ok(())?; OptionT::some::<Result>(1) }",
+    );
     let rhs = result_binding_rhs(&typed);
     let TypedInner::DoSafeBind(control) = &rhs.node else {
-        panic!("question in Result-effect do must preserve do-local control")
+        panic!("question in OptionT do must preserve do-local control")
     };
     assert!(matches!(
         &control.failure_target,
-        SafeBindFailureTarget::DoResultContext(target)
-            if matches!(target.construction, ResultPreserveConstruction::AnnotatedStruct { .. })
+        SafeBindFailureTarget::DoAlternative { .. }
     ));
 }
 
@@ -201,7 +206,7 @@ fn question_in_non_result_closure_inside_do_rejects_outer_failure_targets() {
     assert!(
         error
             .message
-            .contains("requires an enclosing ResultContext return type"),
+            .contains("requires an enclosing MonadFail return type"),
         "{error:?}"
     );
 }
@@ -240,7 +245,12 @@ fn unannotated_closures_cannot_borrow_outer_safebind_failure_targets() {
         ] {
             let error = typecheck(resolve_with_builtin_prelude(&source))
                 .expect_err("an unannotated closure has no concrete local Result failure target");
-            assert!(error.message.contains("requires an enclosing ResultContext return type"), "{source}: {error:?}");
+            assert!(
+                error
+                    .message
+                    .contains("requires an enclosing MonadFail return type"),
+                "{source}: {error:?}"
+            );
         }
         let source = format!("impl Int {{ defextractor outer(value: Int) -> MatchResult<Int> {{ closure = {{|item: Int| {statement}\n ()}}\n MatchResult::Ok(value) }} }}");
         let error = typecheck(resolve_with_builtin_prelude(&source))
@@ -248,7 +258,7 @@ fn unannotated_closures_cannot_borrow_outer_safebind_failure_targets() {
         assert!(
             error
                 .message
-                .contains("requires an enclosing ResultContext return type"),
+                .contains("requires an enclosing MonadFail return type"),
             "{error:?}"
         );
     }

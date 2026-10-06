@@ -1487,14 +1487,6 @@ impl Checker {
                     hint: None,
                 });
             }
-            if !self.allow_error_function_params
-                && !Self::allows_std_error_function_param_exception(id)
-                && Self::ty_exposes_error_value(&param_ty)
-            {
-                return Err(
-                    self.error_function_param_not_allowed_error(Self::ast_ty_span(&param.ty))
-                );
-            }
             if self.ty_contains_facet(&param_ty) {
                 return Err(TypeError {
                     structured: None,
@@ -2405,43 +2397,18 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (
-                param_tys,
-                mut expected_ret,
+            let ResolvedImplMethodSignature {
+                params: param_tys,
+                result: mut expected_ret,
                 type_params,
-                return_type_argument_tys,
-                raw_environment,
-            ) = self.resolve_trait_impl_method_signature(
-                &trait_info,
-                trait_args,
-                &method,
-                target_ast_ty,
-                &trait_method.ret_ty,
-                impl_info.where_clause.as_ref(),
-                impl_info.generated_derive,
-            )?;
-
-            let contract = self.impl_method_instantiation_contract(
-                &impl_info.declaration_key.pattern,
-                &trait_info,
-                trait_args,
-                target_ast_ty,
-                &method,
-                &trait_method.ret_ty,
-                &param_tys,
-                &expected_ret,
-                &return_type_argument_tys,
-                &raw_environment,
-                impl_info.where_clause.as_ref(),
-                &impl_info.constructor_slot_positions,
-            )?;
-            self.trait_impls
-                .get_mut(&impl_info.declaration_key.pattern)
-                .expect("registered impl")
-                .methods
-                .get_mut(&method.method_name)
-                .expect("registered method")
-                .instantiation_contract = Some(contract);
+                return_type_arguments: return_type_argument_tys,
+                environment: raw_environment,
+            } = method.resolved_signature.clone().ok_or_else(|| {
+                TypeError::new(
+                    "Validated impl method is missing its declaration signature",
+                    method.span.clone(),
+                )
+            })?;
 
             let mut typed_params = Vec::new();
             let mut local_bindings = Vec::new();
@@ -3270,9 +3237,9 @@ impl Checker {
                 let payload = match variant.short_name.as_str() {
                     "Ok" => inner.ty.clone(),
                     "Err" => {
-                        if !self.is_concrete_error_value(&inner) {
+                        if !self.types_compatible(&inner.ty, &Ty::Error) {
                             return Err(TypeError::new(
-                                "MatchResult::Err requires a concrete deferror value",
+                                "MatchResult::Err requires an Error value",
                                 inner.span.clone(),
                             ));
                         }
@@ -3383,10 +3350,10 @@ impl Checker {
                     if !matches!(inner.ty, Ty::Error) {
                         return Err(TypeError {
                             structured: None,
-                            message: "Err(...) requires a concrete deferror value.".into(),
+                            message: "Err(...) requires an Error value.".into(),
                             span: inner.span.clone(),
                             hint: Some(
-                                "Use a deferror-defined value in Err(...), not a plain value."
+                                "Use an existing Error or a deferror constructor in Err(...)."
                                     .into(),
                             ),
                         });
@@ -3494,7 +3461,6 @@ impl Checker {
                         params,
                         args,
                         Some(callable_hint.as_str()),
-                        false,
                         false,
                     )?;
                     return Ok(TypedNode {
@@ -3832,19 +3798,6 @@ impl Checker {
                     Ok(self.env.fresh_tyvar())
                 } else {
                     let ty = self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
-                    if Self::ty_exposes_error_value(&ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message:
-                                "Error cannot be used as an enum constructor type argument"
-                                    .into(),
-                            span: Self::ast_ty_span(ast_ty).clone(),
-                            hint: Some(
-                                "Keep Error inside Result<..., Error>; enum constructor type arguments describe ordinary values."
-                                    .into(),
-                            ),
-                        });
-                    }
                     Ok(ty)
                 }
             })

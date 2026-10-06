@@ -223,7 +223,7 @@ fn error_source_location_keeps_generation_site_across_result_and_extractor_propa
 fn error_source_location_partial_bind_selects_the_failing_child_in_result_context() {
     for body in [
         "do::<Result> {\n    (x, 11) <- Ok((3, 2))\n    Ok(x)\n  }",
-        "maybe =? OptionT::run(do::<OptionT<Result, _>> {\n    (x, 11) <- OptionT::some::<Result>((3, 2))\n    OptionT::some::<Result>(x)\n  })\n  Ok(0)",
+        "value =? Identity::run(ResultT::run(do::<ResultT<Identity, _>> {\n    (x, 11) <- ResultT::ok::<Identity>((3, 2))\n    ResultT::ok::<Identity>(x)\n  }))\n  Ok(value)",
     ] {
         let source = format!("def main() -> Result<Int> {{\n  {body}\n}}\nmain()\n");
         assert_error_source_location(&source, "11", "PatternMismatch");
@@ -250,11 +250,11 @@ fn error_source_location_statement_question_preserves_error_and_cause() {
 }
 
 #[test]
-fn error_source_location_partial_bind_preserves_result_effect_errors_and_causes() {
+fn error_source_location_partial_bind_preserves_monad_fail_errors_and_causes() {
     let definitions = "deferror Inner { \"inner\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
     for body in [
         "do::<Result> {\n    E::checked(found) <- Ok(2)\n    Ok(found)\n  }",
-        "maybe =? OptionT::run(do::<OptionT<Result, _>> {\n    E::checked(found) <- OptionT::some::<Result>(2)\n    OptionT::some::<Result>(found)\n  })\n  Ok(0)",
+        "found =? Identity::run(ResultT::run(do::<ResultT<Identity, _>> {\n    E::checked(found) <- ResultT::ok::<Identity>(2)\n    ResultT::ok::<Identity>(found)\n  }))\n  Ok(found)",
     ] {
         let source = format!("{definitions}def main() -> Result<Int> {{\n  {body}\n}}\nmain()\n");
         let dump = assert_error_source_location(&source, "Outer(\"wrapped\")", "Outer");

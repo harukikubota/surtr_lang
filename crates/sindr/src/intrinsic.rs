@@ -39,6 +39,7 @@ impl IntrinsicOwner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CanonicalTraitIdentity {
     Monad,
+    MonadFail,
     Alternative,
 }
 
@@ -46,6 +47,7 @@ impl CanonicalTraitIdentity {
     pub const fn surface_name(self) -> &'static str {
         match self {
             Self::Monad => "Monad",
+            Self::MonadFail => "MonadFail",
             Self::Alternative => "Alternative",
         }
     }
@@ -55,6 +57,7 @@ impl CanonicalTraitIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CanonicalTraitMethodIdentity {
     MonadBind,
+    MonadFailFail,
     AlternativeEmpty,
 }
 
@@ -62,6 +65,7 @@ impl CanonicalTraitMethodIdentity {
     pub const fn trait_identity(self) -> CanonicalTraitIdentity {
         match self {
             Self::MonadBind => CanonicalTraitIdentity::Monad,
+            Self::MonadFailFail => CanonicalTraitIdentity::MonadFail,
             Self::AlternativeEmpty => CanonicalTraitIdentity::Alternative,
         }
     }
@@ -69,6 +73,7 @@ impl CanonicalTraitMethodIdentity {
     pub const fn method_name(self) -> &'static str {
         match self {
             Self::MonadBind => "bind",
+            Self::MonadFailFail => "fail",
             Self::AlternativeEmpty => "empty",
         }
     }
@@ -154,16 +159,10 @@ pub struct DoRouteContract {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FailureEffectAction {
-    PreserveResultEffectFailure,
-    OverrideWith(CanonicalTraitMethodIdentity),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FailureEffectContract {
-    pub result_effect_action: FailureEffectAction,
+    pub monad_fail_method: CanonicalTraitMethodIdentity,
     pub fallback_capability: CanonicalTraitIdentity,
-    pub fallback_action: FailureEffectAction,
+    pub fallback_method: CanonicalTraitMethodIdentity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -229,11 +228,9 @@ const DO_ROUTES: &[DoRouteContract] = &[
         capability: CanonicalTraitIdentity::Monad,
         same_carrier: DO_CARRIER,
         lowering: DoRouteLowering::FailureEffect(FailureEffectContract {
-            result_effect_action: FailureEffectAction::PreserveResultEffectFailure,
+            monad_fail_method: CanonicalTraitMethodIdentity::MonadFailFail,
             fallback_capability: CanonicalTraitIdentity::Alternative,
-            fallback_action: FailureEffectAction::OverrideWith(
-                CanonicalTraitMethodIdentity::AlternativeEmpty,
-            ),
+            fallback_method: CanonicalTraitMethodIdentity::AlternativeEmpty,
         }),
     },
     DoRouteContract {
@@ -241,11 +238,9 @@ const DO_ROUTES: &[DoRouteContract] = &[
         capability: CanonicalTraitIdentity::Monad,
         same_carrier: DO_CARRIER,
         lowering: DoRouteLowering::FailureEffect(FailureEffectContract {
-            result_effect_action: FailureEffectAction::PreserveResultEffectFailure,
+            monad_fail_method: CanonicalTraitMethodIdentity::MonadFailFail,
             fallback_capability: CanonicalTraitIdentity::Alternative,
-            fallback_action: FailureEffectAction::OverrideWith(
-                CanonicalTraitMethodIdentity::AlternativeEmpty,
-            ),
+            fallback_method: CanonicalTraitMethodIdentity::AlternativeEmpty,
         }),
     },
 ];

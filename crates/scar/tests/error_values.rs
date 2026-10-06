@@ -1,0 +1,56 @@
+#[allow(dead_code)]
+mod support;
+use sindr::policy::RuntimeSourcePolicy;
+
+#[test]
+fn errors_are_ordinary_opaque_values() {
+    for source in [
+        "deferror Trouble(code: Int) { \"trouble\" }\ndef relay(error: Error) -> Error { error }\nerror: Error = relay(Trouble(1))\nerrors: List<Error> = [error]\nsaved: Result<Error> = Ok(error)",
+        "deferror Trouble(code: Int) { \"trouble\" }\nfactory: (Int -> Error) = &Trouble\nwrap: (Error -> Result<Int>) = &Err\nvalue = wrap(factory(1))",
+        "factory: (-> Error) = &NoneError\nerror = factory()",
+        "impl Int { defextractor relay(v: Int) -> MatchResult<Int> { error = NoneError()\nMatchResult::Err(error) } }",
+        "deferror Trouble(code: Int) { \"trouble\" }\nerror = Trouble(1)\nhandler: (Error -> String) = {|e: Error| Error::message(e)}\nname = handler(error)",
+    ] {
+        support::typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect(source);
+    }
+}
+
+#[test]
+fn error_observation_paths_are_readonly() {
+    for source in [
+        "error = NoneError()\nkind: String = error.kind\nmessage: String = error.message\npath = Error.message\nread: String = Facet::view(path, error)",
+        "defrecord Failure(error: Error)\nfailure = Failure(NoneError())\nmessage: String = failure.error.message\npath = Failure.error.message\nread: String = Facet::view(path, failure)",
+    ] {
+        support::typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect(source);
+    }
+    for source in [
+        "value = Facet::set(Error.message, NoneError(), \"changed\")",
+        "value = Facet::over(Error.kind, NoneError(), {|value| value})",
+        "update = &Facet::set(Error.message, &1, \"changed\")",
+        "defrecord Failure(error: Error)\nvalue = Facet::set(Failure.error.message, Failure(NoneError()), \"changed\")",
+        "value = Facet::bulk_update(NoneError()) { message <- set(\"changed\") }",
+        "path = Facet::compose(ErrorEnvelope.error, Error.message)\ndefrecord ErrorEnvelope(error: Error)\nvalue = Facet::set(path, ErrorEnvelope(NoneError()), \"changed\")",
+        "value = (NoneError()).location",
+        "value = (NoneError()).stack_trace",
+        "deferror Trouble(code: Int) { \"trouble\" }\npath = Trouble.code",
+    ] {
+        support::typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+    }
+}
+
+#[test]
+fn error_representation_and_capabilities_stay_private() {
+    for source in [
+        "value = Error()",
+        "value = Error",
+        "factory = &Error",
+        "value = Error(kind: \"fake\", message: \"fake\")",
+        "deferror Trouble(code: Int) { \"trouble\" }\nvalue = match Trouble(1) { Trouble(code) => code, _ => 0 }",
+        "deftrait ReadError { def read(value: Self) -> Int }\nimpl ReadError for Error { def read(value: Error) -> Int { 1 } }",
+        "value = NoneError == NoneError",
+        "value = to_string(NoneError)",
+    ] {
+        let result = support::resolve_with_builtin_prelude_result(source).map(support::typecheck);
+        assert!(result.is_err() || result.unwrap().is_err(), "must reject: {source}");
+    }
+}

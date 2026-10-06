@@ -48,14 +48,14 @@ pub(super) struct SignatureOccurrences {
     pub(super) declared_return_type_arguments: BTreeMap<TypeInputId, SourceOrigin>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct DirectConstructorInputs {
     // A direct Trait name is the anonymous spelling of one constructor
     // variable with that single capability inside a signature.
     witnesses: BTreeMap<String, DirectConstructorInput>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct DirectConstructorInput {
     pub(super) witness: Ty,
     pub(super) trait_id: sigil::resolved::ResolvedId,

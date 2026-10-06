@@ -57,8 +57,10 @@ impl Result {
   }
 
   defp _all_cons(head: Result<$A>, tail: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
-    value =? head
-    _all_go(tail, [value, ..acc_rev])
+    match head {
+      Ok(value) => _all_go(tail, [value, ..acc_rev]),
+      Err(error) => Err(error),
+    }
   }
 
   @doc """
@@ -105,9 +107,9 @@ impl Result {
 
   An error placeholder normalizes to `(-> Error)`. For `Result<Int>`,
   `&Result::map_err(&1, &2)` has the shape
-  `(Result<Int>, (-> Error) -> Result<Int>)`, but existing Error restrictions
-  prevent calling or forwarding that capture as an ordinary function value.
-  Fix the error expression inside the capture to expose only the Result input.
+  `(Result<Int>, (-> Error) -> Result<Int>)`. This capture can be stored,
+  called, or forwarded as an ordinary function value. Fixing the error
+  expression inside the capture exposes only the Result input.
 
   Use `cause(...)` when the previous error should remain in the chain.
   ## REPL
@@ -131,9 +133,9 @@ impl Result {
 
   An error placeholder normalizes to `(-> Error)`. For `Result<Int>`,
   `&Result::cause(&1, &2)` has the shape
-  `(Result<Int>, (-> Error) -> Result<Int>)`, which existing Error restrictions
-  prevent using as an ordinary function value. Fix the error expression inside
-  the capture instead. Unlike `map_err`, the new error keeps the old error in
+  `(Result<Int>, (-> Error) -> Result<Int>)` and is an ordinary function value.
+  The error expression can also be fixed inside the capture.
+  Unlike `map_err`, the new error keeps the old error in
   its cause chain; the expression still runs only for `Err`.
 
   This keeps `Error` runtime-managed and opaque while still allowing domain layering.
@@ -187,7 +189,7 @@ impl Result {
   The kind marker does not construct an Error and does not depend on the
   constructor's payload arity. In a complete call capture, keep the concrete
   type name in place; a direct placeholder cannot replace the marker.
-  Existing restrictions on Error-observing handlers remain in force.
+  The Error handler follows the ordinary callable rules.
   The handler is evaluated only when
   `value` is `Err(...)` with the same concrete kind.
   ## REPL
@@ -203,9 +205,13 @@ impl Result {
   Ok((1, 2))
   """
   def zip(left: Result<$A>, right: Result<$B>) -> Result<($A, $B)> {
-    ll =? left
-    rr =? right
-    Ok((ll, rr))
+    match left {
+      Ok(ll) => match right {
+        Ok(rr) => Ok((ll, rr)),
+        Err(error) => Err(error),
+      },
+      Err(error) => Err(error),
+    }
   }
 
   @doc """
@@ -215,10 +221,16 @@ impl Result {
   Ok((1, 2, 3))
   """
   def zip3(a: Result<$A>, b: Result<$B>, c: Result<$C>) -> Result<($A, $B, $C)> {
-    aa =? a
-    bb =? b
-    cc =? c
-    Ok((aa, bb, cc))
+    match a {
+      Ok(aa) => match b {
+        Ok(bb) => match c {
+          Ok(cc) => Ok((aa, bb, cc)),
+          Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+      },
+      Err(error) => Err(error),
+    }
   }
 
   @doc """
@@ -238,8 +250,10 @@ impl Result {
   Ok(1)
   """
   def flatten(value: Result<Result<$A>>) -> Result<$A> {
-    inner =? value
-    inner
+    match value {
+      Ok(inner) => inner,
+      Err(error) => Err(error),
+    }
   }
 
   @doc """
@@ -285,8 +299,10 @@ impl Result {
   Ok(2)
   """
   def then(value: Result<$A>, next: (-> Result<$B>)) -> Result<$B> {
-    _ =? value
-    next()
+    match value {
+      Ok(_) => next(),
+      Err(error) => Err(error),
+    }
   }
 }
 
@@ -373,6 +389,43 @@ impl Monad for Result<$T> {
     match self {
       Ok(value) => mapper(value),
       _ => self,
+    }
+  }
+}
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for Result<$T>
+where
+  $T: MonadFail.$A
+{
+  def fail::<Result<$T>>(error: Error) -> Result<$T> {
+    Err(error)
+  }
+}
+
+@doc """
+Convert Ok to Right and Err to Left without regenerating the Error.
+
+## REPL
+xldr(1)> value: Either<Error, Int> = to(Ok(3))
+xldr(2)> restored: Result<Int> = to(value)
+xldr(3)> restored
+Ok(3)
+"""
+impl Convert<Either<Error, $A>> for Result<$A> {
+  def to::<Either<Error, $A>>(self: Self) -> Either<Error, $A> {
+    match self {
+      Ok(value) => Either::Right(value),
+      Err(error) => Either::Left(error),
+    }
+  }
+}
+
+impl Convert<Result<$A>> for Either<Error, $A> {
+  def to::<Result<$A>>(self: Self) -> Result<$A> {
+    match self {
+      Either::Right(value) => Ok(value),
+      Either::Left(error) => Err(error),
     }
   }
 }

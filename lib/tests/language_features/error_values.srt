@@ -1,0 +1,40 @@
+deferror TransportError(code: Int) { "transported" }
+defrecord ErrorEnvelope(error: Error)
+
+def relay_error(error: Error) -> Error { error }
+def save_error(error: Error) -> (-> Error) { {|| error} }
+
+import Test;
+
+test("Error values") {
+  it("transports Error through calls, containers, closures and successful Results") {
+    do {
+      factory: (Int -> Error) = &TransportError
+      wrap: (Error -> Result<Int>) = &Result::Err(&1)
+      error: Error = relay_error(factory(1))
+      errors: List<Error> = [error]
+      empty: (-> Error) = &NoneError
+      assert_eq("None Value.", Error::message(empty()))
+      saved = save_error(error)
+      success =? Ok(saved())
+      assert_eq("transported", success.message)
+      assert_eq("TransportError", success.kind)
+      assert_eq(1, List::len(errors))
+      assert_err_kind(TransportError, wrap(success))
+    }
+  }
+
+  it("reads Error information through values, paths, composition and capture") {
+    do {
+      error = TransportError(2)
+      envelope = ErrorEnvelope(error)
+      message: (Error -> String) = &Error.message
+      path = ErrorEnvelope.error.message
+      assert_eq(Error::message(error), error.message)
+      assert_eq(Error::kind(error), Facet::view(Error.kind, error))
+      assert_eq("transported", message(error))
+      assert_eq("transported", envelope.error.message)
+      assert_eq("transported", Facet::view(path, envelope))
+    }
+  }
+}

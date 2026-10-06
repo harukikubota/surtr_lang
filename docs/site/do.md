@@ -60,19 +60,19 @@ mismatch: Result<Int> = do::<Result> {
   2 <- Ok(1)
   Ok(3)
 }
-mismatch # Err(PatternMismatch("Pattern did not match."))
+mismatch # Ok(Option::None)
 ```
 
 SafeBindでも、RHSの`Err(error)`と、matcherの不一致から生成したErrorを保持します。
 list/string等の構造pattern固有Errorを一般的なErrorへ書き換えません。
-Extractor は `MatchResult` を返し、`Err` の元 Error を Result-effect route で保持します。Alternative route では破棄します。
+Extractor は `MatchResult` を返し、`Err` の元 Error を MonadFail の経路 で保持します。Alternative route では破棄します。
 
 ```surtr
 checked: Result<Int> = do::<Result> {
   Option::Some(value) =? Option<Int>::None
   Ok(value)
 }
-checked # Err(PatternMismatch("Pattern did not match."))
+checked # Ok(Option::None)
 ```
 
 SafeBindは`<-`の別表記ではありません。non-Result RHSではpartial patternが値全体を検査します。
@@ -82,9 +82,9 @@ SafeBind RHSだけからdo carrierをResultへ決定する規則もありませ�
 ## Alternative実装型
 
 通常sequenceには`Monad`が必要です。failure matcherとSafeBindのfailure targetは、
-`Result effect > Alternative > Monad`の順で決まります。Monadだけではfailure targetを提供できません。
+`MonadFail > Alternative > Monad`の順で決まります。Monadだけではfailure targetを提供できません。
 
-Result effectを持たないcarrierでは`Alternative`が必要で、failureのError/messageを破棄して
+MonadFailを実装しないcarrierでは`Alternative`が必要で、failureのError/messageを破棄して
 そのcarrierの`empty`へ接続します。Optionなら`None`、Listなら空Listです。
 
 ```surtr
@@ -101,7 +101,7 @@ checked: Option<Int> = do::<Option> {
 checked # Option::None
 ```
 
-ResultもAlternativeも持たないcarrierではcompile errorになります。
+MonadFailもAlternativeも持たないcarrierではcompile errorになります。
 Identity/Reader/Stateのtotal `<-`は使えますが、partial `<-`やSafeBindは使えません。
 user-defined Monad/Alternativeでも同じ規則を使い、標準型だけの特例ではありません。
 
@@ -121,28 +121,27 @@ sequenced: OptionT<Result, Int> = do::<OptionT<Result, _>> {
 OptionT::run(sequenced) # Ok(Option::Some(21))
 ```
 
-`OptionT<Result, A>`は明示`@result_effect`により、baseがcanonical Resultへ直接具体化したとき
-Result effectを持ちます。内部のどこかにResultがあるだけでは対象になりません。
-SafeBindとpartial `<-`ではOptionTのAlternativeよりResult effectを優先し、Errorをbase Resultへ保持します。
+`OptionT`にはMonadFail実装がありません。do内のSafeBindとpartial `<-`の失敗は、
+baseによらずAlternativeの`empty`へ接続します。Result baseでは`Ok(None)`です。
 
 ```surtr
 checked: OptionT<Result, Int> = do::<OptionT<Result, _>> {
   Option::Some(value) =? Option<Int>::None
   OptionT::some::<Result>(value)
 }
-OptionT::run(checked) # Err(PatternMismatch("Pattern did not match."))
+OptionT::run(checked) # Ok(Option::None)
 
 mismatch: OptionT<Result, Int> = do::<OptionT<Result, _>> {
   2 <- OptionT::some::<Result>(1)
   OptionT::some::<Result>(3)
 }
-OptionT::run(mismatch) # Err(PatternMismatch("Pattern did not match."))
+OptionT::run(mismatch) # Ok(Option::None)
 
 blocked: OptionT<Result, Unit> = guard(False)
 OptionT::run(blocked) # Ok(Option::None)
 ```
 
-`guard`は通常のAlternative関数で、Result effectを参照しません。
+`guard`は通常のAlternative関数で、MonadFailを参照しません。
 `guard::<List>(condition)`が返す`List<Unit>`も、そのまま途中の式としてsequenceできます。
 `True`なら後続文へ進み、`False`ならその経路の後続文を評価せず空Listを返します。
 
@@ -157,16 +156,15 @@ selected # [2, 3]
 
 liftしたbaseのErrをtotal `<-`でsequenceする場合も、通常のTransformer Monad実装がそのErrを保持します。
 
-標準型でResult effectが付くのはOptionTだけです。
-EitherTはAlternativeも持たず、ReaderT/StateTのAlternativeにはbaseのAlternativeも必要です。
-したがって標準`EitherT<L, Result, A>`、`ReaderT<E, Result, A>`、`StateT<S, Result, A>`では
-total `<-`は利用できても、partial `<-`やSafeBindは能力不足になります。
+`ResultT<M, A>`と`EitherT<Error, M, A>`は内側にErrorを保持します。
+`ReaderT<E, M, A>`と`StateT<S, M, A>`は、baseがMonadFailを実装するとき、
+run時にbaseの`fail`を返します。
 
 ## その他の境界
 
 - `guard`、`pure`、`return`は通常callです。引数式の評価をdoが特別に遅延化しません。
-- nested doはそれぞれ自身のcarrierでfailure targetを決め、外側のResult effectを継承しません。
-- do外のSafeBindは最も近いcallable自身のfailure targetを使います。通常の関数・ClosureではResult/Result-effect return target、Extractor・ExtractorClosure本文ではMatchResult return targetへ元Errorを保持して返します。
+- nested doはそれぞれ自身のcarrierでfailure targetを決め、外側のMonadFailを継承しません。
+- do外のSafeBindは最も近いcallable自身のfailure targetを使います。通常の関数・ClosureではMonadFailを実装する返り型、Extractor・ExtractorClosure本文ではMatchResult return targetへ元Errorを保持して返します。
 - `DoBlock`はcompiler専用signature markerで、利用者が値、field、annotation、implに使う型ではありません。
 
 構文の一覧は[言語リファレンス](./language-reference.md)、Errorの扱いは[エラーハンドリング](./error-handling.md)、

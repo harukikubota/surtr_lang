@@ -282,6 +282,7 @@ fn collect_missing_singleton_calls(
     first_missing: &mut HashMap<String, Span>,
 ) {
     let mut pattern_expressions = Vec::new();
+    pattern_expressions.extend(node.monad_fail_call());
     match &node.node {
         TypedInner::Bind(pattern, _)
         | TypedInner::SafeBind(pattern, _, _, _)
@@ -318,8 +319,6 @@ fn collect_missing_singleton_calls(
     match &node.node {
         TypedInner::Lit(_)
         | TypedInner::Var(_)
-        | TypedInner::ResultEffectFailure(_)
-        | TypedInner::DeferredDoFailure(_)
         | TypedInner::ListNil
         | TypedInner::ProcessContextHandler { .. }
         | TypedInner::FacetPath(_)
@@ -2319,12 +2318,12 @@ mod tests {
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
-        ComposeFlavor, DeferredDoFailureTarget, DoSafeBindOrigins, ResultPreserveConstruction,
-        ResultPreserveTarget, SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin,
-        TraitDispatch, TraitDispatchTarget, TraitObligation, TypedDbgArg, TypedDoSafeBind,
-        TypedFacetPath, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedMatchArm,
-        TypedMatchPattern, TypedNode, TypedPattern, TypedProcessSpec, TypedProgram,
-        TypedReturnTypeArgument, TypedValueParameter,
+        ComposeFlavor, DeferredDoFailureTarget, DoSafeBindOrigins, MonadFailTarget,
+        SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin, TraitDispatch,
+        TraitDispatchTarget, TraitObligation, TypedDbgArg, TypedDoSafeBind, TypedFacetPath,
+        TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedMatchArm, TypedMatchPattern,
+        TypedNode, TypedPattern, TypedProcessSpec, TypedProgram, TypedReturnTypeArgument,
+        TypedValueParameter,
     };
     use scar::types::{NominalType, Ty};
     use sigil::resolved::ResolvedId;
@@ -4366,13 +4365,36 @@ mod tests {
                     payload_ty: Ty::Int,
                     error_ty: Ty::Error,
                 },
-                failure_target: SafeBindFailureTarget::DoResultContext(Box::new(
-                    ResultPreserveTarget {
-                        carrier_ty: result_ty.clone(),
-                        error_ty: Ty::Error,
-                        construction: ResultPreserveConstruction::CanonicalResult,
+                failure_target: SafeBindFailureTarget::DoMonadFail(Box::new(MonadFailTarget {
+                    carrier_ty: result_ty.clone(),
+                    error_id: sigil::resolved::ResolvedId {
+                        name: "error".into(),
+                        qualified_name: None,
+                        unique_id: 91999,
+                        compiler_generated: true,
+                        symbol_info: None,
+                        span: spire::ast::Span { start: 0, end: 0 },
                     },
-                )),
+                    call: Box::new(TypedNode {
+                        ty: Ty::Error,
+                        span: spire::ast::Span { start: 0, end: 0 },
+                        node: TypedInner::ConstructorCall(
+                            1,
+                            vec![TypedNode {
+                                ty: Ty::Error,
+                                span: spire::ast::Span { start: 0, end: 0 },
+                                node: TypedInner::Var(sigil::resolved::ResolvedId {
+                                    name: "error".into(),
+                                    qualified_name: None,
+                                    unique_id: 91999,
+                                    compiler_generated: true,
+                                    symbol_info: None,
+                                    span: spire::ast::Span { start: 0, end: 0 },
+                                }),
+                            }],
+                        ),
+                    }),
+                })),
                 continuation: Box::new(TypedNode {
                     ty: result_ty,
                     span: span(24, 36),
@@ -4618,13 +4640,38 @@ mod tests {
     fn invalid_extractor_outcome_halts_instead_of_returning_a_user_error() {
         let mut gene = Codegen::new();
         gene.in_function = true;
-        gene.safe_bind_failure_target = Some(SafeBindFailureTarget::EnclosingResultContext(
-            Box::new(ResultPreserveTarget {
+        gene.safe_bind_failure_target = Some(SafeBindFailureTarget::EnclosingMonadFail(Box::new(
+            MonadFailTarget {
                 carrier_ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
-                error_ty: Ty::Error,
-                construction: ResultPreserveConstruction::CanonicalResult,
-            }),
-        ));
+                error_id: sigil::resolved::ResolvedId {
+                    name: "error".into(),
+                    qualified_name: None,
+                    unique_id: 91999,
+                    compiler_generated: true,
+                    symbol_info: None,
+                    span: spire::ast::Span { start: 0, end: 0 },
+                },
+                call: Box::new(TypedNode {
+                    ty: Ty::Error,
+                    span: spire::ast::Span { start: 0, end: 0 },
+                    node: TypedInner::ConstructorCall(
+                        1,
+                        vec![TypedNode {
+                            ty: Ty::Error,
+                            span: spire::ast::Span { start: 0, end: 0 },
+                            node: TypedInner::Var(sigil::resolved::ResolvedId {
+                                name: "error".into(),
+                                qualified_name: None,
+                                unique_id: 91999,
+                                compiler_generated: true,
+                                symbol_info: None,
+                                span: spire::ast::Span { start: 0, end: 0 },
+                            }),
+                        }],
+                    ),
+                }),
+            },
+        )));
         gene.emit_invalid_extractor_outcome_failure(&span(1, 8))
             .expect("internal failure emission");
         let (opcodes, _) = gene.finalize().expect("labels resolve");
@@ -5136,7 +5183,8 @@ fn facet_segment_label(segment: &TypedFacetSegment) -> String {
             origin_index: Some(index),
             ..
         } => format!("_{index}"),
-        TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+        TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+        | TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
         TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
         TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
         TypedFacetSegment::ListIndex { display, .. }
@@ -5221,6 +5269,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
             for segment in &path.segments {
                 let label = facet_segment_label(segment);
                 let focus_ty = match segment {
+                    TypedFacetSegment::ReadonlyBuiltin { .. } => Ty::Str,
                     TypedFacetSegment::Field { .. } | TypedFacetSegment::Tuple { .. } => {
                         match &current_source {
                             Ty::Tuple(items) => match segment {
@@ -5300,6 +5349,9 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     _ => prefix.push_str(&label),
                 }
                 let (kind, fallible, reason, policy) = match segment {
+                    TypedFacetSegment::ReadonlyBuiltin { .. } => {
+                        ("observation", false, "builtin observation", "readonly")
+                    }
                     TypedFacetSegment::Field {
                         readonly,
                         private,
@@ -5464,10 +5516,13 @@ fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
         apis.push("preview: unavailable (concrete update slots)".to_string());
     }
     let readonly_boundary = path.source_readonly_root
-        || path
-            .segments
-            .iter()
-            .any(|segment| matches!(segment, TypedFacetSegment::Field { readonly: true, .. }));
+        || path.segments.iter().any(|segment| {
+            matches!(
+                segment,
+                TypedFacetSegment::ReadonlyBuiltin { .. }
+                    | TypedFacetSegment::Field { readonly: true, .. }
+            )
+        });
     if path.is_infallible_structural() && !readonly_boundary {
         apis.push("put: available when replacement B derives T".to_string());
     }
@@ -7680,23 +7735,6 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
             }
 
-            TypedInner::ResultEffectFailure(target) => {
-                self.emit_result_effect_error_value(
-                    target,
-                    "PatternMismatch",
-                    "Pattern did not match.",
-                    &node.span,
-                );
-            }
-
-            TypedInner::DeferredDoFailure(_) => {
-                return Err(CodegenError {
-                    message: "Internal invariant broken: deferred do failure policy reached Forge"
-                        .into(),
-                    span: node.span.clone(),
-                });
-            }
-
             TypedInner::EagerBoundary(inner) => self.emit_node(inner)?,
 
             TypedInner::Bind(pat, rhs) => {
@@ -8852,6 +8890,12 @@ impl Codegen {
         }
 
         match &path.segments[segment_idx] {
+            TypedFacetSegment::ReadonlyBuiltin { .. } => {
+                return Err(CodegenError {
+                    message: "Readonly Facet update reached code generation".into(),
+                    span: span.clone(),
+                })
+            }
             TypedFacetSegment::Field {
                 field_index,
                 container_field_count,
@@ -9309,6 +9353,11 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         for (segment_idx, segment) in path.segments.iter().enumerate() {
             match segment {
+                TypedFacetSegment::ReadonlyBuiltin { builtin_id, .. } => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit_trait_builtin(sindr::signature::BuiltinId(*builtin_id), 1, span)?;
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
                 TypedFacetSegment::Field { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetField {
@@ -9474,7 +9523,8 @@ impl Codegen {
                 origin_index: Some(index),
                 ..
             } => format!("._{index}"),
-            TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
+            TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+            | TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
             TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
             TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
             TypedFacetSegment::ListIndex { display, .. }
@@ -9522,7 +9572,7 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         if matches!(
             failure_target,
-            SafeBindFailureTarget::DoResultContext(_)
+            SafeBindFailureTarget::DoMonadFail(_)
                 | SafeBindFailureTarget::DoAlternative { .. }
                 | SafeBindFailureTarget::Deferred(_)
         ) {
@@ -9557,7 +9607,7 @@ impl Codegen {
         }
         if !matches!(
             failure_target,
-            SafeBindFailureTarget::DoResultContext(_) | SafeBindFailureTarget::DoAlternative { .. }
+            SafeBindFailureTarget::DoMonadFail(_) | SafeBindFailureTarget::DoAlternative { .. }
         ) {
             return Err(CodegenError {
                 message: "Internal invariant broken: DoSafeBind requires a do-local failure target"
@@ -9914,72 +9964,45 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_result_effect_error_value(
+    fn emit_monad_fail_from_error_stack(
         &mut self,
-        target: &ResultPreserveTarget,
+        target: &MonadFailTarget,
+    ) -> Result<(), CodegenError> {
+        let slot = self.alloc_slot(target.error_id.unique_id);
+        self.emit(Opcode::StoreLocal(slot));
+        self.emit_node(&target.call)
+    }
+
+    fn emit_monad_fail_error_value(
+        &mut self,
+        target: &MonadFailTarget,
         kind: &str,
         message: &str,
         span: &Span,
-    ) {
-        if let ResultPreserveConstruction::AnnotatedStruct { tag } = target.construction {
-            let outer_tag = self.add_constant(Constant::Tag(tag));
-            self.emit(Opcode::LoadConst(outer_tag));
-        }
-        let err_tag = self.add_constant(Constant::Tag(1));
-        self.emit(Opcode::LoadConst(err_tag));
+    ) -> Result<(), CodegenError> {
         self.emit_error_value(kind, message, span);
-        self.emit(Opcode::StructNew { field_count: 1 });
-        if matches!(
-            target.construction,
-            ResultPreserveConstruction::AnnotatedStruct { .. }
-        ) {
-            self.emit(Opcode::StructNew { field_count: 1 });
-        }
+        self.emit_monad_fail_from_error_stack(target)
     }
 
-    fn emit_result_effect_error_value_from_message_stack(
+    fn emit_monad_fail_error_value_from_message_stack(
         &mut self,
-        target: &ResultPreserveTarget,
+        target: &MonadFailTarget,
         kind: &str,
         span: &Span,
         diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
-    ) {
-        let msg_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        self.emit(Opcode::StoreLocal(msg_slot));
-        if let ResultPreserveConstruction::AnnotatedStruct { tag } = target.construction {
-            let outer_tag = self.add_constant(Constant::Tag(tag));
-            self.emit(Opcode::LoadConst(outer_tag));
-        }
-        let err_tag = self.add_constant(Constant::Tag(1));
-        self.emit(Opcode::LoadConst(err_tag));
-        self.emit(Opcode::LoadLocal(msg_slot));
+    ) -> Result<(), CodegenError> {
         self.emit_error_value_from_stack_with_diagnostic(kind, span, diagnostic);
-        self.emit(Opcode::StructNew { field_count: 1 });
-        if matches!(
-            target.construction,
-            ResultPreserveConstruction::AnnotatedStruct { .. }
-        ) {
-            self.emit(Opcode::StructNew { field_count: 1 });
-        }
+        self.emit_monad_fail_from_error_stack(target)
     }
 
-    fn emit_result_effect_from_result_local(
+    fn emit_monad_fail_from_result_local(
         &mut self,
-        target: &ResultPreserveTarget,
+        target: &MonadFailTarget,
         result_slot: u32,
-    ) {
-        if let ResultPreserveConstruction::AnnotatedStruct { tag } = target.construction {
-            let outer_tag = self.add_constant(Constant::Tag(tag));
-            self.emit(Opcode::LoadConst(outer_tag));
-        }
+    ) -> Result<(), CodegenError> {
         self.emit(Opcode::LoadLocal(result_slot));
-        if matches!(
-            target.construction,
-            ResultPreserveConstruction::AnnotatedStruct { .. }
-        ) {
-            self.emit(Opcode::StructNew { field_count: 1 });
-        }
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit_monad_fail_from_error_stack(target)
     }
 
     fn emit_pattern_failure(
@@ -9991,19 +10014,19 @@ impl Codegen {
         if self.emit_do_alternative_failure_jump(&span)? {
             return Ok(());
         }
-        if let Some(SafeBindFailureTarget::DoResultContext(target)) =
+        if let Some(SafeBindFailureTarget::DoMonadFail(target)) =
             self.safe_bind_failure_target.clone()
         {
             let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
                 message: "Internal invariant broken: do Result SafeBind has no local join".into(),
                 span: span.clone(),
             })?;
-            self.emit_result_effect_error_value(&target, kind, message, &span);
+            self.emit_monad_fail_error_value(&target, kind, message, &span)?;
             self.emit_jump(end_label);
-        } else if let Some(SafeBindFailureTarget::EnclosingResultContext(target)) =
+        } else if let Some(SafeBindFailureTarget::EnclosingMonadFail(target)) =
             self.safe_bind_failure_target.clone()
         {
-            self.emit_result_effect_error_value(&target, kind, message, &span);
+            self.emit_monad_fail_error_value(&target, kind, message, &span)?;
             self.emit(Opcode::Return);
         } else if let Some(SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }) =
             self.safe_bind_failure_target.clone()
@@ -10101,29 +10124,29 @@ impl Codegen {
         ) {
             self.emit(Opcode::Pop);
             self.emit_do_alternative_failure_jump(&span)?;
-        } else if let Some(SafeBindFailureTarget::DoResultContext(target)) =
+        } else if let Some(SafeBindFailureTarget::DoMonadFail(target)) =
             self.safe_bind_failure_target.clone()
         {
             let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
                 message: "Internal invariant broken: do Result SafeBind has no local join".into(),
                 span: span.clone(),
             })?;
-            self.emit_result_effect_error_value_from_message_stack(
+            self.emit_monad_fail_error_value_from_message_stack(
                 &target,
                 kind,
                 &span,
                 diagnostic.clone(),
-            );
+            )?;
             self.emit_jump(end_label);
-        } else if let Some(SafeBindFailureTarget::EnclosingResultContext(target)) =
+        } else if let Some(SafeBindFailureTarget::EnclosingMonadFail(target)) =
             self.safe_bind_failure_target.clone()
         {
-            self.emit_result_effect_error_value_from_message_stack(
+            self.emit_monad_fail_error_value_from_message_stack(
                 &target,
                 kind,
                 &span,
                 diagnostic.clone(),
-            );
+            )?;
             self.emit(Opcode::Return);
         } else if let Some(SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }) =
             self.safe_bind_failure_target.clone()
@@ -11016,19 +11039,19 @@ impl Codegen {
         if self.emit_do_alternative_failure_jump(&span)? {
             return Ok(());
         }
-        if let Some(SafeBindFailureTarget::DoResultContext(target)) =
+        if let Some(SafeBindFailureTarget::DoMonadFail(target)) =
             self.safe_bind_failure_target.clone()
         {
-            self.emit_result_effect_from_result_local(&target, result_slot);
+            self.emit_monad_fail_from_result_local(&target, result_slot)?;
             let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
                 message: "Internal invariant broken: do Result SafeBind has no local join".into(),
                 span: span.clone(),
             })?;
             self.emit_jump(end_label);
-        } else if let Some(SafeBindFailureTarget::EnclosingResultContext(target)) =
+        } else if let Some(SafeBindFailureTarget::EnclosingMonadFail(target)) =
             self.safe_bind_failure_target.clone()
         {
-            self.emit_result_effect_from_result_local(&target, result_slot);
+            self.emit_monad_fail_from_result_local(&target, result_slot)?;
             self.emit(Opcode::Return);
         } else if let Some(SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }) =
             self.safe_bind_failure_target.clone()

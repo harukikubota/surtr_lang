@@ -59,21 +59,22 @@ impl数・順序・表示名・field探索による逆推論、暗黙lift、runt
 
 Monadは常に要求する。total `<-`はMonadだけでsequenceする。
 partial `<-`と合法なSafeBindのfailure targetは共通FailureEffectで、
-`ResultEffect > Alternative > Monad`の順に選択する。
+`MonadFail > Alternative > Monad`の順に選択する。
 
-- canonical Resultまたは有効な`@result_effect` carrier: Errorを保持して最終carrierを構築する。
-- Result effectなし、Alternativeあり: resolved `Alternative::empty`へ接続する。
+- canonical `MonadFail` を実装する carrier: 通常の `fail(error)` 呼出しで元の Error を保持する。
+- MonadFailなし、Alternativeあり: resolved `Alternative::empty`へ接続する。
 - どちらもなし: capability error。Monad単独ではfailure targetを構築しない。
 
-`@result_effect`の宣言検証と直接baseの条件はTrait system正本に従う。
-標準適用対象はOptionTのみ。内部にResultがあるという理由ではeffectを付与しない。
+`MonadFail` の constructor shape と payload slot は親 `Monad` から引き継ぐ。失敗先は返り型・期待型・宣言した generic bound から決定し、SafeBind の RHS は推論元にしない。通常 callable では `MonadFail` のみを使い、do 内だけで `Alternative::empty` を次の候補とする。metadata の不正や曖昧な dispatch を Alternative への切替えで隠さない。
+OptionT は標準 MonadFail を持たず、do の Pattern failure は Alternative で処理する。base の Err は bind 自身が保持する。
 `guard`はこの選択に参加せず、常に通常のAlternative callである。
 nested doやdo内の別callableはそれぞれ自身のfailure contextを持ち、外側からeffectを借りない。
 
+SafeBind自体にはMonadFail / AlternativeのTrait requirementを持たせず、失敗を扱うcontextが能力を検査する。
 SafeBindはcanonical Resultの外側一段だけを射影する。
 non-Result RHSは値と型全体を通常MatchBlock検査へ渡し、partial patternだけを受理する。
 static pattern errorを先に報告し、型関係が成立するtotal non-Resultは既存の二SafeBind reasonで拒否する。
-Result-effect return targetでもTransformer RHSを自動unwrapしない。
+MonadFail の返り先でもTransformer RHSを自動unwrapしない。
 
 文末の `?` の対象型は canonical `Result<UnitSuccess, E>` とする。
 `UnitSuccess := Unit | Result<UnitSuccess, E>` で、alias は通常の正規化を行い、
@@ -89,14 +90,14 @@ carrier の推論元にせず、末尾の Unit を最終 Monad 値へ暗黙 wrap
 ブロック末尾の `?` を一律に禁じる構文規則は追加しない。
 optional 型や FacetPath optional segment の既存 `?` と構文所有者を区別し、fallback は設けない。
 
-Result-preserving routeはRHS Err、既存pattern Errorのkind/message/location/causeを保存する。
-Extractor / ExtractorClosure は MatchResult を返し、Err の元 Error を Result-effect route で保持する。Alternative route は破棄する。Extractor / ExtractorClosure 本文内でも do の failure は do-local target に接続し、外側 MatchResult へ直接 return しない。
-partial `<-`のno-matchは共通pattern ErrorをResult effectで保持し、Alternative routeではemptyにする。
-Result-effect route の主キャプションは Error の生成位置であり、構文 Pattern では失敗した子、
+MonadFail routeはRHS Err、既存pattern Errorのkind/message/location/causeを保存する。
+Extractor / ExtractorClosure は MatchResult を返し、Err の元 Error を MonadFail route で保持する。Alternative route は破棄する。Extractor / ExtractorClosure 本文内でも do の failure は do-local target に接続し、外側 MatchResult へ直接 return しない。
+partial `<-`のno-matchは共通pattern ErrorをMonadFailで保持し、Alternative routeではemptyにする。
+MonadFail route の主キャプションは Error の生成位置であり、構文 Pattern では失敗した子、
 構造自体の不一致ではその構造 Pattern を指す。Extractor 内や RHS 内で生成した既存 Error を
 `<-` の位置へ置き換えない。新しい Error で wrap した場合はその構築位置を使う。
-この保持は canonical Result と検証済み Result-effect carrier（`OptionT<Result, T>` など）に限る。
-非 Result-effect の Option / List 等は現行の Alternative route を維持し、Extractor Error を破棄する。
+標準 MonadFail は Result、Either<Error, A>、ResultT、EitherT<Error, M, A>、および base が MonadFail の ReaderT / StateT に提供する。
+MonadFail を持たない Option / List / OptionT 等は現行の Alternative route を維持し、Extractor Error を破棄する。
 partial `<-` は `Monad::bind` が渡した payload 全体を照合し、その payload が `Result` でも
 SafeBind の外側一段の自動分解を追加しない。`Ok(x) <- [Ok(1), Err(NoneError)]` は成功要素だけを残す。
 do 本文内の `apply_pattern` は自身の `Result` を返す式であり、外側 carrier の failure target を使わない。
@@ -107,7 +108,7 @@ List等の分岐carrierでは、後続continuationを各payloadについて実�
 
 - Spire: token、RTA、statement分類、pattern/operator/source span。parserではlowerしない。
 - Sigil: canonical identity、surface検証、RHS-first scope、captureとsource origin。
-- Scar: carrier/obligation推論、pattern検査、failure target、具体化済みbind/empty dispatch。
+- Scar: carrier/obligation推論、pattern検査、failure target、具体化済みbind/fail/empty dispatch。
 - 文末 `?` の canonical Result / 終端 Unit 制約も Scar で検査し、既存 typed SafeBind control へ接続する。
 - Forge: concrete closure、block、match、専用typed SafeBind controlを既存命令へlowerする。
 - Eldr:既存命令の実行。carrier推論、candidate探索を行わない。

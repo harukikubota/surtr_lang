@@ -1,0 +1,29 @@
+@doc """
+A Monad that retains an Error without producing a successful payload.
+`Self` is the complete result type. `fail` selects it from the expected type
+or an explicit ReturnTypeArgument. A failed value does not call bind's mapper.
+
+## REPL
+xldr(1)> value: Result<Int> = MonadFail::fail(NoneError)
+xldr(2)> Result::is_err(value)
+True
+"""
+deftrait MonadFail
+where
+  Self: Monad
+{
+  def fail::<Self>(error: Error) -> Self
+
+  @doc """
+  Fail when cond is True; otherwise evaluate then. Only the selected lazy
+  argument runs, exactly once. Parentheses retain the ordinary eager boundary.
+
+  ## REPL
+  xldr(1)> value: Result<Int> = MonadFail::fail_if(False, NoneError, Ok(3))
+  xldr(2)> value
+  Ok(3)
+  """
+  def fail_if(condition: Boolean, err: Lazy<Error>, then: Lazy<Self>) -> Self {
+    if(condition, MonadFail::fail(err()), then())
+  }
+}

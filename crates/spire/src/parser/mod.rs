@@ -1993,8 +1993,7 @@ fn shift_match_pattern(pat: AstPattern, delta: usize) -> AstPattern {
     shift_pattern(pat, delta)
 }
 
-fn shift_decl_attrs(mut attrs: DeclAttrs, delta: usize) -> DeclAttrs {
-    attrs.result_effect = attrs.result_effect.map(|span| shift_span(span, delta));
+fn shift_decl_attrs(attrs: DeclAttrs, _delta: usize) -> DeclAttrs {
     attrs
 }
 

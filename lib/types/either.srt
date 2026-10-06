@@ -1,6 +1,7 @@
 @doc """
 One of two independently typed values.
-Either is a general choice value, not Result-style error control flow.
+Either is a general choice value. Either<Error, A> also implements MonadFail;
+SafeBind still unwraps only Result, so inspect Either explicitly.
 It derives `Eq` when both payload types support `Eq`.
 
 ## REPL
@@ -336,5 +337,15 @@ impl Convert<Option<$R>> for Either<$L, $R> {
   """
   def to::<Option<$R>>(self: Self) -> Option<$R> {
     Either::to_option(self)
+  }
+}
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for Either<Error, $T>
+where
+  $T: MonadFail.$A
+{
+  def fail::<Either<Error, $T>>(error: Error) -> Either<Error, $T> {
+    Either::Left(error)
   }
 }

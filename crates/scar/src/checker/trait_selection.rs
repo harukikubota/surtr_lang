@@ -8,6 +8,7 @@ use diagnostics::{
 use sindr::names::TypeName;
 use std::rc::Rc;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct MethodTypeEnvironment {
     pub bindings: HashMap<String, Ty>,
     pub head_bindings: HashMap<String, Ty>,
@@ -622,6 +623,15 @@ impl Checker {
                     .map(|(arg, ty)| self.canonical_ast_type(arg, ty, raw, environment))
                     .collect::<Result<_, _>>()?,
             )),
+            (ast, Ty::Func(parameters, result))
+                if parameters.is_empty() && Self::lazy_parameter_inner(ast).is_some() =>
+            {
+                let inner = Self::lazy_parameter_inner(ast).expect("matched Lazy parameter");
+                Ok(CanonicalTy::new(
+                    CanonicalTypeHead::Function,
+                    vec![self.canonical_ast_type(inner, result, raw, environment)?],
+                ))
+            }
             (AstTy::Func(_, params, ret), Ty::Func(types, result)) => {
                 let mut args = params
                     .iter()
@@ -1923,71 +1933,6 @@ impl Rel<String,Int> for Box<$T> { def apply(self: Self, a: String, b: Int) -> I
 }
 
 impl Checker {
-    pub(super) fn impl_method_instantiation_contract(
-        &mut self,
-        _pattern: &CanonicalTraitImplPatternKey,
-        trait_info: &TraitInfo,
-        trait_args: &[AstTy],
-        target: &AstTy,
-        method: &TraitImplMethodInfo,
-        fallback_ret: &AstTy,
-        params: &[Ty],
-        ret: &Ty,
-        rtas: &[Ty],
-        raw: &MethodTypeEnvironment,
-        impl_clause: Option<&TypedWhereClause>,
-        slots: &[usize],
-    ) -> Result<ImplMethodInstantiationContract, TypeError> {
-        let (head, mut environment) =
-            self.canonical_impl_head(trait_args, target, raw, &method.span)?;
-        environment.slot_positions = slots.to_vec();
-        if method.display_name_override.is_some() {
-            environment = self.canonical_contract_environment(raw, trait_info, &head, slots)?;
-        }
-        let return_environment = if method.ret_ty.is_none() {
-            Some(self.canonical_contract_environment(raw, trait_info, &head, slots)?)
-        } else {
-            None
-        };
-        let signature = self.canonical_method_list(
-            rtas,
-            params,
-            ret,
-            &method.return_type_arguments,
-            &method.value_parameters,
-            method
-                .ret_ty
-                .as_ref()
-                .map(|ty| ty.syntax())
-                .unwrap_or(fallback_ret),
-            method.where_clause.as_ref(),
-            raw,
-            &environment,
-            return_environment.as_ref(),
-            true,
-        )?;
-        let impl_constraints = self
-            .canonical_method_list(
-                &[],
-                &[],
-                &Ty::Unit,
-                &[],
-                &[],
-                &AstTy::Named(method.span.clone(), "Unit".into()),
-                impl_clause,
-                raw,
-                &environment,
-                None,
-                false,
-            )?
-            .where_constraints;
-        Ok(ImplMethodInstantiationContract {
-            head,
-            signature,
-            impl_constraints,
-        })
-    }
-
     pub(super) fn canonical_to_ty(&self, ty: &CanonicalTy) -> Result<Ty, TypeError> {
         let args = ty
             .arguments
@@ -2248,6 +2193,23 @@ impl Checker {
         trait_name: &str,
     ) -> Option<Vec<usize>> {
         let receiver = self.canonical_to_ty(subject).ok()?;
+        // Applying a declared constructor witness retains its capability. This
+        // also proves obligations recorded by a default method calling another
+        // method on its generic base carrier.
+        if let Ty::SelfApp(items) = &receiver {
+            if let Some((Ty::Var(witness), slots)) = Self::constructor_application_parts(items) {
+                if self.rigid_tyvars.contains(witness)
+                    && self.traits.get(trait_name).is_some_and(|info| {
+                        !info.constructor_slots.is_empty()
+                            && info.constructor_slots.len() == slots.len()
+                    })
+                {
+                    if let Some(evidence) = self.rigid_capability_evidence(*witness, trait_name) {
+                        return Some(evidence);
+                    }
+                }
+            }
+        }
         self.active_capabilities
             .iter()
             .position(|capability| {

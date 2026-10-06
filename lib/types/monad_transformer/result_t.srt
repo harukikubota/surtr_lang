@@ -1,0 +1,182 @@
+@doc """
+A base Monad computation producing a Result. Inner errors remain in Result;
+base failures remain in the base carrier. No implicit unwrap is performed.
+"""
+defstruct ResultT<$M, $A>
+where
+  $M: Monad
+{
+  inner: $M<Result<$A>>,
+}
+
+impl ResultT {
+  @doc """
+  Wrap a base computation.
+
+  ## REPL
+  xldr(1)> value = ResultT::new(Identity::new(Ok(3)))
+  xldr(2)> Identity::run(ResultT::run(value))
+  Ok(3)
+  """
+  def new(inner: $M<Result<$A>>) -> ResultT<$M, $A>
+  where
+    $M: Monad
+  {
+    ResultT { inner }
+  }
+
+  @doc """
+  Extract the stored base computation without executing a Reader or State.
+
+  ## REPL
+  xldr(1)> Identity::run(ResultT::run(ResultT::ok::<Identity>(3)))
+  Ok(3)
+  """
+  def run(self: ResultT<$M, $A>) -> $M<Result<$A>>
+  where
+    $M: Monad
+  {
+    self.inner
+  }
+
+  @doc """
+  Lift a successful payload with the base pure.
+
+  ## REPL
+  xldr(1)> Identity::run(ResultT::run(ResultT::ok::<Identity>(3)))
+  Ok(3)
+  """
+  def ok::<$M>(value: $A) -> ResultT<$M, $A>
+  where
+    $M: Monad
+  {
+    ResultT::new(Applicative::pure(Ok(value)))
+  }
+
+  @doc """
+  Preserve an Error in the inner Result with the base pure.
+
+  ## REPL
+  xldr(1)> value = ResultT::err::<Identity, Int>(NoneError)
+  xldr(2)> Result::is_err(Identity::run(ResultT::run(value)))
+  True
+  """
+  def err::<$M, $A>(error: Error) -> ResultT<$M, $A>
+  where
+    $M: Monad
+  {
+    ResultT::new(Applicative::pure(Err(error)))
+  }
+
+  @doc """
+  Lift an existing Result with the base pure.
+
+  ## REPL
+  xldr(1)> Identity::run(ResultT::run(ResultT::from_result::<Identity>(Ok(3))))
+  Ok(3)
+  """
+  def from_result::<$M>(value: Result<$A>) -> ResultT<$M, $A>
+  where
+    $M: Monad
+  {
+    ResultT::new(Applicative::pure(value))
+  }
+}
+
+impl Functor for ResultT<$M, $T>
+where
+  $M: Monad
+  $T: Functor.$A
+{
+  def fmap(self: ResultT<$M, $A>, mapper: ($A -> $B)) -> ResultT<$M, $B> {
+    ResultT::new(Functor::fmap(self.inner, &Functor::fmap(&1, mapper)))
+  }
+}
+
+impl Applicative for ResultT<$M, $T>
+where
+  $M: Monad
+  $T: Applicative.$A
+{
+  def pure::<ResultT<$M, $T>>(value: $A) -> ResultT<$M, $A> {
+    ResultT::ok(value)
+  }
+
+  # The base sequences mapper first. An inner Err skips the value computation;
+  # ordinary arguments to ap still evaluate strictly before this function.
+  def ap(mapper: ResultT<$M, ($A -> $B)>, value: ResultT<$M, $A>) -> ResultT<$M, $B> {
+    ResultT::new(Monad::bind(mapper.inner, {|inner_mapper|
+      match inner_mapper {
+        Ok(function) => Functor::fmap(value.inner, &Functor::fmap(&1, function)),
+        Err(error) => Applicative::pure(Err(error)),
+      }
+    }))
+  }
+}
+
+impl Monad for ResultT<$M, $T>
+where
+  $M: Monad
+  $T: Monad.$A
+{
+  def return::<ResultT<$M, $T>>(value: $A) -> ResultT<$M, $A> {
+    ResultT::ok(value)
+  }
+
+  def bind(self: ResultT<$M, $A>, mapper: ($A -> ResultT<$M, $B>)) -> ResultT<$M, $B> {
+    ResultT::new(Monad::bind(self.inner, {|result|
+      match result {
+        Ok(value) => mapper(value).inner,
+        Err(error) => Applicative::pure(Err(error)),
+      }
+    }))
+  }
+}
+
+impl MonadT<$M> for ResultT<$M, $T>
+where
+  $M: Monad
+  $T: MonadT.$A
+{
+  def lift::<ResultT<$M, $T>>(value: $M<$A>) -> ResultT<$M, $A> {
+    ResultT::new(Functor::fmap(value, {|item| Ok(item)}))
+  }
+}
+
+impl MonadFail for ResultT<$M, $T>
+where
+  $M: Monad
+  $T: MonadFail.$A
+{
+  def fail::<ResultT<$M, $T>>(error: Error) -> ResultT<$M, $T> {
+    ResultT::err(error)
+  }
+}
+
+impl Convert<EitherT<Error, $M, $A>> for ResultT<$M, $A>
+where
+  $M: Monad
+{
+  def to::<EitherT<Error, $M, $A>>(self: Self) -> EitherT<Error, $M, $A> {
+    EitherT::new(Functor::fmap(self.inner, {|result|
+      match result {
+        Ok(value) => Either<Error, $A>::Right(value),
+        Err(error) => Either<Error, $A>::Left(error),
+      }
+    }))
+  }
+}
+
+impl Convert<ResultT<$M, $A>> for EitherT<Error, $M, $A>
+where
+  $M: Monad
+{
+  def to::<ResultT<$M, $A>>(self: Self) -> ResultT<$M, $A> {
+    ResultT::new(Functor::fmap(self.inner, {|either|
+      match either {
+        Either::Right(value) => Ok(value),
+        Either::Left(error) => Err(error),
+      }
+    }))
+  }
+}

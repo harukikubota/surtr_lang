@@ -370,9 +370,9 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_error_generation_site_survives_static_diagnostic_rollback),
     repl_core_case!(core_eldr_restore_preserves_error_sources_when_new_chunks_are_added),
     repl_core_case!(core_script_preload_rejects_source_spans_outside_the_runtime_range),
-    repl_core_case!(core_do_result_effect_pattern_error_is_preserved_in_fresh_repl),
-    repl_core_case!(core_do_result_effect_pattern_error_is_preserved_across_chunks),
-    repl_core_case!(core_do_result_effect_safebind_and_alternative_boundaries),
+    repl_core_case!(core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl),
+    repl_core_case!(core_do_monad_fail_pattern_error_is_preserved_across_chunks),
+    repl_core_case!(core_do_monad_fail_safebind_and_alternative_boundaries),
 ];
 
 fn assert_repl_error_origin(result: &ReplResult, line: usize, column: usize, origin: &str) {
@@ -419,16 +419,16 @@ fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str) {
     );
 }
 
-fn core_do_result_effect_pattern_error_is_preserved_in_fresh_repl() {
+fn core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl() {
     for source in [
         "match do::<Result> { 2 <- Ok(1); Ok(3) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match OptionT::run(do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) }) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
         assert_repl_pattern_mismatch(&mut engine(), source);
     }
 }
 
-fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
+fn core_do_monad_fail_pattern_error_is_preserved_across_chunks() {
     let mut engine = engine();
     for source in [
         "def unrelated(value: Int) -> Int { value + 41 }",
@@ -436,7 +436,7 @@ fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
         "saved_text = \"relocation must preserve Error kind and message\"",
         "saved_error: Result<Int> = Err(NoneError)",
         "mismatch: Result<Int> = do::<Result> { 2 <- Ok(1); Ok(3) }",
-        "mismatch_t: OptionT<Result, Int> = do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) }",
+        "mismatch_t: ResultT<Identity, Int> = do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) }",
     ] {
         let result = engine.handle_line(source);
         assert!(
@@ -447,7 +447,7 @@ fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
     }
     for source in [
         "match mismatch { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match OptionT::run(mismatch_t) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(mismatch_t)) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
         assert_repl_pattern_mismatch(&mut engine, source);
     }
@@ -458,11 +458,11 @@ fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
     );
 }
 
-fn core_do_result_effect_safebind_and_alternative_boundaries() {
+fn core_do_monad_fail_safebind_and_alternative_boundaries() {
     let mut engine = engine();
     for source in [
         "match do::<Result> { Option::Some(value) =? Option<Int>::None; Ok(value) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match OptionT::run(do::<OptionT<Result, _>> { Option::Some(value) =? Option<Int>::None; OptionT::some::<Result>(value) }) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { Option::Some(value) =? Option<Int>::None; ResultT::ok::<Identity>(value) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
         assert_repl_pattern_mismatch(&mut engine, source);
     }
@@ -473,6 +473,14 @@ fn core_do_result_effect_safebind_and_alternative_boundaries() {
         rendered_text(&blocked)
     );
     for (source, expected) in [
+        (
+            "OptionT::run(do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) })",
+            "Ok(Option::None)",
+        ),
+        (
+            "OptionT::run(do::<OptionT<Result, _>> { Option::Some(value) =? Option<Int>::None; OptionT::some::<Result>(value) })",
+            "Ok(Option::None)",
+        ),
         (
             "OptionT::run(Alternative::empty::<OptionT<Result, Int>>())",
             "Ok(Option::None)",
@@ -4831,9 +4839,18 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{operator_sig}"
     );
     for (symbol, signature) in [
-        (">>", "Bootstrap::>>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)"),
-        (">*", "Bootstrap::>*(left: ($A -> Functor<$B>), mapper: ($B -> $C)) -> ($A -> Functor<$C>)"),
-        (">=>", "Bootstrap::>=>(left: ($A -> Monad<$B>), mapper: ($B -> Monad<$C>)) -> ($A -> Monad<$C>)"),
+        (
+            ">>",
+            "Bootstrap::>>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)",
+        ),
+        (
+            ">*",
+            "Bootstrap::>*(left: ($A -> Functor<$B>), mapper: ($B -> $C)) -> ($A -> Functor<$C>)",
+        ),
+        (
+            ">=>",
+            "Bootstrap::>=>(left: ($A -> Monad<$B>), mapper: ($B -> Monad<$C>)) -> ($A -> Monad<$C>)",
+        ),
     ] {
         let actual = signature_text(&engine.handle_line(&format!(":sig {symbol}")));
         assert!(actual.contains(signature), "{symbol}: {actual}");

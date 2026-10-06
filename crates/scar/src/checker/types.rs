@@ -486,18 +486,6 @@ impl Checker {
         }
     }
 
-    pub(super) fn error_function_param_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            structured: None,
-            message: "Error cannot be used as a user-defined function parameter type".into(),
-            span: span.clone(),
-            hint: Some(
-                "Keep Error inside Err(...), and inspect it only from an Err(...) match arm."
-                    .into(),
-            ),
-        }
-    }
-
     fn lazy_type_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             structured: None,
@@ -508,87 +496,6 @@ impl Checker {
                     .into(),
             ),
         }
-    }
-
-    pub(super) fn ty_exposes_error_value(ty: &Ty) -> bool {
-        match ty {
-            Ty::Error => true,
-            Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
-            Ty::List(inner)
-            | Ty::MatchResult(inner)
-            | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::ty_exposes_error_value(inner),
-            Ty::Facet(_, source, focus, update_source, update_focus) => {
-                Self::ty_exposes_error_value(source)
-                    || Self::ty_exposes_error_value(focus)
-                    || Self::ty_exposes_error_value(update_source)
-                    || Self::ty_exposes_error_value(update_focus)
-            }
-            Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
-                items.iter().any(Self::ty_exposes_error_value)
-            }
-            Ty::Func(params, ret) => {
-                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
-            }
-            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
-                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
-            }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                nominal.arguments.iter().any(Self::ty_exposes_error_value)
-                    || nominal
-                        .iter()
-                        .any(|(_, field_ty)| Self::ty_exposes_error_value(field_ty))
-            }
-            Ty::Int
-            | Ty::Float
-            | Ty::Str
-            | Ty::Bool
-            | Ty::Unit
-            | Ty::Hole
-            | Ty::Var(_)
-            | Ty::Pid(_) => false,
-        }
-    }
-
-    pub(super) fn ty_is_error_observer_callable(ty: &Ty) -> bool {
-        match ty {
-            Ty::Func(params, ret)
-            | Ty::BuiltinFunc { params, ret, .. }
-            | Ty::UserFunc { params, ret, .. } => {
-                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
-            }
-            _ => false,
-        }
-    }
-
-    pub(super) fn error_observer_escape_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            structured: None,
-            message: "Error observer closure cannot escape its Error-observation call".into(),
-            span: span.clone(),
-            hint: Some(
-                "Pass the closure directly to Result::tap_err or another Error-observation API; do not store, return, or rebind it."
-                    .into(),
-            ),
-        }
-    }
-
-    pub(super) fn error_observer_call_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            structured: None,
-            message: "Error observer closure can only be passed to Error-observation APIs".into(),
-            span: span.clone(),
-            hint: Some(
-                "Use Result::tap_err(value, handler) instead of calling handler directly.".into(),
-            ),
-        }
-    }
-
-    pub(super) fn allows_std_error_function_param_exception(id: &ResolvedId) -> bool {
-        matches!(
-            Self::surface_qualified_name(id.qualified_name.as_deref()),
-            Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
-        )
     }
 
     pub(super) fn ensure_no_match_result_value(
@@ -1818,6 +1725,45 @@ impl Checker {
             context,
             tyvars,
             SignatureTyMode::Trait { self_ty },
+        )
+    }
+
+    pub(super) fn lazy_parameter_inner(ast: &AstTy) -> Option<&AstTy> {
+        match ast {
+            AstTy::Generic(_, name, arguments)
+                if Self::builtin_type_is_lazy_signature_surface_only(name)
+                    && arguments.len() == 1 =>
+            {
+                Some(&arguments[0])
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn resolve_trait_parameter_contract(
+        &mut self,
+        signature: &sigil::resolved::ResolvedSignatureTy,
+        self_ty: &Ty,
+        tyvars: &mut HashMap<String, Ty>,
+        allows_lazy: bool,
+    ) -> Result<Ty, TypeError> {
+        if let Some(inner) = Self::lazy_parameter_inner(signature.syntax()) {
+            if !allows_lazy {
+                return Err(self.lazy_type_not_allowed_error(Self::ast_ty_span(signature.syntax())));
+            }
+            let result = self.resolve_trait_signature_ast_ty_in_context(
+                inner,
+                TypeSyntaxContext::General,
+                self_ty,
+                tyvars,
+            )?;
+            return Ok(Ty::Func(vec![], Box::new(result)));
+        }
+        self.resolve_trait_signature_ty_in_context(
+            signature,
+            TypeSyntaxContext::General,
+            self_ty,
+            tyvars,
         )
     }
 
@@ -4252,20 +4198,6 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
-            TypedInner::ResultEffectFailure(mut target) => {
-                target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                target.error_ty = self.resolve_ty(&target.error_ty);
-                TypedInner::ResultEffectFailure(target)
-            }
-            TypedInner::DeferredDoFailure(mut deferred) => {
-                deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
-                deferred.propagated_error_tys = deferred
-                    .propagated_error_tys
-                    .iter()
-                    .map(|ty| self.resolve_ty(ty))
-                    .collect();
-                TypedInner::DeferredDoFailure(deferred)
-            }
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -4378,19 +4310,19 @@ impl Checker {
                     }
                 },
                 match failure_target {
-                    SafeBindFailureTarget::EnclosingResultContext(mut target) => {
+                    SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
                         target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                        target.error_ty = self.resolve_ty(&target.error_ty);
-                        SafeBindFailureTarget::EnclosingResultContext(target)
+                        target.call = self.resolve_typed_node(*target.call);
+                        SafeBindFailureTarget::EnclosingMonadFail(target)
                     }
                     SafeBindFailureTarget::EnclosingMatchResultContext { err_tag } => {
                         SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
-                    SafeBindFailureTarget::DoResultContext(mut target) => {
+                    SafeBindFailureTarget::DoMonadFail(mut target) => {
                         target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                        target.error_ty = self.resolve_ty(&target.error_ty);
-                        SafeBindFailureTarget::DoResultContext(target)
+                        target.call = self.resolve_typed_node(*target.call);
+                        SafeBindFailureTarget::DoMonadFail(target)
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         SafeBindFailureTarget::DoAlternative {
@@ -4435,10 +4367,10 @@ impl Checker {
                         }
                     },
                     failure_target: match failure_target {
-                        SafeBindFailureTarget::DoResultContext(mut target) => {
+                        SafeBindFailureTarget::DoMonadFail(mut target) => {
                             target.carrier_ty = self.resolve_ty(&target.carrier_ty);
-                            target.error_ty = self.resolve_ty(&target.error_ty);
-                            SafeBindFailureTarget::DoResultContext(target)
+                            target.call = self.resolve_typed_node(*target.call);
+                            SafeBindFailureTarget::DoMonadFail(target)
                         }
                         SafeBindFailureTarget::DoAlternative { empty } => {
                             SafeBindFailureTarget::DoAlternative {
@@ -5025,6 +4957,8 @@ mod tests {
                 span: Span { start: 0, end: 1 },
             },
             compiler_owned_equality: false,
+            compiler_owned_failure: false,
+            standard_lazy_contract: false,
             type_params: Vec::new(),
             where_clause: None,
             constructor_slots: vec!["$A".into()],

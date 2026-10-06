@@ -17,7 +17,7 @@ use sindr::warning::{
 };
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
-use crate::env::{ResultEffectTypeInfo, TypeEnv, TypeKind};
+use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::{NominalType, Ty};
@@ -62,8 +62,8 @@ enum ProfileEvent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum ResultEffectResolution {
-    Preserve(ResultPreserveTarget),
+pub(super) enum MonadFailResolution {
+    Preserve(MonadFailTarget),
     Unavailable,
     Deferred,
     InvalidMetadata(&'static str),
@@ -96,7 +96,6 @@ mod process_boundary_policy_tests {
             ExitCodePolicy::EntryOnly
         );
         assert!(!context.enforce_builtin_type_contracts);
-        assert!(!context.allow_error_function_params);
     }
 }
 
@@ -452,6 +451,9 @@ struct TraitInfo {
     id: ResolvedId,
     /// Set only while checking the trusted standard definition stage.
     compiler_owned_equality: bool,
+    compiler_owned_failure: bool,
+    /// Declaration authority persists across user impls and cached standard stages.
+    standard_lazy_contract: bool,
     type_params: Vec<ResolvedTypeParam>,
     where_clause: Option<TypedWhereClause>,
     constructor_slots: Vec<String>,
@@ -483,6 +485,7 @@ struct TraitImplMethodInfo {
     #[serde(default)]
     body_obligations: Vec<TraitObligation>,
     instantiation_contract: Option<ImplMethodInstantiationContract>,
+    resolved_signature: Option<ResolvedImplMethodSignature>,
 }
 
 #[allow(dead_code)]
@@ -506,6 +509,17 @@ struct TraitImplInfo {
     constructor_slot_vars: Vec<u32>,
     constructor_slot_positions: Vec<usize>,
     methods: HashMap<String, TraitImplMethodInfo>,
+}
+
+/// Declaration binders are allocated once and reused by the method body.
+/// Calls selected before body checking must reference this same namespace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResolvedImplMethodSignature {
+    params: Vec<Ty>,
+    result: Ty,
+    type_params: Vec<u32>,
+    return_type_arguments: Vec<Ty>,
+    environment: MethodTypeEnvironment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -780,7 +794,6 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
 pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
-    pub allow_error_function_params: bool,
     /// REPL `:facet` inspects structurally valid paths even when a private
     /// segment is not consumable from the current source scope.
     pub allow_private_facet_inspection: bool,
@@ -791,7 +804,6 @@ impl Default for TypecheckContext {
         Self {
             runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
-            allow_error_function_params: false,
             allow_private_facet_inspection: false,
         }
     }
@@ -802,7 +814,6 @@ impl TypecheckContext {
         Self {
             runtime_policy: policy.runtime_policy,
             enforce_builtin_type_contracts: false,
-            allow_error_function_params: false,
             allow_private_facet_inspection: false,
         }
     }
@@ -1262,7 +1273,6 @@ struct PersistentCheckerState {
     consts: HashMap<u32, ConstMeta>,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
-    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     /// Canonical signature registry shared by ordinary and builtin callables.
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
@@ -1289,7 +1299,6 @@ impl PersistentCheckerState {
             consts: HashMap::new(),
             facet_bindings: HashMap::new(),
             lazy_capture_bindings: HashMap::new(),
-            error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
             callable_signatures: HashMap::new(),
             impl_method_uids: HashMap::new(),
@@ -1315,7 +1324,6 @@ impl PersistentCheckerState {
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
-            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
@@ -1344,7 +1352,6 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             consts: checkpoint.consts,
             facet_bindings: checkpoint.facet_bindings,
             lazy_capture_bindings: checkpoint.lazy_capture_bindings,
-            error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
             callable_signatures: checkpoint.callable_signatures,
             impl_method_uids: checkpoint.impl_method_uids,
@@ -1373,7 +1380,6 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     #[serde(default)]
-    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     #[serde(default)]
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
@@ -1878,6 +1884,7 @@ impl ScarSession {
                 }
                 TypedFacetSegment::Field { .. }
                 | TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::ReadonlyBuiltin { .. }
                 | TypedFacetSegment::Variant { .. } => {}
             }
         }
@@ -1920,18 +1927,41 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_ty(ty, rewrites);
             }
         }
-        match &mut node.node {
-            TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
-            TypedInner::ResultEffectFailure(target) => {
-                Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
-                Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
-            }
-            TypedInner::DeferredDoFailure(deferred) => {
-                Self::rewrite_fun_indices_in_ty(&mut deferred.carrier_ty, rewrites);
-                for error_ty in &mut deferred.propagated_error_tys {
+        if let TypedInner::SafeBind(_, _, projection, failure_target) = &mut node.node {
+            match projection {
+                SafeBindRhsProjection::CanonicalResultOnce {
+                    payload_ty,
+                    error_ty,
+                } => {
+                    Self::rewrite_fun_indices_in_ty(payload_ty, rewrites);
                     Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
                 }
+                SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
+                    Self::rewrite_fun_indices_in_ty(pattern_input_ty, rewrites);
+                }
             }
+            match failure_target {
+                SafeBindFailureTarget::EnclosingMonadFail(target)
+                | SafeBindFailureTarget::DoMonadFail(target) => {
+                    Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
+
+                    Self::rewrite_fun_indices_in_node(&mut target.call, rewrites);
+                }
+                SafeBindFailureTarget::DoAlternative { empty } => {
+                    Self::rewrite_fun_indices_in_node(empty, rewrites)
+                }
+                SafeBindFailureTarget::Deferred(deferred) => {
+                    Self::rewrite_fun_indices_in_ty(&mut deferred.carrier_ty, rewrites);
+                    for error_ty in &mut deferred.propagated_error_tys {
+                        Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                    }
+                }
+                SafeBindFailureTarget::TopLevel
+                | SafeBindFailureTarget::EnclosingMatchResultContext { .. } => {}
+            }
+        }
+        match &mut node.node {
+            TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
             TypedInner::SupervisorSpawn { init, .. } => {
                 Self::rewrite_fun_indices_in_node(init, rewrites);
             }
@@ -2020,9 +2050,10 @@ impl ScarSession {
                     }
                 }
                 match &mut control.failure_target {
-                    SafeBindFailureTarget::DoResultContext(target) => {
+                    SafeBindFailureTarget::DoMonadFail(target) => {
                         Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
-                        Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
+
+                        Self::rewrite_fun_indices_in_node(&mut target.call, rewrites);
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         Self::rewrite_fun_indices_in_node(empty, rewrites);
@@ -2033,9 +2064,10 @@ impl ScarSession {
                             Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
                         }
                     }
-                    SafeBindFailureTarget::EnclosingResultContext(target) => {
+                    SafeBindFailureTarget::EnclosingMonadFail(target) => {
                         Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
-                        Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
+
+                        Self::rewrite_fun_indices_in_node(&mut target.call, rewrites);
                     }
                     SafeBindFailureTarget::TopLevel
                     | SafeBindFailureTarget::EnclosingMatchResultContext { .. } => {}
@@ -2458,13 +2490,36 @@ mod specialization_state_tests {
                     payload_ty: callable_ty.clone(),
                     error_ty: callable_ty.clone(),
                 },
-                failure_target: SafeBindFailureTarget::DoResultContext(Box::new(
-                    ResultPreserveTarget {
-                        carrier_ty: callable_ty.clone(),
-                        error_ty: callable_ty.clone(),
-                        construction: ResultPreserveConstruction::CanonicalResult,
+                failure_target: SafeBindFailureTarget::DoMonadFail(Box::new(MonadFailTarget {
+                    carrier_ty: callable_ty.clone(),
+                    error_id: sigil::resolved::ResolvedId {
+                        name: "error".into(),
+                        qualified_name: None,
+                        unique_id: 91999,
+                        compiler_generated: true,
+                        symbol_info: None,
+                        span: spire::ast::Span { start: 0, end: 0 },
                     },
-                )),
+                    call: Box::new(TypedNode {
+                        ty: Ty::Error,
+                        span: spire::ast::Span { start: 0, end: 0 },
+                        node: TypedInner::ConstructorCall(
+                            1,
+                            vec![TypedNode {
+                                ty: Ty::Error,
+                                span: spire::ast::Span { start: 0, end: 0 },
+                                node: TypedInner::Var(sigil::resolved::ResolvedId {
+                                    name: "error".into(),
+                                    qualified_name: None,
+                                    unique_id: 91999,
+                                    compiler_generated: true,
+                                    symbol_info: None,
+                                    span: spire::ast::Span { start: 0, end: 0 },
+                                }),
+                            }],
+                        ),
+                    }),
+                })),
                 continuation: Box::new(TypedNode {
                     ty: callable_ty,
                     span: test_span(),
@@ -2479,6 +2534,37 @@ mod specialization_state_tests {
                 },
             })),
         };
+
+        let TypedInner::DoSafeBind(control) = &node.node else {
+            unreachable!()
+        };
+        let mut failure_target = control.failure_target.clone();
+        if let SafeBindFailureTarget::DoMonadFail(target) = &mut failure_target {
+            target.call.ty = user_func_ty(40);
+        }
+        let mut ordinary = TypedNode {
+            ty: node.ty.clone(),
+            span: test_span(),
+            node: TypedInner::SafeBind(
+                control.pattern.clone(),
+                control.rhs.clone(),
+                control.projection.clone(),
+                failure_target,
+            ),
+        };
+        ScarSession::rewrite_fun_indices_in_node(&mut ordinary, &HashMap::from([(40, 140)]));
+        let TypedInner::SafeBind(_, _, projection, failure_target) = &ordinary.node else {
+            unreachable!()
+        };
+        assert!(matches!(
+            projection,
+            SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::UserFunc { fun_idx: 140, .. },
+                error_ty: Ty::UserFunc { fun_idx: 140, .. }
+            }
+        ));
+        let call = failure_target.monad_fail_call().expect("failure call");
+        assert!(matches!(call.ty, Ty::UserFunc { fun_idx: 140, .. }));
 
         ScarSession::rewrite_fun_indices_in_node(&mut node, &HashMap::from([(40, 140)]));
 
@@ -2508,11 +2594,9 @@ mod specialization_state_tests {
         ));
         assert!(matches!(
             &control.failure_target,
-            SafeBindFailureTarget::DoResultContext(target)
-                if matches!(target.as_ref(), ResultPreserveTarget {
-                carrier_ty: Ty::UserFunc { fun_idx: 140, .. },
-                error_ty: Ty::UserFunc { fun_idx: 140, .. },
-                construction: ResultPreserveConstruction::CanonicalResult,
+            SafeBindFailureTarget::DoMonadFail(target)
+                if matches!(target.as_ref(), MonadFailTarget {
+                carrier_ty: Ty::UserFunc { fun_idx: 140, .. }, ..
             })
         ));
     }
@@ -2806,7 +2890,6 @@ struct Checker {
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
-    error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
@@ -2840,9 +2923,7 @@ struct Checker {
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
-    allow_error_function_params: bool,
     allow_private_facet_inspection: bool,
-    allow_error_observer_value_use: usize,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     facet_path_kind_decls: HashMap<String, Vec<String>>,
     traits: HashMap<String, TraitInfo>,
@@ -2971,7 +3052,6 @@ impl Checker {
             facet_bindings: state.facet_bindings,
             lazy_capture_bindings: state.lazy_capture_bindings,
             active_lazy_capture: None,
-            error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
             callable_signatures: state.callable_signatures,
@@ -2992,9 +3072,7 @@ impl Checker {
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
-            allow_error_function_params: context.allow_error_function_params,
             allow_private_facet_inspection: context.allow_private_facet_inspection,
-            allow_error_observer_value_use: 0,
             seen_builtin_type_decls: HashMap::new(),
             facet_path_kind_decls: HashMap::new(),
             traits: state.traits,
@@ -3021,7 +3099,6 @@ impl Checker {
             TypecheckContext {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
-                allow_error_function_params: self.allow_error_function_params,
                 allow_private_facet_inspection: self.allow_private_facet_inspection,
             },
         );
@@ -3037,7 +3114,6 @@ impl Checker {
         checker.safe_operator_results = self.safe_operator_results.clone();
         checker.lazy_capture_bindings = self.lazy_capture_bindings.clone();
         checker.active_lazy_capture = self.active_lazy_capture.clone();
-        checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
         checker.active_capabilities = self.active_capabilities.clone();
@@ -3561,8 +3637,6 @@ impl Checker {
             }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -4157,7 +4231,6 @@ impl Checker {
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
-            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
@@ -4183,7 +4256,6 @@ impl Checker {
             consts: self.consts,
             facet_bindings: self.facet_bindings,
             lazy_capture_bindings: self.lazy_capture_bindings,
-            error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
             callable_signatures: self.callable_signatures,
             impl_method_uids: self.impl_method_uids,
@@ -4853,8 +4925,6 @@ impl Checker {
             if let Some(start) = t {
                 predeclare_functions_dur = start.elapsed();
             }
-
-            self.validate_result_effect_annotations(&stmts)?;
 
             self.validate_process_state_contracts()?;
 

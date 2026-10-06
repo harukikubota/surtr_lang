@@ -134,7 +134,14 @@ mod tests {
             let resolve_state = resolved.resume_state;
             let mut scar_session = ScarSession::new();
             let typed = scar_session
-                .typecheck_staged_program_with_context(resolved, TypecheckContext::default())
+                .typecheck_staged_program_with_context(
+                    resolved,
+                    TypecheckContext {
+                        runtime_policy: sindr::policy::RuntimeSourcePolicy::std_module(),
+                        enforce_builtin_type_contracts: true,
+                        allow_private_facet_inspection: false,
+                    },
+                )
                 .expect("std modules should typecheck");
             let bytecode = codegen_typed_program(typed).expect("std modules should codegen");
             scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&bytecode));

@@ -122,7 +122,7 @@ pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentity
                 .with_constructor_capture(ConstructorCapturePolicy::Ordinary)
         }
         OwnerKind::Error => SymbolCapabilities::new(true, false, false, None)
-            .with_constructor_capture(ConstructorCapturePolicy::Forbidden),
+            .with_constructor_capture(ConstructorCapturePolicy::Ordinary),
         OwnerKind::Trait => SymbolCapabilities::trait_owner(),
         OwnerKind::Sig => SymbolCapabilities::signature_owner(),
         OwnerKind::Const => SymbolCapabilities::const_owner(),

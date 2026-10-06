@@ -118,7 +118,6 @@ fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
                 None,
             ),
             enforce_builtin_type_contracts: true,
-            allow_error_function_params: false,
             allow_private_facet_inspection: false,
         },
     )

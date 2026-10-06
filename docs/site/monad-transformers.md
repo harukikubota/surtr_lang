@@ -2,7 +2,7 @@
 
 `do`による逐次処理の入口は[do](./do.md)を参照してください。
 
-`OptionT`、`EitherT`、`ReaderT`、`StateT` は、base の `Monad` を通常の
+`OptionT`、`EitherT`、`ResultT`、`ReaderT`、`StateT` は、base の `Monad` を通常の
 Surtr 値として包む標準型です。compiler 専用の runtime 値ではなく、構造体、関数、
 List、Facet の値として扱えます。
 
@@ -20,7 +20,7 @@ Transformer の計算へ暗黙に混ぜる経路はありません。
 
 ## 共通契約
 
-4つの型はすべて `Functor`、`Applicative`、`Monad`、`MonadT<M>` を実装します。
+これらの型はすべて `Functor`、`Applicative`、`Monad`、`MonadT<M>` を実装します。
 `MonadT::lift` はbase computationを外側のcarrierへ明示的に接続します。
 
 ```text
@@ -33,69 +33,25 @@ Transformerは通常のnominal型なので、field、関数引数、戻り値、
 `M`とpayload `A`が型注釈や引数から決まらない呼び出しは、標準型の候補数や登録順で補完されず、ambiguityとして拒否されます。
 通常の型注釈では完全なcarrierを書き、call-siteのReturnTypeArgumentでは既存のbare head、完全・部分型application、`_`を使います。
 
-### Result effect と failure target
+### 失敗を保持するMonadFail
 
-`@result_effect` は引数を取らず、`defstruct` の直前に一度だけ書ける
-compiler-owned annotation です。`Monad` と `MonadT<$M>` を
-実装する struct にだけ指定でき、field がちょうど一つで public、その field の最外
-constructor が captured base `$M` と一致する必要があります。annotation のない型、
-非 Monad wrapper、複数 field の struct、関数 field を持つ `ReaderT` / `StateT` に
-Result effect を暗黙付与しません。
-標準型では `OptionT` だけが明示的な適用対象です。`EitherT`、`ReaderT`、`StateT`、
-および user-defined MonadT は、宣言に有効な `@result_effect` がなければ対象になりません。
+`ResultT<M, A>`と`EitherT<Error, M, A>`は、Errorを内側の`Err`と`Left`に保持します。
+baseがResultでも、`fail`の結果はそれぞれ`Ok(Err(error))`と`Ok(Left(error))`です。
+`ReaderT`と`StateT`は、baseがMonadFailを実装するとき、run時にbaseの`fail`を返します。
+StateTの失敗は成功値と状態のpairを生成しません。
 
-annotation が有効になるのは base Monad が canonical `Result` に直接具体化された
-場合だけです。内部のどこかに `Result` があるだけでは対象になりません。
+通常関数のSafeBindは返り型のMonadFailを使います。doのSafeBindとpartial `<-`は
+`MonadFail > Alternative`の順に失敗を処理します。OptionTにはMonadFail実装がないため、
+do内のPattern不一致はbaseによらず`empty`になります。Result baseでは`Ok(None)`です。
+一方、`<-`の右辺が持つbaseのErrは、bind自身の短絡によって保持されます。
+`guard`は常にAlternativeを使います。
 
-```text
-OptionT<Result, A> -> Result effect
-OptionT<List, A>   -> Result effect なし
-T<U<Result, _>, A> -> Result effect なし
-```
-
-SafeBind `=?` と failureMatcher となる partial `<-` の failure target は
-`Result effect > Alternative > Monad` の優先順位で選ばれます。`OptionT<Result, A>`
-では `Err(error)` を `inner: Err(error)` として保持し、`OptionT<List, A>` では
-`Alternative::empty()` に進みます。`guard` は通常の `Alternative` 関数なので、
-`OptionT<Result, A>` でも `guard(False)` は `OptionT::empty()`（`Ok(None)`）です。
-
-この規則は SafeBind RHS の分解規則を変更しません。RHS を自動的に外側一段だけ
-分解するのは canonical `Result` だけで、`OptionT<Result, A>` を暗黙に flatten
-したり、nested Result を再帰的に分解したりしません。必要な base 接続には引き続き
-`MonadT::lift`、`run`、Extractor などを明示します。
-
-次の三例では、同じ `OptionT<Result, _>` でも失敗の起点によって結果が分かれます。
-
-```surtr
-deferror Stop { "stop" }
-
-def source() -> Result<Int, Stop> {
-  Err(Stop)
-}
-
-def wrapped() -> OptionT<Result, Int> {
-  value =? source()
-  OptionT::some::<Result>(value + 1)
-}
-
-OptionT::run(wrapped()) # => Err(Stop("stop"))
-
-mismatch: OptionT<Result, Int> = do::<OptionT<Result, _>> {
-  2 <- OptionT::some::<Result>(1)
-  OptionT::some::<Result>(3)
-}
-OptionT::run(mismatch) # => Err(PatternMismatch("Pattern did not match."))
-
-blocked: OptionT<Result, Unit> = guard(False)
-OptionT::run(blocked) # => Ok(Option::None)
-```
-
-通常関数のSafeBindとdoのfailure matcherはResult effectを使うためErrorを保持します。
-一方、`guard`はOptionT自身の`Alternative`を使うためabsenceを返します。
+SafeBindが自動的に外側一段を取り出すのはcanonical Resultだけです。
+Transformerの取り出しには`run`を、baseからの接続には`MonadT::lift`を明示します。
 
 ### ユーザ定義のbaseとTransformer
 
-`MonadT`は標準4型のallowlistではありません。通常の`Functor` / `Applicative` / `Monad`を満たす
+`MonadT`は標準型のallowlistではありません。通常の`Functor` / `Applicative` / `Monad`を満たす
 baseとTransformerを定義し、同じ`MonadT<$M>`経路を利用できます。次は
 `tests/fixtures/script/pass/stdmod/user_defined_monad_transformer.srt`と同じ最小構成です。
 
@@ -125,7 +81,6 @@ impl Monad for UserBase<$T> {
   }
 }
 
-@result_effect
 defstruct UserWrap<$M, $A>
 where
   $M: Monad
@@ -208,8 +163,7 @@ print(to_string(UserBase::run(UserWrap::run(mapped))))
 `lifted`ではexpected type、`explicit`では明示RTAが出力carrierを決めます。compilerは標準型名、
 impl数・登録順、field名・representationからbaseや出力carrierを推測しません。この定義にもruntime
 Trait dictionary、暗黙lift、Transformer専用runtime値はなく、通常のnominal値とstatic dispatchだけを使います。
-`@result_effect`は`UserWrap<UserBase, _>`では有効化されず、baseをcanonical `Result`へ
-具体化したときだけResult effectを提供します。
+失敗を保持するには、通常のMonadFail実装を定義します。
 
 ### `Applicative::ap` の評価順
 
@@ -218,6 +172,7 @@ Trait dictionary、暗黙lift、Transformer専用runtime値はなく、通常の
 | 型 | 順序 |
 |---|---|
 | `OptionT` | `mapper.inner` を先に sequence し、`None` なら `value.inner` を sequence しない |
+| `ResultT` | `mapper.inner` を先にsequenceし、`Err`なら`value.inner`をsequenceしない |
 | `EitherT` | `mapper.inner` を先に sequence し、`Left` なら `value.inner` を sequence しない |
 | `ReaderT` | mapper と value を同じ環境でこの順に実行し、得た base 値を `Applicative::ap` で結合する |
 | `StateT` | mapper transition を先に sequence し、返された次状態で value transition を実行する |
@@ -249,6 +204,31 @@ baseが`List`なら`empty: OptionT<List, A>`のrepresentationは`[Option::None]`
 baseの空List `[]`ではありません。`OptionT::choose`はbase由来のmultiplicityを保持します。
 例えば左が`[None, None, Some(1)]`、右が`[Some(2), Some(3)]`なら、各`None`から右の2分岐が
 それぞれ生じ、最後の`Some(1)`も保持されます。分岐を単一のOptionへ集約しません。
+
+## ResultT
+
+`ResultT<M, A>`は`M<Result<A>>`を保持するstructです。baseにはMonadが必要です。
+
+| API | 入力と結果 |
+|---|---|
+| `new` | `M<Result<A>> -> ResultT<M, A>` |
+| `run` | `ResultT<M, A> -> M<Result<A>>` |
+| `ok` | `A -> ResultT<M, A>` |
+| `err` | `Error -> ResultT<M, A>` |
+| `from_result` | `Result<A> -> ResultT<M, A>` |
+
+`ok`、`err`、`from_result`はbaseのpureで値を包みます。FunctorはOkだけを変換し、
+Monadは内側のErrで後続を実行しません。MonadTのliftはbaseのpayloadをOkに写します。
+Alternativeは実装しません。
+
+```surtr
+value = ResultT::ok::<Identity>(3)
+Identity::run(ResultT::run(value)) # Ok(3)
+```
+
+Resultと`Either<Error, A>`、ResultTと`EitherT<Error, M, A>`の間は、Convertで双方向に変換できます。
+OkとRight、ErrとLeftを対応させ、Errorは再生成しません。
+Transformerの変換はbaseのfmapで内側だけを変えます。baseと失敗層を保ち、ReaderやStateの計算を早期実行しません。
 
 ## EitherT
 
@@ -325,7 +305,7 @@ updated = Facet::put(OptionT.inner, x, Ok(Option::Some(2)))
 
 REPLでも `new`、`lift`、`fmap`、`run`を別々の通常入力として評価できます。各入力では型注釈または引数からcarrierを具体化してください。
 Transformer自体もMonad carrierとして`do`で逐次処理できます。base carrierの値は自動liftされないため、必要な場合は`MonadT::lift`を明示します。
-Result effect の適用は do-local carrier ごとに決まり、外側の do や関数から継承しません。
+失敗の処理先は do-local carrier ごとに決まり、外側の do や関数から継承しません。
 
 ```surtr
 result: EitherT<String, Identity, Int> = do::<EitherT<String, Identity, _>> {
@@ -338,5 +318,5 @@ result: EitherT<String, Identity, Int> = do::<EitherT<String, Identity, _>> {
 
 - `map_t`、`map_inner` は標準 API にありません。
 - `from_left`、`from_right`、`lift_either`、`lift_inner` の別名は追加しません。
-- `IdentityT`、`ResultT`、Transformer 自体を引数に取る抽象 API はありません。
+- `IdentityT`、Transformer 自体を引数に取る抽象 API はありません。
 - `lift` は通常の関数呼び出しであり、base operation の評価を遅延化しません。

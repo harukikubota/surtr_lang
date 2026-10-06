@@ -239,6 +239,13 @@ pub const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
+        file_name: "traits/operator/monad_fail.srt",
+        module_path: "MonadFail",
+        source: include_str!("../../../lib/traits/operator/monad_fail.srt"),
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
         file_name: "traits/monad_t.srt",
         module_path: "MonadT",
         source: include_str!("../../../lib/traits/monad_t.srt"),
@@ -396,6 +403,13 @@ pub const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         file_name: EITHER_T_FILE,
         module_path: EITHER_T_MODULE_PATH,
         source: EITHER_T_SOURCE,
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: "types/monad_transformer/result_t.srt",
+        module_path: "ResultT",
+        source: include_str!("../../../lib/types/monad_transformer/result_t.srt"),
         stage: StdlibStage::Main,
         variant: StdlibVariant::Default,
     },

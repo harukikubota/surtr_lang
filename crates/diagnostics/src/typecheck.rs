@@ -360,19 +360,16 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 );
             }
         }
-        TypeDiagnosticReason::SafeBindRequiresResultTarget => {
+        TypeDiagnosticReason::SafeBindRequiresMonadFailTarget => {
             if let DiagnosticData::Policy(value) = &input.data {
                 return format!(
-                    "`=?` requires an enclosing ResultContext return type (canonical Result or a valid @result_effect carrier), got {}",
+                    "`=?` requires an enclosing MonadFail return type, got {}",
                     value
                         .actual_type
                         .as_deref()
                         .expect("SafeBind enclosing return type")
                 );
             }
-        }
-        TypeDiagnosticReason::ErrorValueMustBeWrapped => {
-            return "Error values must be wrapped with Err(...)".into();
         }
         TypeDiagnosticReason::FacetSafeBindForbidden => {
             return "Facet values cannot be bound with `=?`".into();
@@ -448,14 +445,6 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                         .expect("nominal declaration bound"),
                     value.stage.as_deref().expect("nominal type name")
                 );
-            }
-        }
-        TypeDiagnosticReason::InvalidResultEffectAnnotation => {
-            if let DiagnosticData::Policy(value) = &input.data {
-                return value
-                    .subject
-                    .clone()
-                    .expect("result effect annotation failure");
             }
         }
         TypeDiagnosticReason::TraitImplementationForbidden => {

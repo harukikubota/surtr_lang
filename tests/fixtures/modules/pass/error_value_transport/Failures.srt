@@ -1,0 +1,6 @@
+deferror TransportFailure { "crossed module" }
+
+defmod Failures {
+  def make() -> Error { TransportFailure }
+  def save(error: Error) -> (-> Error) { {|| error} }
+}

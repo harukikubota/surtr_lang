@@ -358,29 +358,23 @@ path 返却は拒否する。`const Facet<...>` の literal bracket 制約は維
   carrier推論、core lowering、SafeBind failure target、Forge lowering、診断整備、全carrier受入検証は
   実装・検証済みである。現行の詳細契約は[do intrinsic](./Do_intrinsic_spec.md)に置く。
 
-`@result_effect` は MonadT の内部表現を探索する機能ではなく、宣言へ明示する compiler-owned assertion である。
-surface は引数を取らず、1つの `defstruct` 宣言へ一度だけ指定できる。重複、引数付き、または
-`defstruct` 以外への指定は parse error とする。
+`MonadFail` は `Self: Monad` を親制約に持ち、`fail::<Self>(error: Error) -> Self` を宣言する。
+Self は完成した返り型であり、期待型または ReturnTypeArgument から決定する。標準宣言の identity により
+能力を選び、struct の内部表現や同名 Trait から推測しない。通常 callable の失敗は MonadFail、do は
+MonadFail、次に Alternative の順で解決する。Monad 単独は失敗値を構築しない。
+`fail` は渡された Error を保持し、成功 payload や bind の後続を生成・実行しない。
+標準実装はこの契約を満たす。ユーザー impl の法則証明や実行結果の補正はコンパイラでは行わない。
 
-annotation が付いた struct だけについて、次の assertion を宣言時にすべて検証する。
+`fail_if(condition: Boolean, err: Lazy<Error>, then: Lazy<Self>) -> Self` は default method とする。
+condition は strict、True は err を一回評価して fail、False は then を一回評価して返す。
+Self は then に現れるため RTA に重複指定できない。Lazy 宣言契約はユーザー override にも引き継ぐ。
 
-1. canonical `Monad` 実装と canonical `MonadT<$M>` 実装がある。
-2. field は正確に1つで public である。
-3. sole field の最外 constructor は `MonadT<$M>` が capture する同一の `$M` である。
-4. field 型は通常の型形成規則を満たす。
+標準実装は Result、Either<Error, A>、ResultT、EitherT<Error, M, A>、および base が MonadFail の
+ReaderT / StateT に限る。Either / EitherT の任意 Left を覆うユーザー blanket impl は通常の coherence 検査で拒否する。
+ResultT / EitherT は内側の失敗を base の pure で保持し、ReaderT / StateT は run 時に base の fail を返す。
+Option / List / OptionT は標準 MonadFail を持たない。guard は常に Alternative の通常呼出しである。
 
-Trait 名の文字列や short-name lookup ではなく、Sigil が保持した canonical `ResolvedId` と resolved impl
-substitution で照合する。identity や必要 metadata が欠ける場合は別の同名 Trait、field layout、または
-`Alternative` へ fallback せず fail closed とする。annotation のない型では field 数・field 名・function field・
-内部の Result から effect を推論しない。
-
-検証済み carrier の直接 base が canonical `Result` の場合に Result effect を提供し、failure context は
-`ResultEffect > Alternative > Monad` の順で解決する。failureMatcher/partial `<-` は Result effect があれば Error を保持し、
-なければ Alternative の `empty`、どちらもなければ capability error とする。total `<-` は Monad のみを要求し、
-`guard` は常に通常の Alternative call とする。
-
-互換用の二重field、旧用語alias、旧経路fallbackを追加してはならない。serialized cacheやfixture更新が
-必要な場合も一括更新し、旧形式を読み戻すcompatibility layerは設けない。
+旧 `@result_effect` annotation は未定義として拒否し、専用 metadata・構築・互換読取り経路を保持しない。
 
 ## 1. パイプラインと phase ownership
 

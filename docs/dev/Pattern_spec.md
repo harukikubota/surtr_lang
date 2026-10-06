@@ -58,7 +58,7 @@ defenum MatchResult<$Value> {
 - `Result` / `Option` と暗黙変換しない。variant 名や tag の類似を根拠に互換扱いしない。
 - constructor は常に `MatchResult::Ok` / `MatchResult::Err` とする。
 
-手書きの `MatchResult::Err(...)` の引数は具象 `deferror` 値に限定する。抽象 Error の直接構築、観測済み abstract Error の手書き constructor への再投入、裸の Error 値の一般保持、String 等の任意値による代用は許可しない。SafeBind の compiler-owned な伝播では取得済みの Error をそのまま保持する。consumer が既存 Error を保持する内部経路と、利用者の明示 constructor の入力制約を区別する。
+`MatchResult::Err(...)` の引数は Error 型で検査する。具象 constructor の生成値と既存の Error を同じ規則で受理し、元の情報を保持する。抽象 Error の直接構築や String 等による代用は拒否する。MatchResult 自体の専用型位置と protocol は維持する。
 
 Error の kind / message / location / cause は既存 Error / RichError 契約に従う。定義側が返した Error を compiler が共通 PatternMismatch で上書きしたり、Extractor 名や型名から message を再構成したりしない。builtin Extractor も同じ契約を持つ。空の list / string に対する `uncons` の Error は標準定義 / builtin の契約が選び、Forge の名前判定に置かない。
 
@@ -69,7 +69,7 @@ Extractor 本文内の構文不一致や内部関数の Error は、その定義
 Extractor が成功した後で子 Pattern が失敗した場合は、その子の位置を使う。
 as-pattern の alias は照合しないため、内部の失敗位置を変更しない。
 新しい Error で wrap した場合は新しい Error の構築位置を使い、呼出し経路は stack trace に保持する。
-`Kernel::apply_pattern` の失敗は常に自身の `Result` に保持する。非 Result-effect の do 本文内でも、
+`Kernel::apply_pattern` の失敗は常に自身の `Result` に保持する。MonadFail を持たない carrier の do 本文内でも、
 外側 carrier の `Alternative::empty` へ変更しない。
 
 ### 利用位置
@@ -386,8 +386,8 @@ direct = *{|value: Int|
 - 内側の通常 Closure は外側 Extractor の MatchResult target を借りず、自身の合法な戻り値文脈で検査する。
 - 内側の ExtractorClosure は独立した Extractor 本文であり、自身の MatchResult target を持つ。
 - Extractor 内の do でも、failure はその do 自身の carrier へ接続する。外側 MatchResult への直接 return を追加しない。
-- do は引き続き Monad を要求し、failure target は ResultEffect > Alternative > Monad の順に解決する。Result-preserving route は元 Error を保持し、Alternative route は明示的に破棄して resolved empty へ進む。
-- `do::<MatchResult>`、MatchResult への Monad / Alternative / @result_effect の導入は対象外である。
+- do は引き続き Monad を要求し、failure target は MonadFail > Alternative > Monad の順に解決する。MonadFail route は元 Error を保持し、Alternative route は明示的に破棄して resolved empty へ進む。
+- `do::<MatchResult>`、MatchResult への Monad / Alternative / MonadFail の導入は対象外である。
 - REPL top-level SafeBind は既存の Error 表示とセッション継続境界を使う。MatchResult を通常 REPL 値として公開しない。
 
 ## 予約語・OR・pipe
@@ -498,7 +498,7 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 ## 検証境界
 
 
-1. named / builtin Extractor と ExtractorClosure が MatchResult の Ok / Err だけを返す。手書き Err の具象 deferror 引数を受理し、観測済み abstract Error の手書き再投入を拒否する。旧 Option、一般 Result、NoMatch、非 Error payload も拒否する。
+1. named / builtin Extractor と ExtractorClosure が MatchResult の Ok / Err だけを返す。手書き Err は Error 型の引数を受理し、具象 deferror の生成値と既存 Error の再投入を区別しない。旧 Option、一般 Result、NoMatch、非 Error payload も拒否する。
 2. 両者の事前引数0 / 1 / 複数が成立し、総 arity、事前引数型、末尾の consumer input 型、子 Pattern 型・arity の不一致を静的拒否する。
 3. 単値 / tuple / UnitOnly の shape が同じ規則で扱われる。UnitOnly の省略、通常 bind、wildcard、Unit projection、型注釈付き Unit projection が成功する。事前引数付き省略形と tuple の Unit slot も検証する。
 4. projection 0 / 1 / 複数、nested / root alias、list tail、番号と traversal 順が異なる例が所定の値・型になる。最大16、欠番、重複、_01 正規化、不正利用位置を検証する。
@@ -509,7 +509,7 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 9. match / if_let / if_let_then / is_match が Err を破棄し、apply_pattern が実際に失敗した Extractor の Error を保持する。OK 後の子 Pattern 不一致は既存 Pattern Error になる。
 10. 通常 Result target と MatchResult 本文 target の SafeBind が RHS Result.Err、LHS Extractor.Err、nested Err、通常 Pattern Error の kind / message / location / cause を保持して早期 return する。失敗後の本文は未評価で、成功終端には明示 constructor を必要とする。
 11. Result RHS は外側一段だけ射影する。non-Result partial pass-through、total non-Result 拒否と型エラー優先を維持する。apply_pattern は Result input を自動射影しない。
-12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の Result-effect 保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
+12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の MonadFail による保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
 13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR は match / if_let / if_let_then で各 alternative の binding 名・canonical 型・順序が一致する場合に許可する。空 list の OR も同じ規則で扱う。if_let 系は全候補失敗時だけ fallback に進み、網羅性要求を持たない。is_match は OR を許可するが全 alternative の binding を拒否する。`=` / `=?`、do binding、apply_pattern は bind 数にかかわらず OR を拒否する。予約語 shadowing 拒否、Regex::matches の qualified 通常 call / capture と旧名の拒否、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
 14. list / string uncons の成功と空入力 Error、builtin / user-defined / local の consumer 一貫性、不正 tag / metadata の内部 failure を検証する。
 15. 旧専用経路と互換 fallback が残らず、正本・標準 @doc・実装・テストが同じ契約を示す。

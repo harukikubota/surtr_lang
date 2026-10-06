@@ -2,9 +2,9 @@
 
 use scar::env::TypeKind;
 use scar::typed::{
-    OperatorTraitOp, ResultPreserveConstruction, SafeBindFailureTarget, SafeBindRhsProjection,
-    TraitCallOrigin, TypedDoSafeBind, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
-    TypedPattern, TypedProgram, TypedWhereConstraintRhs,
+    OperatorTraitOp, SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin,
+    TypedDoSafeBind, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode, TypedPattern,
+    TypedProgram, TypedWhereConstraintRhs,
 };
 use scar::types::Ty;
 use sigil::resolved::{
@@ -605,9 +605,6 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(captured_contextual_callbacks_preserve_payload_views),
     surface_case!(fixed_nominal_callback_parameters_keep_independent_views),
     surface_case!(rigid_callback_payloads_keep_declared_constructor_capability),
-    surface_case!(result_effect_annotation_validates_canonical_monad_t_shape),
-    surface_case!(result_effect_annotation_rejects_invalid_structure_and_capabilities),
-    surface_case!(result_effect_annotation_rejects_noncanonical_trait_metadata),
     (
         "trailing_block_calls_typecheck_inside_script_module_scope",
         trailing_block_calls_typecheck_inside_script_module_scope as fn(),
@@ -1191,24 +1188,24 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         tap_err_accepts_error_observer_captures_and_composition as fn(),
     ),
     (
-        "error_observer_binding_cannot_escape_as_plain_value",
-        error_observer_binding_cannot_escape_as_plain_value as fn(),
+        "error_observer_binding_can_escape_as_plain_value",
+        error_observer_binding_can_escape_as_plain_value as fn(),
     ),
     (
-        "error_observer_binding_cannot_be_called_directly",
-        error_observer_binding_cannot_be_called_directly as fn(),
+        "error_observer_binding_can_be_called_directly",
+        error_observer_binding_can_be_called_directly as fn(),
     ),
     (
-        "error_observer_binding_cannot_use_error_annotation",
-        error_observer_binding_cannot_use_error_annotation as fn(),
+        "error_observer_binding_can_use_error_annotation",
+        error_observer_binding_can_use_error_annotation as fn(),
     ),
     (
-        "error_observer_closure_param_cannot_use_error_annotation",
-        error_observer_closure_param_cannot_use_error_annotation as fn(),
+        "error_observer_closure_param_can_use_error_annotation",
+        error_observer_closure_param_can_use_error_annotation as fn(),
     ),
     (
-        "error_observer_binding_cannot_flow_through_generic_identity",
-        error_observer_binding_cannot_flow_through_generic_identity as fn(),
+        "error_observer_binding_can_flow_through_generic_identity",
+        error_observer_binding_can_flow_through_generic_identity as fn(),
     ),
     (
         "type_kinds_map_to_compile_space_identities",
@@ -1732,7 +1729,7 @@ fn safebind_function_requires_result_return_type() {
     let err = typecheck(resolved).expect_err("typecheck should fail");
     assert!(err
         .message
-        .contains("requires an enclosing ResultContext return type"));
+        .contains("requires an enclosing MonadFail return type"));
 }
 
 fn safebind_result_closure_uses_nearest_callable_return_type() {
@@ -1755,7 +1752,7 @@ fn safebind_non_result_closure_is_rejected() {
     let err = typecheck(resolved).expect_err("non-Result closure should reject SafeBind");
     assert!(err
         .message
-        .contains("requires an enclosing ResultContext return type"));
+        .contains("requires an enclosing MonadFail return type"));
 }
 
 fn safebind_result_returning_annotated_closure_allows_safebind() {
@@ -1781,7 +1778,7 @@ fn safebind_non_result_closure_rejects_safebind() {
     let err = typecheck(resolved).expect_err("non-Result closure should fail");
     assert!(err
         .message
-        .contains("requires an enclosing ResultContext return type"));
+        .contains("requires an enclosing MonadFail return type"));
 }
 
 fn safebind_top_ok_pattern_requires_nested_result_rhs() {
@@ -6751,9 +6748,8 @@ fn do_safebind_selects_typed_failure_targets() {
     ));
     assert!(matches!(
         failure_target,
-        SafeBindFailureTarget::DoResultContext(target)
-            if target.error_ty == Ty::Error
-                && target.construction == ResultPreserveConstruction::CanonicalResult
+        SafeBindFailureTarget::DoMonadFail(target)
+            if matches!(target.call.node, TypedInner::TraitCall { .. })
     ));
     assert_eq!(continuation.ty, result.ty);
     assert_eq!(
@@ -7376,190 +7372,6 @@ fn rigid_callback_payloads_keep_declared_constructor_capability() {
             "{computation}: {error:?}"
         );
     }
-}
-
-const RESULT_EFFECT_CARRIER_SOURCE: &str = r#"@result_effect
-defstruct TransparentT<$M, $A>
-where
-  $M: Monad
-{
-  inner: __FIELD__,
-}
-
-impl TransparentT {
-  def new(inner: $M<$A>) -> TransparentT<$M, $A>
-  where
-    $M: Monad
-  {
-    TransparentT { inner }
-  }
-}
-
-impl Functor for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: Functor.$A
-{
-  def fmap(self: TransparentT<$M, $A>, mapper: ($A -> $B)) -> TransparentT<$M, $B> {
-    TransparentT::new(Functor::fmap(self.inner, mapper))
-  }
-}
-
-impl Applicative for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: Applicative.$A
-{
-  def pure::<TransparentT<$M, $T>>(value: $A) -> TransparentT<$M, $A> {
-    TransparentT::new(Applicative::pure(value))
-  }
-
-  def ap(
-    mapper: TransparentT<$M, ($A -> $B)>,
-    value: TransparentT<$M, $A>,
-  ) -> TransparentT<$M, $B> {
-    TransparentT::new(Applicative::ap(mapper.inner, value.inner))
-  }
-}
-
-impl Monad for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: Monad.$A
-{
-  def return::<TransparentT<$M, $T>>(value: $A) -> TransparentT<$M, $A> {
-    TransparentT::new(Monad::return(value))
-  }
-
-  def bind(
-    self: TransparentT<$M, $A>,
-    mapper: ($A -> TransparentT<$M, $B>),
-  ) -> TransparentT<$M, $B> {
-    TransparentT::new(Monad::bind(self.inner, {|item| mapper(item).inner}))
-  }
-}
-
-impl MonadT<$M> for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: MonadT.$A
-{
-  def lift::<TransparentT<$M, $T>>(value: $M<$A>) -> TransparentT<$M, $A> {
-    TransparentT::new(value)
-  }
-}
-"#;
-
-fn result_effect_annotation_validates_canonical_monad_t_shape() {
-    let source = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
-    typecheck_with_rules(&source, RuntimeSourcePolicy::script()).expect(
-        "a canonical MonadT with one public direct-base field should accept @result_effect",
-    );
-}
-
-fn result_effect_annotation_rejects_invalid_structure_and_capabilities() {
-    for (source, expected) in [
-        (
-            "@result_effect\ndefstruct EmptyT<$M, $A> where $M: Monad {}",
-            "exactly one field",
-        ),
-        (
-            "@result_effect\ndefstruct PairT<$M, $A> where $M: Monad { left: $M<$A>, right: $M<$A> }",
-            "exactly one field",
-        ),
-        (
-            "@result_effect\ndefstruct PrivateT<$M, $A> where $M: Monad { private inner: $M<$A> }",
-            "sole field to be public",
-        ),
-        (
-            "@result_effect\ndefstruct Wrapper<$A> { value: $A }",
-            "canonical Monad implementation",
-        ),
-    ] {
-        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
-            .expect_err("invalid @result_effect structure must fail closed");
-        assert_eq!(
-            error.reason(),
-            Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-            "{source}: {error:?}"
-        );
-        assert!(error.message.contains(expected), "{source}: {error:?}");
-        assert_eq!(error.span.start, source.find("@result_effect").unwrap());
-        let structured = error.structured.expect("annotation rejection must be structured");
-        assert_eq!(structured.primary.role, diagnostics::SourceRole::Annotation);
-    }
-
-    let wrong_field = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "Option<$A>");
-    let error = typecheck_with_rules(&wrong_field, RuntimeSourcePolicy::script())
-        .expect_err("the sole field must use the captured MonadT base constructor");
-    assert_eq!(
-        error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-        "{error:?}"
-    );
-    assert!(error.message.contains("outer constructor"), "{error:?}");
-
-    let valid_shape = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
-    let missing_monad_t = valid_shape
-        .split("impl MonadT")
-        .next()
-        .expect("fixture contains MonadT implementation");
-    let error = typecheck_with_rules(missing_monad_t, RuntimeSourcePolicy::script())
-        .expect_err("@result_effect requires a canonical MonadT implementation");
-    assert_eq!(
-        error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-        "{error:?}"
-    );
-    assert!(
-        error.message.contains("canonical MonadT implementation"),
-        "{error:?}"
-    );
-}
-
-fn result_effect_annotation_rejects_noncanonical_trait_metadata() {
-    let source = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
-    let mut resolved = resolve_with_builtin_prelude(&source);
-    let shadow_identity = resolved.iter().find_map(|node| match node {
-        Resolved::TraitImplDef(_, _, id, ..) if id.name == "Functor" => Some(id.clone()),
-        _ => None,
-    });
-    let shadow_identity = shadow_identity.expect("standard Functor identity should be resolved");
-    let shadow_identity = ResolvedId {
-        name: "Monad".into(),
-        unique_id: shadow_identity.unique_id,
-        compiler_generated: true,
-        ..shadow_identity
-    };
-    let mut replaced = false;
-    for node in &mut resolved {
-        let Resolved::StructDef(_, _id, _, _, attrs) = node else {
-            continue;
-        };
-        let result_effect = attrs
-            .result_effect
-            .as_mut()
-            .expect("annotated carrier should retain result effect metadata");
-        result_effect.monad_trait = Some(shadow_identity.clone());
-        replaced = true;
-    }
-    assert!(
-        replaced,
-        "annotated carrier should be present in resolved nodes"
-    );
-
-    let error = typecheck(resolved).expect_err("noncanonical metadata must fail closed");
-    assert_eq!(
-        error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-        "{error:?}"
-    );
-    assert!(
-        error
-            .message
-            .contains("canonical Monad identity is invalid"),
-        "{error:?}"
-    );
 }
 
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
@@ -9547,8 +9359,6 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)
@@ -9673,8 +9483,6 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)
@@ -11171,16 +10979,15 @@ named = Result::tap_err(Err(NoneError), &Error::kind >> &print)"#,
     assert!(!typed.is_empty());
 }
 
-fn error_observer_binding_cannot_escape_as_plain_value() {
+fn error_observer_binding_can_escape_as_plain_value() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
 escaped = handler"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding must not escape");
-    assert!(err.message.contains("Error observer closure cannot escape"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_be_called_directly() {
+fn error_observer_binding_can_be_called_directly() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
 value = match Err(NoneError) {
@@ -11188,43 +10995,32 @@ value = match Err(NoneError) {
   Err(err) => handler(err),
 }"#,
     );
-    let err =
-        typecheck(resolved).expect_err("Error observer binding must not be callable directly");
-    assert!(err
-        .message
-        .contains("Error observer closure can only be passed"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_use_error_annotation() {
+fn error_observer_binding_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler: (Error -> Unit) = {|err| eprint(err)}
 value = Result::tap_err(Err(NoneError), handler)"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding annotation must fail");
-    assert!(err
-        .message
-        .contains("Error cannot be used as a user-defined function parameter type"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_closure_param_cannot_use_error_annotation() {
+fn error_observer_closure_param_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err: Error| eprint(err)}
 value = Result::tap_err(Err(NoneError), handler)"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer closure param annotation must fail");
-    assert!(err
-        .message
-        .contains("Error cannot be used as a user-defined function parameter type"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_flow_through_generic_identity() {
+fn error_observer_binding_can_flow_through_generic_identity() {
     let resolved = resolve_with_builtin_prelude(
         r#"def id(value: $A) -> $A { value }
 handler = {|err| eprint(err)}
 value = Result::tap_err(Err(NoneError), id(handler))"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding must be a direct argument");
-    assert!(err.message.contains("Error observer closure cannot escape"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
@@ -11289,15 +11085,8 @@ bad: FixtureEither<_, Int> = FixtureEither::Left("term")"#,
     );
     assert!(!closure_payload.is_empty());
 
-    let abstract_error =
-        typecheck_with_rules("value = Option<Error>::None", RuntimeSourcePolicy::script())
-            .expect_err("abstract Error must remain unavailable as an ordinary enum type argument");
-    assert!(
-        abstract_error
-            .message
-            .contains("Error cannot be used as an enum constructor type argument"),
-        "{abstract_error:?}"
-    );
+    typecheck_with_rules("value = Option<Error>::None", RuntimeSourcePolicy::script())
+        .expect("Error is an ordinary enum type argument");
 
     let result_nodes = typecheck_with_rules(
         r#"ok: Result<Int> = Result<Int>::Ok(1)
@@ -11329,9 +11118,7 @@ err: Result<Int> = Result<Int>::Err(NoneError)"#,
         typecheck_with_rules("err = Result<Int>::Err(1)", RuntimeSourcePolicy::script())
             .expect_err("an explicit Result constructor must retain the concrete Error constraint");
     assert!(
-        invalid_err
-            .message
-            .contains("requires a concrete deferror value"),
+        invalid_err.message.contains("requires an Error value"),
         "{invalid_err:?}"
     );
 
@@ -11659,7 +11446,6 @@ fn match_result_extractor_rejects_ordinary_value_uses() {
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { f = {|x| MatchResult::Ok(x)}\n MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int, Int> { MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::Err(v) } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::Ok(v) } } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::Ok(v))\n MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::Ok(v), _), MatchResult::Ok(v), MatchResult::Ok(v)) } }",
     ] {

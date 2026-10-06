@@ -36,17 +36,17 @@ impl Monad for DoProbe<$T> {
   }
 }
 
-deferror DoResultEffectStop {
-  "do result effect stop"
+deferror DoFailureStop {
+  "do failure stop"
 }
 
-def do_result_effect_source() -> Result<Int, DoResultEffectStop> {
-  Err(DoResultEffectStop)
+def do_failure_source() -> Result<Int, DoFailureStop> {
+  Err(DoFailureStop)
 }
 
-def option_t_result_safebind_failure() -> OptionT<Result, Int> {
-  value =? do_result_effect_source()
-  OptionT::some::<Result>(value + 1)
+def result_t_safebind_failure() -> ResultT<Identity, Int> {
+  value =? do_failure_source()
+  ResultT::ok::<Identity>(value + 1)
 }
 
 def option_do(source: Option<Int>) -> Option<Int> {
@@ -163,7 +163,7 @@ def option_t_identity_do(source: OptionT<Identity, Int>) -> OptionT<Identity, In
 
 def option_t_result_safebind_do() -> OptionT<Result, Int> {
   do::<OptionT<Result, _>> {
-    value =? do_result_effect_source()
+    value =? do_failure_source()
     OptionT::some::<Result>(value + 1)
   }
 }
@@ -350,27 +350,29 @@ test("do carrier integration") {
       }
     }
 
-    it("preserves Result errors through OptionT SafeBind") {
+    it("preserves Result errors through ResultT SafeBind") {
       do {
-        actual: Result<Option<Int>> = OptionT::run(option_t_result_safebind_failure())
+        actual: Result<Int> = Identity::run(ResultT::run(result_t_safebind_failure()))
 
-        assert_err_kind(DoResultEffectStop, actual)
+        assert_err_kind(DoFailureStop, actual)
       }
     }
 
-    it("prefers the OptionT Result effect for do SafeBind") {
+    it("uses OptionT Alternative for do SafeBind") {
       do {
         result: OptionT<Result, Int> = option_t_result_safebind_do()
 
-        assert_err_kind(DoResultEffectStop, OptionT::run(result))
+        actual <- OptionT::run(result)
+        assert_none(actual)
       }
     }
 
-    it("prefers the OptionT Result effect for partial do patterns") {
+    it("uses OptionT Alternative for partial do patterns") {
       do {
         result: OptionT<Result, Int> = option_t_result_partial_do()
 
-        match OptionT::run(result) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
+        actual <- OptionT::run(result)
+        assert_none(actual)
       }
     }
 

@@ -21,7 +21,7 @@ enum UnresolvedExecutableTypeArgument {
 }
 
 enum ResolvedDeferredDoFailure {
-    Result(ResultPreserveTarget),
+    Result(MonadFailTarget),
     Alternative(TypedNode),
 }
 
@@ -38,66 +38,24 @@ impl Checker {
         &mut self,
         deferred: DeferredDoFailureTarget,
     ) -> Result<ResolvedDeferredDoFailure, Box<TypeError>> {
-        let carrier_ty = self.resolve_ty(&deferred.carrier_ty);
-        match self.resolve_result_effect(&carrier_ty) {
-            ResultEffectResolution::Preserve(target) => {
-                for propagated in &deferred.propagated_error_tys {
-                    let propagated = self.resolve_ty(propagated);
-                    if !self.types_compatible(&target.error_ty, &propagated) {
-                        return Err(Box::new(self.policy_error(
-                            TypeDiagnosticReason::SafeBindErrorTypeMismatch,
-                            diagnostics::TypePolicy::SafeBindFailureTarget,
-                            Some("do failure effect".into()),
-                            Some(&target.error_ty),
-                            Some(&propagated),
-                            None,
-                            None,
-                            &deferred.failure_span,
-                            None,
-                        )));
-                    }
-                }
-                Ok(ResolvedDeferredDoFailure::Result(target))
+        let target = self.resolve_pattern_failure_target(
+            &deferred.carrier_ty,
+            &deferred.propagated_error_tys,
+            &deferred.failure_span,
+            Some((
+                &deferred.alternative_trait_key,
+                &deferred.alternative_method_name,
+            )),
+            false,
+        )?;
+        match target {
+            SafeBindFailureTarget::DoMonadFail(target) => {
+                Ok(ResolvedDeferredDoFailure::Result(*target))
             }
-            ResultEffectResolution::Unavailable => {
-                let empty = self.check_trait_invocation(
-                    &deferred.failure_span,
-                    &deferred.alternative_trait_key,
-                    &deferred.alternative_method_name,
-                    &[],
-                    None,
-                    Some(&carrier_ty),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
-                Ok(ResolvedDeferredDoFailure::Alternative(empty))
+            SafeBindFailureTarget::DoAlternative { empty } => {
+                Ok(ResolvedDeferredDoFailure::Alternative(*empty))
             }
-            ResultEffectResolution::Deferred => Err(Box::new(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("deferred do failure policy remained unresolved".into()),
-                None,
-                Some(&carrier_ty),
-                None,
-                None,
-                &deferred.failure_span,
-                Some("Resolve the do carrier before code generation.".into()),
-            ))),
-            ResultEffectResolution::InvalidMetadata(subject) => Err(Box::new(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some(subject.into()),
-                None,
-                Some(&carrier_ty),
-                None,
-                None,
-                &deferred.failure_span,
-                None,
-            ))),
+            _ => unreachable!("resolved do failure context"),
         }
     }
 
@@ -383,6 +341,72 @@ impl Checker {
                 }
             });
         }
+        // Generic templates are not executable function-table entries. Validate
+        // after all enclosing calls have supplied their substitutions, so an
+        // unresolved template reference cannot escape to Forge.
+        let executable_functions = rewritten
+            .iter()
+            .filter_map(Self::def_fun_idx)
+            .collect::<HashSet<_>>();
+        for executable in &rewritten {
+            if let Some(error) = self.find_typed_node(executable, &|checker, node| {
+                // A definition's type describes its declaration; only value
+                // references carry an executable function index.
+                if matches!(
+                    node.node,
+                    TypedInner::Def(..) | TypedInner::ExtractorDef(..)
+                ) {
+                    return None;
+                }
+                let Ty::UserFunc {
+                    fun_idx,
+                    call_substitution,
+                    ..
+                } = &node.ty
+                else {
+                    return None;
+                };
+                if !needs_specialization.contains(fun_idx) || executable_functions.contains(fun_idx)
+                {
+                    return None;
+                }
+                let definition = defs_by_fun_idx
+                    .get(fun_idx)
+                    .expect("specialization template has a definition");
+                let pending = checker.find_typed_node(definition, &|_, call| match &call.node {
+                    TypedInner::TraitCall {
+                        trait_name,
+                        method_name,
+                        receiver_ty,
+                        dispatch,
+                        ..
+                    } if matches!(dispatch, TraitDispatch::Pending)
+                        || matches!(dispatch, TraitDispatch::Selected(instantiation)
+                                if Self::selected_instantiation_has_pending_input(instantiation)) =>
+                    {
+                        Some((trait_name, method_name, receiver_ty))
+                    }
+                    _ => None,
+                });
+                if let Some((trait_name, method, subject)) = pending {
+                    let mapping = call_substitution.iter().cloned().collect();
+                    let subject = checker.substitute_ty_with_mapping(subject, &mapping);
+                    return Some(
+                        checker
+                            .pending_trait_helper_error(trait_name, method, &subject, &node.span),
+                    );
+                }
+                Some(
+                    TypeError::new(
+                        "Callable specialization requires concrete type arguments",
+                        node.span.clone(),
+                    )
+                    .with_hint("Add parameter or result type annotations at this call."),
+                )
+            }) {
+                return Err(error);
+            }
+        }
         self.specialization_fun_idxs = specialization_fun_idxs;
         Ok(rewritten)
     }
@@ -393,6 +417,15 @@ impl Checker {
         allowed_vars: &HashSet<u32>,
         allowed_enum_constructor_vars: &HashSet<u32>,
     ) -> Option<UnresolvedExecutableTypeArgument> {
+        if let Some(found) = node.monad_fail_call().and_then(|call| {
+            self.first_unresolved_executable_type_argument(
+                call,
+                allowed_vars,
+                allowed_enum_constructor_vars,
+            )
+        }) {
+            return Some(found);
+        }
         if let Some(pending) = Self::pattern_expression_nodes(node)
             .into_iter()
             .find_map(|expr| {
@@ -526,7 +559,6 @@ impl Checker {
                     _ => None,
                 })
                 .or_else(|| visit(&control.continuation)),
-            TypedInner::DeferredDoFailure(_) => None,
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
@@ -642,7 +674,6 @@ impl Checker {
             }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -706,6 +737,28 @@ impl Checker {
             },
         )?;
         let failure_target = match failure_target {
+            SafeBindFailureTarget::DoMonadFail(mut target) => {
+                target.call = self.rewrite_specializations_in_node(
+                    *target.call,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?;
+                SafeBindFailureTarget::DoMonadFail(target)
+            }
+            SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
+                target.call = self.rewrite_specializations_in_node(
+                    *target.call,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?;
+                SafeBindFailureTarget::EnclosingMonadFail(target)
+            }
             SafeBindFailureTarget::DoAlternative { empty } => {
                 SafeBindFailureTarget::DoAlternative {
                     empty: self.rewrite_specializations_in_node(
@@ -727,8 +780,16 @@ impl Checker {
                     failure_span: deferred.failure_span,
                 };
                 match self.resolve_deferred_do_failure(deferred)? {
-                    ResolvedDeferredDoFailure::Result(target) => {
-                        SafeBindFailureTarget::DoResultContext(Box::new(target))
+                    ResolvedDeferredDoFailure::Result(mut target) => {
+                        target.call = self.rewrite_specializations_in_node(
+                            *target.call,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )?;
+                        SafeBindFailureTarget::DoMonadFail(Box::new(target))
                     }
                     ResolvedDeferredDoFailure::Alternative(empty) => {
                         let empty = self.rewrite_specializations_in_node(
@@ -864,8 +925,6 @@ impl Checker {
                 ),
             TypedInner::Lit(..)
             | TypedInner::Var(..)
-            | TypedInner::ResultEffectFailure(..)
-            | TypedInner::DeferredDoFailure(..)
             | TypedInner::SupervisorSpawn { .. }
             | TypedInner::SupervisorAdopt { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -1307,34 +1366,6 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
-            TypedInner::ResultEffectFailure(target) => TypedInner::ResultEffectFailure(target),
-            TypedInner::DeferredDoFailure(deferred) => {
-                let deferred = DeferredDoFailureTarget {
-                    carrier_ty: deferred.carrier_ty,
-                    alternative_trait_key: deferred.alternative_trait_key,
-                    alternative_method_name: deferred.alternative_method_name,
-                    propagated_error_tys: deferred.propagated_error_tys,
-                    failure_span: deferred.failure_span,
-                };
-                match self.resolve_deferred_do_failure(deferred)? {
-                    ResolvedDeferredDoFailure::Result(target) => {
-                        ty = target.carrier_ty.clone();
-                        TypedInner::ResultEffectFailure(Box::new(target))
-                    }
-                    ResolvedDeferredDoFailure::Alternative(empty) => {
-                        let empty = self.rewrite_specializations_in_node(
-                            empty,
-                            defs_by_fun_idx,
-                            bound_tyvars_by_fun_idx,
-                            needs_specialization,
-                            specialization_fun_idxs,
-                            generated_defs,
-                        )?;
-                        ty = empty.ty.clone();
-                        empty.node
-                    }
-                }
-            }
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -1600,6 +1631,20 @@ impl Checker {
                         generated_defs,
                     },
                 )?;
+                let failure_target = match failure_target {
+                    SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
+                        target.call = self.rewrite_specializations_in_node(
+                            *target.call,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )?;
+                        SafeBindFailureTarget::EnclosingMonadFail(target)
+                    }
+                    other => other,
+                };
                 TypedInner::SafeBind(pattern, rhs, projection, failure_target)
             }
             TypedInner::DoSafeBind(control) => {
@@ -2975,6 +3020,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        if let Some(call) = node.monad_fail_call() {
+            self.collect_pending_trait_receiver_tyvars_in_node(call, ordered, seen);
+        }
         for expr in Self::pattern_expression_nodes(node) {
             self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
         }
@@ -3190,27 +3238,8 @@ impl Checker {
             TypedInner::CaptureConstructorClosure(_, _, _, body) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
             }
-            TypedInner::DeferredDoFailure(deferred) => {
-                let mut vars = Vec::new();
-                Self::collect_ty_vars(&deferred.carrier_ty, &mut vars);
-                for var in vars {
-                    if seen.insert(var) {
-                        ordered.push(var);
-                    }
-                }
-                for error_ty in &deferred.propagated_error_tys {
-                    let mut vars = Vec::new();
-                    Self::collect_ty_vars(error_ty, &mut vars);
-                    for var in vars {
-                        if seen.insert(var) {
-                            ordered.push(var);
-                        }
-                    }
-                }
-            }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
             | TypedInner::StructDef(..)
@@ -3243,6 +3272,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        if let Some(call) = node.monad_fail_call() {
+            self.collect_bound_tyvars_in_node(call, ordered, seen);
+        }
         for expr in Self::pattern_expression_nodes(node) {
             self.collect_bound_tyvars_in_node(expr, ordered, seen);
         }
@@ -3312,12 +3344,6 @@ impl Checker {
             }
             TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
                 self.collect_bound_tyvars_in_node(inner, ordered, seen)
-            }
-            TypedInner::DeferredDoFailure(deferred) => {
-                self.collect_bound_tyvars_in_ty(&deferred.carrier_ty, ordered, seen);
-                for error_ty in &deferred.propagated_error_tys {
-                    self.collect_bound_tyvars_in_ty(error_ty, ordered, seen);
-                }
             }
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_bound_tyvars_in_node(cond, ordered, seen);
@@ -3423,7 +3449,6 @@ impl Checker {
             }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
             | TypedInner::StructDef(..)
@@ -3522,21 +3547,6 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
-            TypedInner::ResultEffectFailure(mut target) => {
-                target.carrier_ty = self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                target.error_ty = self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                TypedInner::ResultEffectFailure(target)
-            }
-            TypedInner::DeferredDoFailure(mut deferred) => {
-                deferred.carrier_ty =
-                    self.substitute_ty_with_mapping(&deferred.carrier_ty, mapping);
-                deferred.propagated_error_tys = deferred
-                    .propagated_error_tys
-                    .iter()
-                    .map(|ty| self.substitute_ty_with_mapping(ty, mapping))
-                    .collect();
-                TypedInner::DeferredDoFailure(deferred)
-            }
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -3650,23 +3660,25 @@ impl Checker {
                     }
                 },
                 match failure_target {
-                    SafeBindFailureTarget::EnclosingResultContext(mut target) => {
+                    SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
                         target.carrier_ty =
                             self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                        target.error_ty =
-                            self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                        SafeBindFailureTarget::EnclosingResultContext(target)
+                        target.call = Box::new(
+                            self.substitute_typed_node_with_mapping(*target.call, mapping),
+                        );
+                        SafeBindFailureTarget::EnclosingMonadFail(target)
                     }
                     SafeBindFailureTarget::EnclosingMatchResultContext { err_tag } => {
                         SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
-                    SafeBindFailureTarget::DoResultContext(mut target) => {
+                    SafeBindFailureTarget::DoMonadFail(mut target) => {
                         target.carrier_ty =
                             self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                        target.error_ty =
-                            self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                        SafeBindFailureTarget::DoResultContext(target)
+                        target.call = Box::new(
+                            self.substitute_typed_node_with_mapping(*target.call, mapping),
+                        );
+                        SafeBindFailureTarget::DoMonadFail(target)
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         SafeBindFailureTarget::DoAlternative {
@@ -3715,12 +3727,13 @@ impl Checker {
                         }
                     },
                     failure_target: match failure_target {
-                        SafeBindFailureTarget::DoResultContext(mut target) => {
+                        SafeBindFailureTarget::DoMonadFail(mut target) => {
                             target.carrier_ty =
                                 self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                            target.error_ty =
-                                self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                            SafeBindFailureTarget::DoResultContext(target)
+                            target.call = Box::new(
+                                self.substitute_typed_node_with_mapping(*target.call, mapping),
+                            );
+                            SafeBindFailureTarget::DoMonadFail(target)
                         }
                         SafeBindFailureTarget::DoAlternative { empty } => {
                             SafeBindFailureTarget::DoAlternative {
@@ -5093,6 +5106,7 @@ impl Checker {
             }
             TypedFacetSegment::Field { .. }
             | TypedFacetSegment::Tuple { .. }
+            | TypedFacetSegment::ReadonlyBuiltin { .. }
             | TypedFacetSegment::Variant { .. } => false,
         }
     }
@@ -5118,6 +5132,12 @@ impl Checker {
     }
 
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
+        if node
+            .monad_fail_call()
+            .is_some_and(Self::typed_node_has_pending_trait_call)
+        {
+            return true;
+        }
         if Self::pattern_expression_nodes(node)
             .into_iter()
             .any(Self::typed_node_has_pending_trait_call)
@@ -5286,7 +5306,6 @@ impl Checker {
             }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
             | TypedInner::StructDef(..)
@@ -5294,7 +5313,6 @@ impl Checker {
             | TypedInner::EnumDef(..)
             | TypedInner::TraitDef(..)
             | TypedInner::TraitImplDef(..) => false,
-            TypedInner::DeferredDoFailure(_) => true,
         }
     }
 
@@ -5479,13 +5497,36 @@ mod tests {
                 payload_ty: Ty::Int,
                 error_ty: Ty::Error,
             },
-            failure_target: SafeBindFailureTarget::DoResultContext(Box::new(
-                ResultPreserveTarget {
-                    carrier_ty: result_ty.clone(),
-                    error_ty: Ty::Error,
-                    construction: ResultPreserveConstruction::CanonicalResult,
+            failure_target: SafeBindFailureTarget::DoMonadFail(Box::new(MonadFailTarget {
+                carrier_ty: result_ty.clone(),
+                error_id: sigil::resolved::ResolvedId {
+                    name: "error".into(),
+                    qualified_name: None,
+                    unique_id: 91999,
+                    compiler_generated: true,
+                    symbol_info: None,
+                    span: spire::ast::Span { start: 0, end: 0 },
                 },
-            )),
+                call: Box::new(TypedNode {
+                    ty: Ty::Error,
+                    span: spire::ast::Span { start: 0, end: 0 },
+                    node: TypedInner::ConstructorCall(
+                        1,
+                        vec![TypedNode {
+                            ty: Ty::Error,
+                            span: spire::ast::Span { start: 0, end: 0 },
+                            node: TypedInner::Var(sigil::resolved::ResolvedId {
+                                name: "error".into(),
+                                qualified_name: None,
+                                unique_id: 91999,
+                                compiler_generated: true,
+                                symbol_info: None,
+                                span: spire::ast::Span { start: 0, end: 0 },
+                            }),
+                        }],
+                    ),
+                }),
+            })),
             continuation: Box::new(TypedNode {
                 ty: result_ty,
                 span: test_span(),

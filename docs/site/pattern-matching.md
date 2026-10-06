@@ -221,9 +221,9 @@ def first(values: List<Int>) -> Result<Int> {
 }
 ```
 
-不一致は現在の失敗返却先へ渡します。通常 callable では Result／Result-effect、Extractor／ExtractorClosure 本文では自身の MatchResult、do 内ではその carrier に従います。内側の callable や do は外側の失敗返却先を借りません。
+不一致は現在の失敗返却先へ渡します。通常 callable では MonadFail、Extractor／ExtractorClosure 本文では自身の MatchResult、do 内ではその carrier に従います。内側の callable や do は外側の失敗返却先を借りません。
 
-do の `<-` は carrier の payload を左辺へ渡します。partial Pattern の失敗は Result effect があれば Error を保持し、なければ Alternative の `empty` へ進みます。必要な能力がなければコンパイルエラーです。詳細は [Error Handling](./error-handling.md) と [do](./do.md) を参照してください。
+do の `<-` は carrier の payload を左辺へ渡します。partial Pattern の失敗は MonadFail があれば Error を保持し、なければ Alternative の `empty` へ進みます。必要な能力がなければコンパイルエラーです。詳細は [Error Handling](./error-handling.md) と [do](./do.md) を参照してください。
 
 ## consumer の呼び出し
 

@@ -150,7 +150,7 @@ constructor capture の引数は位置指定だけです。通常の Record / St
 固定した引数式は capture 作成時ではなく、生成された callable を呼ぶたびに、通常の constructor
 引数と同じ左から右の順序で評価されます。
 
-`deferror` などコンパイラが構築を管理する型は constructor capture できません。List、HashMap、
+抽象 `Error` と専用 protocol の `MatchResult` は constructor capture できません。List、HashMap、
 3 要素以上の tuple は literal で構築するため、nominal constructor capture の対象外です。2-tuple は
 既存の ``&`(,)` `` を使います。
 
@@ -168,16 +168,17 @@ no: (-> Boolean) = &False
 成功型は payload や期待型から推論されます。`err = Err(NoneError)` の成功型は
 多相のまま保持できますが、capture の callable binding には具体的な signature が必要です。
 
-`Err` の payload は具象 `deferror` に限られます。`&Err` や `&Err(&1)` は
-通常 callable の引数へ `Error` を公開するため拒否されます。具象 error を生成する式を
-capture 内に固定し、通常の値だけを入力へ公開することはできます。
+`Err` は既存の Error を包みます。具象 `deferror` constructor も、通常の callable として capture できます。
 
 ```surtr
 deferror InvalidValue(value: Int) { to_string(value) }
+factory: (Int -> Error) = &InvalidValue
+wrap: (Error -> Result<Int>) = &Err
+wrap_placeholder: (Error -> Result<Int>) = &Result::Err(&1)
 fail: (Int -> Result<Int>) = &Err(InvalidValue(&1))
 ```
 
-`Result<T>` の失敗枝に収まる Error は、通常 callable の Error 入出力公開には該当しません。
+抽象 `Error` 自体は生成できないため、`&Error` は使えません。
 
 ## operator capture
 
@@ -305,8 +306,7 @@ Pattern 内の事前 Expr にある既存プレースホルダ、projection の 
 
 Lazy位置を直接プレースホルダにすると、通常の呼び出しで渡せる値と、生成された関数が受け取る型は異なります。
 たとえば `and(True, False)` は有効ですが、上の `both`には `both(True, {|| False})` と渡します。
-`Lazy<Error>`の正規化型は `(-> Error)` ですが、Errorを通常の関数型へ公開する制約は解除されません。
-`require`・`ensure`・`Result::map_err`・`Result::cause`を通常の関数値として使うキャプチャでは、error式を呼び出し内へ固定してください。
+`Lazy<Error>` の正規化型は `(-> Error)` です。error placeholder には、この型の通常の closure を渡せます。
 引数の並べ替えも型に反映され、`&and(&2, &1)` の型は `((-> Boolean), Boolean -> Boolean)` です。
 
 FacetPath 自体をプレースホルダ仮引数で受け取ることは禁止します。直接の置換や、合成の path 部分の置換もできません。
