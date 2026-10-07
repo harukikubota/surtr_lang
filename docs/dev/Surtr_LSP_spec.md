@@ -643,7 +643,21 @@ DiagnosticSource
 
 ## 11. Cache / Invalidation
 
-cache は `AnalysisContext` 単位で持つ。
+解析結果全体の cache は `AnalysisContext` 単位で持つ。
+
+現行の局所最適化は、`AnalysisService` 内の strict / tolerant parse 結果の再利用に限る。
+文書pathごとに、source全文、source ID、source kind、compile unit kind、module pathが
+完全一致する場合だけ再利用する。tolerant parseではcursor位置も照合する。hashの一致だけで
+同一とみなさず、成功結果と失敗診断を保持する。moduleの未保存編集は実際の本文で判定する。
+
+保持するのは各文書の現行入力1件、全体で最大64文書とし、最近使われていない文書から除く。
+文書をcloseしたときも除く。64文書を超えるmodule群を順次巡回する場合、再利用できず再parseが
+続くことがある。serviceのclone間で保存領域を共有しても完全なparse入力を照合し、parseや
+host呼出しの間はcacheのlockを保持しない。
+
+semantic解析結果のcacheと、hostからのrunner / external input変更通知は未実装である。
+現行はcontext解決、module読込、resolve/typecheckを引き続き実行する。以下のcontext全体の
+invalidationを、局所的なparse再利用で満たしたとは扱わない。
 
 cache key には少なくとも次を含める。
 

@@ -7,15 +7,16 @@ use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
 use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
 
+use crate::parse_cache::{DocumentParseCache, ParseInput};
 use crate::{
     complete_prefix, extract_project_runner_input, lookup_symbol_at_cursor, parse_document,
-    parse_document_tolerant, repl_assist_at_cursor, resolve_context, resolve_project_runner_with,
-    signature_help_at_cursor, AnalysisContextRequest, AnalysisContextStatus, AnalysisMode,
-    AnalysisSpan, CompletionKind, CompletionRequest, CompletionResponse, CompletionSymbol,
-    DocumentSnapshot, DocumentStore, LineIndex, ProjectRunnerInput, ProjectRunnerSourceInput,
-    ReplAssist, ReplCompletionUseSite, ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic,
-    RunnerDiagnosticKind, ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation,
-    TextPosition, Utf16Position,
+    repl_assist_at_cursor, resolve_context, resolve_project_runner_with, signature_help_at_cursor,
+    AnalysisContextRequest, AnalysisContextStatus, AnalysisMode, AnalysisSpan, CompletionKind,
+    CompletionRequest, CompletionResponse, CompletionSymbol, DocumentSnapshot, DocumentStore,
+    LineIndex, ProjectRunnerInput, ProjectRunnerSourceInput, ReplAssist, ReplCompletionUseSite,
+    ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic, RunnerDiagnosticKind,
+    ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation, TextPosition,
+    Utf16Position,
 };
 
 pub trait AnalysisHost: std::fmt::Debug + Send + Sync {
@@ -120,6 +121,7 @@ pub struct AnalysisService {
     documents: DocumentStore,
     semantic_index: SemanticIndex,
     host: Arc<dyn AnalysisHost>,
+    parse_cache: DocumentParseCache,
 }
 
 impl AnalysisService {
@@ -132,6 +134,7 @@ impl AnalysisService {
             documents: DocumentStore::default(),
             semantic_index: SemanticIndex::default(),
             host,
+            parse_cache: DocumentParseCache::default(),
         }
     }
 
@@ -145,6 +148,7 @@ impl AnalysisService {
     }
 
     pub fn remove_document(&mut self, path: &Path) -> Option<DocumentSnapshot> {
+        self.parse_cache.remove(path);
         self.documents.remove(path)
     }
 
@@ -185,24 +189,18 @@ impl AnalysisService {
                 module_path_for_document(context.context.mode.clone(), &context.context.active_file)
             };
             let compile_unit_kind = compile_unit_kind_for_active_context(&context);
-            let tolerant = parse_document_tolerant(
-                &document.text,
-                0,
-                context.context.source_kind,
+            let parse_input = ParseInput {
+                source: &document.text,
+                source_id: 0,
+                source_kind: context.context.source_kind,
                 compile_unit_kind,
-                module_path.clone(),
-                None,
-            );
+                module_path: module_path.as_deref(),
+            };
+            let tolerant = self.parse_cache.tolerant(&document.path, parse_input, None);
             editor_ast = Some(tolerant.ast.clone());
             syntax_outline = tolerant.outline.clone();
 
-            match parse_document(
-                &document.text,
-                0,
-                context.context.source_kind,
-                compile_unit_kind,
-                module_path,
-            ) {
+            match self.parse_cache.strict(&document.path, parse_input) {
                 Ok(ast) => {
                     semantic_index =
                         semantic_index_with_source_locations(&semantic_index, &document.path, &ast);
@@ -449,7 +447,17 @@ impl AnalysisService {
         };
 
         let script_source = self.source_for_path(&script_file)?;
-        let directive = match extract_load_project_directive(&script_source) {
+        let script_ast = self.parse_cache.strict(
+            &script_file,
+            ParseInput {
+                source: &script_source,
+                source_id: 0,
+                source_kind: SourceKind::Script,
+                compile_unit_kind: CompileUnitKind::Script,
+                module_path: None,
+            },
+        );
+        let directive = match extract_load_project_directive(script_ast) {
             Ok(Some(directive)) => directive,
             Ok(None) => return None,
             Err(diagnostic) => {
@@ -538,18 +546,17 @@ struct LoadProjectDirective {
 }
 
 fn extract_load_project_directive(
-    source: &str,
+    parsed: Result<Vec<Ast>, spire::error::ParseError>,
 ) -> Result<Option<LoadProjectDirective>, RunnerDiagnostic> {
-    let ast = parse_document(source, 0, SourceKind::Script, CompileUnitKind::Script, None)
-        .map_err(|error| {
-            let span = error.span();
-            RunnerDiagnostic {
-                kind: RunnerDiagnosticKind::LoadProjectUnsupported,
-                path: None,
-                span: Some(analysis_span(span)),
-                message: error.message(),
-            }
-        })?;
+    let ast = parsed.map_err(|error| {
+        let span = error.span();
+        RunnerDiagnostic {
+            kind: RunnerDiagnosticKind::LoadProjectUnsupported,
+            path: None,
+            span: Some(analysis_span(span)),
+            message: error.message(),
+        }
+    })?;
 
     let Some(first_non_include) = ast.iter().find(|node| !matches!(node, Ast::Include(_, _)))
     else {
@@ -1452,23 +1459,20 @@ fn build_staged_modules(
             let parser_module_path = standard_module
                 .filter(|spec| spec.module_path == "Facet")
                 .map(|spec| spec.module_path.to_string());
-            let ast = if file.path == active_document.path {
-                parse_document(
-                    &active_document.text,
-                    0,
-                    file.source_kind,
+            let ast = service.parse_cache.strict(
+                &file.path,
+                ParseInput {
+                    source: if file.path == active_document.path {
+                        &active_document.text
+                    } else {
+                        &source
+                    },
+                    source_id: 0,
+                    source_kind: file.source_kind,
                     compile_unit_kind,
-                    parser_module_path.clone(),
-                )
-            } else {
-                parse_document(
-                    &source,
-                    0,
-                    file.source_kind,
-                    compile_unit_kind,
-                    parser_module_path.clone(),
-                )
-            };
+                    module_path: parser_module_path.as_deref(),
+                },
+            );
             match ast {
                 Ok(ast) => {
                     *semantic_index =
@@ -1883,6 +1887,138 @@ fn _text_position_for_byte(line_index: &LineIndex, byte_offset: usize) -> TextPo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn standalone_context(path: &Path) -> ResolvedAnalysisContext {
+        resolve_context(AnalysisContextRequest {
+            workspace_root: PathBuf::from("/repo"),
+            active_file: path.to_path_buf(),
+            selected_context: Some(SelectedContext::DefinitionStandalone),
+            runner_selection: None,
+            open_documents: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn active_document_parse_reuse_preserves_strict_failure_and_tolerant_outline() {
+        let mut service = AnalysisService::new();
+        let path = PathBuf::from("/repo/main.srt");
+        service.update_document(
+            path.clone(),
+            Some(1),
+            "defmod Good { def good() -> Int { 1 } }\ndefmod Bad { def bad(".into(),
+        );
+        let first = service.analyze(standalone_context(&path));
+        let second = service.analyze(standalone_context(&path));
+        assert!(first.ast.is_none());
+        assert!(!first.diagnostics.is_empty());
+        assert!(!first.syntax_outline.is_empty());
+        assert_eq!(first.diagnostics, second.diagnostics);
+        assert_eq!(first.editor_ast, second.editor_ast);
+        assert_eq!(first.syntax_outline, second.syntax_outline);
+        assert_eq!(service.parse_cache.stats().strict_calls, 1);
+        assert_eq!(service.parse_cache.stats().tolerant_calls, 1);
+
+        service.update_document(
+            path.clone(),
+            Some(1),
+            "defmod Better { def good() -> Int { 2 } }\ndefmod Bad { def bad(".into(),
+        );
+        let changed = service.analyze(standalone_context(&path));
+        assert_ne!(first.syntax_outline, changed.syntax_outline);
+        assert_eq!(service.parse_cache.stats().strict_calls, 2);
+        assert_eq!(service.parse_cache.stats().tolerant_calls, 2);
+    }
+
+    #[test]
+    fn service_clones_parse_their_own_document_contents() {
+        let path = PathBuf::from("/repo/shared.srt");
+        let mut first = AnalysisService::new();
+        first.update_document(path.clone(), Some(1), "defmod First { def bad(".into());
+        let mut second = first.clone();
+        second.update_document(path.clone(), Some(1), "defmod Second { def bad(".into());
+
+        let first_result = first.analyze(standalone_context(&path));
+        let second_result = second.analyze(standalone_context(&path));
+        assert_ne!(first_result.syntax_outline, second_result.syntax_outline);
+        assert_eq!(
+            first.analyze(standalone_context(&path)).syntax_outline,
+            first_result.syntax_outline
+        );
+        assert_eq!(
+            second.analyze(standalone_context(&path)).syntax_outline,
+            second_result.syntax_outline
+        );
+        assert_eq!(first.parse_cache.stats().strict_calls, 4);
+        assert_eq!(second.parse_cache.stats().tolerant_calls, 4);
+    }
+
+    #[test]
+    fn module_parse_reuse_reads_current_host_and_unsaved_document_sources() {
+        #[derive(Debug)]
+        struct ChangingHost(std::sync::Mutex<String>);
+        impl AnalysisHost for ChangingHost {
+            fn read_to_string(&self, _path: &Path) -> Option<String> {
+                Some(self.0.lock().unwrap().clone())
+            }
+        }
+
+        let host = Arc::new(ChangingHost(std::sync::Mutex::new(
+            "defmod Helper { def value() -> Int { 1 } }".into(),
+        )));
+        let mut service = AnalysisService::with_host(host.clone());
+        let active =
+            service.update_document(PathBuf::from("/repo/main.srt"), Some(1), String::new());
+        let context = standalone_context(&active.path);
+        let module = PathBuf::from("/repo/module.srt");
+        let stages = vec![crate::ModuleStage {
+            files: vec![crate::ModuleFileFingerprint {
+                path: module.clone(),
+                source_kind: SourceKind::DefinitionSource,
+                content_hash: "unchanged-runner-fingerprint".into(),
+            }],
+        }];
+        let parse = |service: &AnalysisService| {
+            let mut diagnostics = Vec::new();
+            let parsed = build_staged_modules(
+                service,
+                &context,
+                &stages,
+                None,
+                &active,
+                &mut diagnostics,
+                &mut SemanticIndex::default(),
+            );
+            (parsed, diagnostics)
+        };
+
+        let (first, diagnostics) = parse(&service);
+        assert!(diagnostics.is_empty());
+        assert!(first.is_some());
+        assert!(parse(&service).0.is_some());
+        assert_eq!(service.parse_cache.stats().strict_calls, 1);
+
+        service.update_document(
+            module.clone(),
+            Some(1),
+            "defmod Helper { def value() -> Int { 2 } }".into(),
+        );
+        let (overlay, diagnostics) = parse(&service);
+        assert!(diagnostics.is_empty());
+        assert_ne!(
+            first.as_ref().unwrap()[0][0].ast,
+            overlay.as_ref().unwrap()[0][0].ast
+        );
+        assert!(parse(&service).0.is_some());
+        assert_eq!(service.parse_cache.stats().strict_calls, 2);
+
+        service.remove_document(&module);
+        *host.0.lock().unwrap() = "defmod Helper { def value(".into();
+        let (broken, diagnostics) = parse(&service);
+        assert!(broken.is_none());
+        assert!(!diagnostics.is_empty());
+        assert_eq!(diagnostics, parse(&service).1);
+        assert_eq!(service.parse_cache.stats().strict_calls, 3);
+    }
 
     #[test]
     fn canonical_enum_variant_source_locations_link_aliases_to_the_same_declaration() {
