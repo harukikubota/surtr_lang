@@ -88,7 +88,7 @@ impl Checker {
         carrier: &Ty,
         propagated: &[Ty],
         span: &Span,
-        alternative: Option<(&str, &str)>,
+        alternative: Option<(&str, &str, &Span)>,
         allow_deferred: bool,
     ) -> Result<SafeBindFailureTarget, TypeError> {
         let carrier = self.resolve_ty(carrier);
@@ -133,7 +133,8 @@ impl Checker {
                     && allow_deferred
                     && !self.do_failure_carrier_is_rigid_variable(&carrier) =>
             {
-                let (trait_key, method_name) = alternative.expect("do failure context");
+                let (trait_key, method_name, keyword_span) =
+                    alternative.expect("do failure context");
                 return Ok(SafeBindFailureTarget::Deferred(Box::new(
                     DeferredDoFailureTarget {
                         carrier_ty: carrier,
@@ -141,6 +142,7 @@ impl Checker {
                         alternative_method_name: method_name.into(),
                         propagated_error_tys: propagated.to_vec(),
                         failure_span: span.clone(),
+                        do_keyword_span: keyword_span.clone(),
                     },
                 )));
             }
@@ -159,7 +161,15 @@ impl Checker {
             }
             MonadFailResolution::Unavailable | MonadFailResolution::Deferred => {}
         }
-        let Some((trait_key, method_name)) = alternative else {
+        let Some((trait_key, method_name, keyword_span)) = alternative else {
+            if !type_contains_unresolved_vars(&carrier) {
+                return Err(self.pattern_failure_error(
+                    diagnostics::PatternFailureContext::Callable,
+                    &carrier,
+                    span,
+                    self.function_return_origin.as_ref(),
+                ));
+            }
             return Err(self.policy_error(
                 TypeDiagnosticReason::SafeBindRequiresMonadFailTarget,
                 diagnostics::TypePolicy::SafeBindRequiresMonadFailTarget,
@@ -185,9 +195,61 @@ impl Checker {
             None,
             None,
             None,
-        )?;
+        ).map_err(|error| {
+            if !type_contains_unresolved_vars(&carrier)
+                && error.reason() == Some(TypeDiagnosticReason::NoApplicableTraitImplementation)
+                && matches!(error.structured.as_ref().map(|value| &value.data),
+                    Some(diagnostics::DiagnosticData::TraitDispatch(value)) if value.trait_name == "Alternative")
+            {
+                self.pattern_failure_error(
+                    diagnostics::PatternFailureContext::Do,
+                    &carrier,
+                    span,
+                    Some(keyword_span),
+                )
+            } else {
+                error
+            }
+        })?;
         Ok(SafeBindFailureTarget::DoAlternative {
             empty: Box::new(empty),
+        })
+    }
+
+    pub(super) fn pattern_failure_error(
+        &self,
+        context: diagnostics::PatternFailureContext,
+        carrier: &Ty,
+        failure_span: &Span,
+        target_span: Option<&Span>,
+    ) -> TypeError {
+        let (reason, target_role) = match context {
+            diagnostics::PatternFailureContext::Callable => (
+                TypeDiagnosticReason::SafeBindRequiresMonadFailTarget,
+                diagnostics::SourceRole::ReturnType,
+            ),
+            diagnostics::PatternFailureContext::Do => (
+                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                diagnostics::SourceRole::DoCarrier,
+            ),
+        };
+        TypeError::from_structured(diagnostics::StructuredDiagnostic {
+            reason: reason.into(),
+            origin: diagnostics::DiagnosticOrigin::Intrinsic,
+            data: diagnostics::DiagnosticData::PatternFailure(diagnostics::PatternFailureData {
+                context,
+                carrier_type: self.diagnostic_ty_name(&self.resolve_ty(carrier)),
+            }),
+            primary: diagnostics::SourceFact::untyped(
+                diagnostics::SourceRole::Pattern,
+                diagnostics::SourceId(0),
+                failure_span.clone(),
+            ),
+            related: target_span
+                .map(|span| self.type_fact(target_role, span, carrier))
+                .into_iter()
+                .collect(),
+            remediation: None,
         })
     }
 

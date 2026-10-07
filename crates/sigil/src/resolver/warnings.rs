@@ -146,7 +146,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_node_usage(value, usage);
             }
         }
-        Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
+        Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs, _) => {
             collect_node_usage(rhs, usage);
             collect_pattern_usage(pattern, usage);
         }

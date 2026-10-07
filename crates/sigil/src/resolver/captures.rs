@@ -84,7 +84,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             for stmt in stmts {
                 collect_captures_inner(stmt, &mut local_bound, free);
                 match stmt {
-                    Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _) => {
+                    Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _, _) => {
                         collect_bind_pattern_bindings(pat, &mut local_bound);
                     }
                     Resolved::Def(_, id, _, params, _, _, _, _) => {
@@ -132,7 +132,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_pattern_captures(pat, bound, free);
             collect_bind_pattern_bindings(pat, bound);
         }
-        Resolved::SafeBind(_, pat, rhs) => {
+        Resolved::SafeBind(_, pat, rhs, _) => {
             collect_captures_inner(rhs, bound, free);
             collect_pattern_captures(pat, bound, free);
             collect_bind_pattern_bindings(pat, bound);

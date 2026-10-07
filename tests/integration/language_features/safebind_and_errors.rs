@@ -295,7 +295,7 @@ fn safebind_closure_rejects_non_result_return() {
   value =? Ok(x)
   value
 }"#,
-        "requires an enclosing MonadFail return type",
+        "MonadFail is not implemented.",
     );
 }
 
@@ -668,7 +668,7 @@ fn safebind_requires_result_return_function() {
   num =? Ok(1)
   num
 }"#,
-        "requires an enclosing MonadFail return type",
+        "MonadFail is not implemented.",
     );
 }
 

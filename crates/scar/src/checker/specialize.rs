@@ -45,6 +45,7 @@ impl Checker {
             Some((
                 &deferred.alternative_trait_key,
                 &deferred.alternative_method_name,
+                &deferred.do_keyword_span,
             )),
             false,
         )?;
@@ -778,6 +779,7 @@ impl Checker {
                     alternative_method_name: deferred.alternative_method_name,
                     propagated_error_tys: deferred.propagated_error_tys,
                     failure_span: deferred.failure_span,
+                    do_keyword_span: deferred.do_keyword_span,
                 };
                 match self.resolve_deferred_do_failure(deferred)? {
                     ResolvedDeferredDoFailure::Result(mut target) => {

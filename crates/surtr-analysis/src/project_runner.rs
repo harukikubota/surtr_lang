@@ -334,7 +334,7 @@ impl ProjectRunnerExtractor {
                 }
             }
             Ast::Block(_, nodes) => self.visit_many(nodes),
-            Ast::Do(_, _, statements) => {
+            Ast::Do(_, _, statements, _) => {
                 for statement in statements {
                     match statement {
                         AstDoStatement::Extract { rhs, .. }
@@ -362,7 +362,7 @@ impl ProjectRunnerExtractor {
             | Ast::FieldAccess(_, inner, _)
             | Ast::FacetSegmentAccess(_, inner, _)
             | Ast::FacetCapture(_, inner) => self.visit(inner),
-            Ast::Bind(_, _, expr) | Ast::SafeBind(_, _, expr) => self.visit(expr),
+            Ast::Bind(_, _, expr) | Ast::SafeBind(_, _, expr, _) => self.visit(expr),
             _ => {}
         }
     }
@@ -589,7 +589,7 @@ fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut Con
                 collect_config_builder_facts(node, project_file, facts);
             }
         }
-        Ast::Do(_, _, statements) => {
+        Ast::Do(_, _, statements, _) => {
             for statement in statements {
                 match statement {
                     AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
@@ -620,7 +620,7 @@ fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut Con
         | Ast::FieldAccess(_, inner, _)
         | Ast::FacetSegmentAccess(_, inner, _)
         | Ast::FacetCapture(_, inner) => collect_config_builder_facts(inner, project_file, facts),
-        Ast::Bind(_, _, expr) | Ast::SafeBind(_, _, expr) => {
+        Ast::Bind(_, _, expr) | Ast::SafeBind(_, _, expr, _) => {
             collect_config_builder_facts(expr, project_file, facts);
         }
         _ => {}

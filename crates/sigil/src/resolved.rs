@@ -64,6 +64,8 @@ pub struct ResolvedSignatureTy {
 /// instead of rediscovering canonical Traits from display names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDoContract {
+    /// Source origin of this do expression, also retained by synthetic continuations.
+    pub keyword_span: Span,
     pub monad_fail_trait: Option<ResolvedId>,
     pub monad_trait: Option<ResolvedId>,
     pub alternative_trait: Option<ResolvedId>,
@@ -157,7 +159,8 @@ pub enum Resolved {
     Bind(Span, ResolvedPattern, Box<Resolved>),
 
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
-    SafeBind(Span, ResolvedPattern, Box<Resolved>),
+    /// The final span is the producer-owned failure operator origin.
+    SafeBind(Span, ResolvedPattern, Box<Resolved>, Span),
 
     /// Statement-only `expr?`, retaining its Unit-success constraint for Scar.
     StatementQuestion(Span, Box<Resolved>),

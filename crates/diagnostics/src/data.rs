@@ -455,6 +455,8 @@ pub enum SourceRole {
     OperatorSignature,
     Value,
     ReturnTypeArgument,
+    ReturnType,
+    DoCarrier,
     Annotation,
     Expected,
     Contract,
@@ -476,6 +478,8 @@ impl SourceRole {
             Self::OperatorSignature => "operator_signature",
             Self::Value => "value",
             Self::ReturnTypeArgument => "return_type_argument",
+            Self::ReturnType => "return_type",
+            Self::DoCarrier => "do_carrier",
             Self::Annotation => "annotation",
             Self::Expected => "expected",
             Self::Contract => "contract",
@@ -497,6 +501,8 @@ impl SourceRole {
             Self::OperatorSignature => "OperatorSignature",
             Self::Value => "Value",
             Self::ReturnTypeArgument => "ReturnTypeArgument",
+            Self::ReturnType => "Return type",
+            Self::DoCarrier => "do_carrier",
             Self::Annotation => "Annotation",
             Self::Expected => "Expected",
             Self::Contract => "Contract",
@@ -895,6 +901,19 @@ pub struct RuntimeData {
     pub rhs: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternFailureContext {
+    Callable,
+    Do,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PatternFailureData {
+    pub context: PatternFailureContext,
+    pub carrier_type: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticData {
     CallableShape(CallableShapeData),
@@ -912,6 +931,7 @@ pub enum DiagnosticData {
     TypeConstructorCarrier(TypeConstructorCarrierData),
     BranchAssertion(BranchAssertionData),
     SafeBindRelation(SafeBindRelationData),
+    PatternFailure(PatternFailureData),
     Pattern(PatternDiagnosticData),
     Policy(PolicyData),
     Runtime(RuntimeData),
@@ -953,6 +973,7 @@ impl DiagnosticData {
             }
             Self::BranchAssertion(value) => ("BranchAssertion", serde_json::to_value(value)),
             Self::SafeBindRelation(value) => ("SafeBindRelation", serde_json::to_value(value)),
+            Self::PatternFailure(value) => ("PatternFailure", serde_json::to_value(value)),
             Self::Pattern(value) => ("Pattern", serde_json::to_value(value)),
             Self::Policy(value) => ("Policy", serde_json::to_value(value)),
             Self::Runtime(value) => ("Runtime", serde_json::to_value(value)),

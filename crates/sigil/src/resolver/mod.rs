@@ -749,7 +749,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_resolved_node(start, base, offset);
             rebase_resolved_node(stop, base, offset);
         }
-        Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
+        Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs, _) => {
             rebase_pattern(pattern, base, offset);
             rebase_resolved_node(rhs, base, offset);
         }

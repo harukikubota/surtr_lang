@@ -4,6 +4,33 @@ use crate::{
 };
 use spire::ast::Span;
 
+struct PatternFailureTemplate {
+    message: &'static str,
+    primary_caption: &'static str,
+    help: &'static str,
+}
+
+const CALLABLE_FAILURE_TEMPLATE: PatternFailureTemplate = PatternFailureTemplate {
+    message: "MonadFail is not implemented.",
+    primary_caption: "Requires MonadFail.",
+    help: "Implement MonadFail for the return type to handle FailurePattern.",
+};
+
+const DO_FAILURE_TEMPLATE: PatternFailureTemplate = PatternFailureTemplate {
+    message: "Neither MonadFail nor Alternative is implemented.",
+    primary_caption: "Requires MonadFail or Alternative.",
+    help: "Implement MonadFail -> preserve Error (preferred).\nImplement Alternative -> empty().",
+};
+
+fn pattern_failure_template(
+    context: crate::PatternFailureContext,
+) -> &'static PatternFailureTemplate {
+    match context {
+        crate::PatternFailureContext::Callable => &CALLABLE_FAILURE_TEMPLATE,
+        crate::PatternFailureContext::Do => &DO_FAILURE_TEMPLATE,
+    }
+}
+
 /// Build the explicit producer-contract failure used when an adapter receives
 /// an unstructured Scar type error. Message, hint, and source text are
 /// intentionally unavailable at this boundary.
@@ -55,6 +82,11 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         .chain(input.related.iter())
         .map(source_fact_label)
         .collect();
+    if let DiagnosticData::PatternFailure(value) = &input.data {
+        let template = pattern_failure_template(value.context);
+        spec.labels[0].message = template.primary_caption.into();
+        spec.help = Some(template.help.into());
+    }
     if input.reason.type_reason() == Some(TypeDiagnosticReason::ReservedIntrinsicMarkerUsage) {
         let marker = match &input.data {
             DiagnosticData::Policy(value) => value.subject.as_deref().unwrap_or("intrinsic marker"),
@@ -585,6 +617,7 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 _ => unreachable!("dispatch diagnostic requires dispatch reason"),
             }
         },
+        DiagnosticData::PatternFailure(value) => pattern_failure_template(value.context).message.into(),
         DiagnosticData::TypeConstructorCarrier(value) => match reason {
             TypeDiagnosticReason::TypePayloadMismatch => format!("Type payload mismatch: expected {}, got {}", value.expected_carrier, value.actual_carrier),
             TypeDiagnosticReason::TypeConstructorFamilyMismatch => format!("Type constructor family mismatch: expected {}, got {}", value.expected_carrier, value.actual_carrier),

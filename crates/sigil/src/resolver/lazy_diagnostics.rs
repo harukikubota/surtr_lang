@@ -234,7 +234,7 @@ impl Resolver {
             Ast::Grouped(_, inner)
             | Ast::Semi(_, inner)
             | Ast::Bind(_, _, inner)
-            | Ast::SafeBind(_, _, inner)
+            | Ast::SafeBind(_, _, inner, _)
             | Ast::StatementQuestion(_, inner)
             | Ast::FieldAccess(_, inner, _)
             | Ast::FacetCapture(_, inner)
@@ -279,7 +279,7 @@ impl Resolver {
                     self.collect_ordinary_capture_uses(&arg.expr, used)?;
                 }
             }
-            Ast::Do(_, _, statements) => {
+            Ast::Do(_, _, statements, _) => {
                 for statement in statements {
                     let expr = match statement {
                         AstDoStatement::Extract { rhs, .. }

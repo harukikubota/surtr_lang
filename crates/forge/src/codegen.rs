@@ -4527,6 +4527,7 @@ mod tests {
                 },
                 failure_target: SafeBindFailureTarget::Deferred(Box::new(
                     DeferredDoFailureTarget {
+                        do_keyword_span: span(1, 3),
                         carrier_ty: carrier_ty.clone(),
                         alternative_trait_key: "Global::Alternative".into(),
                         alternative_method_name: "empty".into(),

@@ -690,7 +690,7 @@ fn test_facet_bulk_update_special_form_parses() {
     .expect("bulk update should parse");
 
     match &ast[0] {
-        Ast::SafeBind(_, AstPattern::Var(_, name), rhs) => {
+        Ast::SafeBind(_, AstPattern::Var(_, name), rhs, _) => {
             assert_eq!(name, "updated");
             match rhs.as_ref() {
                 Ast::BulkUpdate(_, source, entries) => {
@@ -766,7 +766,7 @@ fn test_facet_bulk_update_rejects_qualified_facet_leaf_call() {
 fn test_safebind() {
     let ast = parse("num =? gen()").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, AstPattern::Var(_, name), rhs) => {
+        Ast::SafeBind(_, AstPattern::Var(_, name), rhs, _) => {
             assert_eq!(name, "num");
             assert!(matches!(rhs.as_ref(), Ast::App(_, _, _)));
         }
@@ -3213,7 +3213,7 @@ fn test_string_range_literal_expr() {
 fn test_single_item_list_pattern_accepts_trailing_comma() {
     let ast = parse("[head,] =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::ListCons(_, head, tail)
@@ -3230,7 +3230,7 @@ fn test_single_item_list_pattern_accepts_trailing_comma() {
 fn test_list_pattern_safebind() {
     let ast = parse("[head, ..tail] =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::ListCons(_, head, tail)
@@ -3247,7 +3247,7 @@ fn test_list_pattern_safebind() {
 fn test_as_pattern_safebind_with_annotation() {
     let ast = parse("[head, ..tail] @ list_dup: List<Int> =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, name, args)), _)
@@ -3266,7 +3266,7 @@ fn test_as_pattern_safebind_with_annotation() {
 fn test_nested_as_pattern_safebind() {
     let ast = parse("[head, .. [e2, ..tail] @ tail_dup] @ list_dup =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::As(_, outer_inner, outer_alias, None, _)
@@ -3309,7 +3309,7 @@ fn test_as_pattern_bind() {
 fn test_constructor_pattern_safebind() {
     let ast = parse("Ok(num) =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::Call(_, ctor, inner)
@@ -3326,7 +3326,7 @@ fn test_constructor_pattern_safebind() {
 fn test_wildcard_pattern_safebind() {
     let ast = parse("_ =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(pattern, AstPattern::Wildcard(_)));
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
         }
@@ -3378,7 +3378,7 @@ fn test_as_pattern_accepts_compact_at_alias() {
 fn test_integer_literal_pattern_safebind() {
     let ast = parse("1 =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(pattern, AstPattern::IntLit(_, n) if n == &int(1)));
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
         }
@@ -3390,7 +3390,7 @@ fn test_integer_literal_pattern_safebind() {
 fn test_list_pattern_with_nested_constructor_literals_safebind() {
     let ast = parse("[Ok(1), Ok(2), _] =? lr").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::ListCons(_, first, rest)
@@ -4126,7 +4126,7 @@ fn test_safebind_allows_trailing_semicolon() {
     let ast = parse("[] =? value;").unwrap();
     assert!(matches!(
         &ast[0],
-        Ast::Semi(_, inner) if matches!(inner.as_ref(), Ast::SafeBind(_, _, _))
+        Ast::Semi(_, inner) if matches!(inner.as_ref(), Ast::SafeBind(_, _, _, _))
     ));
 }
 
@@ -4773,7 +4773,7 @@ fn test_facet_capture_shorthand_allows_bare_inner_expr_for_later_diagnostics() {
 #[test]
 fn parses_facet_index_and_key_segments() {
     let ast = parse("updated =? Facet::set(~user.score.[\"talk\"], 90)").unwrap();
-    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+    let Ast::SafeBind(_, _, rhs, _) = &ast[0] else {
         panic!("expected safe bind");
     };
     let Ast::App(_, callee, args) = rhs.as_ref() else {
@@ -4828,7 +4828,7 @@ fn parses_bulk_update_index_key_and_case_actions() {
 }"#,
     )
     .unwrap();
-    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+    let Ast::SafeBind(_, _, rhs, _) = &ast[0] else {
         panic!("expected safe bind");
     };
     let Ast::BulkUpdate(_, _, entries) = rhs.as_ref() else {
@@ -6633,7 +6633,7 @@ fn test_defagent_worker_init_route_is_public_surface() {
                         Ast::Block(_, stmts)
                             if stmts.iter().any(|stmt| matches!(
                                     stmt,
-                                    Ast::SafeBind(_, _, rhs)
+                                    Ast::SafeBind(_, _, rhs, _)
                                         if matches!(
                                             rhs.as_ref(),
                                             Ast::App(_, callee, _)
@@ -7362,7 +7362,7 @@ fn do_expression_preserves_carrier_and_statement_kinds() {
     let Ast::Bind(_, _, rhs) = &ast[0] else {
         panic!("expected outer binding");
     };
-    let Ast::Do(_, return_type_arguments, statements) = rhs.as_ref() else {
+    let Ast::Do(_, return_type_arguments, statements, _) = rhs.as_ref() else {
         panic!("expected do expression, got {rhs:?}");
     };
     assert!(matches!(
@@ -7403,7 +7403,7 @@ fn do_expression_preserves_annotated_safebind_pattern() {
     let Ast::Bind(_, _, rhs) = &ast[0] else {
         panic!("expected outer binding");
     };
-    let Ast::Do(_, _, statements) = rhs.as_ref() else {
+    let Ast::Do(_, _, statements, _) = rhs.as_ref() else {
         panic!("expected do expression");
     };
     assert!(matches!(
@@ -8053,7 +8053,7 @@ fn statement_question_accepts_whole_statements_and_existing_separators() {
         let ast = parse(source).unwrap_or_else(|err| panic!("{source}: {err:?}"));
         let node = match &ast[0] {
             Ast::Semi(_, inner) => inner.as_ref(),
-            Ast::Do(_, _, statements) => match &statements[0] {
+            Ast::Do(_, _, statements, _) => match &statements[0] {
                 AstDoStatement::Statement(node) => node,
                 other => panic!("expected question statement, got {other:?}"),
             },
@@ -8170,7 +8170,7 @@ fn special_enum_pattern_aliases_normalize_without_confusing_other_owners() {
         ("MatchResult::Err = item", "MatchResult::Err"),
     ] {
         let ast = parse(input).unwrap();
-        let (Ast::Bind(_, pattern, _) | Ast::SafeBind(_, pattern, _)) = &ast[0] else {
+        let (Ast::Bind(_, pattern, _) | Ast::SafeBind(_, pattern, _, _)) = &ast[0] else {
             panic!("binding expected");
         };
         assert!(
@@ -8621,4 +8621,44 @@ fn removed_result_effect_annotation_is_rejected() {
     let error =
         parse("@result_effect\ndefstruct Legacy { value: Int }").expect_err("removed annotation");
     assert!(error.message().contains("Unknown annotation"));
+}
+
+#[test]
+fn safe_bind_operator_and_do_keyword_spans_survive_rebasing() {
+    for source in ["x =? Ok(1)", "x: Int =? Ok(1)", "(a, b) =? Ok((1, 2))"] {
+        let ast = parse(source).unwrap().remove(0);
+        let original_span = ast.span().clone();
+        let shifted = shift_ast_span(ast, 100);
+        let Ast::SafeBind(span, _, _, operator_span) = shifted else {
+            panic!("expected SafeBind");
+        };
+        assert_eq!(
+            span,
+            Span {
+                start: original_span.start + 100,
+                end: original_span.end + 100
+            }
+        );
+        let start = source.find("=?").unwrap() + 100;
+        assert_eq!(
+            operator_span,
+            Span {
+                start,
+                end: start + 2
+            }
+        );
+    }
+    let source = "do::<Identity> { 2 =? Ok(3); Identity(5) }";
+    let ast = parse(source).unwrap().remove(0);
+    let shifted = shift_ast_span(ast, 100);
+    let Ast::Do(_, _, _, keyword_span) = shifted else {
+        panic!("expected do");
+    };
+    assert_eq!(
+        keyword_span,
+        Span {
+            start: 100,
+            end: 102
+        }
+    );
 }

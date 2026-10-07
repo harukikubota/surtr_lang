@@ -1646,8 +1646,9 @@ impl Checker {
             }
 
             Resolved::ApplyPattern(span, value, pattern) => self.check_apply_pattern(span, value, pattern, None),
-            Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs, false),
+            Resolved::SafeBind(span, pat, rhs, operator_span) => self.check_safebind(span, operator_span, pat, rhs, false),
             Resolved::StatementQuestion(span, rhs) => self.check_safebind(
+                span,
                 span,
                 &ResolvedPattern::Wildcard(span.clone()),
                 rhs,
@@ -1872,6 +1873,7 @@ impl Checker {
                             rigid_tyvars.clone(),
                             body_ret.clone(),
                             Self::ast_ty_span(method.ret_ty.syntax()),
+                            Some(Self::ast_ty_span(method.ret_ty.syntax())),
                             method.id.name.clone(),
                             None,
                             None,
@@ -3519,9 +3521,10 @@ impl Checker {
         })
     }
 
-    pub(super) fn check_safebind(
+    fn check_safebind(
         &mut self,
         span: &Span,
+        operator_span: &Span,
         pat: &ResolvedPattern,
         rhs: &Resolved,
         unit_success_only: bool,
@@ -3541,7 +3544,7 @@ impl Checker {
             self.resolve_pattern_failure_target(
                 &ret_ty,
                 &checked.propagated_error_tys,
-                span,
+                operator_span,
                 None,
                 false,
             )?
@@ -4221,7 +4224,7 @@ impl Checker {
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
             | Resolved::ApplyPattern(span, _, _)
-            | Resolved::SafeBind(span, _, _)
+            | Resolved::SafeBind(span, _, _, _)
             | Resolved::StatementQuestion(span, _)
             | Resolved::Do(span, _, _, _, _)
             | Resolved::BinOp(span, _, _, _)
@@ -12458,6 +12461,7 @@ impl Checker {
         kind: CallableContext,
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_function_return_origin = self.function_return_origin.take();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_current_private_field_owner = self.current_private_field_owner.clone();
@@ -12692,6 +12696,7 @@ impl Checker {
 
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
+        self.function_return_origin = saved_function_return_origin;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.current_private_field_owner = saved_current_private_field_owner;
@@ -13994,6 +13999,7 @@ impl Checker {
                             ResolvedRecordLitArg::Positional(stop),
                         ],
                     )),
+                    span.clone(),
                 ),
                 Resolved::ConstructorCall(
                     span.clone(),
@@ -16003,6 +16009,7 @@ mod tests {
             test_span(),
             sindr::intrinsic::IntrinsicId::Do,
             sigil::resolved::ResolvedDoContract {
+                keyword_span: test_span(),
                 monad_fail_trait: None,
                 monad_trait: None,
                 alternative_trait: None,

@@ -606,7 +606,7 @@ impl Resolver {
                 inside_placeholder_capture,
                 used,
             ),
-            Ast::Do(_, _, statements) => {
+            Ast::Do(_, _, statements, _) => {
                 for statement in statements {
                     let node = match statement {
                         AstDoStatement::Extract { rhs, .. }
@@ -665,7 +665,7 @@ impl Resolver {
                 )
             }
             Ast::Bind(_, _, rhs)
-            | Ast::SafeBind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs, _)
             | Ast::StatementQuestion(_, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
@@ -1009,7 +1009,7 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            Ast::Do(span, return_type_arguments, statements) => Ok(Ast::Do(
+            Ast::Do(span, return_type_arguments, statements, keyword_span) => Ok(Ast::Do(
                 span,
                 return_type_arguments,
                 statements
@@ -1057,6 +1057,7 @@ impl Resolver {
                         )),
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?,
+                keyword_span,
             )),
             Ast::Bind(span, pat, rhs) => Ok(Ast::Bind(
                 span,
@@ -1068,7 +1069,7 @@ impl Resolver {
                     inside_placeholder_capture,
                 )?),
             )),
-            Ast::SafeBind(span, pat, rhs) => Ok(Ast::SafeBind(
+            Ast::SafeBind(span, pat, rhs, operator_span) => Ok(Ast::SafeBind(
                 span,
                 pat,
                 Box::new(self.rewrite_capture_placeholders(
@@ -1077,6 +1078,7 @@ impl Resolver {
                     allow_placeholders,
                     inside_placeholder_capture,
                 )?),
+                operator_span,
             )),
             Ast::StatementQuestion(span, rhs) => Ok(Ast::StatementQuestion(
                 span,
@@ -1724,12 +1726,14 @@ impl Resolver {
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 stmts.iter().find_map(Self::pipe_slot_span)
             }
-            Ast::Do(_, _, statements) => statements.iter().find_map(|statement| match statement {
-                AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
-                    Self::pipe_slot_span(rhs)
-                }
-                AstDoStatement::Statement(statement) => Self::pipe_slot_span(statement),
-            }),
+            Ast::Do(_, _, statements, _) => {
+                statements.iter().find_map(|statement| match statement {
+                    AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
+                        Self::pipe_slot_span(rhs)
+                    }
+                    AstDoStatement::Statement(statement) => Self::pipe_slot_span(statement),
+                })
+            }
             Ast::HashMapLiteral(_, entries) => entries.iter().find_map(|entry| {
                 Self::pipe_slot_span(&entry.key).or_else(|| Self::pipe_slot_span(&entry.value))
             }),
@@ -1737,7 +1741,7 @@ impl Resolver {
                 Self::pipe_slot_span(start).or_else(|| Self::pipe_slot_span(stop))
             }
             Ast::Bind(_, _, rhs)
-            | Ast::SafeBind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs, _)
             | Ast::StatementQuestion(_, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
@@ -3162,7 +3166,7 @@ impl Resolver {
                 Ok(Resolved::Bind(span, resolved_pat, Box::new(resolved_rhs)))
             }
 
-            Ast::SafeBind(span, pat, rhs) => {
+            Ast::SafeBind(span, pat, rhs, operator_span) => {
                 // Resolve RHS first (before defining the new binding for shadowing)
                 let resolved_rhs = self.resolve_node(*rhs)?;
                 let resolved_pat = self.resolve_pattern(pat)?;
@@ -3170,7 +3174,7 @@ impl Resolver {
                     span,
                     resolved_pat,
                     Box::new(resolved_rhs),
-                ))
+                 operator_span))
             }
 
             Ast::StatementQuestion(span, rhs) => Ok(Resolved::StatementQuestion(
@@ -3178,8 +3182,8 @@ impl Resolver {
                 Box::new(self.resolve_node(*rhs)?),
             )),
 
-            Ast::Do(span, return_type_arguments, statements) => {
-                let resolved_contract = self.resolve_do_contract(&span);
+            Ast::Do(span, return_type_arguments, statements, keyword_span) => {
+                let resolved_contract = self.resolve_do_contract(&span, &keyword_span);
                 let resolved_return_type_arguments = return_type_arguments
                     .into_iter()
                     .map(|argument| self.resolve_return_type_argument(argument))
@@ -4996,7 +5000,7 @@ impl Resolver {
         })
     }
 
-    fn resolve_do_contract(&self, span: &Span) -> ResolvedDoContract {
+    fn resolve_do_contract(&self, span: &Span, keyword_span: &Span) -> ResolvedDoContract {
         let resolve_trait = |identity: sindr::intrinsic::CanonicalTraitIdentity| {
             let name = identity.surface_name();
             let unique_id = self.declaration_uids.get(name).copied()?;
@@ -5019,6 +5023,7 @@ impl Resolver {
             })
         };
         ResolvedDoContract {
+            keyword_span: keyword_span.clone(),
             monad_fail_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::MonadFail),
             monad_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Monad),
             alternative_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Alternative),

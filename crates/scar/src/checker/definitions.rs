@@ -54,6 +54,7 @@ mod contextual_capability_tests {
                 Checker::signature_tyvar_ids(&method_tyvars),
                 Ty::Unit,
                 &span,
+                None,
                 "unused".into(),
                 None,
                 None,
@@ -1263,6 +1264,7 @@ impl Checker {
         rigid_tyvars: HashSet<u32>,
         function_return_ty: Ty,
         function_return_span: &Span,
+        function_return_origin: Option<&Span>,
         function_symbol: String,
         impl_target: Option<String>,
         private_field_owner: Option<String>,
@@ -1270,6 +1272,7 @@ impl Checker {
         body: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_function_return_origin = self.function_return_origin.clone();
         let saved_local_annotation_tyvars = self.local_annotation_tyvars.clone();
         let saved_rigid_tyvars = self.rigid_tyvars.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
@@ -1283,6 +1286,7 @@ impl Checker {
 
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty.clone());
+        self.function_return_origin = function_return_origin.cloned();
         self.local_annotation_tyvars = local_annotation_tyvars;
         self.rigid_tyvars = rigid_tyvars;
         // Direct constructor inputs introduce witnesses outside the named
@@ -1344,6 +1348,7 @@ impl Checker {
 
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
+        self.function_return_origin = saved_function_return_origin;
         self.local_annotation_tyvars = saved_local_annotation_tyvars;
         self.rigid_tyvars = saved_rigid_tyvars;
         self.current_function_symbol = saved_current_function_symbol;
@@ -1691,6 +1696,7 @@ impl Checker {
                 .as_ref()
                 .map(|ty| Self::ast_ty_span(ty.syntax()))
                 .unwrap_or(span),
+            ret_ty.as_ref().map(|ty| Self::ast_ty_span(ty.syntax())),
             current_symbol,
             impl_target.clone(),
             impl_target,
@@ -1942,6 +1948,7 @@ impl Checker {
             Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
             Self::ast_ty_span(ret_ty),
+            Some(Self::ast_ty_span(ret_ty)),
             current_symbol,
             impl_target.clone(),
             impl_target,
@@ -2512,6 +2519,10 @@ impl Checker {
                         .as_ref()
                         .map(|ty| Self::ast_ty_span(ty.syntax()))
                         .unwrap_or_else(|| Self::ast_ty_span(trait_method.ret_ty.syntax())),
+                    method
+                        .ret_ty
+                        .as_ref()
+                        .map(|ty| Self::ast_ty_span(ty.syntax())),
                     method.function_id.name.clone(),
                     impl_target,
                     private_field_owner,

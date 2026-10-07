@@ -1826,10 +1826,11 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             rewrite_self_pattern(pat, target),
             Box::new(rewrite_self_ast(*rhs, target)),
         ),
-        Ast::SafeBind(span, pat, rhs) => Ast::SafeBind(
+        Ast::SafeBind(span, pat, rhs, operator_span) => Ast::SafeBind(
             span,
             rewrite_self_pattern(pat, target),
             Box::new(rewrite_self_ast(*rhs, target)),
+            operator_span,
         ),
         Ast::BinOp(span, op, left, right) => Ast::BinOp(
             span,
@@ -2138,7 +2139,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|arg| rewrite_self_ast(arg, target))
                 .collect(),
         ),
-        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+        Ast::Do(span, return_type_arguments, statements, keyword_span) => Ast::Do(
             span,
             return_type_arguments
                 .into_iter()
@@ -2174,6 +2175,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                     }
                 })
                 .collect(),
+            keyword_span,
         ),
         Ast::ReturnTypeArgumentApply(span, target_expr, args) => Ast::ReturnTypeArgumentApply(
             span,

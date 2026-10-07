@@ -48,6 +48,7 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
+    surface_case!(pattern_failure_diagnostics_show_target_origins),
     surface_case!(facet_view_capture_infers_source_from_path),
     surface_case!(facet_view_capture_preserves_constraints),
     surface_case!(facet_capture_compile_time_scope_boundaries),
@@ -1727,9 +1728,7 @@ fn safebind_function_requires_result_return_type() {
     );
 
     let err = typecheck(resolved).expect_err("typecheck should fail");
-    assert!(err
-        .message
-        .contains("requires an enclosing MonadFail return type"));
+    assert!(err.message.contains("MonadFail is not implemented."));
 }
 
 fn safebind_result_closure_uses_nearest_callable_return_type() {
@@ -1750,9 +1749,7 @@ fn safebind_non_result_closure_is_rejected() {
 }"#,
     );
     let err = typecheck(resolved).expect_err("non-Result closure should reject SafeBind");
-    assert!(err
-        .message
-        .contains("requires an enclosing MonadFail return type"));
+    assert!(err.message.contains("MonadFail is not implemented."));
 }
 
 fn safebind_result_returning_annotated_closure_allows_safebind() {
@@ -1776,9 +1773,7 @@ fn safebind_non_result_closure_rejects_safebind() {
     );
 
     let err = typecheck(resolved).expect_err("non-Result closure should fail");
-    assert!(err
-        .message
-        .contains("requires an enclosing MonadFail return type"));
+    assert!(err.message.contains("MonadFail is not implemented."));
 }
 
 fn safebind_top_ok_pattern_requires_nested_result_rhs() {
@@ -12051,4 +12046,110 @@ fn facet_capture_compile_time_scope_boundaries() {
     let source = "defrecord User(name: String)\np = User.name\nf = {|path: Facet<InfallibleStructural, User, String, _, _>| Facet::view(path, User(\"alice\"))}";
     typecheck_with_rules(source, RuntimeSourcePolicy::script())
         .expect_err("Facet closure parameters stay forbidden");
+}
+
+fn pattern_failure_diagnostics_show_target_origins() {
+    let closure = typecheck_with_rules(
+        "def outer() -> Result<Int> { bad: (Int -> Int) = {|x| 2 =? Ok(x); x}; Ok(1) }",
+        RuntimeSourcePolicy::script(),
+    )
+    .unwrap_err();
+    assert_eq!(closure.message, "MonadFail is not implemented.");
+    assert!(closure.structured.as_ref().unwrap().related.is_empty());
+    let ordinary = typecheck_with_rules(
+        "value: Identity<Int> = Alternative::empty()",
+        RuntimeSourcePolicy::script(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        ordinary
+            .structured
+            .as_ref()
+            .map(|diagnostic| &diagnostic.data),
+        Some(diagnostics::DiagnosticData::TraitDispatch(_))
+    ));
+    assert!(!ordinary.message.contains("MonadFail is not implemented."));
+
+    for carrier in ["Identity<Int>", "Option<Int>"] {
+        let tail = if carrier.starts_with("Identity") {
+            "Identity(5)"
+        } else {
+            "Option::Some(5)"
+        };
+        let source = format!("def sample() -> {carrier} {{\n  2 =? Ok(3)\n  {tail}\n}}");
+        let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_err();
+        assert_eq!(error.message, "MonadFail is not implemented.");
+        let diagnostic = error.structured.as_ref().unwrap();
+        let operator = source.find("=?").unwrap();
+        assert_eq!(
+            diagnostic.primary.span,
+            Span {
+                start: operator,
+                end: operator + 2
+            }
+        );
+        let target = diagnostic
+            .related
+            .iter()
+            .find(|fact| fact.role.json_name() == "return_type")
+            .unwrap();
+        let start = source.find(carrier).unwrap();
+        assert_eq!(
+            target.span,
+            Span {
+                start,
+                end: start + carrier.len()
+            }
+        );
+        assert_eq!(target.ty.as_deref(), Some(carrier));
+        let spec = diagnostics::structured_type_error_spec(diagnostic);
+        assert_eq!(
+            spec.help.as_deref(),
+            Some("Implement MonadFail for the return type to handle FailurePattern.")
+        );
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == format!("Return type: {carrier}")));
+        assert_eq!(diagnostic.data.to_json_value()["kind"], "PatternFailure");
+    }
+    for (statement, primary) in [("2 =? Ok(3)", "=?"), ("2 <- Identity(3)", "2")] {
+        let source = format!("def sample() -> Result<Int> {{\n  ret: Result<Int> = do {{\n    nested: Identity<Int> = do::<Identity> {{\n      {statement}\n      Identity(5)\n    }}\n    Ok(5)\n  }}\n  ret\n}}");
+        let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_err();
+        assert_eq!(
+            error.message,
+            "Neither MonadFail nor Alternative is implemented."
+        );
+        let diagnostic = error.structured.as_ref().unwrap();
+        let statement_start = source.find(statement).unwrap();
+        let primary_start = statement_start + statement.find(primary).unwrap();
+        assert_eq!(
+            diagnostic.primary.span,
+            Span {
+                start: primary_start,
+                end: primary_start + primary.len()
+            }
+        );
+        let target = diagnostic
+            .related
+            .iter()
+            .find(|fact| fact.role.json_name() == "do_carrier")
+            .unwrap();
+        let start = source.find("do::<Identity>").unwrap();
+        assert_eq!(
+            target.span,
+            Span {
+                start,
+                end: start + 2
+            }
+        );
+        assert_eq!(target.ty.as_deref(), Some("Identity<Int>"));
+        let spec = diagnostics::structured_type_error_spec(diagnostic);
+        assert!(spec.help.as_deref().unwrap().contains("preferred"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "do_carrier: Identity<Int>"));
+        assert_eq!(diagnostic.data.to_json_value()["kind"], "PatternFailure");
+    }
 }

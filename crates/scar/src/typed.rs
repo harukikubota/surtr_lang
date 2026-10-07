@@ -689,6 +689,7 @@ pub struct MonadFailTarget {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeferredDoFailureTarget {
+    pub do_keyword_span: Span,
     pub carrier_ty: Ty,
     pub alternative_trait_key: String,
     pub alternative_method_name: String,

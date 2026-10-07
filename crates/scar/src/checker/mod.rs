@@ -2876,6 +2876,7 @@ struct Checker {
     active_lazy_capture: Option<ActiveLazyCapture>,
     env: TypeEnv,
     function_return_ty: Option<Ty>,
+    function_return_origin: Option<Span>,
     local_annotation_tyvars: HashMap<String, Ty>,
     /// Declaration-owned generic variables are rigid while their body is
     /// checked. Inference variables may bind to them, but they never bind to a
@@ -3042,6 +3043,7 @@ impl Checker {
         Self {
             env: state.env,
             function_return_ty: None,
+            function_return_origin: None,
             local_annotation_tyvars: HashMap::new(),
             rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
@@ -3103,6 +3105,7 @@ impl Checker {
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
+        checker.function_return_origin = self.function_return_origin.clone();
         checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
         checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
@@ -4583,7 +4586,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         match node {
             Resolved::Bind(_, pattern, rhs)
-            | Resolved::SafeBind(_, pattern, rhs)
+            | Resolved::SafeBind(_, pattern, rhs, _)
             | Resolved::ApplyPattern(_, rhs, pattern) => {
                 self.validate_constructor_pattern(pattern, constructor_traits)?;
                 self.validate_constructor_body_positions(rhs, constructor_traits)?;

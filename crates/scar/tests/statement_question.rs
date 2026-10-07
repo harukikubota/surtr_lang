@@ -87,9 +87,7 @@ fn question_uses_nearest_callable_target() {
         let error = typecheck(resolve_with_builtin_prelude(source))
             .expect_err("a non-Result callable must not use an outer failure target");
         assert!(
-            error
-                .message
-                .contains("requires an enclosing MonadFail return type"),
+            error.message.contains("MonadFail is not implemented."),
             "{error:?}"
         );
     }
@@ -182,7 +180,10 @@ fn question_uses_option_t_alternative_only_inside_do() {
         "def run() -> OptionT<Result, Int> { Ok(())?\n OptionT::some::<Result>(1) }",
     ))
     .expect_err("OptionT has no MonadFail for an ordinary callable");
-    assert!(error.message.contains("MonadFail"), "{error:?}");
+    assert!(
+        error.message.contains("MonadFail is not implemented."),
+        "{error:?}"
+    );
 
     let typed = typecheck_with_builtin_prelude(
         "result = do::<OptionT<Result, _>> { Ok(())?; OptionT::some::<Result>(1) }",
@@ -203,12 +204,7 @@ fn question_in_non_result_closure_inside_do_rejects_outer_failure_targets() {
         "def outer() -> Result<()> { result = do::<Result> { inner: (Int -> Int) = {|value| Ok(())?\n value}\n Ok(()) }\n Ok(()) }",
     ))
     .expect_err("a nested non-Result callable cannot borrow a do or outer callable target");
-    assert!(
-        error
-            .message
-            .contains("requires an enclosing MonadFail return type"),
-        "{error:?}"
-    );
+    assert!(error.message.contains("MonadFail"), "{error:?}");
 }
 
 #[test]
@@ -248,19 +244,14 @@ fn unannotated_closures_cannot_borrow_outer_safebind_failure_targets() {
             assert!(
                 error
                     .message
-                    .contains("requires an enclosing MonadFail return type"),
+                    .contains("MonadFail"),
                 "{source}: {error:?}"
             );
         }
         let source = format!("impl Int {{ defextractor outer(value: Int) -> MatchResult<Int> {{ closure = {{|item: Int| {statement}\n ()}}\n MatchResult::Ok(value) }} }}");
         let error = typecheck(resolve_with_builtin_prelude(&source))
             .expect_err("an ordinary closure cannot borrow an enclosing MatchResult target");
-        assert!(
-            error
-                .message
-                .contains("requires an enclosing MonadFail return type"),
-            "{error:?}"
-        );
+        assert!(error.message.contains("MonadFail"), "{error:?}");
     }
 }
 

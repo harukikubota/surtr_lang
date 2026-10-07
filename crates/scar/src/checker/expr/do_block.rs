@@ -94,7 +94,11 @@ impl Checker {
             carrier,
             propagated,
             span,
-            Some((&alternative_key, empty.method_name())),
+            Some((
+                &alternative_key,
+                empty.method_name(),
+                &contract.keyword_span,
+            )),
             true,
         )
     }
@@ -1057,6 +1061,7 @@ mod tests {
             .traits
             .insert("Shadow::Monad".into(), constructor_trait(shadow));
         let contract = sigil::resolved::ResolvedDoContract {
+            keyword_span: Span { start: 0, end: 2 },
             monad_fail_trait: None,
             monad_trait: Some(canonical),
             alternative_trait: None,

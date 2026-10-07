@@ -55,7 +55,7 @@ impl Parser<'_> {
                 self.peek_span(),
             ));
         }
-        self.advance();
+        let operator_span = self.advance().span;
         let rhs = self.parse_expr()?;
         self.ensure_non_associative_assignment(&rhs)?;
         let span = Span {
@@ -69,7 +69,7 @@ impl Parser<'_> {
                 span,
             ));
         }
-        Self::assignment_ast(assign_tok, span, pat, rhs)
+        Self::assignment_ast(assign_tok, operator_span, span, pat, rhs)
     }
 
     pub(super) fn is_pattern_bind_stmt_start(&self) -> bool {

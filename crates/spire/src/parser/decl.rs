@@ -349,7 +349,7 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             span,
             stmts.into_iter().map(rewrite_process_self_refs).collect(),
         ),
-        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+        Ast::Do(span, return_type_arguments, statements, keyword_span) => Ast::Do(
             span,
             return_type_arguments,
             statements
@@ -382,13 +382,17 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
                     }
                 })
                 .collect(),
+            keyword_span,
         ),
         Ast::Bind(span, pat, rhs) => {
             Ast::Bind(span, pat, Box::new(rewrite_process_self_refs(*rhs)))
         }
-        Ast::SafeBind(span, pat, rhs) => {
-            Ast::SafeBind(span, pat, Box::new(rewrite_process_self_refs(*rhs)))
-        }
+        Ast::SafeBind(span, pat, rhs, operator_span) => Ast::SafeBind(
+            span,
+            pat,
+            Box::new(rewrite_process_self_refs(*rhs)),
+            operator_span,
+        ),
         Ast::BinOp(span, op, lhs, rhs) => Ast::BinOp(
             span,
             op,
@@ -797,6 +801,7 @@ fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
             &[lower_module, "state"],
             vec![var(span, "pid")],
         )),
+        span.clone(),
     )
 }
 
@@ -1168,6 +1173,7 @@ fn build_state_set_wrapper(
         span.clone(),
         AstPattern::Var(span.clone(), "next_state".to_string()),
         Box::new(call(span, "__agent_set", call_args)),
+        span.clone(),
     ));
     stmts.push(internal_qualified_call(
         span,
@@ -1253,6 +1259,7 @@ fn build_genserver_call_wrapper(
         span.clone(),
         AstPattern::Var(span.clone(), "call_result".to_string()),
         Box::new(call(span, internal_handler_name, call_args)),
+        span.clone(),
     ));
     stmts.push(Ast::Match(
         span.clone(),
@@ -1379,6 +1386,7 @@ fn build_genserver_cast_wrapper(
         span.clone(),
         AstPattern::Var(span.clone(), "cast_result".to_string()),
         Box::new(call(span, internal_handler_name, call_args)),
+        span.clone(),
     ));
     stmts.push(Ast::Match(
         span.clone(),

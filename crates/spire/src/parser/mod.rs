@@ -448,7 +448,7 @@ impl<'a> Parser<'a> {
     fn anonymous_callable_call_target(stmt: &Ast) -> Option<&Ast> {
         match stmt {
             Ast::Bind(_, _, rhs)
-            | Ast::SafeBind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs, _)
             | Ast::StatementQuestion(_, rhs)
             | Ast::Semi(_, rhs) => Self::anonymous_callable_call_target(rhs),
             Ast::Capture(_, _, _)
@@ -1093,7 +1093,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             span,
             rewrite_process_owner_refs_in_body(body, old_name, new_name),
         ),
-        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+        Ast::Do(span, return_type_arguments, statements, keyword_span) => Ast::Do(
             span,
             return_type_arguments
                 .into_iter()
@@ -1133,16 +1133,18 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                     ),
                 })
                 .collect(),
+            keyword_span,
         ),
         Ast::Bind(span, pattern, expr) => Ast::Bind(
             span,
             rewrite_process_owner_pattern(pattern, old_name, new_name),
             Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
         ),
-        Ast::SafeBind(span, pattern, expr) => Ast::SafeBind(
+        Ast::SafeBind(span, pattern, expr, operator_span) => Ast::SafeBind(
             span,
             rewrite_process_owner_pattern(pattern, old_name, new_name),
             Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+            operator_span,
         ),
         Ast::BinOp(span, op, lhs, rhs) => Ast::BinOp(
             span,
@@ -2224,18 +2226,20 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_pattern(pat, delta),
             Box::new(shift_ast_span(*rhs, delta)),
         ),
-        Ast::SafeBind(span, pat, rhs) => Ast::SafeBind(
+        Ast::SafeBind(span, pat, rhs, operator_span) => Ast::SafeBind(
             shift_span(span, delta),
             shift_pattern(pat, delta),
             Box::new(shift_ast_span(*rhs, delta)),
+            shift_span(operator_span, delta),
         ),
-        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+        Ast::Do(span, return_type_arguments, statements, keyword_span) => Ast::Do(
             shift_span(span, delta),
             return_type_arguments
                 .into_iter()
                 .map(|argument| shift_return_type_argument(argument, delta))
                 .collect(),
             shift_do_statements(statements, delta),
+            shift_span(keyword_span, delta),
         ),
         Ast::BinOp(span, op, left, right) => Ast::BinOp(
             shift_span(span, delta),
@@ -2878,9 +2882,9 @@ impl Ast {
             | Ast::ReturnTypeArgumentApply(s, _, _)
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
-            | Ast::SafeBind(s, _, _)
+            | Ast::SafeBind(s, _, _, _)
             | Ast::StatementQuestion(s, _)
-            | Ast::Do(s, _, _)
+            | Ast::Do(s, _, _, _)
             | Ast::BinOp(s, _, _, _)
             | Ast::Pipe(s, _, _)
             | Ast::ContextMap(s, _, _)

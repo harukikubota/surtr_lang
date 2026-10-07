@@ -663,13 +663,15 @@ pub enum Ast {
     Bind(Span, AstPattern, Box<Ast>),
 
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
-    SafeBind(Span, AstPattern, Box<Ast>),
+    /// The final span retains the operator token (or the generation origin for synthetic binds).
+    SafeBind(Span, AstPattern, Box<Ast>, Span),
 
     /// Statement-only `expr?`; the terminal success type must be Unit.
     StatementQuestion(Span, Box<Ast>),
 
     /// Compiler-owned monadic sequencing expression.
-    Do(Span, Vec<ReturnTypeArgument>, Vec<AstDoStatement>),
+    /// The final span retains the `do` keyword token.
+    Do(Span, Vec<ReturnTypeArgument>, Vec<AstDoStatement>, Span),
 
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),

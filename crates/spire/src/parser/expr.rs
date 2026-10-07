@@ -33,13 +33,14 @@ const MAX_CAPTURE_PLACEHOLDER_INDEX: usize = 16;
 impl Parser<'_> {
     pub(super) fn assignment_ast(
         assign_tok: Token,
+        operator_span: Span,
         span: Span,
         pat: AstPattern,
         rhs: Ast,
     ) -> Result<Ast, ParseError> {
         match assign_tok {
             Token::Bind => Ok(Ast::Bind(span, pat, Box::new(rhs))),
-            Token::SafeBind => Ok(Ast::SafeBind(span, pat, Box::new(rhs))),
+            Token::SafeBind => Ok(Ast::SafeBind(span, pat, Box::new(rhs), operator_span)),
             other => Err(ParseError::syntax(
                 crate::error::ParseErrorReason::ExpressionSyntax,
                 format!("Expected assignment operator (= or =?), got {:?}", other),
@@ -1355,6 +1356,7 @@ impl Parser<'_> {
                 },
                 return_type_arguments,
                 statements,
+                do_span,
             ))
         })
     }
@@ -2267,6 +2269,7 @@ impl Parser<'_> {
                 ));
             }
             let assign_tok = self.peek().clone();
+            let operator_span = self.peek_span();
             match assign_tok {
                 Token::Bind | Token::SafeBind => {
                     self.advance();
@@ -2295,13 +2298,13 @@ impl Parser<'_> {
                 end: rhs.span().end,
             };
             let pat = AstPattern::Annotated(name_span, name, ty);
-            return Self::assignment_ast(assign_tok, span, pat, rhs);
+            return Self::assignment_ast(assign_tok, operator_span, span, pat, rhs);
         }
 
         // Simple binding: name = expr / name =? expr
         if matches!(self.peek(), Token::Bind | Token::SafeBind) {
             let assign_tok = self.peek().clone();
-            self.advance();
+            let operator_span = self.advance().span;
             let rhs = self.parse_expr()?;
             self.ensure_non_associative_assignment(&rhs)?;
             let span = Span {
@@ -2309,7 +2312,7 @@ impl Parser<'_> {
                 end: rhs.span().end,
             };
             let pat = AstPattern::Var(name_span, name);
-            return Self::assignment_ast(assign_tok, span, pat, rhs);
+            return Self::assignment_ast(assign_tok, operator_span, span, pat, rhs);
         }
 
         // Just a variable
@@ -2382,7 +2385,7 @@ impl Parser<'_> {
 
     /// `=` / `=?` are non-associative in a single statement.
     pub(super) fn ensure_non_associative_assignment(&self, rhs: &Ast) -> Result<(), ParseError> {
-        if matches!(rhs, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _)) {
+        if matches!(rhs, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _, _)) {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::ExpressionSyntax,
                 "`=` and `=?` are non-associative; a statement can contain only one assignment operator",
@@ -2545,7 +2548,7 @@ impl Parser<'_> {
 
     pub(super) fn parse_non_assignment_expr(&mut self) -> Result<Ast, ParseError> {
         let expr = self.parse_expr()?;
-        if matches!(expr, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _)) {
+        if matches!(expr, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _, _)) {
             Err(ParseError::syntax(
                 crate::error::ParseErrorReason::ExpressionSyntax,
                 "Assignments (`=` and `=?`) are statements and cannot appear in argument position",
@@ -3662,7 +3665,7 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         Ast::ReturnTypeArgumentApply(_, target, _) => {
             bulk_update_proc_contains_operation_call(target)
         }
-        Ast::Do(_, _, statements) => statements.iter().any(|statement| match statement {
+        Ast::Do(_, _, statements, _) => statements.iter().any(|statement| match statement {
             AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
                 bulk_update_proc_contains_operation_call(rhs)
             }
@@ -3678,7 +3681,7 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
                 || bulk_update_proc_contains_operation_call(&entry.value)
         }),
         Ast::Bind(_, _, rhs)
-        | Ast::SafeBind(_, _, rhs)
+        | Ast::SafeBind(_, _, rhs, _)
         | Ast::StatementQuestion(_, rhs)
         | Ast::Grouped(_, rhs)
         | Ast::FacetCapture(_, rhs)

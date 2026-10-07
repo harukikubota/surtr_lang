@@ -587,3 +587,87 @@ fn structured_diagnostics_never_extract_optional_fields_from_prose() {
         Some("MissingTraitCapability")
     );
 }
+
+#[test]
+fn pattern_failure_help_and_target_facts_survive_rendering_and_json() {
+    for (context, role, caption, target_text) in [
+        (
+            PatternFailureContext::Callable,
+            SourceRole::ReturnType,
+            "Return type",
+            "Identity<Int>",
+        ),
+        (
+            PatternFailureContext::Do,
+            SourceRole::DoCarrier,
+            "do_carrier",
+            "do",
+        ),
+    ] {
+        let mut sources = SourceRegistry::new();
+        let failure_source = sources.register("body.srt", "2 =? Ok(3)");
+        let target_source = sources.register("target.srt", target_text);
+        let input = StructuredDiagnostic {
+            reason: match context {
+                PatternFailureContext::Callable => {
+                    TypeDiagnosticReason::SafeBindRequiresMonadFailTarget
+                }
+                PatternFailureContext::Do => TypeDiagnosticReason::NoApplicableTraitImplementation,
+            }
+            .into(),
+            origin: DiagnosticOrigin::Intrinsic,
+            data: DiagnosticData::PatternFailure(PatternFailureData {
+                context,
+                carrier_type: "Identity<Int>".into(),
+            }),
+            primary: SourceFact::untyped(
+                SourceRole::Pattern,
+                failure_source,
+                Span { start: 2, end: 4 },
+            ),
+            related: vec![SourceFact::typed(
+                role,
+                target_source,
+                Span {
+                    start: 0,
+                    end: target_text.len(),
+                },
+                "Identity<Int>",
+            )],
+            remediation: None,
+        };
+        let spec = structured_type_error_spec(&input);
+        let (message, primary_caption, help) = match context {
+            PatternFailureContext::Callable => (
+                "MonadFail is not implemented.",
+                "Requires MonadFail.",
+                "Implement MonadFail for the return type to handle FailurePattern.",
+            ),
+            PatternFailureContext::Do => (
+                "Neither MonadFail nor Alternative is implemented.",
+                "Requires MonadFail or Alternative.",
+                "Implement MonadFail -> preserve Error (preferred).\nImplement Alternative -> empty().",
+            ),
+        };
+        assert_eq!(spec.message, message);
+        assert_eq!(spec.labels[0].message, primary_caption);
+        assert_eq!(spec.help.as_deref(), Some(help));
+        let rendered = strip_ansi(&render_error_by_id(&sources, failure_source, &spec));
+        assert!(rendered.contains(&format!("{caption}: Identity<Int>")));
+        assert!(rendered.contains(help.lines().next().unwrap()));
+        let report = serializable_report_by_id(&sources, failure_source, "typecheck", &spec);
+        let diagnostic = &report.errors[0];
+        assert_eq!(diagnostic.span, [2, 4]);
+        assert_eq!(diagnostic.data["carrier_type"], "Identity<Int>");
+        let target = diagnostic
+            .related
+            .iter()
+            .find(|fact| fact.role == role.json_name())
+            .unwrap();
+        assert_eq!(target.source_id, target_source.0);
+        assert_eq!(target.span, [0, target_text.len() as u32]);
+        assert_eq!(target.role, role.json_name());
+        assert_eq!(target.ty.as_deref(), Some("Identity<Int>"));
+        assert_eq!(diagnostic.hint.as_deref(), Some(help));
+    }
+}

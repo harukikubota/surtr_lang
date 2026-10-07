@@ -5251,7 +5251,7 @@ out = 1 |> (mk())"#,
 fn test_safebind_resolution() {
     let resolved = parse_and_resolve("num =? Ok(1)").unwrap();
     match &resolved[0] {
-        Resolved::SafeBind(_, ResolvedPattern::Var(id), rhs) => {
+        Resolved::SafeBind(_, ResolvedPattern::Var(id), rhs, _) => {
             assert_eq!(id.name, "num");
             assert!(matches!(rhs.as_ref(), Resolved::ConstructorCall(_, _, _)));
         }
@@ -5279,7 +5279,7 @@ Ok(num) =? value"#,
         _ => panic!("Expected prelude bind"),
     }
     match &resolved[1] {
-        Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs) => {
+        Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs, _) => {
             assert_eq!(ctor.name, "Result::Ok");
             assert!(matches!(inner.as_slice(), [ResolvedPattern::Var(id)] if id.name == "num"));
             assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
@@ -5300,7 +5300,7 @@ fn test_safebind_list_with_constructor_literal_pattern_resolution() {
         _ => panic!("Expected prelude bind"),
     }
     match &resolved[1] {
-        Resolved::SafeBind(_, pattern, rhs) => {
+        Resolved::SafeBind(_, pattern, rhs, _) => {
             let ResolvedPattern::ListCons(head, tail) = pattern.unlocated() else {
                 panic!("list pattern");
             };
@@ -5325,7 +5325,7 @@ fn test_as_pattern_resolution() {
     )
     .unwrap();
     match &resolved[1] {
-        Resolved::SafeBind(_, ResolvedPattern::As(inner, alias, Some(_)), rhs) => {
+        Resolved::SafeBind(_, ResolvedPattern::As(inner, alias, Some(_)), rhs, _) => {
             assert_eq!(alias.name, "list_dup");
             assert!(matches!(inner.unlocated(), ResolvedPattern::ListCons(_, _)));
             assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
@@ -8116,7 +8116,7 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
         match node {
             Resolved::Pipe(_, _, right) => Some(right.as_ref()),
             Resolved::Block(_, nodes) => nodes.iter().find_map(find_pipe_rhs),
-            Resolved::Bind(_, _, rhs) | Resolved::SafeBind(_, _, rhs) => find_pipe_rhs(rhs),
+            Resolved::Bind(_, _, rhs) | Resolved::SafeBind(_, _, rhs, _) => find_pipe_rhs(rhs),
             _ => None,
         }
     }
