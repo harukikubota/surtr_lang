@@ -37,7 +37,7 @@
 | DA-14 | 低 | 対応済み（文書） | 削除された計画へのリンク |
 | DA-15 | 中 | 対応済み（文書） | SRメモの予約名・shadowing状況 |
 | DA-16 | 低 | 残件管理 | OI-036の未確定扱い |
-| DA-17 | 低 | 残件管理 | ListのRT-6の対象記述 |
+| DA-17 | 低 | 対応済み（残件管理） | ListのRT-6の対象記述 |
 | DA-18 | 低 | 残件管理 | 存在しないOI-038への案内 |
 | DA-19 | 低 | 文書配置 | docs内の過去の実装計画 |
 | DA-20 | 中 | 曖昧性 | Shellのsignal終了時のexit_code |
@@ -229,6 +229,10 @@ Markdownのローカルリンクを確認し、調査開始時の `docs/` 76フ�
 - 根拠: `doc/list_runtime_followups.md:64-66` はmap/filterをbuiltin化の対象外としてまとめる。
 - 現行: `de1f700a`、`lib/types/list.srt:394-405` で両者は共有flat_map builtinへ合成される。
 - 対応・受入条件: 専用builtinを追加していない点と、Builderを使う共有経路への移行済み範囲を分けて記述する。reverse/append/concat、多段pipelineの融合、物理コピーの計測は別の残件として保つ。map/filterが旧source再帰経路のままだと読める説明を除く。
+
+#### 対応記録（2026-10-07）
+
+`list_runtime_followups.md` の RT-6 に、`map` / `filter` が `flat_map` の共有 builtin 経路を利用していることを反映した。`lib/types/list.srt` の定義を静的に照合した。専用 builtin の追加とは区別し、reverse / append / concat、多段 pipeline、物理的なコストの測定は残件として維持した。`git diff --check` を確認し、実行・性能測定は行っていない。
 
 ### DA-18 プロセス設計案が存在しないOI-038を案内する
 

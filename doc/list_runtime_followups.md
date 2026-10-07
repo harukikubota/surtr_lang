@@ -61,7 +61,7 @@
 
 ### RT-6 追加の List 最適化
 
-- 現状: `map` / `filter` / `reverse` / `append` / `concat` は今回の一括 builtin 化の対象にしていない。各 bind は完成した List を返すため、多段の kM が残る。
+- 現状: `map` / `filter` は標準ソースで `flat_map` を組み合わせ、Builder を使う共有 builtin 経路へ移行済み。専用 builtin は追加していない。`reverse` / `append` / `concat` の追加最適化は未着手。各 bind は完成した List を返すため、多段の kM が残る。
 - 未確定点: 個別操作の Builder 化、pipeline の融合、中間 List の省略のうち、どれに効果があるか。一般の nested do は B / E で評価し、常に E = kM と仮定しない。
 - 次の作業: RT-3 の測定を基に対象を選び、generic do と通常の Monad dispatch を基準に評価順・失敗・待機を比較する仕様を作る。
 - 受け入れ条件: 副作用を持つ mapper、空結果、部分 pattern、SafeBind、nested do で値・順序・呼出し回数・失敗後の未評価が一致する。未完成 Builder を公開型、process payload、完成結果へ出さない。
