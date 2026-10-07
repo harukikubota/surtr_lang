@@ -186,14 +186,12 @@ defmod File {
   Prefer this API over any manual open/close pattern. `File` does not expose a
   user-visible `close` function on purpose.
 
-  ## Example
-  ```surtr
-  File::with_open("./tmp/sandbox/chunked.txt", Write, fn(file) {
-    _ =? File::write_chunk(file, "hello")
-    _ =? File::write_chunk(file, "\\nworld")
-    File::flush(file)
-  })
-  ```
+  ## REPL
+  Create `./tmp/sandbox/` before running this example.
+  xldr(1)> File::with_open("./tmp/sandbox/chunked.txt", FileMode::Write, {|file| _ =? File::write_chunk(file, "hello"); File::write_chunk(file, "\nworld")})
+  Ok(())
+  xldr(2)> File::read("./tmp/sandbox/chunked.txt")
+  Ok("hello\nworld")
   """
   @builtin def with_open(path: String, mode: FileMode, body: (FileHandle -> Result<$A>)) -> Result<$A>
 
@@ -205,14 +203,12 @@ defmod File {
   the API predictable for text processing, though it is not intended as a
   binary streaming surface.
 
-  ## Example
-  ```surtr
-  File::with_open("./tmp/sandbox/chunked.txt", Read, fn(file) {
-    first =? File::read_chunk(file, 5)
-    second =? File::read_chunk(file, 5)
-    Ok((first, second))
-  })
-  ```
+  ## REPL
+  Create `./tmp/sandbox/` before running this example.
+  xldr(1)> File::write("./tmp/sandbox/chunked.txt", "helloworld")
+  Ok(())
+  xldr(2)> File::with_open("./tmp/sandbox/chunked.txt", FileMode::Read, {|file| first =? File::read_chunk(file, 5); second =? File::read_chunk(file, 5); Ok((first, second))})
+  Ok(("hello", "world"))
   """
   @builtin def read_chunk(file: FileHandle, max_chars: Int) -> Result<String>
 
@@ -220,14 +216,16 @@ defmod File {
   Write UTF-8 text through an opened file handle.
 
   The exact behavior depends on the `FileMode` used to open the handle.
-  Writing through a `Read` handle returns `Err(FileIoError(...))`.
+  Writing through a `FileMode::Read` handle returns `Err(FileIoError(...))`.
 
-  ## Example
-  ```surtr
-  File::with_open("./tmp/sandbox/chunked.txt", Append, fn(file) {
-    File::write_chunk(file, "tail")
-  })
-  ```
+  ## REPL
+  Create `./tmp/sandbox/` before running this example.
+  xldr(1)> File::write("./tmp/sandbox/chunked.txt", "head")
+  Ok(())
+  xldr(2)> File::with_open("./tmp/sandbox/chunked.txt", FileMode::Append, {|file| File::write_chunk(file, "tail")})
+  Ok(())
+  xldr(3)> File::read("./tmp/sandbox/chunked.txt")
+  Ok("headtail")
   """
   @builtin def write_chunk(file: FileHandle, text: String) -> Result<Unit>
 

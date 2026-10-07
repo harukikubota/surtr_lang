@@ -22,6 +22,13 @@ v1 の範囲は intentionally small です。
 
 ## 最初の例
 
+以下の例では、作業ディレクトリに `./tmp/sandbox/` を用意して使います。
+`File::write` や `File::with_open` は親ディレクトリを作成しないため、先に作成してください。
+
+```sh
+mkdir -p ./tmp/sandbox
+```
+
 ```surtr
 import File
 
@@ -93,12 +100,16 @@ _ =? File::delete("./tmp/sandbox/note.txt")
 import File
 
 def write_report(path: String) -> Result<()> {
-  File::with_open(path, Write, fn(file) {
+  File::with_open(path, FileMode::Write, {|file|
     _ =? File::write_chunk(file, "title: demo\n")
     _ =? File::write_chunk(file, "status: ok\n")
     File::flush(file)
   })
 }
+
+_ =? write_report("./tmp/sandbox/report.txt")
+text =? File::read("./tmp/sandbox/report.txt")
+print(text)
 ```
 
 `FileHandle` は opaque です。user code で new したり close したりはできません。  
@@ -119,18 +130,18 @@ def write_report(path: String) -> Result<()> {
 
 `with_open` の mode は次の 5 種類です。
 
-- `Read`
+- `FileMode::Read`
   読み取り専用
-- `Write`
+- `FileMode::Write`
   作成または truncate して先頭から書く
-- `Append`
+- `FileMode::Append`
   末尾へ追記する
-- `ReadWrite`
+- `FileMode::ReadWrite`
   読み書き両用
-- `ReadAppend`
+- `FileMode::ReadAppend`
   読みつつ追記する
 
-`Read` で開いた handle に `File::write_chunk` すると `Err(FileIoError(...))` になります。
+`FileMode::Read` で開いた handle に `File::write_chunk` すると `Err(FileIoError(...))` になります。
 
 ## chunked read
 
@@ -140,10 +151,14 @@ def write_report(path: String) -> Result<()> {
 import File
 
 def read_prefix(path: String) -> Result<String> {
-  File::with_open(path, Read, fn(file) {
+  File::with_open(path, FileMode::Read, {|file|
     File::read_chunk(file, 5)
   })
 }
+
+_ =? File::write("./tmp/sandbox/prefix.txt", "hello world")
+prefix =? read_prefix("./tmp/sandbox/prefix.txt")
+print(prefix) # hello
 ```
 
 EOF では `Ok("")` を返します。
@@ -152,12 +167,16 @@ EOF では `Ok("")` を返します。
 import File
 
 def drain_two(path: String) -> Result<(String, String)> {
-  File::with_open(path, Read, fn(file) {
+  File::with_open(path, FileMode::Read, {|file|
     left =? File::read_chunk(file, 5)
     right =? File::read_chunk(file, 5)
     Ok((left, right))
   })
 }
+
+_ =? File::write("./tmp/sandbox/drain.txt", "hello")
+chunks =? drain_two("./tmp/sandbox/drain.txt")
+print(inspect(chunks)) # ("hello", "")
 ```
 
 ## エラーハンドリング

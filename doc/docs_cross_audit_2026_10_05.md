@@ -25,7 +25,7 @@
 | DA-02 | 中 | 実装バグ | FSの巨大負depthがRuntimeErrorになる |
 | DA-03 | 中 | 実装バグ | LSP file URIのauthorityが相対pathになる |
 | DA-04 | 中 | 対応済み（文書） | JSONの旧decode API・旧impl署名 |
-| DA-05 | 中 | 文書不整合 | Fileの旧closure・mode表記 |
+| DA-05 | 中 | 対応済み（文書） | Fileの旧closure・mode表記 |
 | DA-06 | 中 | 文書不整合 | File例の戻り値型 |
 | DA-07 | 中 | 文書不整合・契約整理 | FileHandleの保存禁止という説明 |
 | DA-08 | 中 | 文書不整合 | `\|*>` のcontextual mapper結果の受理条件 |
@@ -109,6 +109,12 @@ site・dev の旧 decode 呼出しを `Decode::decode::<T>` へ揃え、Trait / 
 - 実測: `import File` の例は `Undefined variable: Write`。modeだけを `FileMode::Write` に直しても `Undefined function fn/2`。
 - 現行例: `lib/tests/modules/file.srt:27,46` の `FileMode::Read` / `FileMode::Write` と `{|handle| ...}`。
 - 対応・受入条件: siteと正本 `@doc` を現行closure・Enum variant表記へ揃える。必要な一時ファイル・ディレクトリを示し、各例を単独でcheck/runできる形にする。
+
+#### 対応記録（2026-10-07）
+
+`docs/site/file-io.md` と `lib/file.srt` の該当例を `FileMode::Read` / `Write` / `Append` と `{|file| ...}` に揃えた。site の3例には呼出しと必要な入力作成を加え、標準の3例は REPL で結果を確認できる形にした。親ディレクトリ `./tmp/sandbox/` の準備も明記した。
+
+`rtk cargo build -p rune --bin surtr` は終了コード0。一時ディレクトリで変更した site の3例を個別に `check` / `run` し、全件終了コード0・出力一致を確認した。標準の3つの REPL 例もそれぞれ実行し、記載した `Ok(...)` と一致した。`git diff --check` は成功。DA-06 の戻り値型と DA-07 の handle 保存説明はこの項目に混ぜず、後続対応とした。コンパイラ全体のテストは実行していない。
 
 ### DA-06 Fileのwrite/read例が宣言した戻り値型と違う
 
