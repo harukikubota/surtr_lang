@@ -162,9 +162,13 @@ Trait impl methodの本体から同じmethod名を非修飾で呼ぶ場合、そ
 通常どおりstatic dispatchするため、同じimplへの再帰と別implへの再dispatchを同じ規則で扱います。
 local bindingやparameterによる通常のshadowingは維持されます。
 
-callable signature直下のTypeConstructor trait名は名前文字列ではなく、名前解決で選ばれたTrait定義のidentityを
-後続phaseへ渡します。別々のdirect parameterは同じfamilyでも独立し、同じcarrierが必要なmethod contractは
-`Self`または同じ名前付きconstructor variable `$F`で関係を明示します。
+関数の引数や戻り値に TypeConstructor trait 名を直接書く場合、同じ Trait 名を使った箇所は
+同じ型コンストラクタに揃います。たとえば二つの引数がどちらも `Functor` なら、
+中身の型が異なっていても、一方に `List`、もう一方に `Option` を渡すことはできません。
+異なる Trait 名を使う箇所は、同じ能力の系統に属していても、それぞれ別の型コンストラクタを選べます。
+名前付きの型コンストラクタ変数 `$F` を繰り返し使う場合も、同じ型コンストラクタを要求します。
+Trait method の `Self` は、その Trait を実装する型を表します。
+詳しくは[トレイトシステム](trait-system.md)を参照してください。
 
 TypeCtorTraitを要求するcall-site RTAでは、constructor headだけでなく完全・部分型applicationと`_`を指定できます。
 例えば`pure::<Either<String, _>>(10)`は`Either<String, Int>`へ解決されます。通常の型注釈にある`_`はこの推論へ

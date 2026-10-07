@@ -31,7 +31,7 @@
 | DA-08 | 中 | 文書不整合 | `\|*>` のcontextual mapper結果の受理条件 |
 | DA-09 | 低 | 対応済み（文書） | 存在しないNeq traitの列挙 |
 | DA-10 | 低 | 対応済み（文書） | `T?` と `Option<T>` の機能差を示す説明 |
-| DA-11 | 中 | 文書不整合 | 同じdirect TypeConstructor traitのwitness共有 |
+| DA-11 | 中 | 対応済み（文書） | 同じdirect TypeConstructor traitのwitness共有 |
 | DA-12 | 中 | 文書不整合 | 比較Boolean helperが非公開という説明 |
 | DA-13 | 低 | 文書不整合 | Docs chunk・標準型の構成説明 |
 | DA-14 | 低 | 文書不整合 | 削除された計画へのリンク |
@@ -162,6 +162,10 @@ print(inspect(value))
 - 根拠: `docs/site/trait-impls.md:164-166` は別々のdirect parameterを同じfamilyでも独立と説明する。
 - 併読対象: `docs/dev/Trait_system_spec.md:239-242`、`docs/site/trait-system.md:146` は同じdirect Trait名なら共有、異なるTrait名なら独立と説明する。`crates/scar/tests/typecheck_surface.rs:4987-5022` の `same_trait_constructor_parameters_share_one_witness` が同名Traitに対する別carrierの拒否を固定する。
 - 対応・受入条件: same familyという能力分類と、同じTrait identity、名前付きconstructor variable、trait methodのSelfを区別する。独立になる条件と共有する条件を成功／拒否例で揃える。現行のwitness関係を変更する提案ではない。
+
+#### 対応記録（2026-10-07）
+
+`trait-impls.md` を、同じ direct Trait 名を使う引数・戻り値は同じ型コンストラクタを要求し、異なる Trait 名は独立する説明へ修正した。名前付き変数と Trait method の `Self` も区別した。`Trait_system_spec.md`、`trait-system.md`、Scar の `same_trait_constructor_parameters_share_one_witness` を静的に照合し、リンク先と `git diff --check` を確認した。実行例の追加や実行テストは行っていない。
 
 ### DA-12 比較Boolean helperは現行では公開されている
 
