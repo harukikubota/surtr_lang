@@ -10,7 +10,7 @@ Surtr の trait system は V1 です。
 - capability trait
   - `Show`, `Compare`, `Default`, `Convert`, `TryConvert`
 - operator dispatch trait
-  - `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Eq`, `Neq`, `Concat`
+  - `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Eq`, `Concat`
   - `Functor`, `Applicative`, `Monad`
 
 `->` は `Facet::compose` に対応する固定構文です。`|>`、`>>`、`>*`、`>=>` は関数演算子の固定規則であり、関数型への trait impl を要求しません。
@@ -18,6 +18,7 @@ Surtr の trait system は V1 です。
 ### `Eq` と比較できる型
 
 `Eq` は同じ静的型の値同士に適用し、異種比較や暗黙変換はしません。通常型に自動で付く能力ではなく、標準 impl、明示 impl、`@derive Eq` のいずれかが必要です。
+`==` / `eq` と `!=` / `neq` は、いずれも `Eq` の契約です。
 
 | 型 | 等価性 |
 | --- | --- |
