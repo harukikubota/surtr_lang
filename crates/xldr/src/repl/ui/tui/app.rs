@@ -36,7 +36,7 @@ impl ReplMode {
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// One evaluation unit in the results pane.
-/// `source` is preserved so `:v idx` can restore it to the input buffer.
+/// `source` is preserved for the result card; `:v` uses the engine value history.
 #[derive(Debug, Clone)]
 pub(super) struct ResultEntry {
     pub(super) idx: usize,
