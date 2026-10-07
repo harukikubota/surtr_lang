@@ -33,7 +33,7 @@
 | DA-10 | 低 | 対応済み（文書） | `T?` と `Option<T>` の機能差を示す説明 |
 | DA-11 | 中 | 対応済み（文書） | 同じdirect TypeConstructor traitのwitness共有 |
 | DA-12 | 中 | 対応済み（文書） | 比較Boolean helperが非公開という説明 |
-| DA-13 | 低 | 文書不整合 | Docs chunk・標準型の構成説明 |
+| DA-13 | 低 | 対応済み（文書） | Docs chunk・標準型の構成説明 |
 | DA-14 | 低 | 文書不整合 | 削除された計画へのリンク |
 | DA-15 | 中 | 文書不整合 | SRメモの予約名・shadowing状況 |
 | DA-16 | 低 | 残件管理 | OI-036の未確定扱い |
@@ -183,6 +183,10 @@ print(inspect(value))
 - 根拠1: `docs/site/standard-library.md:6` はDocs chunkからの参照を将来扱いにする。現行の `crates/rune/src/compile.rs:604,752` はdocをbytecodeへ格納し、`crates/sindr/src/ir.rs:1440-1441,1511` はDocsを保存・復元する。
 - 根拠2: 同ページ`:82-87` は各type moduleを `@builtin type` と `defmod` の2層に一律分類する。`lib/types/result.srt:27`、`option.srt:29`、`either.srt:13` は通常Enum、`range.srt:13` はStruct。
 - 対応・受入条件: 実装済みのdoc保持と今後の利用機能を区別し、builtin型とsource定義型を分けて説明する。ソースから得られる完全inventoryを手書きで複製しない。静的照合のみ。
+
+#### 対応記録（2026-10-07）
+
+`standard-library.md` に実装済みの Docs chunk への格納を記載し、builtin 型と Surtr で定義する enum / struct を区別した。型の一覧の重複を避け、完全な構成は既存の `STDLIB_MODULE_SPECS` に案内する。Rune の doc 格納、Sindr の Docs 保存・復元、各標準型の宣言を静的に照合し、`git diff --check` を確認した。文書だけの変更で、実行テストは行っていない。
 
 ## 導線と残件管理
 

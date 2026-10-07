@@ -3,7 +3,7 @@
 このページは、Surtr の標準定義ソース構成を利用者向けにまとめたものです。
 
 標準定義ソースは単なる補助ファイルではなく、language surface の一部です。  
-`lib/*.srt` に書かれた `@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
+`lib/*.srt` の `@doc` は標準 API の説明の正本です。コンパイル時には `.eldr` の `Docs` chunk にも格納されます。
 
 Surtr 全体では、関数は常に何らかの namespace に属します。標準ライブラリでもこの方針は同じです。
 
@@ -63,31 +63,15 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 
 ### type modules
 
-現時点では次の module が用意されています。
+型ごとの標準定義は `lib/types/` に置かれています。型の宣言方法は、その型によって異なります。
 
-- `Int`
-- `String`
-- `Boolean`
-- `Error`
-- `List`
-- `Generator`（有限列。step の終端検出は Option、`next` は Result、取得系は List と rest を返す）
-- `InfiniteGenerator`（正常終端のない列。生成と件数・条件指定による List の取得）
-- `HashMap`
-- `Result`
-- `Either`
-- `Range`
-- `Option`
-- `Task`
-- `Facet`
-- `Float`
+- `Int` などは `@builtin type` で宣言する型です。
+- `Result`、`Option`、`Either` は Surtr の `defenum` で定義されています。
+- `Range` は Surtr の `defstruct` で定義されています。
 
-各 type module には 2 つの層があります。
-
-1. file top-level の `@builtin type ...`
-2. `defmod Name { ... }` の module API
-
-この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
-`impl Type` や `impl Trait for Type` は、この module API とは別の型専用 namespace として並びます。
+型に対応する関数は `impl Type`、Trait の実装は `impl Trait for Type` に置きます。
+型宣言と関数の説明は同じファイルで確認できます。全標準定義の構成とロード順は
+上記の `STDLIB_MODULE_SPECS` を参照してください。
 
 `abs`, `min`, `max` などの数値 helper は `Int` / `Float` の type owner surface として置きます。除算と剰余はユーザー拡張可能なトレイトです。
 
