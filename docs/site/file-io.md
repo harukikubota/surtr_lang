@@ -213,11 +213,14 @@ file I/O テストは working directory に依存するので、Surtr では `./
 ```surtr
 import File
 
-def test_write_and_read() -> Result<()> {
+def test_write_and_read() -> Result<String> {
   path = "./tmp/sandbox/test-note.txt"
   _ =? File::write(path, "hello")
   File::read(path)
 }
+
+text =? test_write_and_read()
+print(text) # hello
 ```
 
 ## 関連ページ

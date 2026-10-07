@@ -26,7 +26,7 @@
 | DA-03 | 中 | 実装バグ | LSP file URIのauthorityが相対pathになる |
 | DA-04 | 中 | 対応済み（文書） | JSONの旧decode API・旧impl署名 |
 | DA-05 | 中 | 対応済み（文書） | Fileの旧closure・mode表記 |
-| DA-06 | 中 | 文書不整合 | File例の戻り値型 |
+| DA-06 | 中 | 対応済み（文書） | File例の戻り値型 |
 | DA-07 | 中 | 文書不整合・契約整理 | FileHandleの保存禁止という説明 |
 | DA-08 | 中 | 文書不整合 | `\|*>` のcontextual mapper結果の受理条件 |
 | DA-09 | 低 | 対応済み（文書） | 存在しないNeq traitの列挙 |
@@ -121,6 +121,10 @@ site・dev の旧 decode 呼出しを `Decode::decode::<T>` へ揃え、Trait / 
 - 根拠: `docs/site/file-io.md:197-200` は `Result<()>` の関数から `File::read(path)` を返す。`lib/file.srt:119` のreadは `Result<String>`。
 - 実測: `Return type mismatch: expected Result<Unit>, got Result<String>`、check exit 1。
 - 対応・受入条件: 読んだ文字列を返す例なら `Result<String>` にする。読み書きの検査例なら値を検査して `Ok(())` を返す。例の目的と結果を揃え、check/runする。
+
+#### 対応記録（2026-10-07）
+
+`file-io.md` の読み書き例を、読み取った文字列を返す `Result<String>` に修正し、呼出しと結果表示を加えた。既存の `target/debug/surtr` で例を単独に `check` / `run` し、終了コード0・出力 `hello` を確認した。親ディレクトリは同ページの準備に従って作成した。`git diff --check` は成功。製品コードや標準定義は変更せず、再ビルドとコンパイラ全体のテストは行っていない。
 
 ### DA-07 FileHandleの「保存できない」が現行の資源管理と違う
 
