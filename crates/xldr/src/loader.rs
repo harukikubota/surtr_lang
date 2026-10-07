@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -447,36 +447,43 @@ pub fn collect_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     Ok(module_inputs)
 }
 
-fn collect_lib_module_files(
-    dir: &Path,
-    files: &mut Vec<std::path::PathBuf>,
-) -> Result<(), LoadError> {
-    if lib_relative_path(dir) == "tests" {
-        return Ok(());
-    }
-
-    let entries = fs::read_dir(dir).map_err(|e| LoadError::SourceReadFailed {
-        file_name: display_path(dir),
-        message: e.to_string(),
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| LoadError::SourceReadFailed {
-            file_name: display_path(dir),
-            message: e.to_string(),
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_lib_module_files(&path, files)?;
-        } else if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == "srt")
+fn collect_lib_module_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), LoadError> {
+    let read_error = |path: &Path, error: std::io::Error| LoadError::SourceReadFailed {
+        file_name: display_path(path),
+        message: error.to_string(),
+    };
+    let canonical_root = fs::canonicalize(root).map_err(|error| read_error(root, error))?;
+    let tests_path = root.join("tests");
+    let excluded = match fs::canonicalize(&tests_path) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(read_error(&tests_path, error)),
+    };
+    let mut pending = vec![canonical_root.clone()];
+    let mut visited = HashSet::new();
+    while let Some(path) = pending.pop() {
+        let actual = fs::canonicalize(&path).map_err(|error| read_error(&path, error))?;
+        let Ok(relative) = actual.strip_prefix(&canonical_root) else {
+            continue;
+        };
+        if excluded
+            .as_ref()
+            .is_some_and(|tests| actual.starts_with(tests))
+            || !visited.insert(actual.clone())
         {
-            files.push(path);
+            continue;
+        }
+        let metadata = fs::metadata(&actual).map_err(|error| read_error(&path, error))?;
+        if metadata.is_dir() {
+            let entries = fs::read_dir(&actual).map_err(|error| read_error(&path, error))?;
+            for entry in entries {
+                pending.push(entry.map_err(|error| read_error(&path, error))?.path());
+            }
+        } else if actual.extension().and_then(|extension| extension.to_str()) == Some("srt") {
+            // Retain the caller's root spelling, but use the real file's identity.
+            files.push(root.join(relative));
         }
     }
-
     Ok(())
 }
 
@@ -817,6 +824,59 @@ pub(crate) fn collect_repl_sources_with_module_stages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn standard_source_walk_uses_real_paths_for_scope_and_duplicates() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "surtr-stdlib-walk-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        fs::create_dir_all(root.join("lib/nested")).unwrap();
+        let _cleanup = Cleanup(root.clone());
+        fs::create_dir_all(root.join("lib/tests")).unwrap();
+        fs::create_dir_all(root.join("external")).unwrap();
+        for relative in [
+            "lib/main.srt",
+            "lib/nested/extra.srt",
+            "lib/tests/hidden.srt",
+            "external/outside.srt",
+        ] {
+            fs::write(root.join(relative), "defmod Example {}").unwrap();
+        }
+        symlink("tests", root.join("lib/test_alias")).unwrap();
+        symlink("../external", root.join("lib/external_alias")).unwrap();
+        symlink("tests/hidden.srt", root.join("lib/hidden_alias.srt")).unwrap();
+        symlink(
+            "../external/outside.srt",
+            root.join("lib/outside_alias.srt"),
+        )
+        .unwrap();
+        symlink("nested/extra.srt", root.join("lib/valid_alias.srt")).unwrap();
+        let mut files = Vec::new();
+        collect_lib_module_files(&root.join("lib"), &mut files).unwrap();
+        files.sort();
+        assert_eq!(
+            files,
+            vec![root.join("lib/main.srt"), root.join("lib/nested/extra.srt")]
+        );
+        symlink("..", root.join("lib/nested/ancestor")).unwrap();
+        let mut cycle_files = Vec::new();
+        collect_lib_module_files(&root.join("lib"), &mut cycle_files).unwrap();
+        cycle_files.sort();
+        assert_eq!(cycle_files, files);
+    }
 
     fn stdlib_stage_len(stdlib_variant: StdlibVariant, stage: StdlibStage) -> usize {
         stdlib_module_specs(stdlib_variant)
