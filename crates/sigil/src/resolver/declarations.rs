@@ -3135,7 +3135,7 @@ impl Resolver {
         }
 
         let local_impl_targets;
-        let impl_targets = if let Some(stage_targets) = self.current_stage_impl_targets.as_ref() {
+        let impl_targets = if let Some(stage_targets) = self.current_stage_impl_targets.as_deref() {
             stage_targets
         } else {
             let mut local_targets = HashMap::new();

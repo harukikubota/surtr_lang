@@ -1599,7 +1599,7 @@ where
     assert_eq!(match_result.capabilities.facet_root_path, None);
     assert_eq!(owners.owner_ref("Option").unwrap().canonical_key, "Option");
     let mut resolver = Resolver::new();
-    resolver.owner_registry = owners.clone();
+    resolver.owner_registry = owners.clone().into();
     assert_eq!(
         resolver.owner_identity_for_declaration("App::run", &DeclarationKind::Def, Some("App"),),
         Some(TypeIdentity::Mod)
@@ -9576,4 +9576,93 @@ fn pattern_consumer_builtin_declarations_require_kernel_identity() {
     }
     precollect_declaration_index(&[vec![kernel_pattern_test_module()]])
         .expect("canonical consumer declarations remain available");
+}
+
+#[test]
+fn child_resolvers_share_read_only_declaration_metadata() {
+    let mut resolver = Resolver::new();
+    resolver.declaration_hidden_by_uid = HashMap::from([(17, true)]).into();
+    resolver.owner_registry = standard_test_environment().owner_registry.clone().into();
+    resolver.current_stage_impl_targets = Some(
+        HashMap::from([(
+            "Marker".to_string(),
+            declarations::ImplTargetResolution::Unique(DeclarationKind::Struct),
+        )])
+        .into(),
+    );
+    let hidden = std::ptr::from_ref(resolver.declaration_hidden_by_uid.get(&17).unwrap());
+    let owner = std::ptr::from_ref(resolver.owner_registry.get("Int").unwrap());
+    let target = std::ptr::from_ref(
+        resolver
+            .current_stage_impl_targets
+            .as_ref()
+            .unwrap()
+            .get("Marker")
+            .unwrap(),
+    );
+    resolver
+        .with_child_scope(|child| {
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_hidden_by_uid.get(&17).unwrap()),
+                hidden
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.owner_registry.get("Int").unwrap()),
+                owner
+            );
+            assert_eq!(
+                std::ptr::from_ref(
+                    child
+                        .current_stage_impl_targets
+                        .as_ref()
+                        .unwrap()
+                        .get("Marker")
+                        .unwrap()
+                ),
+                target
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn parallel_stage_resolution_preserves_order_visibility_and_unique_local_ids() {
+    let modules = (0..16).map(|index| {
+        let next = (index + 1) % 16;
+        let name = format!("Stage{index}");
+        let source = format!("import Stage{next}::item{next}\ndef item{index}() -> Int {{\n  local = item{next}()\n  local\n}}");
+        staged_module(&name, parse_module_ast(&source, &name))
+    }).collect::<Vec<_>>();
+    let resolved = resolve_user_with_modules("", &[modules.clone()]).unwrap();
+    let definitions = resolved
+        .iter()
+        .filter_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name.starts_with("item") => {
+                Some((id.name.clone(), first_bind_id(body).unwrap()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>(),
+        (0..16)
+            .map(|index| format!("item{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|(_, id)| *id)
+            .collect::<HashSet<_>>()
+            .len(),
+        16
+    );
+
+    let error =
+        resolve_user_with_modules("", &[modules[..8].to_vec(), modules[8..].to_vec()]).unwrap_err();
+    assert!(error.message.contains("Stage8::item8"), "{error:?}");
 }
