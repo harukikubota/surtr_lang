@@ -1267,52 +1267,54 @@ impl Checker {
             Done,
         }
 
-        fn dfs(
-            node: &str,
-            edges: &HashMap<String, HashSet<String>>,
+        fn find_cycle<'a>(
+            node: &'a str,
+            edges: &'a HashMap<String, HashSet<String>>,
             states: &mut HashMap<String, Visit>,
-            stack: &mut Vec<String>,
         ) -> Option<Vec<String>> {
-            if let Some(state) = states.get(node) {
-                if *state == Visit::Visiting {
-                    let start = stack.iter().position(|name| name == node).unwrap_or(0);
-                    let mut cycle = stack[start..].to_vec();
-                    cycle.push(node.to_string());
-                    return Some(cycle);
-                }
-                if *state == Visit::Done {
-                    return None;
-                }
+            if states.get(node) == Some(&Visit::Done) {
+                return None;
             }
-
             states.insert(node.to_string(), Visit::Visiting);
-            stack.push(node.to_string());
-
-            if let Some(nexts) = edges.get(node) {
-                for next in nexts {
-                    if let Some(cycle) = dfs(next, edges, states, stack) {
-                        return Some(cycle);
+            let mut stack = vec![(node, edges[node].iter())];
+            // Each frame retains its iterator so returning from a child resumes
+            // the same dependency order as the recursive traversal.
+            while let Some((_, nexts)) = stack.last_mut() {
+                if let Some(next) = nexts.next() {
+                    match states.get(next) {
+                        Some(Visit::Done) => {}
+                        Some(Visit::Visiting) => {
+                            let start = stack
+                                .iter()
+                                .position(|(name, _)| *name == next)
+                                .expect("visiting dependency remains on the traversal stack");
+                            let mut cycle = stack[start..]
+                                .iter()
+                                .map(|(name, _)| (*name).to_string())
+                                .collect::<Vec<_>>();
+                            cycle.push(next.clone());
+                            return Some(cycle);
+                        }
+                        None => {
+                            states.insert(next.clone(), Visit::Visiting);
+                            stack.push((next.as_str(), edges[next].iter()));
+                        }
                     }
+                } else {
+                    let (finished, _) = stack.pop().expect("traversal has an active frame");
+                    states.insert(finished.to_string(), Visit::Done);
                 }
             }
-
-            stack.pop();
-            states.insert(node.to_string(), Visit::Done);
             None
         }
 
         let mut states: HashMap<String, Visit> = HashMap::new();
-        let mut stack = Vec::new();
         for name in decl_spans.keys() {
-            if let Some(cycle) = dfs(name, &edges, &mut states, &mut stack) {
-                let head = cycle.first().cloned().unwrap_or_else(|| name.clone());
+            if let Some(cycle) = find_cycle(name, &edges, &mut states) {
                 return Err(TypeError {
                     structured: None,
                     message: format!("Cyclic type definition detected: {}", cycle.join(" -> ")),
-                    span: decl_spans
-                        .get(&head)
-                        .cloned()
-                        .unwrap_or(Span { start: 0, end: 0 }),
+                    span: decl_spans[&cycle[0]].clone(),
                     hint: None,
                 });
             }

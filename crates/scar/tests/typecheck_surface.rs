@@ -8621,13 +8621,34 @@ right: String = str_id("ok")"#,
 }
 
 fn cyclic_type_definition_is_rejected() {
-    let resolved = resolve_with_builtin_prelude(
-        r#"defstruct Node {
-  next: Node,
-}"#,
-    );
-    let err = typecheck(resolved).expect_err("cyclic type must fail");
-    assert!(err.message.contains("Cyclic type definition detected"));
+    for (source, cycle_size) in [
+        ("defstruct Node { next: Node, }", 1),
+        (
+            "defrecord Left(right: Right)\ndefrecord Right(left: Left)",
+            2,
+        ),
+    ] {
+        let resolved = resolve_with_builtin_prelude(source);
+        let declaration_spans = resolved
+            .iter()
+            .filter_map(|node| match node {
+                Resolved::StructDef(_, id, ..) | Resolved::RecordDef(_, id, ..) => {
+                    Some((id.name.clone(), id.span.clone()))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let err = typecheck(resolved).expect_err("cyclic type must fail");
+        let cycle = err
+            .message
+            .strip_prefix("Cyclic type definition detected: ")
+            .expect("cycle diagnostic should keep its reason")
+            .split(" -> ")
+            .collect::<Vec<_>>();
+        assert_eq!(cycle.len(), cycle_size + 1);
+        assert_eq!(cycle.first(), cycle.last());
+        assert_eq!(err.span, declaration_spans[cycle[0]]);
+    }
 }
 
 fn enum_cycle_is_allowed_when_not_shared_by_all_variants() {
