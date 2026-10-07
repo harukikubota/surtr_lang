@@ -4826,6 +4826,152 @@ mod tests {
     }
 
     #[test]
+    fn normalize_function_table_rejects_missing_opcode_targets() {
+        for opcode in [
+            Opcode::LoadFunctionRef(0),
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::SetCallableDelegateFunction(0),
+        ] {
+            let mut gene = Codegen::new();
+            // Old index 0 is absent, but would name this unrelated function
+            // after normalization if the unresolved reference were retained.
+            gene.state.functions.push(function_entry(10, 0, 0));
+            gene.emit(opcode);
+            let error = gene
+                .normalize_function_table()
+                .expect_err("an absent old function index must not become another function");
+            assert_eq!(
+                error.message,
+                "Unresolved function index during normalization: 0"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_function_table_rejects_missing_template_targets() {
+        for kind in [
+            CallableTemplateKind::PartialDirectCall {
+                target: CallableTemplateDirectTarget::Function(0),
+                arg_sources: Vec::new(),
+            },
+            CallableTemplateKind::InjectDirectCall {
+                target: CallableTemplateDirectTarget::Function(0),
+                bound_arg_count: 0,
+            },
+        ] {
+            let mut gene = Codegen::new();
+            gene.state.functions.push(function_entry(10, 0, 0));
+            gene.state.callable_templates.push(CallableTemplate {
+                template_id: 0,
+                kind,
+                metadata: Default::default(),
+            });
+            let error = gene
+                .normalize_function_table()
+                .expect_err("an absent template target must not become another function");
+            assert_eq!(
+                error.message,
+                "Unresolved function index during normalization: 0"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_function_table_preserves_prefix_and_remaps_valid_targets() {
+        let mut gene = Codegen::new();
+        gene.state.functions = vec![function_entry(10, 0, 0), function_entry(0, 0, 0)];
+        let builtin = super::builtin_id_by_name("len").expect("List length builtin exists");
+        for opcode in [
+            Opcode::LoadFunctionRef(0),
+            Opcode::LoadFunctionRef(10),
+            Opcode::Call {
+                fun_idx: 10,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::SetCallableDelegateFunction(10),
+        ] {
+            gene.emit(opcode);
+        }
+        for kind in [
+            CallableTemplateKind::PartialDirectCall {
+                target: CallableTemplateDirectTarget::Function(10),
+                arg_sources: Vec::new(),
+            },
+            CallableTemplateKind::InjectDirectCall {
+                target: CallableTemplateDirectTarget::Function(10),
+                bound_arg_count: 0,
+            },
+            CallableTemplateKind::InjectDirectCall {
+                target: CallableTemplateDirectTarget::Builtin(builtin),
+                bound_arg_count: 0,
+            },
+        ] {
+            gene.state.callable_templates.push(CallableTemplate {
+                template_id: gene.state.callable_templates.len() as u32,
+                kind,
+                metadata: Default::default(),
+            });
+        }
+        gene.normalize_function_table()
+            .expect("registered targets must normalize");
+        let (opcodes, state) = gene.finalize().expect("opcodes must finalize");
+        assert_eq!(
+            opcodes,
+            vec![
+                Opcode::LoadFunctionRef(0),
+                Opcode::LoadFunctionRef(1),
+                Opcode::Call {
+                    fun_idx: 1,
+                    arity: 0,
+                    span_start: 0,
+                    span_end: 0
+                },
+                Opcode::SetCallableDelegateFunction(1),
+            ]
+        );
+        assert_eq!(
+            state
+                .functions
+                .iter()
+                .map(|entry| entry.fun_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(
+            state.functions[0].qualified_name.as_deref(),
+            Some("Global::f0")
+        );
+        assert_eq!(
+            state.functions[1].qualified_name.as_deref(),
+            Some("Global::f10")
+        );
+        assert!(matches!(
+            &state.callable_templates[0].kind,
+            CallableTemplateKind::PartialDirectCall {
+                target: CallableTemplateDirectTarget::Function(1),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &state.callable_templates[1].kind,
+            CallableTemplateKind::InjectDirectCall {
+                target: CallableTemplateDirectTarget::Function(1),
+                ..
+            }
+        ));
+        assert!(
+            matches!(&state.callable_templates[2].kind, CallableTemplateKind::InjectDirectCall { target: CallableTemplateDirectTarget::Builtin(id), .. } if *id == builtin)
+        );
+    }
+
+    #[test]
     fn rebase_chunk_function_ids_rebases_callable_delegate_function_index() {
         let mut opcodes = vec![
             Opcode::LoadFunctionRef(10),
@@ -11349,10 +11495,19 @@ impl Codegen {
             }
         }
 
+        let remap_function = |fun_idx: &mut u32| -> Result<(), CodegenError> {
+            *fun_idx = *remap.get(fun_idx).ok_or_else(|| CodegenError {
+                message: format!(
+                    "Unresolved function index during normalization: {}",
+                    fun_idx
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+            Ok(())
+        };
+
         for entry in &mut self.state.functions {
-            if let Some(new_idx) = remap.get(&entry.fun_idx) {
-                entry.fun_idx = *new_idx;
-            }
+            remap_function(&mut entry.fun_idx)?;
         }
 
         for ir in &mut self.ir {
@@ -11362,9 +11517,7 @@ impl Codegen {
                 | Opcode::SetCallableDelegateFunction(fun_idx),
             ) = ir
             {
-                if let Some(new_idx) = remap.get(fun_idx) {
-                    *fun_idx = *new_idx;
-                }
+                remap_function(fun_idx)?;
             }
         }
 
@@ -11373,9 +11526,7 @@ impl Codegen {
                 CallableTemplateKind::PartialDirectCall { target, .. }
                 | CallableTemplateKind::InjectDirectCall { target, .. } => {
                     if let CallableTemplateDirectTarget::Function(fun_idx) = target {
-                        if let Some(new_idx) = remap.get(fun_idx) {
-                            *fun_idx = *new_idx;
-                        }
+                        remap_function(fun_idx)?;
                     }
                 }
                 CallableTemplateKind::ComposeDirect { .. } => {}
