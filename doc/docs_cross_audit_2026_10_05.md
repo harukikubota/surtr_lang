@@ -317,7 +317,7 @@ builtin制約、空structのDefault、constructor witnessは `Trait_system_spec.
 
 | 項目 | 今回の扱い |
 |---|---|
-| 長いConsのdrop、Packedのsuffix保持、checkpointコピー、未分割builtin | `doc/list_runtime_followups.md` とrelease auditの既存残件。現行閾値・性能は未測定で、新規発見に数えない |
+| 長いConsのdrop、Packedのsuffix保持、checkpointコピー、未分割builtin | 調査時は既存残件として扱った。2026-10-07にCons tailの反復解放を実装・検証済み。残る項目は `doc/list_runtime_followups.md` とrelease auditを参照し、新規発見に数えない |
 | LSPの各要求での全量再解析・context cache | `doc/v0.1_release_codebase_audit.md:90-91` の既存残件。`snapshot_for_uri` がanalyzeを呼ぶことは再確認 |
 | ProjectRunner executor失敗のsource-only救済 | 同監査の完了項目。現行set_runner_selectionは診断を保持するため再起票しない |
 | WarningのCLI・REPL未接続 | `docs/site/warnings.md` とOI-033に明示された既存課題 |
