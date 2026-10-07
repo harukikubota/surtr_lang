@@ -50,7 +50,9 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 `and` / `or` も宣言上は通常の 2 引数関数ですが、コンパイラが short-circuit
 評価へ lower する call-style helper としてここに置きます。
 `eq` / `neq` は auto import される `Eq` trait、`concat` は `Concat` trait、`to_string` は `Show` trait の surface です。`Kernel` の builtin としては提供しません。
-ordered comparison は `compare(left, right)` または `< <= > >=` を使い、専用の Boolean helper 名は公開しません。
+順序比較には `compare(left, right)` と `< <= > >=` を使えます。`Compare` は Boolean を返す
+`lt` / `lte` / `gt` / `gte` も公開し、これらは自動 import されます。
+名前の予約と中置呼出しの規則は[関数名と呼び出し構文](callable-names.md)を参照してください。
 
 ### `SpecialTypes`
 

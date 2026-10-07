@@ -32,7 +32,7 @@
 | DA-09 | 低 | 対応済み（文書） | 存在しないNeq traitの列挙 |
 | DA-10 | 低 | 対応済み（文書） | `T?` と `Option<T>` の機能差を示す説明 |
 | DA-11 | 中 | 対応済み（文書） | 同じdirect TypeConstructor traitのwitness共有 |
-| DA-12 | 中 | 文書不整合 | 比較Boolean helperが非公開という説明 |
+| DA-12 | 中 | 対応済み（文書） | 比較Boolean helperが非公開という説明 |
 | DA-13 | 低 | 文書不整合 | Docs chunk・標準型の構成説明 |
 | DA-14 | 低 | 文書不整合 | 削除された計画へのリンク |
 | DA-15 | 中 | 文書不整合 | SRメモの予約名・shadowing状況 |
@@ -173,6 +173,10 @@ print(inspect(value))
 - 現行: `lib/traits/operator/compare.srt:4-7,34,49,64,79` はautoimportされる `lt` / `lte` / `gt` / `gte` を定義し、中置優先順位と予約名も説明する。
 - 実測: `lt(1,2)`、`lte(1,1)`、`gt(2,1)`、`gte(1,1)` はすべてTrue、run exit 0。
 - 対応・受入条件: 標準ライブラリの説明をCompareの公開surfaceへ揃える。callable名の予約・中置規則は `docs/site/callable-names.md` へつなぐ。
+
+#### 対応記録（2026-10-07）
+
+`standard-library.md` に `Compare` の `lt` / `lte` / `gt` / `gte` と自動 import を記載し、予約名・中置呼出しの説明へリンクした。`lib/traits/operator/compare.srt` と `callable-names.md` を静的に照合し、リンク先と `git diff --check` を確認した。文書だけの変更で、実行テストは行っていない。
 
 ### DA-13 標準ライブラリ構成の説明が古い
 
