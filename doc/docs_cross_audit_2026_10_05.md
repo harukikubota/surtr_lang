@@ -39,7 +39,7 @@
 | DA-16 | 低 | 対応済み（残件管理） | OI-036の未確定扱い |
 | DA-17 | 低 | 対応済み（残件管理） | ListのRT-6の対象記述 |
 | DA-18 | 低 | 対応済み（導線） | 存在しないOI-038への案内 |
-| DA-19 | 低 | 文書配置 | docs内の過去の実装計画 |
+| DA-19 | 低 | 対応済み（文書配置） | docs内の過去の実装計画 |
 | DA-20 | 中 | 曖昧性 | Shellのsignal終了時のexit_code |
 
 計20件。実装バグ3件、文書不整合・契約整理12件、曖昧性1件、残件管理3件、文書配置1件。既存監査の残件は後述し、新規件数へ加えていない。
@@ -293,9 +293,17 @@ OI-036から未確定扱いだった表示identityの選択肢を除き、Eldr V
 
 ### DA-19 docs配下に過去の実装計画が残る
 
-- 根拠: `docs/dev/README.md:6-8` は実装計画・superpowersの一時メモをdocへ整理する方針。現行には `docs/superpowers/plans/` / `specs/` / `records/` が残る。
-- 例: `docs/superpowers/records/2026-08-21-type-identity-owner-registry-task6-checkpoint.md:35-46` に当時の未完了タスクと旧診断がある。複数のplanは削除済み `doc/要件定義v9.md` を入力にする。
+- 調査時の根拠: `docs/dev/README.md:6-8` は実装計画・superpowersの一時メモをdocへ整理する方針。調査時は `docs/superpowers/plans/` / `specs/` / `records/` に資料が残っていた。
+- 例: [OwnerRegistryの作業記録](superpowers/records/2026-08-21-type-identity-owner-registry-task6-checkpoint.md) の35〜46行に当時の未完了タスクと旧診断がある。複数のplanは削除済み `doc/要件定義v9.md` を入力にする。
 - 対応・受入条件: 履歴と現行仕様を区別し、必要な契約が正本へ移管済みかを確認して配置を整理する。当時の失敗3件を現在のworkspace失敗として再起票しない。無差別な削除や、未採用案の正本化は行わない。
+
+#### 対応記録（2026-10-07）
+
+14資料を `doc/superpowers/` へ移し、[履歴資料の案内](superpowers/README.md) を追加した。相対リンク1件の移動先追従を除き、設計・手順・当時のパス・失敗記録を保持した。未採用案や後から変更された契約を正本へ取り込んでいない。
+
+builtin制約、空structのDefault、constructor witnessは `Trait_system_spec.md` と標準定義、wildcardは `Pattern_spec.md` とsite、OwnerRegistryはSindr・Sigilの実装とテスト方針、CIはテスト方針とScarのcheckpointテストへ照合した。紹介ページはsiteに存在し、Standbyの現行契約は `ProcessRuntime_spec.md` が扱う。この照合では、履歴資料から新たに移管すべき必要契約は見つからなかった。OwnerRegistry記録の旧失敗3件も、現在のfixture期待値は新診断へ更新済みだった。
+
+移動前後の14資料を比較し、13資料はバイト単位で一致、1資料は相対リンクの変更だけであることを確認した。追加・変更したMarkdownリンクの参照先と `git diff --check` も確認した。文書配置のみの変更のため、実行テストは行っていない。
 
 ## 公開契約の追加整理
 
