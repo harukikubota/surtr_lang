@@ -37,7 +37,9 @@ impl Checker {
                 // captured parameters and implementation constraints must already
                 // be proved by the normal constructor projection contract.
                 if !matches!(
-                    self.constructor_head_projection(&key, &carrier),
+                    self.constructor_head_projection(&key, &carrier)
+                        .into_checked()
+                        .map_err(|error| error.at_span(span))?,
                     ConstructorProjectionOutcome::Applicable { .. }
                 ) {
                     return Ok(MonadFailResolution::Deferred);
@@ -95,7 +97,7 @@ impl Checker {
         match self.resolve_monad_fail(&carrier, span)? {
             MonadFailResolution::Preserve(target) => {
                 for error_ty in propagated {
-                    if !self.types_compatible(&Ty::Error, error_ty) {
+                    if !self.types_compatible(&Ty::Error, error_ty)? {
                         return Err(self.policy_error(
                             TypeDiagnosticReason::SafeBindErrorTypeMismatch,
                             diagnostics::TypePolicy::SafeBindFailureTarget,
@@ -277,6 +279,7 @@ impl Checker {
         failures
             .iter()
             .map(|failure| match failure {
+                ConstructorProjectionFailure::ProofError(error) => error.message.clone(),
                 ConstructorProjectionFailure::Canonicalization => {
                     "constructor type cannot be canonicalized".to_string()
                 }
@@ -393,7 +396,11 @@ impl Checker {
         })
     }
 
-    pub(super) fn match_bare_constructor_occurrence(&mut self, occurrence: u32, ty: &Ty) -> bool {
+    pub(super) fn match_bare_constructor_occurrence(
+        &mut self,
+        occurrence: u32,
+        ty: &Ty,
+    ) -> Result<bool, TypeError> {
         self.match_constructor_occurrence(occurrence, ty, false)
     }
 
@@ -401,7 +408,7 @@ impl Checker {
         &mut self,
         occurrence: u32,
         ty: &Ty,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         self.match_constructor_occurrence(occurrence, ty, true)
     }
 
@@ -410,16 +417,19 @@ impl Checker {
         occurrence: u32,
         ty: &Ty,
         preserve_mapped_arguments: bool,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         let Some(required_trait) = self.constructor_witness_traits.get(&occurrence).cloned() else {
-            return false;
+            return Ok(false);
         };
-        match self.resolve_ty(&Ty::Var(occurrence)) {
+        Ok(match self.resolve_ty(&Ty::Var(occurrence)) {
             Ty::Var(unbound) => {
                 if self.rigid_tyvars.contains(&unbound) {
-                    return false;
+                    return Ok(false);
                 }
-                match self.constructor_head_projection(&required_trait, ty) {
+                match self
+                    .constructor_head_projection(&required_trait, ty)
+                    .into_checked()?
+                {
                     ConstructorProjectionOutcome::Applicable { info, mut mapping } => {
                         let identity = if preserve_mapped_arguments {
                             self.normalize_inferred_constructor_identity(&required_trait, ty)
@@ -432,13 +442,18 @@ impl Checker {
                             }
                             Some(self.substitute_ty_with_mapping(&info.target_ty, &mapping))
                         };
-                        identity.is_some_and(|identity| self.bind_tyvar(unbound, &identity))
+                        match identity {
+                            Some(identity) => self.bind_tyvar(unbound, &identity)?,
+                            None => false,
+                        }
                     }
                     // Captured arguments may still be selected by a later
                     // expected-result constraint. Keep deferred variables live
                     // until that constraint arrives, but never turn a rejected
                     // constructor proof into an inferred witness.
-                    ConstructorProjectionOutcome::Deferred { .. } => self.bind_tyvar(unbound, ty),
+                    ConstructorProjectionOutcome::Deferred { .. } => {
+                        self.bind_tyvar(unbound, ty)?
+                    }
                     ConstructorProjectionOutcome::Rejected { .. } => false,
                 }
             }
@@ -446,24 +461,28 @@ impl Checker {
                 let Some(identity) =
                     self.normalize_inferred_constructor_identity(&required_trait, ty)
                 else {
-                    return false;
+                    return Ok(false);
                 };
                 let checkpoint = self.candidate_probe_checkpoint();
                 let compatible = self.types_compatible(&witness, &identity);
-                if !compatible {
+                if !matches!(compatible, Ok(true)) {
                     self.rollback_candidate_probe(checkpoint);
                 }
-                compatible
+                compatible?
             }
             witness => {
-                let ConstructorCarrierOutcome::Projected(actual_carrier) =
-                    self.canonical_constructor_carrier(&required_trait, ty)
+                let ConstructorCarrierOutcome::Projected(actual_carrier) = self
+                    .canonical_constructor_carrier(&required_trait, ty)
+                    .into_checked()?
                 else {
-                    return false;
+                    return Ok(false);
                 };
-                match self.canonical_constructor_carrier(&required_trait, &witness) {
+                match self
+                    .canonical_constructor_carrier(&required_trait, &witness)
+                    .into_checked()?
+                {
                     ConstructorCarrierOutcome::Projected(expected_carrier) => {
-                        self.unify_constructor_carriers(&expected_carrier, &actual_carrier)
+                        self.unify_constructor_carriers(&expected_carrier, &actual_carrier)?
                     }
                     ConstructorCarrierOutcome::Deferred { waiting_on } => {
                         debug_assert!(!waiting_on.is_empty());
@@ -475,7 +494,7 @@ impl Checker {
                     }
                 }
             }
-        }
+        })
     }
 
     pub(super) fn is_projected_constructor_identity(&self, ty: &Ty) -> bool {
@@ -495,9 +514,9 @@ impl Checker {
         name: &str,
         left: &[Ty],
         right: &[Ty],
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         if left.len() != right.len() {
-            return false;
+            return Ok(false);
         }
         let constructor_traits = self
             .env
@@ -515,12 +534,11 @@ impl Checker {
             })
             .unwrap_or_default();
 
-        left.iter()
-            .zip(right)
-            .enumerate()
-            .all(|(ordinal, (left, right))| {
+        try_all(
+            left.iter().zip(right).enumerate(),
+            |(ordinal, (left, right))| {
                 if self.resolve_ty(left) == self.resolve_ty(right) {
-                    return true;
+                    return Ok(true);
                 }
                 let Some(trait_key) = constructor_traits
                     .get(ordinal)
@@ -528,44 +546,47 @@ impl Checker {
                 else {
                     return self.types_compatible(left, right);
                 };
-                match (self.resolve_ty(left), self.resolve_ty(right)) {
+                Ok(match (self.resolve_ty(left), self.resolve_ty(right)) {
                     (Ty::Var(variable), right) if !self.rigid_tyvars.contains(&variable) => {
                         if let Some(existing) = self.constructor_witness_traits.get(&variable) {
                             if !self.trait_bound_entails(existing, trait_key, &mut HashSet::new()) {
-                                return false;
+                                return Ok(false);
                             }
                         } else {
                             self.constructor_witness_traits
                                 .insert(variable, trait_key.to_string());
                         }
-                        self.match_bare_constructor_occurrence(variable, &right)
+                        self.match_bare_constructor_occurrence(variable, &right)?
                     }
                     (left, Ty::Var(variable)) if !self.rigid_tyvars.contains(&variable) => {
                         if let Some(existing) = self.constructor_witness_traits.get(&variable) {
                             if !self.trait_bound_entails(existing, trait_key, &mut HashSet::new()) {
-                                return false;
+                                return Ok(false);
                             }
                         } else {
                             self.constructor_witness_traits
                                 .insert(variable, trait_key.to_string());
                         }
-                        self.match_bare_constructor_occurrence(variable, &left)
+                        self.match_bare_constructor_occurrence(variable, &left)?
                     }
                     (left, right) => {
-                        let ConstructorCarrierOutcome::Projected(left) =
-                            self.canonical_constructor_carrier(trait_key, &left)
+                        let ConstructorCarrierOutcome::Projected(left) = self
+                            .canonical_constructor_carrier(trait_key, &left)
+                            .into_checked()?
                         else {
-                            return false;
+                            return Ok(false);
                         };
-                        let ConstructorCarrierOutcome::Projected(right) =
-                            self.canonical_constructor_carrier(trait_key, &right)
+                        let ConstructorCarrierOutcome::Projected(right) = self
+                            .canonical_constructor_carrier(trait_key, &right)
+                            .into_checked()?
                         else {
-                            return false;
+                            return Ok(false);
                         };
-                        self.unify_constructor_carriers(&left, &right)
+                        self.unify_constructor_carriers(&left, &right)?
                     }
-                }
-            })
+                })
+            },
+        )
     }
 
     /// Convert only independent, unresolved mapped slots to the stable
@@ -760,7 +781,7 @@ impl Checker {
         &mut self,
         expected: &CanonicalConstructorCarrier,
         actual: &CanonicalConstructorCarrier,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         if expected.family_id != actual.family_id
             || expected.constructor != actual.constructor
             || expected.arity != actual.arity
@@ -772,7 +793,7 @@ impl Checker {
                 .zip(&actual.captured_arguments)
                 .any(|(expected, actual)| expected.position != actual.position)
         {
-            return false;
+            return Ok(false);
         }
         let captured = expected
             .captured_arguments
@@ -786,16 +807,17 @@ impl Checker {
             })
             .collect::<Option<Vec<_>>>();
         let Some(captured) = captured else {
-            return false;
+            return Ok(false);
         };
         let checkpoint = self.candidate_probe_checkpoint();
         for (expected, actual) in captured {
-            if !self.types_compatible(&expected, &actual) {
+            let compatible = self.types_compatible(&expected, &actual);
+            if !matches!(compatible, Ok(true)) {
                 self.rollback_candidate_probe(checkpoint);
-                return false;
+                return compatible;
             }
         }
-        true
+        Ok(true)
     }
 
     pub(super) fn canonical_constructor_carrier(
@@ -812,10 +834,19 @@ impl Checker {
         left: &Ty,
         right: &Ty,
     ) -> ConstructorCarrierRelation {
-        match (
-            self.canonical_constructor_carrier(trait_key, left),
-            self.canonical_constructor_carrier(trait_key, right),
-        ) {
+        let left = self.canonical_constructor_carrier(trait_key, left);
+        let right = self.canonical_constructor_carrier(trait_key, right);
+        // A deferred peer must not hide a failed required proof.
+        for outcome in [&left, &right] {
+            if let ConstructorCarrierOutcome::Rejected { failures } = outcome {
+                if ConstructorProjectionFailure::proof_error(failures).is_some() {
+                    return ConstructorCarrierRelation::Rejected {
+                        failures: failures.clone(),
+                    };
+                }
+            }
+        }
+        match (left, right) {
             (
                 ConstructorCarrierOutcome::Projected(left),
                 ConstructorCarrierOutcome::Projected(right),

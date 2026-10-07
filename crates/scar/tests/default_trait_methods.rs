@@ -495,6 +495,10 @@ value = First::first(1)"#,
     .expect_err("mutually recursive concrete obligations must not prove one another");
 
     assert!(err.message.contains("CyclicTraitObligation"), "{err:?}");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+    );
 }
 
 #[test]
@@ -535,4 +539,123 @@ value: Boxed<Int> = FirstFactory::make()"#,
     .expect_err("receiverless constructor dispatch must reject mutually recursive impl proofs");
 
     assert!(err.message.contains("CyclicTraitObligation"), "{err:?}");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+    );
+}
+
+fn projection_cycle_declarations() -> &'static str {
+    r#"defenum Boxed<$A> { Boxed($A), }
+deftrait FirstFamily where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+deftrait SecondFamily where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+impl FirstFamily for Boxed<$A> where Self: SecondFamily {
+  def use(self: Boxed<Int>) -> Int { SecondFamily::use(self) }
+}
+impl SecondFamily for Boxed<$A> where Self: FirstFamily {
+  def use(self: Boxed<Int>) -> Int { FirstFamily::use(self) }
+}
+def accept(value: FirstFamily<Int>) -> Unit { () }
+"#
+}
+
+#[test]
+fn constructor_projection_cycle_preserves_reason_and_argument_span() {
+    for use_site in [
+        "accept(Boxed::Boxed(1))",
+        "def make() -> FirstFamily<Int> { Boxed::Boxed(1) }",
+    ] {
+        let source = format!("{}{use_site}", projection_cycle_declarations());
+        let error =
+            typecheck_with_standard_environment(&source).expect_err("cyclic constructor proof");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation),
+            "{error:?}"
+        );
+        let start = source.rfind("Boxed::Boxed(1)").unwrap();
+        assert_eq!(
+            error.span,
+            spire::ast::Span {
+                start,
+                end: start + "Boxed::Boxed(1)".len()
+            }
+        );
+        assert!(error.message.contains("CyclicTraitObligation"), "{error:?}");
+        let structured = error.structured.as_ref().expect("structured cycle cause");
+        assert_eq!(structured.primary.span, error.span);
+        assert!(
+            matches!(&structured.data, diagnostics::DiagnosticData::TraitDispatch(data)
+    if data.trait_name.ends_with("Family") && data.subject_type.as_deref().is_some_and(|name| name.contains("Boxed")))
+        );
+    }
+}
+
+#[test]
+fn constructor_projection_keeps_one_way_success_and_plain_missing_bound() {
+    let declarations = projection_cycle_declarations();
+    let success = declarations.replace(
+        "impl SecondFamily for Boxed<$A> where Self: FirstFamily {\n  def use(self: Boxed<Int>) -> Int { FirstFamily::use(self) }\n}",
+        "impl SecondFamily for Boxed<$A> { def use(self: Boxed<Int>) -> Int { 1 } }",
+    );
+    typecheck_with_standard_environment(&format!("{success}accept(Boxed::Boxed(1))"))
+        .expect("a one-way satisfied bound remains applicable");
+    let missing = r#"defenum Boxed<$A> { Boxed($A), }
+deftrait FirstFamily where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+def accept(value: FirstFamily<Int>) -> Unit { () }
+"#;
+    let error = typecheck_with_standard_environment(&format!("{missing}accept(Boxed::Boxed(1))"))
+        .expect_err("missing FirstFamily implementation is not a cycle");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn unrelated_cyclic_constructor_impl_does_not_reject_matching_head() {
+    let source = format!(
+        r#"{}
+defenum Other<$A> {{ Other($A), }}
+impl FirstFamily for Other<$A> {{ def use(self: Other<Int>) -> Int {{ 1 }} }}
+accept(Other::Other(1))"#,
+        projection_cycle_declarations()
+    );
+    typecheck_with_standard_environment(&source)
+        .expect("the unrelated Boxed cycle is not requested");
+}
+
+#[test]
+fn unused_cyclic_constructor_capability_does_not_reject_plain_value() {
+    let source = format!(
+        "{}def plain(value: Boxed<Int>) -> Boxed<Int> {{ value }}\nplain(Boxed::Boxed(1))",
+        projection_cycle_declarations()
+    );
+    typecheck_with_standard_environment(&source)
+        .expect("optional capability enumeration must not require the cyclic FirstFamily proof");
+}
+
+#[test]
+fn explicit_constructor_helper_preserves_required_cycle() {
+    let source = format!(
+        r#"{}
+deftrait Wrap where Self: Type<$A> {{ def wrap::<Self>(value: $A) -> Self<$A> }}
+impl Wrap for Boxed<$T> {{
+  def wrap::<Boxed<$T>>(value: $A) -> Boxed<$A> {{ Boxed::Boxed(value) }}
+}}
+FirstFamily::use(Wrap::wrap::<Boxed<Int>>(1))"#,
+        projection_cycle_declarations()
+    );
+    let error = typecheck_with_standard_environment(&source)
+        .expect_err("known carrier requires FirstFamily");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation),
+        "{error:?}"
+    );
+    assert!(matches!(
+        &error.structured.as_ref().unwrap().data,
+        diagnostics::DiagnosticData::TraitDispatch(_)
+    ));
 }

@@ -73,6 +73,7 @@ pub enum TypeDiagnosticReason {
     ReservedIntrinsicMarkerUsage,
     TypecheckInvariantViolation,
     TraitImplementationForbidden,
+    CyclicTraitObligation,
 }
 
 impl TypeDiagnosticReason {
@@ -97,6 +98,7 @@ impl TypeDiagnosticReason {
             Self::MissingGenericBound => "MissingGenericBound",
             Self::MissingTraitCapability => "MissingTraitCapability",
             Self::NoApplicableTraitImplementation => "NoApplicableTraitImplementation",
+            Self::CyclicTraitObligation => "CyclicTraitObligation",
             Self::UnresolvedTraitMethodInstantiation => "UnresolvedTraitMethodInstantiation",
             Self::MissingTraitDispatchTarget => "MissingTraitDispatchTarget",
             Self::MissingTypeConstructorConstraint => "MissingTypeConstructorConstraint",

@@ -628,15 +628,19 @@ impl Checker {
         }
     }
 
-    fn struct_new_return_allowed(&mut self, expected_self_ty: &Ty, ret_ty: &Ty) -> bool {
+    fn struct_new_return_allowed(
+        &mut self,
+        expected_self_ty: &Ty,
+        ret_ty: &Ty,
+    ) -> Result<bool, TypeError> {
         let resolved_ret = self.resolve_ty(ret_ty);
-        if self.types_compatible(expected_self_ty, &resolved_ret) {
-            return true;
+        if self.types_compatible(expected_self_ty, &resolved_ret)? {
+            return Ok(true);
         }
-        match resolved_ret {
-            Ty::Result(ok, _) => self.types_compatible(expected_self_ty, ok.as_ref()),
+        Ok(match resolved_ret {
+            Ty::Result(ok, _) => self.types_compatible(expected_self_ty, ok.as_ref())?,
             _ => false,
-        }
+        })
     }
 
     pub(super) fn predeclare_error_types(&mut self, stmts: &[Resolved]) {
@@ -1479,7 +1483,7 @@ impl Checker {
                             hint: None,
                         });
                     };
-                    if !self.types_compatible(expected, bind_ty) {
+                    if !self.types_compatible(expected, bind_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: format!(
@@ -1504,7 +1508,7 @@ impl Checker {
                             hint: None,
                         });
                     };
-                    if !self.types_compatible(expected, alias_ty) {
+                    if !self.types_compatible(expected, alias_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: format!(
@@ -1626,7 +1630,7 @@ impl Checker {
                             return Err(self.struct_new_contract_error(&target, span, Some(&other)))
                         }
                     };
-                    if !self.struct_new_return_allowed(expected_self_ty, &ret_ty) {
+                    if !self.struct_new_return_allowed(expected_self_ty, &ret_ty)? {
                         return Err(self.struct_new_contract_error(&target, span, Some(&ret_ty)));
                     }
                 }
@@ -4001,18 +4005,22 @@ impl Checker {
                 .filter(|impl_info| self.trait_key(&impl_info.trait_id) == parent_key)
                 .cloned()
                 .collect::<Vec<_>>();
-            let parent_impl = parent_candidates
-                .into_iter()
-                .find(|impl_info| self.parent_impl_covers_child(impl_info, child_impl))
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!(
-                        "Trait impl {} for {} requires parent impl {} for the same target",
-                        child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
-                    ),
-                    span: child_impl.trait_id.span.clone(),
-                    hint: None,
-                })?;
+            let mut covering_parent = None;
+            for candidate in parent_candidates {
+                if self.parent_impl_covers_child(&candidate, child_impl)? {
+                    covering_parent = Some(candidate);
+                    break;
+                }
+            }
+            let parent_impl = covering_parent.ok_or_else(|| TypeError {
+                structured: None,
+                message: format!(
+                    "Trait impl {} for {} requires parent impl {} for the same target",
+                    child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
+                ),
+                span: child_impl.trait_id.span.clone(),
+                hint: None,
+            })?;
             if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
                 return Err(TypeError {
                     structured: None,
@@ -4038,7 +4046,7 @@ impl Checker {
         &mut self,
         parent_impl: &TraitImplInfo,
         child_impl: &TraitImplInfo,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         let before_substitutions = self.substitutions.clone();
         let before_rigid = self.rigid_tyvars.clone();
         let mut child_vars = Vec::new();
@@ -4061,8 +4069,9 @@ impl Checker {
             self.instantiate_ty_with_fresh(arg, &mut fresh);
         }
         let head_covers = self.types_compatible(&parent_target, &child_impl.target_ty);
-        let obligations_hold =
-            head_covers && self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh);
+        let obligations_hold = head_covers.map(|covers| {
+            covers && self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh)
+        });
 
         self.substitutions = before_substitutions;
         self.rigid_tyvars = before_rigid;

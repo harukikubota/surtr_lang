@@ -612,6 +612,7 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             let obligation = if value.trait_arguments.is_empty() { value.trait_name.clone() } else { format!("{}<{}>", value.trait_name, value.trait_arguments.join(", ")) };
             match reason {
                 TypeDiagnosticReason::NoApplicableTraitImplementation => format!("No implementation satisfies {} for {}", obligation, value.subject_type.as_deref().expect("concrete obligation has a subject")),
+                TypeDiagnosticReason::CyclicTraitObligation => format!("CyclicTraitObligation: {} for {}", obligation, value.subject_type.as_deref().expect("cyclic obligation has a subject")),
                 TypeDiagnosticReason::UnresolvedTraitMethodInstantiation => format!("{}::{} requires a concrete method instantiation", obligation, value.method.as_deref().expect("method instantiation has a method")),
                 TypeDiagnosticReason::MissingTraitDispatchTarget => format!("{}::{} has no concrete dispatch target", obligation, value.method.as_deref().expect("method instantiation has a method")),
                 _ => unreachable!("dispatch diagnostic requires dispatch reason"),

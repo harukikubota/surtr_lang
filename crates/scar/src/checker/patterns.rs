@@ -1079,7 +1079,7 @@ impl Checker {
                 })?;
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 let pinned_ty = self.resolve_ty(&pinned_ty);
-                if !self.types_compatible(&pinned_ty, &rhs_ty) {
+                if !self.types_compatible(&pinned_ty, &rhs_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Pin,
@@ -1103,7 +1103,7 @@ impl Checker {
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    if !self.types_compatible(&expected, &inner_ty) {
+                    if !self.types_compatible(&expected, &inner_ty)? {
                         return Err(self.pattern_error(
                             TypeDiagnosticReason::PatternTypeMismatch,
                             PatternKind::Other,
@@ -1273,7 +1273,7 @@ impl Checker {
             }
             ResolvedPattern::IntLit(pspan, n) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
-                if !self.types_compatible(&Ty::Int, &rhs_ty) {
+                if !self.types_compatible(&Ty::Int, &rhs_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -1290,7 +1290,7 @@ impl Checker {
             }
             ResolvedPattern::StrLit(pspan, s) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
-                if !self.types_compatible(&Ty::Str, &rhs_ty) {
+                if !self.types_compatible(&Ty::Str, &rhs_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -1307,7 +1307,7 @@ impl Checker {
             }
             ResolvedPattern::BoolLit(pspan, b) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
-                if !self.types_compatible(&Ty::Bool, &rhs_ty) {
+                if !self.types_compatible(&Ty::Bool, &rhs_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -1482,7 +1482,7 @@ impl Checker {
                         &ctor_id.span,
                     ));
                 }
-                if !self.types_compatible(&variant.enum_ty, &rhs_ty) {
+                if !self.types_compatible(&variant.enum_ty, &rhs_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Constructor,
@@ -1534,7 +1534,7 @@ impl Checker {
                         pre_args,
                         &extractor_id.span,
                     )?;
-                if !self.types_compatible(&input_ty, &rhs_ty) {
+                if !self.types_compatible(&input_ty, &rhs_ty)? {
                     let mut error = self.pattern_error(
                         TypeDiagnosticReason::ExtractorInputTypeMismatch,
                         PatternKind::Extractor,

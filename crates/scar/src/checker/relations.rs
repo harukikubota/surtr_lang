@@ -168,14 +168,18 @@ impl Checker {
         } else {
             self.types_compatible(expected, actual)
         };
-        if compatible {
+        if matches!(compatible, Ok(true)) {
             return Ok(());
         }
         if let Some(checkpoint) = checkpoint {
             self.rollback_type_relation(checkpoint);
         }
+        compatible.map_err(|error| error.at_span(&actual_fact.span))?;
         if reason == TypeDiagnosticReason::ArgumentTypeMismatch {
-            if let Some((trait_name, subject)) = self.unsatisfied_relation_bound(expected, actual) {
+            if let Some((trait_name, subject)) =
+                self.unsatisfied_relation_bound(expected, actual)
+                    .map_err(|error| error.at_span(&actual_fact.span))?
+            {
                 let bound_reason = match self.resolve_ty(&subject) {
                     Ty::Var(var) if self.rigid_tyvars.contains(&var) => {
                         TypeDiagnosticReason::MissingGenericBound
@@ -613,7 +617,8 @@ impl Checker {
             1,
         )
         .map_err(|mut error| {
-            if reason == TypeDiagnosticReason::TypePayloadMismatch {
+            if reason == TypeDiagnosticReason::TypePayloadMismatch && error.reason() == Some(reason)
+            {
                 let capability =
                     capability.expect("payload assertion carries its constructor capability");
                 let diagnostic = error.structured.as_mut().expect("typed payload failure");
@@ -646,35 +651,42 @@ impl Checker {
 }
 
 impl Checker {
-    fn unsatisfied_relation_bound(&mut self, expected: &Ty, actual: &Ty) -> Option<(String, Ty)> {
+    fn unsatisfied_relation_bound(
+        &mut self,
+        expected: &Ty,
+        actual: &Ty,
+    ) -> Result<Option<(String, Ty)>, TypeError> {
         let expected = self.resolve_ty(expected);
         let actual = self.resolve_ty(actual);
-        match (&expected, &actual) {
-            (Ty::Var(var), subject) => self
-                .tyvar_bound_names(*var)
-                .into_iter()
-                .find(|bound| !self.ty_satisfies_bounds(subject, std::slice::from_ref(bound)))
-                .map(|bound| (bound, subject.clone())),
-            (Ty::List(a), Ty::List(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
-                self.unsatisfied_relation_bound(a, b)
+        let pairs: Vec<(&Ty, &Ty)> = match (&expected, &actual) {
+            (Ty::Var(var), subject) => {
+                for bound in self.tyvar_bound_names(*var) {
+                    if !self.ty_satisfies_bounds(subject, std::slice::from_ref(&bound))? {
+                        return Ok(Some((bound, subject.clone())));
+                    }
+                }
+                return Ok(None);
             }
-            (Ty::Result(a, e), Ty::Result(b, f)) => self
-                .unsatisfied_relation_bound(a, b)
-                .or_else(|| self.unsatisfied_relation_bound(e, f)),
+            (Ty::List(a), Ty::List(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => vec![(a, b)],
+            (Ty::Result(a, e), Ty::Result(b, f)) => vec![(a, b), (e, f)],
             (Ty::Tuple(a), Ty::Tuple(b)) | (Ty::Enum(_, a), Ty::Enum(_, b))
                 if a.len() == b.len() =>
             {
-                a.iter()
-                    .zip(b)
-                    .find_map(|(a, b)| self.unsatisfied_relation_bound(a, b))
+                a.iter().zip(b).collect()
             }
             (Ty::Func(a, r), Ty::Func(b, s)) if a.len() == b.len() => a
                 .iter()
                 .zip(b)
-                .find_map(|(a, b)| self.unsatisfied_relation_bound(a, b))
-                .or_else(|| self.unsatisfied_relation_bound(r, s)),
-            _ => None,
+                .chain(std::iter::once((r.as_ref(), s.as_ref())))
+                .collect(),
+            _ => return Ok(None),
+        };
+        for (a, b) in pairs {
+            if let Some(bound) = self.unsatisfied_relation_bound(a, b)? {
+                return Ok(Some(bound));
+            }
         }
+        Ok(None)
     }
 }
 
@@ -702,6 +714,9 @@ impl Checker {
             trait_name,
             1,
         ) {
+            if error.reason() != Some(TypeDiagnosticReason::TypeConstructorFamilyMismatch) {
+                return Err(error);
+            }
             let diagnostic = error.structured.as_mut().expect("relation diagnostic");
             diagnostic.data =
                 DiagnosticData::TypeConstructorCarrier(diagnostics::TypeConstructorCarrierData {
@@ -797,6 +812,16 @@ impl Checker {
         bodies: &[&TypedNode],
         guards: &[Option<&TypedNode>],
     ) -> TypeError {
+        if !matches!(
+            error.reason(),
+            Some(
+                TypeDiagnosticReason::IfBranchTypeMismatch
+                    | TypeDiagnosticReason::MatchArmTypeMismatch
+                    | TypeDiagnosticReason::CondBranchTypeMismatch
+            )
+        ) {
+            return error;
+        }
         let diagnostic = error
             .structured
             .as_mut()
@@ -1017,7 +1042,7 @@ mod tests {
         let alias_ty = Ty::Var(alias);
         assert!(
             checker.with_type_relation_probe(&[&source_ty, &alias_ty], |checker| {
-                let compatible = checker.types_compatible(&source_ty, &alias_ty);
+                let compatible = checker.types_compatible(&source_ty, &alias_ty).unwrap();
                 assert_eq!(checker.resolve_ty(&source_ty), alias_ty);
                 assert!(!checker.pending_trait_obligations.contains_key(&source));
                 assert!(checker.pending_trait_obligations.contains_key(&alias));
@@ -1033,7 +1058,7 @@ mod tests {
         let rejected = Ty::Tuple(vec![Ty::Bool, Ty::Str]);
         assert!(
             !checker.with_type_relation_probe(&[&expected, &rejected], |checker| {
-                let compatible = checker.types_compatible(&expected, &rejected);
+                let compatible = checker.types_compatible(&expected, &rejected).unwrap();
                 assert_eq!(checker.resolve_ty(&variable), Ty::Bool);
                 compatible
             })

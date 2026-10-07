@@ -1,7 +1,7 @@
 use diagnostics::{StructuredDiagnostic, TypeDiagnosticReason};
 use spire::ast::Span;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeError {
     pub message: String,
     pub span: Span,
@@ -35,6 +35,14 @@ impl TypeError {
             hint: None,
             structured: None,
         }
+    }
+
+    pub(crate) fn at_span(mut self, span: &Span) -> Self {
+        self.span = span.clone();
+        if let Some(diagnostic) = &mut self.structured {
+            diagnostic.primary.span = span.clone();
+        }
+        self
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {

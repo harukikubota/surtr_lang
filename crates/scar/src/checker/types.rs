@@ -2634,7 +2634,11 @@ impl Checker {
     /// Expected value compatibility is directed. An ignored unary input accepts
     /// the expected input without changing Hole's strict type identity. Outputs
     /// and every other shape still use the ordinary relation.
-    pub(super) fn value_types_compatible(&mut self, expected: &Ty, actual: &Ty) -> bool {
+    pub(super) fn value_types_compatible(
+        &mut self,
+        expected: &Ty,
+        actual: &Ty,
+    ) -> Result<bool, TypeError> {
         let resolved_expected = self.resolve_ty(expected);
         let resolved_actual = self.resolve_ty(actual);
         if let (Some((expected_inputs, expected_output)), Some((actual_inputs, actual_output))) = (
@@ -2656,185 +2660,201 @@ impl Checker {
         self.types_compatible(expected, actual)
     }
 
-    pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> bool {
+    pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> Result<bool, TypeError> {
         let profile = self.profiler.start();
-        let expected_bare_occurrence = Self::bare_constructor_occurrence(expected);
-        let got_bare_occurrence = Self::bare_constructor_occurrence(got);
-        let expected = self.resolve_ty(expected);
-        let got = self.resolve_ty(got);
-        let result = match (&expected, &got) {
-            (Ty::Hole, Ty::Hole) => true,
-            (Ty::Var(left), Ty::Var(right)) => match (
-                self.rigid_tyvars.contains(left),
-                self.rigid_tyvars.contains(right),
-            ) {
-                (true, true) => left == right,
-                (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
-                (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
-                (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
-            },
-            (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
-            (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
-            (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
-            (Ty::Int, Ty::Int)
-            | (Ty::Float, Ty::Float)
-            | (Ty::Str, Ty::Str)
-            | (Ty::Bool, Ty::Bool)
-            | (Ty::Unit, Ty::Unit)
-            | (Ty::Error, Ty::Error) => true,
-            (Ty::MatchResult(a), Ty::MatchResult(b))
-            | (Ty::ExtractorClosure(a), Ty::ExtractorClosure(b))
-            | (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-            (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
-            (Ty::Pid(a), Ty::Pid(b)) => {
-                Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
-                    || a.starts_with('$')
-                    || b.starts_with('$')
-            }
-            (Ty::Pid(expected_process), Ty::Enum(name, args))
-                if name == "WorkerLease" && args.len() == 1 =>
-            {
-                match args.first() {
-                    Some(Ty::Pid(actual_process)) => {
-                        Self::canonical_user_type_name(expected_process)
-                            == Self::canonical_user_type_name(actual_process)
-                            || expected_process.starts_with('$')
-                            || actual_process.starts_with('$')
-                    }
-                    _ => false,
+        let result = (|| -> Result<bool, TypeError> {
+            let expected_bare_occurrence = Self::bare_constructor_occurrence(expected);
+            let got_bare_occurrence = Self::bare_constructor_occurrence(got);
+            let expected = self.resolve_ty(expected);
+            let got = self.resolve_ty(got);
+            let result = match (&expected, &got) {
+                (Ty::Hole, Ty::Hole) => true,
+                (Ty::Var(left), Ty::Var(right)) => match (
+                    self.rigid_tyvars.contains(left),
+                    self.rigid_tyvars.contains(right),
+                ) {
+                    (true, true) => left == right,
+                    (true, false) => self.bind_tyvar(*right, &Ty::Var(*left))?,
+                    (false, true) => self.bind_tyvar(*left, &Ty::Var(*right))?,
+                    (false, false) => self.bind_tyvar(*left, &Ty::Var(*right))?,
+                },
+                (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
+                (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
+                (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty)?,
+                (Ty::Int, Ty::Int)
+                | (Ty::Float, Ty::Float)
+                | (Ty::Str, Ty::Str)
+                | (Ty::Bool, Ty::Bool)
+                | (Ty::Unit, Ty::Unit)
+                | (Ty::Error, Ty::Error) => true,
+                (Ty::MatchResult(a), Ty::MatchResult(b))
+                | (Ty::ExtractorClosure(a), Ty::ExtractorClosure(b))
+                | (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b)?,
+                (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b)?,
+                (Ty::Pid(a), Ty::Pid(b)) => {
+                    Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
+                        || a.starts_with('$')
+                        || b.starts_with('$')
                 }
-            }
-            (
-                Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
-                Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
-            ) => {
-                kind_a.accepts(*kind_b)
-                    && self.types_compatible(src_a, src_b)
-                    && self.types_compatible(focus_a, focus_b)
-                    && self.types_compatible(update_src_a, update_src_b)
-                    && self.types_compatible(update_focus_a, update_focus_b)
-            }
-            (Ty::Tuple(a), Ty::Tuple(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .zip(b.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            (Ty::SelfApp(a), Ty::SelfApp(b))
-                if Self::constructor_application_parts(a).is_some()
-                    && Self::constructor_application_parts(b).is_some() =>
-            {
-                let (left_witness, left_slots) =
-                    Self::constructor_application_parts(a).expect("checked above");
-                let (right_witness, right_slots) =
-                    Self::constructor_application_parts(b).expect("checked above");
-                left_slots.len() == right_slots.len()
-                    && self.types_compatible(left_witness, right_witness)
-                    && left_slots
-                        .iter()
-                        .zip(right_slots.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
-                let (witness, expected_slots) =
-                    Self::constructor_application_parts(a).expect("checked above");
-                if expected_slots.is_empty() {
-                    match expected_bare_occurrence {
-                        Some(occurrence) => {
-                            self.match_bare_constructor_occurrence(occurrence, other)
+                (Ty::Pid(expected_process), Ty::Enum(name, args))
+                    if name == "WorkerLease" && args.len() == 1 =>
+                {
+                    match args.first() {
+                        Some(Ty::Pid(actual_process)) => {
+                            Self::canonical_user_type_name(expected_process)
+                                == Self::canonical_user_type_name(actual_process)
+                                || expected_process.starts_with('$')
+                                || actual_process.starts_with('$')
                         }
-                        None => self.types_compatible(witness, other),
-                    }
-                } else if !match witness {
-                    Ty::Var(occurrence)
-                        if self.constructor_witness_traits.contains_key(occurrence)
-                            && (matches!(self.resolve_ty(witness), Ty::Var(_))
-                                || self.is_projected_constructor_identity(witness)) =>
-                    {
-                        self.match_bare_constructor_occurrence(*occurrence, other)
-                    }
-                    _ => self.types_compatible(witness, other),
-                } {
-                    false
-                } else {
-                    match self.constructor_application_slots_for_witness(
-                        witness,
-                        expected_slots.len(),
-                        other,
-                    ) {
-                        ConstructorSlotsOutcome::Projected(actual_slots) => {
-                            actual_slots.len() == expected_slots.len()
-                                && expected_slots.iter().zip(actual_slots.iter()).all(
-                                    |(expected, actual)| self.types_compatible(expected, actual),
-                                )
-                        }
-                        ConstructorSlotsOutcome::Deferred { .. }
-                        | ConstructorSlotsOutcome::Rejected { .. } => false,
+                        _ => false,
                     }
                 }
-            }
-            (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
-                let (_, slots) = Self::constructor_application_parts(b).expect("checked above");
-                if slots.is_empty() {
-                    match got_bare_occurrence {
-                        Some(occurrence) => {
-                            self.match_bare_constructor_occurrence(occurrence, other)
-                        }
-                        None => self.types_compatible(&Ty::SelfApp(b.clone()), other),
-                    }
-                } else {
-                    self.types_compatible(&Ty::SelfApp(b.clone()), other)
+                (
+                    Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
+                    Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
+                ) => {
+                    kind_a.accepts(*kind_b)
+                        && self.types_compatible(src_a, src_b)?
+                        && self.types_compatible(focus_a, focus_b)?
+                        && self.types_compatible(update_src_a, update_src_b)?
+                        && self.types_compatible(update_focus_a, update_focus_b)?
                 }
-            }
-            (Ty::SelfApp(a), Ty::SelfApp(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .zip(b.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
-                a_params.len() == b_params.len()
-                    && a_params
-                        .iter()
-                        .zip(b_params.iter())
-                        .all(|(a, b)| self.types_compatible(a, b))
-                    && self.types_compatible(a_ret, b_ret)
-            }
-            (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
-                self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
-            }
-            (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && self.nominal_arguments_compatible(n1, &fields1.arguments, &fields2.arguments)
-                    && (fields1.is_empty()
-                        || fields2.is_empty()
-                        || (fields1.len() == fields2.len()
-                            && fields1
-                                .iter()
-                                .zip(fields2)
-                                .all(|((name1, ty1), (name2, ty2))| {
-                                    name1 == name2 && self.types_compatible(ty1, ty2)
-                                })))
-            }
-            (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && self.nominal_arguments_compatible(n1, &fields1.arguments, &fields2.arguments)
-                    && (fields1.is_empty()
-                        || fields2.is_empty()
-                        || (fields1.len() == fields2.len()
-                            && fields1
-                                .iter()
-                                .zip(fields2)
-                                .all(|((name1, ty1), (name2, ty2))| {
-                                    name1 == name2 && self.types_compatible(ty1, ty2)
-                                })))
-            }
-            (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && self.nominal_arguments_compatible(n1, args1, args2)
-            }
-            _ => false,
-        };
+                (Ty::Tuple(a), Ty::Tuple(b)) => {
+                    a.len() == b.len()
+                        && try_all(a.iter().zip(b.iter()), |(left, right)| {
+                            self.types_compatible(left, right)
+                        })?
+                }
+                (Ty::SelfApp(a), Ty::SelfApp(b))
+                    if Self::constructor_application_parts(a).is_some()
+                        && Self::constructor_application_parts(b).is_some() =>
+                {
+                    let (left_witness, left_slots) =
+                        Self::constructor_application_parts(a).expect("checked above");
+                    let (right_witness, right_slots) =
+                        Self::constructor_application_parts(b).expect("checked above");
+                    left_slots.len() == right_slots.len()
+                        && self.types_compatible(left_witness, right_witness)?
+                        && try_all(
+                            left_slots.iter().zip(right_slots.iter()),
+                            |(left, right)| self.types_compatible(left, right),
+                        )?
+                }
+                (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
+                    let (witness, expected_slots) =
+                        Self::constructor_application_parts(a).expect("checked above");
+                    if expected_slots.is_empty() {
+                        match expected_bare_occurrence {
+                            Some(occurrence) => {
+                                self.match_bare_constructor_occurrence(occurrence, other)?
+                            }
+                            None => self.types_compatible(witness, other)?,
+                        }
+                    } else if !match witness {
+                        Ty::Var(occurrence)
+                            if self.constructor_witness_traits.contains_key(occurrence)
+                                && (matches!(self.resolve_ty(witness), Ty::Var(_))
+                                    || self.is_projected_constructor_identity(witness)) =>
+                        {
+                            self.match_bare_constructor_occurrence(*occurrence, other)?
+                        }
+                        _ => self.types_compatible(witness, other)?,
+                    } {
+                        false
+                    } else {
+                        match self
+                            .constructor_application_slots_for_witness(
+                                witness,
+                                expected_slots.len(),
+                                other,
+                            )
+                            .into_checked()?
+                        {
+                            ConstructorSlotsOutcome::Projected(actual_slots) => {
+                                actual_slots.len() == expected_slots.len()
+                                    && try_all(
+                                        expected_slots.iter().zip(actual_slots.iter()),
+                                        |(expected, actual)| {
+                                            self.types_compatible(expected, actual)
+                                        },
+                                    )?
+                            }
+                            ConstructorSlotsOutcome::Deferred { .. }
+                            | ConstructorSlotsOutcome::Rejected { .. } => false,
+                        }
+                    }
+                }
+                (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
+                    let (_, slots) = Self::constructor_application_parts(b).expect("checked above");
+                    if slots.is_empty() {
+                        match got_bare_occurrence {
+                            Some(occurrence) => {
+                                self.match_bare_constructor_occurrence(occurrence, other)?
+                            }
+                            None => self.types_compatible(&Ty::SelfApp(b.clone()), other)?,
+                        }
+                    } else {
+                        self.types_compatible(&Ty::SelfApp(b.clone()), other)?
+                    }
+                }
+                (Ty::SelfApp(a), Ty::SelfApp(b)) => {
+                    a.len() == b.len()
+                        && try_all(a.iter().zip(b.iter()), |(left, right)| {
+                            self.types_compatible(left, right)
+                        })?
+                }
+                (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                    a_params.len() == b_params.len()
+                        && try_all(a_params.iter().zip(b_params.iter()), |(a, b)| {
+                            self.types_compatible(a, b)
+                        })?
+                        && self.types_compatible(a_ret, b_ret)?
+                }
+                (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+                    self.types_compatible(ok1, ok2)? && self.types_compatible(err1, err2)?
+                }
+                (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && self.nominal_arguments_compatible(
+                            n1,
+                            &fields1.arguments,
+                            &fields2.arguments,
+                        )?
+                        && (fields1.is_empty()
+                            || fields2.is_empty()
+                            || (fields1.len() == fields2.len()
+                                && try_all(
+                                    fields1.iter().zip(fields2),
+                                    |((name1, ty1), (name2, ty2))| {
+                                        Ok(name1 == name2 && self.types_compatible(ty1, ty2)?)
+                                    },
+                                )?))
+                }
+                (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && self.nominal_arguments_compatible(
+                            n1,
+                            &fields1.arguments,
+                            &fields2.arguments,
+                        )?
+                        && (fields1.is_empty()
+                            || fields2.is_empty()
+                            || (fields1.len() == fields2.len()
+                                && try_all(
+                                    fields1.iter().zip(fields2),
+                                    |((name1, ty1), (name2, ty2))| {
+                                        Ok(name1 == name2 && self.types_compatible(ty1, ty2)?)
+                                    },
+                                )?))
+                }
+                (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && self.nominal_arguments_compatible(n1, args1, args2)?
+                }
+                _ => false,
+            };
+            Ok(result)
+        })();
         self.profiler.finish(ProfileEvent::TypesCompatible, profile);
         result
     }
@@ -2895,133 +2915,143 @@ impl Checker {
         expected: &Ty,
         got: &Ty,
         rigid_tyvars: &HashSet<u32>,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         let saved = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
         let compatible = self.types_compatible(expected, got);
         self.rigid_tyvars = saved;
         compatible
     }
 
-    pub(super) fn bind_tyvar(&mut self, var: u32, ty: &Ty) -> bool {
+    pub(super) fn bind_tyvar(&mut self, var: u32, ty: &Ty) -> Result<bool, TypeError> {
         let profile = self.profiler.start();
-        let ty = self.resolve_ty(ty);
-        let result = if ty == Ty::Var(var) {
-            true
-        } else if self.ty_contains_var(&ty, var) {
-            false
-        } else {
-            let var_bounds = self.tyvar_bound_names(var);
-            let pending_obligations = self
-                .pending_trait_obligations
-                .get(&var)
-                .cloned()
-                .unwrap_or_default();
-            match &ty {
-                Ty::Var(other) => {
-                    if self.rigid_tyvars.contains(other)
-                        && !var_bounds
-                            .iter()
-                            .all(|bound| self.tyvar_has_bound(*other, bound))
-                    {
-                        self.profiler.finish(ProfileEvent::BindTyVar, profile);
-                        return false;
-                    }
-                    let mut combined = var_bounds;
-                    for bound in self.tyvar_bound_names(*other) {
-                        if !combined.iter().any(|existing| existing == &bound) {
-                            combined.push(bound);
+        let result = (|| -> Result<bool, TypeError> {
+            let ty = self.resolve_ty(ty);
+            let result = if ty == Ty::Var(var) {
+                true
+            } else if self.ty_contains_var(&ty, var) {
+                false
+            } else {
+                let var_bounds = self.tyvar_bound_names(var);
+                let pending_obligations = self
+                    .pending_trait_obligations
+                    .get(&var)
+                    .cloned()
+                    .unwrap_or_default();
+                match &ty {
+                    Ty::Var(other) => {
+                        if self.rigid_tyvars.contains(other)
+                            && !var_bounds
+                                .iter()
+                                .all(|bound| self.tyvar_has_bound(*other, bound))
+                        {
+                            return Ok(false);
                         }
-                    }
-                    combined.sort();
-                    self.tyvar_bounds.insert(var, combined.clone());
-                    self.tyvar_bounds.insert(*other, combined);
-                    let binding = HashMap::from([(var, Ty::Var(*other))]);
-                    for mut obligation in pending_obligations {
-                        obligation.receiver = self.substitute_ty_with_mapping(
-                            &self.resolve_ty(&obligation.receiver),
-                            &binding,
-                        );
-                        obligation.args = obligation
-                            .args
-                            .iter()
-                            .map(|arg| {
-                                self.substitute_ty_with_mapping(&self.resolve_ty(arg), &binding)
-                            })
-                            .collect();
-                        let pending = self.pending_trait_obligations.entry(*other).or_default();
-                        if !pending.contains(&obligation) {
-                            pending.push(obligation);
-                        }
-                    }
-                }
-                _ => {
-                    let has_constructor_identity_marker =
-                        self.canonical_request(&ty).ok().is_some_and(|canonical| {
-                            fn contains_hole(ty: &CanonicalTy) -> bool {
-                                ty.head == CanonicalTypeHead::Hole
-                                    || ty.arguments.iter().any(contains_hole)
+                        let mut combined = var_bounds;
+                        for bound in self.tyvar_bound_names(*other) {
+                            if !combined.iter().any(|existing| existing == &bound) {
+                                combined.push(bound);
                             }
-                            canonical.head != CanonicalTypeHead::SelfApplication
-                                && contains_hole(&canonical)
-                        });
-                    let bounds_satisfied = var_bounds.iter().all(|bound| {
-                        let constructor_bound =
-                            (self.constructor_witness_traits.contains_key(&var)
-                                && has_constructor_identity_marker)
-                                .then(|| self.declaration_constructor_trait_key(bound))
-                                .flatten();
-                        match constructor_bound {
-                            Some(trait_key) => matches!(
-                                self.constructor_head_projection(&trait_key, &ty),
-                                ConstructorProjectionOutcome::Applicable { .. }
-                            ),
-                            None => self.ty_satisfies_bounds(&ty, std::slice::from_ref(bound)),
                         }
-                    });
-                    if !bounds_satisfied {
-                        self.profiler.finish(ProfileEvent::BindTyVar, profile);
-                        return false;
+                        combined.sort();
+                        self.tyvar_bounds.insert(var, combined.clone());
+                        self.tyvar_bounds.insert(*other, combined);
+                        let binding = HashMap::from([(var, Ty::Var(*other))]);
+                        for mut obligation in pending_obligations {
+                            obligation.receiver = self.substitute_ty_with_mapping(
+                                &self.resolve_ty(&obligation.receiver),
+                                &binding,
+                            );
+                            obligation.args = obligation
+                                .args
+                                .iter()
+                                .map(|arg| {
+                                    self.substitute_ty_with_mapping(&self.resolve_ty(arg), &binding)
+                                })
+                                .collect();
+                            let pending = self.pending_trait_obligations.entry(*other).or_default();
+                            if !pending.contains(&obligation) {
+                                pending.push(obligation);
+                            }
+                        }
                     }
-                    if !pending_obligations.iter().all(|obligation| {
-                        let binding = HashMap::from([(var, ty.clone())]);
-                        let receiver = self.substitute_ty_with_mapping(
-                            &self.resolve_ty(&obligation.receiver),
-                            &binding,
-                        );
-                        let arguments = obligation
-                            .args
-                            .iter()
-                            .map(|arg| {
-                                self.substitute_ty_with_mapping(&self.resolve_ty(arg), &binding)
+                    _ => {
+                        let has_constructor_identity_marker =
+                            self.canonical_request(&ty).ok().is_some_and(|canonical| {
+                                fn contains_hole(ty: &CanonicalTy) -> bool {
+                                    ty.head == CanonicalTypeHead::Hole
+                                        || ty.arguments.iter().any(contains_hole)
+                                }
+                                canonical.head != CanonicalTypeHead::SelfApplication
+                                    && contains_hole(&canonical)
+                            });
+                        let bounds_satisfied = try_all(var_bounds.iter(), |bound| {
+                            let constructor_bound =
+                                (self.constructor_witness_traits.contains_key(&var)
+                                    && has_constructor_identity_marker)
+                                    .then(|| self.declaration_constructor_trait_key(bound))
+                                    .flatten();
+                            Ok(match constructor_bound {
+                                Some(trait_key) => matches!(
+                                    self.constructor_head_projection(&trait_key, &ty)
+                                        .into_checked()?,
+                                    ConstructorProjectionOutcome::Applicable { .. }
+                                ),
+                                None => {
+                                    self.ty_satisfies_bounds(&ty, std::slice::from_ref(bound))?
+                                }
                             })
-                            .collect::<Vec<_>>();
-                        self.trait_impl_exists_for_args(&obligation.trait_id, &arguments, &receiver)
-                    }) {
-                        self.profiler.finish(ProfileEvent::BindTyVar, profile);
-                        return false;
+                        })?;
+                        if !bounds_satisfied {
+                            return Ok(false);
+                        }
+                        if !try_all(pending_obligations.iter(), |obligation| {
+                            let binding = HashMap::from([(var, ty.clone())]);
+                            let receiver = self.substitute_ty_with_mapping(
+                                &self.resolve_ty(&obligation.receiver),
+                                &binding,
+                            );
+                            let arguments = obligation
+                                .args
+                                .iter()
+                                .map(|arg| {
+                                    self.substitute_ty_with_mapping(&self.resolve_ty(arg), &binding)
+                                })
+                                .collect::<Vec<_>>();
+                            Ok(matches!(
+                                self.probe_trait_head(&obligation.trait_id, &arguments, &receiver)?,
+                                ApplicabilityProof::Satisfied(_)
+                            ))
+                        })? {
+                            return Ok(false);
+                        }
                     }
                 }
-            }
-            self.substitutions.insert(var, ty);
-            self.pending_trait_obligations.remove(&var);
-            true
-        };
+                self.substitutions.insert(var, ty);
+                self.pending_trait_obligations.remove(&var);
+                true
+            };
+            Ok(result)
+        })();
         self.profiler.finish(ProfileEvent::BindTyVar, profile);
         result
     }
 
-    pub(super) fn ty_satisfies_bounds(&mut self, ty: &Ty, bounds: &[String]) -> bool {
+    pub(super) fn ty_satisfies_bounds(
+        &mut self,
+        ty: &Ty,
+        bounds: &[String],
+    ) -> Result<bool, TypeError> {
         if bounds.is_empty() {
-            return true;
+            return Ok(true);
         }
 
         match self.resolve_ty(ty) {
-            Ty::Var(var) => bounds.iter().all(|bound| self.tyvar_has_bound(var, bound)),
-            concrete => bounds.iter().all(|bound| {
-                matches!(
-                    self.prove_trait_capability(bound, &concrete),
-                    Ok(ApplicabilityProof::Satisfied(_))
-                )
+            Ty::Var(var) => Ok(bounds.iter().all(|bound| self.tyvar_has_bound(var, bound))),
+            concrete => try_all(bounds.iter(), |bound| {
+                Ok(matches!(
+                    self.prove_trait_capability(bound, &concrete)?,
+                    ApplicabilityProof::Satisfied(_)
+                ))
             }),
         }
     }
@@ -3064,11 +3094,13 @@ impl Checker {
                 self.tyvar_has_bound(*var, bound)
             } else if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
                 matches!(
-                    self.constructor_projection(&trait_key, &resolved),
+                    self.constructor_projection(&trait_key, &resolved)
+                        .into_checked()
+                        .map_err(|error| error.at_span(span))?,
                     ConstructorProjectionOutcome::Applicable { .. }
                 )
             } else {
-                self.ty_satisfies_bounds(&resolved, std::slice::from_ref(bound))
+                self.ty_satisfies_bounds(&resolved, std::slice::from_ref(bound))?
             };
             if !satisfied {
                 let actual_type = self.ty_name(&resolved);
@@ -4994,7 +5026,7 @@ mod tests {
             Some(expected.clone())
         );
         assert!(
-            checker.value_types_compatible(&expected, &actual),
+            checker.value_types_compatible(&expected, &actual).unwrap(),
             "bare return compares carrier identity without equating its mapped payload"
         );
     }

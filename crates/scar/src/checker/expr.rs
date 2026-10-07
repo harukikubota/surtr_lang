@@ -683,7 +683,10 @@ impl Checker {
                 method_name,
             )?;
         }
-        if self.constructor_provenance_allows(&actual, required_trait, &arg.ty) {
+        if self
+            .constructor_provenance_allows(&actual, required_trait, &arg.ty)
+            .map_err(|error| error.at_span(&arg.span))?
+        {
             return Ok(());
         }
         Err(self.trait_failure(
@@ -713,32 +716,35 @@ impl Checker {
         trait_key: &str,
         expected: &Ty,
         actual: &Ty,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         let expected = self.resolve_ty(expected);
         let actual = self.resolve_ty(actual);
         // A concrete value can expose a constructor capability. An abstract
         // caller-owned carrier cannot be chosen by a nominal body annotation.
         let Ty::SelfApp(items) = &expected else {
-            return false;
+            return Ok(false);
         };
         let Some((_, abstract_slots)) = Self::constructor_application_parts(items) else {
-            return false;
+            return Ok(false);
         };
-        let concrete_slots =
-            match self.constructor_application_slots_for_trait(trait_key, &actual) {
-                ConstructorSlotsOutcome::Projected(slots) => slots,
-                ConstructorSlotsOutcome::Deferred { .. }
-                | ConstructorSlotsOutcome::Rejected { .. } => return false,
-            };
+        let concrete_slots = match self
+            .constructor_application_slots_for_trait(trait_key, &actual)
+            .into_checked()?
+        {
+            ConstructorSlotsOutcome::Projected(slots) => slots,
+            ConstructorSlotsOutcome::Deferred { .. } | ConstructorSlotsOutcome::Rejected { .. } => {
+                return Ok(false)
+            }
+        };
         if abstract_slots.len() != concrete_slots.len() {
-            return false;
+            return Ok(false);
         }
 
         let substitutions = self.substitutions.clone();
-        let slots_ok = abstract_slots
-            .iter()
-            .zip(concrete_slots.iter())
-            .all(|(expected_slot, actual_slot)| self.types_compatible(expected_slot, actual_slot));
+        let slots_ok = try_all(
+            abstract_slots.iter().zip(concrete_slots.iter()),
+            |(expected_slot, actual_slot)| self.types_compatible(expected_slot, actual_slot),
+        );
         self.substitutions = substitutions;
         slots_ok
     }
@@ -1575,15 +1581,18 @@ impl Checker {
                         self.type_fact(SourceRole::Annotation, Self::ast_ty_span(ast_ty), &expected), self.type_fact(SourceRole::Value, &typed_rhs.span, &typed_rhs.ty),
                         TypeDiagnosticReason::AnnotationTypeMismatch, DiagnosticOrigin::Annotation, "binding", 0);
                     if let Err(error) = relation {
+                        if error.reason() != Some(TypeDiagnosticReason::AnnotationTypeMismatch) {
+                            return Err(error);
+                        }
                         let constructor_coercion = self
                             .constructor_trait_key_for_ast_ty(ast_ty)
-                            .is_some_and(|trait_key| {
+                            .map(|trait_key| {
                                 self.constructor_annotation_compatible(
                                     &trait_key,
                                     &expected,
                                     &typed_rhs.ty,
                                 )
-                            });
+                            }).transpose().map_err(|error| error.at_span(Self::ast_ty_span(ast_ty)))?.unwrap_or(false);
                         if constructor_coercion {
                             typed_rhs.ty = expected.clone();
                         } else {
@@ -2156,10 +2165,10 @@ impl Checker {
                 Ty::Var(variable) if self.constructor_witness_traits.contains_key(&variable) => {
                     let checkpoint = self.candidate_probe_checkpoint();
                     let matched = self.match_explicit_constructor_occurrence(variable, explicit_ty);
-                    if !matched {
+                    if !matches!(matched, Ok(true)) {
                         self.rollback_candidate_probe(checkpoint);
                     }
-                    !matched
+                    !matched.map_err(|error| error.at_span(constraint.span()))?
                 }
                 _ => self
                     .assert_type_relation(
@@ -2449,6 +2458,9 @@ impl Checker {
                 argument.ordinal,
             );
             if let Err(error) = relation {
+                if error.reason() != Some(TypeDiagnosticReason::ArgumentTypeMismatch) {
+                    return super::signatures::SolveState::Failed(error);
+                }
                 if let Some(ordinal) = self.conflicting_return_type_argument_ordinal(
                     &argument.expected,
                     &argument.actual,
@@ -2504,11 +2516,22 @@ impl Checker {
                                 .map(|previous| self.resolve_ty(&previous.actual))
                                 .unwrap_or_else(|| self.resolve_ty(witness));
                             let actual_carrier = self.resolve_ty(&argument.actual);
-                            let reason = match self.constructor_carrier_relation(
-                                &family_trait,
-                                &expected_carrier,
-                                &actual_carrier,
-                            ) {
+                            let relation = self
+                                .constructor_carrier_relation(
+                                    &family_trait,
+                                    &expected_carrier,
+                                    &actual_carrier,
+                                )
+                                .into_checked();
+                            let relation = match relation {
+                                Ok(relation) => relation,
+                                Err(error) => {
+                                    return super::signatures::SolveState::Failed(
+                                        error.at_span(&argument.span),
+                                    )
+                                }
+                            };
+                            let reason = match relation {
                                 ConstructorCarrierRelation::SameCarrier => {
                                     TypeDiagnosticReason::TypePayloadMismatch
                                 }
@@ -2583,16 +2606,23 @@ impl Checker {
         for obligation in &constraints.obligations {
             let subject = self.resolve_ty(&obligation.subject);
             let trait_key = &obligation.trait_name;
-            let constructor_head_satisfies = matches!(
-                &obligation.subject,
-                Ty::Var(variable) if self.constructor_witness_traits.contains_key(variable)
-            ) && matches!(
-                self.constructor_head_projection(trait_key, &subject),
-                ConstructorProjectionOutcome::Applicable { .. }
-            );
-            if !constructor_head_satisfies
-                && !self.ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key))
-            {
+            let obligation_satisfied = (|| -> Result<bool, TypeError> {
+                let constructor_head_satisfies = matches!(
+                    &obligation.subject,
+                    Ty::Var(variable) if self.constructor_witness_traits.contains_key(variable)
+                ) && matches!(
+                    self.constructor_head_projection(trait_key, &subject)
+                        .into_checked()?,
+                    ConstructorProjectionOutcome::Applicable { .. }
+                );
+                Ok(constructor_head_satisfies
+                    || self.ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key))?)
+            })();
+            let obligation_satisfied = match obligation_satisfied {
+                Ok(satisfied) => satisfied,
+                Err(error) => return super::signatures::SolveState::Failed(error.at_span(span)),
+            };
+            if !obligation_satisfied {
                 let reason = if matches!(subject, Ty::Var(var) if self.rigid_tyvars.contains(&var))
                 {
                     TypeDiagnosticReason::MissingGenericBound
@@ -3227,8 +3257,8 @@ impl Checker {
 
         if !expected_kind.is_atomic()
             || expected_kind != actual_kind
-            || !self.types_compatible(expected_source, actual_source)
-            || !self.types_compatible(expected_focus, actual_focus)
+            || !self.types_compatible(expected_source, actual_source)?
+            || !self.types_compatible(expected_focus, actual_focus)?
         {
             return Err(TypeError {
                 structured: None,
@@ -3873,7 +3903,7 @@ impl Checker {
             Box::new(body),
         );
         let typed = self.check_node_with_expected(&synthetic, Some(&expected_ty))?;
-        if !self.types_compatible(&expected_ty, &typed.ty) {
+        if !self.types_compatible(&expected_ty, &typed.ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -4089,7 +4119,7 @@ impl Checker {
         let Ty::Func(params, ret) = &expected_ty else {
             return self.check_app(span, func, args);
         };
-        if params.len() != 2 || !self.types_compatible(&params[0], &params[1]) {
+        if params.len() != 2 || !self.types_compatible(&params[0], &params[1])? {
             return self.check_app(span, func, args);
         }
         let [ResolvedRecordLitArg::Positional(compare_expr), ResolvedRecordLitArg::Positional(key_expr)] =
@@ -4748,7 +4778,10 @@ impl Checker {
         span: &Span,
         operation: &str,
     ) -> Result<Ty, TypeError> {
-        match outcome {
+        match outcome
+            .into_checked()
+            .map_err(|error| error.at_span(span))?
+        {
             ConstructorApplicationOutcome::Applied(ty) => Ok(ty),
             ConstructorApplicationOutcome::Deferred { waiting_on } => {
                 let mut error = self.ambiguous_constructor_result(trait_name, operation, span);
@@ -6326,9 +6359,10 @@ impl Checker {
                 // establish Self. Probe without committing failed substitutions.
                 // An incompatible context is necessarily rejected by the outside
                 // annotation, return, or argument relation; it is not accepted here.
-                let compatible = self.with_type_relation_probe(&[expected, &ret_ty], |checker| {
-                    checker.types_compatible(expected, &ret_ty)
-                });
+                let compatible = self
+                    .with_type_relation_probe(&[expected, &ret_ty], |checker| {
+                        checker.types_compatible(expected, &ret_ty)
+                    })?;
                 if compatible {
                     self.assert_trait_return_context(
                         expected,
@@ -6541,8 +6575,8 @@ impl Checker {
             _ => false,
         };
         let typed_func = if explicit.is_some() || has_named_signature {
-            let (mut typed, signature, return_type_arguments) = self
-                .instantiate_named_callable_signature(span, named_target, explicit.as_deref())?;
+            let (mut typed, signature, return_type_arguments) =
+                self.instantiate_named_callable_signature(span, named_target, explicit.as_deref())?;
             let constraints =
                 self.call_constraint_set(signature, return_type_arguments, None, span, &typed.ty);
             self.apply_return_type_argument_constraints(&constraints)?;
@@ -7297,24 +7331,32 @@ impl Checker {
         }
         let typed_value = self.check_node(value)?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let mut carrier_evidence = expected.and_then(|ty| {
-            match self.constructor_context_type_for(trait_name, ty, &value_ty) {
+        let mut carrier_evidence = match expected {
+            Some(ty) => match self
+                .constructor_context_type_for(trait_name, ty, &value_ty)
+                .into_checked()
+                .map_err(|error| error.at_span(span))?
+            {
                 ConstructorApplicationOutcome::Applied(context) => Some(context),
                 ConstructorApplicationOutcome::Deferred { .. }
                 | ConstructorApplicationOutcome::Rejected { .. } => None,
-            }
-        });
+            },
+            None => None,
+        };
         if carrier_evidence.is_none() && Self::explicit_type_args(helper).is_some() {
             let ResolvedRecordLitArg::Positional(receiver) = &args[receiver_index] else {
                 unreachable!()
             };
             let typed = self.check_node(receiver)?;
-            carrier_evidence =
-                match self.constructor_context_type_for(trait_name, &typed.ty, &value_ty) {
-                    ConstructorApplicationOutcome::Applied(context) => Some(context),
-                    ConstructorApplicationOutcome::Deferred { .. }
-                    | ConstructorApplicationOutcome::Rejected { .. } => None,
-                };
+            carrier_evidence = match self
+                .constructor_context_type_for(trait_name, &typed.ty, &value_ty)
+                .into_checked()
+                .map_err(|error| error.at_span(&typed.span))?
+            {
+                ConstructorApplicationOutcome::Applied(context) => Some(context),
+                ConstructorApplicationOutcome::Deferred { .. }
+                | ConstructorApplicationOutcome::Rejected { .. } => None,
+            };
         }
         if carrier_evidence.is_none() {
             for (index, (argument, parameter)) in args.iter().zip(declared_params).enumerate() {
@@ -7383,14 +7425,15 @@ impl Checker {
                 operator.clone(),
                 Some(&candidate),
             );
+            self.rollback_candidate_probe(checkpoint);
             match result {
                 Ok(_) => accepted.push(candidate.clone()),
+                Err(error) if carrier_evidence.is_some() => return Err(error),
                 Err(error) => failures.push(CandidateFailureData {
                     candidate_type: self.diagnostic_ty_name(&candidate),
                     detail: error.message,
                 }),
             }
-            self.rollback_candidate_probe(checkpoint);
         }
         if !accepted.is_empty() && carrier_evidence.is_none() {
             return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
@@ -7961,7 +8004,7 @@ impl Checker {
                 span.clone(),
             ));
         }
-        self.types_compatible(input, observed_ty);
+        self.types_compatible(input, observed_ty)?;
         let pre_args = pre_args
             .iter()
             .cloned()
@@ -8792,7 +8835,7 @@ impl Checker {
     ) -> Result<TypedFacetPath, TypeError> {
         let mut current_source = if let Some(source_ty_hint) = path.source_ty_hint.clone() {
             if let Some(expected_source) = expected_source {
-                if !self.types_compatible(&source_ty_hint, expected_source) {
+                if !self.types_compatible(&source_ty_hint, expected_source)? {
                     return Err(TypeError {
                         structured: None,
                         message: format!(
@@ -8928,7 +8971,7 @@ impl Checker {
             self.resolve_facet_path_from_node(right, span, Some(&left_path.focus_ty))?;
         self.ensure_deferred_facet_slots(operator_name, &right_path, span)?;
 
-        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
+        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -9159,7 +9202,7 @@ impl Checker {
             ),
             FacetPathInput::Capture(path) => {
                 let path = self.specialize_pending_facet_path(path, span, Some(source_value_ty))?;
-                if !self.types_compatible(&path.source_ty, source_value_ty) {
+                if !self.types_compatible(&path.source_ty, source_value_ty)? {
                     return Err(TypeError {
                         structured: None,
                         message: format!(
@@ -9205,7 +9248,7 @@ impl Checker {
         let path_node = self.check_node_with_expected(path_expr, path_expected)?;
         let path = self.resolve_facet_path_from_node(path_node, span, Some(source_value_ty))?;
 
-        if !self.types_compatible(&path.source_ty, source_value_ty) {
+        if !self.types_compatible(&path.source_ty, source_value_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -9448,7 +9491,7 @@ impl Checker {
             }
             (Ty::List(inner), TypedFacetSegment::ListIndex { .. }) => {
                 let rebuilt = self.rebuild_facet_source_type(&inner, rest, replacement_ty, span)?;
-                if !self.types_compatible(&inner, &rebuilt) {
+                if !self.types_compatible(&inner, &rebuilt)? {
                     return Err(TypeError {
                         structured: None,
                         message:
@@ -9464,7 +9507,7 @@ impl Checker {
                 let expected = Ty::List(inner.clone());
                 let rebuilt =
                     self.rebuild_facet_source_type(&expected, rest, replacement_ty, span)?;
-                if !self.types_compatible(&expected, &rebuilt) {
+                if !self.types_compatible(&expected, &rebuilt)? {
                     return Err(TypeError {
                         structured: None,
                         message:
@@ -9482,7 +9525,7 @@ impl Checker {
                 let value_ty = args[0].clone();
                 let rebuilt =
                     self.rebuild_facet_source_type(&value_ty, rest, replacement_ty, span)?;
-                if !self.types_compatible(&value_ty, &rebuilt) {
+                if !self.types_compatible(&value_ty, &rebuilt)? {
                     return Err(TypeError {
                         structured: None,
                         message:
@@ -9512,7 +9555,7 @@ impl Checker {
                         hint: None,
                     })?;
                 let enum_template = variant.enum_ty.clone();
-                if !self.types_compatible(&variant.enum_ty, &source) {
+                if !self.types_compatible(&variant.enum_ty, &source)? {
                     return Err(TypeError {
                         structured: None,
                         message: "Facet enum path is inconsistent with its source type".into(),
@@ -9722,11 +9765,15 @@ impl Checker {
                         }
                         replacement_slots.to_vec()
                     }
-                    _ => match self.constructor_application_slots_for_witness(
-                        template_witness,
-                        template_slots.len(),
-                        &resolved_replacement,
-                    ) {
+                    _ => match self
+                        .constructor_application_slots_for_witness(
+                            template_witness,
+                            template_slots.len(),
+                            &resolved_replacement,
+                        )
+                        .into_checked()
+                        .map_err(|error| error.at_span(span))?
+                    {
                         ConstructorSlotsOutcome::Projected(slots) => slots,
                         ConstructorSlotsOutcome::Deferred { .. }
                         | ConstructorSlotsOutcome::Rejected { .. } => {
@@ -9824,7 +9871,7 @@ impl Checker {
                 hint: None,
             });
         };
-        if !self.types_compatible(expected_field, rebuilt_field) {
+        if !self.types_compatible(expected_field, rebuilt_field)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -10128,7 +10175,7 @@ impl Checker {
         self.validate_nominal_type_well_formed(&update_source_ty, span, false)?;
 
         if !matches!(path.update_focus_ty, Ty::Hole)
-            && !self.types_compatible(&path.update_focus_ty, &replacement_ty)
+            && !self.types_compatible(&path.update_focus_ty, &replacement_ty)?
         {
             return Err(TypeError {
                 structured: None,
@@ -10142,7 +10189,7 @@ impl Checker {
             });
         }
         if !matches!(path.update_source_ty, Ty::Hole)
-            && !self.types_compatible(&path.update_source_ty, &update_source_ty)
+            && !self.types_compatible(&path.update_source_ty, &update_source_ty)?
         {
             return Err(TypeError {
                 structured: None,
@@ -10590,7 +10637,7 @@ impl Checker {
         let mode = if require_result_focus {
             TypedFacetOverMode::FocusResult
         } else if let Some(value_focus_ty) = &value_focus_ty {
-            if self.types_compatible(value_focus_ty, &in_ty) {
+            if self.types_compatible(value_focus_ty, &in_ty)? {
                 TypedFacetOverMode::FocusValue
             } else if allow_result_focus_input {
                 TypedFacetOverMode::FocusResult
@@ -10616,7 +10663,7 @@ impl Checker {
             (TypedFacetOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
             _ => &resolved_focus_ty,
         };
-        if !self.types_compatible(expected_input_ty, &in_ty) {
+        if !self.types_compatible(expected_input_ty, &in_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -10657,7 +10704,7 @@ impl Checker {
                 ),
             });
         }
-        if !self.types_compatible(&Ty::Error, &out_err) {
+        if !self.types_compatible(&Ty::Error, &out_err)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -11008,7 +11055,7 @@ impl Checker {
                         .map(|_| self.env.fresh_tyvar())
                         .collect::<Vec<_>>();
                     let ret = self.env.fresh_tyvar();
-                    if self.bind_tyvar(var, &Ty::Func(params, Box::new(ret))) {
+                    if self.bind_tyvar(var, &Ty::Func(params, Box::new(ret)))? {
                         return self.check_app_with_expected(span, func, args, expected_return);
                     }
                 }
@@ -11947,7 +11994,7 @@ impl Checker {
             })
             .ok_or_else(|| self.typecheck_invariant_error("WorkerStrategy type metadata", span))?;
         let typed_strategy = self.check_node_with_expected(strategy_expr, Some(&strategy_ty))?;
-        if !self.types_compatible(&strategy_ty, &typed_strategy.ty) {
+        if !self.types_compatible(&strategy_ty, &typed_strategy.ty)? {
             return Err(self.type_relation_error(
                 &strategy_ty,
                 &typed_strategy.ty,
@@ -12103,7 +12150,7 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for (expected, actual) in remaining_params.iter().zip(typed_args.iter()) {
-            if !self.types_compatible(expected, &actual.ty) {
+            if !self.types_compatible(expected, &actual.ty)? {
                 return Ok(None);
             }
         }
@@ -12166,7 +12213,7 @@ impl Checker {
             }
             ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
         };
-        if !self.types_compatible(&pid_ty, &typed_pid.ty) {
+        if !self.types_compatible(&pid_ty, &typed_pid.ty)? {
             return Ok(None);
         }
 
@@ -12181,7 +12228,7 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for (expected, actual) in params.iter().zip(typed_args.iter()) {
-            if !self.types_compatible(expected, &actual.ty) {
+            if !self.types_compatible(expected, &actual.ty)? {
                 return Ok(None);
             }
         }
@@ -13169,8 +13216,9 @@ impl Checker {
             };
             let compatible = callable_shape
                 .as_ref()
-                .is_some_and(|shape| self.types_compatible(shape, expected_ty));
-            if compatible {
+                .map(|shape| self.types_compatible(shape, expected_ty))
+                .transpose();
+            if matches!(compatible, Ok(Some(true))) {
                 target_ty = self.resolve_ty(&target_ty);
             } else {
                 // Operator checking supplies a provisional callable shape so
@@ -13179,6 +13227,7 @@ impl Checker {
                 // leak partial type bindings.
                 self.rollback_candidate_probe(checkpoint);
             }
+            compatible?;
         }
         if let Ty::Facet(_, source_ty, focus_ty, ..) = &target_ty {
             let view_id = self.runtime_helper_id("Facet::view", span)?;
@@ -13653,7 +13702,7 @@ impl Checker {
             }
         };
 
-        if !self.types_compatible(&typed_head.ty, &tail_elem_ty) {
+        if !self.types_compatible(&typed_head.ty, &tail_elem_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -13693,7 +13742,7 @@ impl Checker {
 
         let elem_ty = typed_elems[0].ty.clone();
         for te in typed_elems.iter().skip(1) {
-            if !self.types_compatible(&elem_ty, &te.ty) {
+            if !self.types_compatible(&elem_ty, &te.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -13731,7 +13780,7 @@ impl Checker {
         for entry in entries {
             let typed_key = self.check_node(&entry.key)?;
             self.ensure_no_runtime_facet_value(&typed_key, "HashMap literal key")?;
-            if !self.types_compatible(&Ty::Str, &typed_key.ty) {
+            if !self.types_compatible(&Ty::Str, &typed_key.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -13753,7 +13802,7 @@ impl Checker {
 
         let value_ty = typed_entries[0].1.ty.clone();
         for (_, value) in typed_entries.iter().skip(1) {
-            if !self.types_compatible(&value_ty, &value.ty) {
+            if !self.types_compatible(&value_ty, &value.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -14646,7 +14695,7 @@ impl Checker {
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_cond = self.check_node(cond)?;
-        if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
+        if !self.types_compatible(&Ty::Bool, &typed_cond.ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -14831,7 +14880,7 @@ impl Checker {
         }
         let (handler_in, handler_out) =
             self.unary_function_parts(&typed_handler.ty, "recover_kind", &typed_handler.span)?;
-        if !self.types_compatible(&Ty::Error, &handler_in) {
+        if !self.types_compatible(&Ty::Error, &handler_in)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -14842,7 +14891,7 @@ impl Checker {
                 hint: None,
             });
         }
-        if !self.types_compatible(&expected_handler, &typed_handler.ty) {
+        if !self.types_compatible(&expected_handler, &typed_handler.ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -14892,7 +14941,7 @@ impl Checker {
         );
         let typed_value = self.check_node_with_expected(value, Some(&expected_result_ty))?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        if !self.types_compatible(&expected_result_ty, &value_ty) {
+        if !self.types_compatible(&expected_result_ty, &value_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -14923,7 +14972,7 @@ impl Checker {
                 Ty::List(inner) => {
                     let expr_ty = self.resolve_ty(&typed_expr.ty);
                     if let Ty::Result(ok, _) = &expr_ty {
-                        if self.types_compatible(ok.as_ref(), &Ty::Int) {
+                        if self.types_compatible(ok.as_ref(), &Ty::Int)? {
                             return Err(TypeError {
                                 structured: None,
                                 message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
@@ -14932,7 +14981,7 @@ impl Checker {
                             });
                         }
                     }
-                    if !self.types_compatible(&Ty::Int, &expr_ty) {
+                    if !self.types_compatible(&Ty::Int, &expr_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: "List Facet index expression must be Int".into(),
@@ -14964,7 +15013,7 @@ impl Checker {
                 {
                     let expr_ty = self.resolve_ty(&typed_expr.ty);
                     if let Ty::Result(ok, _) = &expr_ty {
-                        if self.types_compatible(ok.as_ref(), &Ty::Str) {
+                        if self.types_compatible(ok.as_ref(), &Ty::Str)? {
                             return Err(TypeError {
                                 structured: None,
                                 message: "Facet bracket expression must be plain String; unwrap Result<String> before using it".into(),
@@ -14973,7 +15022,7 @@ impl Checker {
                             });
                         }
                     }
-                    if !self.types_compatible(&Ty::Str, &expr_ty) {
+                    if !self.types_compatible(&Ty::Str, &expr_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: "HashMap Facet key expression must be String".into(),
@@ -15031,7 +15080,7 @@ impl Checker {
                     for typed_expr in [&typed_start, &typed_end] {
                         let expr_ty = self.resolve_ty(&typed_expr.ty);
                         if let Ty::Result(ok, _) = &expr_ty {
-                            if self.types_compatible(ok.as_ref(), &Ty::Int) {
+                            if self.types_compatible(ok.as_ref(), &Ty::Int)? {
                                 return Err(TypeError {
                                     structured: None,
                                     message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
@@ -15040,7 +15089,7 @@ impl Checker {
                                 });
                             }
                         }
-                        if !self.types_compatible(&Ty::Int, &expr_ty) {
+                        if !self.types_compatible(&Ty::Int, &expr_ty)? {
                             return Err(TypeError {
                                 structured: None,
                                 message: "List Facet index expression must be Int".into(),
@@ -15278,7 +15327,7 @@ impl Checker {
                     });
                 };
                 let variant = self.instantiate_enum_variant(&variant);
-                if !self.types_compatible(&variant.enum_ty, source_ty) {
+                if !self.types_compatible(&variant.enum_ty, source_ty)? {
                     return Err(TypeError {
                         structured: None,
                         message: format!(
@@ -15415,7 +15464,7 @@ impl Checker {
             hint: Some(Self::tuple_index_hint(tuple_items.len())),
         })?;
 
-        if !self.types_compatible(&focus_ty, &expected_focus) {
+        if !self.types_compatible(&focus_ty, &expected_focus)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -15505,7 +15554,7 @@ impl Checker {
         let (typed_segment, focus_ty, may_fail) =
             self.resolve_facet_segment_for_source_ty(&expected_source, segment, span, true)?;
         let focus_ty = self.resolve_ty(&focus_ty);
-        if !self.types_compatible(&focus_ty, &expected_focus) {
+        if !self.types_compatible(&focus_ty, &expected_focus)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -15605,7 +15654,7 @@ impl Checker {
             self.resolve_facet_segment_for_source_ty(&source_ty, segment, span, true)?;
         let focus_ty = self.resolve_ty(&focus_ty);
         if let Some(expected_focus_ty) = expected_focus_ty {
-            if !self.types_compatible(&focus_ty, &expected_focus_ty) {
+            if !self.types_compatible(&focus_ty, &expected_focus_ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(

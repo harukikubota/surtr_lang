@@ -1385,6 +1385,160 @@ mod applicability_tests {
     }
 
     #[test]
+    fn required_constructor_cycle_restores_relation_state_and_cannot_be_serialized() {
+        let mut checker = checker(
+            r#"
+deftrait First where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+deftrait Second where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+impl First for List<$A> where Self: Second {
+  def use(self: List<Int>) -> Int { Second::use(self) }
+}
+impl Second for List<$A> where Self: First {
+  def use(self: List<Int>) -> Int { First::use(self) }
+}
+"#,
+        );
+        let trait_key = checker.trait_key_by_short_name("First").unwrap();
+        let variable = checker.env.fresh_tyvar();
+        let Ty::Var(witness) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        checker
+            .constructor_witness_traits
+            .insert(witness, trait_key.clone());
+        let expected = Ty::Tuple(vec![
+            variable.clone(),
+            Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness), Ty::Int]),
+        ]);
+        let actual = Ty::Tuple(vec![Ty::Bool, Ty::List(Box::new(Ty::Int))]);
+        let span = Span { start: 10, end: 20 };
+        let substitutions = checker.substitutions.clone();
+        let bounds = checker.tyvar_bounds.clone();
+        let obligations = checker.pending_trait_obligations.clone();
+        let error = checker
+            .assert_type_relation(
+                &expected,
+                &actual,
+                checker.type_fact(diagnostics::SourceRole::Expected, &span, &expected),
+                checker.type_fact(diagnostics::SourceRole::Value, &span, &actual),
+                diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch,
+                diagnostics::DiagnosticOrigin::Call,
+                "accept",
+                0,
+            )
+            .expect_err("the second tuple element requires the cyclic proof");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+        );
+        assert_eq!(error.span, span);
+        assert_eq!(checker.substitutions, substitutions);
+        assert_eq!(checker.tyvar_bounds, bounds);
+        assert_eq!(checker.pending_trait_obligations, obligations);
+        let left = TypedNode {
+            ty: expected.clone(),
+            span: span.clone(),
+            node: TypedInner::Lit(spire::ast::Lit::Unit),
+        };
+        let right = TypedNode {
+            ty: actual.clone(),
+            span: span.clone(),
+            node: TypedInner::Lit(spire::ast::Lit::Unit),
+        };
+        for payload in [false, true] {
+            let error = if payload {
+                checker.assert_operand_relation(
+                    &expected,
+                    &actual,
+                    &left,
+                    &right,
+                    diagnostics::TypeDiagnosticReason::TypePayloadMismatch,
+                    "bind",
+                    "|>=",
+                    Some(&trait_key),
+                    diagnostics::SourceRole::LeftValue,
+                )
+            } else {
+                checker.assert_carrier_relation(
+                    &expected,
+                    &actual,
+                    &left,
+                    &right,
+                    &trait_key,
+                    "|>=",
+                    diagnostics::SourceRole::LeftValue,
+                )
+            }
+            .expect_err("operator decoration must retain the proof failure");
+            assert_eq!(
+                error.reason(),
+                Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+            );
+            assert!(matches!(
+                &error.structured.as_ref().unwrap().data,
+                diagnostics::DiagnosticData::TraitDispatch(_)
+            ));
+            let completed =
+                checker.complete_branch_error(error.clone(), &[&left, &right], &[None, None]);
+            assert_eq!(completed, error);
+            assert_eq!(checker.substitutions, substitutions);
+        }
+        checker.profiler.enabled = true;
+        let before = checker.profiler.snapshot();
+        let Ty::Var(bounded) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        checker
+            .tyvar_bounds
+            .insert(bounded, vec![trait_key.clone()]);
+        checker
+            .types_compatible(&Ty::Var(bounded), &Ty::List(Box::new(Ty::Int)))
+            .expect_err("bounded variable requires the cyclic proof");
+        let after = checker.profiler.snapshot();
+        assert_eq!(
+            after.types_compatible_calls,
+            before.types_compatible_calls + 1
+        );
+        assert_eq!(after.bind_tyvar_calls, before.bind_tyvar_calls + 1);
+        let Ty::Var(pending) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        checker.pending_trait_obligations.insert(
+            pending,
+            vec![PendingTraitObligation {
+                trait_id: trait_key.clone(),
+                args: vec![],
+                receiver: Ty::Var(pending),
+            }],
+        );
+        let error = checker
+            .bind_tyvar(pending, &Ty::List(Box::new(Ty::Int)))
+            .expect_err("pending required proof must not become false");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+        );
+        assert_eq!(checker.resolve_ty(&Ty::Var(pending)), Ty::Var(pending));
+        assert!(checker.pending_trait_obligations.contains_key(&pending));
+        let ConstructorProjectionOutcome::Rejected { failures } =
+            checker.constructor_projection(&trait_key, &Ty::List(Box::new(Ty::Int)))
+        else {
+            panic!("cyclic proof must be rejected")
+        };
+        let failed = ConstructorApplicationOutcome::Rejected { failures };
+        assert!(
+            bincode::serialize(&failed).is_err(),
+            "failed proof cannot enter a successful checkpoint"
+        );
+        let applied = ConstructorApplicationOutcome::Applied(Ty::Int);
+        let bytes = bincode::serialize(&applied).unwrap();
+        assert_eq!(
+            bincode::deserialize::<ConstructorApplicationOutcome>(&bytes).unwrap(),
+            applied
+        );
+    }
+
+    #[test]
     fn derived_method_keeps_a_synthetic_contract_identity() {
         let mut checker = checker(
             r#"
@@ -1839,7 +1993,7 @@ impl Context for Box<$A> {}
                 ),
             }],
         );
-        assert!(checker.bind_tyvar(source, &Ty::Var(alias)));
+        assert!(checker.bind_tyvar(source, &Ty::Var(alias)).unwrap());
         assert!(!checker.pending_trait_obligations.contains_key(&source));
         assert_eq!(
             checker.pending_trait_obligations[&alias],
@@ -1853,11 +2007,11 @@ impl Context for Box<$A> {}
             }]
         );
         assert!(
-            !checker.bind_tyvar(alias, &Ty::Bool),
+            !checker.bind_tyvar(alias, &Ty::Bool).unwrap(),
             "aliased nested obligation must still reject a mismatched concrete binding"
         );
         assert_eq!(checker.resolve_ty(&Ty::Var(alias)), Ty::Var(alias));
-        assert!(checker.bind_tyvar(alias, &Ty::Int));
+        assert!(checker.bind_tyvar(alias, &Ty::Int).unwrap());
         assert_eq!(checker.resolve_ty(&Ty::Var(source)), Ty::Int);
     }
 
@@ -2309,13 +2463,28 @@ impl Checker {
         }
         let proof_key = (trait_id, subject.clone());
         if !visiting.insert(proof_key.clone()) {
-            return Err(TypeError::new(
-                format!(
-                    "CyclicTraitObligation: {} for {}",
-                    self.trait_display_name(&trait_key),
-                    self.canonical_type_name(subject)
-                ),
-                Span { start: 0, end: 0 },
+            return Err(TypeError::from_structured(
+                diagnostics::StructuredDiagnostic {
+                    reason: diagnostics::TypeDiagnosticReason::CyclicTraitObligation.into(),
+                    origin: diagnostics::DiagnosticOrigin::TraitCall,
+                    data: diagnostics::DiagnosticData::TraitDispatch(
+                        diagnostics::TraitDispatchData {
+                            impl_declaration: None,
+                            trait_name: self.trait_display_name(&trait_key),
+                            trait_arguments: Vec::new(),
+                            method: None,
+                            subject_type: Some(self.canonical_type_name(subject)),
+                            dependency: None,
+                        },
+                    ),
+                    primary: diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::CallTarget,
+                        diagnostics::SourceId(0),
+                        Span { start: 0, end: 0 },
+                    ),
+                    related: Vec::new(),
+                    remediation: None,
+                },
             ));
         }
         let candidates = self.trait_impl_candidate_keys(&trait_key);
@@ -2511,7 +2680,7 @@ impl Checker {
         if let Ok(CandidateApplicability::Applicable(instantiation)) = &result {
             if !instantiation.caller_substitution.is_empty() {
                 for (var, ty) in &instantiation.caller_substitution {
-                    if !self.types_compatible(&Ty::Var(*var), ty) {
+                    if !self.types_compatible(&Ty::Var(*var), ty)? {
                         return Err(TypeError::new(
                             "SelectedTraitMethodInferenceConflict",
                             Span { start: 0, end: 0 },
@@ -3372,9 +3541,11 @@ impl Checker {
                         failures.push(ConstructorProjectionFailure::UnsatisfiedConstraints);
                         continue;
                     }
-                    Err(_) => {
+                    Err(error) => {
                         return ConstructorProjectionOutcome::Rejected {
-                            failures: vec![ConstructorProjectionFailure::Canonicalization],
+                            failures: vec![ConstructorProjectionFailure::ProofError(Box::new(
+                                error,
+                            ))],
                         };
                     }
                 }

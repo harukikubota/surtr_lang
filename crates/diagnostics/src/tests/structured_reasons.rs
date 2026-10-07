@@ -87,6 +87,7 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             })
         }
         NoApplicableTraitImplementation
+        | CyclicTraitObligation
         | UnresolvedTraitMethodInstantiation
         | MissingTraitDispatchTarget => DiagnosticData::TraitDispatch(TraitDispatchData {
             impl_declaration: None,
@@ -408,6 +409,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         MissingGenericBound,
         MissingTraitCapability,
         NoApplicableTraitImplementation,
+        CyclicTraitObligation,
         UnresolvedTraitMethodInstantiation,
         MissingTraitDispatchTarget,
         MissingTypeConstructorConstraint,

@@ -1153,7 +1153,7 @@ impl Checker {
             if let Some((actual_witness, _)) = Self::constructor_application_parts(actual_items) {
                 let same_witness = self.resolve_ty(witness) == self.resolve_ty(actual_witness);
                 if same_witness
-                    && self.types_compatible_with_rigid(expected_ret, &actual, rigid_tyvars)
+                    && self.types_compatible_with_rigid(expected_ret, &actual, rigid_tyvars)?
                 {
                     // A definition generic over a direct constructor input
                     // keeps its body abstract. Pending trait calls are
@@ -1178,7 +1178,10 @@ impl Checker {
                 DiagnosticOrigin::Return,
             ));
         }
-        let concrete_slots = match self.constructor_application_slots_for_trait(&trait_key, &actual)
+        let concrete_slots = match self
+            .constructor_application_slots_for_trait(&trait_key, &actual)
+            .into_checked()
+            .map_err(|error| error.at_span(&self.return_mismatch_span(typed_body)))?
         {
             ConstructorSlotsOutcome::Projected(slots) => slots,
             ConstructorSlotsOutcome::Deferred { waiting_on } => {
@@ -1213,19 +1216,19 @@ impl Checker {
             }
         };
         if expected_slots.len() != concrete_slots.len()
-            || !expected_slots
-                .iter()
-                .zip(concrete_slots.iter())
-                .all(|(expected, actual)| {
+            || !try_all(
+                expected_slots.iter().zip(concrete_slots.iter()),
+                |(expected, actual)| {
                     self.types_compatible_with_rigid(expected, actual, rigid_tyvars)
-                })
+                },
+            )?
             || !self.bind_tyvar(
                 match witness {
                     Ty::Var(var) => *var,
                     _ => unreachable!("fresh constructor witness must be a type variable"),
                 },
                 &actual,
-            )
+            )?
         {
             return Err(TypeError {
                 structured: None,
@@ -1733,9 +1736,12 @@ impl Checker {
         let return_constructor_coercion = ret_ty
             .as_ref()
             .and_then(|ty| self.constructor_trait_key_for_signature_ty(ty))
-            .is_some_and(|trait_key| {
+            .map(|trait_key| {
                 self.constructor_annotation_compatible(&trait_key, &expected_ret, &typed_body.ty)
-            });
+                    .map_err(|error| error.at_span(&typed_body.span))
+            })
+            .transpose()?
+            .unwrap_or(false);
         let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
         let relation = self.assert_value_type_relation(
             &expected_ret,
@@ -1957,7 +1963,7 @@ impl Checker {
         )?;
 
         let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
-        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
+        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars)? {
             let actual_ret = self.resolve_ty(&typed_body.ty);
             let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
@@ -3125,7 +3131,7 @@ impl Checker {
                     hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                 });
             }
-            if !self.types_compatible(def_ty, &typed_val.ty) {
+            if !self.types_compatible(def_ty, &typed_val.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -3248,7 +3254,7 @@ impl Checker {
                 let payload = match variant.short_name.as_str() {
                     "Ok" => inner.ty.clone(),
                     "Err" => {
-                        if !self.types_compatible(&inner.ty, &Ty::Error) {
+                        if !self.types_compatible(&inner.ty, &Ty::Error)? {
                             return Err(TypeError::new(
                                 "MatchResult::Err requires an Error value",
                                 inner.span.clone(),
@@ -3563,9 +3569,9 @@ impl Checker {
                     def.fields.clone(),
                 ),
             );
-            let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
+            let returns_self = self.types_compatible(&expected_self_ty, &ret_ty)?;
             let returns_result_self = match self.resolve_ty(&ret_ty) {
-                Ty::Result(ok, _) => self.types_compatible(&expected_self_ty, ok.as_ref()),
+                Ty::Result(ok, _) => self.types_compatible(&expected_self_ty, ok.as_ref())?,
                 _ => false,
             };
             if !(returns_self || returns_result_self) {
@@ -4015,7 +4021,7 @@ impl Checker {
             })?;
         let typed_show = *show_checker.resolve_typed_node(typed_show);
         self.absorb_child_progress(&show_checker);
-        if !self.types_compatible(&Ty::Str, &typed_show.ty) {
+        if !self.types_compatible(&Ty::Str, &typed_show.ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(

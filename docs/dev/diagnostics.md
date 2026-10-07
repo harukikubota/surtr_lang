@@ -93,7 +93,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | type relation / callable | `ArgumentTypeMismatch`, `ReturnTypeMismatch`, `AnnotationTypeMismatch`, `NotCallable`, `CallableShapeMismatch`, `CallableSignatureMetadataMismatch` |
 | ReturnTypeArgument | `ReturnTypeArgumentArityMismatch`, `ReturnTypeArgumentMismatch`, `AmbiguousReturnTypeArgument`, `DuplicateReturnTypeArgumentInput`, `MissingReturnTypeArgument`, `UnusedReturnTypeArgument`, `ConcreteReturnTypeArgumentInDefinition`, `InlineReturnTypeArgumentConstraint` |
 | Enum constructor | `UnresolvedEnumConstructorTypeArgument` |
-| constraint / Trait | `InvalidTraitConstraintSubject`, `MissingGenericBound`, `MissingTraitCapability`, `NoApplicableTraitImplementation`, `UnresolvedTraitMethodInstantiation`, `MissingTraitDispatchTarget` |
+| constraint / Trait | `InvalidTraitConstraintSubject`, `MissingGenericBound`, `MissingTraitCapability`, `NoApplicableTraitImplementation`, `CyclicTraitObligation`, `UnresolvedTraitMethodInstantiation`, `MissingTraitDispatchTarget` |
 | TypeCtorTrait | `MissingTypeConstructorConstraint`, `TypeConstructorFamilyMismatch`, `TypePayloadMismatch`, `MissingTypeConstructorCapability` |
 | Trait method contract | `TraitMethodTypeListMismatch`, `TraitMethodTypeListArityMismatch`, `TraitMethodConstraintMismatch` |
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
@@ -105,6 +105,11 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
 `MissingTypeConstructorCapability`はconstructor carrier occurrenceの能力不足であり、相互に置換しない。
 未確定inference variableのobligationは`Deferred`として保持し、候補数や登録順からreasonや型を決めない。
+`CyclicTraitObligation`は、同じTraitとcanonical subjectの証明を再訪した循環を表す。
+Traitとsubjectを構造化して保持し、constructor投影でも能力不足やmetadata破損へ置き換えない。
+必須の能力検証では要求元のcall / annotation位置をprimaryにし、元のreasonと原因を返す。
+候補headが一致しないimplや、要求されていないTraitの能力列挙で見つけた失敗は、
+無関係なcallの循環診断へ昇格させない。
 `TraitImplementationForbidden`は対象型の実装権限に反する宣言に使い、`Policy` dataに対象型、Trait、
 制限理由を保持する。impl対象とTrait名をそれぞれ source fact に結び、単なる能力不足と区別する。
 生成された `Eq` / `Show` の実装本体または `Eq` の呼出しで能力が不足するときは、元のTrait失敗reasonを維持し、

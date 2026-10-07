@@ -92,15 +92,17 @@ impl Checker {
                 let coerce = self.with_type_relation_probe(
                     &[rt, &typed_arm.body.ty, &typed_scrut.ty],
                     |checker| {
-                        !checker.types_compatible(rt, &typed_arm.body.ty)
-                            && checker.can_coerce_err_only_result_self_arm(
-                                &typed_scrut,
-                                &typed_arms,
-                                &typed_arm,
-                                rt,
-                            )
+                        Ok::<_, TypeError>(
+                            !checker.types_compatible(rt, &typed_arm.body.ty)?
+                                && checker.can_coerce_err_only_result_self_arm(
+                                    &typed_scrut,
+                                    &typed_arms,
+                                    &typed_arm,
+                                    rt,
+                                )?,
+                        )
                     },
-                );
+                )?;
                 if coerce {
                     typed_arm.body.ty = self.resolve_ty(rt);
                 }
@@ -247,44 +249,44 @@ impl Checker {
         previous_arms: &[TypedMatchArm],
         arm: &TypedMatchArm,
         expected_ty: &Ty,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         if arm.guard.is_some() || !matches!(arm.pattern, TypedMatchPattern::Wildcard) {
-            return false;
+            return Ok(false);
         }
 
         let (scrut_ok, scrut_err) = match self.resolve_ty(&scrutinee.ty) {
             Ty::Result(ok, err) => (ok, err),
-            _ => return false,
+            _ => return Ok(false),
         };
         let (expected_ok, expected_err) = match self.resolve_ty(expected_ty) {
             Ty::Result(ok, err) => (ok, err),
-            _ => return false,
+            _ => return Ok(false),
         };
 
-        if !self.types_compatible(scrut_err.as_ref(), expected_err.as_ref()) {
-            return false;
+        if !self.types_compatible(scrut_err.as_ref(), expected_err.as_ref())? {
+            return Ok(false);
         }
 
-        if self.types_compatible(scrut_ok.as_ref(), expected_ok.as_ref()) {
-            return false;
+        if self.types_compatible(scrut_ok.as_ref(), expected_ok.as_ref())? {
+            return Ok(false);
         }
 
         let (scrut_id, body_id) = match (&scrutinee.node, &arm.body.node) {
             (TypedInner::Var(scrut_id), TypedInner::Var(body_id)) => {
                 (scrut_id.unique_id, body_id.unique_id)
             }
-            _ => return false,
+            _ => return Ok(false),
         };
         if scrut_id != body_id {
-            return false;
+            return Ok(false);
         }
 
-        previous_arms.iter().any(|prev_arm| {
+        Ok(previous_arms.iter().any(|prev_arm| {
             prev_arm.guard.is_none()
                 && Self::match_or_alternative_matches(&prev_arm.pattern, &|pattern| {
                     matches!(pattern, TypedMatchPattern::Constructor { tag: 0, .. })
                 })
-        })
+        }))
     }
 
     pub(super) fn check_match_exhaustive(
@@ -528,7 +530,7 @@ impl Checker {
             );
             let typed_guard = if let Some(guard) = &arm.guard {
                 let typed_guard = self.check_node(guard)?;
-                if !self.types_compatible(&Ty::Bool, &typed_guard.ty) {
+                if !self.types_compatible(&Ty::Bool, &typed_guard.ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::MatchGuardTypeMismatch,
                         PatternKind::Match,
@@ -630,7 +632,7 @@ impl Checker {
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                if !self.types_compatible(&expected, expected_ty) {
+                if !self.types_compatible(&expected, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -656,7 +658,7 @@ impl Checker {
                 })?;
                 let expected_ty = self.resolve_ty(expected_ty);
                 let pinned_ty = self.resolve_ty(&pinned_ty);
-                if !self.types_compatible(&pinned_ty, &expected_ty) {
+                if !self.types_compatible(&pinned_ty, &expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Pin,
@@ -681,7 +683,7 @@ impl Checker {
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    if !self.types_compatible(&expected, expected_ty) {
+                    if !self.types_compatible(&expected, expected_ty)? {
                         return Err(self.pattern_error(
                             TypeDiagnosticReason::PatternTypeMismatch,
                             PatternKind::Other,
@@ -746,7 +748,7 @@ impl Checker {
                 Ok(TypedMatchPattern::Record(typed))
             }
             ResolvedPattern::BoolLit(span, b) => {
-                if !self.types_compatible(&Ty::Bool, expected_ty) {
+                if !self.types_compatible(&Ty::Bool, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -762,7 +764,7 @@ impl Checker {
                 Ok(TypedMatchPattern::BoolLit(*b))
             }
             ResolvedPattern::IntLit(span, n) => {
-                if !self.types_compatible(&Ty::Int, expected_ty) {
+                if !self.types_compatible(&Ty::Int, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -778,7 +780,7 @@ impl Checker {
                 Ok(TypedMatchPattern::IntLit(n.clone()))
             }
             ResolvedPattern::StrLit(span, s) => {
-                if !self.types_compatible(&Ty::Str, expected_ty) {
+                if !self.types_compatible(&Ty::Str, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -874,7 +876,7 @@ impl Checker {
                             {
                                 return Err(Self::deferred_pattern_error("Pattern alternatives must bind the same variables in the same order", id, diagnostics::ResolveDiagnosticReason::Pattern));
                             }
-                            if !self.types_compatible(expected_ty, actual_ty)
+                            if !self.types_compatible(expected_ty, actual_ty)?
                                 || self.resolve_ty(expected_ty) != self.resolve_ty(actual_ty)
                             {
                                 return Err(self.pattern_error(
@@ -1094,7 +1096,7 @@ impl Checker {
                         &ctor_id.span,
                     ));
                 }
-                if !self.types_compatible(&variant.enum_ty, expected_ty) {
+                if !self.types_compatible(&variant.enum_ty, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Constructor,
@@ -1203,7 +1205,7 @@ impl Checker {
                         pre_args,
                         &extractor_id.span,
                     )?;
-                if !self.types_compatible(&input_ty, &expected_ty) {
+                if !self.types_compatible(&input_ty, &expected_ty)? {
                     return Err(self
                         .pattern_error(
                             TypeDiagnosticReason::ExtractorInputTypeMismatch,

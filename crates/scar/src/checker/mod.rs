@@ -562,12 +562,22 @@ enum ConstructorProjectionFailure {
     UnsatisfiedConstraints,
     NoApplicableImplementation,
     AmbiguousImplementation,
-    MissingConstructorSlotMapping { variable: u32 },
+    MissingConstructorSlotMapping {
+        variable: u32,
+    },
     MissingWitnessTrait,
-    SlotCountMismatch { expected: usize, actual: usize },
-    InvalidSlotPosition { position: usize },
+    SlotCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidSlotPosition {
+        position: usize,
+    },
     MissingNominalArguments,
     UnsupportedConstructor,
+    // A failed proof is terminal and must never be written into a successful checkpoint.
+    #[serde(skip)]
+    ProofError(Box<TypeError>),
 }
 
 #[derive(Debug, Clone)]
@@ -627,6 +637,49 @@ enum ConstructorSlotsOutcome {
     Rejected {
         failures: Vec<ConstructorProjectionFailure>,
     },
+}
+
+impl ConstructorProjectionFailure {
+    fn proof_error(failures: &[Self]) -> Option<TypeError> {
+        failures.iter().find_map(|failure| match failure {
+            Self::ProofError(error) => Some((**error).clone()),
+            _ => None,
+        })
+    }
+}
+
+macro_rules! checked_constructor_outcome {
+    ($($outcome:ty),+ $(,)?) => {$(
+        impl $outcome {
+            fn into_checked(self) -> Result<Self, TypeError> {
+                if let Self::Rejected { failures } = &self {
+                    if let Some(error) = ConstructorProjectionFailure::proof_error(failures) {
+                        return Err(error);
+                    }
+                }
+                Ok(self)
+            }
+        }
+    )+};
+}
+checked_constructor_outcome!(
+    ConstructorProjectionOutcome,
+    ConstructorCarrierOutcome,
+    ConstructorCarrierRelation,
+    ConstructorApplicationOutcome,
+    ConstructorSlotsOutcome,
+);
+
+fn try_all<T>(
+    values: impl IntoIterator<Item = T>,
+    mut check: impl FnMut(T) -> Result<bool, TypeError>,
+) -> Result<bool, TypeError> {
+    for value in values {
+        if !check(value)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A trait requirement kept in inference state.  Keep the trait identity and
@@ -5037,7 +5090,10 @@ impl Checker {
                 .iter()
                 .find_map(|node| self.unresolved_executable_constructor_application(node))
             {
-                return match outcome {
+                return match outcome
+                    .into_checked()
+                    .map_err(|error| error.at_span(&span))?
+                {
                     ConstructorApplicationOutcome::Deferred { waiting_on } => {
                         let mut error =
                             self.ambiguous_constructor_result("constructor", "application", &span);

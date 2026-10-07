@@ -412,7 +412,7 @@ impl Checker {
                 sindr::intrinsic::CanonicalTraitIdentity::Monad,
                 do_span,
             )?;
-            let compatible = self.types_compatible(expected, &typed.ty);
+            let compatible = self.types_compatible(expected, &typed.ty)?;
             let carrier_classification = if compatible {
                 None
             } else {
@@ -516,7 +516,11 @@ impl Checker {
                 )
             })?;
         let monad = self.canonical_do_trait_key(resolved_contract, monad_identity, do_span)?;
-        match self.constructor_slot_type_for(&monad, &carrier) {
+        match self
+            .constructor_slot_type_for(&monad, &carrier)
+            .into_checked()
+            .map_err(|error| error.at_span(&typed.span))?
+        {
             ConstructorApplicationOutcome::Applied(_) => {
                 self.consume_matching_capability(&carrier, &monad);
                 Ok(typed)

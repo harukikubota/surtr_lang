@@ -423,6 +423,7 @@ impl Checker {
                         for (trait_key, info) in &self.traits {
                             if !info.constructor_slots.is_empty()
                                 && matches!(
+                                    // This enumerates optional capabilities; only required proofs propagate errors.
                                     self.constructor_projection(trait_key, &result_ty),
                                     ConstructorProjectionOutcome::Applicable { .. }
                                 )
@@ -922,6 +923,10 @@ impl Checker {
         outcome: ConstructorApplicationOutcome,
         span: &Span,
     ) -> TypeError {
+        let outcome = match outcome.into_checked() {
+            Ok(outcome) => outcome,
+            Err(error) => return error.at_span(span),
+        };
         let detail = match outcome {
             ConstructorApplicationOutcome::Deferred { .. } => {
                 "Callback input provenance remains unresolved".to_string()
@@ -988,7 +993,10 @@ impl Checker {
         if let Some(outcome) = self.constructor_provenance_application_outcome(&actual) {
             self.require_constructor_projection_type(outcome, required, &source.1, span, callable)?;
         }
-        if !self.constructor_provenance_allows(&actual, required, &source.1) {
+        if !self
+            .constructor_provenance_allows(&actual, required, &source.1)
+            .map_err(|error| error.at_span(span))?
+        {
             return Err(self.trait_failure(
                 TypeDiagnosticReason::MissingTypeConstructorCapability,
                 required,
@@ -1627,8 +1635,8 @@ impl Checker {
         provenance: &Provenance,
         required: &str,
         actual_ty: &Ty,
-    ) -> bool {
-        match provenance {
+    ) -> Result<bool, TypeError> {
+        Ok(match provenance {
             Provenance::Constrained(capabilities) => capabilities.iter().any(|actual| {
                 self.constructor_capability_allows(actual, required, &mut HashSet::new())
             }),
@@ -1639,9 +1647,9 @@ impl Checker {
             }
             Provenance::Intersection(sources) => {
                 !sources.is_empty()
-                    && sources.iter().all(|(source, ty)| {
+                    && try_all(sources.iter(), |(source, ty)| {
                         self.constructor_provenance_allows(source, required, ty)
-                    })
+                    })?
             }
             Provenance::Template { ty, .. }
                 if self.constructor_capability_for_type(ty).is_some() =>
@@ -1658,25 +1666,30 @@ impl Checker {
                     .collect();
                 let declared = self.substitute_ty_with_mapping(ty, &mapping);
                 matches!(
-                    self.constructor_projection(required, &declared),
+                    self.constructor_projection(required, &declared)
+                        .into_checked()?,
                     ConstructorProjectionOutcome::Applicable { .. }
                 )
             }
             Provenance::Parameter(_) | Provenance::Projection { .. } | Provenance::Call { .. } => {
                 false
             }
-            Provenance::ConstructorApplication(_) => false,
+            Provenance::ConstructorApplication(outcome) => {
+                outcome.clone().into_checked()?;
+                false
+            }
             _ => {
                 if let Some(capability) = self.constructor_capability_for_type(actual_ty) {
                     self.constructor_capability_allows(&capability, required, &mut HashSet::new())
                 } else {
                     matches!(
-                        self.constructor_projection(required, actual_ty),
+                        self.constructor_projection(required, actual_ty)
+                            .into_checked()?,
                         ConstructorProjectionOutcome::Applicable { .. }
                     )
                 }
             }
-        }
+        })
     }
 
     fn template_provenance(&self, template: &Ty, actual: &Ty, variables: &Bindings) -> Source {
