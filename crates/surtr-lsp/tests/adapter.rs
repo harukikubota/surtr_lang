@@ -21,6 +21,36 @@ fn file_uri_roundtrip_decodes_percent_escaped_paths() {
 }
 
 #[test]
+fn file_uri_requires_supported_complete_authority() {
+    let mut host = LspAnalysisHost::new(PathBuf::from("/repo"));
+    for uri in [
+        "file://localhostevil/repo/main.srt",
+        "file://remote/repo/main.srt",
+        "file://user@localhost/repo/main.srt",
+        "file://localhost:80/repo/main.srt",
+        "file://localhost",
+        "file://",
+        "https://localhost/repo/main.srt",
+    ] {
+        assert_eq!(file_uri_to_path(uri), None, "{uri}");
+        assert_eq!(
+            host.did_open(uri.into(), Some(1), "1".into()),
+            None,
+            "{uri}"
+        );
+    }
+    for uri in [
+        "file:///repo/%E6%97%A5%E6%9C%AC%20file.srt",
+        "file://localhost/repo/%E6%97%A5%E6%9C%AC%20file.srt",
+    ] {
+        assert_eq!(
+            file_uri_to_path(uri),
+            Some(PathBuf::from("/repo/日本 file.srt"))
+        );
+    }
+}
+
+#[test]
 fn diagnostics_maps_analysis_ranges_and_sources_to_lsp_dto() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");

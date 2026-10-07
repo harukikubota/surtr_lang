@@ -23,7 +23,7 @@
 |---|---|---|---|
 | DA-01 | 高 | 実装バグ | JSON巨大整数のFloat降格・精度損失 |
 | DA-02 | 中 | 実装バグ | FSの巨大負depthがRuntimeErrorになる |
-| DA-03 | 中 | 実装バグ | LSP file URIのauthorityが相対pathになる |
+| DA-03 | 中 | authority修正済み・一部未確定 | LSP file URIのauthorityが相対pathになる |
 | DA-04 | 中 | 対応済み（文書） | JSONの旧decode API・旧impl署名 |
 | DA-05 | 中 | 対応済み（文書） | Fileの旧closure・mode表記 |
 | DA-06 | 中 | 対応済み（文書） | File例の戻り値型 |
@@ -87,6 +87,10 @@ print(inspect(FS::tree_depth(root, -18446744073709551617)))
 - 問題: authority付きURIが作業ディレクトリ相対の別ファイルへ対応する。特にlocalhostのprefix判定はホスト境界を区別していない。
 - 対応: authorityとpathを分けて解釈する。ローカルURIだけを扱う場合、空authorityと正確なlocalhost以外を明示拒否する。query / fragmentの受理条件も固定する。
 - 受入条件: 非対応URIを相対pathとして登録しない。`crates/surtr-lsp/tests/adapter.rs:15` の空白・日本語・percent encodingのround-tripを保ち、authority境界を公開API層で検証する。目安level2。
+
+#### 対応記録（2026-10-07）
+
+`file_uri_to_path` をauthorityと絶対pathに分け、空authorityまたは正確な `localhost` だけを受理するよう修正した（level2）。`localhostevil`、remote host、userinfo、port、pathのないURIは `None` となり、document登録も拒否する。日本語・空白・percent encodingを維持する。旧実装で `localhostevil` が相対pathを返すRedを確認し、修正後はsurtr-lsp全19件成功。query / fragmentの受理・除去・拒否のどれを採るかは既存の公開契約に定めがないため、今回変更せず残件とする。
 
 ## 文書の対応項目
 
