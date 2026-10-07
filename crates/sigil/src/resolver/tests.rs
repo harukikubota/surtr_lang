@@ -9666,3 +9666,78 @@ fn parallel_stage_resolution_preserves_order_visibility_and_unique_local_ids() {
         resolve_user_with_modules("", &[modules[..8].to_vec(), modules[8..].to_vec()]).unwrap_err();
     assert!(error.message.contains("Stage8::item8"), "{error:?}");
 }
+
+#[test]
+fn child_scope_preserves_parent_bindings_and_id_commit_rules() {
+    let mut resolver = Resolver::new();
+    let span = Span { start: 0, end: 1 };
+    let outer_id = resolver.scope.define("outer", span.clone());
+    let initial_next = resolver.scope.next_id();
+    let error = resolver
+        .with_child_scope(|child| {
+            child.scope.define("outer", span.clone());
+            child.reserve_declaration_uid("Child::failed");
+            child.resolve_node(Ast::Var(span.clone(), "unknown_child_name".into()))
+        })
+        .unwrap_err();
+    assert!(error.message.contains("unknown_child_name"));
+    assert_eq!(resolver.scope.lookup("outer"), Some(outer_id));
+    assert_eq!(resolver.scope.next_id(), initial_next);
+    assert!(!resolver.declaration_uids.contains_key("Child::failed"));
+
+    let child_id = resolver
+        .with_child_scope(|child| {
+            let id = child.scope.define("outer", span.clone());
+            child.reserve_declaration_uid("Child::success");
+            assert_eq!(child.scope.lookup("outer"), Some(id));
+            Ok(id)
+        })
+        .unwrap();
+    assert_eq!(child_id, initial_next);
+    assert_eq!(resolver.scope.lookup("outer"), Some(outer_id));
+    assert_eq!(resolver.scope.next_id(), initial_next + 2);
+    assert!(!resolver.declaration_uids.contains_key("Child::success"));
+}
+
+#[test]
+fn child_resolvers_share_unchanged_declaration_metadata() {
+    let mut resolver = Resolver::new();
+    let entry = standard_test_environment()
+        .declaration_index
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    resolver.declaration_entries = HashMap::from([("Marker".into(), entry)]).into();
+    resolver.declaration_uids = HashMap::from([("Marker".into(), 17)]).into();
+    resolver.declaration_uid_kinds = HashMap::from([(17, DeclarationKind::Def)]).into();
+    resolver.trait_constructor_slots = HashMap::from([(17, vec!["A".into()])]).into();
+    let entry = std::ptr::from_ref(resolver.declaration_entries.get("Marker").unwrap());
+    let uid = std::ptr::from_ref(resolver.declaration_uids.get("Marker").unwrap());
+    let kind = std::ptr::from_ref(resolver.declaration_uid_kinds.get(&17).unwrap());
+    let slots = std::ptr::from_ref(resolver.trait_constructor_slots.get(&17).unwrap());
+    resolver
+        .with_child_scope(|child| {
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_entries.get("Marker").unwrap()),
+                entry
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_uids.get("Marker").unwrap()),
+                uid
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_uid_kinds.get(&17).unwrap()),
+                kind
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.trait_constructor_slots.get(&17).unwrap()),
+                slots
+            );
+            child.reserve_declaration_uid("Child::new");
+            assert_eq!(child.declaration_uids.get("Marker"), Some(&17));
+            Ok(())
+        })
+        .unwrap();
+    assert!(!resolver.declaration_uids.contains_key("Child::new"));
+}

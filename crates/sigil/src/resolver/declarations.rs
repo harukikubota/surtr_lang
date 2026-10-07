@@ -3108,8 +3108,7 @@ impl Resolver {
             .copied()
             .unwrap_or_else(|| {
                 let fresh = self.scope.reserve_id();
-                self.declaration_uids
-                    .insert(qualified_name.to_string(), fresh);
+                Arc::make_mut(&mut self.declaration_uids).insert(qualified_name.to_string(), fresh);
                 fresh
             })
     }
@@ -3119,7 +3118,7 @@ impl Resolver {
             .entry(name.to_string())
             .or_default()
             .push_back(uid);
-        self.declaration_uid_kinds.insert(uid, kind);
+        Arc::make_mut(&mut self.declaration_uid_kinds).insert(uid, kind);
     }
 
     fn predeclare_scope_binding(&mut self, name: &str, uid: u32, alias: Option<&str>) {
@@ -3469,7 +3468,7 @@ impl Resolver {
                     let qualified_name = self.qualify_current_declaration_name(name);
                     validate_reserved_callable_declaration(&qualified_name, stmt.span())?;
                     let uid = self.reserve_declaration_uid(&qualified_name);
-                    self.declaration_uids.insert(qualified_name.clone(), uid);
+                    Arc::make_mut(&mut self.declaration_uids).insert(qualified_name.clone(), uid);
                     let mut entry = self
                         .declaration_entries
                         .get(&qualified_name)
@@ -3489,7 +3488,7 @@ impl Resolver {
                             )
                         });
                     entry = entry.with_callable_parameters(stmt);
-                    self.declaration_entries
+                    Arc::make_mut(&mut self.declaration_entries)
                         .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
@@ -3532,7 +3531,7 @@ impl Resolver {
                                 if let spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) =
                                     bound
                                 {
-                                    self.trait_constructor_slots.insert(
+                                    Arc::make_mut(&mut self.trait_constructor_slots).insert(
                                         uid,
                                         slots
                                             .iter()
@@ -3617,7 +3616,7 @@ impl Resolver {
                             )
                         });
                     entry = entry.with_callable_parameters(stmt);
-                    self.declaration_entries
+                    Arc::make_mut(&mut self.declaration_entries)
                         .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));

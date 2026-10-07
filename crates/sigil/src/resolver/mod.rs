@@ -569,11 +569,12 @@ pub fn resolve_staged_program_from_state_with_warnings(
         let mut user_scope = user_scope_build.scope;
         user_scope.advance_next_id_to(next_local_id);
         let mut user_resolver = Resolver::with_scope(user_scope);
-        user_resolver.declaration_entries = declaration_index.clone().into_iter().collect();
-        user_resolver.declaration_uids = declaration_uids;
-        user_resolver.declaration_uid_kinds = declaration_uid_kinds;
+        user_resolver.declaration_entries =
+            Arc::new(declaration_index.clone().into_iter().collect());
+        user_resolver.declaration_uids = Arc::new(declaration_uids);
+        user_resolver.declaration_uid_kinds = Arc::new(declaration_uid_kinds);
         user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
-        user_resolver.trait_constructor_slots = trait_constructor_slots;
+        user_resolver.trait_constructor_slots = Arc::new(trait_constructor_slots);
         user_resolver.owner_registry = owner_registry;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
@@ -653,11 +654,12 @@ fn resolve_stage_modules_parallel(
                         let mut resolver = Resolver::with_scope(module_scope);
                         resolver.current_module_path = Some(module.module_path.clone());
                         resolver.declaration_entries =
-                            declaration_index.clone().into_iter().collect();
-                        resolver.declaration_uids = declaration_uids.clone();
-                        resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
+                            Arc::new(declaration_index.clone().into_iter().collect());
+                        resolver.declaration_uids = Arc::new(declaration_uids.clone());
+                        resolver.declaration_uid_kinds = Arc::new(declaration_uid_kinds.clone());
                         resolver.declaration_hidden_by_uid = Arc::clone(declaration_hidden_by_uid);
-                        resolver.trait_constructor_slots = trait_constructor_slots.clone();
+                        resolver.trait_constructor_slots =
+                            Arc::new(trait_constructor_slots.clone());
                         resolver.owner_registry = Arc::clone(owner_registry);
                         resolver.current_stage_impl_targets = Some(Arc::clone(stage_impl_targets));
                         resolver.allow_top_level_shadowing = true;
@@ -1236,11 +1238,11 @@ struct Resolver {
     pattern_proxies: Option<HashMap<String, ResolvedId>>,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
-    declaration_entries: HashMap<String, DeclarationEntry>,
-    declaration_uids: HashMap<String, u32>,
-    declaration_uid_kinds: HashMap<u32, DeclarationKind>,
+    declaration_entries: Arc<HashMap<String, DeclarationEntry>>,
+    declaration_uids: Arc<HashMap<String, u32>>,
+    declaration_uid_kinds: Arc<HashMap<u32, DeclarationKind>>,
     declaration_hidden_by_uid: Arc<HashMap<u32, bool>>,
-    trait_constructor_slots: HashMap<u32, Vec<String>>,
+    trait_constructor_slots: Arc<HashMap<u32, Vec<String>>>,
     owner_registry: Arc<OwnerRegistry>,
     explicit_module_imports: HashSet<String>,
     current_module_path: Option<String>,

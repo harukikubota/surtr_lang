@@ -23,7 +23,7 @@ mod pipe_contract_tests {
         let span = Span { start: 0, end: 1 };
         let name = format!("{owner}::{member}");
         let uid = resolver.scope.define(&name, span.clone());
-        resolver.declaration_uids.insert(name, uid);
+        Arc::make_mut(&mut resolver.declaration_uids).insert(name, uid);
         Box::new(Ast::Path(
             span.clone(),
             AstPath {
