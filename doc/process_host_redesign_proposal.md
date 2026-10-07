@@ -121,6 +121,6 @@ Erlang の例外とプロセス間の終了観測は別の仕組みである。[
 
 成功境界は PID 付き API の部分適用、通常 helper の合成、ホスト間で共通コードが同じ結果を返すこと。拒否境界は異なる process の PID、引数・返答型の不一致、利用不可の機能、ABI 不一致、不正な外部メッセージである。停止と返答の競合、遅延返答、再起動 identity も固定する。
 
-変更する正本は `docs/dev/ProcessRuntime_spec.md`、`docs/site/process.md`、`lib/process.srt` の `@doc` と関連する backend 仕様。今回は提案のみで正本の契約は変更しない。未確定事項は `doc/open-issues.md` の OI-038 を参照。
+変更する正本は `docs/dev/ProcessRuntime_spec.md`、`docs/site/process.md`、`lib/process.srt` の `@doc` と関連する backend 仕様。今回は提案のみで正本の契約は変更しない。未確定事項は本書の第3〜7節で扱い、本節の手順1で仕様を確定する。
 
 実装時は直接の契約テストから開始し、level4 の `rtk cargo nextest run --profile ci --workspace`、`cargo run -- test --quiet --all`、独立レビューを行う。今回の調査では実行テストを行わない。
