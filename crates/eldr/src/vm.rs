@@ -2412,7 +2412,13 @@ impl VM {
         next_state: Value,
         reply: Value,
     ) -> Result<Value, RuntimeError> {
-        let _ = self.process_store(pid, next_state)?;
+        if let Err(error) = decode_vm_result(
+            self.process_store(pid, next_state)?,
+            "__genserver_call_reply",
+            "state store",
+        )? {
+            return Ok(err_vm_result(error));
+        }
         Ok(ok_vm_result(reply))
     }
 
@@ -2440,7 +2446,13 @@ impl VM {
         pid: &PidHandle,
         next_state: Value,
     ) -> Result<Value, RuntimeError> {
-        let _ = self.process_store(pid, next_state)?;
+        if let Err(error) = decode_vm_result(
+            self.process_store(pid, next_state)?,
+            "__genserver_cast_next",
+            "state store",
+        )? {
+            return Ok(err_vm_result(error));
+        }
         Ok(ok_vm_result(Value::Unit))
     }
 
@@ -12044,6 +12056,100 @@ mod tests {
                 .state_value,
             None
         );
+    }
+
+    #[test]
+    fn genserver_reply_preserves_store_failure_without_runtime_changes() {
+        assert_genserver_store_failure_preserves_runtime(|vm, pid| {
+            vm.genserver_call_reply(pid, Value::Int(int(99)), Value::Int(int(7)))
+        });
+    }
+
+    #[test]
+    fn genserver_next_preserves_store_failure_without_runtime_changes() {
+        assert_genserver_store_failure_preserves_runtime(|vm, pid| {
+            vm.genserver_cast_next(pid, Value::Int(int(99)))
+        });
+    }
+
+    #[test]
+    fn genserver_reply_later_preserves_store_failure_without_runtime_changes() {
+        assert_genserver_store_failure_preserves_runtime(|vm, pid| {
+            vm.genserver_call_reply_later(pid, Value::Int(int(99)), vm.callable_for_function(0))
+        });
+    }
+
+    fn assert_genserver_store_failure_preserves_runtime(
+        operation: impl Fn(&mut VM, &PidHandle) -> Result<Value, super::RuntimeError>,
+    ) {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(7))];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Worker::callback"))];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::GenServer,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = PidHandle {
+            id: vm
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
+                .expect("worker allocation should succeed"),
+            process_name: "Worker".into(),
+        };
+        let pending = vm
+            .genserver_call_reply_later(&pid, Value::Int(int(41)), vm.callable_for_function(0))
+            .expect("valid reply later should register a pending callback");
+        assert!(matches!(pending, Value::PendingFuture(_)));
+
+        for invalid_pid in [
+            PidHandle {
+                id: pid.id + 1,
+                process_name: "Worker".into(),
+            },
+            PidHandle {
+                id: pid.id,
+                process_name: "OtherWorker".into(),
+            },
+        ] {
+            let before = format!("{:?}", vm.process_runtime);
+            let expected = vm
+                .process_store(&invalid_pid, Value::Int(int(99)))
+                .expect("invalid PID should return a language error");
+            let error = decode_vm_result(expected.clone(), "test", "store")
+                .expect("store result is well formed")
+                .expect_err("invalid PID must fail to store");
+            assert_eq!(
+                error.kind,
+                sindr::names::compiler_global_error_kind("InvalidPid")
+            );
+            let actual =
+                operation(&mut vm, &invalid_pid).expect("store failure remains a language error");
+            assert_eq!(
+                actual, expected,
+                "must preserve the original InvalidPid error"
+            );
+            // Covers state, ID allocators, futures, reply waiters and detached tasks,
+            // including the pending callback registered before this failed store.
+            assert_eq!(format!("{:?}", vm.process_runtime), before);
+        }
     }
 
     #[test]

@@ -937,7 +937,13 @@ impl VM {
         next_state: Value,
         callback: Callable,
     ) -> Result<Value, RuntimeError> {
-        self.process_store(pid, next_state)?;
+        if let Err(error) = decode_vm_result(
+            self.process_store(pid, next_state)?,
+            "__genserver_call_reply_later",
+            "state store",
+        )? {
+            return Ok(err_vm_result(error));
+        }
         let future_id = self
             .process_runtime
             .allocate_future(Some(pid.id), None, false);
