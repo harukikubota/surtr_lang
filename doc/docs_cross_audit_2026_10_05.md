@@ -35,7 +35,7 @@
 | DA-12 | 中 | 対応済み（文書） | 比較Boolean helperが非公開という説明 |
 | DA-13 | 低 | 対応済み（文書） | Docs chunk・標準型の構成説明 |
 | DA-14 | 低 | 対応済み（文書） | 削除された計画へのリンク |
-| DA-15 | 中 | 文書不整合 | SRメモの予約名・shadowing状況 |
+| DA-15 | 中 | 対応済み（文書） | SRメモの予約名・shadowing状況 |
 | DA-16 | 低 | 残件管理 | OI-036の未確定扱い |
 | DA-17 | 低 | 残件管理 | ListのRT-6の対象記述 |
 | DA-18 | 低 | 残件管理 | 存在しないOI-038への案内 |
@@ -213,6 +213,10 @@ Markdownのローカルリンクを確認し、調査開始時の `docs/` 76フ�
 - 現行: `bebb8fec` と `docs/site/callable-names.md` は標準callable名を予約する。`crates/sigil/src/resolver/declarations.rs:1263` の `validate_reserved_callable_declaration` が宣言を拒否する。
 - 実測: `def on(x: Int, y: Int) -> Int { x + y }` はcheck exit 1、`Callable name on is reserved for its standard declaration Function::on`。
 - 対応・受入条件: 当時の実施記録は履歴として区別し、状況表と後段への引継ぎを現行へ更新する。SR-07の本当に未確定な部分まで解決済み扱いにしない。旧shadow成功例を現行の受理例として案内しない。
+
+#### 対応記録（2026-10-07）
+
+`sr_revision_notes.md` の状況表・引継ぎを予約名改修後の契約へ更新し、SR-06 の旧 shadow 成功記録を当時の履歴として区別した。Spire の `NamedInfixRef`、Sigil の予約宣言検査、`callable-names.md` を静的に照合した。SR-07 の変換範囲・対象表記は未確定のまま残した。リンク先と `git diff --check` を確認し、過去の実測値は再実行した結果として扱っていない。
 
 ### DA-16 OI-036は確定済みのFacet capture契約を未確定としている
 
