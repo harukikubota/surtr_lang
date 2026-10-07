@@ -319,6 +319,39 @@ mod tests {
     }
 
     #[test]
+    fn compile_error_expectation_rejects_empty_assertions() {
+        let root = super::unique_temp_dir("empty-error-expectation");
+        let path = root.join("case.error");
+        for content in [
+            "",
+            " \n# comment\n",
+            "contains: \n",
+            "phase: resolve\ncontains:\n",
+        ] {
+            std::fs::write(&path, content).unwrap();
+            let result = std::panic::catch_unwind(|| super::parse_compile_error_expectation(&path));
+            let error = result.expect_err("empty assertions must not accept arbitrary failures");
+            let message = error
+                .downcast_ref::<String>()
+                .expect("string panic message");
+            assert!(message.contains("case.error"), "{message}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_error_expectation_accepts_contains_without_phase() {
+        let root = super::unique_temp_dir("contains-error-expectation");
+        let path = root.join("case.error");
+        std::fs::write(&path, "# expected failure\ncontains: Undefined variable\n").unwrap();
+        let expected = super::parse_compile_error_expectation(&path);
+        assert_eq!(expected.phase, None);
+        assert_eq!(expected.contains, ["Undefined variable"]);
+        assert!(expected.json.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn compile_error_matcher_checks_phase_and_needles() {
         let expected = CompileErrorExpectation {
             phase: Some("typecheck".to_string()),
@@ -542,6 +575,11 @@ pub fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
             continue;
         }
         if let Some(rest) = line.strip_prefix("contains:") {
+            assert!(
+                !rest.trim().is_empty(),
+                "empty contains assertion in {}",
+                path.display()
+            );
             contains.push(rest.trim().to_string());
             continue;
         }
@@ -567,6 +605,11 @@ pub fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
         );
     }
 
+    assert!(
+        phase.is_some() || !contains.is_empty() || !json.is_empty(),
+        "no compile error assertions in {}",
+        path.display()
+    );
     CompileErrorExpectation {
         phase,
         contains,
