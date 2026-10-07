@@ -1,0 +1,16 @@
+def keep_first(value: $A, _other: $A) -> $A { value }
+def pair_values(first: $A, second: $B) -> ($A, $B) { (first, second) }
+def empty_for::<$B>(_value: $A) -> List<$B> { [] }
+
+ints: List<Int> = [1, 1, 2] |> List::dedup()
+strings: List<String> = ["a", "a", "b"] |> List::dedup()
+first_int: Int = 7 |> keep_first(9)
+first_string: String = "first" |> keep_first("second")
+pair: (Int, String) = 7 |> pair_values("bound")
+empty_strings: List<String> = 7 |> empty_for::<String>()
+print(inspect(ints))
+print(inspect(strings))
+print(inspect(first_int))
+print(inspect(first_string))
+print(inspect(pair))
+print(inspect(empty_strings))

@@ -1556,16 +1556,17 @@ impl Checker {
                     args,
                 }
             }
-            TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
-                self.rewrite_specializations_in_node(
+            TypedInner::InjectCall(func, args) => {
+                let mut target = *self.rewrite_specializations_in_node(
                     *func,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?,
-                args.into_iter()
+                )?;
+                let args = args
+                    .into_iter()
                     .map(|arg| {
                         self.rewrite_specializations_in_node(
                             arg,
@@ -1577,8 +1578,19 @@ impl Checker {
                         )
                         .map(|node| *node)
                     })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?;
+                self.specialize_callable_reference(
+                    &mut target,
+                    &mut SpecializationContext {
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    },
+                )?;
+                TypedInner::InjectCall(Box::new(target), args)
+            }
             TypedInner::Bind(pattern, rhs) => *self.rewrite_bind_specializations(
                 pattern,
                 rhs,
@@ -2230,74 +2242,16 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 if args.is_empty() {
-                    if let Ty::UserFunc {
-                        fun_idx,
-                        type_params,
-                        call_substitution,
-                        params,
-                        ret,
-                    } = target.ty.clone()
-                    {
-                        if needs_specialization.contains(&fun_idx) {
-                            let original_def =
-                                defs_by_fun_idx.get(&fun_idx).ok_or_else(|| TypeError {
-                                    structured: None,
-                                    message: format!(
-                                        "Missing generic definition for fun_idx {}",
-                                        fun_idx
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                })?;
-                            let bound_tyvars = bound_tyvars_by_fun_idx
-                                .get(&fun_idx)
-                                .cloned()
-                                .unwrap_or_default();
-                            let mapping = self.infer_specialization_mapping(
-                                original_def,
-                                &[],
-                                Some(&target.ty),
-                                true,
-                                &bound_tyvars,
-                            )?;
-                            let fully_concrete = mapping.len() == bound_tyvars.len()
-                                && bound_tyvars.iter().all(|var| {
-                                    mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
-                                });
-                            if fully_concrete
-                                || (!Self::typed_node_has_pending_trait_call(original_def)
-                                    && !self
-                                        .direct_pattern_requirement_tyvars
-                                        .contains_key(&fun_idx))
-                            {
-                                let concrete_tys = bound_tyvars
-                                    .iter()
-                                    .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
-                                    .collect::<Vec<_>>();
-                                let specialized_fun_idx = self.ensure_specialized_def(
-                                    fun_idx,
-                                    &concrete_tys,
-                                    &mapping,
-                                    defs_by_fun_idx,
-                                    bound_tyvars_by_fun_idx,
-                                    needs_specialization,
-                                    specialization_fun_idxs,
-                                    generated_defs,
-                                )?;
-                                target.ty = Ty::UserFunc {
-                                    fun_idx: specialized_fun_idx,
-                                    type_params,
-                                    call_substitution: if fully_concrete {
-                                        Vec::new()
-                                    } else {
-                                        call_substitution
-                                    },
-                                    params,
-                                    ret,
-                                };
-                            }
-                        }
-                    }
+                    self.specialize_callable_reference(
+                        &mut target,
+                        &mut SpecializationContext {
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        },
+                    )?;
                 }
                 TypedInner::Capture(Box::new(target), args)
             }
@@ -2506,6 +2460,86 @@ impl Checker {
             },
             other => other,
         })
+    }
+
+    fn specialize_callable_reference(
+        &mut self,
+        target: &mut TypedNode,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<(), TypeError> {
+        if let Ty::UserFunc {
+            fun_idx,
+            type_params,
+            call_substitution,
+            params,
+            ret,
+        } = target.ty.clone()
+        {
+            if context.needs_specialization.contains(&fun_idx) {
+                let original_def =
+                    context
+                        .defs_by_fun_idx
+                        .get(&fun_idx)
+                        .ok_or_else(|| TypeError {
+                            structured: None,
+                            message: format!("Missing generic definition for fun_idx {}", fun_idx),
+                            span: target.span.clone(),
+                            hint: None,
+                        })?;
+                let bound_tyvars = context
+                    .bound_tyvars_by_fun_idx
+                    .get(&fun_idx)
+                    .cloned()
+                    .unwrap_or_default();
+                // The callable signature already carries the declaration's substitution.
+                // InjectCall's bound arguments omit the injected value, so they are
+                // not a complete argument list for ordinary call specialization.
+                let mapping = self.infer_specialization_mapping(
+                    original_def,
+                    &[],
+                    Some(&target.ty),
+                    true,
+                    &bound_tyvars,
+                )?;
+                let fully_concrete = mapping.len() == bound_tyvars.len()
+                    && bound_tyvars
+                        .iter()
+                        .all(|var| mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_))));
+                if fully_concrete
+                    || (!Self::typed_node_has_pending_trait_call(original_def)
+                        && !self
+                            .direct_pattern_requirement_tyvars
+                            .contains_key(&fun_idx))
+                {
+                    let concrete_tys = bound_tyvars
+                        .iter()
+                        .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
+                        .collect::<Vec<_>>();
+                    let specialized_fun_idx = self.ensure_specialized_def(
+                        fun_idx,
+                        &concrete_tys,
+                        &mapping,
+                        context.defs_by_fun_idx,
+                        context.bound_tyvars_by_fun_idx,
+                        context.needs_specialization,
+                        context.specialization_fun_idxs,
+                        context.generated_defs,
+                    )?;
+                    target.ty = Ty::UserFunc {
+                        fun_idx: specialized_fun_idx,
+                        type_params,
+                        call_substitution: if fully_concrete {
+                            Vec::new()
+                        } else {
+                            call_substitution
+                        },
+                        params,
+                        ret,
+                    };
+                }
+            }
+        }
+        Ok(())
     }
 
     fn ensure_specialized_def(
@@ -5562,6 +5596,74 @@ mod tests {
             rewritten.pattern.unlocated(),
             TypedPattern::Wildcard(Ty::Int)
         ));
+    }
+
+    #[test]
+    fn injected_callable_specialization_materializes_target_with_bound_arguments() {
+        for bound_arg_count in [0, 1] {
+            let mut checker = Checker::new(TypecheckContext::default());
+            checker.env.next_fun_idx = 100;
+            let function_id = resolved_id("first", Some("Global::first"), 10);
+            let mut definition =
+                generic_identity_def(20, function_id.clone(), resolved_id("value", None, 11), 1);
+            if bound_arg_count == 1 {
+                let TypedInner::Def(_, _, _, parameters, _, _, _, _) = &mut definition.node else {
+                    unreachable!()
+                };
+                parameters.push(TypedValueParameter {
+                    id: resolved_id("other", None, 12),
+                    mode: spire::ast::ValueParameterMode::PositionalOrNamed,
+                    ty: Ty::Var(1),
+                    span: test_span(),
+                });
+                let Ty::UserFunc { params, .. } = &mut definition.ty else {
+                    unreachable!()
+                };
+                params.push(Ty::Var(1));
+            }
+            let injected = TypedNode {
+                ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+                span: test_span(),
+                node: TypedInner::InjectCall(
+                    Box::new(TypedNode {
+                        ty: Ty::UserFunc {
+                            fun_idx: 20,
+                            type_params: vec![1],
+                            call_substitution: vec![(1, Ty::Int)],
+                            params: vec![Ty::Int; bound_arg_count + 1],
+                            ret: Box::new(Ty::Int),
+                        },
+                        span: test_span(),
+                        node: TypedInner::Var(function_id),
+                    }),
+                    (0..bound_arg_count)
+                        .map(|_| typed_arg(13, Ty::Int))
+                        .collect(),
+                ),
+            };
+            let nodes = checker
+                .specialize_program(vec![definition, injected])
+                .expect("injected callable specialization should succeed");
+            let generated = generated_def_fun_idxs(&nodes, "Global::first");
+            assert_eq!(
+                generated.len(),
+                1,
+                "injected callable must materialize a definition"
+            );
+            let injected = nodes
+                .iter()
+                .find(|node| matches!(node.node, TypedInner::InjectCall(..)))
+                .expect("injected callable remains in the program");
+            assert_eq!(injected.ty, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
+            let TypedInner::InjectCall(target, args) = &injected.node else {
+                unreachable!()
+            };
+            assert_eq!(args.len(), bound_arg_count);
+            assert!(
+                matches!(&target.ty, Ty::UserFunc { fun_idx, call_substitution, .. }
+                if *fun_idx == generated[0] && call_substitution.is_empty())
+            );
+        }
     }
 
     #[test]

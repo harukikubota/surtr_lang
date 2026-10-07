@@ -6528,7 +6528,29 @@ impl Checker {
             });
         }
 
-        let typed_func = self.check_node(func)?;
+        let explicit = Self::explicit_type_args(func);
+        let named_target = match func {
+            Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+            other => other,
+        };
+        let has_named_signature = match named_target {
+            Resolved::Var(_, id) => {
+                self.callable_signatures.contains_key(&id.unique_id)
+                    || self.is_registered_callable_declaration(id.unique_id)
+            }
+            _ => false,
+        };
+        let typed_func = if explicit.is_some() || has_named_signature {
+            let (mut typed, signature, return_type_arguments) = self
+                .instantiate_named_callable_signature(span, named_target, explicit.as_deref())?;
+            let constraints =
+                self.call_constraint_set(signature, return_type_arguments, None, span, &typed.ty);
+            self.apply_return_type_argument_constraints(&constraints)?;
+            typed.ty = self.callable_ty_from_signature(&typed.ty, &constraints.signature);
+            typed
+        } else {
+            self.check_node(func)?
+        };
         let (params, ret) = match self.resolve_ty(&typed_func.ty) {
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
                 (params, ret.as_ref().clone())
