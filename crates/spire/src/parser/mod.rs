@@ -1802,83 +1802,78 @@ fn fixed_bind_list_pattern(start: usize, end: usize, items: Vec<AstPattern>) -> 
         })
 }
 
-fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
+fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
+    map_ast_span(ast, &|span| shift_span(span, delta))
+}
+
+fn map_span(span: Span, map: &dyn Fn(Span) -> Span) -> Span {
+    map(span)
+}
+
+fn map_ast_ty(ty: AstTy, map: &dyn Fn(Span) -> Span) -> AstTy {
     match ty {
-        AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
-        AstTy::ImplTrait(span, name) => AstTy::ImplTrait(shift_span(span, delta), name),
+        AstTy::Named(span, name) => AstTy::Named(map_span(span, map), name),
+        AstTy::ImplTrait(span, name) => AstTy::ImplTrait(map_span(span, map), name),
         AstTy::Generic(span, name, args) => AstTy::Generic(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
-            args.into_iter()
-                .map(|arg| shift_ast_ty(arg, delta))
-                .collect(),
+            args.into_iter().map(|arg| map_ast_ty(arg, map)).collect(),
         ),
         AstTy::Tuple(span, items) => AstTy::Tuple(
-            shift_span(span, delta),
+            map_span(span, map),
             items
                 .into_iter()
-                .map(|item| shift_ast_ty(item, delta))
+                .map(|item| map_ast_ty(item, map))
                 .collect(),
         ),
         AstTy::Func(span, params, ret) => AstTy::Func(
-            shift_span(span, delta),
-            params.into_iter().map(|p| shift_ast_ty(p, delta)).collect(),
-            Box::new(shift_ast_ty(*ret, delta)),
+            map_span(span, map),
+            params.into_iter().map(|p| map_ast_ty(p, map)).collect(),
+            Box::new(map_ast_ty(*ret, map)),
         ),
     }
 }
 
-fn shift_where_clause(clause: WhereClause, delta: usize) -> WhereClause {
+fn map_where_clause(clause: WhereClause, map: &dyn Fn(Span) -> Span) -> WhereClause {
     WhereClause {
-        span: shift_span(clause.span, delta),
+        span: map_span(clause.span, map),
         constraints: clause
             .constraints
             .into_iter()
             .map(|constraint| WhereConstraint {
-                subject: shift_ast_ty(constraint.subject, delta),
+                subject: map_ast_ty(constraint.subject, map),
                 bounds: constraint
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
                         WhereConstraintRhs::Trait(span, name) => {
-                            WhereConstraintRhs::Trait(shift_span(span, delta), name)
+                            WhereConstraintRhs::Trait(map_span(span, map), name)
                         }
                         WhereConstraintRhs::TypeConstructor(span, slots) => {
                             WhereConstraintRhs::TypeConstructor(
-                                shift_span(span, delta),
+                                map_span(span, map),
                                 slots
                                     .into_iter()
-                                    .map(|slot| shift_ast_ty(slot, delta))
+                                    .map(|slot| map_ast_ty(slot, map))
                                     .collect(),
                             )
                         }
                         WhereConstraintRhs::TraitSlot(span, name, slot) => {
-                            WhereConstraintRhs::TraitSlot(shift_span(span, delta), name, slot)
+                            WhereConstraintRhs::TraitSlot(map_span(span, map), name, slot)
                         }
                     })
                     .collect(),
-                span: shift_span(constraint.span, delta),
+                span: map_span(constraint.span, map),
             })
             .collect(),
     }
 }
 
-fn shift_parse_error(mut error: ParseError, delta: usize) -> ParseError {
-    match &mut error {
-        ParseError::Incomplete {
-            span, cursor_span, ..
-        }
-        | ParseError::SyntaxError {
-            span, cursor_span, ..
-        } => {
-            *span = shift_span(span.clone(), delta);
-            *cursor_span = shift_span(cursor_span.clone(), delta);
-        }
-    }
-    error
+fn map_parse_error(error: ParseError, map: &dyn Fn(Span) -> Span) -> ParseError {
+    error.map_spans(|span| map(span.clone()))
 }
 
-fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
+fn map_pattern(pat: AstPattern, map: &dyn Fn(Span) -> Span) -> AstPattern {
     match pat {
         AstPattern::Projection {
             span,
@@ -1886,121 +1881,122 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
             inner,
             annotation,
         } => AstPattern::Projection {
-            span: shift_span(span, delta),
+            span: map_span(span, map),
             index,
-            inner: Box::new(shift_pattern(*inner, delta)),
-            annotation: annotation.map(|ty| shift_ast_ty(ty, delta)),
+            inner: Box::new(map_pattern(*inner, map)),
+            annotation: annotation.map(|ty| map_ast_ty(ty, map)),
         },
-        AstPattern::Var(span, name) => AstPattern::Var(shift_span(span, delta), name),
+        AstPattern::Var(span, name) => AstPattern::Var(map_span(span, map), name),
         AstPattern::Annotated(span, name, ty) => {
-            AstPattern::Annotated(shift_span(span, delta), name, shift_ast_ty(ty, delta))
+            AstPattern::Annotated(map_span(span, map), name, map_ast_ty(ty, map))
         }
-        AstPattern::Pin(span, name) => AstPattern::Pin(shift_span(span, delta), name),
-        AstPattern::Wildcard(span) => AstPattern::Wildcard(shift_span(span, delta)),
+        AstPattern::Pin(span, name) => AstPattern::Pin(map_span(span, map), name),
+        AstPattern::Wildcard(span) => AstPattern::Wildcard(map_span(span, map)),
         AstPattern::AnnotatedWildcard(span, ty) => {
-            AstPattern::AnnotatedWildcard(shift_span(span, delta), shift_ast_ty(ty, delta))
+            AstPattern::AnnotatedWildcard(map_span(span, map), map_ast_ty(ty, map))
         }
-        AstPattern::ListNil(span) => AstPattern::ListNil(shift_span(span, delta)),
+        AstPattern::ListNil(span) => AstPattern::ListNil(map_span(span, map)),
         AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
-            shift_span(span, delta),
-            Box::new(shift_pattern(*head, delta)),
-            Box::new(shift_pattern(*tail, delta)),
+            map_span(span, map),
+            Box::new(map_pattern(*head, map)),
+            Box::new(map_pattern(*tail, map)),
         ),
-        AstPattern::IntLit(span, n) => AstPattern::IntLit(shift_span(span, delta), n),
-        AstPattern::StrLit(span, s) => AstPattern::StrLit(shift_span(span, delta), s),
-        AstPattern::BoolLit(span, b) => AstPattern::BoolLit(shift_span(span, delta), b),
-        AstPattern::DurationLit(span, n) => AstPattern::DurationLit(shift_span(span, delta), n),
+        AstPattern::IntLit(span, n) => AstPattern::IntLit(map_span(span, map), n),
+        AstPattern::StrLit(span, s) => AstPattern::StrLit(map_span(span, map), s),
+        AstPattern::BoolLit(span, b) => AstPattern::BoolLit(map_span(span, map), b),
+        AstPattern::DurationLit(span, n) => AstPattern::DurationLit(map_span(span, map), n),
         AstPattern::Constructor(span, name, inners) => AstPattern::Constructor(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             inners
                 .into_iter()
-                .map(|inner| shift_pattern(inner, delta))
+                .map(|inner| map_pattern(inner, map))
                 .collect(),
         ),
         AstPattern::Call(span, name, args) => AstPattern::Call(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             args.into_iter()
                 .map(|arg| AstPatternArgument {
-                    span: shift_span(arg.span, delta),
+                    span: map_span(arg.span, map),
                     expression_error: arg
                         .expression_error
-                        .map(|error| shift_parse_error(error, delta)),
-                    pattern_error: arg
-                        .pattern_error
-                        .map(|error| shift_parse_error(error, delta)),
+                        .map(|error| map_parse_error(error, map)),
+                    pattern_error: arg.pattern_error.map(|error| map_parse_error(error, map)),
                     expression: arg
                         .expression
-                        .map(|expr| Box::new(shift_ast_span(*expr, delta))),
+                        .map(|expr| Box::new(map_ast_span(*expr, map))),
                     pattern: arg
                         .pattern
-                        .map(|pattern| Box::new(shift_pattern(*pattern, delta))),
+                        .map(|pattern| Box::new(map_pattern(*pattern, map))),
                     named_pattern: arg
                         .named_pattern
-                        .map(|(name, pattern)| (name, Box::new(shift_pattern(*pattern, delta)))),
+                        .map(|(name, pattern)| (name, Box::new(map_pattern(*pattern, map)))),
                 })
                 .collect(),
         ),
         AstPattern::Tuple(span, items) => AstPattern::Tuple(
-            shift_span(span, delta),
+            map_span(span, map),
             items
                 .into_iter()
-                .map(|item| shift_pattern(item, delta))
+                .map(|item| map_pattern(item, map))
                 .collect(),
         ),
         AstPattern::Or(span, items) => AstPattern::Or(
-            shift_span(span, delta),
+            map_span(span, map),
             items
                 .into_iter()
-                .map(|item| shift_pattern(item, delta))
+                .map(|item| map_pattern(item, map))
                 .collect(),
         ),
         AstPattern::As(span, inner, alias, alias_ty, alias_span) => AstPattern::As(
-            shift_span(span, delta),
-            Box::new(shift_pattern(*inner, delta)),
+            map_span(span, map),
+            Box::new(map_pattern(*inner, map)),
             alias,
-            alias_ty.map(|ty| shift_ast_ty(ty, delta)),
-            shift_span(alias_span, delta),
+            alias_ty.map(|ty| map_ast_ty(ty, map)),
+            map_span(alias_span, map),
         ),
     }
 }
 
-fn shift_value_parameter(param: ValueParameter, delta: usize) -> ValueParameter {
+fn map_value_parameter(param: ValueParameter, map: &dyn Fn(Span) -> Span) -> ValueParameter {
     ValueParameter {
         name: param.name,
         mode: param.mode,
-        ty: shift_ast_ty(param.ty, delta),
-        span: shift_span(param.span, delta),
+        ty: map_ast_ty(param.ty, map),
+        span: map_span(param.span, map),
     }
 }
 
-fn shift_return_type_argument(argument: ReturnTypeArgument, delta: usize) -> ReturnTypeArgument {
+fn map_return_type_argument(
+    argument: ReturnTypeArgument,
+    map: &dyn Fn(Span) -> Span,
+) -> ReturnTypeArgument {
     ReturnTypeArgument {
         ordinal: argument.ordinal,
-        ty: shift_ast_ty(argument.ty, delta),
-        span: shift_span(argument.span, delta),
+        ty: map_ast_ty(argument.ty, map),
+        span: map_span(argument.span, map),
     }
 }
 
-fn shift_extractor_param(param: ExtractorParam, delta: usize) -> ExtractorParam {
+fn map_extractor_param(param: ExtractorParam, map: &dyn Fn(Span) -> Span) -> ExtractorParam {
     ExtractorParam {
         name: param.name,
-        ty: param.ty.map(|ty| shift_ast_ty(ty, delta)),
-        span: shift_span(param.span, delta),
+        ty: param.ty.map(|ty| map_ast_ty(ty, map)),
+        span: map_span(param.span, map),
     }
 }
 
-fn shift_match_pattern(pat: AstPattern, delta: usize) -> AstPattern {
-    shift_pattern(pat, delta)
+fn map_match_pattern(pat: AstPattern, map: &dyn Fn(Span) -> Span) -> AstPattern {
+    map_pattern(pat, map)
 }
 
-fn shift_decl_attrs(attrs: DeclAttrs, _delta: usize) -> DeclAttrs {
+fn map_decl_attrs(attrs: DeclAttrs, _map: &dyn Fn(Span) -> Span) -> DeclAttrs {
     attrs
 }
 
-fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
-    spec.state = shift_ast_ty(spec.state, delta);
+fn map_process_spec(mut spec: ProcessSpec, map: &dyn Fn(Span) -> Span) -> ProcessSpec {
+    spec.state = map_ast_ty(spec.state, map);
     spec.handlers = spec
         .handlers
         .into_iter()
@@ -2009,9 +2005,9 @@ fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
             capability: handler.capability,
             default_target: ProcessHandlerTarget {
                 name: handler.default_target.name,
-                span: shift_span(handler.default_target.span, delta),
+                span: map_span(handler.default_target.span, map),
             },
-            span: shift_span(handler.span, delta),
+            span: map_span(handler.span, map),
         })
         .collect();
     if let Some(policy) = &mut spec.supervisor_policy {
@@ -2024,103 +2020,110 @@ fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
             name: handler.name,
             internal_name: handler.internal_name,
             kind: handler.kind,
-            span: shift_span(handler.span, delta),
+            span: map_span(handler.span, map),
         })
         .collect();
     spec
 }
 
-fn shift_builtin_type_head(head: BuiltinTypeHead, delta: usize) -> BuiltinTypeHead {
+fn map_builtin_type_head(head: BuiltinTypeHead, map: &dyn Fn(Span) -> Span) -> BuiltinTypeHead {
     BuiltinTypeHead {
-        span: shift_span(head.span, delta),
+        span: map_span(head.span, map),
         name: head.name,
         params: head.params,
     }
 }
 
-fn shift_record_lit_arg(arg: RecordLitArg, delta: usize) -> RecordLitArg {
+fn map_record_lit_arg(arg: RecordLitArg, map: &dyn Fn(Span) -> Span) -> RecordLitArg {
     match arg {
-        RecordLitArg::Positional(expr) => RecordLitArg::Positional(shift_ast_span(expr, delta)),
-        RecordLitArg::Named(name, expr) => RecordLitArg::Named(name, shift_ast_span(expr, delta)),
+        RecordLitArg::Positional(expr) => RecordLitArg::Positional(map_ast_span(expr, map)),
+        RecordLitArg::Named(name, expr) => RecordLitArg::Named(name, map_ast_span(expr, map)),
     }
 }
 
-fn shift_ast_path(path: AstPath, delta: usize) -> AstPath {
+fn map_ast_path(path: AstPath, map: &dyn Fn(Span) -> Span) -> AstPath {
     AstPath {
-        span: shift_span(path.span, delta),
+        span: map_span(path.span, map),
         segments: path.segments,
     }
 }
 
-fn shift_facet_path_segment(segment: FacetPathSegment, delta: usize) -> FacetPathSegment {
+fn map_facet_path_segment(
+    segment: FacetPathSegment,
+    map: &dyn Fn(Span) -> Span,
+) -> FacetPathSegment {
     match segment {
         FacetPathSegment::Field { .. } => segment,
         FacetPathSegment::Bracket(expr) => FacetPathSegment::Bracket(FacetBracketExpr {
-            expr: Box::new(shift_ast_span(*expr.expr, delta)),
+            expr: Box::new(map_ast_span(*expr.expr, map)),
             display: expr.display,
         }),
     }
 }
 
-fn shift_bulk_update_path(path: BulkUpdatePath, delta: usize) -> BulkUpdatePath {
+fn map_bulk_update_path(path: BulkUpdatePath, map: &dyn Fn(Span) -> Span) -> BulkUpdatePath {
     match path {
         BulkUpdatePath::Segments(span, segments) => BulkUpdatePath::Segments(
-            shift_span(span, delta),
+            map_span(span, map),
             segments
                 .into_iter()
-                .map(|segment| shift_facet_path_segment(segment, delta))
+                .map(|segment| map_facet_path_segment(segment, map))
                 .collect(),
         ),
-        BulkUpdatePath::Pin(span, name) => BulkUpdatePath::Pin(shift_span(span, delta), name),
+        BulkUpdatePath::Pin(span, name) => BulkUpdatePath::Pin(map_span(span, map), name),
         BulkUpdatePath::Chain(span, left, right) => BulkUpdatePath::Chain(
-            shift_span(span, delta),
-            Box::new(shift_bulk_update_path(*left, delta)),
-            Box::new(shift_bulk_update_path(*right, delta)),
+            map_span(span, map),
+            Box::new(map_bulk_update_path(*left, map)),
+            Box::new(map_bulk_update_path(*right, map)),
         ),
         BulkUpdatePath::StripLeft(span, inner, count) => BulkUpdatePath::StripLeft(
-            shift_span(span, delta),
-            Box::new(shift_bulk_update_path(*inner, delta)),
+            map_span(span, map),
+            Box::new(map_bulk_update_path(*inner, map)),
             count,
         ),
         BulkUpdatePath::StripRight(span, inner, count) => BulkUpdatePath::StripRight(
-            shift_span(span, delta),
-            Box::new(shift_bulk_update_path(*inner, delta)),
+            map_span(span, map),
+            Box::new(map_bulk_update_path(*inner, map)),
             count,
         ),
     }
 }
 
-fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec<BulkUpdateEntry> {
+fn map_bulk_update_entries(
+    entries: Vec<BulkUpdateEntry>,
+    map: &dyn Fn(Span) -> Span,
+) -> Vec<BulkUpdateEntry> {
     entries
         .into_iter()
         .map(|entry| BulkUpdateEntry {
-            span: shift_span(entry.span, delta),
-            path: shift_bulk_update_path(entry.path, delta),
+            span: map_span(entry.span, map),
+            path: map_bulk_update_path(entry.path, map),
             kind: match entry.kind {
-                BulkUpdateEntryKind::Set(expr) => {
-                    BulkUpdateEntryKind::Set(shift_ast_span(expr, delta))
-                }
+                BulkUpdateEntryKind::Set(expr) => BulkUpdateEntryKind::Set(map_ast_span(expr, map)),
                 BulkUpdateEntryKind::Over(expr) => {
-                    BulkUpdateEntryKind::Over(shift_ast_span(expr, delta))
+                    BulkUpdateEntryKind::Over(map_ast_span(expr, map))
                 }
                 BulkUpdateEntryKind::OverResult(expr) => {
-                    BulkUpdateEntryKind::OverResult(shift_ast_span(expr, delta))
+                    BulkUpdateEntryKind::OverResult(map_ast_span(expr, map))
                 }
                 BulkUpdateEntryKind::CaseSet(expr) => {
-                    BulkUpdateEntryKind::CaseSet(shift_ast_span(expr, delta))
+                    BulkUpdateEntryKind::CaseSet(map_ast_span(expr, map))
                 }
                 BulkUpdateEntryKind::CaseOver(expr) => {
-                    BulkUpdateEntryKind::CaseOver(shift_ast_span(expr, delta))
+                    BulkUpdateEntryKind::CaseOver(map_ast_span(expr, map))
                 }
                 BulkUpdateEntryKind::Nested(entries) => {
-                    BulkUpdateEntryKind::Nested(shift_bulk_update_entries(entries, delta))
+                    BulkUpdateEntryKind::Nested(map_bulk_update_entries(entries, map))
                 }
             },
         })
         .collect()
 }
 
-fn shift_do_statements(statements: Vec<AstDoStatement>, delta: usize) -> Vec<AstDoStatement> {
+fn map_do_statements(
+    statements: Vec<AstDoStatement>,
+    map: &dyn Fn(Span) -> Span,
+) -> Vec<AstDoStatement> {
     statements
         .into_iter()
         .map(|statement| match statement {
@@ -2130,10 +2133,10 @@ fn shift_do_statements(statements: Vec<AstDoStatement>, delta: usize) -> Vec<Ast
                 pattern,
                 rhs,
             } => AstDoStatement::Extract {
-                span: shift_span(span, delta),
-                operator_span: shift_span(operator_span, delta),
-                pattern: shift_pattern(pattern, delta),
-                rhs: shift_ast_span(rhs, delta),
+                span: map_span(span, map),
+                operator_span: map_span(operator_span, map),
+                pattern: map_pattern(pattern, map),
+                rhs: map_ast_span(rhs, map),
             },
             AstDoStatement::SafeBind {
                 span,
@@ -2141,345 +2144,327 @@ fn shift_do_statements(statements: Vec<AstDoStatement>, delta: usize) -> Vec<Ast
                 pattern,
                 rhs,
             } => AstDoStatement::SafeBind {
-                span: shift_span(span, delta),
-                operator_span: shift_span(operator_span, delta),
-                pattern: shift_pattern(pattern, delta),
-                rhs: shift_ast_span(rhs, delta),
+                span: map_span(span, map),
+                operator_span: map_span(operator_span, map),
+                pattern: map_pattern(pattern, map),
+                rhs: map_ast_span(rhs, map),
             },
             AstDoStatement::Statement(statement) => {
-                AstDoStatement::Statement(shift_ast_span(statement, delta))
+                AstDoStatement::Statement(map_ast_span(statement, map))
             }
         })
         .collect()
 }
 
-fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
+fn map_ast_span(ast: Ast, map: &dyn Fn(Span) -> Span) -> Ast {
     match ast {
         Ast::NumberedPlaceholder(span, index) => {
-            Ast::NumberedPlaceholder(shift_span(span, delta), index)
+            Ast::NumberedPlaceholder(map_span(span, map), index)
         }
         Ast::PatternConsumerCall(span, callee, args) => Ast::PatternConsumerCall(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*callee, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*callee, map)),
             args.into_iter()
                 .map(|arg| AstPatternArgument {
-                    span: shift_span(arg.span, delta),
+                    span: map_span(arg.span, map),
                     expression: arg
                         .expression
-                        .map(|expr| Box::new(shift_ast_span(*expr, delta))),
+                        .map(|expr| Box::new(map_ast_span(*expr, map))),
                     pattern: arg
                         .pattern
-                        .map(|pattern| Box::new(shift_pattern(*pattern, delta))),
+                        .map(|pattern| Box::new(map_pattern(*pattern, map))),
                     named_pattern: arg
                         .named_pattern
-                        .map(|(name, pattern)| (name, Box::new(shift_pattern(*pattern, delta)))),
+                        .map(|(name, pattern)| (name, Box::new(map_pattern(*pattern, map)))),
                     expression_error: arg
                         .expression_error
-                        .map(|error| shift_parse_error(error, delta)),
-                    pattern_error: arg
-                        .pattern_error
-                        .map(|error| shift_parse_error(error, delta)),
+                        .map(|error| map_parse_error(error, map)),
+                    pattern_error: arg.pattern_error.map(|error| map_parse_error(error, map)),
                 })
                 .collect(),
         ),
-        Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
-        Ast::Var(span, name) => Ast::Var(shift_span(span, delta), name),
-        Ast::InternalVar(span, name) => Ast::InternalVar(shift_span(span, delta), name),
-        Ast::Path(span, path) => Ast::Path(shift_span(span, delta), shift_ast_path(path, delta)),
+        Ast::Lit(span, lit) => Ast::Lit(map_span(span, map), lit),
+        Ast::Var(span, name) => Ast::Var(map_span(span, map), name),
+        Ast::InternalVar(span, name) => Ast::InternalVar(map_span(span, map), name),
+        Ast::Path(span, path) => Ast::Path(map_span(span, map), map_ast_path(path, map)),
         Ast::App(span, func, args) => Ast::App(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*func, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*func, map)),
             args.into_iter()
-                .map(|a| shift_record_lit_arg(a, delta))
+                .map(|a| map_record_lit_arg(a, map))
                 .collect(),
         ),
         Ast::ReturnTypeArgumentApply(span, target, args) => Ast::ReturnTypeArgumentApply(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*target, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*target, map)),
             args.into_iter()
-                .map(|arg| shift_return_type_argument(arg, delta))
+                .map(|arg| map_return_type_argument(arg, map))
                 .collect(),
         ),
         Ast::EnumConstructorCall(span, owner, type_args, variant, args) => {
             Ast::EnumConstructorCall(
-                shift_span(span, delta),
+                map_span(span, map),
                 owner,
                 type_args
                     .into_iter()
-                    .map(|ty| shift_ast_ty(ty, delta))
+                    .map(|ty| map_ast_ty(ty, map))
                     .collect(),
                 variant,
                 args.into_iter()
-                    .map(|arg| shift_record_lit_arg(arg, delta))
+                    .map(|arg| map_record_lit_arg(arg, map))
                     .collect(),
             )
         }
         Ast::Block(span, stmts) => Ast::Block(
-            shift_span(span, delta),
-            stmts
-                .into_iter()
-                .map(|s| shift_ast_span(s, delta))
-                .collect(),
+            map_span(span, map),
+            stmts.into_iter().map(|s| map_ast_span(s, map)).collect(),
         ),
         Ast::Bind(span, pat, rhs) => Ast::Bind(
-            shift_span(span, delta),
-            shift_pattern(pat, delta),
-            Box::new(shift_ast_span(*rhs, delta)),
+            map_span(span, map),
+            map_pattern(pat, map),
+            Box::new(map_ast_span(*rhs, map)),
         ),
         Ast::SafeBind(span, pat, rhs, operator_span) => Ast::SafeBind(
-            shift_span(span, delta),
-            shift_pattern(pat, delta),
-            Box::new(shift_ast_span(*rhs, delta)),
-            shift_span(operator_span, delta),
+            map_span(span, map),
+            map_pattern(pat, map),
+            Box::new(map_ast_span(*rhs, map)),
+            map_span(operator_span, map),
         ),
         Ast::Do(span, return_type_arguments, statements, keyword_span) => Ast::Do(
-            shift_span(span, delta),
+            map_span(span, map),
             return_type_arguments
                 .into_iter()
-                .map(|argument| shift_return_type_argument(argument, delta))
+                .map(|argument| map_return_type_argument(argument, map))
                 .collect(),
-            shift_do_statements(statements, delta),
-            shift_span(keyword_span, delta),
+            map_do_statements(statements, map),
+            map_span(keyword_span, map),
         ),
         Ast::BinOp(span, op, left, right) => Ast::BinOp(
-            shift_span(span, delta),
+            map_span(span, map),
             op,
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
         Ast::Pipe(span, left, right) => Ast::Pipe(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
         Ast::ContextMap(span, left, right) => Ast::ContextMap(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
         Ast::ContextApply(span, left, right) => Ast::ContextApply(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
         Ast::ContextBind(span, left, right) => Ast::ContextBind(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
         Ast::Compose(span, left, right) => Ast::Compose(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
         Ast::LiftedCompose(span, left, right) => Ast::LiftedCompose(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
         Ast::KleisliCompose(span, left, right) => Ast::KleisliCompose(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*left, delta)),
-            Box::new(shift_ast_span(*right, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*left, map)),
+            Box::new(map_ast_span(*right, map)),
         ),
-        Ast::ListNil(span) => Ast::ListNil(shift_span(span, delta)),
+        Ast::ListNil(span) => Ast::ListNil(map_span(span, map)),
         Ast::ListCons(span, head, tail) => Ast::ListCons(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*head, delta)),
-            Box::new(shift_ast_span(*tail, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*head, map)),
+            Box::new(map_ast_span(*tail, map)),
         ),
         Ast::ListLiteral(span, elems) => Ast::ListLiteral(
-            shift_span(span, delta),
-            elems
-                .into_iter()
-                .map(|e| shift_ast_span(e, delta))
-                .collect(),
+            map_span(span, map),
+            elems.into_iter().map(|e| map_ast_span(e, map)).collect(),
         ),
         Ast::HashMapLiteral(span, entries) => Ast::HashMapLiteral(
-            shift_span(span, delta),
+            map_span(span, map),
             entries
                 .into_iter()
                 .map(|entry| HashMapLiteralEntry {
-                    key: shift_ast_span(entry.key, delta),
-                    value: shift_ast_span(entry.value, delta),
+                    key: map_ast_span(entry.key, map),
+                    value: map_ast_span(entry.value, map),
                 })
                 .collect(),
         ),
         Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*start, delta)),
-            Box::new(shift_ast_span(*stop, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*start, map)),
+            Box::new(map_ast_span(*stop, map)),
         ),
         Ast::TupleLiteral(span, elems) => Ast::TupleLiteral(
-            shift_span(span, delta),
-            elems
-                .into_iter()
-                .map(|e| shift_ast_span(e, delta))
-                .collect(),
+            map_span(span, map),
+            elems.into_iter().map(|e| map_ast_span(e, map)).collect(),
         ),
         Ast::Cond(span, clauses) => Ast::Cond(
-            shift_span(span, delta),
+            map_span(span, map),
             clauses
                 .into_iter()
-                .map(|(condition, body)| {
-                    (
-                        shift_ast_span(condition, delta),
-                        shift_ast_span(body, delta),
-                    )
-                })
+                .map(|(condition, body)| (map_ast_span(condition, map), map_ast_span(body, map)))
                 .collect(),
         ),
-        Ast::Grouped(span, inner) => Ast::Grouped(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*inner, delta)),
-        ),
+        Ast::Grouped(span, inner) => {
+            Ast::Grouped(map_span(span, map), Box::new(map_ast_span(*inner, map)))
+        }
         Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
-            shift_span(span, delta),
+            map_span(span, map),
             parts
                 .into_iter()
                 .map(|p| match p {
                     InterpolatedPart::Text(s) => InterpolatedPart::Text(s),
                     InterpolatedPart::Expr(expr) => {
-                        InterpolatedPart::Expr(Box::new(shift_ast_span(*expr, delta)))
+                        InterpolatedPart::Expr(Box::new(map_ast_span(*expr, map)))
                     }
                 })
                 .collect(),
         ),
         Ast::Dbg(span, args) => Ast::Dbg(
-            shift_span(span, delta),
+            map_span(span, map),
             args.into_iter()
                 .map(|arg| DbgArg {
-                    span: shift_span(arg.span, delta),
-                    expr: shift_ast_span(arg.expr, delta),
+                    span: map_span(arg.span, map),
+                    expr: map_ast_span(arg.expr, map),
                 })
                 .collect(),
         ),
         Ast::Match(span, expr, arms) => Ast::Match(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*expr, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*expr, map)),
             arms.into_iter()
                 .map(|arm| AstMatchArm {
-                    pattern: shift_match_pattern(arm.pattern, delta),
-                    guard: arm.guard.map(|guard| shift_ast_span(guard, delta)),
-                    body: shift_ast_span(arm.body, delta),
+                    pattern: map_match_pattern(arm.pattern, map),
+                    guard: arm.guard.map(|guard| map_ast_span(guard, map)),
+                    body: map_ast_span(arm.body, map),
                 })
                 .collect(),
         ),
         Ast::BulkUpdate(span, source, entries) => Ast::BulkUpdate(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*source, delta)),
-            shift_bulk_update_entries(entries, delta),
+            map_span(span, map),
+            Box::new(map_ast_span(*source, map)),
+            map_bulk_update_entries(entries, map),
         ),
         Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*expr, delta)),
+            map_span(span, map),
+            Box::new(map_ast_span(*expr, map)),
             field,
         ),
         Ast::FacetSegmentAccess(span, expr, segment) => Ast::FacetSegmentAccess(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*expr, delta)),
-            shift_facet_path_segment(segment, delta),
+            map_span(span, map),
+            Box::new(map_ast_span(*expr, map)),
+            map_facet_path_segment(segment, map),
         ),
-        Ast::FacetCapture(span, expr) => Ast::FacetCapture(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*expr, delta)),
-        ),
+        Ast::FacetCapture(span, expr) => {
+            Ast::FacetCapture(map_span(span, map), Box::new(map_ast_span(*expr, map)))
+        }
         Ast::StructDef(span, name, type_params, fields, attrs) => Ast::StructDef(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             type_params
                 .into_iter()
                 .map(|param| TypeParam {
                     name: param.name,
                     bound: param.bound,
-                    span: shift_span(param.span, delta),
+                    span: map_span(param.span, map),
                 })
                 .collect(),
             fields
                 .into_iter()
                 .map(|f| StructField {
                     name: f.name,
-                    ty: shift_ast_ty(f.ty, delta),
-                    span: shift_span(f.span, delta),
+                    ty: map_ast_ty(f.ty, map),
+                    span: map_span(f.span, map),
                     visibility: f.visibility,
                     readonly: f.readonly,
                 })
                 .collect(),
-            shift_decl_attrs(attrs, delta),
+            map_decl_attrs(attrs, map),
         ),
         Ast::RecordDef(span, name, fields, attrs) => Ast::RecordDef(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             fields
                 .into_iter()
                 .map(|f| RecordField {
                     name: f.name,
-                    ty: shift_ast_ty(f.ty, delta),
-                    span: shift_span(f.span, delta),
+                    ty: map_ast_ty(f.ty, map),
+                    span: map_span(f.span, map),
                     visibility: f.visibility,
                     readonly: f.readonly,
                 })
                 .collect(),
-            shift_decl_attrs(attrs, delta),
+            map_decl_attrs(attrs, map),
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             fields
                 .into_iter()
                 .map(|field| match field {
                     StructLitField::Explicit(name, expr) => {
-                        StructLitField::Explicit(name, shift_ast_span(expr, delta))
+                        StructLitField::Explicit(name, map_ast_span(expr, map))
                     }
                     StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
                 })
                 .collect(),
         ),
         Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             fields
                 .into_iter()
                 .map(|field| match field {
                     StructLitField::Explicit(name, expr) => {
-                        StructLitField::Explicit(name, shift_ast_span(expr, delta))
+                        StructLitField::Explicit(name, map_ast_span(expr, map))
                     }
                     StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
                 })
                 .collect(),
         ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             args.into_iter()
-                .map(|a| shift_record_lit_arg(a, delta))
+                .map(|a| map_record_lit_arg(a, map))
                 .collect(),
         ),
         Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ast::DeferrorDef(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             fields
                 .into_iter()
                 .map(|f| RecordField {
                     name: f.name,
-                    ty: shift_ast_ty(f.ty, delta),
-                    span: shift_span(f.span, delta),
+                    ty: map_ast_ty(f.ty, map),
+                    span: map_span(f.span, map),
                     visibility: f.visibility,
                     readonly: f.readonly,
                 })
                 .collect(),
-            Box::new(shift_ast_span(*show_expr, delta)),
-            shift_decl_attrs(attrs, delta),
+            Box::new(map_ast_span(*show_expr, map)),
+            map_decl_attrs(attrs, map),
         ),
         Ast::EnumDef(span, name, type_params, variants, attrs) => Ast::EnumDef(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             type_params
                 .into_iter()
                 .map(|param| TypeParam {
                     name: param.name,
                     bound: param.bound,
-                    span: shift_span(param.span, delta),
+                    span: map_span(param.span, map),
                 })
                 .collect(),
             variants
@@ -2489,41 +2474,41 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     payload: variant
                         .payload
                         .into_iter()
-                        .map(|ty| shift_ast_ty(ty, delta))
+                        .map(|ty| map_ast_ty(ty, map))
                         .collect(),
                     discriminant: variant.discriminant,
-                    span: shift_span(variant.span, delta),
+                    span: map_span(variant.span, map),
                 })
                 .collect(),
-            shift_decl_attrs(attrs, delta),
+            map_decl_attrs(attrs, map),
         ),
         Ast::Def(span, name, return_type_arguments, params, ret_ty, where_clause, body, attrs) => {
             Ast::Def(
-                shift_span(span, delta),
+                map_span(span, map),
                 name,
                 return_type_arguments
                     .into_iter()
-                    .map(|argument| shift_return_type_argument(argument, delta))
+                    .map(|argument| map_return_type_argument(argument, map))
                     .collect(),
                 params
                     .into_iter()
-                    .map(|p| shift_value_parameter(p, delta))
+                    .map(|p| map_value_parameter(p, map))
                     .collect(),
-                ret_ty.map(|ty| shift_ast_ty(ty, delta)),
-                where_clause.map(|clause| shift_where_clause(clause, delta)),
-                Box::new(shift_ast_span(*body, delta)),
-                shift_decl_attrs(attrs, delta),
+                ret_ty.map(|ty| map_ast_ty(ty, map)),
+                where_clause.map(|clause| map_where_clause(clause, map)),
+                Box::new(map_ast_span(*body, map)),
+                map_decl_attrs(attrs, map),
             )
         }
         Ast::ConstDef(span, name, ty, value, attrs) => Ast::ConstDef(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
-            ty.map(|ty| shift_ast_ty(ty, delta)),
-            Box::new(shift_ast_span(*value, delta)),
-            shift_decl_attrs(attrs, delta),
+            ty.map(|ty| map_ast_ty(ty, map)),
+            Box::new(map_ast_span(*value, map)),
+            map_decl_attrs(attrs, map),
         ),
         Ast::SupervisorInit(span, spec) => Ast::SupervisorInit(
-            shift_span(span, delta),
+            map_span(span, map),
             SupervisorInitSpec {
                 entries: spec
                     .entries
@@ -2545,16 +2530,16 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                                         .map(|arg| SupervisorInitHandlerArg {
                                             name: arg.name,
                                             value: arg.value,
-                                            span: shift_span(arg.span, delta),
+                                            span: map_span(arg.span, map),
                                         })
                                         .collect(),
-                                    span: shift_span(handler.target.span, delta),
+                                    span: map_span(handler.target.span, map),
                                 },
-                                span: shift_span(handler.span, delta),
+                                span: map_span(handler.span, map),
                             })
                             .collect(),
                         overrides: entry.overrides,
-                        span: shift_span(entry.span, delta),
+                        span: map_span(entry.span, map),
                     })
                     .collect(),
                 singletons: spec
@@ -2577,15 +2562,15 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                                         .map(|arg| SupervisorInitHandlerArg {
                                             name: arg.name,
                                             value: arg.value,
-                                            span: shift_span(arg.span, delta),
+                                            span: map_span(arg.span, map),
                                         })
                                         .collect(),
-                                    span: shift_span(handler.target.span, delta),
+                                    span: map_span(handler.target.span, map),
                                 },
-                                span: shift_span(handler.span, delta),
+                                span: map_span(handler.span, map),
                             })
                             .collect(),
-                        span: shift_span(singleton.span, delta),
+                        span: map_span(singleton.span, map),
                     })
                     .collect(),
                 supervisors: spec
@@ -2594,30 +2579,30 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     .map(|supervisor| SupervisorInitOverride {
                         process_name: supervisor.process_name,
                         overrides: supervisor.overrides,
-                        span: shift_span(supervisor.span, delta),
+                        span: map_span(supervisor.span, map),
                     })
                     .collect(),
             },
         ),
         Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
             Ast::ExtractorDef(
-                shift_span(span, delta),
+                map_span(span, map),
                 name,
                 type_params
                     .into_iter()
                     .map(|param| TypeParam {
                         name: param.name,
                         bound: param.bound,
-                        span: shift_span(param.span, delta),
+                        span: map_span(param.span, map),
                     })
                     .collect(),
                 param
                     .into_iter()
-                    .map(|param| shift_extractor_param(param, delta))
+                    .map(|param| map_extractor_param(param, map))
                     .collect(),
-                shift_ast_ty(ret_ty, delta),
-                Box::new(shift_ast_span(*body, delta)),
-                shift_decl_attrs(attrs, delta),
+                map_ast_ty(ret_ty, map),
+                Box::new(map_ast_span(*body, map)),
+                map_decl_attrs(attrs, map),
             )
         }
         Ast::BuiltinDecl(
@@ -2629,128 +2614,125 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             where_clause,
             attrs,
         ) => Ast::BuiltinDecl(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             return_type_arguments
                 .into_iter()
-                .map(|argument| shift_return_type_argument(argument, delta))
+                .map(|argument| map_return_type_argument(argument, map))
                 .collect(),
             params
                 .into_iter()
-                .map(|p| shift_value_parameter(p, delta))
+                .map(|p| map_value_parameter(p, map))
                 .collect(),
-            ret_ty.map(|ty| shift_ast_ty(ty, delta)),
-            where_clause.map(|clause| shift_where_clause(clause, delta)),
-            shift_decl_attrs(attrs, delta),
+            ret_ty.map(|ty| map_ast_ty(ty, map)),
+            where_clause.map(|clause| map_where_clause(clause, map)),
+            map_decl_attrs(attrs, map),
         ),
         Ast::IntrinsicDecl(span, name, signature, attrs) => Ast::IntrinsicDecl(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             IntrinsicSignature {
                 raw: signature.raw,
                 return_type_arguments: signature
                     .return_type_arguments
                     .into_iter()
-                    .map(|argument| shift_return_type_argument(argument, delta))
+                    .map(|argument| map_return_type_argument(argument, map))
                     .collect(),
                 value_parameters: signature
                     .value_parameters
                     .into_iter()
-                    .map(|parameter| shift_value_parameter(parameter, delta))
+                    .map(|parameter| map_value_parameter(parameter, map))
                     .collect(),
-                return_type: signature.return_type.map(|ty| shift_ast_ty(ty, delta)),
+                return_type: signature.return_type.map(|ty| map_ast_ty(ty, map)),
                 where_clause: signature
                     .where_clause
-                    .map(|clause| shift_where_clause(clause, delta)),
+                    .map(|clause| map_where_clause(clause, map)),
             },
-            shift_decl_attrs(attrs, delta),
+            map_decl_attrs(attrs, map),
         ),
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             param
                 .into_iter()
-                .map(|param| shift_extractor_param(param, delta))
+                .map(|param| map_extractor_param(param, map))
                 .collect(),
-            shift_ast_ty(ret_ty, delta),
-            shift_decl_attrs(attrs, delta),
+            map_ast_ty(ret_ty, map),
+            map_decl_attrs(attrs, map),
         ),
         Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
-            shift_span(span, delta),
-            shift_builtin_type_head(head, delta),
-            shift_decl_attrs(attrs, delta),
+            map_span(span, map),
+            map_builtin_type_head(head, map),
+            map_decl_attrs(attrs, map),
         ),
-        Ast::TypeAlias(span, name, type_params, rhs) => Ast::TypeAlias(
-            shift_span(span, delta),
-            name,
-            type_params,
-            shift_ast_ty(rhs, delta),
-        ),
+        Ast::TypeAlias(span, name, type_params, rhs) => {
+            Ast::TypeAlias(map_span(span, map), name, type_params, map_ast_ty(rhs, map))
+        }
         Ast::Namespace(span, name, body) => Ast::Namespace(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             body.into_iter()
-                .map(|stmt| shift_ast_span(stmt, delta))
+                .map(|stmt| map_ast_span(stmt, map))
                 .collect(),
         ),
         Ast::Defmod(span, name, body, attrs) => Ast::Defmod(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
-            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
-            shift_decl_attrs(attrs, delta),
+            body.into_iter().map(|n| map_ast_span(n, map)).collect(),
+            map_decl_attrs(attrs, map),
         ),
         Ast::Defagent(span, name, body, process_spec, attrs) => Ast::Defagent(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
-            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
-            shift_process_spec(process_spec, delta),
-            shift_decl_attrs(attrs, delta),
+            body.into_iter().map(|n| map_ast_span(n, map)).collect(),
+            map_process_spec(process_spec, map),
+            map_decl_attrs(attrs, map),
         ),
         Ast::Defgenserver(span, name, body, process_spec, attrs) => Ast::Defgenserver(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
-            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
-            shift_process_spec(process_spec, delta),
-            shift_decl_attrs(attrs, delta),
+            body.into_iter().map(|n| map_ast_span(n, map)).collect(),
+            map_process_spec(process_spec, map),
+            map_decl_attrs(attrs, map),
         ),
         Ast::Defsupervisor(span, name, body, process_spec, attrs) => Ast::Defsupervisor(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
-            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
-            shift_process_spec(process_spec, delta),
-            shift_decl_attrs(attrs, delta),
+            body.into_iter().map(|n| map_ast_span(n, map)).collect(),
+            map_process_spec(process_spec, map),
+            map_decl_attrs(attrs, map),
         ),
         Ast::DefdynamicSupervisor(span, name, body, process_spec, attrs) => {
             Ast::DefdynamicSupervisor(
-                shift_span(span, delta),
+                map_span(span, map),
                 name,
-                body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
-                shift_process_spec(process_spec, delta),
-                shift_decl_attrs(attrs, delta),
+                body.into_iter().map(|n| map_ast_span(n, map)).collect(),
+                map_process_spec(process_spec, map),
+                map_decl_attrs(attrs, map),
             )
         }
         Ast::ImplDef(span, target, target_span, methods, attrs) => Ast::ImplDef(
-            shift_span(span, delta),
+            map_span(span, map),
             target,
-            shift_span(target_span, delta),
+            map_span(target_span, map),
             methods
                 .into_iter()
-                .map(|method| shift_ast_span(method, delta))
+                .map(|method| map_ast_span(method, map))
                 .collect(),
-            shift_decl_attrs(attrs, delta),
+            map_decl_attrs(attrs, map),
         ),
         Ast::TraitDef(span, name, type_params, where_clause, methods, attrs) => Ast::TraitDef(
-            shift_span(span, delta),
+            map_span(span, map),
             name,
             type_params
                 .into_iter()
                 .map(|param| TypeParam {
                     name: param.name,
                     bound: param.bound,
-                    span: shift_span(param.span, delta),
+                    span: map_span(param.span, map),
                 })
                 .collect(),
-            where_clause.map(|clause| shift_where_clause(clause, delta)),
+            where_clause.map(|clause| map_where_clause(clause, map)),
             methods
                 .into_iter()
                 .map(|method| TraitMethodSig {
@@ -2758,7 +2740,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     return_type_arguments: method
                         .return_type_arguments
                         .into_iter()
-                        .map(|argument| shift_return_type_argument(argument, delta))
+                        .map(|argument| map_return_type_argument(argument, map))
                         .collect(),
                     type_params: method
                         .type_params
@@ -2766,102 +2748,96 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                         .map(|param| TypeParam {
                             name: param.name,
                             bound: param.bound,
-                            span: shift_span(param.span, delta),
+                            span: map_span(param.span, map),
                         })
                         .collect(),
                     value_parameters: method
                         .value_parameters
                         .into_iter()
-                        .map(|param| shift_value_parameter(param, delta))
+                        .map(|param| map_value_parameter(param, map))
                         .collect(),
-                    ret_ty: shift_ast_ty(method.ret_ty, delta),
+                    ret_ty: map_ast_ty(method.ret_ty, map),
                     where_clause: method
                         .where_clause
-                        .map(|clause| shift_where_clause(clause, delta)),
-                    body: method
-                        .body
-                        .map(|body| Box::new(shift_ast_span(*body, delta))),
-                    attrs: shift_decl_attrs(method.attrs, delta),
-                    span: shift_span(method.span, delta),
+                        .map(|clause| map_where_clause(clause, map)),
+                    body: method.body.map(|body| Box::new(map_ast_span(*body, map))),
+                    attrs: map_decl_attrs(method.attrs, map),
+                    span: map_span(method.span, map),
                 })
                 .collect(),
-            shift_decl_attrs(attrs, delta),
+            map_decl_attrs(attrs, map),
         ),
         Ast::TraitImplDef(span, trait_name, trait_args, target, where_clause, methods, attrs) => {
             Ast::TraitImplDef(
-                shift_span(span, delta),
+                map_span(span, map),
                 trait_name,
                 trait_args
                     .into_iter()
-                    .map(|arg| shift_ast_ty(arg, delta))
+                    .map(|arg| map_ast_ty(arg, map))
                     .collect(),
-                shift_ast_ty(target, delta),
-                where_clause.map(|clause| shift_where_clause(clause, delta)),
+                map_ast_ty(target, map),
+                where_clause.map(|clause| map_where_clause(clause, map)),
                 methods
                     .into_iter()
-                    .map(|method| shift_ast_span(method, delta))
+                    .map(|method| map_ast_span(method, map))
                     .collect(),
-                shift_decl_attrs(attrs, delta),
+                map_decl_attrs(attrs, map),
             )
         }
         Ast::Import(span, path, spec) => {
-            Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
+            Ast::Import(map_span(span, map), map_ast_path(path, map), spec)
         }
-        Ast::Include(span, path) => Ast::Include(shift_span(span, delta), path),
+        Ast::Include(span, path) => Ast::Include(map_span(span, map), path),
         Ast::Closure(span, params, body) => Ast::Closure(
-            shift_span(span, delta),
+            map_span(span, map),
             params
                 .into_iter()
                 .map(|p| ClosureParam {
                     name: p.name,
-                    ty: p.ty.map(|ty| shift_ast_ty(ty, delta)),
-                    span: shift_span(p.span, delta),
+                    ty: p.ty.map(|ty| map_ast_ty(ty, map)),
+                    span: map_span(p.span, map),
                 })
                 .collect(),
-            Box::new(shift_ast_span(*body, delta)),
+            Box::new(map_ast_span(*body, map)),
         ),
         Ast::ExtractorClosure(span, params, body) => Ast::ExtractorClosure(
-            shift_span(span, delta),
+            map_span(span, map),
             params
                 .into_iter()
                 .map(|p| ClosureParam {
                     name: p.name,
-                    ty: p.ty.map(|ty| shift_ast_ty(ty, delta)),
-                    span: shift_span(p.span, delta),
+                    ty: p.ty.map(|ty| map_ast_ty(ty, map)),
+                    span: map_span(p.span, map),
                 })
                 .collect(),
-            Box::new(shift_ast_span(*body, delta)),
+            Box::new(map_ast_span(*body, map)),
         ),
         Ast::Capture(span, target, args) => Ast::Capture(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*target, delta)),
-            args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
+            map_span(span, map),
+            Box::new(map_ast_span(*target, map)),
+            args.into_iter().map(|a| map_ast_span(a, map)).collect(),
         ),
         Ast::NamedInfixRef(span, path) => Ast::NamedInfixRef(
-            shift_span(span, delta),
+            map_span(span, map),
             AstPath {
-                span: shift_span(path.span, delta),
+                span: map_span(path.span, map),
                 segments: path.segments,
             },
         ),
         Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(
-            shift_span(span, delta),
+            map_span(span, map),
             FuncLiteralRef {
-                span: shift_span(func.span, delta),
+                span: map_span(func.span, map),
                 body: func.body,
             },
         ),
-        Ast::CapturePlaceholder(span, index) => {
-            Ast::CapturePlaceholder(shift_span(span, delta), index)
+        Ast::CapturePlaceholder(span, index) => Ast::CapturePlaceholder(map_span(span, map), index),
+        Ast::StatementQuestion(span, inner) => {
+            Ast::StatementQuestion(map_span(span, map), Box::new(map_ast_span(*inner, map)))
         }
-        Ast::StatementQuestion(span, inner) => Ast::StatementQuestion(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*inner, delta)),
-        ),
-        Ast::Semi(span, inner) => Ast::Semi(
-            shift_span(span, delta),
-            Box::new(shift_ast_span(*inner, delta)),
-        ),
+        Ast::Semi(span, inner) => {
+            Ast::Semi(map_span(span, map), Box::new(map_ast_span(*inner, map)))
+        }
     }
 }
 

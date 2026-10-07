@@ -154,7 +154,8 @@ fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result
         ));
     }
     match parser.peek().clone() {
-        Token::DocString(text) => {
+        Token::DocString(raw) => {
+            let text = raw.text;
             if Parser::string_has_interpolation(&text) {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::DeclarationSyntax,
@@ -2372,7 +2373,8 @@ impl Parser<'_> {
                         ));
                     }
                     match self.peek().clone() {
-                        Token::DocString(text) => {
+                        Token::DocString(raw) => {
+                            let text = raw.text;
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
                                     crate::error::ParseErrorReason::DeclarationSyntax,
@@ -4080,7 +4082,8 @@ impl Parser<'_> {
                     }
                     let token = self.peek().clone();
                     match token {
-                        Token::DocString(text) => {
+                        Token::DocString(raw) => {
+                            let text = raw.text;
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
                                     crate::error::ParseErrorReason::DeclarationSyntax,

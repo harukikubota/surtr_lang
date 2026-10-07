@@ -532,9 +532,10 @@ fn normalize_triple_quoted_string(
     quote_start: usize,
     content_start: usize,
     content_end: usize,
-) -> Result<String, ParseError> {
+) -> Result<crate::token::RawStringLiteral, ParseError> {
     let base_indent = line_indent_before(chars, quote_start);
     let mut out = String::new();
+    let mut source_positions = Vec::new();
     let mut i = content_start;
     let mut at_line_start = content_start == 0 || chars[content_start - 1] == '\n';
 
@@ -542,10 +543,12 @@ fn normalize_triple_quoted_string(
         if !at_line_start {
             while i < content_end && chars[i] != '\n' {
                 out.push(chars[i]);
+                source_positions.push(i);
                 i += 1;
             }
             if i < content_end {
                 out.push(chars[i]);
+                source_positions.push(i);
                 i += 1;
                 at_line_start = true;
             }
@@ -558,12 +561,12 @@ fn normalize_triple_quoted_string(
             match chars[i] {
                 ' ' => {
                     columns += 1;
-                    indent_chars.push(chars[i]);
+                    indent_chars.push((chars[i], i));
                     i += 1;
                 }
                 '\t' => {
                     columns += 4 - (columns % 4);
-                    indent_chars.push(chars[i]);
+                    indent_chars.push((chars[i], i));
                     i += 1;
                 }
                 '\r' => {
@@ -571,6 +574,7 @@ fn normalize_triple_quoted_string(
                 }
                 '\n' => {
                     out.push(chars[i]);
+                    source_positions.push(i);
                     i += 1;
                     break;
                 }
@@ -585,13 +589,20 @@ fn normalize_triple_quoted_string(
                             },
                         ));
                     }
-                    push_indent_after_base(&mut out, &indent_chars, base_indent);
+                    push_indent_after_base(
+                        &mut out,
+                        &mut source_positions,
+                        &indent_chars,
+                        base_indent,
+                    );
                     while i < content_end && chars[i] != '\n' {
                         out.push(chars[i]);
+                        source_positions.push(i);
                         i += 1;
                     }
                     if i < content_end {
                         out.push(chars[i]);
+                        source_positions.push(i);
                         i += 1;
                     }
                     break;
@@ -601,13 +612,22 @@ fn normalize_triple_quoted_string(
         at_line_start = true;
     }
 
-    Ok(out)
+    Ok(crate::token::RawStringLiteral {
+        text: out,
+        source_positions,
+        source_end: content_end,
+    })
 }
 
-fn push_indent_after_base(out: &mut String, indent_chars: &[char], base_indent: usize) {
+fn push_indent_after_base(
+    out: &mut String,
+    source_positions: &mut Vec<usize>,
+    indent_chars: &[(char, usize)],
+    base_indent: usize,
+) {
     let mut columns = 0usize;
     let mut keep_from = indent_chars.len();
-    for (idx, ch) in indent_chars.iter().enumerate() {
+    for (idx, (ch, _)) in indent_chars.iter().enumerate() {
         let next_columns = match ch {
             ' ' => columns + 1,
             '\t' => columns + (4 - (columns % 4)),
@@ -623,8 +643,9 @@ fn push_indent_after_base(out: &mut String, indent_chars: &[char], base_indent: 
             break;
         }
     }
-    for ch in &indent_chars[keep_from..] {
+    for (ch, position) in &indent_chars[keep_from..] {
         out.push(*ch);
+        source_positions.push(*position);
     }
 }
 
@@ -745,14 +766,14 @@ mod tests {
     fn test_doc_string_token() {
         let tokens = tokenize("@doc \"\"\"\nHello\n\"\"\"").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
-        assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nHello\n"));
+        assert!(matches!(tokens[1].token, Token::DocString(ref s) if s.text == "\nHello\n"));
     }
 
     #[test]
     fn test_doc_string_allows_content_at_doc_indent_with_tabs() {
         let tokens = tokenize("\t@doc \"\"\"\n\tabcde\n\t    5\n\t\"\"\"").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
-        assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nabcde\n    5\n"));
+        assert!(matches!(tokens[1].token, Token::DocString(ref s) if s.text == "\nabcde\n    5\n"));
     }
 
     #[test]

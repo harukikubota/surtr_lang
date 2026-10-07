@@ -353,3 +353,118 @@ fn static_declaration_string_arguments_share_escape_rules() {
         ParseErrorReason::LiteralSyntax
     );
 }
+
+#[test]
+fn raw_interpolation_dedent_maps_multiline_ast_to_original_source() {
+    let source = "    \"\"\"あ\n    #{{left\n      right}}\n    #{last}\n    \"\"\"";
+    let ast = parse(source).unwrap();
+    let Ast::InterpolatedStr(_, parts) = &ast[0] else {
+        panic!("{ast:?}")
+    };
+    let expressions: Vec<_> = parts
+        .iter()
+        .filter_map(|part| match part {
+            InterpolatedPart::Expr(expr) => Some(expr.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let source_span = |needle: &str| {
+        let start = source[..source.find(needle).unwrap()].chars().count();
+        Span {
+            start,
+            end: start + needle.chars().count(),
+        }
+    };
+    let Ast::Closure(span, _, body) = expressions[0] else {
+        panic!("{expressions:?}")
+    };
+    let Ast::Block(_, values) = body.as_ref() else {
+        panic!("{body:?}")
+    };
+    assert_eq!(*span, source_span("{left\n      right}"));
+    assert!(matches!(&values[0], Ast::Var(span, _) if *span == source_span("left")));
+    assert!(matches!(&values[1], Ast::Var(span, _) if *span == source_span("right")));
+    assert!(matches!(expressions[1], Ast::Var(span, _) if *span == source_span("last")));
+    let tolerant = parse_tolerant_with_context(source, ParserContext::script(0), None);
+    assert!(
+        tolerant.diagnostics.is_empty(),
+        "{:?}",
+        tolerant.diagnostics
+    );
+    assert_eq!(tolerant.ast, ast);
+}
+
+#[test]
+fn raw_interpolation_dedent_preserves_parse_error_metadata() {
+    let source = "    \"\"\"あ\n    #{\n      )}\n    \"\"\"";
+    let error = parse(source).unwrap_err();
+    let direct = parse("\n  )").unwrap_err();
+    let start = source[..source.find(')').unwrap()].chars().count();
+    assert_eq!(
+        *error.span(),
+        Span {
+            start,
+            end: start + 1
+        }
+    );
+    assert_eq!(
+        *error.cursor_span(),
+        Span {
+            start,
+            end: start + 1
+        }
+    );
+    assert_eq!(error.reason(), ParseErrorReason::InterpolationSyntax);
+    assert_eq!(
+        error.message(),
+        format!("Invalid interpolation expression: {}", direct.message())
+    );
+    assert_eq!(error.expected_tokens(), direct.expected_tokens());
+    assert!(!error.is_incomplete());
+    let tolerant = parse_tolerant_with_context(source, ParserContext::script(0), None);
+    assert!(
+        tolerant.diagnostics.iter().any(|diag| diag.error == error),
+        "{:?}",
+        tolerant.diagnostics
+    );
+}
+
+#[test]
+fn raw_interpolation_maps_tabs_blank_lines_and_empty_error_cursor() {
+    let source = "\t\"\"\"あ\r\n\t  \r\n\t#{value}\r\n\t\"\"\"";
+    let ast = parse(source).unwrap();
+    let Ast::InterpolatedStr(_, parts) = &ast[0] else {
+        panic!("{ast:?}")
+    };
+    let start = source[..source.find("value").unwrap()].chars().count();
+    assert!(parts.iter().any(|part| matches!(part, InterpolatedPart::Expr(expr)
+        if matches!(expr.as_ref(), Ast::Var(span, _) if *span == (Span { start, end: start + 5 })))));
+    let tolerant = parse_tolerant_with_context(source, ParserContext::script(0), None);
+    assert_eq!(tolerant.ast, ast);
+    assert!(tolerant.diagnostics.is_empty());
+
+    let source = "    \"\"\"\n    #{(}\n    \"\"\"";
+    let error = parse(source).unwrap_err();
+    let direct = parse("(").unwrap_err();
+    let start = source.find('}').unwrap();
+    assert_eq!(*error.cursor_span(), Span { start, end: start });
+    assert!(!error.is_incomplete());
+    assert_eq!(error.reason(), ParseErrorReason::InterpolationSyntax);
+    assert_eq!(
+        error.message(),
+        format!("Invalid interpolation expression: {}", direct.message())
+    );
+    assert_eq!(error.expected_tokens(), direct.expected_tokens());
+}
+
+#[test]
+fn tolerant_raw_strings_reject_under_indentation_and_recover() {
+    let source = "    \"\"\"\n  invalid\n    \"\"\"\nnext = 2";
+    let error = parse(source).unwrap_err();
+    let tolerant = parse_tolerant_with_context(source, ParserContext::script(0), None);
+    assert!(tolerant.diagnostics.iter().any(|diag| diag.error == error));
+    assert!(tolerant
+        .ast
+        .iter()
+        .any(|ast| matches!(ast, Ast::Bind(_, _, _))));
+}

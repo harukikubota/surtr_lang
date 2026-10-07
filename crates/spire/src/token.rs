@@ -7,13 +7,37 @@ pub struct Spanned<T> {
     pub span: Span,
 }
 
+/// Dedented raw text and the original character position of each retained character.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawStringLiteral {
+    pub text: String,
+    pub(crate) source_positions: Vec<usize>,
+    pub(crate) source_end: usize,
+}
+
+impl RawStringLiteral {
+    pub(crate) fn source_span(&self, span: Span) -> Span {
+        let start = if span.start == self.source_positions.len() {
+            self.source_end
+        } else {
+            self.source_positions[span.start]
+        };
+        let end = if span.start == span.end {
+            start
+        } else {
+            self.source_positions[span.end - 1] + 1
+        };
+        Span { start, end }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     // ── Literals ──
     Int(SurtrInt),
     Float(f64),
     Str(crate::string_literal::StringLiteral),
-    DocString(String),
+    DocString(RawStringLiteral),
     True,
     False,
     Unit, // ()
