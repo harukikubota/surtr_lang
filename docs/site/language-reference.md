@@ -370,8 +370,22 @@ Ok(1) |*> add(2)            # => Ok(add(1, 2))
 ["a", "b"] |*> wrap("[", "]")
 ```
 
-`|*>` の右辺は plain function である必要があります。  
-`A -> Result<B>`、`A -> List<B>`、`A -> Option<B>` のような文脈付き関数は受けません。
+`|*>` の右辺は通常、文脈の中身 `A` から値 `B` を返す関数として推論されます。結果の型を指定せずに `Result`、`List`、`Option` などを返す関数を渡すと、型エラーになります。
+
+結果の型で入れ子を明示すれば、文脈付きの値も内側の値として保持できます。`|*>` は入れ子を平らにしません。
+
+```surtr
+nested: Result<Result<Int>> = Ok(1) |*> {|x: Int| Ok(x)}
+flat = Ok(1) |>= {|x: Int| Ok(x)}
+print(inspect(nested)) # Ok(Ok(1))
+print(inspect(flat))   # Ok(1)
+```
+
+次の例は結果の型を指定していないため、型エラーになります。
+
+```surtr
+value = Ok(1) |*> {|x: Int| Ok(x)}
+```
 
 #### `|>=` 文脈 bind
 

@@ -28,7 +28,7 @@
 | DA-05 | 中 | 対応済み（文書） | Fileの旧closure・mode表記 |
 | DA-06 | 中 | 対応済み（文書） | File例の戻り値型 |
 | DA-07 | 中 | 対応済み（文書） | FileHandleの保存禁止という説明 |
-| DA-08 | 中 | 文書不整合 | `\|*>` のcontextual mapper結果の受理条件 |
+| DA-08 | 中 | 対応済み（文書） | `\|*>` のcontextual mapper結果の受理条件 |
 | DA-09 | 低 | 対応済み（文書） | 存在しないNeq traitの列挙 |
 | DA-10 | 低 | 対応済み（文書） | `T?` と `Option<T>` の機能差を示す説明 |
 | DA-11 | 中 | 対応済み（文書） | 同じdirect TypeConstructor traitのwitness共有 |
@@ -162,6 +162,12 @@ print(inspect(value))
 ```
 
 - 対応・受入条件: plain mapperの推論規則と、明示されたnested expected typeによる受理を分けて説明する。成功・拒否の両例を置き、`|>=` との違いも値の入れ子／flattenで示す。既存の受理条件を文書だけで禁止へ変えない。
+
+#### 対応記録（2026-10-07）
+
+`function-operators.md` と `language-reference.md` の一律拒否の説明を修正した。通常の推論では文脈付きの mapper 結果を拒否することと、結果型で入れ子を明示すれば受理することを分け、成功・拒否の例を追加した。`Result<Result<Int>>` の型注釈を付けた `|*>` は `Ok(Ok(1))`、`|>=` は `Ok(1)` となる例で違いを示した。
+
+既存の `target/debug/surtr` で両ページの追加例を個別に検証した。成功例は `check` / `run` が終了コード0で、表示結果も記載どおり。未注釈の拒否例は `check --format json` が終了コード1、理由は `CallableShapeMismatch` だった。`git diff --check` は成功。製品コード・標準定義は変更せず、再ビルドとコンパイラ全体のテストは行っていない。
 
 ### DA-09 存在しないNeq traitをoperator dispatchに列挙する
 

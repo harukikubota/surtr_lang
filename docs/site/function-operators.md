@@ -103,8 +103,22 @@ users |*> _.name
 - `List<A> |*> (A -> B) -> List<B>`
 - `Option<A> |*> (A -> B) -> Option<B>`
 
-`Result` のときは `Err` をそのまま通します。  
-右辺は plain function である必要があり、`A -> Result<B>` は受けません。
+`Result` のときは `Err` をそのまま通します。右辺は通常、文脈の中身 `A` から値 `B` を返す関数として推論されます。結果の型を指定せずに `Result` などを返す関数を渡すと、型エラーになります。
+
+結果の型を `Result<Result<Int>>` のように明示すれば、右辺が返した `Result` を内側の値として保持できます。`|*>` は入れ子を平らにしません。次の処理が返す `Result` をそのまま結果にしたい場合は `|>=` を使います。
+
+```surtr
+nested: Result<Result<Int>> = Ok(1) |*> {|x: Int| Ok(x)}
+flat = Ok(1) |>= {|x: Int| Ok(x)}
+print(inspect(nested)) # Ok(Ok(1))
+print(inspect(flat))   # Ok(1)
+```
+
+次の例は結果の型を指定していないため、型エラーになります。
+
+```surtr
+value = Ok(1) |*> {|x: Int| Ok(x)}
+```
 
 ```surtr
 scores = [1, 2, 3] |*> add(10)
