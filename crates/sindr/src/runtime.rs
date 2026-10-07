@@ -831,6 +831,22 @@ impl ListHandle {
     }
 }
 
+impl Drop for ListHandle {
+    fn drop(&mut self) {
+        let mut repr = std::mem::replace(&mut self.repr, ListRepr::Empty);
+        while let ListRepr::Cons(node) = repr {
+            // A shared tail remains owned by its other handles.
+            let Ok(mut node) = Rc::try_unwrap(node) else {
+                break;
+            };
+            // Keep the existing head-before-tail destruction order. Only the
+            // tail chain is iterative; nested Values use their own destructors.
+            drop(node.value);
+            repr = std::mem::replace(&mut node.tail.repr, ListRepr::Empty);
+        }
+    }
+}
+
 impl PartialEq for ListHandle {
     fn eq(&self, other: &Self) -> bool {
         self.len == other.len && self.iter().eq(other.iter())
@@ -1560,6 +1576,45 @@ mod tests {
                 super::ListRepr::Empty
             ));
         }
+    }
+
+    #[test]
+    fn cons_drop_releases_unique_nodes_and_preserves_shared_storage() {
+        use std::rc::Rc;
+
+        let packed = ListHandle::from_items(vec![Value::Bool(true)]);
+        let super::ListRepr::Packed(storage) = &packed.repr else {
+            unreachable!()
+        };
+        let buffer = Rc::downgrade(&storage.items);
+        let shared_tail = ListHandle::cons(Value::Bool(false), &packed);
+        let super::ListRepr::Cons(node) = &shared_tail.repr else {
+            unreachable!()
+        };
+        let tail_node = Rc::downgrade(node);
+        let element_list = ListHandle::cons(Value::Unit, &ListHandle::empty());
+        let super::ListRepr::Cons(node) = &element_list.repr else {
+            unreachable!()
+        };
+        let element_node = Rc::downgrade(node);
+        let list = ListHandle::cons(Value::List(element_list), &shared_tail);
+        let super::ListRepr::Cons(node) = &list.repr else {
+            unreachable!()
+        };
+        let head_node = Rc::downgrade(node);
+        drop(packed);
+        drop(list);
+        assert!(head_node.upgrade().is_none());
+        assert!(element_node.upgrade().is_none());
+        assert!(tail_node.upgrade().is_some());
+        assert!(buffer.upgrade().is_some());
+        assert_eq!(
+            shared_tail.iter().collect::<Vec<_>>(),
+            vec![Value::Bool(false), Value::Bool(true)]
+        );
+        drop(shared_tail);
+        assert!(tail_node.upgrade().is_none());
+        assert!(buffer.upgrade().is_none());
     }
 
     #[test]

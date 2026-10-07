@@ -21,14 +21,6 @@
 
 ## Runtime の追加調査・最適化
 
-### RT-1 長い Cons の解放
-
-- 現状: `from_items` は Packed を作るが、`cons` や source-level の List 操作は長い Cons の鎖を作り得る。Cons の反復的な解放は未実装。
-- 記録: [release audit](v0.1_release_codebase_audit.md) には変更前の同形の鎖を10万要素解放した Rust probe で、stack overflow / exit 134 を確認した記録がある。Packed 導入後の再現条件と Surtr 実行時の閾値は未測定。
-- 次の作業: Cons の反復構築、共有 tail、Cons-over-Packed を分けて再現し、最後の所有者が解放する範囲を確認する。共有を維持した反復解放の方法を設計する。
-- 受け入れ条件: 大きい正常な List の生成・解放で abort せず、別の handle が参照する tail の値を保つ。入れ子の Value の解放も検証範囲に明記する。
-- 検証: Sindr の所有権・共有テストと、abort を隔離して確認できる subprocess の回帰テスト。
-
 ### RT-2 Packed の使用済み先頭部分の保持
 
 - 現状: 小さい suffix だけを保持しても、元の `Rc<Vec<Value>>` 全体が生存する。最後の参照の破棄では buffer 全体の解放が発生し得る。

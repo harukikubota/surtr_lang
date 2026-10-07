@@ -352,8 +352,10 @@ k 個の bind が末尾の M 要素を順に平坦化して返す場合、E = kM
 
 これらは要素の物理的な clone / drop、allocator、実時間、RSS の改善を保証しない。
 Packed の tail は参照中の buffer 全体を保持し、処理済みの先頭部分を自動で縮めない。
-最後の参照の破棄では元の buffer 全体を解放し得る。Cons の長い鎖の反復解放と、
-checkpoint の一般的なコピー削減も未実装である。
+最後の参照の破棄では元の buffer 全体を解放し得る。Cons の tail 鎖は最後の所有者が
+反復解放し、共有 tail に到達したらその参照だけを減らす。各 head は tail より先に解放する。
+固定深さの List / Tuple / Tagged / Callable に含まれる長い Cons も同じ処理を使う。
+任意の深さに入れ子になった Value 木全体の反復解放と、checkpoint の一般的なコピー削減は未実装である。
 
 ---
 
