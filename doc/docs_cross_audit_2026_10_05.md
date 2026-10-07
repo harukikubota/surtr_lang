@@ -36,7 +36,7 @@
 | DA-13 | 低 | 対応済み（文書） | Docs chunk・標準型の構成説明 |
 | DA-14 | 低 | 対応済み（文書） | 削除された計画へのリンク |
 | DA-15 | 中 | 対応済み（文書） | SRメモの予約名・shadowing状況 |
-| DA-16 | 低 | 残件管理 | OI-036の未確定扱い |
+| DA-16 | 低 | 対応済み（残件管理） | OI-036の未確定扱い |
 | DA-17 | 低 | 対応済み（残件管理） | ListのRT-6の対象記述 |
 | DA-18 | 低 | 対応済み（導線） | 存在しないOI-038への案内 |
 | DA-19 | 低 | 文書配置 | docs内の過去の実装計画 |
@@ -229,6 +229,10 @@ Markdownのローカルリンクを確認し、調査開始時の `docs/` 76フ�
 - 根拠: `doc/open-issues.md:348-363` はFacet captureの表示名・canonical identityを未確定とする。
 - 現行: `docs/dev/EldrVM_spec.md:249-253`、`lib/facet.srt:159-173` はFacet/view identityを明記する。`crates/forge/src/lib.rs:1525` の `facet_api_capture_preserves_resolved_callable_metadata` と `tests/fixtures/script/pass/functions/facet_view_capture_scope.{srt,expected}` が各APIとpath captureのmetadataを固定する。
 - 対応・受入条件: 上記で固定済みの範囲を台帳から除く。optional/fallible・再captureなど、元の受入inventoryの残りを確認してから項目全体の削除を判断する。既存テストを読んだ静的照合であり、本調査ではその全inventoryを再実行していない。
+
+#### 対応記録（2026-10-07）
+
+OI-036から未確定扱いだった表示identityの選択肢を除き、Eldr VMの確定契約へ揃えた。Forgeの8 APIと通常closure、実行fixtureの直接path・path変数・placeholder・putの表示検証を照合した。optional/fallibleな複数segment、Facet由来の再capture、REPLのnested表示のinventoryは未確認として残す。項目全体を解決済みにはしていない。文書だけの修正で、追加の実行テストは行っていない。
 
 ### DA-17 RT-6にmap/filterの移行済み範囲が反映されていない
 

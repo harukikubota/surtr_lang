@@ -345,22 +345,20 @@
   - 仕様確定後、Spireでrecord grammar、Sigilでowner / parameter scope、Scarでwell-formednessとFacet destination、Forge / Eldrで値表現を責務ごとに固定する。
   - parserだけを先行して`defstruct`のgeneric surfaceへ合わせるテストは追加しない。
 
-### OI-036 Facet capture callable identity
+### OI-036 Facet capture の残る検証範囲
 
-- 背景:
-  - [Eldr VM 仕様](../docs/dev/EldrVM_spec.md) に、callable の Capture / Closure origin と capture-site signature を値ごとの runtime metadata に保持する契約を定めている。
-  - Facet path capture は Scar が synthetic closure wrapper へ lower するため、source-level Capture origin と `FnCapture(module, name)` に出す canonical identity が失われうる。
-- 未確定点:
-  - Facet capture の表示名を `Facet` helper (`view` など) として出すか、Facet path の owner/segment を identity とするか。
-  - optional / fallible segment capture、複数 segment path、field update が identity にどう反映されるか。
-  - Facet capture の partial application / variable re-capture で identity を維持する canonical representation。
-- 受け入れ条件:
-  - Facet capture の source origin は closure literal と混同しない。
-  - canonical identity は path shape や lexical capture 順に依存せず決定的である。
-  - ordinary Closure display、type acceptance、Facet dispatch、privacy checks は変化しない。
-- テスト方針:
-  - identity 規約を要件定義へ確定してから、`scar` / `forge` / `eldr` に direct・optional・fallible path と partial/re-capture 境界を置く。
-  - Xldr では direct binding と struct / Result 等の nested field display が同じ metadata を使うことを確認する。
+- 確定済みの契約:
+  - [Eldr VM 仕様](../docs/dev/EldrVM_spec.md)はFacet API captureを `Facet` / API名で表示し、`&Type.path`・`&p`・`_.path` の読み取りを `Facet` / `view` とする。path ownerを表示identityにする案は未確定事項として残さない。
+  - 通常のclosure literalとの区別、capture位置で確定したsignature、partial applicationと変数経由の再captureによる由来の保持も同仕様に従う。
+- 確認済みの検証範囲:
+  - [Forgeの生成テスト](../crates/forge/src/lib.rs)の `facet_api_capture_preserves_resolved_callable_metadata` はview・put・set・preview・over・over_result・case_set・case_overと通常closureのmetadataを検証する。
+  - [実行fixture](../tests/fixtures/script/pass/functions/facet_view_capture_scope.srt)は直接path・path変数・placeholderの読み取り表示、putの表示、fallibleな添字と複数segmentの実行を検証する。
+- 未確認点:
+  - optional / fallibleな複数segment、Facet由来のpartial application・変数経由の再capture、REPLの直接bindingとnested field表示について、契約を覆うテストの対応表がまだ揃っていない。
+  - 既存fixtureの実行成功だけでは、すべての経路で表示metadataまで検証したことにはならない。
+- 受け入れ条件と次の作業:
+  - 上記の残る経路を既存テストと照合し、不足する境界だけを追加する。type acceptance、Facet dispatch、privacy checksは変えない。
+  - 確定済みのidentity契約に沿った検証が揃った時点で、この項目を削除する。今回の整理はソース・テストの読み取りに基づき、追加の実行検証はしていない。
 
 ## 更新ルール
 
