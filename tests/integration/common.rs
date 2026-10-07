@@ -280,6 +280,45 @@ mod tests {
     }
 
     #[test]
+    fn module_pass_fixture_rejects_missing_sidecar() {
+        let root = super::unique_temp_dir("module-pass-sidecar");
+        for name in ["complete", "missing_expected"] {
+            super::write_source(&root.join(name).join("entry.srt"), "1");
+            super::write_source(&root.join(name).join("entry.expected"), "1");
+        }
+        assert_eq!(super::collect_module_spec_fixtures(&root).len(), 2);
+        std::fs::remove_file(root.join("missing_expected/entry.expected")).unwrap();
+        let result = std::panic::catch_unwind(|| super::collect_module_spec_fixtures(&root));
+        std::fs::remove_dir_all(root).unwrap();
+        let error = result.expect_err("a missing sidecar must not silently remove a fixture");
+        let message = error
+            .downcast_ref::<String>()
+            .expect("string panic message");
+        assert!(message.contains("missing_expected"), "{message}");
+        assert!(message.contains("entry.expected"), "{message}");
+    }
+
+    #[test]
+    fn module_fail_fixture_rejects_missing_sidecar() {
+        let root = super::unique_temp_dir("module-fail-sidecar");
+        for name in ["complete", "missing_error"] {
+            super::write_source(&root.join(name).join("entry.srt"), "missing");
+            super::write_source(&root.join(name).join("entry.error"), "phase: resolve");
+        }
+        assert_eq!(super::collect_module_compile_error_fixtures(&root).len(), 2);
+        std::fs::remove_file(root.join("missing_error/entry.error")).unwrap();
+        let result =
+            std::panic::catch_unwind(|| super::collect_module_compile_error_fixtures(&root));
+        std::fs::remove_dir_all(root).unwrap();
+        let error = result.expect_err("a missing sidecar must not silently remove a fixture");
+        let message = error
+            .downcast_ref::<String>()
+            .expect("string panic message");
+        assert!(message.contains("missing_error"), "{message}");
+        assert!(message.contains("entry.error"), "{message}");
+    }
+
+    #[test]
     fn compile_error_matcher_checks_phase_and_needles() {
         let expected = CompileErrorExpectation {
             phase: Some("typecheck".to_string()),
@@ -416,28 +455,36 @@ pub fn module_spec_fixtures() -> Vec<ModuleSpecFixtureCase> {
 
     FIXTURES
         .get_or_init(|| {
-            let modules_root = repo_root().join("tests/fixtures/modules/pass");
-            let mut fixtures = sorted_immediate_subdirs(&modules_root)
-                .into_iter()
-                .filter_map(|case_dir| {
-                    let entry_path = case_dir.join("entry.srt");
-                    let expected_path = case_dir.join("entry.expected");
-                    expected_path.exists().then(|| ModuleSpecFixtureCase {
-                        case: ModuleFixtureCase {
-                            case_dir: case_dir.clone(),
-                            entry_path: entry_path.clone(),
-                            entry_source: leak_text(read_text(&entry_path)),
-                            module_stages: collect_module_fixture_stages(&case_dir),
-                        },
-                        expected_path: expected_path.clone(),
-                        expected: leak_text(read_text(&expected_path)),
-                    })
-                })
-                .collect::<Vec<_>>();
-            fixtures.sort_by(|a, b| a.case.case_dir.cmp(&b.case.case_dir));
-            fixtures
+            collect_module_spec_fixtures(&repo_root().join("tests/fixtures/modules/pass"))
         })
         .clone()
+}
+
+fn collect_module_spec_fixtures(modules_root: &Path) -> Vec<ModuleSpecFixtureCase> {
+    let mut fixtures = sorted_immediate_subdirs(modules_root)
+        .into_iter()
+        .map(|case_dir| {
+            let entry_path = case_dir.join("entry.srt");
+            let expected_path = case_dir.join("entry.expected");
+            assert!(
+                expected_path.exists(),
+                "missing entry.expected for module pass fixture: {}",
+                case_dir.display()
+            );
+            ModuleSpecFixtureCase {
+                case: ModuleFixtureCase {
+                    case_dir: case_dir.clone(),
+                    entry_path: entry_path.clone(),
+                    entry_source: leak_text(read_text(&entry_path)),
+                    module_stages: collect_module_fixture_stages(&case_dir),
+                },
+                expected_path: expected_path.clone(),
+                expected: leak_text(read_text(&expected_path)),
+            }
+        })
+        .collect::<Vec<_>>();
+    fixtures.sort_by(|a, b| a.case.case_dir.cmp(&b.case.case_dir));
+    fixtures
 }
 
 pub fn module_compile_error_fixtures() -> Vec<ModuleCompileErrorFixtureCase> {
@@ -445,27 +492,37 @@ pub fn module_compile_error_fixtures() -> Vec<ModuleCompileErrorFixtureCase> {
 
     FIXTURES
         .get_or_init(|| {
-            let modules_root = repo_root().join("tests/fixtures/modules/fail");
-            let mut fixtures = sorted_immediate_subdirs(&modules_root)
-                .into_iter()
-                .filter_map(|case_dir| {
-                    let entry_path = case_dir.join("entry.srt");
-                    let error_path = case_dir.join("entry.error");
-                    error_path.exists().then(|| ModuleCompileErrorFixtureCase {
-                        case: ModuleFixtureCase {
-                            case_dir: case_dir.clone(),
-                            entry_path: entry_path.clone(),
-                            entry_source: leak_text(read_text(&entry_path)),
-                            module_stages: collect_module_fixture_stages(&case_dir),
-                        },
-                        error_path,
-                    })
-                })
-                .collect::<Vec<_>>();
-            fixtures.sort_by(|a, b| a.case.case_dir.cmp(&b.case.case_dir));
-            fixtures
+            collect_module_compile_error_fixtures(&repo_root().join("tests/fixtures/modules/fail"))
         })
         .clone()
+}
+
+fn collect_module_compile_error_fixtures(
+    modules_root: &Path,
+) -> Vec<ModuleCompileErrorFixtureCase> {
+    let mut fixtures = sorted_immediate_subdirs(modules_root)
+        .into_iter()
+        .map(|case_dir| {
+            let entry_path = case_dir.join("entry.srt");
+            let error_path = case_dir.join("entry.error");
+            assert!(
+                error_path.exists(),
+                "missing entry.error for module fail fixture: {}",
+                case_dir.display()
+            );
+            ModuleCompileErrorFixtureCase {
+                case: ModuleFixtureCase {
+                    case_dir: case_dir.clone(),
+                    entry_path: entry_path.clone(),
+                    entry_source: leak_text(read_text(&entry_path)),
+                    module_stages: collect_module_fixture_stages(&case_dir),
+                },
+                error_path,
+            }
+        })
+        .collect::<Vec<_>>();
+    fixtures.sort_by(|a, b| a.case.case_dir.cmp(&b.case.case_dir));
+    fixtures
 }
 
 pub fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
