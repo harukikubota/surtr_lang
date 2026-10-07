@@ -224,11 +224,10 @@ print(to_string(user.age))
 - enum 値に対する field access はない
 - field の更新は代入ではなく、新しい値を組み立てる helper か Facet API で扱う
 
-### `Option<T>` field と `T?` field の使い分け
+### optional field の値変換と Facet 更新
 
-field を「値として optional に持つだけ」なら `Option<T>` でも問題ありません。
-ただし、構造体 field を `Facet` で取り出して `Result`-returning helper へ流したい場合は
-`T?` の方が更新パイプを短く保てます。
+`T?` は `Option<T>` の短い表記で、使える操作は同じです。
+field の値を取り出して `Result` を返す関数へ渡す場合は、明示的な変換を組み合わせます。
 
 ```surtr
 defstruct User {
@@ -242,8 +241,8 @@ next =
   |> to::<Option>()
 ```
 
-上のように `Option<T>` field は `Result` パイプへ入る前に `Option -> Result`、
-戻すときに `Result -> Option` の変換が要ります。
+この例の `next` は変換後の `Option<String>` です。`user` 自体は更新しません。
+構造体の中の `Some` の値を更新するなら、Facet の selector を使えます。
 
 ```surtr
 defstruct User {
@@ -253,9 +252,9 @@ defstruct User {
 next =? Facet::case_over(User.nickname.Some, user, normalize_name)
 ```
 
-`nickname: String?` は `Option<String>` と同じなので、
-optional payload を更新するときは required `Some` selector を経由した
-`Facet::case_over` / `Facet::case_set` が自然です。
+この例の `next` は更新後の `User` です。`nickname: Option<String>` と宣言しても、
+同じ `User.nickname.Some` と `Facet::case_over` / `Facet::case_set` を使えます。
+値の変換と構造体の更新の違いであり、型の表記による機能差はありません。
 
 たとえば `impl User` 内で `with_age` を定義して再構築できます。
 

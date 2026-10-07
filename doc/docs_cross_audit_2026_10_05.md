@@ -30,7 +30,7 @@
 | DA-07 | 中 | 文書不整合・契約整理 | FileHandleの保存禁止という説明 |
 | DA-08 | 中 | 文書不整合 | `\|*>` のcontextual mapper結果の受理条件 |
 | DA-09 | 低 | 対応済み（文書） | 存在しないNeq traitの列挙 |
-| DA-10 | 低 | 文書不整合 | `T?` と `Option<T>` の機能差を示す説明 |
+| DA-10 | 低 | 対応済み（文書） | `T?` と `Option<T>` の機能差を示す説明 |
 | DA-11 | 中 | 文書不整合 | 同じdirect TypeConstructor traitのwitness共有 |
 | DA-12 | 中 | 文書不整合 | 比較Boolean helperが非公開という説明 |
 | DA-13 | 低 | 文書不整合 | Docs chunk・標準型の構成説明 |
@@ -152,6 +152,10 @@ print(inspect(value))
 - 根拠: `docs/site/structs.md:227-257` は `T?` の方がFacet更新パイプを短く保てると説明し、`Option<T>` の例にだけ変換を要求する。
 - 現行: `crates/spire/src/parser/ty.rs:95-104` は `T?` をOptionのgeneric型へ変換。同ページ`:256` も同一型と明記する。
 - 対応・受入条件: パイプの短さは、値変換とFacetのSome selectorによる操作の違いとして説明する。両方の型表記で同じFacet操作が使えることを示す。静的照合のみ。
+
+#### 対応記録（2026-10-07）
+
+`structs.md` と `standard-library.md` で、`T?` と `Option<T>` が同じ型であることを前提に説明を揃えた。値を取り出して変換する例と、Facet で構造体を更新する例の結果を区別し、どちらの型表記でも同じ操作を使えると明記した。Spire の型構文と `lib/facet.srt` の契約を静的に照合し、リンク先と `git diff --check` を確認した。実行例の内容は変更せず、実行テストは行っていない。
 
 ### DA-11 direct parameterのwitness共有条件が食い違う
 

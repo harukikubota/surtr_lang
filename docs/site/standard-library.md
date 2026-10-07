@@ -423,8 +423,9 @@ user.nickname
 |> to::<Option>()
 ```
 
-`Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。
-`nickname: String?` も同じく `Option<String>` なので、この変換規則は変わりません。
+この例は field の値を取り出し、変換後の `Option` を返します。構造体自体を更新する場合は、
+`Some` selector を使う Facet 更新も選べます。どちらの操作も `T?` と `Option<T>` で同じです。
+詳しくは[optional field の値変換と Facet 更新](structs.md#optional-field-の値変換と-facet-更新)を参照してください。
 
 ## 12. `Facet` module の位置づけ
 
