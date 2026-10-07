@@ -348,7 +348,7 @@
 ### OI-036 Facet capture callable identity
 
 - 背景:
-  - [`callable-display-origin-spec.md`](./callable-display-origin-spec.md) で、callable の Capture / Closure origin と capture-site signature を値ごとの runtime metadata に保持する契約を整理した。
+  - [Eldr VM 仕様](../docs/dev/EldrVM_spec.md) に、callable の Capture / Closure origin と capture-site signature を値ごとの runtime metadata に保持する契約を定めている。
   - Facet path capture は Scar が synthetic closure wrapper へ lower するため、source-level Capture origin と `FnCapture(module, name)` に出す canonical identity が失われうる。
 - 未確定点:
   - Facet capture の表示名を `Facet` helper (`view` など) として出すか、Facet path の owner/segment を identity とするか。

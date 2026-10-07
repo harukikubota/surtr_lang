@@ -18,7 +18,7 @@
 | SR-12 | 可視性・拒否条件を確認 | public Constはimportなし、private Constはファイル内 |
 | SR-13 | 正本文書の整合済み | newの定義必須によるコンパイル時の呼出し先解決。実行時のResult値とは独立 |
 
-SR-01・07・10・11の具体的な根拠、未確定事項、受入条件は[呼出し解決・構文の計画](sr_call_resolution_syntax_plan.md)にまとめた。
+呼出しと予約名の現行仕様は[関数名と呼出し構文](../docs/site/callable-names.md)、Pattern consumer の現行契約は[Pattern / Extractor 実装契約](../docs/dev/Pattern_spec.md)を参照する。SR-01・07・10・11の当時の判断と残件は、本書の各節に記録する。
 
 ## SR-01: special formの呼出し先とスコープ解決
 

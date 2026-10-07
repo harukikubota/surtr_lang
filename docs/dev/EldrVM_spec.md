@@ -243,8 +243,9 @@ callable 値の signature の `Result` は `Result<T>`、ExtractorClosure 内の
 List / HashMap / tuple / tagged value の payload と field でも同じ callable 表示を再帰適用する。
 Callable 自身の runtime metadata を origin と signature の正本とし、closure body、parameter 名、lexical
 capture から Capture / Closure origin を推測しない。metadata を復元できない user-facing callable は汎用表示とし、
-内部の function / template / builtin ID を出力しない。詳細な callable 生成契約と受入 inventory は
-[`callable-display-origin-spec.md`](../../doc/callable-display-origin-spec.md) を参照。
+内部の function / template / builtin ID を出力しない。回帰境界は
+[Forge の生成テスト](../../crates/forge/src/lib.rs)と
+[Facet capture の実行例](../../tests/fixtures/script/pass/functions/facet_view_capture_scope.srt)で検証する。
 直接 binding と nested value は同一の runtime metadata を使い、REPL binding metadata が表示 origin を上書きしない。
 演算子 capture は lower 後の対応 Trait method の module / name を表示する。二要素 tuple の ``&`(,)` `` は
 `Bootstrap` / `(,)` を表示し、どちらも capture 作成位置で解決した実際の callable signature を使う。
