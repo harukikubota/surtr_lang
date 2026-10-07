@@ -4,6 +4,7 @@ use crate::{
     SerializableSourceFact, SourceId, SourceRegistry,
 };
 use ariadne::{Label, Report, ReportKind};
+use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, Write};
 
@@ -114,13 +115,13 @@ fn build_report(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RenderSourceId {
     Primary(String),
-    Auxiliary(SourceId, usize, String),
+    Registered(SourceId, String),
 }
 
 impl fmt::Display for RenderSourceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RenderSourceId::Primary(file_name) | RenderSourceId::Auxiliary(_, _, file_name) => {
+            RenderSourceId::Primary(file_name) | RenderSourceId::Registered(_, file_name) => {
                 f.write_str(file_name)
             }
         }
@@ -141,7 +142,7 @@ fn build_report_with_registry(
     let primary = normalized_char_span(primary_source, &spec.primary_span);
     let primary_range = primary.start..primary.end;
     let suppress_primary_label = spec.structured.is_some() && !spec.labels.is_empty();
-    let primary_render_source = RenderSourceId::Primary(primary_file_name.clone());
+    let primary_render_source = RenderSourceId::Registered(source_id, primary_file_name);
     let mut builder = Report::build(
         ReportKind::Error,
         (primary_render_source.clone(), primary_range.clone()),
@@ -158,26 +159,19 @@ fn build_report_with_registry(
 
     let mut cache = vec![(primary_render_source.clone(), primary_source.to_string())];
 
-    for (label_index, label) in spec.labels.iter().enumerate() {
+    let mut cached_sources = HashSet::from([source_id]);
+    for label in &spec.labels {
         let label_source_id = label.source_id.unwrap_or(source_id);
         let Some(label_entry) = sources.get(label_source_id) else {
             continue;
         };
         let label_span = normalized_char_span(&label_entry.source, &label.span);
         let label_range = label_span.start..label_span.end;
-        let label_render_source = if label.source_id.is_none() && label_source_id == source_id {
-            primary_render_source.clone()
-        } else {
-            let render_id = RenderSourceId::Auxiliary(
-                label_source_id,
-                label_index,
-                label_entry.file_name.clone(),
-            );
-            if !cache.iter().any(|(id, _)| id == &render_id) {
-                cache.push((render_id.clone(), label_entry.source.clone()));
-            }
-            render_id
-        };
+        let label_render_source =
+            RenderSourceId::Registered(label_source_id, label_entry.file_name.clone());
+        if cached_sources.insert(label_source_id) {
+            cache.push((label_render_source.clone(), label_entry.source.clone()));
+        }
         builder = builder.with_label(match label.color {
             Some(color) => Label::new((label_render_source, label_range))
                 .with_message(label.message.clone())
@@ -310,4 +304,48 @@ fn structured_expected_got(spec: &DiagnosticSpec) -> Option<(Option<String>, Opt
         DiagnosticData::Policy(value) => (value.expected_type, value.actual_type),
         _ => (None, None),
     })
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::{simple_error, DiagnosticLabel};
+    use spire::ast::Span;
+
+    #[test]
+    fn registry_cache_keeps_one_body_per_source_across_many_labels() {
+        let mut sources = SourceRegistry::new();
+        let text = "あx".repeat(4096);
+        let primary = sources.register("same.srt", text.clone());
+        // Distinct source identities must not collapse even with the same filename.
+        let related = sources.register("same.srt", "別y");
+        for label_count in [1, 10, 100] {
+            let mut spec = simple_error("TypeError", "test", Span { start: 1, end: 2 }, None);
+            for index in 0..label_count {
+                spec.labels.push(DiagnosticLabel {
+                    source_id: Some(primary),
+                    span: Span { start: 1, end: 2 },
+                    message: format!("primary {index}"),
+                    color: None,
+                });
+            }
+            spec.labels.push(DiagnosticLabel {
+                source_id: Some(related),
+                span: Span { start: 1, end: 2 },
+                message: "related".into(),
+                color: None,
+            });
+            let (report, cache) = build_report_with_registry(&sources, primary, &spec).unwrap();
+            assert_eq!(cache.len(), 2, "{label_count} labels");
+            assert_eq!(
+                cache.iter().map(|(_, body)| body.len()).sum::<usize>(),
+                text.len() + "別y".len()
+            );
+            let mut output = Vec::new();
+            report.write(ariadne::sources(cache), &mut output).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("primary 0"));
+            assert!(output.contains("related"));
+        }
+    }
 }
