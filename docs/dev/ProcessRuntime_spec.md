@@ -1494,6 +1494,8 @@ scheduler が runnable な実行を選び直したときに次の quantum を与
 継続状態は VM 内部にあり、利用者の process state / payload には入らない。
 immutable な値の backing storage は同一 VM 内で共有してよい。REPL checkpoint は中断中の状態も保存し、
 rollback 後は保存位置から再開する。外部 I/O の副作用を巻き戻す保証は加えない。
+checkpointはprocess・future・detached taskの表とentryを共有し、変更するentryだけを複製する。
+中断中の継続状態を変更する場合は、そのentry内の可変Builderも独立した状態へ複製し、保存位置を維持する。
 未分割の Rust loop・外部呼出し・要素の clone / drop は、実時間の公平性保証の対象外とする。
 
 ---

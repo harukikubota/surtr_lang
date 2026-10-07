@@ -333,7 +333,8 @@ compile / surface 契約との対応は次のとおり。
 共通予算を消費し、callback の命令も同じ予算で進める。mapper は入力順に一度だけ呼ぶ。
 mapper の結果が List でない不正な bytecode は RuntimeError とし、後続の mapper を実行しない。
 完了時にだけ Builder の buffer を ListHandle へ移す。中断状態や Builder は利用者の Value に追加しない。
-REPL checkpoint は Builder を独立に保存するが、通常の実行切替えでは所有権を移し、複製しない。
+REPL checkpointはprocess・future・detached taskの表とentryを共有し、変更するentryだけを複製する。
+そのentry内のBuilderも初回変更時に独立させ、保存した継続位置を維持する。通常の実行切替えでは所有権を移し、複製しない。
 
 要素操作を単位とする仮想計算量では、`cons` / `uncons` / `len` / `head` / `tail` は `O(1)`、
 全走査は `O(n)`、`append` は左辺の長さに比例する。flat_map は入力長を N、mapper が返す全要素数を M とすると
@@ -355,7 +356,8 @@ Packed の tail は参照中の buffer 全体を保持し、処理済みの先�
 最後の参照の破棄では元の buffer 全体を解放し得る。Cons の tail 鎖は最後の所有者が
 反復解放し、共有 tail に到達したらその参照だけを減らす。各 head は tail より先に解放する。
 固定深さの List / Tuple / Tagged / Callable に含まれる長い Cons も同じ処理を使う。
-任意の深さに入れ子になった Value 木全体の反復解放と、checkpoint の一般的なコピー削減は未実装である。
+任意の深さに入れ子になったValue木全体の反復解放は未実装である。
+checkpointの共有はprocess・future・detached taskの3表を対象とし、metadataやqueueなどの複製は残る。
 
 ---
 

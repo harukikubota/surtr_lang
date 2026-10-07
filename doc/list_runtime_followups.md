@@ -43,13 +43,14 @@
 - 受け入れ条件: 移行した処理が完了前に他の runnable task へ切り替わり、副作用・結果配送を重複させない。CPU yield と Future 待機を区別し、batch / REPL / Task / process の通常入口から確認する。
 - 制限: 処理を分割した範囲を明示する。未移行の処理、Value の物理操作、allocator を含む VM 全体の実時間上限は、別途根拠が必要。
 
-### RT-5 REPL checkpoint のコピー量
+### RT-5 REPL checkpoint の残るコピー量
 
-- 現状: 通常の実行切替えで Builder は複製されない。checkpoint では復元用に Builder と runtime の状態を独立して保存する。
-- 未確定点: process / future / continuation の保存を差分化するか、immutable 部分の共有を広げるか。
-- 次の作業: process 数、future 数、Builder の長さ、chunk 数を別々に増やして、入力ごとのコピー量とピークメモリを測る。[release audit](v0.1_release_codebase_audit.md) の checkpoint 項目と同じ作業として扱う。
-- 受け入れ条件: 失敗した chunk の進捗を破棄して保存位置から再開し、その位置より前の callback を呼び直さず、復帰先へ一度だけ結果を渡す。実行中の mutable Builder と保存状態を共有しない。失敗した chunk の外部 I/O は巻き戻さない。
-- 検証: 途中の出力追加・mapper 待機を含む VM / REPL の rollback テストと、成功 chunk の継続実行。
+- 現状: process・future・detached taskの3表とentryをcheckpointで共有し、変更時に表のindexと対象entryを複製する方式へ移行した。可変Builderはそのentryの初回変更時に独立させる。通常の実行切替えでは引き続き複製しない。
+- 確認済み: Builder長25の停止・待機process数1/8/32×checkpoint数1/4/16の9条件で、保存時のBuilder cloneはprocess数×checkpoint数から0になった。32 process×16回では12,800要素のコピーを省いた。測定条件と単発の経過時間は[release audit](v0.1_release_codebase_audit.md)に記録している。
+- 残る範囲: metadata、singleton/worker表、waiting/reply表、queueの複製と、変更時の表indexの複製が残る。これらの共有を広げるかは未決定で、runtime全体の定数時間保存を保証しない。
+- 次の作業: metadataやqueueの件数、future数、Builderの長さ、chunk数を分け、実chunk全体の時間とピークメモリを測る。停止済みPIDの回収契約は別に確定する。
+- 受け入れ条件: 失敗したchunkの進捗を破棄して保存位置から再開し、その位置より前のcallbackを呼び直さず、復帰先へ一度だけ結果を渡す。実行中に変更する可変Builderは保存状態から独立させる。失敗したchunkの外部I/Oは巻き戻さない。
+- 検証: 対象entryだけの複製、process/futureのrollbackと更新保持、別ownerのtaskを複製しないstop、Builder/cursorの再開を確認した。既存のVM/REPL rollback・成功chunkの継続実行も維持する。
 
 ### RT-6 追加の List 最適化
 

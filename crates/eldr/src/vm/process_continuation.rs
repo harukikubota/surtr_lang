@@ -665,7 +665,7 @@ impl VM {
         let saved = self.take_execution_context(saved_pc, ExecutionTarget::TopLevel);
         let result = (|| {
             for id in ids {
-                let Some(mut task) = self.process_runtime.detached_tasks.remove(&id) else {
+                let Some(mut task) = self.process_runtime.detached_tasks.take(&id) else {
                     continue;
                 };
                 if self.task_completion_ready(&task) && !task.cancelling {
@@ -889,10 +889,18 @@ impl VM {
     }
 
     pub(super) fn remove_process_detached_tasks(&mut self, pid: u64) {
-        self.process_runtime.detached_tasks.retain(|_, task| {
-            if task.owner_pid != Some(pid) {
-                return true;
-            }
+        let owned_ids = self
+            .process_runtime
+            .detached_tasks
+            .iter()
+            .filter_map(|(id, task)| (task.owner_pid == Some(pid)).then_some(*id))
+            .collect::<Vec<_>>();
+        for id in owned_ids {
+            let mut task = self
+                .process_runtime
+                .detached_tasks
+                .take(&id)
+                .expect("selected task remains registered during cancellation");
             match &mut task.state {
                 DetachedTaskState::Runnable(context)
                 | DetachedTaskState::Waiting {
@@ -901,11 +909,11 @@ impl VM {
                 } => {
                     Self::cancel_execution_context(context, RuntimeError::new("process stopped"));
                     task.cancelling = true;
-                    true
+                    self.process_runtime.detached_tasks.insert(id, task);
                 }
-                DetachedTaskState::Waiting { context: None, .. } => false,
+                DetachedTaskState::Waiting { context: None, .. } => {}
             }
-        });
+        }
     }
 
     fn complete_runtime_task(&mut self, completion: DetachedCompletion, value: Value) {

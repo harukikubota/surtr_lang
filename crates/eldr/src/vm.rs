@@ -2,8 +2,10 @@ mod test_runner;
 use test_runner::VmTestRunner;
 pub use test_runner::{VmTestCase, VmTestDeclaration, VmTestPolicy, VmTestScope, VmTestScopeKind};
 mod process_continuation;
+mod runtime_table;
 pub(crate) use process_continuation::RuntimeContinuation;
 use process_continuation::{DetachedTask, SingletonFlight};
+use runtime_table::RuntimeTable;
 use sindr::builtin::{builtin_meta_by_id, match_result_variant_meta};
 use sindr::ir::{
     line_column_for_offset, validate_chunk_function_table, validate_program_function_table,
@@ -517,14 +519,14 @@ struct ProcessRuntime {
     singleton_by_name: BTreeMap<String, u64>,
     singleton_inits: BTreeMap<String, SingletonFlight>,
     refilling_worker_sets: BTreeSet<u64>,
-    processes: BTreeMap<u64, ProcessInstance>,
-    futures: BTreeMap<FutureId, FutureRecord>,
+    processes: RuntimeTable<ProcessInstance>,
+    futures: RuntimeTable<FutureRecord>,
     reply_table: BTreeMap<CorrelationId, FutureId>,
     waiting_table: BTreeMap<u64, ProcessWaitReason>,
     deadline_queue: VecDeque<DeadlineEntry>,
     run_queue: VecDeque<u64>,
     output_events: VecDeque<RuntimeOutputEvent>,
-    detached_tasks: BTreeMap<u64, DetachedTask>,
+    detached_tasks: RuntimeTable<DetachedTask>,
     root_supervisor: RootSupervisorState,
     worker_sets: BTreeMap<u64, WorkerSetState>,
 }
