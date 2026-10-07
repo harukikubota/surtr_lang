@@ -384,12 +384,14 @@ defmod StyledDoc {
   @doc """
   Concatenate many documents in order.
   This is the multi-value companion to `append`.
+  Empty documents contribute no lines; explicit blank lines and styles are kept.
+  With N input documents and M total lines, the cost is O(N + M).
   ## REPL
   xldr(1)> StyledDoc::plain(StyledDoc::concat([StyledDoc::line("a"), StyledDoc::line("b")]))
   "a\nb"
   """
   def concat(docs: List<StyledDocDoc>) -> StyledDocDoc {
-    List::reduce(docs, empty(), {|acc, doc| append(acc, doc)})
+    StyledDocDoc(List::flat_map(docs, {|doc| doc.lines}))
   }
 
   @doc """
