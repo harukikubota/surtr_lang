@@ -4233,49 +4233,114 @@ fn json_variant(tag: u32, discriminant: i64, payload: Vec<Value>) -> Value {
     Value::Tagged { tag, fields }
 }
 
-fn json_value_to_surtr(
-    ctors: &JsonRuntimeConstructors,
-    value: serde_json::Value,
-) -> Result<Value, RuntimeError> {
-    match value {
-        serde_json::Value::Null => Ok(json_variant(ctors.null, 0, Vec::new())),
-        serde_json::Value::Bool(value) => {
-            Ok(json_variant(ctors.bool_, 1, vec![Value::Bool(value)]))
-        }
-        serde_json::Value::Number(number) => {
-            if let Some(value) = number.as_i64() {
-                Ok(json_variant(
-                    ctors.int,
-                    2,
-                    vec![Value::Int(BigInt::from(value))],
-                ))
-            } else if let Some(value) = number.as_u64() {
-                Ok(json_variant(
-                    ctors.int,
-                    2,
-                    vec![Value::Int(BigInt::from(value))],
-                ))
-            } else if let Some(value) = number.as_f64() {
-                if value.is_finite() {
-                    Ok(json_variant(ctors.float, 3, vec![Value::Float(value)]))
-                } else {
-                    Err(RuntimeError::new(
-                        "JsonValue::Float cannot represent NaN or infinity",
-                    ))
+struct JsonObjectEntries<'a>(Vec<(String, &'a serde_json::value::RawValue)>);
+
+impl<'de> serde::Deserialize<'de> for JsonObjectEntries<'de> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ObjectVisitor;
+        impl<'de> serde::de::Visitor<'de> for ObjectVisitor {
+            type Value = JsonObjectEntries<'de>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    entries.push(entry);
                 }
-            } else {
-                Err(RuntimeError::new(
-                    "serde_json number could not be represented",
-                ))
+                Ok(JsonObjectEntries(entries))
             }
         }
-        serde_json::Value::String(text) => {
-            Ok(json_variant(ctors.string, 4, vec![Value::Str(text)]))
+        deserializer.deserialize_map(ObjectVisitor)
+    }
+}
+
+enum JsonParseConversionError {
+    Invalid(String),
+    Internal(RuntimeError),
+}
+
+fn json_decode_error(
+    source: &str,
+    text: &str,
+    error: serde_json::Error,
+) -> JsonParseConversionError {
+    let offset = text.as_ptr() as usize - source.as_ptr() as usize;
+    let preceding_lines: usize = text
+        .split_inclusive('\n')
+        .take(error.line() - 1)
+        .map(str::len)
+        .sum();
+    let detail = error.to_string();
+    let suffix = format!(" at line {} column {}", error.line(), error.column());
+    let detail = detail.strip_suffix(&suffix).unwrap_or(&detail);
+    json_parse_error_at(source, offset + preceding_lines + error.column(), detail)
+}
+
+fn json_parse_error_at(source: &str, offset: usize, detail: &str) -> JsonParseConversionError {
+    let prefix = &source.as_bytes()[..offset];
+    let line = prefix.iter().filter(|&&byte| byte == b'\n').count() + 1;
+    let column = prefix
+        .iter()
+        .rposition(|&byte| byte == b'\n')
+        .map_or(prefix.len(), |newline| prefix.len() - newline - 1);
+    JsonParseConversionError::Invalid(format!("json parse error at {line}:{column}: {detail}"))
+}
+
+fn json_value_to_surtr(
+    ctors: &JsonRuntimeConstructors,
+    source: &str,
+    value: &serde_json::value::RawValue,
+    depth: usize,
+) -> Result<Value, JsonParseConversionError> {
+    let text = value.get();
+    // RawValue borrows a validated token from source, including in nested containers.
+    let offset = text.as_ptr() as usize - source.as_ptr() as usize;
+    match text.as_bytes()[0] {
+        b'n' => Ok(json_variant(ctors.null, 0, Vec::new())),
+        b't' | b'f' => Ok(json_variant(
+            ctors.bool_,
+            1,
+            vec![Value::Bool(text == "true")],
+        )),
+        b'-' | b'0'..=b'9' => {
+            if text.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
+                let number = serde_json::from_str::<f64>(text)
+                    .map_err(|error| json_decode_error(source, text, error))?;
+                Ok(json_variant(ctors.float, 3, vec![Value::Float(number)]))
+            } else {
+                let number = text.parse::<BigInt>().map_err(|error| {
+                    JsonParseConversionError::Internal(RuntimeError::new(format!(
+                        "validated JSON integer could not be decoded: {error}"
+                    )))
+                })?;
+                Ok(json_variant(ctors.int, 2, vec![Value::Int(number)]))
+            }
         }
-        serde_json::Value::Array(values) => {
+        b'"' => Ok(json_variant(
+            ctors.string,
+            4,
+            vec![Value::Str(
+                serde_json::from_str(text)
+                    .map_err(|error| json_decode_error(source, text, error))?,
+            )],
+        )),
+        b'[' | b'{' if depth >= 127 => Err(json_parse_error_at(
+            source,
+            offset + 1,
+            "recursion limit exceeded",
+        )),
+        b'[' => {
+            let values: Vec<&serde_json::value::RawValue> = serde_json::from_str(text)
+                .map_err(|error| json_decode_error(source, text, error))?;
             let items = values
                 .into_iter()
-                .map(|item| json_value_to_surtr(ctors, item))
+                .map(|item| json_value_to_surtr(ctors, source, item, depth + 1))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(json_variant(
                 ctors.array,
@@ -4283,14 +4348,20 @@ fn json_value_to_surtr(
                 vec![Value::List(ListHandle::from_items(items))],
             ))
         }
-        serde_json::Value::Object(entries) => {
+        b'{' => {
+            // Decode ordinary keys directly, including serde_json's private marker names.
+            let JsonObjectEntries(entries) = serde_json::from_str(text)
+                .map_err(|error| json_decode_error(source, text, error))?;
             let mut map = HashMapHandle::empty();
             for (key, value) in entries {
-                let converted = json_value_to_surtr(ctors, value)?;
+                let converted = json_value_to_surtr(ctors, source, value, depth + 1)?;
                 map = map.insert(key, converted);
             }
             Ok(json_variant(ctors.object, 6, vec![Value::HashMap(map)]))
         }
+        _ => Err(JsonParseConversionError::Internal(RuntimeError::new(
+            "validated JSON has an unknown token kind",
+        ))),
     }
 }
 
@@ -4298,25 +4369,27 @@ fn builtin_json_parse(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErr
     let [Value::Str(text)] = args.as_slice() else {
         return Err(RuntimeError::new("json_parse expects String"));
     };
-    match serde_json::from_str::<serde_json::Value>(text) {
+    match serde_json::from_str::<&serde_json::value::RawValue>(text) {
         Ok(value) => {
             let ctors = json_constructors(vm)?;
-            let converted = json_value_to_surtr(&ctors, value)?;
-            Ok(ok_result(converted))
+            match json_value_to_surtr(&ctors, text, value, 0) {
+                Ok(converted) => Ok(ok_result(converted)),
+                Err(JsonParseConversionError::Invalid(message)) => {
+                    Ok(err_result(vm, "JsonParseError", &message))
+                }
+                Err(JsonParseConversionError::Internal(error)) => Err(error),
+            }
         }
-        Err(err) => {
-            let detail = err.to_string();
-            Ok(err_result(
-                vm,
-                "JsonParseError",
-                &format!(
-                    "json parse error at {}:{}: {}",
-                    err.line(),
-                    err.column(),
-                    detail
-                ),
-            ))
-        }
+        Err(err) => Ok(err_result(
+            vm,
+            "JsonParseError",
+            &format!(
+                "json parse error at {}:{}: {}",
+                err.line(),
+                err.column(),
+                err
+            ),
+        )),
     }
 }
 
@@ -5465,18 +5538,20 @@ mod tests {
     #[test]
     fn json_parse_returns_err_for_malformed_json() {
         let mut vm = json_vm();
-        let result = call_builtin(
-            &mut vm,
-            builtin_id("json_parse"),
-            vec![Value::Str("{".into())],
-        )
-        .expect("json_parse itself should not raise RuntimeError for malformed user JSON");
-        match result {
-            Value::Tagged { tag: 1, fields } => match fields.as_slice() {
-                [Value::Error(rich)] => assert_eq!(rich.kind, "Global::JsonParseError"),
-                other => panic!("expected JsonParseError value, got {:?}", other),
-            },
-            other => panic!("expected Err result, got {:?}", other),
+        for text in ["{", "1e400", "-1e400", "[1e400]", "{\"n\":1e400}"] {
+            let result = call_builtin(
+                &mut vm,
+                builtin_id("json_parse"),
+                vec![Value::Str(text.into())],
+            )
+            .expect("invalid user JSON should not raise RuntimeError");
+            match result {
+                Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+                    [Value::Error(rich)] => assert_eq!(rich.kind, "Global::JsonParseError"),
+                    other => panic!("expected JsonParseError value for {text}, got {other:?}"),
+                },
+                other => panic!("expected Err result for {text}, got {other:?}"),
+            }
         }
     }
 
@@ -5485,11 +5560,152 @@ mod tests {
         let int_value = parse_json_ok("1");
         assert_json_variant(&int_value, "JsonValue::Int");
 
-        let decimal_value = parse_json_ok("1.5");
-        assert_json_variant(&decimal_value, "JsonValue::Float");
+        for text in ["1.0", "1.5", "1e2", "1E+2", "-0.0", "1e-400"] {
+            let value = parse_json_ok(text);
+            assert_json_variant(&value, "JsonValue::Float");
+            assert_eq!(
+                value,
+                json_variant(13, 3, vec![Value::Float(text.parse().unwrap())]),
+                "{text}"
+            );
+        }
+    }
 
-        let exponent_value = parse_json_ok("1e2");
-        assert_json_variant(&exponent_value, "JsonValue::Float");
+    #[test]
+    fn json_parse_preserves_integer_precision_across_machine_boundaries() {
+        let beyond_float_range = format!("1{}", "0".repeat(400));
+        for text in [
+            "9223372036854775807",
+            "9223372036854775808",
+            "18446744073709551615",
+            "18446744073709551616",
+            "18446744073709551617",
+            "-9223372036854775808",
+            "-9223372036854775809",
+            "-18446744073709551617",
+            "0",
+            "-0",
+            beyond_float_range.as_str(),
+        ] {
+            let value = parse_json_ok(text);
+            assert_json_variant(&value, "JsonValue::Int");
+            assert_eq!(
+                value,
+                json_variant(12, 2, vec![Value::Int(text.parse().unwrap())]),
+                "integer literal must retain its exact value: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn json_parse_keeps_private_metadata_keys_as_object() {
+        for key in [
+            "$serde_json::private::Number",
+            "$serde_json::private::RawValue",
+        ] {
+            let value = parse_json_ok(&format!(r#"{{"{key}":"123"}}"#));
+            assert_eq!(
+                value,
+                json_object_value(vec![(
+                    key,
+                    json_variant(14, 4, vec![Value::Str("123".into())])
+                )])
+            );
+        }
+        assert_eq!(
+            parse_json_ok(r#"{"n":1,"n":2}"#),
+            json_object_value(vec![("n", json_int_value(2))])
+        );
+        let nested = parse_json_ok(r#"{"n":[18446744073709551617]}"#);
+        assert_eq!(
+            nested,
+            json_object_value(vec![(
+                "n",
+                json_variant(
+                    15,
+                    5,
+                    vec![Value::List(ListHandle::from_items(vec![json_variant(
+                        12,
+                        2,
+                        vec![Value::Int("18446744073709551617".parse().unwrap())]
+                    )]))]
+                )
+            )])
+        );
+    }
+
+    #[test]
+    fn json_parse_preserves_error_locations_and_nesting_limit() {
+        assert_eq!(
+            parse_json_ok(r#""\uD83D\uDE00""#),
+            json_variant(14, 4, vec![Value::Str("😀".into())])
+        );
+        for text in [
+            "1e400",
+            "[1e400]",
+            "{\n  \"n\": 1e400\n}",
+            r#"{"n":1e400,"n":1}"#,
+            r#""\uD800""#,
+            r#""\uDC00""#,
+            r#"{"\uD800":1}"#,
+            r#"{"\uDC00":1}"#,
+            "{\n \"a\": [\n \"\\uD800\"]}",
+            "{\n \"a\": {\n \"\\uDC00\": 1}}",
+        ] {
+            let original_error = serde_json::from_str::<serde_json::Value>(text).unwrap_err();
+            let mut vm = json_vm();
+            let result = call_builtin(
+                &mut vm,
+                builtin_id("json_parse"),
+                vec![Value::Str(text.into())],
+            )
+            .unwrap();
+            let Value::Tagged { tag: 1, fields } = result else {
+                panic!("expected Err")
+            };
+            let [Value::Error(error)] = fields.as_slice() else {
+                panic!("expected error")
+            };
+            assert_eq!(error.kind, "Global::JsonParseError");
+            assert!(
+                error.message.contains(&format!(
+                    "json parse error at {}:{}:",
+                    original_error.line(),
+                    original_error.column()
+                )),
+                "{}",
+                error.message
+            );
+        }
+        let allowed = format!("{}0{}", "[".repeat(127), "]".repeat(127));
+        parse_json_ok(&allowed);
+        let rejected = format!("{}0{}", "[".repeat(128), "]".repeat(128));
+        let mut vm = json_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("json_parse"),
+            vec![Value::Str(rejected)],
+        )
+        .unwrap();
+        assert!(
+            matches!(result, Value::Tagged { tag: 1, fields } if matches!(fields.as_slice(), [Value::Error(error)] if error.kind == "Global::JsonParseError" && error.message.contains("recursion limit exceeded")))
+        );
+    }
+
+    #[test]
+    fn json_stringify_keeps_rejecting_out_of_range_integers() {
+        let mut vm = json_vm();
+        for text in ["18446744073709551617", "-9223372036854775809"] {
+            let value = json_variant(12, 2, vec![Value::Int(text.parse().unwrap())]);
+            let result = call_builtin(&mut vm, builtin_id("json_stringify"), vec![value])
+                .expect("unsupported JSON integer should return a language error");
+            assert!(
+                matches!(result, Value::Tagged { tag: 1, fields }
+                if matches!(fields.as_slice(), [Value::Error(error)]
+                    if error.kind == "Global::JsonEncodeError")),
+                "{text}"
+            );
+        }
     }
 
     #[test]

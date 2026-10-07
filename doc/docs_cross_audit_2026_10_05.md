@@ -21,7 +21,7 @@
 
 | ID | 優先度 | 分類 | 対応対象 |
 |---|---|---|---|
-| DA-01 | 高 | 実装バグ | JSON巨大整数のFloat降格・精度損失 |
+| DA-01 | 高 | 修正済み | JSON巨大整数のFloat降格・精度損失 |
 | DA-02 | 中 | 実装バグ | FSの巨大負depthがRuntimeErrorになる |
 | DA-03 | 中 | authority修正済み・一部未確定 | LSP file URIのauthorityが相対pathになる |
 | DA-04 | 中 | 対応済み（文書） | JSONの旧decode API・旧impl署名 |
@@ -65,6 +65,12 @@ Err(JsonEncodeError("json encode error: JsonValue::Int cannot be represented as 
 - 対応: 整数literalの分類・値をBigIntとして保つ。巨大整数のstringifyが `JsonEncodeError` になること自体は、stringify不能値の拒否契約と分けて扱う。stringifyの公開範囲も整合確認するが、今回の確定バグはparseが丸めた値を成功として返す点。
 - 受入条件: i64/u64境界とその外側の正負の整数を、Floatに変えず正確にparseする。decimal/exponentの現行分類を保つ。旧降格経路は残さない。
 - テスト境界: `crates/eldr/src/builtin.rs:5484` 付近の既存JSON分類テストは通常サイズを確認する。数値境界はruntime層へ置き、JSON文書の分類例も確認する。目安level3。
+
+#### 対応記録（2026-10-07）
+
+整数の原字句をserde_jsonのRawValueで保持し、直接BigIntへ変換するよう修正した（level3）。i64/u64への変換とFloatへの降格経路を削除した。小数・指数は従来どおりfiniteなFloatとし、巨大Intのstringify拒否は今回の対象外として維持する。
+
+u64範囲外でFloatになるRedを確認後、正負の境界・401桁整数・入れ子・小数/指数・非有限数の拒否を検証した。objectの特殊な名前のキー、重複キーの最後の値、上書き前の不正値の拒否、127段成功/128段拒否も維持する。主担当レビューで追加した不正surrogateの値/キーは当初RuntimeErrorとなったため、元ソースのline/column付きJsonParseErrorへ修正した。追加後のJSON関連7件成功。Eldr全277件の成功はこの追加修正前の結果で、最終全体検証は一連の修正後に行う。
 
 ### DA-02 FS::tree_depthの巨大負数がResultの外へ落ちる
 

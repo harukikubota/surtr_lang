@@ -376,6 +376,7 @@ dependencies = [
  "diagnostics",
  "num-bigint",
  "regex",
+ "serde",
  "serde_json",
  "sindr",
 ]
