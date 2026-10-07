@@ -22,7 +22,7 @@
 | ID | 優先度 | 分類 | 対応対象 |
 |---|---|---|---|
 | DA-01 | 高 | 修正済み | JSON巨大整数のFloat降格・精度損失 |
-| DA-02 | 中 | 実装バグ | FSの巨大負depthがRuntimeErrorになる |
+| DA-02 | 中 | 修正済み | FSの巨大負depthがRuntimeErrorになる |
 | DA-03 | 中 | authority修正済み・一部未確定 | LSP file URIのauthorityが相対pathになる |
 | DA-04 | 中 | 対応済み（文書） | JSONの旧decode API・旧impl署名 |
 | DA-05 | 中 | 対応済み（文書） | Fileの旧closure・mode表記 |
@@ -85,6 +85,12 @@ print(inspect(FS::tree_depth(root, -18446744073709551617)))
 
 - 対応: BigIntの符号を先に判定し、すべての負数を公開APIの `Err` として返す。非負の巨大depthについてもOS側の有限表現との境界を明記する。
 - 受入条件: `-1`、i64最小値より小さい負数、`0` を区別して検証する。正常な型の公開入力を内部契約違反へ変えない。目安level2、公開範囲の新規決定が必要ならlevel4。
+
+#### 対応記録（2026-10-07）
+
+depthをi64へ縮小する処理を削除し、負数を先にFileSystemInvalidDepthとして返すよう修正した（level2）。指定depthはOS APIへ渡されず探索内の比較にだけ使うため、指定値と現在深さをBigIntのまま扱い、非負値にも新しい上限や丸めを設けず既存のInt契約を満たした。未使用のOption既定値経路も削除した。
+
+旧実装ではi64最小値未満の負数とi64最大値超の正数でRuntimeErrorになるRedを確認した。修正後は負数、0、1/2段、i64/usizeを超える値、401桁の正数を検証し、filesystem関連5件とEldr全279件が成功。FS/Shell正本も固定幅上限を設けない比較へ追従した。主担当レビュー・差分検査済み。
 
 ### DA-03 LSP file URIのauthorityをpathの一部にしてしまう
 

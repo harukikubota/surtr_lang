@@ -217,6 +217,7 @@ defmod FS {
 `FS::ls` は直下 entry だけを取得する。
 `FS::tree_depth(path, depth)` は root 配下を depth まで再帰的に取得する。
 `depth < 0` は `Err(FileSystemInvalidDepth(depth))` を返す。
+探索中の深さと指定した深さは `Int` のまま比較し、固定幅整数の上限を設けない。
 
 `FS::rm` は file または空 directory を 1 つ削除する。危険な再帰削除
 `rm_all` は v1 に含めない。

@@ -3255,20 +3255,25 @@ fn builtin_filesystem_stat(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
 
 fn builtin_filesystem_ls(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let path = decode_file_path_arg(vm, &args[0], "filesystem_ls", "path")?;
-    filesystem_snapshot(vm, path, Some(1))
+    filesystem_snapshot(vm, path, &int(1))
 }
 
 fn builtin_filesystem_tree_depth(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let path = decode_file_path_arg(vm, &args[0], "filesystem_tree_depth", "path")?;
-    let depth = decode_int_i64_arg(&args[1], "filesystem_tree_depth", "depth")?;
-    if depth < 0 {
+    let Value::Int(depth) = &args[1] else {
+        return Err(RuntimeError::new(format!(
+            "filesystem_tree_depth expects Int as depth, got {:?}",
+            args[1]
+        )));
+    };
+    if depth.sign() == Sign::Minus {
         return Ok(filesystem_error_with_message(
             vm,
             "FileSystemInvalidDepth",
             &format!("invalid filesystem tree depth: {depth}"),
         ));
     }
-    filesystem_snapshot(vm, path, Some(depth as usize))
+    filesystem_snapshot(vm, path, depth)
 }
 
 fn builtin_filesystem_mkdir(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -3944,24 +3949,6 @@ fn decode_file_path_arg<'a>(
         other => Err(RuntimeError::new(format!(
             "{builtin_name} expects FilePath.raw String field for {arg_name}, got {} fields",
             other.len()
-        ))),
-    }
-}
-
-fn decode_int_i64_arg(
-    value: &Value,
-    builtin_name: &str,
-    arg_name: &str,
-) -> Result<i64, RuntimeError> {
-    match value {
-        Value::Int(num) => num.to_i64().ok_or_else(|| {
-            RuntimeError::new(format!(
-                "{builtin_name} Int argument {arg_name} is out of range for i64: {num}"
-            ))
-        }),
-        other => Err(RuntimeError::new(format!(
-            "{builtin_name} expects Int as {arg_name}, got {:?}",
-            other
         ))),
     }
 }
@@ -4690,20 +4677,14 @@ fn filesystem_entry(vm: &VM, raw_path: &str) -> Result<Result<Value, Value>, Run
     )?))
 }
 
-fn filesystem_snapshot(
-    vm: &VM,
-    root_raw: &str,
-    max_depth: Option<usize>,
-) -> Result<Value, RuntimeError> {
+fn filesystem_snapshot(vm: &VM, root_raw: &str, max_depth: &BigInt) -> Result<Value, RuntimeError> {
     let root_host = vm.resolve_host_path(root_raw);
     if !root_host.is_dir() {
         return Ok(filesystem_error(vm, "FileSystemNotDirectory", root_raw));
     }
 
     let mut paths = Vec::new();
-    if let Err(err) =
-        collect_filesystem_entries(vm, root_raw, 1, max_depth.unwrap_or(1), &mut paths)
-    {
+    if let Err(err) = collect_filesystem_entries(vm, root_raw, int(1), max_depth, &mut paths) {
         return Ok(err);
     }
     paths.sort();
@@ -4729,11 +4710,11 @@ fn filesystem_snapshot(
 fn collect_filesystem_entries(
     vm: &VM,
     raw_path: &str,
-    current_depth: usize,
-    max_depth: usize,
+    current_depth: BigInt,
+    max_depth: &BigInt,
     out: &mut Vec<String>,
 ) -> Result<(), Value> {
-    if max_depth == 0 || current_depth > max_depth {
+    if &current_depth > max_depth {
         return Ok(());
     }
     let host_path = vm.resolve_host_path(raw_path);
@@ -4758,7 +4739,7 @@ fn collect_filesystem_entries(
         let is_dir = vm.resolve_host_path(&child).is_dir();
         out.push(child.clone());
         if is_dir {
-            collect_filesystem_entries(vm, &child, current_depth + 1, max_depth, out)?;
+            collect_filesystem_entries(vm, &child, &current_depth + 1, max_depth, out)?;
         }
     }
     Ok(())
@@ -7080,6 +7061,94 @@ mod tests {
             err_kind(&result),
             "Global::FileSystemPermissionDenied" | "Global::FileSystemIoError"
         ));
+    }
+
+    #[test]
+    fn filesystem_tree_depth_rejects_all_negative_ints_and_accepts_zero() {
+        let mut vm = filesystem_vm();
+        let path = Value::Tagged {
+            tag: 30,
+            fields: vec![Value::Str(".".into())],
+        };
+        for depth in [
+            "-1",
+            "-9223372036854775808",
+            "-9223372036854775809",
+            "-18446744073709551617",
+        ] {
+            let result = call_builtin(
+                &mut vm,
+                builtin_id("filesystem_tree_depth"),
+                vec![path.clone(), Value::Int(depth.parse().unwrap())],
+            )
+            .expect("negative depth should return a language error");
+            assert_eq!(err_kind(&result), "Global::FileSystemInvalidDepth");
+            let Value::Tagged { fields, .. } = result else {
+                unreachable!()
+            };
+            let [Value::Error(error)] = fields.as_slice() else {
+                panic!("expected error")
+            };
+            assert_eq!(
+                error.message,
+                format!("invalid filesystem tree depth: {depth}")
+            );
+        }
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("filesystem_tree_depth"),
+            vec![path.clone(), Value::Int(0.into())],
+        )
+        .expect("zero depth should return an empty snapshot");
+        assert_eq!(
+            ok_payload(result),
+            Value::Tagged {
+                tag: 34,
+                fields: vec![path, Value::List(ListHandle::from_items(vec![]))]
+            }
+        );
+    }
+
+    #[test]
+    fn filesystem_tree_depth_accepts_positive_ints_beyond_machine_bounds() {
+        let dir = sandbox_dir("builtin-filesystem-bigint-depth");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("nested/leaf"), "leaf").unwrap();
+        fs::write(dir.join("flat"), "flat").unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(dir.clone());
+        let path = Value::Tagged {
+            tag: 30,
+            fields: vec![Value::Str(dir.to_string_lossy().into_owned())],
+        };
+        let huge = format!("1{}", "0".repeat(400));
+        let mut vm = filesystem_vm();
+        for (depth, count) in [
+            ("1", 2),
+            ("2", 3),
+            ("9223372036854775808", 3),
+            ("18446744073709551616", 3),
+            (huge.as_str(), 3),
+        ] {
+            let result = call_builtin(
+                &mut vm,
+                builtin_id("filesystem_tree_depth"),
+                vec![path.clone(), Value::Int(depth.parse().unwrap())],
+            )
+            .expect("nonnegative Int depth should return a snapshot");
+            let Value::Tagged { tag: 34, fields } = ok_payload(result) else {
+                panic!("expected snapshot")
+            };
+            let [_, Value::List(entries)] = fields.as_slice() else {
+                panic!("expected snapshot entries")
+            };
+            assert_eq!(entries.len(), count, "depth {depth}");
+        }
     }
 
     #[cfg(unix)]
