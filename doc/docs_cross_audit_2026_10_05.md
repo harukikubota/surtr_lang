@@ -27,7 +27,7 @@
 | DA-04 | 中 | 対応済み（文書） | JSONの旧decode API・旧impl署名 |
 | DA-05 | 中 | 対応済み（文書） | Fileの旧closure・mode表記 |
 | DA-06 | 中 | 対応済み（文書） | File例の戻り値型 |
-| DA-07 | 中 | 文書不整合・契約整理 | FileHandleの保存禁止という説明 |
+| DA-07 | 中 | 対応済み（文書） | FileHandleの保存禁止という説明 |
 | DA-08 | 中 | 文書不整合 | `\|*>` のcontextual mapper結果の受理条件 |
 | DA-09 | 低 | 対応済み（文書） | 存在しないNeq traitの列挙 |
 | DA-10 | 低 | 対応済み（文書） | `T?` と `Option<T>` の機能差を示す説明 |
@@ -143,6 +143,12 @@ print(inspect(File::read_chunk(handle, 1)))
 
 - 境界: `docs/dev/EldrVM_spec.md:191,193` はcallback終了・失敗時のcloseとcheckpoint復元を定め、静的保存禁止を定めていない。`crates/scar/src/checker/types.rs:1068` は通常のbuiltin型として扱う。
 - 対応・受入条件: 現行契約へ追随するなら、保存は可能だがcallback外では閉じたhandleとなりFileClosedを返すと明記する。静的escape禁止を選ぶ場合は別途level4の仕様整理が必要。今回、実装漏れとは断定しない。
+
+#### 対応記録（2026-10-07）
+
+`lib/file.srt` の `FileHandle` / `with_open` の説明と `file-io.md` を現行契約へ揃えた。handle の保存・callback からの返却は可能であり、`with_open` が返る前に閉じられ、その後の読み書き・flush は `FileClosed` を返すと明記した。生成と close は runtime が管理する契約を維持し、静的な保存禁止は追加していない。
+
+`rtk cargo build -p rune --bin surtr` は終了コード0。一時ディレクトリで追加した site 例を `check` / `run` し、終了コード0と `Err(FileClosed("file is already closed"))` を確認した。`FileHandle` の REPL 例も実行し、同じエラー値と保存された handle の表示を確認した。`git diff --check` は成功。runtime の変更とコンパイラ全体のテストは行っていない。
 
 ### DA-08 `|*>` のmapper結果を一律に拒否すると読める
 

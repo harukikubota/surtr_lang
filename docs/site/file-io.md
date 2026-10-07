@@ -112,8 +112,18 @@ text =? File::read("./tmp/sandbox/report.txt")
 print(text)
 ```
 
-`FileHandle` は opaque です。user code で new したり close したりはできません。  
-この制約は不便さではなく、「cleanup を runtime が責任を持つ」ための design choice です。
+`FileHandle` の生成と close は runtime が管理します。利用者のコードから直接生成したり、close したりはできません。
+
+handle を保存したり callback から返したりすることはできます。ただし、`with_open` が返る前にファイルは閉じられます。その後に同じ handle で読み書きや flush を行うと `FileClosed` が返ります。
+
+```surtr
+import File
+
+_ =? File::write("./tmp/sandbox/handle.txt", "hello")
+handle =? File::with_open("./tmp/sandbox/handle.txt", FileMode::Read, {|file| Ok(file)})
+print(inspect(File::read_chunk(handle, 1)))
+# Err(FileClosed("file is already closed"))
+```
 
 ### cleanup guarantee
 
@@ -240,4 +250,4 @@ print(text) # hello
 - `File` は auto import されないので、bare `read(...)` ではなく `File::read(...)` が必要です。
 - `read_chunk` の上限は byte 数ではなく UTF-8 文字数です。
 - `exists` は権限やファイル種別までは保証しません。
-- `with_open` の handle は callback の外へ持ち出す前提ではありません。
+- `with_open` から返した handle はすでに閉じているため、読み書きや flush は `FileClosed` を返します。

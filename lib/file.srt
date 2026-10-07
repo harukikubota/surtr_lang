@@ -43,11 +43,22 @@ deferror FileIoError(detail: String) {
 @doc """
 Opaque runtime-managed file handle used by `File::with_open`.
 
-`FileHandle` values are created by the runtime and are only valid inside the
-callback passed to `File::with_open`. User code cannot construct, store, or
-close them directly. The runtime owns their lifetime and guarantees cleanup
-when the callback returns, when the current VM run ends, and when an
-interactive chunk is rolled back.
+`FileHandle` values are created and closed by the runtime. User code can
+store a handle or return it from the callback passed to `File::with_open`,
+but the file is closed before `with_open` returns. Reading, writing, or
+flushing that closed handle returns `Err(FileClosed(...))`.
+
+User code cannot construct or close handles directly. The runtime guarantees
+cleanup when the callback returns, when the current VM run ends, and when
+an interactive chunk is rolled back.
+
+## REPL
+Create `./tmp/sandbox/` before running this example.
+xldr(1)> File::write("./tmp/sandbox/handle.txt", "hello")
+Ok(())
+xldr(2)> handle =? File::with_open("./tmp/sandbox/handle.txt", FileMode::Read, {|file| Ok(file)}); print(inspect(File::read_chunk(handle, 1)))
+Err(FileClosed("file is already closed"))
+handle: FileHandle = FileHandle#1
 """
 @builtin type FileHandle
 
@@ -176,7 +187,9 @@ defmod File {
   call, whether `body` returns `Ok(...)` or `Err(...)`.
 
   This is the primary API when several operations should share one open file.
-  `FileHandle` values are opaque and only meaningful inside `body`.
+  `FileHandle` values are opaque. A handle may be stored or returned from
+  `body`, but it is closed before this call returns. Later read, write, or
+  flush operations on it return `Err(FileClosed(...))`.
 
   Cleanup guarantee:
   - success path: flush, then close
