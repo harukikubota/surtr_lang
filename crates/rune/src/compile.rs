@@ -489,29 +489,7 @@ fn parse_program_with_module_sources<'a>(
     let expanded =
         xldr::expand_snapshot_module_stages(compile_sources, std_snapshot, compile_unit_kind)
             .map_err(|e| {
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    e.source_id,
-                    "parse",
-                    match &e.kind {
-                        xldr::ModuleStageParseErrorKind::Parse { error } => {
-                            diagnostics::parse_error_spec(
-                                e.source_id,
-                                sources.source(e.source_id).unwrap_or(""),
-                                error,
-                            )
-                        }
-                        xldr::ModuleStageParseErrorKind::DuplicateModulePath { .. } => {
-                            diagnostics::parse_policy_error_spec(
-                                e.source_id,
-                                sources.source(e.source_id).unwrap_or(""),
-                                e.message(),
-                                e.span(),
-                            )
-                        }
-                    },
-                )
+                RuneError::diagnostic(1, sources, e.source_id, "parse", e.diagnostic_spec(sources))
             })?;
     if let Some(measurement) = measurement.as_deref_mut() {
         measurement.parse_modules = elapsed(parse_modules_start);

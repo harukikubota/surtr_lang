@@ -36,6 +36,13 @@ source span を必要としない説明や修正案を `labels` に置かない�
 - runtime SafeBind failure は typed IR の `RuntimeErrorDiagnostic` を VM まで保持する。表示用 marker を message へ埋め込まない。
 - source-backed builtin declaration は `BUILTIN_METAS.surfaces` の owner/name/RTA/parameter mode・型/return/where と完全一致させる。compiler-generated declaration identityは別の`compiler_generated_surfaces`へ正確なowner/nameだけを登録し、ASTの生成由来も同時に要求する。runtime/compiler-only builtinをsource surfaceへ混入させず、名前接頭辞や任意owner合成で検証を迂回しない。
 
+module stageのparse workerをOSが起動できない場合は、`WorkerSpawnFailure`をparse phaseの診断として返す。
+対象module名とOSのエラーを保持し、対象ファイルのsource IDと先頭の空spanをprimaryにする。
+構文上の誤りやsource policy違反として扱わず、通常のmodule読み込みではCLIとREPLが同じ構造化診断を表示する。
+標準定義snapshotの構築中は、既存の`LoadError::BootstrapFailed`でparse phase・ファイル名・messageを返す。
+このbootstrap経路はstructured reasonとspanを保持しない。
+stage内の結果は入力順に扱い、起動済みworkerはjoinする。worker内部のpanicは元のpayloadを再送する。
+
 ## 型関係と呼び出しの診断（実装済み）
 
 - Scar の `assert_type_relation` は、失敗時に部分的な型代入と capability / obligation の変更を rollback する。成功した制約だけを後続へ渡す。両側の source fact は照合対象の型とともに保持する。

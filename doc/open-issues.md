@@ -96,7 +96,8 @@
   - Eldr:
     - process runtime の残 cleanup は、process surface / VM scheduling への影響範囲を分けてから扱う。
   - Xldr / REPL:
-    - stage parser worker spawn の `expect` を diagnostic 化する。
+    - stage parser worker spawnの`expect`は2026-10-07に対応済み。既存の`ModuleStageParseError`に`WorkerSpawnFailure`を追加し、module名・OSエラー・source IDを保持する。通常のmodule読み込みではCLI / REPL共通のadapterでparse診断へ変換する。標準定義snapshot構築中は、既存の`BootstrapFailed`でparse phase・ファイル名・messageを返し、structured reason / spanは保持しない。
+      - 検証: 本番のspawn結果consumerへ`WouldBlock`を注入し、旧`expect`でpanicするRedと、診断を返すGreenを確認した。Human / JSONの診断、worker内部のpanic payload再送、既存の正常parseと入力順を検証。`rtk cargo nextest run --profile ci -p xldr -p diagnostics --lib`は213件、Runeのcompile unitテストは12件成功。workspace全体は主担当の最終ゲートで確認する。
     - `:save .eldr` / directory-ish names の validation、`:help` topic coverage、`:history` header/row format、command query pipe duplicate placeholder validationを整理する。
 - 受け入れ条件:
   - process / REPL 領域は仕様・表示・integration の影響範囲を分けてから着手する。

@@ -8519,23 +8519,7 @@ fn parse_preload_sources(
                 phase: "parse".to_string(),
                 sources: compile_sources.sources.clone(),
                 source_id: e.source_id,
-                spec: match &e.kind {
-                    crate::ModuleStageParseErrorKind::Parse { error } => {
-                        diagnostics::parse_error_spec(
-                            e.source_id,
-                            compile_sources.sources.source(e.source_id).unwrap_or(""),
-                            error,
-                        )
-                    }
-                    crate::ModuleStageParseErrorKind::DuplicateModulePath { .. } => {
-                        diagnostics::parse_policy_error_spec(
-                            e.source_id,
-                            compile_sources.sources.source(e.source_id).unwrap_or(""),
-                            e.message(),
-                            e.span(),
-                        )
-                    }
-                },
+                spec: e.diagnostic_spec(&compile_sources.sources),
             })?;
     let mut module_stage_asts = expanded.module_stages.into_owned();
     let raw_module_stages = compile_sources.module_stages.clone();
@@ -9217,15 +9201,18 @@ impl SeenModulePath {
     }
 }
 
+type StageParseResult = Result<Vec<crate::LoweredModuleAst>, ModuleStageParseError>;
+
 fn parse_stage_modules_parallel(
     sources: &SourceRegistry,
     stage: &[StagedModule],
     compile_unit_kind: CompileUnitKind,
-) -> Vec<Result<Vec<crate::LoweredModuleAst>, ModuleStageParseError>> {
+) -> Vec<StageParseResult> {
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(stage.len());
         for module in stage {
-            handles.push(
+            handles.push((
+                module,
                 std::thread::Builder::new()
                     .stack_size(STAGE_PARSE_WORKER_STACK_SIZE)
                     .spawn_scoped(scope, move || {
@@ -9248,19 +9235,32 @@ fn parse_stage_modules_parallel(
                             Some(module.module_path.as_str()),
                         );
                         Ok(crate::lower_module_source_ast(parsed, fallback_module_path))
-                    })
-                    .expect("stage parser worker thread should spawn"),
-            );
+                    }),
+            ));
         }
 
         handles
             .into_iter()
-            .map(|handle| match handle.join() {
-                Ok(result) => result,
-                Err(payload) => panic::resume_unwind(payload),
-            })
+            .map(|(module, worker)| finish_stage_parse_worker(module, worker))
             .collect()
     })
+}
+
+fn finish_stage_parse_worker(
+    module: &StagedModule,
+    worker: std::io::Result<std::thread::ScopedJoinHandle<'_, StageParseResult>>,
+) -> StageParseResult {
+    let worker = worker.map_err(|error| ModuleStageParseError {
+        source_id: module.source_id,
+        kind: ModuleStageParseErrorKind::WorkerSpawnFailure {
+            module_path: module.module_path.clone(),
+            message: error.to_string(),
+        },
+    })?;
+    match worker.join() {
+        Ok(result) => result,
+        Err(payload) => panic::resume_unwind(payload),
+    }
 }
 
 pub(crate) fn xldr_version() -> &'static str {
@@ -9417,6 +9417,65 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stage_parser_spawn_failure_retains_module_source_and_diagnostic() {
+        let mut sources = SourceRegistry::new();
+        sources.register("other.srt", "");
+        let source_id = sources.register("failed.srt", "defmod Failed {}");
+        let module = StagedModule {
+            source_id,
+            module_path: "Failed".into(),
+            source_kind: SourceKind::DefinitionSource,
+        };
+        let error = finish_stage_parse_worker(
+            &module,
+            Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "injected worker shortage",
+            )),
+        )
+        .expect_err("worker creation failure must be a parse phase error");
+        assert_eq!(error.source_id, source_id);
+        assert_eq!(error.span(), Span { start: 0, end: 0 });
+        assert!(error.message().contains("Failed"));
+        assert!(error.message().contains("injected worker shortage"));
+        let spec = error.diagnostic_spec(&sources);
+        let diagnostic =
+            diagnostics::serializable_diagnostic_by_id(&sources, source_id, "parse", &spec);
+        assert_eq!(diagnostic.kind, "ParseError");
+        assert_eq!(diagnostic.phase, "parse");
+        assert_eq!(diagnostic.reason.as_deref(), Some("WorkerSpawnFailure"));
+        assert_eq!(diagnostic.span, [0, 0]);
+        assert_eq!(
+            spec.structured.as_ref().unwrap().primary.source_id,
+            source_id
+        );
+        assert_eq!(sources.file_name(source_id), Some("failed.srt"));
+        let rendered = diagnostics::render_error_by_id(&sources, source_id, &spec);
+        assert!(rendered.contains("failed.srt"), "{rendered}");
+        assert!(rendered.contains("injected worker shortage"), "{rendered}");
+    }
+
+    #[test]
+    fn stage_parser_worker_panic_keeps_its_payload() {
+        let module = StagedModule {
+            source_id: SourceId(0),
+            module_path: "Broken".into(),
+            source_kind: SourceKind::DefinitionSource,
+        };
+        let failure = std::panic::catch_unwind(|| {
+            std::thread::scope(|scope| {
+                finish_stage_parse_worker(
+                    &module,
+                    std::thread::Builder::new()
+                        .spawn_scoped(scope, || std::panic::panic_any(73_u32)),
+                )
+            })
+        })
+        .expect_err("worker panic must unwind");
+        assert_eq!(failure.downcast_ref::<u32>(), Some(&73));
+    }
+
     #[test]
     fn boolean_function_suffix_completion_token_keeps_the_full_name() {
         let source = ":sig Predicates::positive?";

@@ -181,8 +181,8 @@ impl RuntimeDiagnosticReason {
     }
 }
 
-/// Stable parser failure families. The producer selects a reason from parser
-/// state; diagnostic adapters never recover it from rendered text.
+/// Stable parse-phase failure families, including worker startup failures.
+/// Producers select reasons; adapters never recover them from rendered text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseDiagnosticReason {
     IncompleteInput,
@@ -199,6 +199,7 @@ pub enum ParseDiagnosticReason {
     ReturnTypeArgumentArityMismatch,
     InvalidDoCarrierReturnTypeArgument,
     CompilerInvariant,
+    WorkerSpawnFailure,
 }
 
 impl ParseDiagnosticReason {
@@ -218,6 +219,7 @@ impl ParseDiagnosticReason {
             Self::ReturnTypeArgumentArityMismatch => "ReturnTypeArgumentArityMismatch",
             Self::InvalidDoCarrierReturnTypeArgument => "InvalidDoCarrierReturnTypeArgument",
             Self::CompilerInvariant => "CompilerInvariant",
+            Self::WorkerSpawnFailure => "WorkerSpawnFailure",
         }
     }
 }

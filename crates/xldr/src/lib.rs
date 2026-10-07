@@ -182,6 +182,10 @@ pub enum ModuleStageParseErrorKind {
         second_file_name: String,
         span: spire::ast::Span,
     },
+    WorkerSpawnFailure {
+        module_path: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +198,10 @@ impl ModuleStageParseError {
     pub fn message(&self) -> String {
         match &self.kind {
             ModuleStageParseErrorKind::Parse { error } => error.message(),
+            ModuleStageParseErrorKind::WorkerSpawnFailure {
+                module_path,
+                message,
+            } => format!("cannot start parser worker for module `{module_path}`: {message}"),
             ModuleStageParseErrorKind::DuplicateModulePath {
                 module_path,
                 first_file_name,
@@ -210,6 +218,53 @@ impl ModuleStageParseError {
         match &self.kind {
             ModuleStageParseErrorKind::Parse { error } => error.span().clone(),
             ModuleStageParseErrorKind::DuplicateModulePath { span, .. } => span.clone(),
+            ModuleStageParseErrorKind::WorkerSpawnFailure { .. } => {
+                spire::ast::Span { start: 0, end: 0 }
+            }
+        }
+    }
+
+    pub fn diagnostic_spec(
+        &self,
+        sources: &diagnostics::SourceRegistry,
+    ) -> diagnostics::DiagnosticSpec {
+        let source = sources.source(self.source_id).unwrap_or("");
+        match &self.kind {
+            ModuleStageParseErrorKind::Parse { error } => {
+                diagnostics::parse_error_spec(self.source_id, source, error)
+            }
+            ModuleStageParseErrorKind::DuplicateModulePath { .. } => {
+                diagnostics::parse_policy_error_spec(
+                    self.source_id,
+                    source,
+                    self.message(),
+                    self.span(),
+                )
+            }
+            ModuleStageParseErrorKind::WorkerSpawnFailure { .. } => {
+                let span = self.span();
+                let diagnostic = diagnostics::StructuredDiagnostic {
+                    reason: diagnostics::DiagnosticReason::Parse(
+                        diagnostics::ParseDiagnosticReason::WorkerSpawnFailure,
+                    ),
+                    origin: diagnostics::DiagnosticOrigin::Parse,
+                    data: diagnostics::DiagnosticData::Parse(diagnostics::ParseDiagnosticData {
+                        detail: self.message(),
+                        expected_tokens: Vec::new(),
+                        cursor_span: span.clone(),
+                        guidance: None,
+                        token_kind: None,
+                    }),
+                    primary: diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::Other,
+                        self.source_id,
+                        span,
+                    ),
+                    related: Vec::new(),
+                    remediation: None,
+                };
+                diagnostics::structured_compile_error_spec(source, &diagnostic)
+            }
         }
     }
 }
