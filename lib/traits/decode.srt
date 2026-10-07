@@ -2,13 +2,12 @@
 Standard `Decode` trait declaration.
 `Decode<$To>` converts `Self` into `$To`.
 Choose the decoded target with an explicit type argument.
-Format-specific value owners such as `JsonValue` expose their own helper
-surface, for example `Decode::decode::<Target>(value)`.
+Use `Decode::decode::<Target>(value)` to select the target type.
 
 ## REPL
-xldr(1)> json =? Json::decode("{\"name\":\"surtr\"}")
+xldr(1)> json =? Json::decode("\"surtr\"")
 xldr(2)> Decode::decode::<String>(json)
-Ok(Object(hash!["name" => String("surtr")]))
+Ok("surtr")
 """
 deftrait Decode<$To> {
   # Convert the value into the requested target type.

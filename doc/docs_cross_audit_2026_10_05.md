@@ -24,7 +24,7 @@
 | DA-01 | 高 | 実装バグ | JSON巨大整数のFloat降格・精度損失 |
 | DA-02 | 中 | 実装バグ | FSの巨大負depthがRuntimeErrorになる |
 | DA-03 | 中 | 実装バグ | LSP file URIのauthorityが相対pathになる |
-| DA-04 | 中 | 文書不整合 | JSONの旧decode API・旧impl署名 |
+| DA-04 | 中 | 対応済み（文書） | JSONの旧decode API・旧impl署名 |
 | DA-05 | 中 | 文書不整合 | Fileの旧closure・mode表記 |
 | DA-06 | 中 | 文書不整合 | File例の戻り値型 |
 | DA-07 | 中 | 文書不整合・契約整理 | FileHandleの保存禁止という説明 |
@@ -96,6 +96,12 @@ print(inspect(FS::tree_depth(root, -18446744073709551617)))
 - 現行: `lib/traits/decode.srt:15` は `def decode::<$To>`。`lib/types/json.srt:171-183` にdecode memberはない。`tests/fixtures/script/pass/json/decode_pipeline.srt:2`、`custom_config_decode.srt:4-8` が現行例。
 - 実測: `JsonValue::decode(Int)` は `Undefined function JsonValue::decode/1`。旧impl宣言は `Trait impl method decode has incompatible ReturnTypeArgument arity: expected 1, got 0`。いずれもcheck exit 1。
 - 対応・受入条件: 呼出しを `Decode::decode::<T>`、impl宣言を現行RTA付きへ揃える。旧APIを復活させない。site・dev・標準 `@doc` の独立コード例をcheckし、想定出力まで確認する。
+
+#### 対応記録（2026-10-07）
+
+site・dev の旧 decode 呼出しを `Decode::decode::<T>` へ揃え、Trait / impl の ReturnTypeArgument を現行宣言に合わせた。site の例では存在しない `Result::err` と import のないテスト用 assertion を使わず、結果を表示する形にした。標準 Decode の変換方向を明確にし、`lib/traits/decode.srt` の REPL 例も String を decode する正しい入力・出力へ修正した。
+
+`rtk cargo build -p rune --bin surtr` は終了コード0。定義の抜粋を除く site の7例を一時ディレクトリへ個別に抽出し、`target/debug/surtr check <path>` と `run <path>` がすべて終了コード0、出力一致となることを確認した。Decode / Encode の標準 REPL 例も `repl --quiet --no-local-config` で実行し、期待した成功値を確認した。dev の宣言抜粋は標準定義と静的に照合した。`git diff --check` は成功。文書だけの変更のため、コンパイラ全体のテストは実行していない。
 
 ### DA-05 Fileのclosure・mode例が現行構文では動かない
 

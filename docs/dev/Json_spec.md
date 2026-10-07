@@ -23,7 +23,7 @@
 - `Json` は type ではなく qualified operation namespace とする
 - `Json` 自体は auto import しない
 
-`JsonValue` の shape は次で固定する。
+`JsonValue` の標準定義は次のとおり。これは宣言の抜粋であり、利用者側で再定義しない。
 
 ```surtr
 defenum JsonValue {
@@ -52,14 +52,15 @@ defenum JsonValue {
 ### 1.3 Trait surface
 
 `Encode` / `Decode` は target-oriented trait とし、prelude へ auto import しない。
+次は標準宣言の抜粋で、変換先を ReturnTypeArgument に指定する。
 
 ```surtr
 deftrait Encode<$To> {
-  def encode(self: Self) -> Result<$To, Error>
+  def encode::<$To>(self: Self) -> Result<$To, Error>
 }
 
 deftrait Decode<$To> {
-  def decode(self: Self) -> Result<$To, Error>
+  def decode::<$To>(self: Self) -> Result<$To, Error>
 }
 ```
 
@@ -91,6 +92,8 @@ deftrait Decode<$To> {
 schema-level decode は builtin ではなく、利用者が
 `impl Decode<T> for JsonValue` を明示実装して書く。
 schema-level encode は `impl Encode<JsonValue> for T` を明示実装して書く。
+impl method にも、`def decode::<T>(...)` / `def encode::<JsonValue>(...)` のように
+実装対象の変換先を ReturnTypeArgument として指定する。
 
 ---
 
@@ -149,7 +152,7 @@ compile 側は `Bootstrap` stage、test extension を必要に応じて含む sh
 最低限、次を回帰基準にする。
 
 - `unit/sigil`
-  - `JsonValue::decode` helper が trait helper に解決し、`JsonValue::encode` source alias が typecheck できる
+  - `Decode::decode::<Target>` が明示型適用された trait helper に解決し、`JsonValue::encode` source alias が typecheck できる
   - bare `encode` / `decode` が prelude だけでは解決されない
   - direct call と pipeline partial call の witness lowering が一致する
 - `unit/scar`
@@ -161,7 +164,7 @@ compile 側は `Bootstrap` stage、test extension を必要に応じて含む sh
 - `spec/json`
   - malformed JSON が `Err(JsonParseError(...))` として観測できる
   - type mismatch が `Err(JsonDecodeError(...))` として観測できる
-  - custom `impl Decode<Config> for JsonValue` が `Json::get(...) |>= JsonValue::decode(T)` と `=?` で書ける
+  - custom `impl Decode<Config> for JsonValue` が `Json::get(...) |>= Decode::decode::<T>` と `=?` で書ける
   - custom `impl Encode<JsonValue> for Config` が `Config -> JsonValue -> String` の file RW 例で使える
   - 同じ pattern の recursive decode / encode call が compile error にならない
   - decode 後の typed value に `Facet::over` / `Facet::set` を適用できる
