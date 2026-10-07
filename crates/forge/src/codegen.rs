@@ -2756,6 +2756,94 @@ mod tests {
     }
 
     #[test]
+    fn finalize_preserves_label_boundaries_and_remaps_all_jump_forms() {
+        use super::IrOp;
+        for blocks in [1, 8, 64] {
+            let mut gene = Codegen::new();
+            let mut expected = Vec::new();
+            for block in 0..blocks {
+                let start = gene.fresh_label();
+                let return_label = gene.fresh_label();
+                let return_alias = gene.fresh_label();
+                let next = gene.fresh_label();
+                gene.patch_label(start);
+                gene.state
+                    .functions
+                    .push(function_entry(block, gene.ir.len() as u32, 0));
+                gene.ir.extend([
+                    IrOp::JumpIfFalseLabel(return_label),
+                    IrOp::JumpIfTrueLabel(return_alias),
+                    IrOp::JumpIfLocalTagEqLabel {
+                        local_idx: 2,
+                        tag_const_idx: 3,
+                        label: return_label,
+                    },
+                    IrOp::JumpIfLocalTagNeLabel {
+                        local_idx: 4,
+                        tag_const_idx: 5,
+                        label: next,
+                    },
+                    IrOp::JumpLabel(start),
+                    IrOp::Op(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: 10,
+                        span_end: 20,
+                    }),
+                ]);
+                gene.patch_label(return_label);
+                gene.patch_label(return_alias);
+                gene.ir.extend([
+                    IrOp::Op(Opcode::Return),
+                    IrOp::Op(Opcode::CallClosure {
+                        arity: 2,
+                        span_start: 30,
+                        span_end: 40,
+                    }),
+                    IrOp::Op(Opcode::Return),
+                ]);
+                gene.patch_label(next);
+                let pc = block * 8;
+                expected.extend([
+                    Opcode::JumpIfFalse(pc + 6),
+                    Opcode::JumpIfTrue(pc + 6),
+                    Opcode::JumpIfLocalTagEq {
+                        local_idx: 2,
+                        tag_const_idx: 3,
+                        target_pc: pc + 6,
+                    },
+                    Opcode::JumpIfLocalTagNe {
+                        local_idx: 4,
+                        tag_const_idx: 5,
+                        target_pc: pc + 8,
+                    },
+                    Opcode::Jump(pc),
+                    Opcode::CallClosure {
+                        arity: 1,
+                        span_start: 10,
+                        span_end: 20,
+                    },
+                    Opcode::Return,
+                    Opcode::TailCallClosure {
+                        arity: 2,
+                        span_start: 30,
+                        span_end: 40,
+                    },
+                ]);
+            }
+            let (opcodes, state) = gene.finalize().unwrap();
+            assert_eq!(opcodes, expected);
+            assert_eq!(
+                state
+                    .functions
+                    .iter()
+                    .map(|entry| entry.entry_pc)
+                    .collect::<Vec<_>>(),
+                (0..blocks).map(|block| block * 8).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn emit_match_routes_last_failure_through_pattern_mismatch_path() {
         let mut gene = Codegen::new();
         let scrutinee = lit_node(Ty::Bool, Lit::Bool(false), span(1, 6));
@@ -12823,14 +12911,11 @@ impl Codegen {
     // ── Finish: resolve labels → absolute addresses ──
 
     fn finalize(mut self) -> Result<(Vec<Opcode>, CodegenState), CodegenError> {
+        let label_boundaries: HashSet<usize> = self.label_positions.values().copied().collect();
         let mut fuse_tail_call = vec![false; self.ir.len()];
         let mut skip_ir = vec![false; self.ir.len()];
         for idx in 0..self.ir.len().saturating_sub(1) {
-            if self
-                .label_positions
-                .values()
-                .any(|position| *position == idx + 1)
-            {
+            if label_boundaries.contains(&(idx + 1)) {
                 continue;
             }
             if matches!(
