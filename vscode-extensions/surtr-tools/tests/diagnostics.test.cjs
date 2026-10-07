@@ -75,6 +75,10 @@ function harness() {
       documents.push(document);
       return document;
     },
+    show(document) {
+      vscode.window.activeTextEditor = document ? { document } : undefined;
+      events.editor(vscode.window.activeTextEditor);
+    },
     configure(key, value) {
       settings[key] = value;
       events.configuration?.({ affectsConfiguration: (section) => section === key });
@@ -92,7 +96,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 test("newer diagnostics survive out-of-order checks for one document", async () => {
   const h = harness();
   const document = h.document();
-  h.events.open(document);
+  h.show(document);
   document.version += 1;
   h.events.save(document);
   h.complete(1, "new diagnostic");
@@ -105,7 +109,7 @@ test("newer diagnostics survive out-of-order checks for one document", async () 
 test("an edited document rejects a pending result before another save", async () => {
   const h = harness();
   const document = h.document();
-  h.events.open(document);
+  h.show(document);
   document.version += 1;
   h.complete(0, "obsolete diagnostic");
   await flush();
@@ -115,11 +119,12 @@ test("an edited document rejects a pending result before another save", async ()
 test("disabling diagnostics clears results immediately and invalidates in-flight checks", async () => {
   const h = harness();
   const document = h.document();
-  h.events.open(document);
+  h.show(document);
   h.complete(0, "published diagnostic");
   await flush();
   h.events.save(document);
   h.configure("surtr.diagnostics.onSave", false);
+  assert.equal(h.status.text, "$(flame) Surtr");
   assert.equal(h.messages(document), undefined);
   h.complete(1, "late diagnostic");
   await flush();
@@ -129,7 +134,7 @@ test("disabling diagnostics clears results immediately and invalidates in-flight
 test("reenabling diagnostics never reuses a previous request identity", async () => {
   const h = harness();
   const document = h.document();
-  h.events.open(document);
+  h.show(document);
   h.configure("surtr.diagnostics.onSave", false);
   h.configure("surtr.diagnostics.onSave", true);
   assert.equal(h.pending.length, 2);
@@ -143,7 +148,7 @@ test("reenabling diagnostics never reuses a previous request identity", async ()
 test("compiler configuration changes discard results from the previous compiler", async () => {
   const h = harness();
   const document = h.document();
-  h.events.open(document);
+  h.show(document);
   h.configure("surtr.compiler.path", "/new/surtr");
   assert.equal(h.pending.length, 2);
   assert.equal(h.pending[1].file, "/new/surtr");
@@ -157,15 +162,16 @@ test("compiler configuration changes discard results from the previous compiler"
 test("closing and reopening the same URI rejects the closed document's result", async () => {
   const h = harness();
   const document = h.document();
-  h.events.open(document);
+  h.show(document);
   h.complete(0, "published diagnostic");
   await flush();
   h.events.save(document);
   document.isClosed = true;
   h.events.close?.(document);
+  assert.equal(h.status.text, "$(flame) Surtr");
   assert.equal(h.messages(document), undefined);
   const reopened = h.document();
-  h.events.open(reopened);
+  h.show(reopened);
   h.complete(2, "reopened diagnostic");
   await flush();
   h.complete(1, "closed diagnostic");
@@ -176,7 +182,7 @@ test("closing and reopening the same URI rejects the closed document's result", 
 test("obsolete failures do not warn or overwrite the current status", async () => {
   const h = harness();
   const document = h.document();
-  h.events.open(document);
+  h.show(document);
   h.events.save(document);
   h.complete(1);
   await flush();
@@ -189,4 +195,88 @@ test("obsolete failures do not warn or overwrite the current status", async () =
   h.pending[2].reject(new Error("current failure"));
   await flush();
   assert.deepEqual(h.warnings, ["Error: current failure"]);
+});
+
+
+test("background diagnostics keep the active document status and are restored on switching back", async () => {
+  const h = harness();
+  const a = h.document("/work/a.srt");
+  const b = h.document("/work/b.srt");
+  h.show(a);
+  h.show(b);
+  h.complete(1);
+  await flush();
+  assert.equal(h.status.text, "$(pass) Surtr");
+  h.complete(0, "A diagnostic");
+  await flush();
+  assert.deepEqual(h.messages(a), ["A diagnostic"]);
+  assert.deepEqual(h.messages(b), []);
+  assert.equal(h.status.text, "$(pass) Surtr");
+  h.show(a);
+  assert.equal(h.status.text, "$(error) Surtr 1");
+  h.show(b);
+  assert.equal(h.status.text, "$(pass) Surtr");
+});
+
+test("background failures do not replace the active document status", async () => {
+  const h = harness();
+  const a = h.document("/work/a.srt");
+  const b = h.document("/work/b.srt");
+  h.show(a);
+  h.show(b);
+  h.complete(1);
+  await flush();
+  h.pending[0].reject(new Error("A compiler failed"));
+  await flush();
+  assert.equal(h.status.text, "$(pass) Surtr");
+  h.show(a);
+  assert.equal(h.status.text, "$(warning) Surtr");
+});
+
+test("no editor and unsupported editors retain neutral status during background checks", async () => {
+  const h = harness();
+  const a = h.document("/work/a.srt");
+  h.show(a);
+  h.complete(0, "A diagnostic");
+  await flush();
+  assert.equal(h.status.text, "$(error) Surtr 1");
+  h.show();
+  assert.equal(h.status.text, "$(flame) Surtr");
+  h.events.save(a);
+  h.complete(1, "A updated diagnostic");
+  await flush();
+  assert.equal(h.status.text, "$(flame) Surtr");
+  h.show(a);
+  assert.equal(h.status.text, "$(error) Surtr 1");
+  const text = h.document("/work/notes.txt");
+  text.languageId = "plaintext";
+  h.show(text);
+  assert.equal(h.status.text, "$(flame) Surtr");
+  h.complete(2);
+  await flush();
+  assert.equal(h.status.text, "$(flame) Surtr");
+  h.show(a);
+  assert.equal(h.status.text, "$(pass) Surtr");
+  const untitled = h.document("/unsaved.srt");
+  untitled.uri.scheme = "untitled";
+  h.show(untitled);
+  assert.equal(h.status.text, "$(flame) Surtr");
+});
+
+test("cached status is invalidated by compiler configuration and document edits", async () => {
+  const h = harness();
+  const document = h.document();
+  h.show(document);
+  h.complete(0, "old diagnostic");
+  await flush();
+  h.configure("surtr.compiler.path", "/new/surtr");
+  assert.equal(h.status.text, "$(flame) Surtr");
+  h.show(document);
+  assert.equal(h.status.text, "$(flame) Surtr");
+  h.complete(2);
+  await flush();
+  assert.equal(h.status.text, "$(pass) Surtr");
+  document.version += 1;
+  h.show(document);
+  assert.equal(h.status.text, "$(flame) Surtr");
 });

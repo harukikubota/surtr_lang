@@ -27,6 +27,18 @@ export function activate(context: vscode.ExtensionContext): void {
   status.text = "$(flame) Surtr";
   status.show();
   const requests = new Map<string, symbol>();
+  const documentStatuses = new Map<string, { version: number; text: string }>();
+  const updateStatus = (): void => {
+    const document = vscode.window.activeTextEditor?.document;
+    if (!document || document.languageId !== "surtr" || document.uri.scheme !== "file" ||
+        document.isClosed ||
+        !vscode.workspace.getConfiguration().get<boolean>("surtr.diagnostics.onSave", true)) {
+      status.text = "$(flame) Surtr";
+      return;
+    }
+    const saved = documentStatuses.get(document.uri.toString());
+    status.text = saved?.version === document.version ? saved.text : "$(flame) Surtr";
+  };
 
   const refreshDiagnostics = async (document: vscode.TextDocument): Promise<void> => {
     if (document.languageId !== "surtr" || document.uri.scheme !== "file" || document.isClosed) {
@@ -40,7 +52,8 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!diagnosticsEnabled) {
       requests.delete(key);
       diagnostics.delete(document.uri);
-      status.text = "$(flame) Surtr";
+      documentStatuses.delete(key);
+      updateStatus();
       return;
     }
 
@@ -78,15 +91,19 @@ export function activate(context: vscode.ExtensionContext): void {
         return diagnostic;
       });
       diagnostics.set(document.uri, nextDiagnostics);
-      status.text =
-        nextDiagnostics.length === 0
+      documentStatuses.set(key, {
+        version,
+        text: nextDiagnostics.length === 0
           ? "$(pass) Surtr"
-          : `$(error) Surtr ${nextDiagnostics.length}`;
+          : `$(error) Surtr ${nextDiagnostics.length}`
+      });
+      updateStatus();
     } catch (error) {
       if (!isCurrent()) {
         return;
       }
-      status.text = "$(warning) Surtr";
+      documentStatuses.set(key, { version, text: "$(warning) Surtr" });
+      updateStatus();
       void vscode.window.showWarningMessage(String(error));
     }
   };
@@ -94,7 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     diagnostics,
     status,
-    { dispose: () => requests.clear() },
+    { dispose: () => { requests.clear(); documentStatuses.clear(); } },
     vscode.workspace.onDidSaveTextDocument((document) => {
       void refreshDiagnostics(document);
     }),
@@ -104,6 +121,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidCloseTextDocument((document) => {
       requests.delete(document.uri.toString());
       diagnostics.delete(document.uri);
+      documentStatuses.delete(document.uri.toString());
+      updateStatus();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (!event.affectsConfiguration("surtr.diagnostics.onSave") &&
@@ -112,12 +131,14 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       requests.clear();
       diagnostics.clear();
-      status.text = "$(flame) Surtr";
+      documentStatuses.clear();
+      updateStatus();
       for (const document of vscode.workspace.textDocuments) {
         void refreshDiagnostics(document);
       }
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
+      updateStatus();
       if (editor?.document) {
         void refreshDiagnostics(editor.document);
       }
