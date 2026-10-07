@@ -1,0 +1,28 @@
+defmod MahjongNormalizeTest {
+  defp _accept(raw: String) -> Result<Unit> {
+    valid =? MahjongDomain::parse_valid_hand14(raw)
+    require(
+      and(valid.raw == raw, List::len(valid.tiles) == 14),
+      HandValidationError("valid hand changed during normalization"),
+    )
+  }
+
+  defp _reject(raw: String, expected: String) -> Result<Unit> {
+    match MahjongDomain::parse_valid_hand14(raw) {
+      Err(error) => require(
+        Error::message(error) == expected,
+        HandValidationError("unexpected validation error: " ++ Error::message(error)),
+      ),
+      Ok(_) => Err(HandValidationError("invalid hand was accepted: " ++ raw)),
+    }
+  }
+
+  def run() -> Result<Unit> {
+    _valid =? _accept("123m456789p567s11w")
+    _four =? _accept("1111m234p567s123w1d")
+    _five =? _reject("11111m234p567s123w", "tile appears more than 4 copies: 1m")
+    _length =? _reject("11111m", "hand must contain exactly 14 tiles")
+    print("[OK] Mahjong normalization tests passed: 4")
+    Ok(())
+  }
+}

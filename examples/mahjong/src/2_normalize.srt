@@ -22,14 +22,16 @@ defmod MahjongNormalize {
     }
   }
 
+  defp _validate_tiles(normalized: NormalizedHand14) -> Result<ValidHand14> {
+    _ok =? _validate_copy_limit(normalized.tiles, normalized.tiles)
+    Ok(ValidHand14(raw: normalized.raw, tiles: normalized.tiles))
+  }
+
   def validate_hand14(normalized: NormalizedHand14) -> Result<ValidHand14> {
     if(
       List::len(normalized.tiles) != 14,
       Err(HandValidationError("hand must contain exactly 14 tiles")),
-      {
-        _ok =? _validate_copy_limit(normalized.tiles, normalized.tiles)
-        Ok(ValidHand14(raw: normalized.raw, tiles: normalized.tiles))
-      },
+      _validate_tiles(normalized),
     )
   }
 }

@@ -1,0 +1,7 @@
+include '../src/0_types.srt'
+include '../src/1_parser.srt'
+include '../src/2_normalize.srt'
+
+include './normalize_impl.srt'
+
+MahjongNormalizeTest::run()

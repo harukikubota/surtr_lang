@@ -45,22 +45,26 @@ defmod MahjongSolver {
       [head, ..tail] => if(
         head == target,
         Ok(tail),
-        {
-          rest =? _remove_first(tail, target)
-          Ok([head, ..rest])
-        },
+        _remove_after_head(head, tail, target),
       ),
     }
+  }
+
+  defp _remove_after_head(head: Int, tail: List<Int>, target: Int) -> Result<List<Int>> {
+    rest =? _remove_first(tail, target)
+    Ok([head, ..rest])
+  }
+
+  defp _remove_next(ids: List<Int>, target: Int, n: Int) -> Result<List<Int>> {
+    next =? _remove_first(ids, target)
+    _remove_n(next, target, n - 1)
   }
 
   defp _remove_n(ids: List<Int>, target: Int, n: Int) -> Result<List<Int>> {
     if(
       n <= 0,
       Ok(ids),
-      {
-        next =? _remove_first(ids, target)
-        _remove_n(next, target, n - 1)
-      },
+      _remove_next(ids, target, n),
     )
   }
 
