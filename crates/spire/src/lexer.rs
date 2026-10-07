@@ -450,14 +450,14 @@ fn lex_integer_literal(
                 end += 1;
             }
 
-            for ch in &chars[body_start..end] {
+            for (offset, ch) in chars[body_start..end].iter().enumerate() {
                 if !is_valid_int_digit(*ch, base) {
                     return Err(ParseError::syntax(
                         crate::error::ParseErrorReason::LiteralSyntax,
                         format!("invalid digit for {} integer literal: {}", base.label(), ch),
                         Span {
-                            start,
-                            end: end.min(body_start + 1),
+                            start: body_start + offset,
+                            end: body_start + offset + 1,
                         },
                     ));
                 }
@@ -704,14 +704,32 @@ mod tests {
     #[test]
     fn test_int_base_rejects_invalid_digits() {
         let cases = [
-            ("0o18", "invalid digit for octal integer literal: 8"),
-            ("0b102", "invalid digit for binary integer literal: 2"),
-            ("0xfg", "invalid digit for hexadecimal integer literal: g"),
+            ("0x12G", "hexadecimal", 'G', 4),
+            ("0o18", "octal", '8', 3),
+            ("0b102", "binary", '2', 4),
+            ("0xfg", "hexadecimal", 'g', 3),
+            ("0d12a", "decimal", 'a', 4),
+            ("0b23", "binary", '2', 2),
         ];
 
-        for (literal, expected) in cases {
-            let err = tokenize(literal).expect_err("expected invalid digit error");
-            assert!(err.message().contains(expected), "got: {}", err.message());
+        for (literal, base, digit, offset) in cases {
+            for prefix in ["", "value = ", "\"あ\"\n"] {
+                let source = format!("{prefix}{literal}");
+                let err = tokenize(&source).expect_err("expected invalid digit error");
+                let expected = format!("invalid digit for {base} integer literal: {digit}");
+                assert!(err.message().contains(&expected), "got: {}", err.message());
+                assert_eq!(err.reason(), crate::error::ParseErrorReason::LiteralSyntax);
+                let start = prefix.chars().count() + offset;
+                assert_eq!(
+                    err.span(),
+                    &Span {
+                        start,
+                        end: start + 1
+                    },
+                    "source: {source:?}"
+                );
+                assert_eq!(err.cursor_span(), err.span());
+            }
         }
     }
 
