@@ -26,23 +26,40 @@ export function activate(context: vscode.ExtensionContext): void {
   status.name = "Surtr Diagnostics";
   status.text = "$(flame) Surtr";
   status.show();
+  const requests = new Map<string, symbol>();
 
   const refreshDiagnostics = async (document: vscode.TextDocument): Promise<void> => {
-    if (document.languageId !== "surtr" || document.uri.scheme !== "file") {
+    if (document.languageId !== "surtr" || document.uri.scheme !== "file" || document.isClosed) {
       return;
     }
 
+    const key = document.uri.toString();
     const diagnosticsEnabled = vscode.workspace
       .getConfiguration()
       .get<boolean>("surtr.diagnostics.onSave", true);
     if (!diagnosticsEnabled) {
+      requests.delete(key);
       diagnostics.delete(document.uri);
       status.text = "$(flame) Surtr";
       return;
     }
 
+    const request = Symbol();
+    const version = document.version;
+    const compilerPath = configuredCompilerPath();
+    requests.set(key, request);
+    const isCurrent = (): boolean =>
+      requests.get(key) === request &&
+      !document.isClosed &&
+      document.version === version &&
+      vscode.workspace.getConfiguration().get<boolean>("surtr.diagnostics.onSave", true) &&
+      configuredCompilerPath() === compilerPath;
+
     try {
-      const report = await runCheck(document.uri.fsPath);
+      const report = await runCheck(document.uri.fsPath, compilerPath);
+      if (!isCurrent()) {
+        return;
+      }
       const nextDiagnostics = report.errors.map((error) => {
         const line = Math.max(0, error.line - 1);
         const column = Math.max(0, error.column - 1);
@@ -66,6 +83,9 @@ export function activate(context: vscode.ExtensionContext): void {
           ? "$(pass) Surtr"
           : `$(error) Surtr ${nextDiagnostics.length}`;
     } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
       status.text = "$(warning) Surtr";
       void vscode.window.showWarningMessage(String(error));
     }
@@ -74,11 +94,28 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     diagnostics,
     status,
+    { dispose: () => requests.clear() },
     vscode.workspace.onDidSaveTextDocument((document) => {
       void refreshDiagnostics(document);
     }),
     vscode.workspace.onDidOpenTextDocument((document) => {
       void refreshDiagnostics(document);
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      requests.delete(document.uri.toString());
+      diagnostics.delete(document.uri);
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("surtr.diagnostics.onSave") &&
+          !event.affectsConfiguration("surtr.compiler.path")) {
+        return;
+      }
+      requests.clear();
+      diagnostics.clear();
+      status.text = "$(flame) Surtr";
+      for (const document of vscode.workspace.textDocuments) {
+        void refreshDiagnostics(document);
+      }
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor?.document) {
@@ -108,9 +145,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {}
 
-async function runCheck(filePath: string): Promise<CheckReport> {
+async function runCheck(filePath: string, compilerPath: string): Promise<CheckReport> {
   try {
-    const { stdout } = await execSurtr(["check", filePath, "--format", "json"]);
+    const { stdout } = await execSurtr(["check", filePath, "--format", "json"], compilerPath);
     return JSON.parse(stdout) as CheckReport;
   } catch (error) {
     const stdout = stdoutFromError(error);
@@ -121,10 +158,16 @@ async function runCheck(filePath: string): Promise<CheckReport> {
   }
 }
 
-async function execSurtr(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const compilerPath = vscode.workspace
+function configuredCompilerPath(): string {
+  return vscode.workspace
     .getConfiguration()
     .get<string>("surtr.compiler.path", "surtr");
+}
+
+async function execSurtr(
+  args: string[],
+  compilerPath = configuredCompilerPath()
+): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(compilerPath, args, {
     cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
   });
