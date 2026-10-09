@@ -740,3 +740,106 @@ Cargoの`serde rc`追加とexample移設、テスト方針の各説明も対応�
 コミット前後の33パスの内容を照合し、検証済みの実装・テスト・manifest・正本文書を変更していない。
 今回はGit操作とこの記録の追加だけを行い、前回成功したclean CI 2,291件と標準テストは再実行していない。
 マージ・pushは行っていない。
+
+
+## 第6回: タイムアウト余裕を作るテスト分割
+
+2026-10-10の依頼で、直前の読み取り調査を入力としてlevel 2の変更を行う。
+追加テスト群の入力・期待値・ケース本体は維持し、既存テストの実行単位を分割する。
+対象はワークツリー`/Users/haruca/.codex/worktrees/d975/surtr`の`590e1eb2`である。
+言語・製品コード、timeout設定、テストの除外条件は変更しない。
+
+### 入力調査と変更方針
+
+- source長上限の既存テストは、上限直前の成功、上限超過mainの拒否、上限超過include先の拒否を独立した3テストへ分ける。元の入力と全assertionを維持し、CLI起動回数は3回のままにする。
+- Scar surfaceは既存8 bucketのうち0・3・6・7だけを二分し、12実行単位にする。各ケースの順序と独立したsessionを維持する。登録ケースと生成される実行単位の対応をinventoryで検査する。
+- REPL coreは8 bucketから16 bucketへ分ける。ケース関数の内部にある同じengineでの状態遷移は分割しない。ケース名・関数・入力・期待値を維持し、実行単位の一意性と非空をinventoryで検査する。
+- analysisのProjectケースは既に個別実行へ戻されている。LSPの失敗から復帰するhostの状態遷移、約3秒で均衡するForge、短縮済みのcaption・型境界テストは変更しない。
+
+保存済みの第5回ログにはtimeoutがない。source長上限は第5回の変更前局所計測で14.679秒、最終cleanで8.041秒だった。分割は1テスト当たりの実行時間に余裕を作るためであり、総時間の短縮とは区別する。
+
+### 受入条件と検証
+
+元のケース・入力・assertionが保持され、全登録ケースが実行単位のちょうど一つに所属することを確認する。親エージェントがビルドとテストを直列に実行し、分担エージェントはビルド・テストを実行しない。
+
+対象の同条件比較には次のコマンドを使う。分割後はsource長上限の3テストを選択するよう、そのフィルターだけ変更する。
+
+```sh
+cargo nextest run --profile ci -p scar -p xldr -p rune -E 'binary(typecheck_surface) | binary(repl_core) | test(/^error_source_locations::error_source_location_rejects_sources_that_exceed_the_span_encoding_range$/)'
+```
+
+変更前は22 passed、714は選択対象外、Summary 18.255秒、exit 0だった。
+最終差分では入力文書のcleanコマンドと標準Surtrテストを直列実行し、timeout・失敗・未実行を記録する。分割前後の最大テスト時間と総時間を分けて評価し、独立レビューでケース保持と実行単位の完全性を確認する。
+
+ログは`/tmp/surtr-test-perf-d975/round6/`へ保存する。
+
+
+### 実装と局所計測
+
+Scarの428登録ケースとREPLの173登録ケースは、registry・ケース本体の変更前後の内容一致を確認した。Scarは単一の分割設定から12テストとinventoryの設定を生成し、REPLは単一の宣言から16テストとbucket IDを生成する。両inventoryは全ケースの一意な所属と各実行単位の非空を検査する。
+source長上限は独立した一時ディレクトリを使う3テストへ分けた。上限直前の文字数・成功・stdout・空stderrと、超過入力の終了失敗・LoadError・対象ファイル・Bootstrap誤帰属禁止・stdout空をすべて保持した。CLI起動は3回のままである。
+独立レビューではケースの欠落、期待値の弱化、状態復元の変更は見つからなかった。関連する既存のテスト方針文書も実行単位数に追従した。
+
+分割後の局所コマンドは次のとおり。
+
+```sh
+cargo nextest run --profile ci -p scar -p xldr -p rune -E 'binary(typecheck_surface) | binary(repl_core) | test(/^error_source_locations::error_source_location_.*_the_span_encoding_range$/)'
+```
+
+| 観測 | 変更前 | 変更後 |
+|---|---:|---:|
+| 選択対象 | 22 passed | 36 passed |
+| 選択対象外 | 714 | 714 |
+| Summary（setupを含む） | 18.255s | 15.387s |
+| Scar surfaceの最大テスト時間 | 5.586s | 4.053s |
+| Scar surfaceの累積時間 | 33.155s | 35.878s |
+| REPL bucketの最大テスト時間 | 9.417s | 3.685s |
+| REPL bucketの累積時間 | 59.742s | 47.346s |
+| source長上限の最大テスト時間 | 7.465s | 6.688s |
+| source長上限の累積時間 | 7.465s | 6.871s |
+
+両実行ともexit 0、timeoutなし。増加した14実行単位はScarが4、REPLが8、source長上限が2であり、元の製品ケースを増減したものではない。各1回の局所測定で、並列負荷の揺らぎを含む。Scarの累積時間は増えており、分割で準備費も減ったとは扱わない。
+source長上限は正常入力側が6.688秒、main拒否が0.108秒、include先拒否が0.075秒だった。三等分の時間短縮ではなく、正常入力の検査が依然支配的である。入力を小さくして上限境界を失わせる変更は行わない。
+
+
+### 最終clean CI
+
+Rust差分を固定した後、入力文書の`cargo clean && cargo build && cargo nextest run --all --profile ci`を直列実行した。exit 0、2,305 passed、0 skipped、timeout・失敗・leakなし。前回の2,291件との差14件は実行単位の分割による。
+
+| 区間 | 第5回の保存済み計測 | 第6回 |
+|---|---:|---:|
+| cargo build | 23.46s | 24.67s |
+| nextest test build | 36.75s | 37.32s |
+| setup | 4.071s | 4.023s |
+| nextest Summary（setupを含む） | 94.912s | 95.775s |
+| コマンド全体real | 186.49s | 197.01s |
+| コマンド全体user / sys | 821.69s / 56.35s | 835.95s / 56.77s |
+| テストプロセスの累積時間 | 621.249s | 624.714s |
+
+| 対象 | 前回の最大時間 | 今回の最大時間 | 前回の累積時間 | 今回の累積時間 |
+|---|---:|---:|---:|---:|
+| Scar surface bucketのみ | 6.287s | 4.018s | 37.653s | 39.035s |
+| REPL bucketのみ | 7.628s | 5.622s | 52.937s | 69.251s |
+| source長上限 | 8.041s | 7.636s | 8.041s | 7.829s |
+
+bucketのみの集計はinventoryや同target内の個別テストを含まず、第5回のtarget全体の表とは範囲が異なる。
+ScarとREPLは最大テスト時間が小さくなり、15秒制限に対する余裕を確認した。一方で累積時間は増え、REPLではプロセス増加による準備の反復が残る。source長上限は今回も正常入力側が支配的で、最大時間の減少は小さい。
+全体Summaryは0.863秒、約0.9%増え、コマンド全体realは10.52秒、約5.6%増えた。今回の変更を全体速度の改善とは扱わない。前回保存ログと今回各1回の測定であり、負荷や起動・一覧取得を含む区間の差もあるため、全体増加を分割だけへ帰属させない。
+
+生ログ・照合結果は`/tmp/surtr-test-perf-d975/round6/`に保存した。
+
+- `focused-before.log` / `focused-after.log` / `focused-comparison.json`: 同じ対象を選んだ局所比較。
+- `final-clean.log` / `clean-comparison.json`: clean CIと第5回保存ログの集計比較。
+- `preservation.json`: registry・ケース本体・他のsource位置テストの内容一致。
+- `fmt-check.log` / `input-doc-lint.log` / `policy-doc-lint.log`: 書式と日本語文書の確認。
+- `standard-srt.log`: 標準Surtrテストの結果。
+
+
+`cargo run -- test --quiet --all`はexit 0、real 20.50秒で成功した。quiet実行のためケース件数は報告しない。最終Rust差分の`cargo fmt --all -- --check`と`git diff --check`は成功し、独立レビューに必須指摘はなかった。日本語lintの警告は参考として確認し、既存記録の用語・引用・検証値は変更していない。
+変更はテスト3ファイルと直接関連する既存文書2ファイルのみで、製品コード・追加ケース本体・timeout設定は変更していない。必須検証の失敗・timeout・未実行は残っていない。コミット・マージ・pushは行っていない。
+
+
+### main統合の依頼
+
+2026-10-10、検証済みの第1〜6回の改善をmainへ統合し、作業ワークツリーとブランチを削除する依頼を受けた。本ターンではテストを再実行しない。対象は`codex/ci-test-scaling`と`/Users/haruca/.codex/worktrees/d975/surtr`に限定する。
+統合前のmainは`ab374367`で、未コミット変更はなかった。最後の分割差分5パスのみを明示してコミットし、既存の改善コミットとともにno-ff mergeする。Gitの親コミット・祖先関係・統合treeとファイル内容の一致を確認し、その後に対象リソースを削除する。

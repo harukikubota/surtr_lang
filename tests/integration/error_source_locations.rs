@@ -264,8 +264,8 @@ fn error_source_location_partial_bind_preserves_monad_fail_errors_and_causes() {
 }
 
 #[test]
-fn error_source_location_rejects_sources_that_exceed_the_span_encoding_range() {
-    let temp = unique_temp_dir("error_source_location_stride");
+fn error_source_location_accepts_source_within_the_span_encoding_range() {
+    let temp = unique_temp_dir("error_source_location_stride_valid");
     let valid_path = temp.join("within_range.srt");
     let tail = "print(\"ok\")\n";
     let valid_padding = sindr::ir::MODULE_SPAN_STRIDE - 1 - tail.chars().count();
@@ -294,12 +294,26 @@ fn error_source_location_rejects_sources_that_exceed_the_span_encoding_range() {
     );
     assert_eq!(valid.stdout, b"ok\n");
     assert!(valid.stderr.is_empty(), "{valid:?}");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn error_source_location_rejects_main_source_exceeding_the_span_encoding_range() {
+    let temp = unique_temp_dir("error_source_location_stride_main");
     let padding = "# あ\n".repeat(sindr::ir::MODULE_SPAN_STRIDE / 4 + 1);
     let main_path = temp.join("large_main.srt");
     write_source(
         &main_path,
         &format!("{padding}def main() -> Result<Int> {{ Err(NoneError) }}\nmain()\n"),
     );
+    assert_oversized_source_rejected(&main_path, &main_path);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn error_source_location_rejects_included_source_exceeding_the_span_encoding_range() {
+    let temp = unique_temp_dir("error_source_location_stride_included");
+    let padding = "# あ\n".repeat(sindr::ir::MODULE_SPAN_STRIDE / 4 + 1);
     let module_path = temp.join("large_module.srt");
     write_source(
         &module_path,
@@ -312,30 +326,30 @@ fn error_source_location_rejects_sources_that_exceed_the_span_encoding_range() {
         &include_path,
         "include \"./large_module.srt\"\nOversized::fail()\n",
     );
-    for (entry, rejected_file) in [
-        (&main_path, "large_main.srt"),
-        (&include_path, "large_module.srt"),
-    ] {
-        let output = surtr_command()
-            .arg("run")
-            .arg(entry)
-            .output()
-            .expect("CLI must run");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !output.status.success(),
-            "oversized source must be rejected"
-        );
-        assert!(stderr.contains("LoadError"), "{rejected_file}: {stderr}");
-        assert!(
-            stderr.contains(rejected_file),
-            "rejected source must be identified: {stderr}"
-        );
-        assert!(
-            !stderr.contains("bootstrap.srt"),
-            "oversized source must not be mapped to Bootstrap: {stderr}"
-        );
-        assert!(output.stdout.is_empty(), "oversized input must not execute");
-    }
+    assert_oversized_source_rejected(&include_path, &module_path);
     fs::remove_dir_all(temp).unwrap();
+}
+
+fn assert_oversized_source_rejected(entry: &std::path::Path, rejected_source: &std::path::Path) {
+    let rejected_file = rejected_source.file_name().unwrap().to_str().unwrap();
+    let output = surtr_command()
+        .arg("run")
+        .arg(entry)
+        .output()
+        .expect("CLI must run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "oversized source must be rejected"
+    );
+    assert!(stderr.contains("LoadError"), "{rejected_file}: {stderr}");
+    assert!(
+        stderr.contains(rejected_file),
+        "rejected source must be identified: {stderr}"
+    );
+    assert!(
+        !stderr.contains("bootstrap.srt"),
+        "oversized source must not be mapped to Bootstrap: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "oversized input must not execute");
 }
