@@ -872,6 +872,170 @@ mod tests {
     use xldr::{SourceKind, StagedModule};
 
     #[test]
+    fn compile_source_rejects_test_assertion_type_boundaries() {
+        const FILE: &str = "lib/tests/local/math.srt";
+        let module_sources = xldr::collect_test_module_sources_with_module_stages(&[])
+            .expect("Test-enabled standard sources must load");
+        for (source, expected, expected_phase) in [
+            (
+                "assert_cause_chain([\"NoneError\"], Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "assert_cause_chain([PayloadFailure(\"x\")], Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "assert_cause_chain([Error], Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "assert_cause_chain([Int], Err(NoneError))",
+                "Undefined variable: Int",
+                "resolve",
+            ),
+            (
+                "marker = NoneError\nassert_cause_chain([marker], Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "markers = [NoneError]\nassert_cause_chain(markers, Err(NoneError))",
+                "direct List literal",
+                "resolve",
+            ),
+            (
+                "assert_cause_chain([NoneError, ..[]], Err(NoneError))",
+                "direct List literal",
+                "resolve",
+            ),
+            (
+                "&Test::assert_cause_chain(&1, Err(NoneError))",
+                "direct List literal",
+                "resolve",
+            ),
+            (
+                "&Test::assert_cause_chain([&1], Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            ("assert_cause_chain([NoneError], 3)", "Result", "typecheck"),
+            (
+                "def forward(kinds: List<ErrorKind>) -> Result<()> { Ok(()) }\nOk(())",
+                "ErrorKind is reserved",
+                "typecheck",
+            ),
+            (
+                "kinds: List<ErrorKind> = []\nOk(())",
+                "ErrorKind is reserved",
+                "typecheck",
+            ),
+            ("assert_ne({|x: Int| x}, {|x: Int| x})", "Eq", "typecheck"),
+            (
+                "assert_some_eq({|x: Int| x}, Option::Some({|x: Int| x}))",
+                "Eq",
+                "typecheck",
+            ),
+            ("assert_approx(1, 1.0, 0.0)", "Float", "typecheck"),
+            ("assert(1, \"message\")", "Boolean", "typecheck"),
+            (
+                "assert_satisfies(1, \"message\", {|n| n + 1})",
+                "Boolean",
+                "typecheck",
+            ),
+            ("assert_lt(1, 2.0)", "Int", "typecheck"),
+            (
+                "assert_gt({|x: Int| x}, {|x: Int| x})",
+                "Compare",
+                "typecheck",
+            ),
+            ("assert_some(Ok(1))", "Option", "typecheck"),
+            (
+                "assert_err_kind(\"NoneError\", Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "assert_err_kind(PayloadFailure(\"x\"), Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "assert_err_kind(Int, Err(NoneError))",
+                "Undefined variable: Int",
+                "resolve",
+            ),
+            (
+                "&Test::assert_err_kind(&1, Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "assert_err_kind(Error, Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "marker = NoneError\nassert_err_kind(marker, Err(NoneError))",
+                "concrete deferror",
+                "resolve",
+            ),
+            (
+                "def forward(marker: ErrorKind) -> Result<()> { Ok(()) }\nOk(())",
+                "ErrorKind is reserved",
+                "typecheck",
+            ),
+        ] {
+            let source = format!(
+                "import Test;\ndeferror PayloadFailure(detail: String) {{ detail }}\n{source}\n"
+            );
+            let plan = prepare_script_compile_plan(FILE, &source, None)
+                .expect("assertion input must have a valid script plan");
+            let compile_sources = xldr::compose_script_compile_sources_with_stdlib_variant(
+                FILE,
+                &plan.source_for_parse,
+                module_sources.clone(),
+                xldr::StdlibVariant::TestEnabled,
+            );
+            let error = compile_source(ExecutionEnv::Test, &compile_sources, &plan)
+                .expect_err("invalid assertion input must fail before codegen");
+            assert_eq!(error.exit_code(), 1, "{source}: {error:?}");
+            let RuneError::Diagnostic { diagnostic, .. } = &error else {
+                panic!("assertion input must produce a compiler diagnostic: {source}: {error:?}");
+            };
+            assert_eq!(diagnostic.phase, expected_phase, "{source}: {error:?}");
+            assert_eq!(
+                diagnostic.source_id, compile_sources.user_source_id,
+                "{source}"
+            );
+            assert_eq!(
+                diagnostic.sources.file_name(diagnostic.source_id),
+                Some(FILE),
+                "{source}"
+            );
+            assert_eq!(
+                diagnostic.sources.source(diagnostic.source_id),
+                Some(source.as_str()),
+                "{source}"
+            );
+            let span = &diagnostic.spec.primary_span;
+            assert!(
+                span.start <= span.end && span.end <= source.chars().count(),
+                "{source}: {span:?}"
+            );
+            let report = error.to_serializable_report();
+            assert_eq!(report.errors.len(), 1, "{source}: {report:?}");
+            assert!(
+                report.errors[0].message.contains(expected),
+                "{source}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_adapter_preserves_the_parser_reason_and_origin() {
         let source = "def f() -> Int { ) }";
         let parse_error = spire::parse(source).expect_err("unexpected token should fail parsing");
