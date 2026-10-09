@@ -1,3 +1,55 @@
+#![deny(dead_code)]
+
+#[path = "support/case_registry.rs"]
+mod case_registry;
+
+case_registry::register_case_suite!(
+    "return_type_arguments.rs",
+    [
+        accepts_declared_return_only_input,
+        recursively_finds_missing_return_only_input,
+        rejects_input_introduced_by_value_and_return_type_argument,
+        rejects_unused_return_type_argument,
+        rejects_constructor_variable_without_constructor_trait_constraint,
+        accepts_constructor_variable_with_constructor_trait_constraint,
+        rejects_trait_name_as_where_constraint_subject,
+        recursive_value_occurrences_do_not_require_return_type_arguments,
+        direct_type_constructor_trait_return_type_argument_is_accepted,
+        direct_type_constructor_trait_uses_one_typed_witness,
+        rejects_omitted_return_only_input_without_a_witness,
+        accepts_return_only_input_inferred_from_expected_result,
+        rejects_ambiguous_return_only_input_inside_an_unannotated_binding,
+        accepts_return_only_input_forwarded_by_an_outer_generic_result,
+        forwards_return_only_where_obligation_through_outer_generic_bound,
+        callable_result_binding_requires_a_concrete_return_type_argument,
+        accepts_explicit_return_type_argument_on_ordinary_callable,
+        ordinary_return_type_argument_requires_a_complete_type,
+        trait_method_return_type_argument_accepts_a_structural_bare_target_head,
+        trait_method_bare_target_head_rejects_an_unshared_argument,
+        trait_method_top_level_underscore_uses_expected_return_inference,
+        constructor_return_type_argument_accepts_bare_full_and_partial_carriers,
+        applied_constructor_return_type_argument_accepts_enclosing_fixed_type_variable,
+        constructor_return_type_argument_rejects_an_outer_constructor_variable,
+        constructor_return_type_argument_defers_nominal_constraints_on_underscores,
+        rejects_constructor_head_with_an_unresolved_fixed_argument,
+        alternative_empty_allows_a_user_defined_captured_carrier_representation,
+        alternative_empty_rejects_an_unresolved_mapped_slot_inside_a_carrier_rta,
+        rejects_captured_constructor_head_with_an_unresolved_fixed_argument,
+        expected_constructor_selection_is_independent_of_impl_order,
+        omitted_and_underscore_return_type_arguments_share_inference,
+        rejects_return_type_argument_arity_underflow_without_partial_zip,
+        rejects_return_type_argument_arity_overflow_without_partial_zip,
+        rejects_explicit_return_type_argument_conflicting_with_expected_return,
+        mismatch_reports_the_conflicting_return_type_argument_ordinal,
+        ambiguity_reports_the_unresolved_return_type_argument_ordinal,
+        accepts_explicit_return_type_argument_capture_with_expected_shape,
+        rejects_explicit_capture_conflicting_with_expected_return,
+        rejects_ambiguous_return_type_argument_capture,
+        omitted_and_underscore_captures_share_ambiguity_check,
+        expected_generic_result_allows_err_only_self_match_arm,
+    ]
+);
+
 #[allow(dead_code)]
 mod support;
 
@@ -24,7 +76,6 @@ fn assert_reason(source: &str, expected: TypeDiagnosticReason) -> scar::error::T
     error
 }
 
-#[test]
 fn accepts_declared_return_only_input() {
     typecheck_with_standard_environment(
         r#"deftrait Factory {
@@ -34,7 +85,6 @@ fn accepts_declared_return_only_input() {
     .expect("a declared return-only input should be accepted");
 }
 
-#[test]
 fn recursively_finds_missing_return_only_input() {
     let error = assert_reason(
         r#"def missing(mapper: ($A -> Int)) -> Option<$B> { 0 }"#,
@@ -43,7 +93,6 @@ fn recursively_finds_missing_return_only_input() {
     assert_eq!(error.message, "return-only type input `$B` is not declared");
 }
 
-#[test]
 fn rejects_input_introduced_by_value_and_return_type_argument() {
     for source in [
         r#"deftrait FixtureFunctor
@@ -74,7 +123,6 @@ def duplicate::<FixtureFunctor>(value: FixtureFunctor<$A>) -> FixtureFunctor<$A>
     }
 }
 
-#[test]
 fn rejects_unused_return_type_argument() {
     let error = assert_reason(
         r#"def unused::<$A>() -> Int { 0 }"#,
@@ -86,7 +134,6 @@ fn rejects_unused_return_type_argument() {
     );
 }
 
-#[test]
 fn rejects_constructor_variable_without_constructor_trait_constraint() {
     let error = assert_reason(
         r#"def invalid(value: $F<$A>) -> $F<$A> { value }"#,
@@ -98,7 +145,6 @@ fn rejects_constructor_variable_without_constructor_trait_constraint() {
     );
 }
 
-#[test]
 fn accepts_constructor_variable_with_constructor_trait_constraint() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureFunctor
@@ -115,7 +161,6 @@ deftrait Keeper {
     .expect("a constrained constructor variable application should be accepted");
 }
 
-#[test]
 fn rejects_trait_name_as_where_constraint_subject() {
     let error = assert_reason(
         r#"deftrait FixtureAdd {}
@@ -137,7 +182,6 @@ where
     );
 }
 
-#[test]
 fn recursive_value_occurrences_do_not_require_return_type_arguments() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureMapper {
@@ -147,7 +191,6 @@ fn recursive_value_occurrences_do_not_require_return_type_arguments() {
     .expect("nested function-type inputs should be classified as value inputs");
 }
 
-#[test]
 fn direct_type_constructor_trait_return_type_argument_is_accepted() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureAlternative
@@ -162,7 +205,6 @@ deftrait GuardFactory {
     .expect("direct TypeCtorTrait syntax should normalize as one constructor input");
 }
 
-#[test]
 fn direct_type_constructor_trait_uses_one_typed_witness() {
     let typed = typecheck_with_standard_environment(
         r#"deftrait FixtureAlternative
@@ -196,7 +238,6 @@ def guard::<FixtureAlternative>(condition: Boolean) -> FixtureAlternative<Unit> 
     assert_eq!(rta_witness, return_type);
 }
 
-#[test]
 fn rejects_omitted_return_only_input_without_a_witness() {
     let error = assert_reason(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -209,7 +250,6 @@ make()"#,
     );
 }
 
-#[test]
 fn accepts_return_only_input_inferred_from_expected_result() {
     typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -218,7 +258,6 @@ value: List<Int> = make()"#,
     .expect("the expected result type should determine the return-only input");
 }
 
-#[test]
 fn rejects_ambiguous_return_only_input_inside_an_unannotated_binding() {
     assert_reason(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -227,7 +266,6 @@ value = make()"#,
     );
 }
 
-#[test]
 fn accepts_return_only_input_forwarded_by_an_outer_generic_result() {
     typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -236,7 +274,6 @@ def forward::<$A>() -> List<$A> { make() }"#,
     .expect("an outer declared input should witness the nested return-only input");
 }
 
-#[test]
 fn forwards_return_only_where_obligation_through_outer_generic_bound() {
     for tail in [
         "inner()",
@@ -272,7 +309,6 @@ value: Int = outer()"#
     }
 }
 
-#[test]
 fn callable_result_binding_requires_a_concrete_return_type_argument() {
     let error = typecheck_with_standard_environment(
         r#"def identity::<$A>() -> ($A -> $A) { {|value| value} }
@@ -295,7 +331,6 @@ result: Int = callable(42)"#,
     .expect("a concrete callable annotation may choose the return type argument");
 }
 
-#[test]
 fn accepts_explicit_return_type_argument_on_ordinary_callable() {
     typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -304,7 +339,6 @@ value: List<Int> = make::<Int>()"#,
     .expect("an ordinary callable should accept its declared ReturnTypeArgument");
 }
 
-#[test]
 fn ordinary_return_type_argument_requires_a_complete_type() {
     let error = typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -317,7 +351,6 @@ value = make::<List>()"#,
     );
 }
 
-#[test]
 fn trait_method_return_type_argument_accepts_a_structural_bare_target_head() {
     typecheck_with_standard_environment(
         r#"defenum Source<$A> { Source($A), }
@@ -342,7 +375,6 @@ full: Target<Int> = FixtureConvert::convert::<Target<Int>>(source)"#,
     .expect("the matching impl must share its payload variable from source to target");
 }
 
-#[test]
 fn trait_method_bare_target_head_rejects_an_unshared_argument() {
     let error = typecheck_with_standard_environment(
         r#"defenum Source<$A> { Source($A), }
@@ -376,7 +408,6 @@ value = FixtureConvert::convert::<Target>(source)"#,
     );
 }
 
-#[test]
 fn trait_method_top_level_underscore_uses_expected_return_inference() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureDefault {
@@ -405,7 +436,6 @@ value: List<Int> = Maker::make::<_>(())"#,
     .expect("the regular Trait-call path should use the same `_` inference rule");
 }
 
-#[test]
 fn constructor_return_type_argument_accepts_bare_full_and_partial_carriers() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureAlternative
@@ -461,7 +491,6 @@ value: FixtureEither<String, Int> = pure::<FixtureEither<String, _>>(10)"#,
     .expect("a constructor input should infer only the underscore position");
 }
 
-#[test]
 fn applied_constructor_return_type_argument_accepts_enclosing_fixed_type_variable() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureApplicative
@@ -494,7 +523,6 @@ value: FixtureEither<String, Int> = wrap("tag")"#,
     .expect("an applied carrier may use an enclosing ordinary type variable as a fixed argument");
 }
 
-#[test]
 fn constructor_return_type_argument_rejects_an_outer_constructor_variable() {
     let error = typecheck_with_standard_environment(
         r#"deftrait FixtureApplicative
@@ -520,7 +548,6 @@ where
     );
 }
 
-#[test]
 fn constructor_return_type_argument_defers_nominal_constraints_on_underscores() {
     let source = r#"deftrait Marker {}
 impl Marker for Int {}
@@ -564,7 +591,6 @@ value: Bounded<Int, EXPECTED> = Maker::make::<Bounded<Int, _>>()"#;
     );
 }
 
-#[test]
 fn rejects_constructor_head_with_an_unresolved_fixed_argument() {
     assert_reason(
         r#"deftrait FixtureAlternative
@@ -588,7 +614,6 @@ value = choose::<FixtureEither>()"#,
     );
 }
 
-#[test]
 fn alternative_empty_allows_a_user_defined_captured_carrier_representation() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureApplicative
@@ -633,7 +658,6 @@ value: Choice<String, Int> = FixtureAlternative::choose(empty, first)"#,
     );
 }
 
-#[test]
 fn alternative_empty_rejects_an_unresolved_mapped_slot_inside_a_carrier_rta() {
     assert_reason(
         r#"deftrait FixtureApplicative
@@ -669,7 +693,6 @@ value = FixtureAlternative::empty::<Choice<String, _>>()"#,
     );
 }
 
-#[test]
 fn rejects_captured_constructor_head_with_an_unresolved_fixed_argument() {
     assert_reason(
         r#"deftrait FixtureAlternative
@@ -693,7 +716,6 @@ factory = &choose::<FixtureEither>"#,
     );
 }
 
-#[test]
 fn expected_constructor_selection_is_independent_of_impl_order() {
     for impls in [
         r#"impl Factory for First<$T> {
@@ -732,7 +754,6 @@ value: Second<Unit> = choose()"#
     }
 }
 
-#[test]
 fn omitted_and_underscore_return_type_arguments_share_inference() {
     typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -742,7 +763,6 @@ underscore: List<Int> = make::<_>()"#,
     .expect("omitted and underscore ReturnTypeArguments should use the same inference route");
 }
 
-#[test]
 fn rejects_return_type_argument_arity_underflow_without_partial_zip() {
     assert_reason(
         r#"def choose::<$A, $B>() -> ($A, $B) { choose() }
@@ -751,7 +771,6 @@ choose::<Int>()"#,
     );
 }
 
-#[test]
 fn rejects_return_type_argument_arity_overflow_without_partial_zip() {
     assert_reason(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -760,7 +779,6 @@ make::<Int, String>()"#,
     );
 }
 
-#[test]
 fn rejects_explicit_return_type_argument_conflicting_with_expected_return() {
     let error = assert_reason(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -780,7 +798,6 @@ value: List<String> = make::<Int>()"#,
     );
 }
 
-#[test]
 fn mismatch_reports_the_conflicting_return_type_argument_ordinal() {
     let error = assert_reason(
         r#"def choose::<$A, $B>() -> ($A, $B) { choose() }
@@ -794,7 +811,6 @@ value: (Int, String) = choose::<Int, Boolean>()"#,
     );
 }
 
-#[test]
 fn ambiguity_reports_the_unresolved_return_type_argument_ordinal() {
     let error = assert_reason(
         r#"def choose::<$A, $B>() -> ($A, $B) { choose() }
@@ -808,7 +824,6 @@ value = choose::<Int, _>()"#,
     );
 }
 
-#[test]
 fn accepts_explicit_return_type_argument_capture_with_expected_shape() {
     typecheck_with_standard_environment(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -817,7 +832,6 @@ factory: (-> List<Int>) = &make::<Int>"#,
     .expect("a capture should preserve an explicitly solved ReturnTypeArgument");
 }
 
-#[test]
 fn rejects_explicit_capture_conflicting_with_expected_return() {
     let error = assert_reason(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -835,7 +849,6 @@ factory: (-> List<String>) = &make::<Int>"#,
     );
 }
 
-#[test]
 fn rejects_ambiguous_return_type_argument_capture() {
     assert_reason(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -844,7 +857,6 @@ factory = &make::<_>"#,
     );
 }
 
-#[test]
 fn omitted_and_underscore_captures_share_ambiguity_check() {
     assert_reason(
         r#"def make::<$A>() -> List<$A> { [] }
@@ -853,7 +865,6 @@ factory = &make"#,
     );
 }
 
-#[test]
 fn expected_generic_result_allows_err_only_self_match_arm() {
     typecheck_with_standard_environment(
         r#"def map_result(value: Result<$A>, mapper: ($A -> $B)) -> Result<$B> {

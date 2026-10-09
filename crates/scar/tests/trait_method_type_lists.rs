@@ -1,3 +1,36 @@
+#![deny(dead_code)]
+
+#[path = "support/case_registry.rs"]
+mod case_registry;
+
+case_registry::register_case_suite!(
+    "trait_method_type_lists.rs",
+    [
+        return_only_nested_mismatch_is_structured,
+        value_parameter_arity_is_structured,
+        preserves_repeated_variables_across_entries,
+        alpha_renamed_nested_signature_is_accepted,
+        method_constraint_mismatch_is_structured,
+        direct_constructor_constraint_spelling_is_canonical,
+        return_type_argument_arity_is_structured,
+        constraints_are_an_alpha_renamed_order_independent_set,
+        constraints_are_substituted_through_trait_arguments,
+        constructor_self_application_expands_with_slot_mapping,
+        impl_head_variable_remains_anchored_even_without_receiver,
+        nominal_path_uses_declared_arguments_instead_of_field_order,
+        concrete_impl_return_type_arguments_keep_nested_structure,
+        phantom_nominal_arguments_are_part_of_contract,
+        trait_parameter_names_do_not_capture_impl_variables,
+        colliding_trait_parameter_names_do_not_accept_wrong_impl_variable,
+        matching_phantom_nominal_arguments_are_accepted,
+        variable_cannot_be_equated_with_a_recursive_type_tree,
+        duplicate_method_constraints_do_not_change_the_canonical_set,
+        default_method_keeps_impl_head_namespace_separate,
+        aliases_preserve_nested_phantom_arguments,
+        constructor_default_methods_use_self_witness_and_independent_payloads,
+    ]
+);
+
 #[allow(dead_code)]
 mod support;
 
@@ -8,7 +41,6 @@ fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeE
     support::typecheck(support::resolve_ast_with_builtin_prelude(ast).expect("resolve"))
 }
 
-#[test]
 fn return_only_nested_mismatch_is_structured() {
     let error = check(
         r#"
@@ -41,7 +73,6 @@ impl Make for Int { def make(self: Self) -> Box<String> { Box::new("x") } }
     assert_ne!(structured.primary.span, structured.related[0].span);
 }
 
-#[test]
 fn value_parameter_arity_is_structured() {
     let error = check(
         r#"
@@ -60,7 +91,6 @@ impl Copy for Int { def copy(self: Self) -> Int { 0 } }
     assert!(structured.related[0].ty.is_none());
 }
 
-#[test]
 fn preserves_repeated_variables_across_entries() {
     let error = check(
         r#"
@@ -76,7 +106,6 @@ impl Same for Int { def same(self: Self, left: $X, right: $Y) -> $X { left } }
     );
 }
 
-#[test]
 fn alpha_renamed_nested_signature_is_accepted() {
     check(r#"
 defstruct Box<$T> { val: $T }
@@ -86,7 +115,6 @@ impl MethodIdentity for Int { def identity(self: Self, value: (Box<$Z>, ($Z -> $
 "#).expect("alpha equivalent recursive signature");
 }
 
-#[test]
 fn method_constraint_mismatch_is_structured() {
     let error = check(
         r#"
@@ -103,7 +131,6 @@ impl MethodIdentity for Int { def identity(self: Self, value: $Z) -> $Z { value 
     );
 }
 
-#[test]
 fn direct_constructor_constraint_spelling_is_canonical() {
     let named = r#"def map(value: $F<$A>) -> $F<$A> where $F: Context { value }"#;
     let direct = r#"def map(value: Context<$A>) -> Context<$A> { value }"#;
@@ -125,7 +152,6 @@ impl Wrapper for Int {{ {implementation} }}
     }
 }
 
-#[test]
 fn return_type_argument_arity_is_structured() {
     let error = check(
         r#"
@@ -141,7 +167,6 @@ impl Factory for Int { def make() -> Int { 0 } }
     );
 }
 
-#[test]
 fn constraints_are_an_alpha_renamed_order_independent_set() {
     check(r#"
 deftrait First { def first(self: Self) -> Self }
@@ -151,7 +176,6 @@ impl MethodIdentity for Int { def identity(self: Self, value: $Z) -> $Z where $Z
 "#).expect("constraint order and generic spelling are irrelevant");
 }
 
-#[test]
 fn constraints_are_substituted_through_trait_arguments() {
     check(r#"
 deftrait Marker { def mark(self: Self) -> Self }
@@ -161,7 +185,6 @@ impl MethodIdentity<Int> for Int { def identity(self: Self, value: Int) -> Int w
 "#).expect("contract head arguments also substitute constraint subjects");
 }
 
-#[test]
 fn constructor_self_application_expands_with_slot_mapping() {
     check(
         r#"
@@ -178,7 +201,6 @@ impl Keep for Box<$T> where $T: Keep.$A {
     .expect("Self application is expanded before structural matching");
 }
 
-#[test]
 fn impl_head_variable_remains_anchored_even_without_receiver() {
     let error = check(
         r#"
@@ -196,7 +218,6 @@ impl MethodIdentity<$T> for Box<$T> { def identity(value: $Z) -> $Z { value } }
     );
 }
 
-#[test]
 fn nominal_path_uses_declared_arguments_instead_of_field_order() {
     let error = check(r#"
 defstruct Pair<$A, $B> { second: $B, first: $A }
@@ -215,7 +236,6 @@ impl Make for Int { def make(self: Self) -> Pair<Int, Int> { Pair::new(1, 2) } }
     assert_eq!(data.actual_type.as_deref(), Some("Pair<Int, Int>"));
 }
 
-#[test]
 fn concrete_impl_return_type_arguments_keep_nested_structure() {
     let error = check(
         r#"
@@ -236,7 +256,6 @@ impl Factory for Box<Int> { def make::<Box<String>>() -> Box<String> { Box::new(
     assert_eq!(data.nested_path, vec![0]);
 }
 
-#[test]
 fn phantom_nominal_arguments_are_part_of_contract() {
     let error = check(
         r#"
@@ -253,7 +272,6 @@ impl Make for Int { def make(self: Self) -> Phantom<String> { Phantom::new::<Str
     );
 }
 
-#[test]
 fn trait_parameter_names_do_not_capture_impl_variables() {
     check(
         r#"
@@ -264,7 +282,6 @@ impl Pair<$B, $A> for Int { def keep(value: $B) -> $B { value } }
     .expect("impl names are in a separate namespace");
 }
 
-#[test]
 fn colliding_trait_parameter_names_do_not_accept_wrong_impl_variable() {
     let error = check(
         r#"
@@ -279,7 +296,6 @@ impl Pair<$B, $A> for Int { def keep(value: $A) -> $A { value } }
     );
 }
 
-#[test]
 fn matching_phantom_nominal_arguments_are_accepted() {
     check(
         r#"
@@ -292,7 +308,6 @@ impl Make for Int { def make(self: Self) -> Phantom<Int> { Phantom::new::<Int>()
     .expect("phantom applications remain legal");
 }
 
-#[test]
 fn variable_cannot_be_equated_with_a_recursive_type_tree() {
     let error = check(
         r#"
@@ -307,7 +322,6 @@ impl Same for Int { def same(self: Self, value: $X) -> List<$X> { [value] } }
     );
 }
 
-#[test]
 fn duplicate_method_constraints_do_not_change_the_canonical_set() {
     check(r#"
 deftrait Marker { def mark(self: Self) -> Self }
@@ -316,7 +330,6 @@ impl MethodIdentity for Int { def identity(self: Self, value: $Z) -> $Z where $Z
 "#).expect("where constraints are a set");
 }
 
-#[test]
 fn default_method_keeps_impl_head_namespace_separate() {
     check(
         r#"
@@ -327,7 +340,6 @@ impl Pair<$B, $A> for Int {}
     .expect("synthesized defaults substitute contract names without changing impl head names");
 }
 
-#[test]
 fn aliases_preserve_nested_phantom_arguments() {
     let error = check(
         r#"
@@ -355,7 +367,6 @@ impl Make for Int { def make(self: Self) -> Alias<String> { {|value| []} } }
     );
 }
 
-#[test]
 fn constructor_default_methods_use_self_witness_and_independent_payloads() {
     let declarations = r#"
 deftrait DefaultContext where Self: Applicative {
