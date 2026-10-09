@@ -853,9 +853,15 @@ fn core_string_quote_roundtrips_arbitrary_scalars_and_literal_syntax() {
     }
 }
 
+const REPL_CORE_BUCKET_COUNT: usize = 16;
+
 fn run_repl_core_bucket(bucket: usize) {
+    assert!(
+        bucket < REPL_CORE_BUCKET_COUNT,
+        "invalid REPL core bucket: {bucket}"
+    );
     for (index, &(name, case)) in REPL_CORE_CASES.iter().enumerate() {
-        if index % 8 == bucket {
+        if index % REPL_CORE_BUCKET_COUNT == bucket {
             eprintln!("repl_core case: {name}");
             case();
         }
@@ -873,26 +879,77 @@ fn repl_core_case_inventory_has_unique_names_and_functions() {
             functions.insert(case as usize),
             "duplicate REPL core case function: {name}"
         );
+        assert!(
+            !include_str!("repl_core.rs").contains(&format!("#[test]\nfn {name}(")),
+            "registered REPL core case must run only through a bucket: {name}"
+        );
+    }
+
+    let mut buckets = HashSet::new();
+    for &bucket in REPL_CORE_BUCKET_IDS {
+        assert!(
+            bucket < REPL_CORE_BUCKET_COUNT,
+            "invalid REPL core bucket: {bucket}"
+        );
+        assert!(
+            buckets.insert(bucket),
+            "duplicate REPL core bucket: {bucket}"
+        );
+        assert!(
+            REPL_CORE_CASES
+                .iter()
+                .enumerate()
+                .any(|(index, _)| index % REPL_CORE_BUCKET_COUNT == bucket),
+            "empty REPL core bucket: {bucket}"
+        );
+    }
+    assert_eq!(
+        buckets.len(),
+        REPL_CORE_BUCKET_COUNT,
+        "missing REPL core bucket"
+    );
+    for (index, &(name, _)) in REPL_CORE_CASES.iter().enumerate() {
+        assert_eq!(
+            REPL_CORE_BUCKET_IDS
+                .iter()
+                .filter(|&&bucket| index % REPL_CORE_BUCKET_COUNT == bucket)
+                .count(),
+            1,
+            "REPL core case must run exactly once: {name}"
+        );
     }
 }
 
-macro_rules! repl_core_bucket {
-    ($name:ident, $bucket:expr) => {
+macro_rules! repl_core_buckets {
+    ($($name:ident => $bucket:expr),+ $(,)?) => {
+        const REPL_CORE_BUCKET_IDS: &[usize] = &[$($bucket),+];
+        $(
         #[test]
         fn $name() {
             run_repl_core_bucket($bucket);
         }
+        )+
     };
 }
 
-repl_core_bucket!(repl_core_bucket_0, 0);
-repl_core_bucket!(repl_core_bucket_1, 1);
-repl_core_bucket!(repl_core_bucket_2, 2);
-repl_core_bucket!(repl_core_bucket_3, 3);
-repl_core_bucket!(repl_core_bucket_4, 4);
-repl_core_bucket!(repl_core_bucket_5, 5);
-repl_core_bucket!(repl_core_bucket_6, 6);
-repl_core_bucket!(repl_core_bucket_7, 7);
+repl_core_buckets! {
+    repl_core_bucket_0 => 0,
+    repl_core_bucket_1 => 1,
+    repl_core_bucket_2 => 2,
+    repl_core_bucket_3 => 3,
+    repl_core_bucket_4 => 4,
+    repl_core_bucket_5 => 5,
+    repl_core_bucket_6 => 6,
+    repl_core_bucket_7 => 7,
+    repl_core_bucket_8 => 8,
+    repl_core_bucket_9 => 9,
+    repl_core_bucket_10 => 10,
+    repl_core_bucket_11 => 11,
+    repl_core_bucket_12 => 12,
+    repl_core_bucket_13 => 13,
+    repl_core_bucket_14 => 14,
+    repl_core_bucket_15 => 15,
+}
 
 fn core_completion_returns_global_candidates_with_details() {
     let mut engine = engine();

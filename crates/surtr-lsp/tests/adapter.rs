@@ -1,3 +1,5 @@
+#![deny(dead_code)]
+
 use std::path::PathBuf;
 
 use surtr_analysis::{
@@ -50,7 +52,6 @@ fn file_uri_requires_supported_complete_authority() {
     }
 }
 
-#[test]
 fn diagnostics_maps_analysis_ranges_and_sources_to_lsp_dto() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -95,7 +96,6 @@ fn diagnostics_publish_parse_ranges_from_tolerant_parse() {
     assert!(parse.range.end.character > parse.range.start.character);
 }
 
-#[test]
 fn completion_maps_utf16_position_to_lsp_text_edits() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -149,7 +149,6 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
     assert_eq!(items[0].text_edit.new_text, "fixture_print");
 }
 
-#[test]
 fn completion_hides_bootstrap_module_but_keeps_other_modules_and_members() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -393,7 +392,6 @@ fn completion_preserves_contextual_sort_text_through_lsp() {
     );
 }
 
-#[test]
 fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -488,7 +486,6 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
     );
 }
 
-#[test]
 fn hover_maps_semantic_detail_and_documentation_to_lsp_dto() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -573,7 +570,6 @@ fn signature_help_maps_semantic_call_context_to_lsp_dto() {
     assert_eq!(help.active_parameter, Some(1));
 }
 
-#[test]
 fn definition_maps_analysis_location_to_lsp_dto() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -1040,3 +1036,76 @@ fn temp_workspace(name: &str) -> PathBuf {
             .as_nanos()
     ))
 }
+
+// Share only the immutable default standard environment. Project and
+// standard-development cases rebuild it for their own declaration index and
+// remain standalone tests. Each registered case creates a fresh service/host.
+const SEMANTIC_BUCKET_COUNT: usize = 2;
+const SEMANTIC_CASES: &[(&str, fn())] = &[
+    (
+        "diagnostics_maps_analysis_ranges_and_sources_to_lsp_dto",
+        diagnostics_maps_analysis_ranges_and_sources_to_lsp_dto,
+    ),
+    (
+        "completion_maps_utf16_position_to_lsp_text_edits",
+        completion_maps_utf16_position_to_lsp_text_edits,
+    ),
+    (
+        "completion_hides_bootstrap_module_but_keeps_other_modules_and_members",
+        completion_hides_bootstrap_module_but_keeps_other_modules_and_members,
+    ),
+    (
+        "completion_exposes_shared_result_ctors_and_bool_variants_through_lsp",
+        completion_exposes_shared_result_ctors_and_bool_variants_through_lsp,
+    ),
+    (
+        "hover_maps_semantic_detail_and_documentation_to_lsp_dto",
+        hover_maps_semantic_detail_and_documentation_to_lsp_dto,
+    ),
+    (
+        "definition_maps_analysis_location_to_lsp_dto",
+        definition_maps_analysis_location_to_lsp_dto,
+    ),
+];
+
+#[test]
+fn semantic_case_inventory_is_complete() {
+    let mut names = std::collections::HashSet::new();
+    let mut functions = std::collections::HashSet::new();
+    for &(name, case) in SEMANTIC_CASES {
+        assert!(names.insert(name), "duplicate semantic case: {name}");
+        assert!(
+            functions.insert(case as usize),
+            "duplicate semantic function: {name}"
+        );
+        assert!(
+            !include_str!("adapter.rs").contains(&format!("#[test]\nfn {name}(")),
+            "semantic case must run only through a bucket: {name}"
+        );
+    }
+    for bucket in 0..SEMANTIC_BUCKET_COUNT {
+        assert!(
+            SEMANTIC_CASES
+                .iter()
+                .enumerate()
+                .any(|(index, _)| index % SEMANTIC_BUCKET_COUNT == bucket),
+            "empty semantic bucket: {bucket}"
+        );
+    }
+}
+
+macro_rules! semantic_bucket_test {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            for (index, &(case_name, case)) in SEMANTIC_CASES.iter().enumerate() {
+                if index % SEMANTIC_BUCKET_COUNT == $bucket {
+                    eprintln!("semantic case: {case_name}");
+                    case();
+                }
+            }
+        }
+    };
+}
+semantic_bucket_test!(semantic_bucket_0, 0);
+semantic_bucket_test!(semantic_bucket_1, 1);

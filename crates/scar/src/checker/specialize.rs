@@ -26,7 +26,7 @@ enum ResolvedDeferredDoFailure {
 }
 
 struct SpecializationContext<'a> {
-    defs_by_fun_idx: &'a HashMap<u32, TypedNode>,
+    defs_by_fun_idx: &'a SpecializableDefinitions,
     bound_tyvars_by_fun_idx: &'a HashMap<u32, Vec<u32>>,
     needs_specialization: &'a HashSet<u32>,
     specialization_fun_idxs: &'a mut HashMap<CallableInstantiationKey, u32>,
@@ -62,7 +62,7 @@ impl Checker {
 
     fn collect_direct_pattern_requirements(
         &self,
-        definitions: &HashMap<u32, TypedNode>,
+        definitions: &SpecializableDefinitions,
     ) -> Result<HashMap<u32, Vec<u32>>, TypeError> {
         use std::cell::RefCell;
         let mut signatures = HashMap::new();
@@ -180,11 +180,10 @@ impl Checker {
         &mut self,
         stmts: Vec<TypedNode>,
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let mut defs_by_fun_idx = HashMap::new();
-        defs_by_fun_idx.extend(self.specializable_defs.clone());
+        let mut defs_by_fun_idx = self.specializable_defs.clone();
         for stmt in &stmts {
             if let Some(fun_idx) = Self::def_fun_idx(stmt) {
-                defs_by_fun_idx.insert(fun_idx, stmt.clone());
+                defs_by_fun_idx.insert(fun_idx, Arc::new(stmt.clone()));
             }
         }
 
@@ -193,8 +192,19 @@ impl Checker {
 
         let mut needs_specialization = HashSet::new();
         let mut bound_tyvars_by_fun_idx = HashMap::new();
+        // Method identities are unchanged while classifying this compile unit.
+        // Build their membership index once instead of scanning every impl per definition.
+        let trait_impl_method_uids = self
+            .trait_impls
+            .values()
+            .flat_map(|info| {
+                info.methods
+                    .values()
+                    .map(|method| method.function_id.unique_id)
+            })
+            .collect::<HashSet<_>>();
         for (fun_idx, def) in &defs_by_fun_idx {
-            let mut bound_tyvars = self.collect_bound_tyvars_for_def(def);
+            let mut bound_tyvars = self.collect_bound_tyvars_for_def(def, &trait_impl_method_uids);
             if let Some(required) = self.direct_pattern_requirement_tyvars.get(fun_idx) {
                 for variable in required {
                     if !bound_tyvars.contains(variable) {
@@ -224,7 +234,7 @@ impl Checker {
                             &HashSet::new(),
                         );
                     }
-                    self.specializable_defs.insert(fun_idx, stmt);
+                    self.specializable_defs.insert(fun_idx, Arc::new(stmt));
                     continue;
                 }
             }
@@ -699,7 +709,7 @@ impl Checker {
         &mut self,
         control: Box<TypedDoSafeBind>,
         span: &Span,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -882,7 +892,7 @@ impl Checker {
     fn rewrite_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -989,7 +999,7 @@ impl Checker {
     fn rewrite_app_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1179,7 +1189,7 @@ impl Checker {
     fn rewrite_block_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1218,7 +1228,7 @@ impl Checker {
     fn rewrite_match_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1287,7 +1297,7 @@ impl Checker {
     fn rewrite_closure_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1357,7 +1367,7 @@ impl Checker {
     fn rewrite_other_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2285,7 +2295,7 @@ impl Checker {
     fn rewrite_specializations_in_facet_path(
         &mut self,
         mut path: TypedFacetPath,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2311,7 +2321,7 @@ impl Checker {
     fn rewrite_specializations_in_facet_segment(
         &mut self,
         segment: TypedFacetSegment,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2396,7 +2406,7 @@ impl Checker {
     fn rewrite_specializations_in_pending_facet_path(
         &mut self,
         mut path: PendingFacetPath,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2422,7 +2432,7 @@ impl Checker {
     fn rewrite_specializations_in_pending_facet_segment(
         &mut self,
         segment: PendingFacetSegment,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2547,7 +2557,7 @@ impl Checker {
         original_fun_idx: u32,
         concrete_tys: &[Ty],
         mapping: &HashMap<u32, Ty>,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2583,8 +2593,11 @@ impl Checker {
         self.env.next_fun_idx += 1;
         specialization_fun_idxs.insert(key, specialized_fun_idx);
 
-        let substituted_def =
-            self.substitute_specialized_def(original_def.clone(), specialized_fun_idx, mapping)?;
+        let substituted_def = self.substitute_specialized_def(
+            original_def.as_ref().clone(),
+            specialized_fun_idx,
+            mapping,
+        )?;
         // Reserve the definition before rewriting its body. A specialization
         // can refer to itself while its body is being rewritten; without the
         // reservation that recursive lookup mistakes the fresh cache entry
@@ -2603,7 +2616,7 @@ impl Checker {
             .map(|node| *node)
             .map_err(|error| *error)?;
         self.specializable_defs
-            .insert(specialized_fun_idx, rewritten_def.clone());
+            .insert(specialized_fun_idx, Arc::new(rewritten_def.clone()));
         generated_defs[generated_index] = rewritten_def;
         Ok(specialized_fun_idx)
     }
@@ -2956,16 +2969,16 @@ impl Checker {
             .collect()
     }
 
-    fn collect_bound_tyvars_for_def(&self, def: &TypedNode) -> Vec<u32> {
+    fn collect_bound_tyvars_for_def(
+        &self,
+        def: &TypedNode,
+        trait_impl_method_uids: &HashSet<u32>,
+    ) -> Vec<u32> {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
         match &def.node {
             TypedInner::Def(_, id, return_type_arguments, params, ret_ty, _, _body, _) => {
-                let is_trait_impl_method = self.trait_impls.values().any(|info| {
-                    info.methods
-                        .values()
-                        .any(|method| method.function_id.unique_id == id.unique_id)
-                });
+                let is_trait_impl_method = trait_impl_method_uids.contains(&id.unique_id);
                 for argument in return_type_arguments {
                     let mut declared = Vec::new();
                     Self::collect_ty_vars(&argument.ty, &mut declared);

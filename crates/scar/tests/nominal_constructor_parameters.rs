@@ -1,3 +1,35 @@
+#![deny(dead_code)]
+
+#[path = "support/case_registry.rs"]
+mod case_registry;
+
+case_registry::register_case_suite!(
+    "nominal_constructor_parameters.rs",
+    [
+        nominal_constructor_parameter_applies_known_unary_head_in_nested_field,
+        nominal_enum_constructor_parameter_uses_the_same_bound_metadata,
+        nominal_enum_constructor_parameter_supports_local_constructor_trait,
+        nominal_struct_constructor_parameter_supports_local_constructor_trait,
+        nominal_enum_constructor_parameter_rejects_wrong_slot_arity,
+        nominal_enum_constructor_parameter_rejects_head_without_capability,
+        nominal_constructor_parameter_rejects_wrong_slot_arity,
+        nominal_constructor_parameter_does_not_treat_underscore_as_constructor_inference,
+        nominal_constructor_application_requires_constructor_trait_bound,
+        nominal_constructor_parameter_requires_explicit_rigid_bound,
+        nested_nominal_declaration_requires_forwarded_constructor_bound,
+        nested_nominal_declaration_accepts_forwarded_constructor_bound,
+        trait_method_nominal_constructor_parameter_requires_explicit_bound,
+        trait_impl_target_nominal_constructor_parameter_requires_explicit_bound,
+        extractor_nominal_constructor_parameter_requires_explicit_bound,
+        nominal_constructor_parameter_checks_return_destination_bound,
+        nominal_constructor_parameter_consumes_explicit_rigid_bound_for_well_formedness,
+        nominal_constructor_parameter_rejects_head_without_declared_capability,
+        facet_rebuild_preserves_constructor_head_and_checks_destination_bound,
+        facet_rebuild_rejects_a_different_constructor_head,
+        facet_rebuild_rejects_destination_that_violates_declaration_constraint,
+    ]
+);
+
 // The shared helper module is compiled as part of this test target, although
 // most of its helpers belong to the larger surface-test target.
 #[allow(dead_code)]
@@ -29,7 +61,6 @@ impl FixtureOptionT {
 }
 "#;
 
-#[test]
 fn nominal_constructor_parameter_applies_known_unary_head_in_nested_field() {
     check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -42,7 +73,6 @@ listed: FixtureOptionT<List, Int> = FixtureOptionT([Option::Some(3)])
     .expect("a bound nominal constructor parameter should apply Result to Option<Int>");
 }
 
-#[test]
 fn nominal_enum_constructor_parameter_uses_the_same_bound_metadata() {
     check(
         r#"
@@ -56,7 +86,6 @@ value: Layer<Result, Int> = Layer::Layer(Ok(Option::Some(1)))
     .expect("enum payloads should use the same nominal constructor parameter rules");
 }
 
-#[test]
 fn nominal_enum_constructor_parameter_supports_local_constructor_trait() {
     check(
         r#"
@@ -74,7 +103,6 @@ value: Layer<Local, Int> = Layer::Layer(Local::Local(1))
     .expect("same-unit constructor Traits should be activated before enum constructors are used");
 }
 
-#[test]
 fn nominal_struct_constructor_parameter_supports_local_constructor_trait() {
     check(
         r#"
@@ -101,7 +129,6 @@ value: Layer<Local, Int> = Layer(Local(1))
     .expect("same-unit constructor Traits should support a user-defined struct head");
 }
 
-#[test]
 fn nominal_enum_constructor_parameter_rejects_wrong_slot_arity() {
     let error = check(
         r#"
@@ -118,7 +145,6 @@ defenum InvalidLayer<$M, $A, $B> where $M: Monad {
     );
 }
 
-#[test]
 fn nominal_enum_constructor_parameter_rejects_head_without_capability() {
     let error = check(
         r#"
@@ -137,7 +163,6 @@ def reject(value: Layer<Plain, Int>) -> Unit { () }
     );
 }
 
-#[test]
 fn nominal_constructor_parameter_rejects_wrong_slot_arity() {
     let error = check(
         r#"
@@ -154,7 +179,6 @@ defstruct Invalid<$M, $A, $B> where $M: Monad {
     );
 }
 
-#[test]
 fn nominal_constructor_parameter_does_not_treat_underscore_as_constructor_inference() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -167,7 +191,6 @@ def reject(value: FixtureOptionT<_, Int>) -> Unit {{ () }}"#
     );
 }
 
-#[test]
 fn nominal_constructor_application_requires_constructor_trait_bound() {
     let error = check(
         r#"
@@ -185,7 +208,6 @@ defstruct Invalid<$M, $A> where $M: Marker {
     );
 }
 
-#[test]
 fn nominal_constructor_parameter_requires_explicit_rigid_bound() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -202,7 +224,6 @@ def keep(value: FixtureOptionT<$M, $A>) -> FixtureOptionT<$M, $A> {{ value }}
     );
 }
 
-#[test]
 fn nested_nominal_declaration_requires_forwarded_constructor_bound() {
     let error = check(
         r#"
@@ -225,7 +246,6 @@ defstruct Invalid<$M> {
     );
 }
 
-#[test]
 fn nested_nominal_declaration_accepts_forwarded_constructor_bound() {
     check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -245,7 +265,6 @@ impl Wrapped {{
     .expect("a nested nominal type should accept the declaration's explicit bound");
 }
 
-#[test]
 fn trait_method_nominal_constructor_parameter_requires_explicit_bound() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -264,7 +283,6 @@ deftrait Invalid {{
     );
 }
 
-#[test]
 fn trait_impl_target_nominal_constructor_parameter_requires_explicit_bound() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -284,7 +302,6 @@ impl Keep for FixtureOptionT<$M, Int> {{
     );
 }
 
-#[test]
 fn extractor_nominal_constructor_parameter_requires_explicit_bound() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -316,7 +333,6 @@ impl ConcreteMatchers {{
     .expect("an extractor may use a concrete constructor satisfying the declaration constraint");
 }
 
-#[test]
 fn nominal_constructor_parameter_checks_return_destination_bound() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -333,7 +349,6 @@ def invalid::<$M, $A>() -> FixtureOptionT<$M, $A> {{ () }}
     );
 }
 
-#[test]
 fn nominal_constructor_parameter_consumes_explicit_rigid_bound_for_well_formedness() {
     check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -348,7 +363,6 @@ where
     .expect("a where bound used to form a nominal type is not unused");
 }
 
-#[test]
 fn nominal_constructor_parameter_rejects_head_without_declared_capability() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -366,7 +380,6 @@ def reject(value: FixtureOptionT<Plain, Int>) -> Unit {{ () }}
     );
 }
 
-#[test]
 fn facet_rebuild_preserves_constructor_head_and_checks_destination_bound() {
     check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -377,7 +390,6 @@ updated: FixtureOptionT<Result, String> = Facet::put(FixtureOptionT.inner, sourc
     .expect("Facet should rebuild the payload while preserving the Result constructor head");
 }
 
-#[test]
 fn facet_rebuild_rejects_a_different_constructor_head() {
     let error = check(&format!(
         r#"{FIXTURE_OPTION_T}
@@ -395,7 +407,6 @@ Facet::put(FixtureOptionT.inner, source, Option::Some(Option::Some("one")))
     );
 }
 
-#[test]
 fn facet_rebuild_rejects_destination_that_violates_declaration_constraint() {
     let error = check(
         r#"

@@ -1,5 +1,6 @@
 use scar::typed::TypedInner;
 
+#[path = "support/core.rs"]
 mod support;
 use support::{resolve_with_builtin_prelude, typecheck};
 

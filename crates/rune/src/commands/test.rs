@@ -1079,7 +1079,6 @@ mod tests {
         colorize_text, note_line, parse_test_options, summary_color, summary_line,
         test_color_enabled, test_event_line, TestMode, TestOutputColor, TestRunSummary,
     };
-    use std::path::Path;
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {

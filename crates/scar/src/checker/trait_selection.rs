@@ -1385,6 +1385,100 @@ mod applicability_tests {
     }
 
     #[test]
+    fn checked_method_obligations_detach_only_the_child_implementation() {
+        let source = "deftrait Needed { def need(self: Self) -> Int }\nimpl Needed for Int { def need(self: Self) -> Int { self } }\ndeftrait Carrier { def carry(self: Self) -> Int }\nimpl Carrier for Int { def carry(self: Self) -> Int { Needed::need(self) } }";
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut parent = checker(source);
+        let key = parent.trait_impl_candidate_keys("Carrier").pop().unwrap();
+        let initial = &parent.trait_impls[&key];
+        assert!(!initial.methods["carry"].body_obligations.is_empty());
+        assert_eq!(
+            bincode::serialize(initial).unwrap(),
+            bincode::serialize(initial.as_ref()).unwrap(),
+        );
+        // Recheck a registered method whose body obligations have not yet been
+        // recorded in this branch, as during declaration/body checking.
+        Arc::make_mut(parent.trait_impls.get_mut(&key).unwrap())
+            .methods
+            .get_mut("carry")
+            .unwrap()
+            .body_obligations
+            .clear();
+        let checkpoint = parent
+            .persistent_state_with_env(parent.env.clone())
+            .checkpoint(Vec::new());
+        let sibling = parent.spawn_child_checker(parent.env.clone());
+        let mut child = parent.spawn_child_checker(parent.env.clone());
+        let untouched_key = parent
+            .trait_impls
+            .keys()
+            .find(|candidate| *candidate != &key)
+            .unwrap()
+            .clone();
+        assert!(Arc::ptr_eq(
+            &parent.trait_impls[&key],
+            &child.trait_impls[&key]
+        ));
+
+        let Resolved::TraitImplDef(span, declaration, trait_id, arguments, target, constraints, methods) = resolved
+            .iter()
+            .find(|node| matches!(node, Resolved::TraitImplDef(_, _, trait_id, ..) if trait_id.name == "Carrier"))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        child
+            .check_trait_impl_items(
+                span,
+                *declaration,
+                trait_id,
+                arguments,
+                target,
+                constraints.as_ref(),
+                methods,
+            )
+            .unwrap();
+        assert!(!child.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(parent.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(sibling.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(checkpoint.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(!Arc::ptr_eq(
+            &parent.trait_impls[&key],
+            &child.trait_impls[&key]
+        ));
+        assert!(Arc::ptr_eq(
+            &parent.trait_impls[&untouched_key],
+            &child.trait_impls[&untouched_key]
+        ));
+
+        parent.absorb_child_progress(&child);
+        assert!(Arc::ptr_eq(
+            &parent.trait_impls[&key],
+            &child.trait_impls[&key]
+        ));
+        assert!(!parent.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(sibling.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let restored: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        assert!(restored.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+    }
+
+    #[test]
     fn required_constructor_cycle_restores_relation_state_and_cannot_be_serialized() {
         let mut checker = checker(
             r#"
@@ -1736,7 +1830,7 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
             .cloned()
             .expect("original retained as specialization source");
         let generated_idx = checker.env.next_fun_idx + 10;
-        let TypedInner::Def(fun_idx, ..) = &mut generated.node else {
+        let TypedInner::Def(fun_idx, ..) = &mut Arc::make_mut(&mut generated).node else {
             unreachable!()
         };
         *fun_idx = generated_idx;
@@ -1846,10 +1940,7 @@ impl Context for Box<$A> {}
 
         let (mut checker, trait_key) = context_checker();
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .head_type_list
             .entries
             .retain(|entry| entry.role != TypeListRole::ImplTarget);
@@ -1861,10 +1952,7 @@ impl Context for Box<$A> {}
 
         let (mut checker, trait_key) = context_checker();
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .constructor_slot_vars
             .clear();
         assert!(matches!(
@@ -1878,10 +1966,7 @@ impl Context for Box<$A> {}
 
         let (mut checker, trait_key) = context_checker();
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .constructor_slot_vars[0] = u32::MAX;
         assert!(matches!(
             checker.constructor_application_slots_for_trait(
@@ -1913,10 +1998,7 @@ impl Context for Box<$A> {}
         ));
 
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .constructor_slot_positions[0] = 4;
         assert!(matches!(
             checker.apply_constructor_application(&witness_source, &witness, &[Ty::Str]),

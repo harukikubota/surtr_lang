@@ -645,7 +645,7 @@ DiagnosticSource
 
 解析結果全体の cache は `AnalysisContext` 単位で持つ。
 
-現行の局所最適化は、`AnalysisService` 内の strict / tolerant parse 結果の再利用に限る。
+文書ごとのparseは、`AnalysisService`内のstrict / tolerant結果を再利用する。
 文書pathごとに、source全文、source ID、source kind、compile unit kind、module pathが
 完全一致する場合だけ再利用する。tolerant parseではcursor位置も照合する。hashの一致だけで
 同一とみなさず、成功結果と失敗診断を保持する。moduleの未保存編集は実際の本文で判定する。
@@ -654,6 +654,11 @@ DiagnosticSource
 文書をcloseしたときも除く。64文書を超えるmodule群を順次巡回する場合、再利用できず再parseが
 続くことがある。serviceのclone間で保存領域を共有しても完全なparse入力を照合し、parseや
 host呼出しの間はcacheのlockを保持しない。
+
+埋込標準定義のASTとmodule stageは、process内で一度準備し、この64文書のparse cacheとは
+別に保持する。型検査済みの標準環境は必要な場合だけ遅延構築する。Projectでは構文だけを
+再利用し、追加宣言を含む全indexで標準定義のresolve/typecheckを再実行する。
+標準ファイルの編集中はこの共有を使わず、現在のdocument本文を解析する。
 
 semantic解析結果のcacheと、hostからのrunner / external input変更通知は未実装である。
 現行はcontext解決、module読込、resolve/typecheckを引き続き実行する。以下のcontext全体の

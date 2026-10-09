@@ -5932,8 +5932,8 @@ impl Checker {
                             captured.remove(slot);
                         }
                         (
-                            implementation.target_ty,
-                            implementation.constructor_slot_vars,
+                            implementation.target_ty.clone(),
+                            implementation.constructor_slot_vars.clone(),
                             captured,
                             Some(implementation_trait_args),
                         )
@@ -7313,7 +7313,7 @@ impl Checker {
             return Ok(None);
         };
         let helper_info = self.traits[&helper_trait].clone();
-        let helper_method = helper_info.methods[&helper_method].clone();
+        let helper_method = &helper_info.methods[&helper_method];
         if helper_info.constructor_slots.len() != 1 {
             return Ok(None);
         }
@@ -7322,7 +7322,7 @@ impl Checker {
         };
         let helper_self = self.env.fresh_tyvar();
         let (helper_params, helper_result, _, _, _) =
-            self.resolve_trait_method_signature(&helper_info, &helper_method, &helper_self)?;
+            self.resolve_trait_method_signature(&helper_info, helper_method, &helper_self)?;
         let (Some(parameter), Ty::SelfApp(slots)) = (helper_params.first(), &helper_result) else {
             return Ok(None);
         };

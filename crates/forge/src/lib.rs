@@ -300,7 +300,6 @@ mod tests {
         compose_bytecode_with_chunk(prelude.bytecode.clone(), chunk)
     }
 
-    #[test]
     fn codegen_rejects_call_arity_above_u8_limit() {
         fn source_with_arity(arity: usize) -> String {
             let params = (0..arity)
@@ -421,6 +420,10 @@ mod tests {
         semantic_prefix_case!(codegen_rejects_boot_plan_handler_override_for_unknown_slot),
         semantic_prefix_case!(codegen_typed_program_embeds_genserver_runtime_handler_specs),
         semantic_prefix_case!(codegen_typed_program_emits_v2_process_spec_for_standby_process_init),
+        semantic_prefix_case!(codegen_rejects_call_arity_above_u8_limit),
+        semantic_prefix_case!(special_enum_captures_use_normal_constructor_lowering),
+        semantic_prefix_case!(safe_mod_trait_call_lowers_to_specialized_opcode),
+        semantic_prefix_case!(facet_api_capture_preserves_resolved_callable_metadata),
     ];
 
     #[test]
@@ -1286,7 +1289,6 @@ print("ok")"#,
         assert_no_call_builtin(&bytecode, "len");
     }
 
-    #[test]
     fn special_enum_captures_use_normal_constructor_lowering() {
         let bytecode = codegen_source(
             "yes: (-> Boolean) = &True\nno: (-> Boolean) = &Boolean::False\nwrap: (Int -> Result<Int>) = &Result<_>::Ok\n(yes(), no(), wrap(3))",
@@ -1306,7 +1308,6 @@ print("ok")"#,
         assert_eq!(ids, (0..ids.len() as u32).collect::<Vec<_>>());
     }
 
-    #[test]
     fn safe_mod_trait_call_lowers_to_specialized_opcode() {
         let bytecode = codegen_source("remainder = Mod::safe_mod(7, 3)");
 
@@ -1528,7 +1529,6 @@ value4 =? Facet::set(User.score.["talk"], user, 90)"#,
         }
     }
 
-    #[test]
     fn facet_api_capture_preserves_resolved_callable_metadata() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)

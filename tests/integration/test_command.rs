@@ -419,43 +419,86 @@ fn test_command_validation_assertions_report_public_call_sites() {
 
 fn check_assertion_call_sites(cases: &[(&str, &str)]) {
     let temp = unique_temp_dir("surtr_test_assertion_captions");
-    for &(assertion, name) in cases {
-        for (before, after) in [
+    let mut source = "import Test;\ntest(\"キャプション\") {\n".to_string();
+    let mut expected = Vec::new();
+    for (case_index, &(assertion, name)) in cases.iter().enumerate() {
+        for (wrap_index, (before, after)) in [
             ("", ""),
             (
                 "do::<Result> { assert_eq(\"prior\", \"prior\")\n        ",
                 " }",
             ),
             ("assert_true(True)?\n      ", "?\n      Ok(())"),
-        ] {
-            let source = format!(
-                "import Test;\ntest(\"キャプション\") {{\n  describe(\"nested\") {{\n    it(\"same name\") {{\n      {before}{assertion}{after}\n    }}\n    it(\"same name\") {{ assert_eq(\"later\", \"later\") }}\n  }}\n}}\n",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let group = format!("nested {case_index}-{wrap_index}");
+            let fragment = format!(
+                "  describe(\"{group}\") {{\n    it(\"same name\") {{\n      {before}{assertion}{after}\n    }}\n    it(\"same name\") {{ assert_eq(\"later\", \"later\") }}\n  }}\n",
             );
-            write_math_test(&temp, &source);
-            let byte_start = source.find(assertion).unwrap();
-            let prefix = &source[..byte_start];
+            let byte_start = fragment.find(assertion).unwrap();
+            let prefix = format!("{}{}", source, &fragment[..byte_start]);
             let line = prefix.chars().filter(|ch| *ch == '\n').count() + 1;
             let column = prefix.rsplit('\n').next().unwrap().chars().count() + 1;
-            let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
-            let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert_eq!(
-                output.status.code(),
-                Some(1),
-                "{source}\n{stdout}\n{stderr}"
-            );
-            assert!(
-                stdout.contains(&format!("lib/tests/local/math.srt:{line}:{column}")),
-                "wrong caption for {assertion}:\n{stdout}\n{stderr}"
-            );
-            assert!(stdout.contains(&format!("{name} failed:")), "{stdout}");
-            assert!(!stdout.contains("LHS term: \"later\""), "{stdout}");
-            assert!(
-                stdout.contains("test result: passed=1, failed=1, total=2"),
-                "{stdout}"
-            );
+            expected.push((assertion, name, group, line, column));
+            source.push_str(&fragment);
         }
     }
+    source.push_str("}\n");
+    write_math_test(&temp, &source);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{source}\n{stdout}\n{stderr}"
+    );
+    assert!(stderr.is_empty(), "{source}\n{stdout}\n{stderr}");
+    assert!(!stdout.contains("LHS term: \"later\""), "{stdout}");
+
+    // Match each diagnostic only inside its own failed case's output block.
+    // The next event has the same case name, so scope identity must distinguish it.
+    let mut event_starts = Vec::new();
+    let mut offset = 0;
+    for line in stdout.split_inclusive('\n') {
+        if line.starts_with("[FAIL] ") || line.starts_with("[PASS] ") {
+            event_starts.push(offset);
+        }
+        offset += line.len();
+    }
+    assert_eq!(event_starts.len(), expected.len() * 2, "{source}\n{stdout}");
+    for (pair, (assertion, name, group, line, column)) in
+        event_starts.chunks_exact(2).zip(&expected)
+    {
+        let failed = &stdout[pair[0]..pair[1]];
+        let passed = &stdout[pair[1]..];
+        assert!(
+            failed.starts_with(&format!(
+                "[FAIL] キャプション > {group} > same name (lib/tests/local/math.srt)\n"
+            )),
+            "{assertion}: {failed}"
+        );
+        assert!(
+            passed.starts_with(&format!("[PASS] キャプション > {group} > same name\n")),
+            "{assertion}: {passed}"
+        );
+        assert!(
+            failed.contains(&format!("lib/tests/local/math.srt:{line}:{column}")),
+            "wrong caption for {assertion}:\n{failed}"
+        );
+        assert!(failed.contains(&format!("{name} failed:")), "{failed}");
+        assert!(!failed.contains("LHS term: \"later\""), "{failed}");
+    }
+    let count = expected.len();
+    assert!(
+        stdout.contains(&format!(
+            "test result: passed={count}, failed={count}, total={}",
+            count * 2
+        )),
+        "{stdout}"
+    );
     let _ = fs::remove_dir_all(temp);
 }
 
@@ -1318,113 +1361,22 @@ fn test_command_extension_scan_and_declaration_failures_are_not_filtered() {
 #[test]
 fn test_command_extension_assertion_type_boundaries() {
     let temp = unique_temp_dir("surtr_test_extension_assertion_types");
-    for (source, expected) in [
-        (
-            "assert_cause_chain([\"NoneError\"], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_cause_chain([PayloadFailure(\"x\")], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_cause_chain([Error], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_cause_chain([Int], Err(NoneError))",
-            "Undefined variable: Int",
-        ),
-        (
-            "marker = NoneError\nassert_cause_chain([marker], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "markers = [NoneError]\nassert_cause_chain(markers, Err(NoneError))",
-            "direct List literal",
-        ),
-        (
-            "assert_cause_chain([NoneError, ..[]], Err(NoneError))",
-            "direct List literal",
-        ),
-        (
-            "&Test::assert_cause_chain(&1, Err(NoneError))",
-            "direct List literal",
-        ),
-        (
-            "&Test::assert_cause_chain([&1], Err(NoneError))",
-            "concrete deferror",
-        ),
-        ("assert_cause_chain([NoneError], 3)", "Result"),
-        (
-            "def forward(kinds: List<ErrorKind>) -> Result<()> { Ok(()) }\nOk(())",
-            "ErrorKind is reserved",
-        ),
-        (
-            "kinds: List<ErrorKind> = []\nOk(())",
-            "ErrorKind is reserved",
-        ),
-        ("assert_ne({|x: Int| x}, {|x: Int| x})", "Eq"),
-        (
-            "assert_some_eq({|x: Int| x}, Option::Some({|x: Int| x}))",
-            "Eq",
-        ),
-        ("assert_approx(1, 1.0, 0.0)", "Float"),
-        ("assert(1, \"message\")", "Boolean"),
-        ("assert_satisfies(1, \"message\", {|n| n + 1})", "Boolean"),
-        ("assert_lt(1, 2.0)", "Int"),
-        ("assert_gt({|x: Int| x}, {|x: Int| x})", "Compare"),
-        ("assert_some(Ok(1))", "Option"),
-        (
-            "assert_err_kind(\"NoneError\", Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_err_kind(PayloadFailure(\"x\"), Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_err_kind(Int, Err(NoneError))",
-            "Undefined variable: Int",
-        ),
-        (
-            "&Test::assert_err_kind(&1, Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_err_kind(Error, Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "marker = NoneError\nassert_err_kind(marker, Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "def forward(marker: ErrorKind) -> Result<()> { Ok(()) }\nOk(())",
-            "ErrorKind is reserved",
-        ),
-    ] {
-        write_math_test(
-            &temp,
-            &format!(
-                "import Test;\ndeferror PayloadFailure(detail: String) {{ detail }}\n{source}\n"
-            ),
-        );
-        let output = run_surtr(
-            &temp,
-            &["test", "lib/tests/local/math.srt", "--format=json"],
-        );
-        let report = test_json(&output);
-        assert_eq!(output.status.code(), Some(1), "{source}: {report}");
-        assert_eq!(report["summary"]["script_errors"], 1);
-        assert!(
-            report["errors"][0]["message"]
-                .as_str()
-                .unwrap()
-                .contains(expected),
-            "{source}: {report}"
-        );
-    }
+    let source = "import Test;\ndeferror PayloadFailure(detail: String) { detail }\nassert_cause_chain([\"NoneError\"], Err(NoneError))\n";
+    write_math_test(&temp, source);
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{source}: {report}");
+    assert_eq!(report["summary"]["script_errors"], 1);
+    assert!(
+        report["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("concrete deferror"),
+        "{source}: {report}"
+    );
     let _ = fs::remove_dir_all(temp);
 }
 

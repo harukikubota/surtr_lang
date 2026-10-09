@@ -351,7 +351,7 @@ impl Checker {
             super::signatures::canonical_where_constraints(self, where_clause, &mut tyvars)?;
         self.callable_signatures.insert(
             id.unique_id,
-            super::signatures::canonical_callable_signature(
+            Arc::new(super::signatures::canonical_callable_signature(
                 self,
                 id,
                 return_type_arguments,
@@ -362,7 +362,7 @@ impl Checker {
                 canonical_where_constraints,
                 sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
                 sindr::signature::CallableDeclarationKind::Builtin,
-            )?,
+            )?),
         );
 
         self.env.bind_var(
@@ -1823,7 +1823,7 @@ impl Checker {
             super::signatures::canonical_where_constraints(self, where_clause, &mut tyvars)?;
         self.callable_signatures.insert(
             id.unique_id,
-            super::signatures::canonical_callable_signature(
+            Arc::new(super::signatures::canonical_callable_signature(
                 self,
                 id,
                 return_type_arguments,
@@ -1838,7 +1838,7 @@ impl Checker {
                 canonical_where_constraints,
                 sindr::signature::RuntimeTarget::UserFunction(fun_idx),
                 sindr::signature::CallableDeclarationKind::Function,
-            )?,
+            )?),
         );
         Ok(TypedNode {
             ty: Ty::Unit,
@@ -2382,7 +2382,7 @@ impl Checker {
             ),
         }];
 
-        let mut methods = impl_info.methods.into_values().collect::<Vec<_>>();
+        let mut methods = impl_info.methods.values().collect::<Vec<_>>();
         methods.sort_by_key(|method| method.function_id.unique_id);
 
         for method in methods {
@@ -2618,15 +2618,26 @@ impl Checker {
                     receiver: self.resolve_ty(&obligation.receiver),
                 })
                 .collect::<Vec<_>>();
-            for registered_impl in self.trait_impls.values_mut() {
-                if let Some(registered_method) =
-                    registered_impl.methods.get_mut(&method.method_name)
-                {
-                    if registered_method.function_id.unique_id == method.function_id.unique_id {
-                        registered_method.body_obligations = body_obligations.clone();
-                        break;
-                    }
-                }
+            let registered_impl_key = self.trait_impls.iter().find_map(|(key, implementation)| {
+                implementation
+                    .methods
+                    .get(&method.method_name)
+                    .filter(|registered| {
+                        registered.function_id.unique_id == method.function_id.unique_id
+                    })
+                    .map(|_| key.clone())
+            });
+            if let Some(key) = registered_impl_key {
+                let implementation = Arc::make_mut(
+                    self.trait_impls
+                        .get_mut(&key)
+                        .expect("matched implementation remains registered"),
+                );
+                implementation
+                    .methods
+                    .get_mut(&method.method_name)
+                    .expect("matched implementation method remains registered")
+                    .body_obligations = body_obligations;
             }
             let fun_idx = match self.env.lookup_var(method.function_id.unique_id) {
                 Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,

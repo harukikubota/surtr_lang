@@ -1,3 +1,5 @@
+#![deny(dead_code)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,7 +35,6 @@ impl AnalysisHost for MemoryHost {
     }
 }
 
-#[test]
 fn analysis_service_updates_documents_and_parses_active_context() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -215,7 +216,6 @@ def next() -> Int { 2 }"#
     assert!(symbols.iter().any(|symbol| symbol.name.ends_with("next")));
 }
 
-#[test]
 fn analysis_service_maps_resolve_diagnostics_to_utf16_ranges() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -239,7 +239,6 @@ fn analysis_service_maps_resolve_diagnostics_to_utf16_ranges() {
     assert!(resolve.message.contains("missing_name"));
 }
 
-#[test]
 fn analysis_service_maps_typecheck_diagnostics_to_utf16_ranges() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -381,7 +380,6 @@ Main::ma"#
     );
 }
 
-#[test]
 fn analysis_service_definition_uses_injected_host_sources_for_line_index() {
     let target_path = PathBuf::from("/repo/lib/helper.srt");
     let mut service = AnalysisService::with_host(Arc::new(MemoryHost::new([(
@@ -1262,7 +1260,6 @@ Project::config({|config|
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[test]
 fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -1400,7 +1397,6 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
     assert!(!labels.contains(&"user"), "{labels:?}");
 }
 
-#[test]
 fn analysis_service_facet_arg_completion_uses_source_location_root_capabilities() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -1569,7 +1565,6 @@ fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
     assert_eq!(assist.candidates[0].label, "name");
 }
 
-#[test]
 fn analysis_service_hover_uses_snapshot_semantic_index_and_token_range() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -1658,7 +1653,6 @@ fn analysis_service_signature_help_uses_snapshot_semantic_index() {
     assert_eq!(help.active_parameter, Some(1));
 }
 
-#[test]
 fn analysis_service_definition_uses_active_document_semantic_locations() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -1922,7 +1916,6 @@ fn temp_root(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("surtr-analysis-service-{name}-{nonce}"))
 }
 
-#[test]
 fn analysis_service_refreshes_consumer_parse_contract_after_unfinished_edit() {
     use spire::ast::{Ast, RecordLitArg};
     let mut service = AnalysisService::new();
@@ -1965,7 +1958,6 @@ fn analysis_service_refreshes_consumer_parse_contract_after_unfinished_edit() {
     }
 }
 
-#[test]
 fn analysis_service_enum_constructor_definition_points_to_the_variant() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -1995,7 +1987,6 @@ fn analysis_service_enum_constructor_definition_points_to_the_variant() {
     );
 }
 
-#[test]
 fn analysis_service_standalone_uses_standard_autoimports_and_explicit_imports() {
     for source in [
         "print(to_string(List::len([1, 2])))",
@@ -2021,7 +2012,6 @@ fn analysis_service_standalone_uses_standard_autoimports_and_explicit_imports() 
     }
 }
 
-#[test]
 fn analysis_service_standalone_rejects_unimported_standard_member() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -2080,7 +2070,6 @@ fn analysis_service_standard_development_uses_current_document() {
     );
 }
 
-#[test]
 fn analysis_service_standard_prefix_does_not_authorize_user_lazy_declarations() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -2108,3 +2097,106 @@ fn analysis_service_standard_prefix_does_not_authorize_user_lazy_declarations() 
     );
     assert!(snapshot.typed.is_none());
 }
+
+// Share only the immutable default standard environment. Project and
+// standard-development cases rebuild it for their own declaration index and
+// remain standalone tests. Each registered case creates a fresh service/host.
+const SEMANTIC_BUCKET_COUNT: usize = 4;
+const SEMANTIC_CASES: &[(&str, fn())] = &[
+    (
+        "analysis_service_updates_documents_and_parses_active_context",
+        analysis_service_updates_documents_and_parses_active_context,
+    ),
+    (
+        "analysis_service_maps_resolve_diagnostics_to_utf16_ranges",
+        analysis_service_maps_resolve_diagnostics_to_utf16_ranges,
+    ),
+    (
+        "analysis_service_maps_typecheck_diagnostics_to_utf16_ranges",
+        analysis_service_maps_typecheck_diagnostics_to_utf16_ranges,
+    ),
+    (
+        "analysis_service_definition_uses_injected_host_sources_for_line_index",
+        analysis_service_definition_uses_injected_host_sources_for_line_index,
+    ),
+    (
+        "analysis_service_completions_use_snapshot_semantic_index_and_utf16_position",
+        analysis_service_completions_use_snapshot_semantic_index_and_utf16_position,
+    ),
+    (
+        "analysis_service_facet_arg_completion_uses_source_location_root_capabilities",
+        analysis_service_facet_arg_completion_uses_source_location_root_capabilities,
+    ),
+    (
+        "analysis_service_hover_uses_snapshot_semantic_index_and_token_range",
+        analysis_service_hover_uses_snapshot_semantic_index_and_token_range,
+    ),
+    (
+        "analysis_service_definition_uses_active_document_semantic_locations",
+        analysis_service_definition_uses_active_document_semantic_locations,
+    ),
+    (
+        "analysis_service_refreshes_consumer_parse_contract_after_unfinished_edit",
+        analysis_service_refreshes_consumer_parse_contract_after_unfinished_edit,
+    ),
+    (
+        "analysis_service_enum_constructor_definition_points_to_the_variant",
+        analysis_service_enum_constructor_definition_points_to_the_variant,
+    ),
+    (
+        "analysis_service_standalone_uses_standard_autoimports_and_explicit_imports",
+        analysis_service_standalone_uses_standard_autoimports_and_explicit_imports,
+    ),
+    (
+        "analysis_service_standalone_rejects_unimported_standard_member",
+        analysis_service_standalone_rejects_unimported_standard_member,
+    ),
+    (
+        "analysis_service_standard_prefix_does_not_authorize_user_lazy_declarations",
+        analysis_service_standard_prefix_does_not_authorize_user_lazy_declarations,
+    ),
+];
+
+#[test]
+fn semantic_case_inventory_is_complete() {
+    let mut names = std::collections::HashSet::new();
+    let mut functions = std::collections::HashSet::new();
+    for &(name, case) in SEMANTIC_CASES {
+        assert!(names.insert(name), "duplicate semantic case: {name}");
+        assert!(
+            functions.insert(case as usize),
+            "duplicate semantic function: {name}"
+        );
+        assert!(
+            !include_str!("service.rs").contains(&format!("#[test]\nfn {name}(")),
+            "semantic case must run only through a bucket: {name}"
+        );
+    }
+    for bucket in 0..SEMANTIC_BUCKET_COUNT {
+        assert!(
+            SEMANTIC_CASES
+                .iter()
+                .enumerate()
+                .any(|(index, _)| index % SEMANTIC_BUCKET_COUNT == bucket),
+            "empty semantic bucket: {bucket}"
+        );
+    }
+}
+
+macro_rules! semantic_bucket_test {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            for (index, &(case_name, case)) in SEMANTIC_CASES.iter().enumerate() {
+                if index % SEMANTIC_BUCKET_COUNT == $bucket {
+                    eprintln!("semantic case: {case_name}");
+                    case();
+                }
+            }
+        }
+    };
+}
+semantic_bucket_test!(semantic_bucket_0, 0);
+semantic_bucket_test!(semantic_bucket_1, 1);
+semantic_bucket_test!(semantic_bucket_2, 2);
+semantic_bucket_test!(semantic_bucket_3, 3);

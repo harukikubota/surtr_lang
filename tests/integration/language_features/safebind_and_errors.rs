@@ -892,6 +892,56 @@ match Result::chain(Err(Lower), Result::cause(Err(Tail), Higher)) {
     );
 }
 
+fn apply_pattern_inside_non_result_do_keeps_its_result_value() {
+    let source = r#"print(inspect(do::<Option> {
+  1 <- Option::Some(1)
+  Option::Some(apply_pattern(2, 11))
+}))
+"#;
+    let output = crate::support::run_project_script("pattern_result_in_option_do.srt", source)
+        .expect("apply_pattern must return its own Result inside the do body");
+    assert_eq!(
+        output,
+        ["Option::Some(Err(PatternMismatch(\"Pattern did not match.\")))"]
+    );
+}
+
+fn partial_bind_matches_result_payload_without_unwrapping() {
+    let source = r#"print(inspect(do::<List> {
+  Ok(x) <- [Ok(1), Err(NoneError)]
+  [x]
+}))
+print(inspect(do::<Option> {
+  Ok(x) <- Option::Some(Ok(1))
+  Option::Some(x)
+}))
+print(inspect(do::<Result> {
+  Ok(x) <- Ok(Ok(1))
+  Ok(x)
+}))
+"#;
+    let output = crate::support::run_project_script("result_payload_partial_bind.srt", source)
+        .expect("partial bind must match the complete carrier payload");
+    assert_eq!(output, ["[1]", "Option::Some(1)", "Ok(1)"]);
+}
+
+fn partial_bind_uses_alternative_for_non_result_extractor_failures() {
+    let source = r#"deferror Rejected { "discarded extractor error" }
+ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected)}
+print(inspect(do::<Option> {
+  ext(found) <- Option::Some(2)
+  Option::Some(found)
+}))
+print(inspect(do::<List> {
+  ext(found) <- [2, 3]
+  [found]
+}))
+"#;
+    let output = crate::support::run_project_script("non_result_partial_bind.srt", source)
+        .expect("non-Result failures must keep Alternative semantics");
+    assert_eq!(output, ["Option::None", "[]"]);
+}
+
 pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
         ("safebind_top_level_ok", safebind_top_level_ok as fn()),
@@ -1132,6 +1182,18 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "eprint_renders_linear_cause_chain_lines",
             eprint_renders_linear_cause_chain_lines as fn(),
+        ),
+        (
+            "apply_pattern_inside_non_result_do_keeps_its_result_value",
+            apply_pattern_inside_non_result_do_keeps_its_result_value as fn(),
+        ),
+        (
+            "partial_bind_matches_result_payload_without_unwrapping",
+            partial_bind_matches_result_payload_without_unwrapping as fn(),
+        ),
+        (
+            "partial_bind_uses_alternative_for_non_result_extractor_failures",
+            partial_bind_uses_alternative_for_non_result_extractor_failures as fn(),
         ),
     ];
     super::run_bucket_cases("safebind_and_errors", cases, bucket, bucket_count)

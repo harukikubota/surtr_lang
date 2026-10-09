@@ -26,7 +26,6 @@ use support::*;
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 
 const SURFACE_WORKER_COUNT: usize = 1;
-const SURFACE_BUCKET_COUNT: usize = 8;
 
 fn resolve_with_standard_environment(source: &str) -> Vec<Resolved> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
@@ -1325,7 +1324,19 @@ fn surface_case_inventory_has_unique_names_and_functions() {
     let mut names = HashSet::new();
     let mut functions = HashSet::new();
 
-    for &(name, case) in SURFACE_CASES {
+    for &(name, residue, modulus) in SURFACE_PARTITIONS {
+        assert!(modulus > 0, "invalid surface partition modulus: {name}");
+        assert!(
+            residue < modulus,
+            "invalid surface partition residue: {name}"
+        );
+        assert!(
+            (0..SURFACE_CASES.len()).any(|index| index % modulus == residue),
+            "empty Scar surface partition: {name}"
+        );
+    }
+
+    for (index, &(name, case)) in SURFACE_CASES.iter().enumerate() {
         assert!(
             names.insert(name),
             "duplicate Scar surface case name: {name}"
@@ -1334,26 +1345,47 @@ fn surface_case_inventory_has_unique_names_and_functions() {
             functions.insert(case as usize),
             "duplicate Scar surface case function: {name}"
         );
+        assert_eq!(
+            SURFACE_PARTITIONS
+                .iter()
+                .filter(|&&(_, residue, modulus)| index % modulus == residue)
+                .count(),
+            1,
+            "Scar surface case must belong to exactly one partition: {name}"
+        );
     }
 }
 
-macro_rules! surface_bucket_test {
-    ($name:ident, $bucket:expr) => {
-        #[test]
-        fn $name() {
-            run_surface_case_bucket($bucket, SURFACE_BUCKET_COUNT);
-        }
+macro_rules! surface_bucket_tests {
+    ($(($name:ident, $residue:expr, $modulus:expr)),+ $(,)?) => {
+        const SURFACE_PARTITIONS: &[(&str, usize, usize)] = &[
+            $((stringify!($name), $residue, $modulus)),+
+        ];
+
+        $(
+            #[test]
+            fn $name() {
+                run_surface_case_bucket($residue, $modulus);
+            }
+        )+
     };
 }
 
-surface_bucket_test!(typecheck_surface_bucket_0, 0);
-surface_bucket_test!(typecheck_surface_bucket_1, 1);
-surface_bucket_test!(typecheck_surface_bucket_2, 2);
-surface_bucket_test!(typecheck_surface_bucket_3, 3);
-surface_bucket_test!(typecheck_surface_bucket_4, 4);
-surface_bucket_test!(typecheck_surface_bucket_5, 5);
-surface_bucket_test!(typecheck_surface_bucket_6, 6);
-surface_bucket_test!(typecheck_surface_bucket_7, 7);
+// Split only the slower original buckets; retain every case in its original order.
+surface_bucket_tests!(
+    (typecheck_surface_bucket_0_a, 0, 16),
+    (typecheck_surface_bucket_0_b, 8, 16),
+    (typecheck_surface_bucket_1, 1, 8),
+    (typecheck_surface_bucket_2, 2, 8),
+    (typecheck_surface_bucket_3_a, 3, 16),
+    (typecheck_surface_bucket_3_b, 11, 16),
+    (typecheck_surface_bucket_4, 4, 8),
+    (typecheck_surface_bucket_5, 5, 8),
+    (typecheck_surface_bucket_6_a, 6, 16),
+    (typecheck_surface_bucket_6_b, 14, 16),
+    (typecheck_surface_bucket_7_a, 7, 16),
+    (typecheck_surface_bucket_7_b, 15, 16),
+);
 
 fn run_surface_case_bucket(bucket: usize, bucket_count: usize) {
     assert!(bucket_count > 0, "bucket_count must be positive");
