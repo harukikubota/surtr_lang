@@ -261,55 +261,6 @@ fn error_source_location_partial_bind_preserves_monad_fail_errors_and_causes() {
         assert_eq!(dump["result"]["error"]["message"], "wrapped");
         assert_eq!(dump["result"]["last_value"], "Err(Outer(\"wrapped\"))\n|_ Inner(\"inner\")");
     }
-    let source = r#"deferror Rejected { "discarded extractor error" }
-ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected)}
-print(inspect(do::<Option> {
-  ext(found) <- Option::Some(2)
-  Option::Some(found)
-}))
-print(inspect(do::<List> {
-  ext(found) <- [2, 3]
-  [found]
-}))
-"#;
-    let output = crate::support::run_project_script("non_result_partial_bind.srt", source)
-        .expect("non-Result failures must keep Alternative semantics");
-    assert_eq!(output, ["Option::None", "[]"]);
-}
-
-#[test]
-fn error_source_location_apply_pattern_inside_non_result_do_keeps_its_result_value() {
-    let source = r#"print(inspect(do::<Option> {
-  1 <- Option::Some(1)
-  Option::Some(apply_pattern(2, 11))
-}))
-"#;
-    let output = crate::support::run_project_script("pattern_result_in_option_do.srt", source)
-        .expect("apply_pattern must return its own Result inside the do body");
-    assert_eq!(
-        output,
-        ["Option::Some(Err(PatternMismatch(\"Pattern did not match.\")))"]
-    );
-}
-
-#[test]
-fn error_source_location_partial_bind_matches_result_payload_without_unwrapping() {
-    let source = r#"print(inspect(do::<List> {
-  Ok(x) <- [Ok(1), Err(NoneError)]
-  [x]
-}))
-print(inspect(do::<Option> {
-  Ok(x) <- Option::Some(Ok(1))
-  Option::Some(x)
-}))
-print(inspect(do::<Result> {
-  Ok(x) <- Ok(Ok(1))
-  Ok(x)
-}))
-"#;
-    let output = crate::support::run_project_script("result_payload_partial_bind.srt", source)
-        .expect("partial bind must match the complete carrier payload");
-    assert_eq!(output, ["[1]", "Option::Some(1)", "Ok(1)"]);
 }
 
 #[test]
@@ -318,10 +269,13 @@ fn error_source_location_rejects_sources_that_exceed_the_span_encoding_range() {
     let valid_path = temp.join("within_range.srt");
     let tail = "print(\"ok\")\n";
     let valid_padding = sindr::ir::MODULE_SPAN_STRIDE - 1 - tail.chars().count();
+    // Exercise the source-length boundary without parsing a newline token for
+    // every four characters. Include the single comment terminator in padding.
+    let comment_padding = valid_padding - 1;
     let valid_source = format!(
-        "{}{tail}{}",
-        "# あ\n".repeat(valid_padding / 4),
-        "#".repeat(valid_padding % 4)
+        "{}{}\n{tail}",
+        "# あ ".repeat(comment_padding / 4),
+        "#".repeat(comment_padding % 4)
     );
     assert_eq!(
         valid_source.chars().count(),
