@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#[path = "../tests/support/mod.rs"]
+#[path = "../../scar/tests/support/mod.rs"]
 mod support;
 
 fn main() {
