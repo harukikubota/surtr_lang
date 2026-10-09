@@ -142,7 +142,7 @@ impl Checker {
         match self.constructor_projection(trait_key, concrete_ty) {
             ConstructorProjectionOutcome::Applicable { info, mapping } => {
                 let mut slots = Vec::with_capacity(info.constructor_slot_vars.len());
-                for variable in info.constructor_slot_vars {
+                for variable in info.constructor_slot_vars.iter().copied() {
                     let Some(slot) = mapping.get(&variable).cloned() else {
                         return ConstructorSlotsOutcome::Rejected {
                             failures: vec![
@@ -303,7 +303,7 @@ impl Checker {
         };
         match self.constructor_projection(trait_key, witness) {
             ConstructorProjectionOutcome::Applicable { info, .. } => {
-                Ok(info.constructor_slot_positions)
+                Ok(info.constructor_slot_positions.clone())
             }
             ConstructorProjectionOutcome::Deferred { waiting_on } => {
                 Err(ConstructorApplicationOutcome::Deferred { waiting_on })
@@ -4978,8 +4978,8 @@ impl Checker {
 mod tests {
     use super::*;
 
-    fn constructor_trait(name: &str, qualified_name: &str, unique_id: u32) -> TraitInfo {
-        TraitInfo {
+    fn constructor_trait(name: &str, qualified_name: &str, unique_id: u32) -> Arc<TraitInfo> {
+        Arc::new(TraitInfo {
             id: ResolvedId {
                 name: name.into(),
                 qualified_name: Some(qualified_name.into()),
@@ -4996,7 +4996,7 @@ mod tests {
             constructor_slots: vec!["$A".into()],
             parents: Vec::new(),
             methods: HashMap::new(),
-        }
+        })
     }
 
     #[test]
@@ -5100,7 +5100,7 @@ mod tests {
     fn exact_ordinary_trait_bound_does_not_fall_back_to_same_surface_constructor_trait() {
         let mut checker = Checker::new(TypecheckContext::default());
         let mut ordinary = constructor_trait("Context", "Left::Context", 71_003);
-        ordinary.constructor_slots.clear();
+        Arc::make_mut(&mut ordinary).constructor_slots.clear();
         checker.traits.insert("Left::Context".into(), ordinary);
         checker.traits.insert(
             "Right::Context".into(),

@@ -1039,8 +1039,8 @@ mod tests {
         }
     }
 
-    fn constructor_trait(id: ResolvedId) -> TraitInfo {
-        TraitInfo {
+    fn constructor_trait(id: ResolvedId) -> Arc<TraitInfo> {
+        Arc::new(TraitInfo {
             id,
             compiler_owned_equality: false,
             compiler_owned_failure: false,
@@ -1050,7 +1050,7 @@ mod tests {
             constructor_slots: vec!["$A".into()],
             parents: Vec::new(),
             methods: HashMap::new(),
-        }
+        })
     }
 
     #[test]

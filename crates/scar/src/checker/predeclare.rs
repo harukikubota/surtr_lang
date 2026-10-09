@@ -1716,7 +1716,10 @@ impl Checker {
         }
     }
 
-    pub(super) fn trait_impl_for_declaration(&self, declaration_id: u32) -> Option<TraitImplInfo> {
+    pub(super) fn trait_impl_for_declaration(
+        &self,
+        declaration_id: u32,
+    ) -> Option<Arc<TraitImplInfo>> {
         self.trait_impls
             .values()
             .find(|info| info.declaration_key.declaration_id == declaration_id)
@@ -1953,7 +1956,7 @@ impl Checker {
     fn resolve_trait_constraint_closure(&mut self) -> Result<(), TypeError> {
         fn visit(
             key: &str,
-            traits: &HashMap<String, TraitInfo>,
+            traits: &TraitDefinitions,
             visiting: &mut Vec<String>,
             resolved: &mut HashMap<String, Vec<String>>,
         ) -> Result<Vec<String>, TypeError> {
@@ -2010,14 +2013,15 @@ impl Checker {
         }
 
         let keys = self.traits.keys().cloned().collect::<Vec<_>>();
-        let snapshot = self.traits.clone();
         let mut resolved = HashMap::new();
         for key in &keys {
-            visit(key, &snapshot, &mut Vec::new(), &mut resolved)?;
+            visit(key, &self.traits, &mut Vec::new(), &mut resolved)?;
         }
         for (key, slots) in resolved {
             if let Some(info) = self.traits.get_mut(&key) {
-                info.constructor_slots = slots;
+                if info.constructor_slots != slots {
+                    Arc::make_mut(info).constructor_slots = slots;
+                }
             }
         }
         Ok(())
@@ -3334,7 +3338,7 @@ impl Checker {
                 parents,
                 methods: method_map,
             };
-            self.traits.insert(trait_key.clone(), trait_info.clone());
+            self.traits.insert(trait_key, Arc::new(trait_info));
 
             let _ = span;
         }
@@ -3363,7 +3367,7 @@ impl Checker {
                         self.resolve_trait_method_signature(&trait_info, method, &self_ty)?;
                     self.callable_signatures.insert(
                         method.id.unique_id,
-                        super::signatures::canonical_callable_signature(
+                        Arc::new(super::signatures::canonical_callable_signature(
                             self,
                             &method.id,
                             &method.return_type_arguments,
@@ -3374,7 +3378,7 @@ impl Checker {
                             sindr::signature::CanonicalConstraintSet::default(),
                             sindr::signature::RuntimeTarget::TraitDispatch(method.id.unique_id),
                             sindr::signature::CallableDeclarationKind::TraitMethod,
-                        )?,
+                        )?),
                     );
                 }
             }
@@ -3942,7 +3946,7 @@ impl Checker {
 
             self.trait_impls.insert(
                 impl_key.clone(),
-                TraitImplInfo {
+                Arc::new(TraitImplInfo {
                     declaration_key: TraitImplDeclarationKey {
                         pattern: impl_key.clone(),
                         declaration_id: *declaration_id,
@@ -3963,7 +3967,7 @@ impl Checker {
                     constructor_slot_vars,
                     constructor_slot_positions,
                     methods: method_map,
-                },
+                }),
             );
             self.index_trait_impl(impl_key);
         }
@@ -4294,7 +4298,7 @@ impl Checker {
                     if let Some(meta) = meta {
                         self.callable_signatures.insert(
                             id.unique_id,
-                            super::signatures::canonical_callable_signature(
+                            Arc::new(super::signatures::canonical_callable_signature(
                                 self,
                                 id,
                                 return_type_arguments,
@@ -4305,7 +4309,7 @@ impl Checker {
                                 canonical_where_constraints,
                                 sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
                                 sindr::signature::CallableDeclarationKind::Builtin,
-                            )?,
+                            )?),
                         );
                     }
                     self.env.bind_var(
@@ -4503,7 +4507,7 @@ impl Checker {
                     );
                     self.callable_signatures.insert(
                         id.unique_id,
-                        super::signatures::canonical_callable_signature(
+                        Arc::new(super::signatures::canonical_callable_signature(
                             self,
                             id,
                             return_type_arguments,
@@ -4514,7 +4518,7 @@ impl Checker {
                             canonical_where_constraints,
                             sindr::signature::RuntimeTarget::UserFunction(fun_idx),
                             sindr::signature::CallableDeclarationKind::Function,
-                        )?,
+                        )?),
                     );
                     self.user_func_params.insert(id.unique_id, param_names);
                     if let Some(qualified_name) = id.qualified_name.as_ref() {
@@ -4677,7 +4681,7 @@ impl Checker {
                     .insert(method.function_id.unique_id, param_names);
                 self.callable_signatures.insert(
                     method.function_id.unique_id,
-                    super::signatures::canonical_callable_signature(
+                    Arc::new(super::signatures::canonical_callable_signature(
                         self,
                         &method.function_id,
                         &method.return_type_arguments,
@@ -4690,7 +4694,7 @@ impl Checker {
                             method.function_id.unique_id,
                         ),
                         sindr::signature::CallableDeclarationKind::TraitMethod,
-                    )?,
+                    )?),
                 );
                 if let Some(qualified_name) = method.function_id.qualified_name.as_ref() {
                     if Self::split_impl_method_name(qualified_name).is_some() {
@@ -4704,5 +4708,144 @@ impl Checker {
 
         self.env.next_fun_idx = fun_idx;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod shared_registry_tests {
+    use super::*;
+
+    fn resolve(source: &str) -> Vec<Resolved> {
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap()
+    }
+
+    #[test]
+    fn inherited_slots_detach_only_changed_traits_from_saved_branches() {
+        let source = "deftrait CowRoot where Self: Type<$A> {}\ndeftrait CowChild where Self: CowRoot {}\ndeftrait CowPlain {}";
+        let mut parent = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        parent.check_program(resolve(source)).unwrap();
+        let child_key = parent.trait_key_by_short_name("CowChild").unwrap();
+        let root_key = parent.trait_key_by_short_name("CowRoot").unwrap();
+        let plain_key = parent.trait_key_by_short_name("CowPlain").unwrap();
+        assert_eq!(parent.traits[&child_key].constructor_slots, vec!["$A"]);
+        assert_eq!(
+            bincode::serialize(&parent.traits[&child_key]).unwrap(),
+            bincode::serialize(parent.traits[&child_key].as_ref()).unwrap(),
+        );
+        // Model the declaration state before inherited slots are resolved.
+        Arc::make_mut(parent.traits.get_mut(&child_key).unwrap())
+            .constructor_slots
+            .clear();
+        let checkpoint = parent
+            .persistent_state_with_env(parent.env.clone())
+            .checkpoint(Vec::new());
+        let sibling = parent.spawn_child_checker(parent.env.clone());
+        let mut child = parent.spawn_child_checker(parent.env.clone());
+        assert!(Arc::ptr_eq(
+            &parent.traits[&child_key],
+            &child.traits[&child_key]
+        ));
+
+        child.resolve_trait_constraint_closure().unwrap();
+        assert_eq!(child.traits[&child_key].constructor_slots, vec!["$A"]);
+        assert!(parent.traits[&child_key].constructor_slots.is_empty());
+        assert!(sibling.traits[&child_key].constructor_slots.is_empty());
+        assert!(checkpoint.traits[&child_key].constructor_slots.is_empty());
+        assert!(!Arc::ptr_eq(
+            &parent.traits[&child_key],
+            &child.traits[&child_key]
+        ));
+        for unchanged in [&root_key, &plain_key] {
+            assert!(Arc::ptr_eq(
+                &parent.traits[unchanged],
+                &child.traits[unchanged]
+            ));
+        }
+        let resolved_child = child.traits[&child_key].clone();
+        child.resolve_trait_constraint_closure().unwrap();
+        assert!(Arc::ptr_eq(&resolved_child, &child.traits[&child_key]));
+
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let restored: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        let mut restored =
+            Checker::with_persistent_state(restored.into(), TypecheckContext::default());
+        restored.resolve_trait_constraint_closure().unwrap();
+        assert_eq!(restored.traits[&child_key].constructor_slots, vec!["$A"]);
+        assert!(checkpoint.traits[&child_key].constructor_slots.is_empty());
+    }
+
+    #[test]
+    fn shared_callable_signatures_keep_instantiations_and_failed_sessions_independent() {
+        const DEFINITION: &str = "def cow_identity(value: $A) -> $A { value }";
+        let mut original = crate::test_support::session_from_cached_std_prelude();
+        let definition = resolve(DEFINITION);
+        let Resolved::Def(_, id, ..) = &definition[0] else {
+            panic!("expected the identity definition");
+        };
+        let uid = id.unique_id;
+        original.typecheck(definition).unwrap();
+        let declaration = original.state.callable_signatures[&uid].clone();
+        assert!(matches!(declaration.value_parameters[0].ty, Ty::Var(_)));
+        assert_eq!(
+            bincode::serialize(&declaration).unwrap(),
+            bincode::serialize(declaration.as_ref()).unwrap(),
+        );
+        let checkpoint = original.checkpoint();
+        let mut successful = original.clone();
+        let mut rejected = original.clone();
+        let calls = |suffix: &str| {
+            let resolved = resolve(&format!("{DEFINITION}\n{suffix}"));
+            let Resolved::Def(_, id, ..) = &resolved[0] else {
+                panic!("expected the identity definition before calls");
+            };
+            assert_eq!(id.unique_id, uid);
+            resolved.into_iter().skip(1).collect()
+        };
+        let typed = successful
+            .typecheck(calls("cow_identity(1)\ncow_identity(\"ok\")"))
+            .unwrap();
+        assert_eq!(typed[0].ty, Ty::Int);
+        assert_eq!(typed[1].ty, Ty::Str);
+        assert!(Arc::ptr_eq(
+            &declaration,
+            &successful.state.callable_signatures[&uid]
+        ));
+        let error = rejected
+            .typecheck(calls("wrong: Boolean = cow_identity(1)"))
+            .expect_err("Boolean annotation cannot accept an Int result");
+        assert!(
+            error.message.contains("Boolean") && error.message.contains("Int"),
+            "expected the annotation type mismatch: {error:?}"
+        );
+        assert!(Arc::ptr_eq(
+            &declaration,
+            &rejected.state.callable_signatures[&uid]
+        ));
+        let mut sibling = original.clone();
+        assert_eq!(
+            sibling
+                .typecheck(calls("cow_identity(\"after failure\")"))
+                .unwrap()[0]
+                .ty,
+            Ty::Str
+        );
+        assert!(Arc::ptr_eq(
+            &declaration,
+            &checkpoint.callable_signatures[&uid]
+        ));
+        assert!(matches!(declaration.value_parameters[0].ty, Ty::Var(_)));
+
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let decoded: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        let mut restored = ScarSession::new();
+        restored.rollback(decoded);
+        assert_eq!(
+            restored.typecheck(calls("cow_identity(2)")).unwrap()[0].ty,
+            Ty::Int
+        );
     }
 }

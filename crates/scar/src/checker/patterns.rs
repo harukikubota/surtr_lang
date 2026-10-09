@@ -1658,14 +1658,15 @@ impl Checker {
         let profile = self.profiler.start();
         let keys = self.env.vars.keys().copied().collect::<Vec<_>>();
         for key in keys {
-            if let Some(ty) = self.env.vars.get(&key).cloned() {
+            if let Some(ty) = self.env.vars.get(&key) {
                 if matches!(
                     ty,
                     Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } | Ty::Func(_, _)
                 ) {
                     continue;
                 }
-                self.env.vars.insert(key, self.resolve_ty(&ty));
+                let resolved = self.resolve_ty(ty);
+                self.env.vars.insert(key, resolved);
             }
         }
         self.profiler

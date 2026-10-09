@@ -583,7 +583,7 @@ enum ConstructorProjectionFailure {
 #[derive(Debug, Clone)]
 enum ConstructorProjectionOutcome {
     Applicable {
-        info: TraitImplInfo,
+        info: Arc<TraitImplInfo>,
         mapping: HashMap<u32, Ty>,
     },
     Deferred {
@@ -1243,6 +1243,12 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 
 type TraitImplKey = CanonicalTraitImplPatternKey;
 type TraitImplIndex = HashMap<u32, Vec<TraitImplKey>>;
+// Immutable definitions and declaration metadata are shared by snapshots.
+// Mutation must detach the affected value with Arc::make_mut.
+type SpecializableDefinitions = HashMap<u32, Arc<TypedNode>>;
+type TraitImplementations = HashMap<TraitImplKey, Arc<TraitImplInfo>>;
+type TraitDefinitions = HashMap<String, Arc<TraitInfo>>;
+type CallableSignatures = HashMap<u32, Arc<sindr::signature::CallableSignature<Ty>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CallableInstantiationKey {
@@ -1328,13 +1334,13 @@ struct PersistentCheckerState {
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     user_func_params: HashMap<u32, Vec<String>>,
     /// Canonical signature registry shared by ordinary and builtin callables.
-    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
+    callable_signatures: CallableSignatures,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
+    specializable_defs: SpecializableDefinitions,
     specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
+    traits: TraitDefinitions,
+    trait_impls: TraitImplementations,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
@@ -1435,14 +1441,14 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     user_func_params: HashMap<u32, Vec<String>>,
     #[serde(default)]
-    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
+    callable_signatures: CallableSignatures,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
+    specializable_defs: SpecializableDefinitions,
     #[serde(default)]
     specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
+    traits: TraitDefinitions,
+    trait_impls: TraitImplementations,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
@@ -1717,8 +1723,11 @@ impl ScarSession {
             }
         }
         self.rekey_specializable_defs(specializable_rekeys);
-        for def in self.state.specializable_defs.values_mut() {
-            Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
+        fun_idx_rewrites.retain(|old, new| old != new);
+        if !fun_idx_rewrites.is_empty() {
+            for def in self.state.specializable_defs.values_mut() {
+                Self::rewrite_fun_indices_in_node(Arc::make_mut(def), &fun_idx_rewrites);
+            }
         }
         Self::rewrite_specialization_fun_indices(
             &mut self.state.specialization_fun_idxs,
@@ -1761,8 +1770,11 @@ impl ScarSession {
         }
 
         self.rekey_specializable_defs(specializable_rekeys);
-        for def in self.state.specializable_defs.values_mut() {
-            Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
+        fun_idx_rewrites.retain(|old, new| old != new);
+        if !fun_idx_rewrites.is_empty() {
+            for def in self.state.specializable_defs.values_mut() {
+                Self::rewrite_fun_indices_in_node(Arc::make_mut(def), &fun_idx_rewrites);
+            }
         }
         Self::rewrite_specialization_fun_indices(
             &mut self.state.specialization_fun_idxs,
@@ -1783,7 +1795,9 @@ impl ScarSession {
                     .specializable_defs
                     .remove(&old_fun_idx)
                     .map(|mut def| {
-                        Self::set_def_fun_idx(&mut def, new_fun_idx);
+                        if old_fun_idx != new_fun_idx {
+                            Self::set_def_fun_idx(Arc::make_mut(&mut def), new_fun_idx);
+                        }
                         (new_fun_idx, def)
                     })
             })
@@ -2464,9 +2478,9 @@ mod specialization_state_tests {
         }
     }
 
-    fn specializable_def(fun_idx: u32, name: &str, uid: u32) -> TypedNode {
+    fn specializable_def(fun_idx: u32, name: &str, uid: u32) -> Arc<TypedNode> {
         let id = resolved_id(name, &format!("Global::{name}"), uid);
-        TypedNode {
+        Arc::new(TypedNode {
             ty: user_func_ty(fun_idx),
             span: test_span(),
             node: TypedInner::Def(
@@ -2488,6 +2502,13 @@ mod specialization_state_tests {
                 }),
                 spire::ast::Visibility::Public,
             ),
+        })
+    }
+
+    fn retained_fun_idx(definition: &TypedNode) -> Option<u32> {
+        match &definition.node {
+            TypedInner::Def(index, ..) => Some(*index),
+            _ => panic!("retained test definition must be an ordinary function"),
         }
     }
 
@@ -2923,6 +2944,98 @@ mod specialization_state_tests {
             });
         assert_eq!(helper_fun_idx, Some(512));
     }
+
+    #[test]
+    fn retained_definitions_isolate_reconciled_sessions_and_checkpoints() {
+        let mut original = session_with_cached_specialization(10, 40);
+        let mut definition = specializable_def(40, "helper", 10);
+        Arc::make_mut(&mut definition).span = Span {
+            start: 700,
+            end: 710,
+        };
+        original.state.specializable_defs.insert(40, definition);
+        let checkpoint = original.checkpoint();
+        let mut sibling = original.clone();
+        let saved_definition = &checkpoint.specializable_defs[&40];
+        assert!(Arc::ptr_eq(
+            saved_definition,
+            &sibling.state.specializable_defs[&40],
+        ));
+
+        // Reconciliation still updates the function floor and cache on a no-op,
+        // but must retain the shared definition when no index changes.
+        sibling.reconcile_visible_function_indices([(10, 40)]);
+        assert!(Arc::ptr_eq(
+            saved_definition,
+            &sibling.state.specializable_defs[&40],
+        ));
+        assert_eq!(sibling.state.env.next_fun_idx, 41);
+        assert_eq!(
+            sibling.state.specialization_fun_idxs[&specialization_key()],
+            40
+        );
+
+        sibling.reconcile_visible_function_indices([(10, 77)]);
+        assert!(!Arc::ptr_eq(
+            saved_definition,
+            &sibling.state.specializable_defs[&77],
+        ));
+        assert_eq!(retained_fun_idx(saved_definition), Some(40));
+        assert_eq!(
+            retained_fun_idx(&sibling.state.specializable_defs[&77]),
+            Some(77)
+        );
+        assert_eq!(
+            retained_fun_idx(&original.state.specializable_defs[&40]),
+            Some(40)
+        );
+        assert_eq!(
+            sibling.state.specializable_defs[&77].span,
+            saved_definition.span
+        );
+
+        let mut restored = ScarSession::new();
+        restored.rollback(checkpoint.clone());
+        assert!(Arc::ptr_eq(
+            saved_definition,
+            &restored.state.specializable_defs[&40],
+        ));
+        restored.reconcile_function_indices([("Global::helper", 90)]);
+        assert_eq!(retained_fun_idx(saved_definition), Some(40));
+        assert_eq!(
+            retained_fun_idx(&restored.state.specializable_defs[&91]),
+            Some(91)
+        );
+
+        sibling.rollback(checkpoint);
+        assert!(sibling.state.specializable_defs.contains_key(&40));
+        assert!(!sibling.state.specializable_defs.contains_key(&77));
+    }
+
+    #[test]
+    fn retained_definition_sharing_preserves_wire_and_checkpoint_restore() {
+        let mut original = session_with_cached_specialization(10, 40);
+        let definition = specializable_def(40, "helper", 10);
+        assert_eq!(
+            bincode::serialize(&definition).unwrap(),
+            bincode::serialize(definition.as_ref()).unwrap(),
+        );
+        original.state.specializable_defs.insert(40, definition);
+        let checkpoint = original.checkpoint();
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let decoded: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        let mut restored = ScarSession::new();
+        restored.rollback(decoded);
+        restored.reconcile_visible_function_indices([(10, 77)]);
+        assert_eq!(
+            retained_fun_idx(&checkpoint.specializable_defs[&40]),
+            Some(40)
+        );
+        assert_eq!(
+            retained_fun_idx(&restored.state.specializable_defs[&77]),
+            Some(77)
+        );
+    }
 }
 
 struct Checker {
@@ -2946,10 +3059,10 @@ struct Checker {
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
-    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
+    callable_signatures: CallableSignatures,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
+    specializable_defs: SpecializableDefinitions,
     /// Derived anew for each specialization pass; never persisted across sessions.
     direct_pattern_requirement_tyvars: HashMap<u32, Vec<u32>>,
     specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
@@ -2980,8 +3093,8 @@ struct Checker {
     allow_private_facet_inspection: bool,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     facet_path_kind_decls: HashMap<String, Vec<String>>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
+    traits: TraitDefinitions,
+    trait_impls: TraitImplementations,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     profiler: TypecheckProfiler,
@@ -3147,8 +3260,7 @@ impl Checker {
 
     fn spawn_child_checker(&self, env: TypeEnv) -> Self {
         let profile = self.profiler.start();
-        let mut state = self.persistent_state();
-        state.env = env;
+        let state = self.persistent_state_with_env(env);
         let mut checker = Checker::with_persistent_state(
             state,
             TypecheckContext {
@@ -3166,16 +3278,11 @@ impl Checker {
         checker.current_private_field_owner = self.current_private_field_owner.clone();
         checker.callable_context = self.callable_context;
         checker.closure_depth = self.closure_depth;
-        checker.facet_bindings = self.facet_bindings.clone();
         checker.safe_operator_results = self.safe_operator_results.clone();
-        checker.lazy_capture_bindings = self.lazy_capture_bindings.clone();
         checker.active_lazy_capture = self.active_lazy_capture.clone();
         checker.substitutions = self.substitutions.clone();
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
         checker.active_capabilities = self.active_capabilities.clone();
-        checker.constructor_capabilities = self.constructor_capabilities.clone();
-        checker.explicit_closure_parameters = self.explicit_closure_parameters.clone();
-        checker.constructor_witness_traits = self.constructor_witness_traits.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -4281,9 +4388,9 @@ impl Checker {
         variant
     }
 
-    fn persistent_state(&self) -> PersistentCheckerState {
+    fn persistent_state_with_env(&self, env: TypeEnv) -> PersistentCheckerState {
         PersistentCheckerState {
-            env: self.env.clone(),
+            env,
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
