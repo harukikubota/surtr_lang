@@ -1204,7 +1204,7 @@ impl Checker {
 
                     self.env
                         .enum_variants_by_enum
-                        .insert(id.name.clone(), enum_variants);
+                        .insert(id.name.clone(), Arc::new(enum_variants));
                 }
                 _ => {}
             }
