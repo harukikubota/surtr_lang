@@ -140,6 +140,37 @@ print(to_string(add(y: 2, x: 1)))
 - 関数本体は式として評価される
 - 前方参照は許可される。後で同じコンパイル単位に定義が現れればよい
 
+短い関数は `=` の後に単一行の式を書けます。末尾の `;` は結果を Unit にします。
+
+```surtr
+def add(x: Int, y: Int) -> Int = x + y
+def say(message: String) -> Unit = print(message);
+def positive?(value: Int) -> Boolean = value > 0
+```
+
+`do`、`match`、`cond` を本体として直接書く場合は、複数行を使えます。
+
+```surtr
+def main() -> Result<()> = do {
+  num <- Ok(1)
+  print(to_string(num))
+  Ok(())
+}
+
+def tag(num: Int) -> Int = cond {
+  num > 0 => 1,
+  num < 0 => -1,
+  True => 0
+}
+
+def option_tag(value: Option<Int>) -> Int = match value {
+  Option::Some(_) => 1,
+  Option::None => 0
+}
+```
+
+その他の式は括弧や closure の内部も含めて一行に収めます。二択は `= if(flag, a, b)`、複数の条件は `= cond { ... }`、パターンによる分岐は `= match ... { ... }` と書けます。本体末尾の `;` の後へ同じ行で別の式は続けられません。詳しい制約は[言語リファレンスの関数](./language-reference.md#関数)を参照してください。
+
 ### 5.1 関数はどこに属するか
 
 Surtr では、関数は必ず何らかの namespace に属します。

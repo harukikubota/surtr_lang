@@ -20,6 +20,8 @@ blockはchild scopeを持ち、RHSをLHS bindingより先に解決し、pattern�
 capture、warning、ID rebase、Facet bulk_update等のvisitorはdo内部にも再帰する。
 bulk_updateの`<-`とは構文所有者で区別し、通常callへ曖昧にfallbackしない。
 
+関数本体の `def ... -> Ty = do { ... }` でも通常の do 式と同じ契約を使う。関数の戻り値型を期待型として carrier を決め、本文や明示 RTA との衝突を通常の型エラーとして拒否する。関数本体専用の推論・lowering 経路は設けない。関数本体の構文規則は[言語リファレンス](../site/language-reference.md#関数)を参照する。
+
 ## Compiler-owned contract
 
 Sindrの`IntrinsicId::Do` / `DoIntrinsicContract`が標準surfaceとloweringのidentityを所有する。

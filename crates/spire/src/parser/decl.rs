@@ -2057,27 +2057,10 @@ impl Parser<'_> {
         let where_clause = self.parse_optional_where_clause(
             WhereClauseContext::inherent_implementation_method(target.to_string()),
         )?;
-        self.skip_newlines();
-        self.expect(&Token::LBrace)?;
         self.impl_target_stack.push(target.to_string());
-        let body_stmts = self.parse_block_stmts();
+        let parsed_body = self.parse_function_body(&sp);
         self.impl_target_stack.pop();
-        let body_stmts = body_stmts?;
-        if body_stmts.is_empty() {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::DeclarationSyntax,
-                "Function body must not be empty",
-                self.peek_span(),
-            ));
-        }
-        let end = self.expect(&Token::RBrace)?;
-        let body = Ast::Block(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            body_stmts,
-        );
+        let (body, end) = parsed_body?;
 
         let ast = Ast::Def(
             Span {
@@ -2798,32 +2781,13 @@ impl Parser<'_> {
 
         let (body, end) = if matches!(
             self.tokens.get(lookahead).map(|sp| &sp.token),
-            Some(Token::LBrace)
+            Some(Token::LBrace | Token::Bind)
         ) {
-            self.skip_newlines();
-            self.expect(&Token::LBrace)?;
             self.impl_target_stack.push("Self".to_string());
-            let body_stmts = self.parse_block_stmts();
+            let parsed_body = self.parse_function_body(&sp);
             self.impl_target_stack.pop();
-            let body_stmts = body_stmts?;
-            if body_stmts.is_empty() {
-                return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::DeclarationSyntax,
-                    "Function body must not be empty",
-                    self.peek_span(),
-                ));
-            }
-            let end = self.expect(&Token::RBrace)?;
-            (
-                Some(Box::new(Ast::Block(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    body_stmts,
-                ))),
-                end.end,
-            )
+            let (body, end) = parsed_body?;
+            (Some(Box::new(body)), end.end)
         } else {
             if visibility == Visibility::Private {
                 return Err(ParseError::syntax(
@@ -6149,6 +6113,92 @@ impl Parser<'_> {
         self.parse_extractor_def_with_attrs(DeclAttrs::default(), None)
     }
 
+    fn parse_function_body(&mut self, definition_span: &Span) -> Result<(Ast, Span), ParseError> {
+        self.skip_newlines();
+        let previous_level = self.context.level;
+        self.context.level = super::context::DeclLevel::Expr;
+        let result = (|| {
+            if matches!(self.peek(), Token::LBrace) {
+                self.advance();
+                let statements = self.parse_block_stmts()?;
+                if statements.is_empty() {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "Function body must not be empty",
+                        self.peek_span(),
+                    ));
+                }
+                let end = self.expect(&Token::RBrace)?;
+                return Ok((
+                    Ast::Block(
+                        Span {
+                            start: definition_span.start,
+                            end: end.end,
+                        },
+                        statements,
+                    ),
+                    end,
+                ));
+            }
+
+            let equals = self.expect(&Token::Bind)?;
+            let structured_body = matches!(self.peek(), Token::Do | Token::Match | Token::Cond);
+            let mut expression = self.parse_non_assignment_expr()?;
+            if structured_body
+                && !matches!(expression, Ast::Do(..) | Ast::Match(..) | Ast::Cond(..))
+            {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "A do, match, or cond function body must end at that expression",
+                    expression.span().clone(),
+                ));
+            }
+            let mut end = expression.span().clone();
+            if !structured_body {
+                if matches!(self.peek(), Token::Semicolon) {
+                    end = self.advance().span;
+                    expression = Ast::Semi(
+                        Span {
+                            start: expression.span().start,
+                            end: end.end,
+                        },
+                        Box::new(expression),
+                    );
+                }
+                let body_span = Span {
+                    start: equals.end,
+                    end: end.end,
+                };
+                if self.source_text_for_span(&body_span).contains('\n') {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "An expression function body must stay on one source line; use a block, do, match, or cond for multiple lines",
+                        body_span,
+                    ));
+                }
+            }
+            if !matches!(self.peek(), Token::Newline | Token::Eof | Token::RBrace) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "Expected newline, end of input, or closing brace after function body",
+                    self.peek_span(),
+                ));
+            }
+            Ok((
+                Ast::Block(
+                    Span {
+                        start: definition_span.start,
+                        end: end.end,
+                    },
+                    vec![expression],
+                ),
+                end,
+            ))
+        })();
+        self.context.level = previous_level;
+        result
+    }
+
     pub(super) fn parse_def_with_attrs(
         &mut self,
         attrs: DeclAttrs,
@@ -6166,24 +6216,7 @@ impl Parser<'_> {
             },
         )?;
 
-        self.skip_newlines();
-        self.expect(&Token::LBrace)?;
-        let body_stmts = self.parse_block_stmts()?;
-        if body_stmts.is_empty() {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::DeclarationSyntax,
-                "Function body must not be empty",
-                self.peek_span(),
-            ));
-        }
-        let end = self.expect(&Token::RBrace)?;
-        let body = Ast::Block(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            body_stmts,
-        );
+        let (body, end) = self.parse_function_body(&sp)?;
 
         let ast = Ast::Def(
             Span {

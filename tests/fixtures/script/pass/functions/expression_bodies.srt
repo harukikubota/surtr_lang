@@ -1,0 +1,50 @@
+defstruct User { name: String }
+
+def name(user: User) -> String = user.name
+defp positive?(num: Int) -> Boolean = num > 0
+def tag(num: Int) -> Int = cond {
+  positive?(num) => 1,
+  num < 0 => -1,
+  True => 0
+}
+def option_tag(value: Option<Int>) -> Int = match value {
+  Option::Some(num) => num,
+  Option::None => 0
+}
+def choose(flag: Boolean) -> Int = if(flag, 1, 0)
+def discard() -> Unit = 42;
+def collect() -> Result<Int> = do {
+  num <- Ok(41)
+  Ok(num + 1)
+}
+
+def default_return() -> Result<Int> = do {
+  Monad::return(9)
+}
+
+deftrait Value {
+  def value(self: Self) -> Int
+  def next(self: Self) -> Int = Value::value(self) + 1
+}
+impl Value for Int {
+  def value(self: Self) -> Int = self
+}
+impl User {
+  def new(name: String) -> Self = User { name: name }
+  def label(self: Self) -> String = self.name
+}
+
+print(name(User::new("日本語")))
+print(User::label(User::new("label")))
+print(to_string(tag(1)))
+print(to_string(tag(-1)))
+print(to_string(tag(0)))
+print(to_string(option_tag(Option::Some(7))))
+print(to_string(option_tag(Option<Int>::None)))
+print(to_string(choose(False)))
+print(to_string(discard()))
+print(to_string(Value::next(41)))
+value =? collect()
+print(to_string(value))
+default_value =? default_return()
+print(to_string(default_value))

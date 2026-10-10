@@ -39,7 +39,22 @@ private const PROFILE_NAME = User.profile -> Profile.name
 
 ```surtr
 def name(args...) -> Ty { expr }
+def name(args...) -> Ty = expr
+def name(args...) -> Ty = do { ... }
+def name(args...) -> Ty = match value { ... }
+def name(args...) -> Ty = cond { ... }
 ```
+
+`{ ... }` 本体に加え、`=` の後へ本体を直接書けます。`defp`、module 関数、inherent / trait impl、trait のデフォルト本体でも同じ規則です。`defextractor` と本体を持たない builtin / intrinsic 宣言は対象外です。
+
+- `= do { ... }`、`= match ... { ... }`、`= cond { ... }` は複数行で書けます。既存の carrier 指定や `match` / `cond` の括弧付き構文も使えます。本体はその式全体で終わり、外側へ演算を続けたり末尾に `;` を付けたりはできません。
+- その他の `= expr` は、`=` の直後から同じ行に単一の式を書きます。括弧、引数、closure、文字列の内部も改行できません。`if` ファミリーもこの規則に従います。
+- `= expr` の末尾に `;` を1個付けると、本体の結果を Unit にします。式内部の `;` は、この末尾の回数制限に含めません。
+- 本体の直後は改行、EOF、または外側の閉じ `}` とします。末尾 `;` の後にも同じ行で次の式は書けません。
+- 直接の束縛文、SafeBind 文、文末の `?` は `= expr` 本体にできません。必要な場合は `{ ... }` 本体を使います。
+- 複数行の許可は `=` の直後に直接書く `do` / `match` / `cond` に限ります。括弧で包んだり、別の式の引数に入れたりしても改行の制約は解除されません。
+
+`do` 本体は関数の戻り値型を期待型として carrier を決定します。戻り値が `Result<()>` なら carrier は `Result` です。本文や明示 carrier と戻り値型が一致しない場合は型エラーになります。
 
 Boolean を返す関数は `def positive?(value: Int) -> Boolean { value > 0 }` のように名前の末尾へ隣接する `?` を1個付けられます。`positive?(1)` で呼び出し、`&positive?` で capture します。未確定の返り型や `Result<Boolean>`、`Option<Boolean>` は対象外です。変数・引数・Pattern 束縛・フィールド・型・モジュール・Extractor の名前には付けられません。
 

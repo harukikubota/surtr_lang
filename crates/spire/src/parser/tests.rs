@@ -8785,3 +8785,95 @@ fn hashmap_structural_pattern_syntax() {
     parse("hash![] = map").expect("empty HashMap pattern is valid binding syntax");
     assert!(parse("match map { hash![\"a\" x] => 1, _ => 0 }").is_err());
 }
+
+#[test]
+fn function_expression_bodies_accept_all_definition_contexts() {
+    for source in [
+        "def name(user: User) -> String = user.name",
+        "defp value() -> Int = 1",
+        "impl Int { def value(self: Self) -> Self = self }",
+        "impl Show for Int { def show(self: Self) -> String = to_string(self) }",
+        "deftrait Show { def show(self: Self) -> String = to_string(self)\n def other(self: Self) -> String }",
+        "deftrait Show { defp value() -> Int = 1 }",
+        "def value() -> Unit = 1;",
+        "def value() -> Int = if(True, 1, 0)",
+        "def value() -> Int = apply({ |x| print(x); x }, 1)",
+        "def value() -> String = \"日本語\"\ndef next() -> Int = 2",
+    ] {
+        parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+    parse_with_context(
+        "defmod Values { def value() -> Int = 1 }",
+        ParserContext::module(1, None),
+    )
+    .unwrap();
+    let ast = parse("def value() -> Unit = 1;").unwrap();
+    assert!(matches!(&ast[0], Ast::Def(_, _, _, _, _, _, body, _)
+        if matches!(body.as_ref(), Ast::Block(_, statements)
+            if matches!(statements.as_slice(), [Ast::Semi(_, _)]))));
+}
+
+#[test]
+fn function_expression_bodies_accept_structured_multiline_expressions() {
+    for body in [
+        "do {\n value <- Ok(1)\n Ok(value)\n}",
+        "do::<Result> {\n Ok(1)\n}",
+        "match value {\n 0 => 0,\n _ => 1\n}",
+        "cond {\n value > 0 => 1,\n True => 0\n}",
+        "cond({\n True => 0\n})",
+    ] {
+        for source in [
+            format!("def value() -> Int = {body}"),
+            format!("impl Int {{ def value(self: Self) -> Int = {body}\n}}"),
+            format!("deftrait Value {{ def value() -> Int = {body}\n}}"),
+        ] {
+            parse(&source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
+    }
+}
+
+#[test]
+fn function_expression_bodies_reject_invalid_boundaries() {
+    for source in [
+        "def value() -> Int =\n 1",
+        "def value() -> Int = (\n 1\n)",
+        "def value() -> Int = call(\n 1\n)",
+        "def value() -> Int = value\n |> next()",
+        "def value() -> Int = value |>\n next()",
+        "def value() -> Int = apply({\n 1\n})",
+        "def value() -> String = \"\"\"\n  text\n  \"\"\"",
+        "def value() -> Int = if(True,\n 1, 0)",
+        "def value() -> Int = (cond {\n True => 1\n})",
+        "def value() -> Int = x = 1",
+        "def value() -> Int = x =? Ok(1)",
+        "def value() -> Unit = operation()?",
+        "def value() -> Unit = 1;;",
+        "def value() -> Unit = 1; print(\"outside\")",
+        "def value() -> Int = 1 2",
+        "def value() -> Int = cond { True => 1 } + 1",
+        "def value() -> Int = match 1 { _ => 1 };",
+        "defextractor value(input: Int) -> MatchResult<Int> = MatchResult::Ok(input)",
+        "@builtin def value() -> Int = 1",
+    ] {
+        parse(source).expect_err(source);
+    }
+}
+
+#[test]
+fn function_expression_bodies_tolerant_parser_preserves_definitions() {
+    let source = "def value() -> Int = 1\ndef other() -> Int = cond {\n True => 2\n}";
+    let parsed = parse(source).unwrap();
+    let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+    assert_eq!(tolerant.ast, parsed);
+    assert!(tolerant.diagnostics.is_empty());
+}
+
+#[test]
+fn function_expression_bodies_report_multiline_source_span() {
+    let source = "def value() -> String = call(\"日本語\",\n 1)";
+    let error = parse(source).expect_err("multiline argument must be rejected");
+    assert_eq!(error.reason(), ParseErrorReason::DeclarationSyntax);
+    assert!(error.message().contains("must stay on one source line"));
+    assert_eq!(error.span().start, source.find('=').unwrap() + 1);
+    assert_eq!(error.span().end, source.chars().count());
+}
