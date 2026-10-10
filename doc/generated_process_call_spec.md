@@ -97,7 +97,9 @@ payload が 0 個の場合、`Counter::ping()` は即時の call、`&Counter::pi
 
 呼び出し元が生成関数の本体であることを内部 metadata で検証する。ユーザが同名を定義したり、同じ名前の属性を書いたりして権限を得られる仕組みにしない。公開 wrapper の capture は許可し、内部操作そのものの関数値は公開しない。
 
-BEAM 出力では、生成関数と runtime module の呼び出しへ変換できる。ここでいう compiler-only は Surtr ソースのアクセス規則であり、外部 Erlang コードから BEAM の export を呼べないという保証ではない。外部からの入力契約違反まで一律に Result に変換することは要求しない。
+`surtr` ホストの BEAM 出力では、生成関数と runtime module の呼び出しへ変換できる。2026-10-10 のホスト別方針により、`erl` / `elixir` ホストは通常モジュールの `.erl` 出力に限定し、本案のプロセス定義・生成メッセージ API は依存先経由の使用も含めてコンパイル時に拒否する。詳細は [ホストの機能制限](./process_host_redesign_proposal.md#51-erl--elixir-ホストの制限2026-10-10) を参照。ホスト別制限と BEAM 出力は未実装である。
+
+ここでいう compiler-only は Surtr ソースのアクセス規則であり、外部 Erlang コードから BEAM の export を呼べないという保証ではない。Erlang / Elixir からの直接メッセージ送信や内部生成関数への直接呼び出しは、Surtr のプロセス契約の保証対象外とする。外部からの入力契約違反まで一律に Result に変換することは要求しない。
 
 ## 6. 現行との差分と周辺の未確定事項
 
