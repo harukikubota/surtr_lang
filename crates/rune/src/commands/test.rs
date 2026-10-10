@@ -301,19 +301,51 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     match paths {
         Ok(paths) => {
             let total = paths.len();
+            let mut compiled = Vec::with_capacity(total);
             for (index, file_path) in paths.into_iter().enumerate() {
-                execute_test_script(
+                let position = TestFilePosition {
+                    index: index + 1,
+                    total,
+                };
+                let result = prepare_test_script(
                     &file_path,
                     env,
-                    &options,
-                    &mut report,
-                    TestFilePosition {
-                        index: index + 1,
-                        total,
-                    },
+                    position,
                     &mut progress,
                     &mut compile_context,
-                )?;
+                );
+                let result = match result {
+                    Ok(script) => Ok(script),
+                    Err(TestCompileError::Compile(error)) => Err(error),
+                    Err(TestCompileError::Progress(error)) => return Err(progress_error(error)),
+                };
+                compiled.push((file_path, result));
+            }
+            let compilation_failed = compiled.iter().any(|(_, result)| result.is_err());
+            for (index, (file_path, result)) in compiled.into_iter().enumerate() {
+                match result {
+                    Err(error) => {
+                        report.scripts.push(json!({
+                            "file": file_path, "status": "aborted",
+                            "io": {"stdout": [], "stderr": []},
+                        }));
+                        report.script_error(error);
+                    }
+                    Ok(_) if compilation_failed => report.scripts.push(json!({
+                        "file": file_path, "status": "not_run",
+                        "io": {"stdout": [], "stderr": []},
+                    })),
+                    Ok(compiled) => execute_test_script(
+                        compiled,
+                        &options,
+                        &mut report,
+                        TestFilePosition {
+                            index: index + 1,
+                            total,
+                        },
+                        &mut progress,
+                    )?,
+                }
             }
         }
         Err(error) => report.script_error(error),
@@ -405,37 +437,32 @@ impl TestReport {
         });
     }
 }
-fn execute_test_script(
+struct CompiledTestScript {
+    script: TestScript,
+    bytecode: Bytecode,
+}
+
+fn prepare_test_script(
     file_path: &str,
     env: ExecutionEnv,
+    position: TestFilePosition,
+    progress: &mut TestProgress<std::io::Stderr>,
+    compile_context: &mut TestCompileContext,
+) -> Result<CompiledTestScript, TestCompileError> {
+    progress.compiling(position.index, position.total, file_path)?;
+    let script = load_test_script(file_path)?;
+    let bytecode = compile_test_script(&script, env, position, progress, compile_context)?;
+    Ok(CompiledTestScript { script, bytecode })
+}
+
+fn execute_test_script(
+    compiled: CompiledTestScript,
     options: &TestOptions,
     report: &mut TestReport,
     position: TestFilePosition,
     progress: &mut TestProgress<std::io::Stderr>,
-    compile_context: &mut TestCompileContext,
 ) -> RuneResult<()> {
-    progress
-        .compiling(position.index, position.total, file_path)
-        .map_err(progress_error)?;
-    let script = match load_test_script(file_path) {
-        Ok(script) => script,
-        Err(error) => {
-            report.scripts.push(
-                json!({"file": file_path, "status": "aborted", "io": {"stdout": [], "stderr": []}}),
-            );
-            report.script_error(error);
-            return Ok(());
-        }
-    };
-    let bytecode = match compile_test_script(&script, env, position, progress, compile_context) {
-        Ok(bytecode) => bytecode,
-        Err(TestCompileError::Progress(error)) => return Err(progress_error(error)),
-        Err(TestCompileError::Compile(error)) => {
-            report.scripts.push(json!({"file": script.file_path, "status": "aborted", "io": {"stdout": [], "stderr": []}}));
-            report.script_error(error);
-            return Ok(());
-        }
-    };
+    let CompiledTestScript { script, bytecode } = compiled;
     progress
         .running(position.index, position.total, &script.file_path)
         .map_err(progress_error)?;
