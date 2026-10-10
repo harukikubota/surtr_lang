@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use sindr::policy::{CompileUnitKind, RuntimeSourcePolicy};
 use xldr::{CompileSources, ModuleInput, ModuleSources, SourceKind};
@@ -71,16 +71,9 @@ pub(super) fn default_stdlib_snapshot() -> Result<Arc<xldr::DefaultStdlibSnapsho
 }
 
 fn default_module_sources() -> Result<ModuleSources, String> {
-    static DEFAULT_MODULE_SOURCES: OnceLock<Result<ModuleSources, String>> = OnceLock::new();
-
-    DEFAULT_MODULE_SOURCES
-        .get_or_init(|| {
-            let module_inputs = xldr::cached_additional_default_std_module_inputs()
-                .map_err(|e| format!("phase=load; message={}", e))?;
-            xldr::collect_module_sources_with_module_stages(&[module_inputs])
-                .map_err(|e| format!("phase=load; message={}", e))
-        })
-        .clone()
+    xldr::cached_default_script_module_sources(xldr::StdlibVariant::Default)
+        .map(|sources| (*sources).clone())
+        .map_err(|e| format!("phase=load; message={}", e))
 }
 
 pub(super) fn compile_unit_kind_for_mode(mode: TestCompileMode) -> CompileUnitKind {

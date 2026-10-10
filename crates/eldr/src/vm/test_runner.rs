@@ -183,7 +183,7 @@ impl VM {
             started: None,
             stdout: self.output.as_mut().map(std::mem::take),
             stderr: self.error_output.as_mut().map(std::mem::take),
-            stdin: self.stdin_input.take(),
+            stdin: self.stdin_input.replace(String::new()),
             stdin_cursor: self.stdin_input_cursor,
             stdout_cursor: self.test_stdout_cursor,
             stderr_cursor: self.test_stderr_cursor,
@@ -386,6 +386,7 @@ mod tests {
             });
         vm.output.as_mut().unwrap().push("walk before".into());
         vm.push_stdin_input("walk input");
+        assert_eq!(vm.read_injected_char().as_deref(), Some("w"));
         assert!(!vm
             .begin_test_case("xit", "paused".into(), "repair".into())
             .unwrap());
@@ -394,11 +395,15 @@ mod tests {
             .unwrap());
         assert!(vm.begin_test_case("it", "run".into(), "".into()).unwrap());
         assert!(vm.output.as_ref().unwrap().is_empty());
-        assert!(vm.stdin_input.is_none());
+        assert_eq!(vm.stdin_input.as_deref(), Some(""));
+        assert!(vm.has_injected_stdin());
+        assert!(vm.read_injected_char().is_none());
+        assert!(vm.read_injected_line().is_none());
         vm.output.as_mut().unwrap().push("case output".into());
         vm.record_test_pass("run".into()).unwrap();
         assert_eq!(vm.take_stdout(), vec!["walk before"]);
         assert_eq!(vm.stdin_input.as_deref(), Some("walk input"));
+        assert_eq!(vm.read_injected_line().as_deref(), Some("alk input"));
         for event in &vm.test_events()[..2] {
             assert!(event.io.is_none());
             assert!(event.case.as_ref().unwrap().duration_ns.is_none());

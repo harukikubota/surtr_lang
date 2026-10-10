@@ -684,21 +684,75 @@ pub fn collect_module_sources_with_stdlib_variant(
         stage_specs.push(extra_std_sources.to_vec());
     }
 
+    let module_sources = build_module_sources_from_stage_specs(stage_specs)?;
+    extend_module_sources_with_module_stages(module_sources, module_input_stages)
+}
+
+/// Append definition stages while preserving the prefix's source IDs and layout.
+pub fn extend_module_sources_with_module_stages(
+    mut module_sources: ModuleSources,
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
+    if module_input_stages.iter().all(Vec::is_empty) {
+        return Ok(module_sources);
+    }
+    let mut by_file = HashMap::new();
+    for module in module_sources.module_stages.iter().flatten() {
+        let file_name = module_sources
+            .sources
+            .file_name(module.source_id)
+            .expect("module source must be registered");
+        by_file.insert(
+            file_name.to_string(),
+            (
+                module.source_id,
+                module.source_kind,
+                module.module_path.clone(),
+            ),
+        );
+    }
     for stage in module_input_stages {
         if stage.is_empty() {
             continue;
         }
-        let mut specs = Vec::with_capacity(stage.len());
+        let mut modules = Vec::with_capacity(stage.len());
         for module in stage {
-            specs.push(SourceDescriptor::module(
-                module.file_name.clone(),
-                module.source.clone(),
-                module.module_path.clone(),
-            ));
+            let source_id = if let Some((source_id, source_kind, module_path)) =
+                by_file.get(&module.file_name)
+            {
+                if *source_kind != SourceKind::DefinitionSource
+                    || module_path != &module.module_path
+                    || module_sources.sources.source(*source_id) != Some(module.source.as_str())
+                {
+                    return Err(LoadError::ConflictingSource {
+                        file_name: module.file_name.clone(),
+                    });
+                }
+                *source_id
+            } else {
+                let source_id = module_sources
+                    .sources
+                    .register(module.file_name.clone(), module.source.clone());
+                by_file.insert(
+                    module.file_name.clone(),
+                    (
+                        source_id,
+                        SourceKind::DefinitionSource,
+                        module.module_path.clone(),
+                    ),
+                );
+                source_id
+            };
+            module_sources.module_source_ids.push(source_id);
+            modules.push(StagedModule {
+                source_id,
+                module_path: module.module_path.clone(),
+                source_kind: SourceKind::DefinitionSource,
+            });
         }
-        stage_specs.push(specs);
+        module_sources.module_stages.push(modules);
     }
-    build_module_sources_from_stage_specs(stage_specs)
+    Ok(module_sources)
 }
 
 pub fn collect_module_sources_with_module_stages(
@@ -1029,6 +1083,76 @@ mod tests {
                 "Shell",
                 "StyledDoc",
             ]
+        );
+    }
+
+    #[test]
+    fn extending_module_sources_preserves_prefix_and_duplicate_stages() {
+        let prefix = collect_test_module_sources_with_module_stages(&[])
+            .expect("standard sources should load");
+        let dependency = ModuleInput {
+            file_name: "support/helper.srt".into(),
+            source: "defmod Helper { def value() -> Int { 1 } }".into(),
+            module_path: "Helper".into(),
+        };
+        let extended = extend_module_sources_with_module_stages(
+            prefix.clone(),
+            &[vec![dependency.clone()], vec![dependency]],
+        )
+        .expect("identical source registration should succeed");
+        assert_eq!(
+            &extended.sources.entries()[..prefix.sources.entries().len()],
+            prefix.sources.entries()
+        );
+        assert_eq!(
+            &extended.module_stages[..prefix.module_stages.len()],
+            prefix.module_stages
+        );
+        assert_eq!(
+            extended.sources.entries().len(),
+            prefix.sources.entries().len() + 1
+        );
+        assert_eq!(extended.module_stages.len(), prefix.module_stages.len() + 2);
+        assert_eq!(
+            extended.module_stages[prefix.module_stages.len()][0].source_id,
+            extended.module_stages[prefix.module_stages.len() + 1][0].source_id
+        );
+    }
+
+    #[test]
+    fn extending_module_sources_rejects_conflicting_source_identity() {
+        let prefix = collect_test_module_sources_with_module_stages(&[])
+            .expect("standard sources should load");
+        let dependency = ModuleInput {
+            file_name: "support/helper.srt".into(),
+            source: "defmod Helper { def value() -> Int { 1 } }".into(),
+            module_path: "Helper".into(),
+        };
+        let extended =
+            extend_module_sources_with_module_stages(prefix.clone(), &[vec![dependency.clone()]])
+                .expect("dependency should load");
+        let mut changed_body = dependency.clone();
+        changed_body.source.push_str("\n");
+        let mut changed_module = dependency;
+        changed_module.module_path = "Other".into();
+        for changed in [changed_body, changed_module] {
+            let error =
+                extend_module_sources_with_module_stages(extended.clone(), &[vec![changed]])
+                    .expect_err("different source identities must conflict");
+            assert!(matches!(error, LoadError::ConflictingSource { .. }));
+        }
+        let standard = &prefix.sources.entries()[0];
+        let explicit_standard = ModuleInput {
+            file_name: standard.file_name.clone(),
+            source: standard.source.clone(),
+            module_path: prefix.module_stages[0][0].module_path.clone(),
+        };
+        assert!(
+            matches!(
+                extend_module_sources_with_module_stages(prefix, &[vec![explicit_standard]]),
+                Err(LoadError::ConflictingSource { .. })
+            ),
+            "source kind differences must conflict"
         );
     }
 
