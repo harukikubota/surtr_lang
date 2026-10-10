@@ -855,3 +855,47 @@ fn dump_outputs_viewer_json() {
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn source_reflections_keep_file_origins_in_compiled_bytecode() {
+    let temp = unique_temp_dir("source_reflections");
+    let nested = temp.join("nested");
+    fs::create_dir(&nested).unwrap();
+    let source_path = temp.join("main.srt");
+    let module_path = nested.join("origin_module.srt");
+    let bytecode_path = temp.join("main.eldr");
+    write_source(&module_path, "defmod Origin {\n  # declaration source\n  def location() -> (String, String, Int) { (__FILE__, __DIR__, __LINE__) }\n}\n");
+    write_source(&source_path, "include \"./nested/origin_module.srt\"\nprint(__FILE__)\nprint(__DIR__)\nprint(\"#{__LINE__}\")\nprint(inspect(Origin::location()))\nclosure = {|| __LINE__}\nprint(\"#{closure()}\")\n");
+    let build = surtr_command()
+        .arg("build")
+        .arg(&source_path)
+        .arg(&bytecode_path)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    fs::remove_file(&source_path).unwrap();
+    fs::remove_file(&module_path).unwrap();
+    let run = surtr_command()
+        .arg("run")
+        .arg(&bytecode_path)
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(run.stdout).unwrap(),
+        format!(
+            "main.srt\n{}\n4\n(\"origin_module.srt\", \"{}\", 3)\n6\n",
+            temp.display(),
+            nested.display()
+        )
+    );
+    fs::remove_dir_all(temp).unwrap();
+}

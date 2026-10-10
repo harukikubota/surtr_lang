@@ -295,6 +295,16 @@ pub fn derive_parser_context(
     )
 }
 
+/// Parse and materialize source-position values while spans are file-local.
+pub fn parse_file_source(
+    source: &str,
+    context: spire::ParserContext,
+    file_name: &str,
+) -> Result<Vec<spire::ast::Ast>, spire::error::ParseError> {
+    let ast = spire::parse_with_context(source, context)?;
+    spire::materialize_reflections(ast, source, Some(std::path::Path::new(file_name)))
+}
+
 pub fn derive_runtime_policy(
     compile_unit_kind: CompileUnitKind,
     source_kind: SourceKind,

@@ -34,7 +34,13 @@ impl Parser<'_> {
                     source,
                     span: expr_span,
                 } => {
-                    let parsed = super::parse(&source).map_err(|error| {
+                    let parsed = super::parse_with_context(
+                        &source,
+                        self.context
+                            .clone()
+                            .with_rules(super::ParseRules::permissive_for_tests()),
+                    )
+                    .map_err(|error| {
                         error.map_spans(|span| Span {
                             start: expr_span.start + span.start,
                             end: expr_span.start + span.end,
@@ -196,7 +202,13 @@ impl Parser<'_> {
                     end: expr_start + span.end,
                 })
             };
-            let parsed = super::parse(&expr_src).map_err(|error| ParseError::SyntaxError {
+            let parsed = super::parse_with_context(
+                &expr_src,
+                self.context
+                    .clone()
+                    .with_rules(super::ParseRules::permissive_for_tests()),
+            )
+            .map_err(|error| ParseError::SyntaxError {
                 message: format!("Invalid interpolation expression: {}", error.message()),
                 span: map(error.span().clone()),
                 reason: crate::error::ParseErrorReason::InterpolationSyntax,

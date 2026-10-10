@@ -29,6 +29,7 @@ stage、user source の順で読み込まれます。完全なモジュール in
 - loader が最初に読む固定ステージ
 - `import` / `include` builtin function docs の canonical anchor
 - 標準 concrete error の置き場
+- ソース位置リフレクションの `@builtin def` 宣言と説明
 
 `Bootstrap` は「何かでもかんでも置く場所」ではありません。  
 将来 bootstrap 手順が増えても、入口の module 名と順序を固定するために残しています。

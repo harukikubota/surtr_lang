@@ -103,6 +103,7 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - `surtr repl --module <file>` や `include` で入る definition source でも、module identity は file 名ではなく declared `defmod` の canonical path を使う
 - preload 後の対話入力自体は引き続き `SourceKind::ReplChunk` として扱い、VM 実行 phase を `Live` へ切り替えたうえで append-only policy を適用する
 - preload script が導入した binding / function / doc metadata は、そのまま後続の REPL 対話入力から参照できる
+- preloadするファイルの `__FILE__`・`__DIR__`・`__LINE__` は、通常のファイルと同じくコンパイル時に確定する。loaderは原文とファイルパスを用い、module spanのrebase前に参照をリテラルへ変換する。補間内でも参照元の行番号を保持する。ファイル情報のない入力で `__FILE__`・`__DIR__` を参照した場合はエラーとし、cwdで代用しない。
 - preload script に `defagent` / `defgenserver` / `defsupervisor` などの process 宣言が含まれる場合、REPL は declaration area から process module stage を抽出し、後続の対話入力でも concrete process surface と runtime metadata を継続参照できる
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする
 - REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
@@ -149,6 +150,7 @@ REPL 実装は次の 3 層に分ける。
 
 - TTY 対話入力
 - pipe / redirect による標準入力
+- REPLの式では `__FILE__`・`__DIR__`・`__LINE__` の呼出しを拒否する。ファイル中では括弧なしで呼び出し、括弧付きの呼出しは拒否する。`__ENV__` は予約名として使用・定義を拒否し、標準宣言は配置しない。
 
 ### 4.2 プロンプト
 
@@ -242,6 +244,7 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `:doc` は value binding で型 doc fallback を行う。`ret = Ok(1)` のあと `:doc ret` は `Result` 側 doc を返す
 - `:sig` は callable / family / owner / process surface を対象にし、non-callable value binding を拒否する
 - 演算子照会は bare token と修飾された固定 symbol を受け付ける。`:sig |*> Option` などの実装指定は拒否する
+- `__FILE__`・`__DIR__`・`__LINE__` は `:doc` と `:sig` でBootstrapの組込み関数宣言の説明・シグネチャを照会できる。`:info` と一般の補完には含めない。`__ENV__` は照会対象にしない。
 - 固定関数演算子 `|>` / `>>` / `>*` / `>=>` は `Bootstrap` の builtin 宣言を bare token の `:doc` / `:sig` から引く。`->` は `Facet::compose` の doc / signature に接続する。`/` / `%` は `Div::safe_div` / `Mod::safe_mod` の定義メソッドの doc / signature に接続する。削除済みの関数型 trait や `Compose` の lookup へ戻さない
 - facet path / facet API lookup は `:sig` に含めず、completion と `:facet` に委譲する
 - 多相関数の `:sig` は定義 signature を表示し、入力引数による置換や実装選択を行わない

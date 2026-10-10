@@ -8988,3 +8988,98 @@ fn function_expression_bodies_report_multiline_source_span() {
     assert_eq!(error.span().start, source.find('=').unwrap() + 1);
     assert_eq!(error.span().end, source.chars().count());
 }
+
+#[test]
+fn source_reflections_reject_reserved_env_and_repl_expressions() {
+    for source in ["__ENV__", "__ENV__()", "\"#{__ENV__}\""] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+    for source in ["__FILE__", "__DIR__", "__LINE__", "\"#{__LINE__}\""] {
+        assert!(
+            parse_with_context(source, ParserContext::repl(0)).is_err(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn source_reflections_cannot_be_shadowed() {
+    for source in [
+        "__LINE__ = 1",
+        "def __FILE__() -> String { \"x\" }",
+        "def f(__DIR__: String) -> String { __DIR__ }",
+        "const __LINE__ = 1",
+        "__ENV__ = 1",
+        "def __ENV__() -> String { \"x\" }",
+        "def f(__ENV__: String) -> String { \"x\" }",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn source_reflections_materialize_original_positions_and_paths() {
+    let source = "# あいう\n(__FILE__, __DIR__, __LINE__, \"#{__LINE__}\")";
+    let ast = materialize_reflections(
+        parse(source).unwrap(),
+        source,
+        Some(std::path::Path::new("/repo/src/example.srt")),
+    )
+    .unwrap();
+    let [Ast::TupleLiteral(_, items)] = ast.as_slice() else {
+        panic!("tuple expected");
+    };
+    assert!(matches!(&items[0], Ast::Lit(_, Lit::Str(value)) if value == "example.srt"));
+    assert!(matches!(&items[1], Ast::Lit(_, Lit::Str(value)) if value == "/repo/src"));
+    assert!(matches!(&items[2], Ast::Lit(_, Lit::Int(value)) if *value == int(2)));
+    assert!(
+        matches!(&items[3], Ast::InterpolatedStr(_, parts) if matches!(&parts[0], InterpolatedPart::Expr(expr) if matches!(expr.as_ref(), Ast::Lit(_, Lit::Int(value)) if *value == int(2))))
+    );
+    assert!(materialize_reflections(parse("__FILE__").unwrap(), "__FILE__", None).is_err());
+    assert!(materialize_reflections(parse("__DIR__").unwrap(), "__DIR__", None).is_err());
+}
+
+#[test]
+fn source_reflections_in_triple_interpolations_keep_original_line() {
+    let source = "# header\n\"\"\"\n  text\n  #{__LINE__}\n\"\"\"";
+    let ast = materialize_reflections(parse(source).unwrap(), source, None).unwrap();
+    let [Ast::InterpolatedStr(_, parts)] = ast.as_slice() else {
+        panic!("interpolation expected");
+    };
+    assert!(parts.iter().any(|part| matches!(part, InterpolatedPart::Expr(expr) if matches!(expr.as_ref(), Ast::Lit(_, Lit::Int(value)) if *value == int(4)))));
+}
+
+#[test]
+fn source_reflections_validate_builtin_function_declarations() {
+    let context = ParserContext::module(0, None).with_rules(ParseRules::std_module());
+    for source in [
+        "@builtin def __FILE__() -> String",
+        "@builtin def __DIR__() -> String",
+        "@builtin def __LINE__() -> Int",
+    ] {
+        assert!(
+            parse_with_context(source, context.clone()).is_ok(),
+            "{source}"
+        );
+        assert!(parse(source).is_err(), "user source: {source}");
+    }
+    for source in [
+        "@builtin def __FILE__() -> Int",
+        "@builtin def __LINE__() -> Int = 1",
+        "@builtin def __ENV__()",
+        "@builtin def __ENV__() -> String",
+        "@builtin def __FILE__() -> String\n{ \"x\" }",
+        "@builtin const FOO: Int",
+        "@builtin const __FILE__: String",
+        "@builtin def __FILE__(x: String) -> String",
+        "@builtin def __FILE__() -> String { \"x\" }",
+    ] {
+        assert!(
+            parse_with_context(source, context.clone()).is_err(),
+            "{source}"
+        );
+    }
+    for source in ["__LINE__()", "__DIR__(1)", "&__LINE__", "^__LINE__"] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+}

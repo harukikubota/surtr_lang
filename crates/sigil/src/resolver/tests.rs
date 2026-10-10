@@ -9903,3 +9903,33 @@ fn hashmap_pattern_keys_cannot_reference_new_bindings() {
     .unwrap_err();
     assert!(error.message.contains("Duplicate"), "{}", error.message);
 }
+
+#[test]
+fn source_reflections_require_canonical_and_unique_builtin_declarations() {
+    let parse_std = |source| {
+        spire::parse_with_context(
+            source,
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .unwrap()
+    };
+    for (owner, source, expected) in [
+        (
+            "Other",
+            "@builtin def __FILE__() -> String",
+            "canonical Bootstrap",
+        ),
+        (
+            "Bootstrap",
+            "@builtin def __LINE__() -> Int\n@builtin def __LINE__() -> Int",
+            "Duplicate builtin reflection function",
+        ),
+    ] {
+        let stages = vec![vec![staged_module(owner, parse_std(source))]];
+        let error = precollect_declarations(&stages).expect_err("invalid builtin declaration");
+        assert!(error.message.contains(expected), "{}", error.message);
+    }
+    let error =
+        resolve(spire::parse("__LINE__").unwrap()).expect_err("source context must be supplied");
+    assert!(error.message.contains("not materialized"));
+}

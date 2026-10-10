@@ -2595,10 +2595,48 @@ pub fn precollect_declarations(
     let owner_registry = precollect_owner_registry(module_stages)?;
     let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
     let mut seen_public_consts: HashMap<String, (usize, String)> = HashMap::new();
+    let mut seen_builtin_reflections = HashMap::<String, Span>::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
             for stmt in &module.ast {
+                if let Ast::BuiltinReflectionDecl(span, value, attrs) = stmt {
+                    if global_surface_name(&module.module_path) != "Bootstrap" || !attrs.builtin {
+                        return Err(ResolveError {
+                            message: format!(
+                                "{} requires its canonical Bootstrap builtin reflection function declaration",
+                                value.name()
+                            ),
+                            span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: Some(value.name().into()),
+                            },
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    if let Some(first) =
+                        seen_builtin_reflections.insert(value.name().into(), span.clone())
+                    {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Duplicate builtin reflection function {}",
+                                value.name()
+                            ),
+                            span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: Some(value.name().into()),
+                            },
+                            related_labels: vec![ResolveErrorLabel {
+                                span: first,
+                                message: "first builtin reflection function declaration".into(),
+                                source: None,
+                            }],
+                        });
+                    }
+                    continue;
+                }
                 if let Ast::IntrinsicDecl(span, name, signature, _) = stmt {
                     validate_intrinsic_surface(
                         &owner_registry,
@@ -2951,7 +2989,7 @@ pub fn precollect_declarations(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::IntrinsicDecl(_, _, _, _) => continue,
+                        Ast::BuiltinReflectionDecl(..) | Ast::IntrinsicDecl(_, _, _, _) => continue,
                         Ast::BuiltinExtractorDecl(span, name, _, _, attrs) => (
                             span,
                             name.as_str(),
@@ -3651,7 +3689,7 @@ impl Resolver {
                     self.record_predeclared_uid(name, uid, DeclarationKind::Def);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
-                Ast::IntrinsicDecl(_, _, _, _) => continue,
+                Ast::BuiltinReflectionDecl(..) | Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
                     reject_special_variant_binding(name, stmt.span())?;
                     if !declared_in_batch.insert(name.clone()) {

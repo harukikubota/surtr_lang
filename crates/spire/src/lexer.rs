@@ -206,7 +206,15 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 i += 1;
             }
             let text: String = chars[start..i].iter().collect();
+            if let Some(value) = sindr::reflection::Reflection::from_name(&text) {
+                tokens.push(Spanned {
+                    token: Token::Reflection(value),
+                    span: Span { start, end: i },
+                });
+                continue;
+            }
             let token = match text.as_str() {
+                sindr::reflection::RESERVED_ENV_NAME => Token::ReservedEnv,
                 "True" => Token::True,
                 "False" => Token::False,
                 "def" => Token::Def,

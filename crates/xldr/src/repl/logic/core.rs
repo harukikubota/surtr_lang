@@ -233,6 +233,14 @@ struct PreparedScriptPreload {
 }
 
 #[derive(Clone)]
+struct ReplInput {
+    source: String,
+    // File-preload expressions have already been parsed and materialized.
+    // Preserve them when replaying; live REPL input always uses None.
+    ast: Option<Vec<Ast>>,
+}
+
+#[derive(Clone)]
 struct PreloadedChunkState {
     sources: SourceRegistry,
     repl_source_id: SourceId,
@@ -249,7 +257,7 @@ struct PreloadedChunkState {
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
     auto_import_records: Vec<ReplImportRecord>,
-    script_runtime_inputs: Vec<String>,
+    script_runtime_inputs: Vec<ReplInput>,
     script_preload_docs: Vec<DocEntry>,
     script_preload_signatures: Vec<SignatureEntry>,
     import_records: Vec<ReplImportRecord>,
@@ -726,7 +734,7 @@ pub struct ReplEngine {
     auto_import_modules: BTreeSet<String>,
     auto_import_records: Vec<ReplImportRecord>,
     reload_seed: ReplReloadSeed,
-    replay_inputs: Vec<String>,
+    replay_inputs: Vec<ReplInput>,
     history_entries: Vec<ReplHistoryEntry>,
     binding_records: Vec<ReplBindingRecord>,
     import_records: Vec<ReplImportRecord>,
@@ -1142,7 +1150,7 @@ impl ReplEngine {
         .and_then(|mut engine| {
             let script_runtime_inputs = state.script_runtime_inputs;
             for input in script_runtime_inputs {
-                let result = engine.handle_line(&input);
+                let result = engine.handle_line_with_ast(&input.source, input.ast);
                 if result.should_exit {
                     return Err(ReplLoadError::Runtime {
                         file_name: "<repl-preload>".to_string(),
@@ -2948,6 +2956,14 @@ impl ReplEngine {
 
     fn handle_doc(&self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
+        if sindr::reflection::Reflection::from_name(trimmed).is_some() {
+            if let Some(entry) = self.docs.iter().find(|entry| {
+                entry.kind == DocKind::Function
+                    && entry.qualified_name == format!("Bootstrap::{trimmed}")
+            }) {
+                return ReplResult::ok(Self::doc_resolved_output(entry));
+            }
+        }
         if trimmed.is_empty() {
             return Self::plain(Self::doc_help_lines());
         }
@@ -4293,6 +4309,17 @@ impl ReplEngine {
 
     fn handle_sig(&mut self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
+        if let Some(reflection) = sindr::reflection::Reflection::from_name(trimmed) {
+            if let Some(entry) = self.signatures.iter().find(|entry| {
+                entry.kind == DocKind::Function
+                    && entry.qualified_name == format!("Bootstrap::{}", reflection.name())
+            }) {
+                return Self::styled(vec![Self::render_signature_with_qualified_name(
+                    &entry.qualified_name,
+                    entry.signature.clone(),
+                )]);
+            }
+        }
         if trimmed.is_empty() {
             return Self::plain(Self::sig_help_lines());
         }
@@ -4428,6 +4455,14 @@ impl ReplEngine {
 
     fn handle_info(&mut self, query: &str) -> ReplResult {
         let trimmed = query.trim();
+        if sindr::reflection::Reflection::from_name(trimmed).is_some()
+            || sindr::reflection::Reflection::from_builtin_name(crate::surface_path_name(trimmed))
+                .is_some()
+        {
+            return Self::plain(vec![format!(
+                "Source reflection functions are not :info targets; use :doc or :sig {trimmed}."
+            )]);
+        }
         if trimmed.is_empty() {
             return Self::plain(Self::info_help_lines());
         }
@@ -5981,7 +6016,7 @@ impl ReplEngine {
         engine.stack_trace_display_mode = self.stack_trace_display_mode;
         if keep_session_defs {
             for input in &self.replay_inputs {
-                let result = engine.handle_line(input);
+                let result = engine.handle_line_with_ast(&input.source, input.ast.clone());
                 if result.should_exit {
                     return Err(Self::plain(vec![
                         "reload failed: replay requested REPL exit".to_string(),
@@ -6223,6 +6258,10 @@ impl ReplEngine {
     ///
     /// The unified entry point used by both CLI and TUI.
     pub fn handle_line(&mut self, line: &str) -> ReplResult {
+        self.handle_line_with_ast(line, None)
+    }
+
+    fn handle_line_with_ast(&mut self, line: &str, preparsed_ast: Option<Vec<Ast>>) -> ReplResult {
         if self.pending.is_empty() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -6308,15 +6347,19 @@ impl ReplEngine {
         self.sources
             .update_source(self.repl_source_id, self.pending.clone());
 
-        let ast = match spire::parse_with_context(
-            &self.pending,
-            crate::derive_parser_context(
-                self.repl_source_id.0,
-                SourceKind::ReplChunk,
-                CompileUnitKind::Repl,
-                None,
+        let parsed = match &preparsed_ast {
+            Some(ast) => Ok(ast.clone()),
+            None => spire::parse_with_context(
+                &self.pending,
+                crate::derive_parser_context(
+                    self.repl_source_id.0,
+                    SourceKind::ReplChunk,
+                    CompileUnitKind::Repl,
+                    None,
+                ),
             ),
-        ) {
+        };
+        let ast = match parsed {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
                 return Self::plain(vec![]);
@@ -6655,7 +6698,10 @@ impl ReplEngine {
                     &meta.function_defs,
                 );
                 if Self::chunk_is_replayable(&ast) {
-                    self.replay_inputs.push(committed_source);
+                    self.replay_inputs.push(ReplInput {
+                        source: committed_source,
+                        ast: preparsed_ast,
+                    });
                 }
                 let history_value = history_value_for_result(&self.vm, &value, &meta);
                 self.bump_line(Some(history_value), Some(meta.clone()));
@@ -7292,7 +7338,7 @@ fn parse_preload_sources(
         Vec<Vec<sigil::StagedModuleAst>>,
         Vec<Vec<StagedModule>>,
         Vec<Ast>,
-        Vec<String>,
+        Vec<ReplInput>,
     ),
     ReplLoadError,
 > {
@@ -7311,7 +7357,7 @@ fn parse_preload_sources(
         .sources
         .source(compile_sources.user_source_id)
         .unwrap_or("");
-    let user_ast = spire::parse_with_context(
+    let user_ast = crate::parse_file_source(
         user_source,
         crate::derive_parser_context(
             compile_sources.user_source_id.0,
@@ -7319,6 +7365,10 @@ fn parse_preload_sources(
             CompileUnitKind::Script,
             None,
         ),
+        compile_sources
+            .sources
+            .file_name(compile_sources.user_source_id)
+            .expect("registered preload source"),
     )
     .map_err(|e| ReplLoadError::Diagnostic {
         phase: "parse".to_string(),
@@ -7361,7 +7411,7 @@ fn collect_process_metadata(
     out
 }
 
-fn split_preload_script_ast(ast: &[Ast], source: &str) -> (Vec<Ast>, Vec<String>) {
+fn split_preload_script_ast(ast: &[Ast], source: &str) -> (Vec<Ast>, Vec<ReplInput>) {
     let first_runtime_index = ast
         .iter()
         .position(|stmt| !is_preload_declaration(stmt))
@@ -7377,7 +7427,15 @@ fn split_preload_script_ast(ast: &[Ast], source: &str) -> (Vec<Ast>, Vec<String>
                 .take(span.end.saturating_sub(span.start))
                 .collect::<String>();
             let trimmed = snippet.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
+            (!trimmed.is_empty()).then(|| ReplInput {
+                source: trimmed.to_string(),
+                ast: Some(spire::map_ast_spans(vec![stmt.clone()], &|inner| {
+                    spire::ast::Span {
+                        start: inner.start - span.start,
+                        end: inner.end - span.start,
+                    }
+                })),
+            })
         })
         .collect();
     (preload_ast, runtime_inputs)
@@ -7404,6 +7462,7 @@ fn is_preload_declaration(stmt: &Ast) -> bool {
             | Ast::Defsupervisor(..)
             | Ast::DefdynamicSupervisor(..)
             | Ast::BuiltinDecl(..)
+            | Ast::BuiltinReflectionDecl(..)
             | Ast::IntrinsicDecl(..)
             | Ast::BuiltinExtractorDecl(..)
             | Ast::BuiltinTypeDecl(..)
@@ -7463,6 +7522,8 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::SupervisorInit(span, _)
         | Ast::ExtractorDef(span, _, _, _, _, _, _)
         | Ast::BuiltinDecl(span, ..)
+        | Ast::BuiltinReflectionDecl(span, _, _)
+        | Ast::Reflection(span, _)
         | Ast::IntrinsicDecl(span, _, _, _)
         | Ast::BuiltinExtractorDecl(span, _, _, _, _)
         | Ast::BuiltinTypeDecl(span, _, _)
@@ -8088,7 +8149,7 @@ fn parse_stage_modules_parallel(
                     .stack_size(STAGE_PARSE_WORKER_STACK_SIZE)
                     .spawn_scoped(scope, move || {
                         let module_source = sources.source(module.source_id).unwrap_or("");
-                        let parsed = spire::parse_with_context(
+                        let parsed = crate::parse_file_source(
                             module_source,
                             crate::derive_parser_context(
                                 module.source_id.0,
@@ -8096,6 +8157,9 @@ fn parse_stage_modules_parallel(
                                 compile_unit_kind,
                                 (module.module_path == "Facet").then(|| "Facet".into()),
                             ),
+                            sources
+                                .file_name(module.source_id)
+                                .expect("registered module source"),
                         )
                         .map_err(|error| ModuleStageParseError {
                             source_id: module.source_id,
@@ -9220,6 +9284,97 @@ defenum QueryEnum { Empty, Item(Int) }
             "match SavedOption(Option::Some(7)) { SavedOption(Option::Some(value)) => value, _ => 0 }",
         );
         assert_eq!(ReplEngine::repl_result_text(&value), "7");
+    }
+
+    #[test]
+    fn source_reflections_are_documented_but_disabled_in_repl() {
+        let mut engine = ReplEngine::new().expect("REPL should initialize");
+        for input in ["__", ":sig __", ":info __", ":type __"] {
+            assert!(!engine
+                .completions(input, input.len())
+                .candidates
+                .iter()
+                .any(|candidate| candidate.replacement.contains("__FILE__")
+                    || candidate.replacement.contains("__DIR__")
+                    || candidate.replacement.contains("__LINE__")
+                    || candidate.replacement.contains("__ENV__")));
+        }
+        assert!(!matches!(
+            engine.handle_line(":doc __ENV__").output,
+            ReplOutput::DocResolved { .. }
+        ));
+        assert!(
+            ReplEngine::repl_result_text(&engine.handle_line(":sig __ENV__"))
+                .contains("No signature found")
+        );
+        assert!(matches!(
+            engine.handle_line("__ENV__").output,
+            ReplOutput::EvalError { .. }
+        ));
+        for value in sindr::reflection::Reflection::ALL {
+            let doc = engine.handle_line(&format!(":doc {}", value.name()));
+            assert!(
+                matches!(doc.output, ReplOutput::DocResolved { .. }),
+                "{}: {}",
+                value.name(),
+                ReplEngine::repl_result_text(&doc)
+            );
+            let signature = engine.handle_line(&format!(":sig {}", value.name()));
+            assert!(ReplEngine::repl_result_text(&signature).contains(&value.signature()));
+            for name in [
+                value.name().to_string(),
+                format!("Bootstrap::{}", value.name()),
+                format!("Global::Bootstrap::{}", value.name()),
+            ] {
+                let info = engine.handle_line(&format!(":info {name}"));
+                assert!(ReplEngine::repl_result_text(&info).contains("use :doc or :sig"));
+            }
+            let expression = engine.handle_line(value.name());
+            assert!(
+                matches!(expression.output, ReplOutput::EvalError { .. }),
+                "{}",
+                ReplEngine::repl_result_text(&expression)
+            );
+        }
+    }
+
+    #[test]
+    fn source_reflections_in_preloaded_runtime_input_survive_replay() {
+        let mut engine = ReplEngine::from_script_source(
+            "/repo/origin.srt",
+            "# header\nlocation = (__FILE__, __DIR__, __LINE__)",
+        )
+        .expect("preload should compile");
+        assert_eq!(
+            ReplEngine::repl_result_text(&engine.handle_line("location")),
+            "(\"origin.srt\", \"/repo\", 2)"
+        );
+        let reload = engine.handle_line(":reload defs");
+        assert!(
+            !matches!(
+                reload.output,
+                ReplOutput::Diagnostic { .. } | ReplOutput::EvalError { .. }
+            ),
+            "{}",
+            ReplEngine::repl_result_text(&reload)
+        );
+        assert_eq!(
+            ReplEngine::repl_result_text(&engine.handle_line("location")),
+            "(\"origin.srt\", \"/repo\", 2)"
+        );
+    }
+
+    #[test]
+    fn source_reflections_in_preloaded_function_use_definition_source() {
+        let mut engine = ReplEngine::from_script_source(
+            "/repo/origin.srt",
+            "# header\ndef location() -> (String, String, Int) { (__FILE__, __DIR__, __LINE__) }",
+        )
+        .expect("preload should compile");
+        assert_eq!(
+            ReplEngine::repl_result_text(&engine.handle_line("location()")),
+            "(\"origin.srt\", \"/repo\", 2)"
+        );
     }
 
     #[test]

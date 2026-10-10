@@ -1001,6 +1001,33 @@ impl Parser<'_> {
                 ))
             }
 
+            Token::ReservedEnv => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
+                "`__ENV__` is reserved and cannot be used",
+                sp,
+            )),
+            Token::Reflection(value) => {
+                self.advance();
+                if self.context.unit_kind == super::context::ParseUnitKind::Repl {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PositionRule,
+                        "source reflections are disabled in REPL expressions; use :doc or :sig",
+                        sp,
+                    ));
+                }
+                if matches!(
+                    self.peek(),
+                    Token::Unit | Token::LParen | Token::Bind | Token::SafeBind | Token::Colon
+                ) {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PositionRule,
+                        "source reflection functions must be called without parentheses and cannot be bound",
+                        sp,
+                    ));
+                }
+                Ok(Ast::Reflection(sp, value))
+            }
+
             // Literals
             Token::Int(n) => {
                 self.advance();
@@ -3753,7 +3780,9 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
             InterpolatedPart::Text(_) => false,
             InterpolatedPart::Expr(expr) => bulk_update_proc_contains_operation_call(expr),
         }),
-        Ast::Lit(_, _)
+        Ast::Reflection(..)
+        | Ast::BuiltinReflectionDecl(..)
+        | Ast::Lit(_, _)
         | Ast::Var(_, _)
         | Ast::InternalVar(_, _)
         | Ast::Path(_, _)

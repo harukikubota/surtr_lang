@@ -35,6 +35,14 @@ private const PROFILE_NAME = User.profile -> Profile.name
 - 値は primitive literal、Facet path、別の Facet const、またはそれらの `->` 合成に限定する
 - const Facet の bracket segment は literal `Int` / `String`、または両端が literal `Int` の range だけを受け付ける
 
+### ソース位置リフレクション
+
+`__FILE__` は参照を書いたファイルの名前、`__DIR__` はそのファイルの親ディレクトリの絶対パス、`__LINE__` は参照位置の行番号（1始まり）です。戻り値の型は順に `String`、`String`、`Int` です。引数なしの関数で、括弧を付けずに呼び出します。`__FILE__()` など括弧付きの呼出しはエラーです。関数・closure内でも参照を書いた位置を返し、呼出し位置には変わりません。
+
+`__ENV__` は予約名で、使用・定義・照会はできません。標準ソースに宣言はありません。これらの名前をユーザ定義の関数・引数・束縛等に使うこともできません。通常の定数名の規則は変わりません。
+
+REPLの式からは参照できません。`:doc __FILE__` などで説明、`:sig __FILE__` などで関数シグネチャを確認できます。REPLにロードする実ファイルでは使えます。
+
 ### 関数
 
 ```surtr
@@ -819,6 +827,8 @@ import Kernel::print;
 - REPL でも使えない
 
 これは「builtin をユーザーが追加するための構文」ではなく、「処理系内の共有 builtin テーブルを Surtr source 側から宣言するための構文」です。
+
+`@builtin def __FILE__() -> String` などは `Bootstrap` に置く、ソース位置リフレクションの専用関数宣言です。
 
 `@builtin type ...` も同じく標準定義ソース専用です。  
 各標準定義ソース file の top-level に置いて、compiler が canonical head と照合します。
