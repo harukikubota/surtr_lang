@@ -246,7 +246,7 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - facet path / facet API lookup は `:sig` に含めず、completion と `:facet` に委譲する
 - 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で concrete type / binding 解決後の置換結果を表示する
 - `:doc` / `:sig` は public declaration を主 query surface とし、private hit を認識できた場合は private-surface guidance を返す
-- 具象 process の REPL 公開面は annotation 由来で決まり、annotation 付き関数だけが public surface になる。annotation なし関数は `defp` 相当として `:doc` / `:sig` / 補完対象に含めない
+- 具象 process の REPL 公開面は annotation 由来で決まり、annotation 付き関数だけが public surface になる。handler annotation のない `def` は拒否し、`defp` への変更を案内する。`defp` は外部 API を持たず、`:doc` / `:sig` / 補完対象に含めない
 - process public surface の名前解決は通常関数と同じであり、visible な concrete 関数名は `import` により unqualified 参照できる
 - compiler-managed hidden process surface は completion / import 対象には含めないが、`:doc` / `:sig` の process query では `Agent::pid` や `GenServer::spawn` のような hidden lower symbol を明示名で引ける
 - concrete singleton process query (`Counter::pid`, `MyServer::pid`) は hidden lower doc 本文を流用してよいが、表示 symbol / signature は query した concrete 名に揃える

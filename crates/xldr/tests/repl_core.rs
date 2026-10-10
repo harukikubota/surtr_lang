@@ -32,7 +32,7 @@ defagent MyWorker {
   @set
   def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 
-  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+  defp hidden_value(_state: Int) -> Result<Int> { Ok(99) }
 }
 
 defgenserver MyServer {
@@ -50,7 +50,7 @@ defgenserver MyServer {
     Ok(CallResult::Reply(state, state))
   }
 
-  def hidden_size(_state: Int) -> Result<Int> { Ok(0) }
+  defp hidden_size(_state: Int) -> Result<Int> { Ok(0) }
 }
 
 defsupervisor MySup {

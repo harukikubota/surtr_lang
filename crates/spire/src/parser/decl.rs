@@ -176,25 +176,6 @@ fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result
     }
 }
 
-fn make_process_helper_private(def: Ast) -> Ast {
-    match def {
-        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, mut attrs) => {
-            attrs.visibility = Visibility::Private;
-            Ast::Def(
-                span,
-                name,
-                type_params,
-                params,
-                ret_ty,
-                where_clause,
-                body,
-                attrs,
-            )
-        }
-        other => other,
-    }
-}
-
 fn private_doc_forbidden_error(span: Span) -> ParseError {
     ParseError::syntax(
         crate::error::ParseErrorReason::DeclarationSyntax,
@@ -5190,6 +5171,13 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
+            if marker.is_none() && matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "Process helpers must use `defp`; change `def` to `defp`",
+                    self.peek_span(),
+                ));
+            }
             let def = self.parse_def_with_attrs(member_attrs, None)?;
             self.ensure_stmt_boundary(&def, true)?;
             match marker {
@@ -5224,15 +5212,6 @@ impl Parser<'_> {
                     set = Some(AgentHandler { def });
                 }
                 None => {
-                    let def = make_process_helper_private(def);
-                    let attrs = ast_decl_attrs(&def).ok_or_else(|| {
-                        ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "process helper lowering must produce a declaration",
-                            def.span().clone(),
-                        )
-                    })?;
-                    validate_doc_visibility(attrs, def.span())?;
                     helpers.push(def);
                 }
             }
@@ -5344,10 +5323,10 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
-            if matches!(self.peek(), Token::Defp) {
+            if marker.is_none() && matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::DeclarationSyntax,
-                    "GenServer body uses `def`; visibility is controlled by annotations.",
+                    "Process helpers must use `defp`; change `def` to `defp`",
                     self.peek_span(),
                 ));
             }
@@ -5382,15 +5361,6 @@ impl Parser<'_> {
                     ));
                 }
                 None => {
-                    let def = make_process_helper_private(def);
-                    let attrs = ast_decl_attrs(&def).ok_or_else(|| {
-                        ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "process helper lowering must produce a declaration",
-                            def.span().clone(),
-                        )
-                    })?;
-                    validate_doc_visibility(attrs, def.span())?;
                     helpers.push(def);
                 }
             }

@@ -201,7 +201,7 @@ defgenserver ImageWorkerPool {
     ImageWorkerSupervisor::workers(ImageWorker::init("./input"), WorkerStrategy::fixed(4))
   }
 
-  def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
+  defp assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
     lease =? Workers::reserve(workers)
     ImageWorker::assign(lease, job)
   }
@@ -275,7 +275,7 @@ impl Workers {
       init_policy: Eager
     }
 
-    def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
+    defp assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
       lease =? Workers::reserve(workers)
       ImageWorker::assign(lease, job)
     }

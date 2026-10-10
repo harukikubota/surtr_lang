@@ -181,7 +181,7 @@ fn process_handler_helper_tail_call_is_optimized() {
     Ok(30)
   }
 
-  def count_down(remaining: Int, acc: Int) -> Result<Int> {
+  defp count_down(remaining: Int, acc: Int) -> Result<Int> {
     if(
       remaining == 0,
       Ok(acc),

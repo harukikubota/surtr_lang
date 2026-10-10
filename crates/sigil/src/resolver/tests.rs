@@ -7555,6 +7555,58 @@ print(priv_fun(1))"#,
 }
 
 #[test]
+fn test_process_helpers_are_owner_local_and_generated_api_stays_public() {
+    let stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+  @get
+  def read(state: Int) -> Result<Int> { Ok(helper(state)) }
+  @set
+  def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+  defp helper(state: Int) -> Int { hidden(state) }
+  defp hidden(state: Int) -> Int { state }
+}"#,
+        "Counter",
+    ))]];
+    let external = crate::effective_visible_entries(&stages, &[], None, 0).unwrap();
+    assert!(external
+        .iter()
+        .all(|visible| !["helper", "hidden"].contains(&visible.entry.name.as_str())));
+    let internal =
+        crate::effective_visible_entries(&stages, &[], Some(&stages[0][0].module_path), 0).unwrap();
+    for name in ["helper", "hidden"] {
+        assert!(internal.iter().any(|visible| visible.entry.name == name));
+    }
+    resolve_user_with_modules("pid =? Counter::init(1)\nCounter::read(pid)", &stages)
+        .expect("handler calls may use local helpers and expose only their generated API");
+    for source in [
+        "Counter::helper(1)",
+        "f = &Counter::helper",
+        "f = Counter::helper",
+        "import Counter::helper",
+        "Counter::hidden(1)",
+        "f = &Counter::hidden",
+        "import Counter::hidden",
+    ] {
+        let error = resolve_user_with_modules(source, &stages)
+            .expect_err("helpers cannot be accessed outside the process owner");
+        if source.starts_with("import") || source.contains("(1)") {
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Visibility,
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_worker_process_init_surface_is_importable() {
     let module_stages = vec![vec![staged_process_module(parse_module_ast(
         r#"defagent FibWorker {

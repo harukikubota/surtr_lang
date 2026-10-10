@@ -452,20 +452,24 @@ defgenserver CounterServer {
     )
   }
 
-  def format(label: String, value: Int) -> String {
+  defp format(label: String, value: Int) -> String {
     label ++ "=" ++ to_string(value)
   }
 }
 ```
 
-GenServer 内では `def` のみを使う。公開性は annotation の有無で決める。
+Agent / GenServer 内では `def` と `defp` を使う。`def` には対応する handler annotation が必須である。`defp` は同じプロセス定義内からのみ参照でき、handler annotation は付けられない。
+
+外部から呼べる範囲は、コンパイラが生成する公開 API に対応する。helper は明示的に `defp` で宣言する。handler annotation のない `def` は parse error とし、`defp` への変更を案内する。`@doc` だけを付けた `def` も同じ条件で拒否する。通常の `def` を内部 helper として受理したり、private に書き換えたりする経路は設けない。
 
 | 関数 | 外部公開 |
 |---|---|
-| `@init` | いいえ |
+| `@init` | 本体は非公開。stateful Worker の起動 API は公開 |
 | `@call` | はい |
 | `@cast` | はい |
-| annotation なし `def` | いいえ。内部 helper |
+| `@get` / `@set` | はい |
+| handler annotation なし `def` | 宣言を拒否。`defp` への変更を案内 |
+| `defp` | いいえ。同じプロセス定義内の helper |
 
 Handler 契約:
 
@@ -481,7 +485,9 @@ import / 可視性ルール:
 
 - `@call` / `@cast` により公開された concrete 関数名は、通常の module 関数と同じ規則で `import` できる
 - singleton `Type::pid` により公開された concrete 関数名も、通常の module 関数と同じ規則で `import` できる
-- annotation なし `def` は内部 helper であり、`defp` 相当として `import` できない
+- `defp` は外部 API を持たず、外部から直接呼び出し・関数参照・`import` できない。同じプロセス定義内では通常の関数として参照できる
+- helper が `ctx` や `Process::self()` を使うかどうかに応じて、外部公開範囲を変えない。各 API の既存の使用条件は維持する
+- 利用者のテストも生成された公開 API を通す。helper の計算を直接テストする場合は、通常モジュールの公開関数へ切り出す
 - compiler-managed hidden surface (`Agent::pid`, `GenServer::pid`, `GenServer::spawn`, common owner helper, hidden lower 名) は `import` 対象外であり、user code から直接参照できない
 
 Singleton GenServer は PID なし call を推奨する。explicit PID API は残す。
@@ -1515,7 +1521,8 @@ checkpointはprocess・future・detached taskの表とentryを共有し、変更
 | `defagent` | `@get` がない | `agent-get-missing` | Agent requires exactly one `@get` handler. | Add one `@get` handler. |
 | `defagent` | `@set` が複数ある | `agent-set-duplicate` | Agent allows at most one `@set` handler. | Use GenServer for multiple write protocols. |
 | `defagent` | `@get` が複数ある | `agent-get-duplicate` | Agent allows exactly one `@get` handler. | Use GenServer for multiple query protocols. |
-| `defgenserver` | `defp` を使った | `genserver-defp-not-allowed` | GenServer body uses `def`; visibility is controlled by annotations. | Replace `defp` with annotation-less `def`. |
+| process helper | handler annotation なしで `def` を使った | `process-helper-requires-defp` | Process helpers must use `defp`; change `def` to `defp` | Change the helper declaration to `defp`. |
+| process handler | handler annotation に続けて `defp` を使った | `process-handler-requires-def` | Handler marker must be followed by def. | Use `def` for handlers; use annotation-less `defp` for local helpers. |
 | `defgenserver` | `@call` の戻り値が `Result<Reply>` | `genserver-call-return-mismatch` | `@call` must return `Result<CallResult<Reply, State>>`. | Return `CallResult::Reply(...)`, `ReplyLater(...)`, or `Stop(...)`. |
 | `defgenserver` | `@cast` の戻り値が `Result<()>` | `genserver-cast-return-mismatch` | `@cast` must return `Result<CastResult<State>>`. | Return `CastResult::Next(...)` or `Stop(...)`. |
 | `meta.handlers` | default target が slot capability を満たさない | `handler-default-capability-mismatch` | handler default does not satisfy required capability. | Use a handler that implements the required capability. |

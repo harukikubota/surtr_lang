@@ -20,6 +20,14 @@ include "./Agents.srt"
 
 `include` の細かい規則は `./language-features.md`、`Result` と `=?` の読み方は `./error-handling.md` にまとめています。
 
+## 関数の可視性
+
+`defagent` / `defgenserver` 内では、handler を `def` とアノテーションで宣言します。外部からは、コンパイラが生成する公開 API を呼びます。handler 本体へ state を渡して直接呼ぶことはできません。
+
+内部 helper は `defp` で宣言します。`defp` は同じプロセス定義内からのみ参照でき、handler アノテーションは付けられません。handler アノテーションなしの `def` はエラーになり、`defp` への変更が案内されます。
+
+テストでも同じ公開 API を使います。計算部分を単独でテストしたい場合は、通常モジュールの公開関数へ切り出し、プロセス内からその関数を呼びます。
+
 ## Singleton Process
 
 singleton は「同じ状態を全体で共有したい」ときの基本形です。設定ストア、メトリクス集約、キャッシュのように、1 つだけあればよい状態に向いています。

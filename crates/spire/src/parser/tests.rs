@@ -282,6 +282,62 @@ defstruct CounterState {
 }
 
 #[test]
+fn test_process_helpers_require_defp_and_handlers_require_def() {
+    for (kind, marker, handler_return) in [
+        ("defagent", "get", "Result<Int>"),
+        ("defgenserver", "call", "Result<CallResult<Int, Int>>"),
+    ] {
+        let source = format!(
+            r#"{kind} Counter {{
+  meta {{
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }}
+  @init
+  def init(seed: Int) -> Result<Int> {{ Ok(seed) }}
+  @{marker}
+  def read(state: Int) -> {handler_return} {{ helper(state) }}
+  def helper(state: Int) -> Int {{ state }}
+}}"#
+        );
+        for source in [
+            source.clone(),
+            source.replace("  def helper", "  @doc \"\"\"Helper.\"\"\"\n  def helper"),
+        ] {
+            let error = parse_with_context(&source, ParserContext::module(1, None))
+                .expect_err("annotation-less def must be rejected");
+            assert!(
+                error
+                    .message()
+                    .contains("Process helpers must use `defp`; change `def` to `defp`"),
+                "{error:?}"
+            );
+        }
+        let valid = source.replace("def helper", "defp helper");
+        let ast = parse_with_context(&valid, ParserContext::module(1, None)).unwrap();
+        let body = match &ast[0] {
+            Ast::Defagent(_, _, body, _, _) | Ast::Defgenserver(_, _, body, _, _) => body,
+            other => panic!("expected process, got {other:?}"),
+        };
+        let attrs = body
+            .iter()
+            .find_map(|node| match node {
+                Ast::Def(_, name, _, _, _, _, _, attrs) if name == "helper" => Some(attrs),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(attrs.visibility, Visibility::Private);
+        let bad = valid.replace("def read", "defp read");
+        let error = parse_with_context(&bad, ParserContext::module(1, None)).unwrap_err();
+        assert!(
+            error.message().contains("must be followed by def"),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn test_doc_on_private_process_helper_is_rejected() {
     let err = parse_with_context(
         r#"defagent Counter {
@@ -298,11 +354,11 @@ fn test_doc_on_private_process_helper_is_rejected() {
   def read(state: Int) -> Result<Int> { Ok(state) }
 
   @doc """Internal helper."""
-  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+  defp hidden_value(_state: Int) -> Result<Int> { Ok(99) }
 }"#,
         ParserContext::module(1, None),
     )
-    .expect_err("@doc on lowered private process helper should fail");
+    .expect_err("@doc on explicit private process helper should fail");
 
     assert!(err
         .message()
@@ -6881,7 +6937,7 @@ fn test_defagent_rejects_compiler_managed_surface_names() {
   @get
   def get(state: Int) -> Result<Int> { Ok(state) }
 
-  def spawn() -> Int { 1 }
+  defp spawn() -> Int { 1 }
 }"#,
         ParserContext::module(1, None),
     )
@@ -6907,7 +6963,7 @@ fn test_defgenserver_rejects_compiler_managed_surface_names() {
   @call
   def view(state: Int) -> Result<(Int, Int)> { Ok((state, state)) }
 
-  def workers() -> Int { 1 }
+  defp workers() -> Int { 1 }
 }"#,
         ParserContext::module(1, None),
     )
