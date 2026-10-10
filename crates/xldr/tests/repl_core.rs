@@ -4301,6 +4301,25 @@ fn core_renders_top_level_facet_composition_expressions_without_codegen_leak() {
 }
 
 #[test]
+fn facet_duration_root_inspection_matches_its_structural_path() {
+    let mut engine = engine();
+    for root in ["Duration", "Global::Duration"] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {root}")));
+        assert!(info.contains("kind: struct"), "{info}");
+        assert!(info.contains("- public readonly millis: Int"), "{info}");
+        assert_eq!(
+            info,
+            rendered_text(&engine.handle_line(&format!(":info {root}")))
+        );
+    }
+    let path = rendered_text(&engine.handle_line(":facet Duration.millis"));
+    assert!(path.contains("full path: Duration.millis"), "{path}");
+    assert!(path.contains("focus: Int"), "{path}");
+    let doc = doc_text(&engine.handle_line(":doc Facet.Duration"));
+    assert!(doc.contains("is a Facet path root"), "{doc}");
+}
+
+#[test]
 fn facet_root_inspection_lists_members_and_preserves_path_boundaries() {
     let mut engine = ReplEngine::from_script_source(
         "facet_roots.srt",

@@ -2980,8 +2980,17 @@ impl ReplEngine {
                 | sigil::DeclarationKind::Record
                 | sigil::DeclarationKind::Enum
                 | sigil::DeclarationKind::BuiltinType => {
-                    if let Some(info) = sindr::names::builtin_symbol_identity_info(&decl.fq_name) {
-                        return info.capabilities.facet_root_path;
+                    // Struct/Record paths follow their declaration schema, even
+                    // when builtin signatures reserve the name (e.g. Duration).
+                    if matches!(
+                        decl.kind,
+                        sigil::DeclarationKind::BuiltinType | sigil::DeclarationKind::Enum
+                    ) {
+                        if let Some(info) =
+                            sindr::names::builtin_symbol_identity_info(&decl.fq_name)
+                        {
+                            return info.capabilities.facet_root_path;
+                        }
                     }
                     surtr_analysis::symbol_capabilities_for_declaration_entry(
                         self.sigil_session.owner_registry(),
