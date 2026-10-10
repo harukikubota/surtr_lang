@@ -30,7 +30,6 @@ use crate::error::CodegenError;
 use crate::opcode::Opcode;
 use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 
-const DYNAMIC_SUPERVISOR_PROCESS_NAME: &str = "DynamicSupervisor";
 /// Lower the typed AST to bytecode.
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     codegen_typed_program(TypedProgram {
@@ -1048,58 +1047,98 @@ fn build_runtime_boot_plan(
     boot_plan: &SupervisorInitSpec,
     process_specs: &[TypedProcessSpec],
 ) -> Result<RuntimeBootPlan, CodegenError> {
+    build_runtime_boot_plan_with_prefix(boot_plan, process_specs, &HashMap::new())
+}
+
+/// Declaration facts used by boot configuration, shared by freshly checked
+/// source and already compiled prefixes. No function body is reconstructed.
+#[derive(Debug, Clone)]
+struct BootProcessSpec {
+    process_name: String,
+    instance: RuntimeProcessInstance,
+    kind: RuntimeProcessKind,
+    policy: Option<RuntimeSupervisorPolicy>,
+    handlers: HashMap<String, String>,
+}
+
+impl BootProcessSpec {
+    fn from_typed(spec: &TypedProcessSpec) -> Self {
+        Self {
+            process_name: spec.process_name.clone(),
+            instance: match spec.spec.instance {
+                ProcessInstance::Singleton => RuntimeProcessInstance::Singleton,
+                ProcessInstance::Worker => RuntimeProcessInstance::Worker,
+            },
+            kind: match spec.spec.kind {
+                ProcessKind::Agent => RuntimeProcessKind::Agent,
+                ProcessKind::GenServer => RuntimeProcessKind::GenServer,
+                ProcessKind::Supervisor => RuntimeProcessKind::Supervisor,
+                ProcessKind::RuntimeSupervisor => RuntimeProcessKind::RuntimeSupervisor,
+                ProcessKind::DynamicSupervisor => RuntimeProcessKind::DynamicSupervisor,
+                ProcessKind::Task => RuntimeProcessKind::Task,
+            },
+            policy: spec.spec.supervisor_policy.as_ref().map(|policy| {
+                runtime_supervisor_policy_from_effective(policy, &Default::default())
+            }),
+            handlers: spec
+                .spec
+                .handlers
+                .iter()
+                .map(|handler| (handler.slot.clone(), handler.capability.clone()))
+                .collect(),
+        }
+    }
+
+    fn from_runtime(spec: &RuntimeProcessSpec) -> Self {
+        Self {
+            process_name: spec.type_name.clone(),
+            instance: spec.instance,
+            kind: spec.kind,
+            policy: spec.supervision.policy.clone(),
+            handlers: spec
+                .dependencies
+                .handlers
+                .iter()
+                .map(|handler| (handler.slot.clone(), handler.capability.clone()))
+                .collect(),
+        }
+    }
+}
+
+fn build_runtime_boot_plan_with_prefix(
+    boot_plan: &SupervisorInitSpec,
+    process_specs: &[TypedProcessSpec],
+    prefix: &HashMap<String, BootProcessSpec>,
+) -> Result<RuntimeBootPlan, CodegenError> {
+    let current_names = process_specs
+        .iter()
+        .map(|spec| spec.process_name.as_str())
+        .collect::<HashSet<_>>();
+    let mut visible = prefix
+        .values()
+        .filter(|spec| !current_names.contains(spec.process_name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    visible.extend(process_specs.iter().map(BootProcessSpec::from_typed));
+    let process_specs = visible;
     let mut runtime = RuntimeBootPlan::default();
     let default_timeout_ms = runtime.runtime_limits.default_init_timeout_ms;
 
     for entry in &boot_plan.entries {
-        let spec =
-            match resolve_boot_process_spec(process_specs, &entry.process_name, &entry.span) {
-                Ok(spec) => spec,
-                Err(err) if entry.process_name == DYNAMIC_SUPERVISOR_PROCESS_NAME => {
-                    if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
-                        return Err(CodegenError {
-                        message:
-                            "supervisor_init supervisor entry does not accept timeout or handlers"
-                                .into(),
-                        span: entry.span.clone(),
-                    });
-                    }
-                    if runtime.supervisor_overrides.iter().any(|registered| {
-                        registered.process_name == DYNAMIC_SUPERVISOR_PROCESS_NAME
-                    }) {
-                        return Err(CodegenError {
-                            message: "supervisor_init entry is duplicated".into(),
-                            span: entry.span.clone(),
-                        });
-                    }
-                    let base_policy = default_dynamic_supervisor_policy();
-                    runtime
-                        .supervisor_overrides
-                        .push(RuntimeSupervisorOverrideEntry {
-                            process_name: DYNAMIC_SUPERVISOR_PROCESS_NAME.into(),
-                            policy: runtime_supervisor_policy_from_effective(
-                                &base_policy,
-                                &entry.overrides,
-                            ),
-                        });
-                    let _ = err;
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
-        match spec.spec.instance {
-            ProcessInstance::Worker => {
+        let spec = resolve_boot_process_spec(&process_specs, &entry.process_name, &entry.span)?;
+        match spec.instance {
+            RuntimeProcessInstance::Worker => {
                 return Err(CodegenError {
                     message: "worker process cannot appear in supervisor_init".into(),
                     span: entry.span.clone(),
                 });
             }
-            ProcessInstance::Singleton
+            RuntimeProcessInstance::Singleton
                 if matches!(
-                    spec.spec.kind,
-                    spire::ast::ProcessKind::Supervisor
-                        | spire::ast::ProcessKind::DynamicSupervisor
-                        | spire::ast::ProcessKind::RuntimeSupervisor
+                    spec.kind,
+                    RuntimeProcessKind::Supervisor
+                        | RuntimeProcessKind::DynamicSupervisor
+                        | RuntimeProcessKind::RuntimeSupervisor
                 ) =>
             {
                 if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
@@ -1110,7 +1149,7 @@ fn build_runtime_boot_plan(
                         span: entry.span.clone(),
                     });
                 }
-                let Some(base_policy) = &spec.spec.supervisor_policy else {
+                let Some(base_policy) = &spec.policy else {
                     return Err(CodegenError {
                         message: "supervisor process is missing a policy definition".into(),
                         span: entry.span.clone(),
@@ -1129,14 +1168,11 @@ fn build_runtime_boot_plan(
                 runtime
                     .supervisor_overrides
                     .push(RuntimeSupervisorOverrideEntry {
-                        process_name: runtime_supervisor_process_name(spec),
-                        policy: runtime_supervisor_policy_from_effective(
-                            base_policy,
-                            &entry.overrides,
-                        ),
+                        process_name: spec.process_name.clone(),
+                        policy: override_runtime_supervisor_policy(base_policy, &entry.overrides),
                     });
             }
-            ProcessInstance::Singleton => {
+            RuntimeProcessInstance::Singleton => {
                 if entry.overrides != Default::default() {
                     return Err(CodegenError {
                         message:
@@ -1159,8 +1195,8 @@ fn build_runtime_boot_plan(
 
     for singleton in &boot_plan.singletons {
         let spec =
-            resolve_boot_process_spec(process_specs, &singleton.process_name, &singleton.span)?;
-        if spec.spec.instance != ProcessInstance::Singleton {
+            resolve_boot_process_spec(&process_specs, &singleton.process_name, &singleton.span)?;
+        if spec.instance != RuntimeProcessInstance::Singleton {
             return Err(CodegenError {
                 message: "only Singleton process can appear in singleton boot entry".into(),
                 span: singleton.span.clone(),
@@ -1178,19 +1214,19 @@ fn build_runtime_boot_plan(
 
     for supervisor in &boot_plan.supervisors {
         let spec =
-            resolve_boot_process_spec(process_specs, &supervisor.process_name, &supervisor.span)?;
+            resolve_boot_process_spec(&process_specs, &supervisor.process_name, &supervisor.span)?;
         if !matches!(
-            spec.spec.kind,
-            spire::ast::ProcessKind::Supervisor
-                | spire::ast::ProcessKind::DynamicSupervisor
-                | spire::ast::ProcessKind::RuntimeSupervisor
+            spec.kind,
+            RuntimeProcessKind::Supervisor
+                | RuntimeProcessKind::DynamicSupervisor
+                | RuntimeProcessKind::RuntimeSupervisor
         ) {
             return Err(CodegenError {
                 message: "supervisor override target must be a supervisor process".into(),
                 span: supervisor.span.clone(),
             });
         }
-        let Some(base_policy) = &spec.spec.supervisor_policy else {
+        let Some(base_policy) = &spec.policy else {
             return Err(CodegenError {
                 message: "supervisor process is missing a policy definition".into(),
                 span: supervisor.span.clone(),
@@ -1199,28 +1235,17 @@ fn build_runtime_boot_plan(
         runtime
             .supervisor_overrides
             .push(RuntimeSupervisorOverrideEntry {
-                process_name: runtime_supervisor_process_name(spec),
-                policy: runtime_supervisor_policy_from_effective(
-                    base_policy,
-                    &supervisor.overrides,
-                ),
+                process_name: spec.process_name.clone(),
+                policy: override_runtime_supervisor_policy(base_policy, &supervisor.overrides),
             });
     }
 
     Ok(runtime)
 }
 
-fn runtime_supervisor_process_name(spec: &TypedProcessSpec) -> String {
-    if spec.spec.kind == ProcessKind::DynamicSupervisor {
-        surface_path_name(&spec.process_name).to_string()
-    } else {
-        spec.process_name.clone()
-    }
-}
-
 fn add_runtime_singleton_entry(
     runtime: &mut RuntimeBootPlan,
-    spec: &TypedProcessSpec,
+    spec: &BootProcessSpec,
     timeout_ms: Option<u64>,
     handlers: &[spire::ast::SupervisorInitHandlerOverride],
     span: &Span,
@@ -1243,18 +1268,13 @@ fn add_runtime_singleton_entry(
         source: BootEntrySource::ExplicitConfig,
     });
     for handler in handlers {
-        let Some(dependency) = spec
-            .spec
-            .handlers
-            .iter()
-            .find(|dependency| dependency.slot == handler.slot)
-        else {
+        let Some(capability) = spec.handlers.get(&handler.slot) else {
             return Err(CodegenError {
                 message: "handler slot is not declared by the target process".into(),
                 span: handler.span.clone(),
             });
         };
-        validate_runtime_handler_target(dependency, &handler.target)?;
+        validate_runtime_handler_target(capability, &handler.target)?;
         runtime.handler_overrides.push(RuntimeHandlerOverride {
             target_process: spec.process_name.clone(),
             slot: handler.slot.clone(),
@@ -1276,10 +1296,10 @@ fn add_runtime_singleton_entry(
 }
 
 fn resolve_boot_process_spec<'a>(
-    process_specs: &'a [TypedProcessSpec],
+    process_specs: &'a [BootProcessSpec],
     requested_name: &str,
     span: &Span,
-) -> Result<&'a TypedProcessSpec, CodegenError> {
+) -> Result<&'a BootProcessSpec, CodegenError> {
     let exact = process_specs
         .iter()
         .filter(|spec| spec.process_name == requested_name)
@@ -1310,35 +1330,43 @@ fn resolve_boot_process_spec<'a>(
     }
 }
 
-fn default_dynamic_supervisor_policy() -> spire::ast::SupervisorPolicy {
-    spire::ast::SupervisorPolicy {
-        strategy: spire::ast::SupervisorStrategy::OneForOne,
-        max_restarts: 10,
-        max_seconds: 5,
-        child_restart_default: spire::ast::ChildRestartPolicy::Transient,
-        allow_adopt: true,
-        shutdown_timeout_ms: None,
-    }
-}
-
 fn runtime_supervisor_policy_from_effective(
     base: &spire::ast::SupervisorPolicy,
     overrides: &spire::ast::SupervisorPolicyOverride,
 ) -> RuntimeSupervisorPolicy {
-    let effective_strategy = overrides.strategy.unwrap_or(base.strategy);
-    let effective_restart_default = overrides
-        .child_restart_default
-        .unwrap_or(base.child_restart_default);
-    RuntimeSupervisorPolicy {
-        strategy: match effective_strategy {
+    let runtime = RuntimeSupervisorPolicy {
+        strategy: match base.strategy {
             spire::ast::SupervisorStrategy::OneForOne => "OneForOne".into(),
         },
-        max_restarts: overrides.max_restarts.unwrap_or(base.max_restarts),
-        max_seconds: overrides.max_seconds.unwrap_or(base.max_seconds),
-        child_restart_default: match effective_restart_default {
+        max_restarts: base.max_restarts,
+        max_seconds: base.max_seconds,
+        child_restart_default: match base.child_restart_default {
             spire::ast::ChildRestartPolicy::Permanent => "Permanent".into(),
             spire::ast::ChildRestartPolicy::Transient => "Transient".into(),
             spire::ast::ChildRestartPolicy::Temporary => "Temporary".into(),
+        },
+        allow_adopt: base.allow_adopt,
+        shutdown_timeout_ms: base.shutdown_timeout_ms,
+    };
+    override_runtime_supervisor_policy(&runtime, overrides)
+}
+
+fn override_runtime_supervisor_policy(
+    base: &RuntimeSupervisorPolicy,
+    overrides: &spire::ast::SupervisorPolicyOverride,
+) -> RuntimeSupervisorPolicy {
+    RuntimeSupervisorPolicy {
+        strategy: match overrides.strategy {
+            Some(spire::ast::SupervisorStrategy::OneForOne) => "OneForOne".into(),
+            None => base.strategy.clone(),
+        },
+        max_restarts: overrides.max_restarts.unwrap_or(base.max_restarts),
+        max_seconds: overrides.max_seconds.unwrap_or(base.max_seconds),
+        child_restart_default: match overrides.child_restart_default {
+            Some(spire::ast::ChildRestartPolicy::Permanent) => "Permanent".into(),
+            Some(spire::ast::ChildRestartPolicy::Transient) => "Transient".into(),
+            Some(spire::ast::ChildRestartPolicy::Temporary) => "Temporary".into(),
+            None => base.child_restart_default.clone(),
         },
         allow_adopt: overrides.allow_adopt.unwrap_or(base.allow_adopt),
         shutdown_timeout_ms: overrides.shutdown_timeout_ms.or(base.shutdown_timeout_ms),
@@ -1346,10 +1374,10 @@ fn runtime_supervisor_policy_from_effective(
 }
 
 fn validate_runtime_handler_target(
-    dependency: &spire::ast::ProcessHandlerDependency,
+    capability: &str,
     target: &spire::ast::SupervisorInitHandlerTarget,
 ) -> Result<(), CodegenError> {
-    match dependency.capability.as_str() {
+    match capability {
         "OutHandler" => match target.name.as_str() {
             "StdOut" | "StdErr" | "NullOutHandler" => {
                 if !target.named_args.is_empty() {
@@ -1389,7 +1417,7 @@ fn validate_runtime_handler_target(
                 message: format!(
                     "handler capability `{capability}` is not supported by supervisor_init override validation"
                 ),
-                span: dependency.span.clone(),
+                span: target.span.clone(),
             });
         }
     }
@@ -2057,6 +2085,7 @@ struct CodegenState {
     type_registry: TypeRegistry,
     enum_types: HashMap<String, Vec<TypedEnumVariantDef>>,
     nominal_types: HashMap<String, TypedNominalDefinition>,
+    boot_process_specs: HashMap<String, BootProcessSpec>,
     error_templates: Vec<ErrTemplate>,
     dbg_templates: Vec<DbgTemplate>,
     callable_templates: Vec<CallableTemplate>,
@@ -2075,6 +2104,7 @@ impl CodegenState {
             type_registry: TypeRegistry::new(),
             enum_types: HashMap::new(),
             nominal_types: HashMap::new(),
+            boot_process_specs: HashMap::new(),
             error_templates: Vec::new(),
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
@@ -2141,6 +2171,12 @@ impl ForgeSession {
                 type_registry: bytecode.type_registry.clone(),
                 enum_types: HashMap::new(),
                 nominal_types: HashMap::new(),
+                boot_process_specs: bytecode
+                    .runtime_process_specs
+                    .entries
+                    .iter()
+                    .map(|spec| (spec.type_name.clone(), BootProcessSpec::from_runtime(spec)))
+                    .collect(),
                 error_templates: bytecode.error_templates.clone(),
                 dbg_templates: bytecode.dbg_templates.clone(),
                 callable_templates: bytecode.callable_templates.clone(),
@@ -2204,7 +2240,11 @@ impl ForgeSession {
             self.codegen_chunk_nodes_with_options(nodes, top_level_returns_result)?;
         let runtime_process_specs =
             build_runtime_process_specs(&process_specs, &typed_for_meta, &functions)?.entries;
-        let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
+        let runtime_boot_plan = build_runtime_boot_plan_with_prefix(
+            &boot_plan,
+            &process_specs,
+            &self.state.boot_process_specs,
+        )?;
         let base_function_len = self.state.functions.len().saturating_sub(functions.len());
         let chunk = BytecodeChunk {
             runtime_process_specs,
@@ -2220,6 +2260,12 @@ impl ForgeSession {
             false,
         )
         .map_err(codegen_validation_error)?;
+        self.state.boot_process_specs.extend(
+            chunk
+                .runtime_process_specs
+                .iter()
+                .map(|spec| (spec.type_name.clone(), BootProcessSpec::from_runtime(spec))),
+        );
         Ok((chunk, meta))
     }
 
@@ -2394,6 +2440,7 @@ mod tests {
     };
     use scar::types::{NominalType, Ty};
     use sigil::resolved::ResolvedId;
+    use sindr::ir::RuntimeSupervisorPolicy;
     use sindr::ir::{
         BootEntrySource, CallableTemplate, CallableTemplateComposeFlavor,
         CallableTemplateDirectTarget, CallableTemplateKind, DbgTemplate, DocEntry, DocKind,
@@ -2407,6 +2454,7 @@ mod tests {
         AstTy, BinOp, Lit, ProcessInstance, ProcessKind, ProcessRuntimeHandlerSpec, ProcessSpec,
         Span, SupervisorInitEntry, SupervisorInitSpec, Visibility,
     };
+    use std::collections::HashMap;
 
     fn seed_error_definitions(gene: &mut Codegen) {
         use sindr::ir::ErrorValueSchema::{Int, String as Str};
@@ -5641,6 +5689,7 @@ mod tests {
     #[test]
     fn forge_session_codegen_chunk_typed_program_embeds_runtime_metadata() {
         let mut session = ForgeSession::new();
+        let before_declaration = session.checkpoint();
         let (chunk, _) = session
             .codegen_chunk_typed_program(singleton_process_program("ChunkedLogger"))
             .expect("typed program chunk should succeed");
@@ -5656,6 +5705,102 @@ mod tests {
             chunk.runtime_boot_plan.singletons[0].process_name,
             "Global::ChunkedLogger"
         );
+        let configure_previous = || TypedProgram {
+            nodes: Vec::new(),
+            process_specs: Vec::new(),
+            boot_plan: SupervisorInitSpec {
+                entries: vec![SupervisorInitEntry {
+                    process_name: "ChunkedLogger".into(),
+                    timeout_ms: Some(42),
+                    handlers: Vec::new(),
+                    overrides: Default::default(),
+                    span: span(0, 0),
+                }],
+                ..Default::default()
+            },
+            enum_definitions: HashMap::new(),
+            nominal_definitions: HashMap::new(),
+        };
+        let (configured, _) = session
+            .codegen_chunk_typed_program(configure_previous())
+            .expect("a previous chunk's declared singleton remains visible");
+        assert_eq!(
+            configured.runtime_boot_plan.singletons[0].process_name,
+            "Global::ChunkedLogger"
+        );
+        assert_eq!(
+            configured.runtime_boot_plan.singletons[0].init_timeout_ms,
+            42
+        );
+        session.rollback(before_declaration);
+        session
+            .codegen_chunk_typed_program(configure_previous())
+            .expect_err("rollback removes the uncommitted process declaration");
+    }
+
+    #[test]
+    fn forge_session_restores_declared_supervisor_policy_for_boot_chunks() {
+        for (canonical_name, request, kind) in [
+            (
+                "Global::DynamicSupervisor",
+                "DynamicSupervisor",
+                RuntimeProcessKind::DynamicSupervisor,
+            ),
+            (
+                "Application::Sup",
+                "Application::Sup",
+                RuntimeProcessKind::Supervisor,
+            ),
+        ] {
+            let mut base = base_bytecode();
+            let mut spec = runtime_process_spec(canonical_name, 0);
+            spec.kind = kind;
+            let declared = RuntimeSupervisorPolicy {
+                strategy: "OneForOne".into(),
+                max_restarts: 73,
+                max_seconds: 36,
+                child_restart_default: "Permanent".into(),
+                allow_adopt: false,
+                shutdown_timeout_ms: Some(42),
+            };
+            spec.supervision.policy = Some(declared.clone());
+            base.runtime_process_specs.entries = vec![spec];
+            let mut session = ForgeSession::from_bytecode(&base);
+            let typed = TypedProgram {
+                nodes: Vec::new(),
+                process_specs: Vec::new(),
+                enum_definitions: HashMap::new(),
+                nominal_definitions: HashMap::new(),
+                boot_plan: SupervisorInitSpec {
+                    entries: vec![SupervisorInitEntry {
+                        process_name: request.into(),
+                        timeout_ms: None,
+                        handlers: Vec::new(),
+                        overrides: spire::ast::SupervisorPolicyOverride {
+                            max_restarts: Some(20),
+                            ..Default::default()
+                        },
+                        span: span(0, 0),
+                    }],
+                    ..Default::default()
+                },
+            };
+            let (chunk, _) = session
+                .codegen_chunk_typed_program(typed)
+                .expect("compiled prefix declaration supplies its actual policy");
+            assert_eq!(chunk.runtime_boot_plan.supervisor_overrides.len(), 1);
+            assert_eq!(
+                chunk.runtime_boot_plan.supervisor_overrides[0].process_name,
+                canonical_name
+            );
+            assert_eq!(
+                chunk.runtime_boot_plan.supervisor_overrides[0].policy,
+                RuntimeSupervisorPolicy {
+                    max_restarts: 20,
+                    ..declared
+                }
+            );
+        }
     }
 
     #[test]
@@ -14253,6 +14398,36 @@ mod process_runtime_v2_tests {
         assert_eq!(
             runtime.supervisor_overrides[0].process_name,
             "ImageWorkerSupervisor"
+        );
+    }
+
+    #[test]
+    fn dynamic_supervisor_boot_requires_resolved_declaration() {
+        let boot_plan = SupervisorInitSpec {
+            entries: vec![supervisor_init_entry("DynamicSupervisor")],
+            ..SupervisorInitSpec::default()
+        };
+        assert!(build_runtime_boot_plan(&boot_plan, &[]).is_err());
+        let declarations = [
+            supervisor_process_spec("A::DynamicSupervisor", ProcessKind::Supervisor),
+            supervisor_process_spec("B::DynamicSupervisor", ProcessKind::Supervisor),
+        ];
+        assert!(build_runtime_boot_plan(&boot_plan, &declarations).is_err());
+    }
+
+    #[test]
+    fn runtime_supervisor_name_preserves_canonical_identity() {
+        let spec =
+            supervisor_process_spec("Global::DynamicSupervisor", ProcessKind::DynamicSupervisor);
+        let plan = SupervisorInitSpec {
+            entries: vec![supervisor_init_entry("DynamicSupervisor")],
+            ..SupervisorInitSpec::default()
+        };
+        let runtime =
+            build_runtime_boot_plan(&plan, &[spec]).expect("canonical declaration resolves");
+        assert_eq!(
+            runtime.supervisor_overrides[0].process_name,
+            "Global::DynamicSupervisor"
         );
     }
 

@@ -1740,7 +1740,7 @@ supervisor_init {
         assert_eq!(handler.handler_target.named_args[0].value, "./logs/app.log");
         assert_eq!(bytecode.runtime_boot_plan.supervisor_overrides.len(), 1);
         let supervisor = &bytecode.runtime_boot_plan.supervisor_overrides[0];
-        assert_eq!(supervisor.process_name, "DynamicSupervisor");
+        assert_eq!(supervisor.process_name, "Global::DynamicSupervisor");
         assert_eq!(supervisor.policy.max_restarts, 10);
         assert!(supervisor.policy.allow_adopt);
     }

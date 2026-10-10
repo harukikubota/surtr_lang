@@ -12,12 +12,12 @@
 |---|---|---|
 | RT-02 | 停止・回収修正で解消済み | 実行権限付きの保存と受付閉鎖を正本へ反映。検証記録は末尾 |
 | RT-05 | プロセス側の残件 | 補充initの言語Errの通知・target未達の扱いは停止・回収仕様だけでは未確定 |
-| RT-06 | 修正対象の短名照合が残存 | プロセス側でcanonical identityへ統一。停止・回収仕様の対象とは別 |
+| RT-06 | 修正・検証済み | overrideとbuiltin接続をcanonical identityへ統一。可視prefixの実policyを維持 |
 | RT-09 | 修正・検証済み | Agent / GenServerのinit_policyを必須化し、専用のparse診断を提供 |
 | RT-11 | 文書修正済み | `Result::recover`の通常関数としての実行と、`recover_kind`のErrorKind専用処理を区別 |
 | RT-12 | 文書整理済み | 旧移行表を削除し、生成API・起動構成・runtimeの責務へ整理 |
 
-プロセス以外で新たに対応する確定項目はRT-11。型検査側の対応項目は[型検査の継続調査書](typecheck_audit_followup_20261010.md)を参照する。
+今回のRT-06・RT-09・RT-11は修正・検証済み。RT-05の通知先と再試行方針は未確定のため実装していない。型検査側の対応項目は[型検査の継続調査書](typecheck_audit_followup_20261010.md)を参照する。
 
 ## RT-11: recoverの説明を現行の通常関数へ揃える
 
@@ -58,7 +58,15 @@ print(inspect(Result::recover(Err(NoneError), {|| Ok(1)})))
 
 ### RT-06: policyの短名照合
 
-**修正対象が残存。** `vm.rs:2238-2267`の`effective_supervisor_policy`は完全名に加えて末尾短名でもoverrideを選ぶ。さらに`2033-2052`の`apply_runtime_supervisor_overrides`は末尾が`DynamicSupervisor`ならbuiltinのkeyにも書き込む。この2経路をcanonical identityへ揃える必要がある。
+**修正・検証済み（level4）。** 2026-10-10、VMのoverride適用・policy取得・spec登録で末尾短名の照合を除去した。builtin内部keyへの接続はcanonicalなGlobal::DynamicSupervisorかつDynamicSupervisor種別だけに限定する。Forgeのoverride metadataもcanonical名を保持し、宣言解決失敗を既定policy合成で補う旧fallback・専用helper・定数を削除した。
+
+公開検証で標準prefixの宣言情報がchunkの起動設定へ届かないデグレを確認したため、ForgeSessionがruntime metadataからcanonical名・実policy・handler capabilityを復元し、可視prefixと新規宣言を同じ規則で解決するようにした。前chunkの宣言を保持し、checkpoint rollbackで戻す。未定義・同短名曖昧性は拒否する。schema / VM version、公開構文は変更していない。
+
+通常Supervisorの同短名分離、builtin policyへの同短名混入、canonical名の保持、解決失敗fallbackの拒否でRedを確認。VM / Forgeの局所検証は6件成功。公開moduleでは標準prefixと別namespaceのDynamicSupervisorの曖昧なbare entryを拒否し、既存fixtureで標準override成功を維持した。現行supervisor_init entryはqualified名を受けないため、構文を拡張して同名policyの成功fixtureを作ることはせず、分離はVMの直接テストで検証した。prefix復元・前chunk参照・rollbackと公開fixtureの選択検証は23件成功。
+
+最終差分の独立レビューは指摘なし。全体CIで既存Forgeテストの旧短名期待だけが失敗したためcanonical名へ追従し、局所再検証後のCIは2,430件成功。標準Surtr全件は終了コード0（RT-09節のコマンド）。
+
+以下は修正前の調査記録。 `vm.rs:2238-2267`の`effective_supervisor_policy`は完全名に加えて末尾短名でもoverrideを選ぶ。さらに`2033-2052`の`apply_runtime_supervisor_overrides`は末尾が`DynamicSupervisor`ならbuiltinのkeyにも書き込む。この2経路をcanonical identityへ揃える必要がある。
 
 表示用の`Global::`除去は、別namespaceの同名宣言の同一視を許可しない。受入条件は、同じ短名の異なるsupervisorでpolicyが混ざらず、canonical builtinだけがbuiltin policyを変更すること。通常の複数module入力からの到達性は今回未実測。停止・回収仕様はadopt順序を定めるが、このlookup修正を受入条件に含めていない。
 

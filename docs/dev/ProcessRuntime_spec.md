@@ -573,6 +573,8 @@ DynamicSupervisor は singleton process として扱い、user-facing API に `s
 pid = DynamicSupervisor::spawn(MyWorker::init(args))
 ```
 
+Supervisor policyと起動overrideはcanonicalな宣言名で照合する。末尾の短名が同じ別namespaceの宣言へoverrideを適用しない。標準DynamicSupervisorの内部keyへ接続するのは、canonicalな`Global::DynamicSupervisor`かつDynamicSupervisor種別の宣言だけとする。表示用の`Global::`除去をpolicy照合へ使わない。incremental compileは可視prefixのruntime metadataから宣言のcanonical名と実policyを復元し、そのpolicyへoverrideを適用する。未定義・曖昧な宣言を既定policyの合成で救済しない。
+
 `defsupervisor` は policy-only declaration とし、`meta` には supervisor policy だけを置く。
 
 - `strategy`
