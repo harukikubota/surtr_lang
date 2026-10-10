@@ -102,7 +102,7 @@ defagent Counter {
 | key | 意味 |
 |---|---|
 | `instance` | `Singleton` または `Worker` |
-| `init_policy` | `Eager` または `Standby` |
+| `init_policy` | `Eager` または `Standby`。明記必須 |
 | `state` | process handler が扱う state 型。primitive / container / user-defined のいずれも明記必須 |
 | `handlers` | process-local readonly handler dependency と default target |
 
@@ -119,7 +119,7 @@ defagent Counter {
 
 ### 3.3 `init_policy`
 
-`init_policy` は process 定義側の性質である。
+`init_policy` は process 定義側の性質であり、`defagent` / `defgenserver` の `meta` に必ず明記する。省略は parse error とし、`Eager` へ補完しない。`defsupervisor` はこの項目を受理しない。
 
 | policy | `@init` 戻り値 | 意味 |
 |---|---|---|

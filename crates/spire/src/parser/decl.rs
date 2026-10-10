@@ -5106,7 +5106,14 @@ impl Parser<'_> {
                 )
                 .with_guidance(crate::error::ParseErrorGuidance::MissingMetaInstance)
             })?,
-            init_policy: init_policy.unwrap_or(InitPolicy::Eager),
+            init_policy: init_policy.ok_or_else(|| {
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "meta requires init_policy",
+                    meta_span.clone(),
+                )
+                .with_guidance(crate::error::ParseErrorGuidance::MissingMetaInitPolicy)
+            })?,
             state: state.ok_or_else(|| {
                 ParseError::syntax(
                     crate::error::ParseErrorReason::DeclarationSyntax,

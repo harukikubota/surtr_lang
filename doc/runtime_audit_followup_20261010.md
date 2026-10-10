@@ -13,7 +13,7 @@
 | RT-02 | 停止・回収修正で解消済み | 実行権限付きの保存と受付閉鎖を正本へ反映。検証記録は末尾 |
 | RT-05 | プロセス側の残件 | 補充initの言語Errの通知・target未達の扱いは停止・回収仕様だけでは未確定 |
 | RT-06 | 修正対象の短名照合が残存 | プロセス側でcanonical identityへ統一。停止・回収仕様の対象とは別 |
-| RT-09 | 省略補完が残存 | プロセス側で`init_policy`省略をparse errorへ変更 |
+| RT-09 | 修正・検証済み | Agent / GenServerのinit_policyを必須化し、専用のparse診断を提供 |
 | RT-11 | 文書修正済み | `Result::recover`の通常関数としての実行と、`recover_kind`のErrorKind専用処理を区別 |
 | RT-12 | 文書整理済み | 旧移行表を削除し、生成API・起動構成・runtimeの責務へ整理 |
 
@@ -64,7 +64,11 @@ print(inspect(Result::recover(Err(NoneError), {|| Ok(1)})))
 
 ### RT-09: init_policy省略
 
-**省略補完が残存。** `crates/spire/src/parser/decl.rs:5066`は`init_policy.unwrap_or(InitPolicy::Eager)`を使う。Worker GenServerの正しい宣言から`init_policy: Eager`だけを除く最小入力は、現行`surtr check`で終了コード0だった。
+**修正・検証済み（level3）。** 2026-10-10、共通process meta parserのEager補完を削除し、Agent / GenServerのSingleton / Workerいずれでも省略をparse errorにした。元のmeta位置とDeclarationSyntax reasonを保ち、専用guidanceで明示Eager / Standbyを案内する。明示policyの意味とWorker Standby拒否は維持し、ProcessRuntime正本と利用者説明を追従した。
+
+省略4ケースの回帰でRedを確認。既存missing-state診断の入力は明示policyへ整合させ、init_policy専用Help・labelのテストを追加した。`rtk cargo nextest run -p spire -p diagnostics`は590件成功。最終差分の独立レビューは指摘なし。共有の最終検証は`rtk cargo nextest run --profile ci --workspace --features rune/tui`が2,430件成功、`rtk proxy cargo run -- test --quiet --all`が終了コード0。quietのため標準テスト件数は記録していない。
+
+以下は修正前の調査記録。 `crates/spire/src/parser/decl.rs:5066`は`init_policy.unwrap_or(InitPolicy::Eager)`を使う。Worker GenServerの正しい宣言から`init_policy: Eager`だけを除く最小入力は、現行`surtr check`で終了コード0だった。
 
 利用者判断に従い、後続で省略をparse errorにする。明示Eager / Standbyの意味は維持し、parser・既存成功／拒否例・`docs/dev/ProcessRuntime_spec.md:120`の必須項目・利用者向け説明を揃える。[Process Runtime 第4.11節](../docs/dev/ProcessRuntime_spec.md#411-processstatus)の初期化境界だけでは、この必須化は実施されない。
 

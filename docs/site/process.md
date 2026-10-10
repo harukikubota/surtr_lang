@@ -20,6 +20,8 @@ include "./Agents.srt"
 
 `include` の細かい規則は `./language-features.md`、`Result` と `=?` の読み方は `./error-handling.md` にまとめています。
 
+`defagent` / `defgenserver` の `meta` には `instance`、`init_policy`、`state` を明記します。`init_policy` を省略すると構文エラーになります。`Eager` は1回の初期化で状態を確定し、`Standby` は Singleton の Agent / GenServer で Ready になるまで初期化を続けます。Worker には `Eager` を指定します。
+
 ## 関数の可視性
 
 `defagent` / `defgenserver` 内では、handler を `def` とアノテーションで宣言します。外部からは、コンパイラが生成する公開 API を呼びます。handler 本体へ state を渡して直接呼ぶことはできません。
