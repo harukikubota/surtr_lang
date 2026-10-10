@@ -1,3 +1,7 @@
+deferror ZeroModuloError() {
+  Self(message: "modulo by zero")
+}
+
 @doc """
 Bootstrap module.
 
@@ -144,9 +148,9 @@ defmod Bootstrap {
   decomposed by one outer layer only, and its `Ok` payload is passed to the
   left-hand MatchBlock pattern. If it produces `Err(error)`, that value is
   propagated to the current failure target. Extractor `MatchResult::Err(error)`
-  preserves the original error. A general mismatch produces `PatternMismatch`; structural
-  patterns retain their existing errors such as `EmptyList` or
-  `IndexOutOfBounds`. A MonadFail target preserves that error; a do-local
+  preserves the original error. Each literal, pin, or variant mismatch produces its specific Error; structural
+  patterns return their specific errors such as `EmptyHeadTailListPattern` or
+  `ListPatternTooShort`. A MonadFail target preserves that error; a do-local
   Alternative target discards it and returns `empty`.
 
   `=?` is not a trait-dispatched operator.
@@ -179,7 +183,7 @@ defmod Bootstrap {
   - inside `do`, the current carrier may instead provide an Alternative target
   - only a canonical `Result` RHS is decomposed, by one outer layer
   - RHS `Err(...)` is propagated to the current failure target
-  - Extractor `MatchResult::Err` preserves its Error; general mismatch becomes `PatternMismatch`; structural pattern errors keep their kind
+  - Extractor `MatchResult::Err` preserves its Error; each mismatch uses its specific Error; structural pattern errors keep their kind
   - a non-Result RHS requires a partial pattern that inspects the whole value
   """
   @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
@@ -357,20 +361,24 @@ with `Result<T, NoneError>` in its direct return position.
 deferror NoneError { "None Value." }
 
 @doc """
-Concrete bootstrap error for division or modulo by zero.
-The standard `Div` implementations for `Int` and `Float`, and `Mod` for `Int`,
-return this through `Err(...)` instead of trapping.
+Concrete bootstrap error for division by zero.
+The standard `Div` implementations for `Int` and `Float` return this through
+`Err(...)` instead of trapping. Modulo by zero returns `ZeroModuloError`.
 The traits do not fix their error contract; user implementations may declare
 their own errors.
 """
 deferror ZeroDivisionError { "division by zero" }
 
 @doc """
-Concrete bootstrap error for operations that require at least one list element.
-Use this when a list-specific operation cannot proceed because the input is
-empty.
+Error for a head-tail List pattern applied to an empty List.
+List APIs have their own errors for empty input.
+## REPL
+xldr(1)> apply_pattern([], [_1: Int, .._])
+Err(EmptyHeadTailListPattern("head-tail list pattern requires a non-empty List"))
 """
-deferror EmptyList { "Empty List." }
+deferror EmptyHeadTailListPattern() {
+  Self(message: "head-tail list pattern requires a non-empty List")
+}
 
 @doc """
 Concrete bootstrap error for placeholder code paths that are intentionally
@@ -379,28 +387,3 @@ Use this with `todo()` when a function should type-check before the final
 implementation is ready.
 """
 deferror NotImplemented { "not implemented" }
-
-@doc """
-Concrete bootstrap error for index-based access outside the valid range.
-The `detail` field keeps the user-facing message flexible so the runtime can
-attach the relevant bounds information.
-"""
-deferror IndexOutOfBounds(detail: String) { detail }
-
-@doc """
-Concrete bootstrap error for Facet HashMap key access when the key is missing.
-`HashMap::map_get` keeps returning `NoneError`; Facet paths use this error so a
-missing path segment is visible in diagnostics.
-"""
-deferror KeyNotFound(key: String) { "key not found: #{key}" }
-
-@doc """
-Concrete bootstrap error for enum-variant selector mismatch in Facet access.
-`Facet::view` returns this when a variant segment does not match the runtime
-value's tag.
-"""
-deferror VariantMismatch(detail: String) { detail }
-
-type Mapper<$A, $B> = ($A -> $B)
-type Predicate<$A> = ($A -> Boolean)
-type Reducer<$Acc, $A> = ($Acc, $A -> $Acc)

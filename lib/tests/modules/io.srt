@@ -29,7 +29,7 @@ test("IO") {
     }
     it("reports EOF") {
       do {
-        assert_err_kind(InputError, IO::get_line(""))
+        assert_err_kind(InputLineEnd, IO::get_line(""))
       }
     }
     it("reports EOF after consuming input") {
@@ -37,7 +37,7 @@ test("IO") {
         push_stdin("x\n")
 
         assert_ok_eq("x", IO::get_line(""))
-        assert_err_kind(InputError, IO::get_line(""))
+        assert_err_kind(InputLineEnd, IO::get_line(""))
       }
     }
   }
@@ -71,7 +71,7 @@ test("IO") {
         push_stdin("x")
 
         assert_ok_eq("x", IO::get(""))
-        assert_err_kind(InputError, IO::get(""))
+        assert_err_kind(InputCharacterEnd, IO::get(""))
       }
     }
   }

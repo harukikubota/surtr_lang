@@ -1,3 +1,8 @@
+deferror NegativeStyledDocWidth(width: Int) {
+  |width: Int|
+  Self(message: "styled document width must be non-negative: #{width}", width)
+}
+
 import String::repeat;
 
 @doc """
@@ -407,7 +412,7 @@ defmod StyledDoc {
 
   @doc """
   Prefix every line, including blank ones, with `width` spaces.
-  Return `Err(NegativeRepeatCount(width))` for a negative width.
+  Return `Err(NegativeStyledDocWidth(width))` for a negative width.
   A zero width preserves the document content.
   Because the prefix is inserted as the first segment, paths such as
   `StyledDocDoc.lines.[0].segments.[0]` remain valid and 0-based.
@@ -415,9 +420,9 @@ defmod StyledDoc {
   xldr(1)> StyledDoc::indent(StyledDoc::append(StyledDoc::line("a"), StyledDocline()), 2) |*> &StyledDoc::plain
   Ok("  a\n  ")
   xldr(2)> StyledDoc::indent(StyledDoc::text("x"), -1)
-  Err(NegativeRepeatCount(-1))
+  Err(NegativeStyledDocWidth(-1))
   """
-  def indent(doc: StyledDocDoc, width: Int) -> Result<StyledDocDoc, NegativeRepeatCount> {
+  def indent(doc: StyledDocDoc, width: Int) -> Result<StyledDocDoc, NegativeStyledDocWidth> {
     match repeat(" ", width) {
       Ok(prefix) => Ok(StyledDocDoc(_indent_lines(doc.lines, prefix))),
       Err(error) => Err(error),

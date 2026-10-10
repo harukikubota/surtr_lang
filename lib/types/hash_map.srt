@@ -1,3 +1,8 @@
+deferror HashMapKeyMissing(key: String) {
+  |key: String|
+  Self(message: "hash map key not found: #{key}", key)
+}
+
 @doc """
 Standard `HashMap` type declaration.
 `HashMap<$V>` is an immutable map with `String` keys and
@@ -68,12 +73,12 @@ impl HashMap {
   @builtin def map_contains_key(map: HashMap<$V>, key: String) -> Boolean
 
   @doc """
-  Return `Ok(value)` when the key exists, otherwise `Err(NoneError)`.
+  Return `Ok(value)` when the key exists, otherwise `Err(HashMapKeyMissing(key))`.
   ## REPL
   xldr(1)> HashMap::map_get(HashMap::map_from_entries([("a", 1)]), "a")
   Ok(1)
   """
-  @builtin def map_get(map: HashMap<$V>, key: String) -> Result<$V, NoneError>
+  @builtin def map_get(map: HashMap<$V>, key: String) -> Result<$V, HashMapKeyMissing>
 
   @doc """
   Return a new map with `key` set to `value`.

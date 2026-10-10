@@ -40,8 +40,8 @@ test("Facet") {
       do {
         result = bind_missing_nominal_facet()
 
-        assert_err_kind(IndexOutOfBounds, result)
-        assert_err_message_eq("index 2 out of bounds for len 1", result)
+        assert_err_kind(FacetListIndexOutOfBounds, result)
+        assert_err_message_eq("facet list index 2 out of bounds for length 1", result)
         assert_stdout_eq([])
       }
     }
@@ -224,10 +224,10 @@ test("Facet") {
         map = HashMap::map_from_entries([("talk", 80)])
         user = ScoreFixture([10], map)
 
-        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[2], user))
-        assert_err_contains("KeyNotFound", Facet::view(ScoreFixture.score.["missing"], user))
-        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[-2], user))
-        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[1..2], user))
+        assert_err_contains("FacetListIndexOutOfBounds", Facet::view(ScoreFixture.scores.[2], user))
+        assert_err_contains("FacetKeyNotFound", Facet::view(ScoreFixture.score.["missing"], user))
+        assert_err_contains("FacetListIndexOutOfBounds", Facet::view(ScoreFixture.scores.[-2], user))
+        assert_err_contains("FacetListIndexOutOfBounds", Facet::view(ScoreFixture.scores.[1..2], user))
       }
     }
   }
@@ -250,7 +250,7 @@ test("Facet") {
 
         assert_some_eq(Ok("alice!"), rewritten)
         none: Option<Result<String>> = Option::None
-        assert_err_contains("VariantMismatch", Facet::case_over(Option.Some, none, {|name| Ok(name ++ "!")}))
+        assert_err_contains("FacetUpdateVariantMismatch", Facet::case_over(Option.Some, none, {|name| Ok(name ++ "!")}))
       }
     }
   }
@@ -298,9 +298,9 @@ test("Facet") {
         fixture = demo_fixture()
         replaced = (fixture._0, fixture._1, BitWidth::W8)
 
-        assert_err_contains("VariantMismatch", Facet::view(BitWidth.Any, replaced._2))
-        assert_err_contains("VariantMismatch", Facet::set(Tuple._2 -> BitWidth.Any, replaced, 9))
-        assert_err_contains("VariantMismatch", Facet::over(Tuple._2 -> BitWidth.Any, replaced, {|value| Ok(value + 1)}))
+        assert_err_contains("FacetReadVariantMismatch", Facet::view(BitWidth.Any, replaced._2))
+        assert_err_contains("FacetUpdateVariantMismatch", Facet::set(Tuple._2 -> BitWidth.Any, replaced, 9))
+        assert_err_contains("FacetUpdateVariantMismatch", Facet::over(Tuple._2 -> BitWidth.Any, replaced, {|value| Ok(value + 1)}))
       }
     }
   }

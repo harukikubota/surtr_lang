@@ -1,9 +1,13 @@
+deferror GeneratorExhausted() {
+  Self(message: "generator has no next item")
+}
+
 @doc """
 Standard `Generator` type declaration.
 `Generator<$Item>` models a finite lazy sequence and exposes only the item type.
 `unfold` stores the state and callable; `next` evaluates the step on demand.
 The finite step reports normal termination with `Option::None`.
-The public `next` returns `Ok((item, rest))` or `Err(NoneError)` at the end.
+The public `next` returns `Ok((item, rest))` or `Err(GeneratorExhausted)` at the end.
 `Result` and `Option` items remain ordinary data.
 The original value is immutable. Pass the returned rest to the next call to
 advance the sequence.
@@ -19,24 +23,56 @@ Generator(<opaque>)
 @doc """
 Error for a zero step in an integer or character range.
 """
-deferror InvalidRangeStep(message: String) { "#{message}" }
+deferror ZeroIntegerRangeStep(step: Int) {
+  |step: Int|
+  Self(message: "integer range step must not be 0: #{step}", step)
+}
+
+deferror ZeroCharacterRangeStep(step: Int) {
+  |step: Int|
+  Self(message: "character range step must not be 0: #{step}", step)
+}
 
 @doc """
 Error for a character range endpoint that is not a single ASCII character.
 """
-deferror InvalidCharRange(message: String) { "#{message}" }
+deferror CharacterRangeStartLengthInvalid(value: String) {
+  |value: String|
+  Self(message: "start must be a single character: #{inspect(value)}", value)
+}
+
+deferror CharacterRangeStartNonAscii(value: String) {
+  |value: String|
+  Self(message: "start must be a single ASCII character: #{inspect(value)}", value)
+}
+
+deferror CharacterRangeStopLengthInvalid(value: String) {
+  |value: String|
+  Self(message: "stop must be a single character: #{inspect(value)}", value)
+}
+
+deferror CharacterRangeStopNonAscii(value: String) {
+  |value: String|
+  Self(message: "stop must be a single ASCII character: #{inspect(value)}", value)
+}
 
 @doc """
 Argument error for a non-positive `take_exact` count.
 The count is checked before generating any items.
 """
-deferror InvalidGeneratorCount(requested: Int) { "count must be positive: #{requested}" }
+deferror InvalidGeneratorCount(requested: Int) {
+  |requested: Int|
+  Self(message: "count must be positive: #{requested}", requested)
+}
 
 @doc """
 Error for too few items returned by `take_exact`.
 The message preserves the requested and actual counts.
 """
-deferror GeneratorShortage(requested: Int, actual: Int) { "requested #{requested} items, got #{actual}" }
+deferror GeneratorShortage(requested: Int, actual: Int) {
+  |requested: Int, actual: Int|
+  Self(message: "requested #{requested} items, got #{actual}", requested, actual)
+}
 
 impl Generator {
   # The shared runtime pull protocol uses Option for normal termination.
@@ -57,17 +93,17 @@ impl Generator {
 
   @doc """
   Generate one item and return `Ok((item, rest))`.
-  Return `Err(NoneError)` on normal termination.
+  Return `Err(GeneratorExhausted)` on normal termination.
   The original generator is unchanged. A separate call on the same value
   reevaluates the step from its saved state.
   ## REPL
   xldr(1)> Generator::next(Generator::range(10, 12))
   Ok((10, Generator(<opaque>)))
   """
-  def next(gen: Generator<$Item>) -> Result<($Item, Generator<$Item>), NoneError> {
+  def next(gen: Generator<$Item>) -> Result<($Item, Generator<$Item>), GeneratorExhausted> {
     match _step(gen) {
       Option::Some(pair) => Ok(pair),
-      Option::None => Err(NoneError),
+      Option::None => Err(GeneratorExhausted),
     }
   }
 
@@ -77,7 +113,7 @@ impl Generator {
   `count <= 0` returns `([], gen)` without evaluation. Reaching the requested
   count does not evaluate another step.
   After normal termination has been observed, the rest is terminal: its `next`
-  returns `Err(NoneError)` without calling the step.
+  returns `Err(GeneratorExhausted)` without calling the step.
   ## REPL
   xldr(1)> Generator::take(Generator::range(1, 5), 3)
   ([1, 2, 3], Generator(<opaque>))
@@ -158,25 +194,35 @@ impl Generator {
   [7, 5, 3, 1]
   """
   def range_step(start: Int, stop: Int, step: Int) -> Result<Generator<Int>, Error> {
-    if(step == 0, Err(InvalidRangeStep("step must not be 0")),
+    if(step == 0, Err(ZeroIntegerRangeStep(step)),
       Ok(unfold(start, {|current|
         if(if(step > 0, current <= stop, current >= stop),
           Option::Some((current, current + step)), Option::None)
       })))
   }
 
-  defp _single_ascii_codepoint(value: String, label: String) -> Result<Int, InvalidCharRange> {
-    match String::codepoints(value, StringEncoding::Ascii) {
-      Ok(codepoints) => match codepoints {
-        [cp, ..tail] => match tail {
-          [] => Ok(cp),
-          [_, .._] => Err(InvalidCharRange("#{label} must be a single char")),
-        },
-        [] => Err(InvalidCharRange("#{label} must be a single char")),
+  defp _single_ascii_start(value: String) -> Result<Int> {
+    if(String::len(value) != 1,
+      Err(CharacterRangeStartLengthInvalid(value)),
+      match String::codepoints(value, StringEncoding::Ascii) {
+        Ok([cp]) => Ok(cp),
+        Ok(_) => Err(CharacterRangeStartLengthInvalid(value)),
+        Err(_) => Err(CharacterRangeStartNonAscii(value)),
       },
-      Err(_) => Err(InvalidCharRange("#{label} must be a single ASCII char")),
-    }
+    )
   }
+
+  defp _single_ascii_stop(value: String) -> Result<Int> {
+    if(String::len(value) != 1,
+      Err(CharacterRangeStopLengthInvalid(value)),
+      match String::codepoints(value, StringEncoding::Ascii) {
+        Ok([cp]) => Ok(cp),
+        Ok(_) => Err(CharacterRangeStopLengthInvalid(value)),
+        Err(_) => Err(CharacterRangeStopNonAscii(value)),
+      },
+    )
+  }
+
 
   @builtin defp range_char_validated(start: Int, stop: Int, step: Int) -> Generator<String>
 
@@ -194,8 +240,8 @@ impl Generator {
   }
 
   defp _range_char_step_checked(start: String, stop: String, step: Int) -> Result<Generator<String>, Error> {
-    start_cp =? _single_ascii_codepoint(start, "start")
-    stop_cp =? _single_ascii_codepoint(stop, "stop")
+    start_cp =? _single_ascii_start(start)
+    stop_cp =? _single_ascii_stop(stop)
     Ok(range_char_validated(start_cp, stop_cp, step))
   }
 
@@ -210,6 +256,6 @@ impl Generator {
   ["e", "c", "a"]
   """
   def range_char_step(start: String, stop: String, step: Int) -> Result<Generator<String>, Error> {
-    if(step == 0, Err(InvalidRangeStep("step must not be 0")), _range_char_step_checked(start, stop, step))
+    if(step == 0, Err(ZeroCharacterRangeStep(step)), _range_char_step_checked(start, stop, step))
   }
 }

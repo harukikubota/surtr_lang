@@ -1521,7 +1521,7 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
+        stdout.contains("Err(ZeroModuloError(\"modulo by zero\"))"),
         "expected safe_mod zero to return Err value, got:\n{}",
         stdout
     );

@@ -1,0 +1,17 @@
+deferror SavedPair(left: Int, right: Int) {
+  |a: Int, b: Int|
+  Self(message: "saved", left: a, right: b)
+}
+deferror FirstPair(x: Int, y: Int) { |a: Int, b: Int| Self(message: "first", x: a, y: b) }
+deferror SecondPair(x: Int, y: Int) { |a: Int, b: Int| Self(message: "second", x: a, y: b) }
+deferror FixedError() { Self(message: "fixed") }
+def relay(error: Error) -> Error { error }
+
+a = 11
+b = 22
+print(match relay(SavedPair(b, a)) { SavedPair(left, right) @ e => "#{left}:#{right}:#{e.left}:#{e.message}", _ => "wrong" })
+print(match SavedPair(a: a, b) { SavedPair(left: left, right) => "#{left}:#{right}", _ => "wrong" })
+print(match SecondPair(11, 22) { FirstPair(x, y) | SecondPair(y, x) => "#{x}:#{y}", _ => "wrong" })
+print(inspect(is_match(SavedPair(11, 22), SavedPair(11, 22))))
+print(inspect(is_match(SavedPair(11, 22), SavedPair(22, 11))))
+print(FixedError().message)

@@ -1,8 +1,153 @@
 @doc """
-An assertion failure whose message is the supplied `detail`.
+An assertion failure whose message is the supplied `note`.
 """
-deferror TestAssertionFailed(detail: String) {
-  detail
+deferror TestExplicitFailure(note: String) {
+  |note: String|
+  Self(message: note, note)
+}
+
+deferror TestConditionFalse(note: String) {
+  |note: String|
+  Self(message: note, note)
+}
+
+deferror TestPredicateRejected(note: String, actual: String) {
+  |note: String, actual: String|
+  Self(message: "#{note}\nactual: #{actual}", note, actual)
+}
+
+deferror TestExpectedTrue() {
+  Self(message: "expected True, got False")
+}
+
+deferror TestExpectedFalse() {
+  Self(message: "expected False, got True")
+}
+
+deferror TestEqualityMismatch(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(message: "expected #{expected}, got #{actual}", expected, actual)
+}
+
+deferror TestExpectedUnequal(actual: String) {
+  |actual: String|
+  Self(message: "expected unequal values, got #{actual}", actual)
+}
+
+deferror TestLessThanFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} < #{rhs}", lhs, rhs)
+}
+
+deferror TestLessEqualFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} <= #{rhs}", lhs, rhs)
+}
+
+deferror TestGreaterThanFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} > #{rhs}", lhs, rhs)
+}
+
+deferror TestGreaterEqualFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} >= #{rhs}", lhs, rhs)
+}
+
+deferror TestPrefixMissing(prefix: String, actual: String) {
+  |prefix: String, actual: String|
+  Self(message: "expected #{inspect(actual)} to start with #{inspect(prefix)}", prefix, actual)
+}
+
+deferror TestSuffixMissing(suffix: String, actual: String) {
+  |suffix: String, actual: String|
+  Self(message: "expected #{inspect(actual)} to end with #{inspect(suffix)}", suffix, actual)
+}
+
+deferror TestFragmentMissing(fragment: String, actual: String) {
+  |fragment: String, actual: String|
+  Self(message: "expected #{inspect(actual)} to contain #{inspect(fragment)}", fragment, actual)
+}
+
+deferror TestExpectedSome() {
+  Self(message: "expected Some, got None")
+}
+
+deferror TestExpectedSomeValue(expected: String) {
+  |expected: String|
+  Self(message: "expected Some(#{expected}), got None", expected)
+}
+
+deferror TestExpectedNone(actual: String) {
+  |actual: String|
+  Self(message: "expected None, got Some(#{actual})", actual)
+}
+
+deferror TestExpectedOk(error: Error) {
+  |error: Error|
+  Self(message: "expected Ok, got Err(#{inspect(error)})", error)
+}
+
+deferror TestExpectedOkValue(expected: String, error: Error) {
+  |expected: String, error: Error|
+  Self(message: "expected Ok(#{expected}), got Err(#{inspect(error)})", expected, error)
+}
+
+deferror TestExpectedErr(actual: String) {
+  |actual: String|
+  Self(message: "expected Err, got Ok(#{actual})", actual)
+}
+
+deferror TestExpectedErrMessage(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(message: "expected Err with message #{inspect(expected)}, got Ok(#{actual})", expected, actual)
+}
+
+deferror TestExpectedErrFragment(fragment: String, actual: String) {
+  |fragment: String, actual: String|
+  Self(message: "expected Err containing #{fragment}, got Ok(#{actual})", fragment, actual)
+}
+
+deferror TestErrorFragmentMissing(fragment: String, actual: String) {
+  |fragment: String, actual: String|
+  Self(message: "expected Err containing #{fragment}, got #{actual}", fragment, actual)
+}
+
+deferror TestNegativeTolerance(tolerance: Float) {
+  |tolerance: Float|
+  Self(message: "invalid negative tolerance: #{tolerance}", tolerance)
+}
+
+deferror TestApproxMismatch(expected: Float, actual: Float, tolerance: Float) {
+  |expected: Float, actual: Float, tolerance: Float|
+  Self(message: "expected #{inspect(expected)} within tolerance #{inspect(tolerance)}, got #{inspect(actual)}", expected, actual, tolerance)
+}
+
+deferror TestErrorKindMismatch(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(message: "expected Err kind #{expected}, got #{actual}", expected, actual)
+}
+
+deferror TestExpectedErrorKind(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(message: "expected Err kind #{expected}, got Ok(#{actual})", expected, actual)
+}
+
+deferror TestExpectedCauseChain(expected: List<String>) {
+  |expected: List<String>|
+  Self(message: "expected Err cause chain #{inspect(expected)}, got Ok", expected)
+}
+
+deferror TestCauseChainMismatch(expected: List<String>, actual: List<String>) {
+  |expected: List<String>, actual: List<String>|
+  mismatch = List::reduce(List::zip(expected, actual), (0, "", False), {|state, pair|
+    if(state._2, state,
+      if(pair._0 == pair._1, (state._0 + 1, "", False),
+        (state._0, "cause chain mismatch at index #{state._0}: expected #{pair._0}, got #{pair._1}", True)))
+  })
+  message = if(mismatch._2, mismatch._1,
+    "cause chain length mismatch: expected #{List::len(expected)}, got #{List::len(actual)}")
+  Self(message: message, expected, actual)
 }
 
 
@@ -22,7 +167,7 @@ Use `--test`, `--describe`, and `--it` for case-sensitive substring filters,
 `--list` skips case bodies but still executes top-level and test/describe traversal.
 `--timings` measures executed cases; `--format json` produces one structured report.
 `--quiet` suppresses normal details while retaining failures and denied pending cases.
-Assertions return `Ok(())` on success or `Err(TestAssertionFailed(...))` on failure.
+Assertions return `Ok(())` on success or `Err(...)` on failure.
 Tests run serially, with separate stdin, stdout, and stderr buffers for each case.
 
 Example file: `lib/tests/basic_types/int.srt` (`surtr test lib/tests/basic_types/int.srt`).
@@ -53,9 +198,7 @@ defmod Test {
   @builtin def __test_push_stdin(input: String) -> Unit
   @builtin def __test_begin_case(kind: String, name: String, reason: String) -> Boolean
 
-  defp _fail(detail: String) -> Result<()> {
-    Err(TestAssertionFailed(detail))
-  }
+
 
   defp _finish_ok() -> Result<()> {
     __test_pop()
@@ -88,7 +231,7 @@ defmod Test {
     if(
       String::contains(rendered, fragment),
       Ok(()),
-      _fail("expected Err containing #{fragment}, got #{rendered}"),
+      Err(TestErrorFragmentMissing(fragment, rendered)),
     )
   }
 
@@ -159,7 +302,7 @@ defmod Test {
 
   @doc """
   Require a true condition with a caller-supplied message.
-  Returns `Ok(())` or `Err(TestAssertionFailed(message))`; an empty message is preserved.
+  Returns `Ok(())` or `Err(TestConditionFalse(message))`; an empty message is preserved.
   This is an ordinary function. Propagate its Result to fail the current case.
 
   ```surtr
@@ -168,13 +311,13 @@ defmod Test {
   ```
   """
   def assert(flag: Boolean, message: String) -> Result<()> {
-    Kernel::require(flag, TestAssertionFailed(message))
+    Kernel::require(flag, TestConditionFalse(message))
   }
 
   @doc """
   Call `predicate(actual)` exactly once and require True.
   The String message is evaluated normally. On failure only, inspect the actual value
-  and return `TestAssertionFailed` with the message followed by `actual: ...`.
+  and return `TestPredicateRejected` with the message followed by `actual: ...`.
 
   ```surtr
   import Test;
@@ -184,7 +327,7 @@ defmod Test {
   ```
   """
   def assert_satisfies(actual: $A, message: String, predicate: ($A -> Boolean)) -> Result<()> {
-    Kernel::require(predicate(actual), TestAssertionFailed("#{message}\nactual: #{inspect(actual)}"))
+    Kernel::require(predicate(actual), TestPredicateRejected(message, inspect(actual)))
   }
 
   @doc """
@@ -200,7 +343,7 @@ defmod Test {
   where
     $A: Compare
   {
-    Kernel::require(Compare::lt(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} < #{inspect(rhs)}"))
+    Kernel::require(Compare::lt(lhs, rhs), TestLessThanFailed(inspect(lhs), inspect(rhs)))
   }
 
   @doc """
@@ -216,7 +359,7 @@ defmod Test {
   where
     $A: Compare
   {
-    Kernel::require(Compare::lte(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} <= #{inspect(rhs)}"))
+    Kernel::require(Compare::lte(lhs, rhs), TestLessEqualFailed(inspect(lhs), inspect(rhs)))
   }
 
   @doc """
@@ -232,7 +375,7 @@ defmod Test {
   where
     $A: Compare
   {
-    Kernel::require(Compare::gt(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} > #{inspect(rhs)}"))
+    Kernel::require(Compare::gt(lhs, rhs), TestGreaterThanFailed(inspect(lhs), inspect(rhs)))
   }
 
   @doc """
@@ -248,7 +391,7 @@ defmod Test {
   where
     $A: Compare
   {
-    Kernel::require(Compare::gte(lhs, rhs), TestAssertionFailed("expected #{inspect(lhs)} >= #{inspect(rhs)}"))
+    Kernel::require(Compare::gte(lhs, rhs), TestGreaterEqualFailed(inspect(lhs), inspect(rhs)))
   }
 
   @doc """
@@ -259,14 +402,14 @@ defmod Test {
   ```surtr
   import Test;
   test("assert_err_message_eq") {
-    it("checks only the message") { assert_err_message_eq("detail", Err(TestAssertionFailed("detail"))) }
+    it("checks only the message") { assert_err_message_eq("detail", Err(TestExplicitFailure("detail"))) }
   }
   ```
   """
   def assert_err_message_eq(expected: String, result: Result<$A>) -> Result<()> {
     match result {
       Err(err) => assert_eq(expected, Error::message(err)),
-      Ok(actual) => _fail("expected Err with message #{inspect(expected)}, got Ok(#{inspect(actual)})"),
+      Ok(actual) => Err(TestExpectedErrMessage(expected, inspect(actual))),
     }
   }
 
@@ -280,7 +423,7 @@ defmod Test {
   ```
   """
   def assert_starts_with(prefix: String, actual: String) -> Result<()> {
-    Kernel::require(String::starts_with(actual, prefix), TestAssertionFailed("expected #{inspect(actual)} to start with #{inspect(prefix)}"))
+    Kernel::require(String::starts_with(actual, prefix), TestPrefixMissing(prefix, actual))
   }
 
   @doc """
@@ -293,7 +436,7 @@ defmod Test {
   ```
   """
   def assert_ends_with(suffix: String, actual: String) -> Result<()> {
-    Kernel::require(String::ends_with(actual, suffix), TestAssertionFailed("expected #{inspect(actual)} to end with #{inspect(suffix)}"))
+    Kernel::require(String::ends_with(actual, suffix), TestSuffixMissing(suffix, actual))
   }
 
   @doc """
@@ -308,13 +451,13 @@ defmod Test {
   def assert_some(option: Option<$A>) -> Result<()> {
     match option {
       Option::Some(_) => Ok(()),
-      Option::None => _fail("expected Some, got None"),
+      Option::None => Err(TestExpectedSome),
     }
   }
 
   @doc """
   Check that `flag` is `True`.
-  Returns `Ok(())` for `True`, or `Err(TestAssertionFailed(...))` for `False`.
+  Returns `Ok(())` for `True`, or `Err(TestExpectedTrue)` for `False`.
 
   ```surtr
   import Test;
@@ -327,12 +470,12 @@ defmod Test {
   ```
   """
   def assert_true(flag: Boolean) -> Result<()> {
-    if(flag, Ok(()), _fail("expected True, got False"))
+    if(flag, Ok(()), Err(TestExpectedTrue))
   }
 
   @doc """
   Check that `flag` is `False`.
-  Returns `Ok(())` for `False`, or `Err(TestAssertionFailed(...))` for `True`.
+  Returns `Ok(())` for `False`, or `Err(TestExpectedFalse)` for `True`.
 
   ```surtr
   import Test;
@@ -345,12 +488,12 @@ defmod Test {
   ```
   """
   def assert_false(flag: Boolean) -> Result<()> {
-    if(flag, _fail("expected False, got True"), Ok(()))
+    if(flag, Err(TestExpectedFalse), Ok(()))
   }
 
   @doc """
   Check that `actual` equals `expected` according to `Eq`.
-  Returns `Ok(())` for equal values, or `Err(TestAssertionFailed(...))` describing the mismatch.
+  Returns `Ok(())` for equal values, or `Err(TestEqualityMismatch(...))` describing the mismatch.
 
   ```surtr
   import Test;
@@ -369,7 +512,7 @@ defmod Test {
     if(
       Eq::eq(expected, actual),
       Ok(()),
-      Err(TestAssertionFailed("expected #{inspect(expected)}, got #{inspect(actual)}")),
+      Err(TestEqualityMismatch(inspect(expected), inspect(actual))),
     )
   }
 
@@ -381,7 +524,7 @@ defmod Test {
   where
     $A: Eq
   {
-    if(Eq::eq(expected, actual), _fail("expected unequal values, got #{inspect(actual)}"), Ok(()))
+    if(Eq::eq(expected, actual), Err(TestExpectedUnequal(inspect(actual))), Ok(()))
   }
 
   @doc """
@@ -391,7 +534,7 @@ defmod Test {
   def assert_ok(result: Result<$A>) -> Result<()> {
     match result {
       Ok(_) => Ok(()),
-      Err(err) => _fail("expected Ok, got Err(#{inspect(err)})"),
+      Err(err) => Err(TestExpectedOk(err)),
     }
   }
 
@@ -402,7 +545,7 @@ defmod Test {
   def assert_err(result: Result<$A>) -> Result<()> {
     match result {
       Err(_) => Ok(()),
-      Ok(actual) => _fail("expected Err, got Ok(#{inspect(actual)})"),
+      Ok(actual) => Err(TestExpectedErr(inspect(actual))),
     }
   }
 
@@ -432,7 +575,7 @@ defmod Test {
   {
     match option {
       Option::Some(actual) => assert_eq(expected, actual),
-      Option::None => _fail("expected Some(#{inspect(expected)}), got None"),
+      Option::None => Err(TestExpectedSomeValue(inspect(expected))),
     }
   }
 
@@ -443,7 +586,7 @@ defmod Test {
   def assert_none(option: Option<$A>) -> Result<()> {
     match option {
       Option::None => Ok(()),
-      Option::Some(actual) => _fail("expected None, got Some(#{inspect(actual)})"),
+      Option::Some(actual) => Err(TestExpectedNone(inspect(actual))),
     }
   }
 
@@ -452,7 +595,7 @@ defmod Test {
   Example: `assert_contains("ell", "hello")` returns `Ok(())`.
   """
   def assert_contains(fragment: String, actual: String) -> Result<()> {
-    if(String::contains(actual, fragment), Ok(()), _fail("expected #{inspect(actual)} to contain #{inspect(fragment)}"))
+    if(String::contains(actual, fragment), Ok(()), Err(TestFragmentMissing(fragment, actual)))
   }
 
   @builtin def __test_approx_equal(expected: Float, actual: Float, tolerance: Float) -> Boolean
@@ -464,21 +607,21 @@ defmod Test {
   """
   def assert_approx(expected: Float, actual: Float, tolerance: Float) -> Result<()> {
     if(tolerance < 0.0,
-      _fail("invalid negative tolerance: #{inspect(tolerance)}"),
+      Err(TestNegativeTolerance(tolerance)),
       if(__test_approx_equal(expected, actual, tolerance), Ok(()),
-        _fail("expected #{inspect(expected)} within tolerance #{inspect(tolerance)}, got #{inspect(actual)}")),
+        Err(TestApproxMismatch(expected, actual, tolerance))),
     )
   }
 
   @doc """
-  Always return Err(TestAssertionFailed(detail)), preserving detail unchanged.
+  Always return Err(TestExplicitFailure(detail)), preserving detail unchanged.
   Example: `fail("not reached")` returns an assertion failure containing `not reached`.
   """
-  def fail(detail: String) -> Result<()> { _fail(detail) }
+  def fail(detail: String) -> Result<()> { Err(TestExplicitFailure(detail)) }
 
   @doc """
   Check that `result` is `Ok(actual)` and that `actual` equals `expected` according to `Eq`.
-  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` for an unequal value or an `Err`.
+  Returns `Ok(())` on a match, or `Err(...)` for an unequal value or an `Err`.
 
   ```surtr
   import Test;
@@ -496,13 +639,13 @@ defmod Test {
   {
     match result {
       Ok(actual) => assert_eq(expected, actual),
-      Err(err) => _fail("expected Ok(#{inspect(expected)}), got Err(#{inspect(err)})"),
+      Err(err) => Err(TestExpectedOkValue(inspect(expected), err)),
     }
   }
 
   @doc """
   Check that `result` is `Err(error)` and `inspect(error)` contains `fragment` as a case-sensitive substring.
-  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` for an `Ok` or a missing fragment.
+  Returns `Ok(())` on a match, or `Err(...)` for an `Ok` or a missing fragment.
 
   ```surtr
   import Test;
@@ -517,14 +660,14 @@ defmod Test {
   """
   def assert_err_contains(fragment: String, result: Result<$A>) -> Result<()> {
     match result {
-      Ok(actual) => _fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
+      Ok(actual) => Err(TestExpectedErrFragment(fragment, inspect(actual))),
       Err(err) => _assert_err_rendered_contains(fragment, inspect(err)),
     }
   }
 
   @doc """
   Check that `doc` rendered as plain text equals `expected`.
-  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the text mismatch.
+  Returns `Ok(())` on a match, or `Err(TestEqualityMismatch(...))` describing the text mismatch.
 
   ```surtr
   import Test;
@@ -543,7 +686,7 @@ defmod Test {
 
   @doc """
   Check that `doc` rendered with ANSI styling equals `expected`, including escape sequences.
-  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the text mismatch.
+  Returns `Ok(())` on a match, or `Err(TestEqualityMismatch(...))` describing the text mismatch.
 
   ```surtr
   import Test;
@@ -582,7 +725,7 @@ defmod Test {
   Supply text for `IO::get` and `IO::get_line` in the current test case.
   Append `input` without adding a newline and return `Ok(())`.
   Each case starts with an empty input buffer. Reads use only this buffer and return
-  `Err(InputError(...))` before input is supplied or when it is exhausted.
+  `Err(InputCharacterEnd) or Err(InputLineEnd)` before input is supplied or when it is exhausted.
   """
   def push_stdin(input: String) -> Result<()> {
     __test_push_stdin(input)
@@ -592,7 +735,7 @@ defmod Test {
   @doc """
   Compare the current case's captured stdout entries with `expected`, in output order.
   Consume the captured entries even when the comparison fails.
-  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the mismatch.
+  Returns `Ok(())` on a match, or `Err(TestEqualityMismatch(...))` describing the mismatch.
 
   ```surtr
   import Test;
@@ -612,7 +755,7 @@ defmod Test {
   @doc """
   Compare the current case's captured stderr entries with `expected`, in output order.
   Consume the captured entries even when the comparison fails.
-  Returns `Ok(())` on a match, or `Err(TestAssertionFailed(...))` describing the mismatch.
+  Returns `Ok(())` on a match, or `Err(TestEqualityMismatch(...))` describing the mismatch.
 
   ```surtr
   import Test;

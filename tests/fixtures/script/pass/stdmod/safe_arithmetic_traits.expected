@@ -10,7 +10,7 @@ Ok(2)
 Ok(2)
 Err(ZeroDivisionError("division by zero"))
 Err(ZeroDivisionError("division by zero"))
-Err(ZeroDivisionError("division by zero"))
+Err(ZeroModuloError("modulo by zero"))
 7
 11
 7

@@ -145,9 +145,9 @@ impl Facet {
   Variant paths are fallible because the runtime value may be a different
   variant:
 
-  When the selector does not match, the result is `Err(VariantMismatch(...))`.
+  When the selector does not match, the result is `Err(FacetReadVariantMismatch(...))`.
   List and HashMap path segments are also fallible: they return
-  `IndexOutOfBounds` or `KeyNotFound` through `Result`.
+  `FacetListIndexOutOfBounds` or `FacetKeyNotFound` through `Result`.
   Their bracket expression may be any ordinary runtime expression as long as it
   resolves to plain `Int` or `String`. List ranges use inclusive endpoints and
   return a `List<T>` focus.
@@ -224,7 +224,7 @@ impl Facet {
 
   Use `set` instead when the update should compose through `Result` context or
   variant matching.
-  List and HashMap path segments return `IndexOutOfBounds` or `KeyNotFound`
+  List and HashMap path segments return `FacetListIndexOutOfBounds` or `FacetKeyNotFound`
   through `Result`, and are therefore not accepted by `put`.
 
   ## REPL
@@ -254,7 +254,7 @@ impl Facet {
   For nested updates, compose the path first:
 
   If the path contains a variant selector, `set` fails with
-  `Err(VariantMismatch(...))` when the current value is not on that variant.
+  `Err(FacetReadVariantMismatch(...))` when the current value is not on that variant.
   List and HashMap bracket segments reuse the same evaluated index/key for both
   the read and rebuild phases of one update.
 
@@ -281,7 +281,7 @@ impl Facet {
   `case_set` is valid only when the Facet path contains an enum selector and
   the final segment is that enum case.
 
-  Enum segments are required and return `Err(VariantMismatch(...))` when the
+  Enum segments are required and return `Err(FacetReadVariantMismatch(...))` when the
   source is on another variant.
   """
   @builtin def case_set(facet: Facet<CasePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>

@@ -1,0 +1,6 @@
+error = PayloadFactory::make()
+print(match error {
+  Left::Failure(number) => "wrong:#{number}",
+  Right::Failure(text) @ concrete => "#{text}:#{concrete.value}",
+  _ => "lost",
+})

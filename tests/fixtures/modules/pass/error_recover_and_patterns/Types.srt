@@ -11,5 +11,6 @@ deferror DnsFailure {
 }
 
 deferror TimeoutWithDetail(detail: String) {
-  detail
+  |detail: String|
+  Self(message: detail, detail)
 }

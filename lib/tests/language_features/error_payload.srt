@@ -1,0 +1,199 @@
+deferror SavedPayload(number: Int, label: String) {
+  |input: Int|
+  number = input + 1
+  label = "saved"
+  Self(message: "payload", number, label)
+}
+deferror SavedAsync(extractor: ExtractorClosure<(Int -> MatchResult<Int>)>, task: TaskHandle<Int>) {
+  |extractor: ExtractorClosure<(Int -> MatchResult<Int>)>, task: TaskHandle<Int>|
+  Self(message: "async payload", extractor, task)
+}
+deferror SavedLookup(re: Regex, captures: RegexCaptures, found: RegexMatch, map: HashMap<Int>) {
+  |re: Regex, captures: RegexCaptures, found: RegexMatch, map: HashMap<Int>|
+  Self(message: "lookup payload", re, captures, found, map)
+}
+deferror SavedSequences(finite: Generator<Int>, infinite: InfiniteGenerator<Int>, rng: RandomGenerator) {
+  |finite: Generator<Int>, infinite: InfiniteGenerator<Int>, rng: RandomGenerator|
+  Self(message: "sequence payload", finite, infinite, rng)
+}
+def relay_payload(error: Error) -> Error { error }
+import Test;
+test("Error payload") {
+  it("preserves values across ordinary transport and exposes fields after matching") {
+    do {
+      error = relay_payload(SavedPayload(7))
+      values: List<Error> = [error]
+      transported =? List::first(values)
+      match transported {
+        SavedPayload(number, label) @ concrete => do {
+          alias: SavedPayload = concrete
+          path = SavedPayload.number
+          reader = {|| alias.number}
+          assert_eq(8, number)
+          assert_eq("saved", label)
+          assert_eq(8, Facet::view(path, alias))
+          assert_eq(8, reader())
+          assert_eq("payload", alias.message)
+        },
+        _ => fail("payload kind lost"),
+      }
+    }
+  }
+  it("matches saved payload instead of constructor inputs") {
+    do {
+      assert_true(is_match(SavedPayload(7), SavedPayload(8, "saved")))
+      assert_false(is_match(SavedPayload(7), SavedPayload(7, "saved")))
+    }
+  }
+  it("stores builtin arithmetic and collection inputs") {
+    do {
+      match List::at([10, 20], 5) {
+        Err(ListIndexOutOfBounds(index, length)) => do {
+          assert_eq(5, index)
+          assert_eq(2, length)
+        },
+        _ => fail("expected list index payload"),
+      }
+      assert_err_kind(ZeroModuloError, Mod::safe_mod(7, 0))
+      bits = Int::shl(1, 128)
+      too_large <- bits
+      match Int::shl(1, too_large) {
+        Err(ShiftCountTooLarge(saved)) => assert_eq(too_large, saved),
+        _ => fail("expected original arbitrary-precision shift amount"),
+      }
+    }
+  }
+  it("preserves original text across recursive standard operations") {
+    do {
+      match String::strip_prefix("hello", "hero") {
+        Err(StringPrefixMissing(value, prefix)) => do {
+          assert_eq("hello", value)
+          assert_eq("hero", prefix)
+        },
+        _ => fail("expected original prefix input"),
+      }
+      match String::split_once("hello", "x") {
+        Err(StringSeparatorMissing(value, separator)) => do {
+          assert_eq("hello", value)
+          assert_eq("x", separator)
+        },
+        _ => fail("expected original separator input"),
+      }
+      match String::from_chars(["a", "bc"]) {
+        Err(InvalidCharList(index, value)) => do {
+          assert_eq(1, index)
+          assert_eq("bc", value)
+        },
+        _ => fail("expected invalid char payload"),
+      }
+    }
+  }
+  it("keeps typed integer parse and duration failure values") {
+    do {
+      match Int::parse_bin("102") {
+        Err(IntParseInvalidDigit(base, digit, index)) => do {
+          assert_eq("binary", IntBase::label(base))
+          assert_eq("2", digit)
+          assert_eq(2, index)
+        },
+        _ => fail("expected integer parse payload"),
+      }
+      match Duration::sub(10ms, 20ms) {
+        Err(NegativeDurationDifference(lhs, rhs)) => do {
+          assert_eq(10, lhs)
+          assert_eq(20, rhs)
+        },
+        _ => fail("expected duration operands"),
+      }
+    }
+  }
+  it("separates regex capture absence from nonparticipation") {
+    do {
+      re <- Regex::compile("(?<value>a)?b")
+      caps <- Regex::captures(re, "b")
+      assert_err_kind(RegexCaptureIndexMissing, RegexCaptures::get(caps, 2))
+      assert_err_kind(RegexCaptureIndexUnmatched, RegexCaptures::get(caps, 1))
+      assert_err_kind(RegexCaptureNameMissing, RegexCaptures::get_name(caps, "missing"))
+      assert_err_kind(RegexCaptureNameUnmatched, RegexCaptures::get_name(caps, "value"))
+      match Regex::captures(re, "x") {
+        Err(RegexCapturesNoMatch(pattern, input)) => do {
+          assert_eq("(?<value>a)?b", pattern)
+          assert_eq("x", input)
+        },
+        _ => fail("expected regex input payload"),
+      }
+    }
+  }
+  it("preserves an Error inside assertion Payload and cause chains") {
+    do {
+      inner = SavedPayload(9)
+      failed = Test::assert_ok(Err(inner))
+      match failed {
+        Err(TestExpectedOk(error)) => match error {
+          SavedPayload(number, _) => assert_eq(10, number),
+          _ => fail("assertion erased nested payload"),
+        },
+        _ => fail("expected assertion Error payload"),
+      }
+      wrapped = Result::cause(Err(inner), NoneError)
+      assert_cause_chain([NoneError, SavedPayload], wrapped)
+      same_kind: Result<Int> = Err(SavedPayload(1))
+      different_payload: Result<Int> = Err(SavedPayload(7))
+      assert_eq(same_kind, different_payload)
+    }
+  }
+
+  it("executes an ExtractorClosure and awaits a task after Error transport") {
+    do {
+      extractor: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::Ok(value + 1)}
+      task = Task::async({|| Ok(21)})
+      transported = relay_payload(SavedAsync(extractor, task))
+      match transported {
+        SavedAsync(saved_extractor, saved_task) => do {
+          assert_eq(4, if_let(3, saved_extractor(number), number, 0))
+          result <- Task::await(saved_task)
+          assert_eq(21, result)
+        },
+        _ => fail("expected callable and task Payload"),
+      }
+    }
+  }
+  it("uses stored regex handles and a generic map through their APIs") {
+    do {
+      re <- Regex::compile("(?<word>a+)")
+      captures <- Regex::captures(re, "caaab")
+      found <- Regex::find(re, "caaab")
+      transported = relay_payload(SavedLookup(re, captures, found, hash!["answer" => 42]))
+      match transported {
+        SavedLookup(saved_re, saved_captures, saved_found, saved_map) => do {
+          assert_true(Regex::matches(saved_re, "aa"))
+          word <- RegexCaptures::get_name(saved_captures, "word")
+          assert_eq("aaa", word)
+          assert_eq("aaa", RegexMatch::text(saved_found))
+          answer <- HashMap::map_get(saved_map, "answer")
+          assert_eq(42, answer)
+        },
+        _ => fail("expected regex and map Payload"),
+      }
+    }
+  }
+  it("resumes stored generators and a seeded random state") {
+    do {
+      finite = Generator::range(1, 3)
+      infinite = InfiniteGenerator::unfold(4, {|number| (number, number + 1)})
+      rng = Random::seed(123)
+      expected <- Random::next_int_range(rng, -100, 100)
+      transported = relay_payload(SavedSequences(finite, infinite, rng))
+      match transported {
+        SavedSequences(saved_finite, saved_infinite, saved_rng) => do {
+          assert_eq([1, 2, 3], Generator::to_list(saved_finite))
+          assert_eq([4, 5, 6], InfiniteGenerator::take(saved_infinite, 3)._0)
+          (actual, _) <- Random::next_int_range(saved_rng, -100, 100)
+          assert_eq(expected._0, actual)
+        },
+        _ => fail("expected generator and random Payload"),
+      }
+    }
+  }
+
+}

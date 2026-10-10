@@ -1,6 +1,9 @@
 import Test;
 
-deferror ApiError(detail: String) { detail }
+deferror ApiError(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
 def inc(x: Int) -> Int { x + 1 }
 def add2(x: Int, y: Int) -> Int { x + y }
 def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
@@ -29,8 +32,14 @@ impl Eq for EqByValue {
 }
 
 
-deferror FirstFailure(detail: String) { detail }
-deferror SecondFailure(detail: String) { detail }
+deferror FirstFailure(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
+deferror SecondFailure(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
 
 test("Result") {
   describe("canonical variant constructors") {

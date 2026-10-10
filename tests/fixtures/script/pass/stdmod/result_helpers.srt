@@ -1,3 +1,5 @@
+deferror TailFailure(detail: String) { |detail: String| Self(message: detail, detail) }
+
 def inc(x: Int) -> Int {
   x + 1
 }
@@ -40,15 +42,15 @@ print(inspect(Result::map_err(Ok(1), ZeroDivisionError)))
 print(inspect(Result::map_err(Err(NoneError), ZeroDivisionError)))
 print(inspect(Result::cause(Ok(1), ZeroDivisionError)))
 print(inspect(Result::cause(Err(NoneError), ZeroDivisionError)))
-print(inspect(Result::map_err(Ok(1), IndexOutOfBounds(side_effect_label()))))
-print(inspect(Result::cause(Ok(1), IndexOutOfBounds(side_effect_label()))))
+print(inspect(Result::map_err(Ok(1), TailFailure(side_effect_label()))))
+print(inspect(Result::cause(Ok(1), TailFailure(side_effect_label()))))
 print(inspect(Result::chain(Ok(7), Ok(()))))
 pair: (Result<Int>, Int) = (Ok(7), 1)
 print(inspect(chain(pair._0, Ok(()))))
-print(inspect(Result::chain(Ok(7), Err(IndexOutOfBounds("tail")))))
+print(inspect(Result::chain(Ok(7), Err(TailFailure("tail")))))
 print(inspect(Result::chain(Err(NoneError), Ok(()))))
 print(inspect(Result::chain(Err(NoneError), Err(ZeroDivisionError))))
-print(inspect(Result::chain(Err(IndexOutOfBounds("tail")), Result::cause(Err(NoneError), ZeroDivisionError))))
+print(inspect(Result::chain(Err(TailFailure("tail")), Result::cause(Err(NoneError), ZeroDivisionError))))
 match Result::cause(Err(NoneError), ZeroDivisionError) {
   Ok(_) => print("unexpected"),
   Err(e) => print(inspect(e)),
@@ -79,7 +81,7 @@ print(inspect(Result::tap_err(Err(NoneError), &Error::kind >> &print)))
 print(inspect(Result::then(Ok(1), &emit_next)))
 print(inspect(Result::then(Err(NoneError), &emit_next)))
 print(inspect(Result::zip(Err(NoneError), Err(ZeroDivisionError))))
-print(inspect(Result::zip3(Err(NoneError), Err(ZeroDivisionError), Err(EmptyList))))
+print(inspect(Result::zip3(Err(NoneError), Err(ZeroDivisionError), Err(EmptyHeadTailListPattern))))
 print(inspect(Result::all([Err(NoneError)])))
 print(inspect(Result::then(Err(NoneError), {||
   print("unexpected no-payload continuation")

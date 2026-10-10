@@ -41,12 +41,12 @@ test("Json") {
     }
     it("rejects a missing key") {
       do {
-        json <- Json::parse("{}"); assert_err_kind(JsonDecodeError, Json::get(json, "missing"))
+        json <- Json::parse("{}"); assert_err_kind(JsonFieldMissing, Json::get(json, "missing"))
       }
     }
     it("rejects a nonobject") {
       do {
-        assert_err_kind(JsonDecodeError, Json::get(JsonValue::Int(3), "missing"))
+        assert_err_kind(JsonObjectExpected, Json::get(JsonValue::Int(3), "missing"))
       }
     }
   }
@@ -58,7 +58,7 @@ test("Json") {
     }
     it("rejects an index outside the array") {
       do {
-        json <- Json::parse("[]"); assert_err_kind(JsonDecodeError, Json::at(json, 0))
+        json <- Json::parse("[]"); assert_err_kind(JsonIndexMissing, Json::at(json, 0))
       }
     }
   }
@@ -75,7 +75,7 @@ test("Json") {
     }
     it("rejects a different kind") {
       do {
-        assert_err_kind(JsonDecodeError, Json::as_array(JsonValue::Null))
+        assert_err_kind(JsonArrayExpected, Json::as_array(JsonValue::Null))
       }
     }
   }
@@ -96,27 +96,27 @@ test("Json") {
   describe("as_* rejection") {
     it("rejects a nonString") {
       do {
-        assert_err_kind(JsonDecodeError, Json::as_string(JsonValue::Null))
+        assert_err_kind(JsonStringExpected, Json::as_string(JsonValue::Null))
       }
     }
     it("rejects a nonInt") {
       do {
-        assert_err_kind(JsonDecodeError, Json::as_int(JsonValue::Null))
+        assert_err_kind(JsonIntExpected, Json::as_int(JsonValue::Null))
       }
     }
     it("rejects a nonFloat") {
       do {
-        assert_err_kind(JsonDecodeError, Json::as_float(JsonValue::Null))
+        assert_err_kind(JsonFloatExpected, Json::as_float(JsonValue::Null))
       }
     }
     it("rejects a nonBoolean") {
       do {
-        assert_err_kind(JsonDecodeError, Json::as_bool(JsonValue::Null))
+        assert_err_kind(JsonBooleanExpected, Json::as_bool(JsonValue::Null))
       }
     }
     it("rejects a nonObject") {
       do {
-        assert_err_kind(JsonDecodeError, Json::as_object(JsonValue::Null))
+        assert_err_kind(JsonObjectExpected, Json::as_object(JsonValue::Null))
       }
     }
   }

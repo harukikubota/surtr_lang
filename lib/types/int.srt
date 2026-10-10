@@ -1,3 +1,8 @@
+deferror ShiftCountTooLarge(bits: Int) {
+  |bits: Int|
+  Self(message: "shift count is too large: #{bits}", bits)
+}
+
 @doc """
 Standard `Int` type declaration.
 User-visible integer values are backed by arbitrary-precision arithmetic across
@@ -17,7 +22,8 @@ Concrete integer-module error for negative bit shift counts.
 `Int::shl` and `Int::shr` return this instead of trapping when `bits < 0`.
 """
 deferror NegativeShiftCount(bits: Int) {
-  "shift amount must be non-negative: #{bits}"
+  |bits: Int|
+  Self(message: "shift amount must be non-negative: #{bits}", bits)
 }
 
 @doc """
@@ -25,7 +31,8 @@ Concrete integer-module error for negative bit indexes.
 Index-based bit helpers return this instead of trapping when `index < 0`.
 """
 deferror NegativeBitIndex(index: Int) {
-  "bit index must be non-negative: #{index}"
+  |index: Int|
+  Self(message: "bit index must be non-negative: #{index}", index)
 }
 
 @doc """
@@ -58,21 +65,53 @@ Concrete integer-module error for invalid custom bit widths.
 `BitWidth::Any(bits)` must use a positive width.
 """
 deferror InvalidBitWidth(width: Int) {
-  "bit width must be positive: #{width}"
+  |width: Int|
+  Self(message: "bit width must be positive: #{width}", width)
 }
 
 @doc """
 Recoverable parse error for base-fixed integer parsing helpers.
 """
-deferror ParseIntError(detail: String) {
-  detail
+deferror IntParseEmpty(base: IntBase) {
+  |base: IntBase|
+  Self(message: "empty #{IntBase::label(base)} integer input", base)
+}
+
+deferror IntParseSignWithoutDigits(base: IntBase, input: String) {
+  |base: IntBase, input: String|
+  Self(message: "sign without digits in #{IntBase::label(base)} integer: #{inspect(input)}", base, input)
+}
+
+deferror IntParseInvalidDigit(base: IntBase, digit: String, index: Int) {
+  |base: IntBase, digit: String, index: Int|
+  Self(message: "invalid digit for #{IntBase::label(base)} integer: #{inspect(digit)} at index #{index}", base, digit, index)
 }
 
 @doc """
 Recoverable parse error for literal-syntax integer parsing helpers.
 """
-deferror ParseIntLiteralError(detail: String) {
-  detail
+deferror IntLiteralEmpty() {
+  Self(message: "empty integer literal input")
+}
+
+deferror IntLiteralSignWithoutDigits(input: String) {
+  |input: String|
+  Self(message: "sign without digits in integer literal: #{inspect(input)}", input)
+}
+
+deferror IntLiteralMissingDigits(base: IntBase) {
+  |base: IntBase|
+  Self(message: "missing digits after integer base prefix: #{IntBase::prefix(base)}", base)
+}
+
+deferror IntLiteralUnknownPrefix(prefix: String) {
+  |prefix: String|
+  Self(message: "unknown integer base prefix: #{prefix}", prefix)
+}
+
+deferror IntLiteralInvalidDigit(base: IntBase, digit: String, index: Int) {
+  |base: IntBase, digit: String, index: Int|
+  Self(message: "invalid digit for #{IntBase::label(base)} integer literal: #{inspect(digit)} at index #{index}", base, digit, index)
 }
 
 @doc """
@@ -81,7 +120,8 @@ range.
 `index` must satisfy `0 <= index < width`.
 """
 deferror BitIndexOutOfRange(index: Int, width: Int) {
-  "bit index #{index} out of range for width #{width}"
+  |index: Int, width: Int|
+  Self(message: "bit index #{index} out of range for width #{width}", index, width)
 }
 
 impl IntBase {
@@ -231,34 +271,30 @@ impl Int {
     }
   }
 
-  defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntError> {
+  defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
     radix = IntBase::radix(base)
     match _digit_value(ch) {
       Ok(value) => if(
         value < radix,
         Ok(value),
-        Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}")),
+        Err(IntParseInvalidDigit(base, ch, index)),
       ),
-      Err(_) => Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}")),
+      Err(_) => Err(IntParseInvalidDigit(base, ch, index)),
     }
   }
 
-  defp _parse_literal_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntLiteralError> {
+  defp _parse_literal_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
     radix = IntBase::radix(base)
     match _digit_value(ch) {
       Ok(value) => if(
         value < radix,
         Ok(value),
         Err(
-          ParseIntLiteralError(
-            "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
-          ),
+          IntLiteralInvalidDigit(base, ch, index),
         ),
       ),
       Err(_) => Err(
-        ParseIntLiteralError(
-          "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
-        ),
+        IntLiteralInvalidDigit(base, ch, index),
       ),
     }
   }
@@ -269,7 +305,7 @@ impl Int {
     acc: Int,
     index: Int,
     sign: Int,
-  ) -> Result<Int, ParseIntError> {
+  ) -> Result<Int> {
     match chars {
       "" => Ok(_apply_parse_sign(acc, sign)),
       [head, ..tail] => _parse_digits_step(head, tail, base, acc, index, sign),
@@ -283,7 +319,7 @@ impl Int {
     acc: Int,
     index: Int,
     sign: Int,
-  ) -> Result<Int, ParseIntError> {
+  ) -> Result<Int> {
     digit =? _parse_digit_for_base(base, head, index)
     _parse_digits_go(
       tail,
@@ -300,7 +336,7 @@ impl Int {
     acc: Int,
     index: Int,
     sign: Int,
-  ) -> Result<Int, ParseIntLiteralError> {
+  ) -> Result<Int> {
     match chars {
       "" => Ok(_apply_parse_sign(acc, sign)),
       [head, ..tail] => _parse_literal_digits_step(head, tail, base, acc, index, sign),
@@ -314,7 +350,7 @@ impl Int {
     acc: Int,
     index: Int,
     sign: Int,
-  ) -> Result<Int, ParseIntLiteralError> {
+  ) -> Result<Int> {
     digit =? _parse_literal_digit_for_base(base, head, index)
     _parse_literal_digits_go(
       tail,
@@ -330,9 +366,9 @@ impl Int {
     base: IntBase,
     sign: Int,
     start_index: Int,
-  ) -> Result<Int, ParseIntError> {
+  ) -> Result<Int> {
     match chars {
-      "" => Err(ParseIntError("empty integer input")),
+      "" => Err(IntParseEmpty(base)),
       _ => _parse_digits_go(chars, base, 0, start_index, sign),
     }
   }
@@ -342,9 +378,9 @@ impl Int {
     base: IntBase,
     sign: Int,
     start_index: Int,
-  ) -> Result<Int, ParseIntLiteralError> {
+  ) -> Result<Int> {
     match body {
-      "" => Err(ParseIntLiteralError("missing digits after integer base prefix: #{IntBase::prefix(base)}")),
+      "" => Err(IntLiteralMissingDigits(base)),
       _ => _parse_literal_digits_go(body, base, 0, start_index, sign),
     }
   }
@@ -353,9 +389,9 @@ impl Int {
     chars: String,
     sign: Int,
     start_index: Int,
-  ) -> Result<Int, ParseIntLiteralError> {
+  ) -> Result<Int> {
     match chars {
-      "" => Err(ParseIntLiteralError("empty integer literal input")),
+      "" => Err(IntLiteralEmpty),
       ["0", ..tail] => match tail {
         "" => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
         ["b", ..body] => _parse_literal_prefixed(body, IntBase::Bin, sign, start_index + 2),
@@ -366,9 +402,9 @@ impl Int {
           Ok(value) => if(
             value < 10,
             _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
-            Err(ParseIntLiteralError("unknown integer base prefix: " ++ "0" ++ prefix)),
+            Err(IntLiteralUnknownPrefix("0" ++ prefix)),
           ),
-          Err(_) => Err(ParseIntLiteralError("unknown integer base prefix: " ++ "0" ++ prefix)),
+          Err(_) => Err(IntLiteralUnknownPrefix("0" ++ prefix)),
         },
       },
       _ => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
@@ -379,7 +415,7 @@ impl Int {
   Parse base-10 text as an `Int`.
   This is an alias for `Int::parse_dec`.
   """
-  def parse(text: String) -> Result<Int, ParseIntError> {
+  def parse(text: String) -> Result<Int> {
     Int::parse_dec(text)
   }
 
@@ -387,15 +423,15 @@ impl Int {
   Parse base-10 digits as an `Int`.
   Accepts an optional leading `+` or `-`.
   """
-  def parse_dec(text: String) -> Result<Int, ParseIntError> {
+  def parse_dec(text: String) -> Result<Int> {
     match text {
-      "" => Err(ParseIntError("empty integer input")),
+      "" => Err(IntParseEmpty(IntBase::Dec)),
       ["-", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Dec, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Dec, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Dec, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Dec, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Dec, 1, 0),
@@ -406,15 +442,15 @@ impl Int {
   Parse base-16 digits as an `Int`.
   Prefixes such as `0x` are not accepted here.
   """
-  def parse_hex(text: String) -> Result<Int, ParseIntError> {
+  def parse_hex(text: String) -> Result<Int> {
     match text {
-      "" => Err(ParseIntError("empty integer input")),
+      "" => Err(IntParseEmpty(IntBase::Hex)),
       ["-", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Hex, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Hex, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Hex, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Hex, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Hex, 1, 0),
@@ -425,15 +461,15 @@ impl Int {
   Parse base-8 digits as an `Int`.
   Prefixes such as `0o` are not accepted here.
   """
-  def parse_oct(text: String) -> Result<Int, ParseIntError> {
+  def parse_oct(text: String) -> Result<Int> {
     match text {
-      "" => Err(ParseIntError("empty integer input")),
+      "" => Err(IntParseEmpty(IntBase::Oct)),
       ["-", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Oct, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Oct, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Oct, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Oct, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Oct, 1, 0),
@@ -444,15 +480,15 @@ impl Int {
   Parse base-2 digits as an `Int`.
   Prefixes such as `0b` are not accepted here.
   """
-  def parse_bin(text: String) -> Result<Int, ParseIntError> {
+  def parse_bin(text: String) -> Result<Int> {
     match text {
-      "" => Err(ParseIntError("empty integer input")),
+      "" => Err(IntParseEmpty(IntBase::Bin)),
       ["-", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Bin, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Bin, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => Err(ParseIntError("sign without digits")),
+        "" => Err(IntParseSignWithoutDigits(IntBase::Bin, text)),
         _ => _parse_digits_unsigned(tail, IntBase::Bin, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Bin, 1, 0),
@@ -463,15 +499,15 @@ impl Int {
   Parse Surtr integer literal syntax from text.
   Accepts plain decimal, `0d`, `0x`, `0o`, and `0b` forms.
   """
-  def parse_literal(text: String) -> Result<Int, ParseIntLiteralError> {
+  def parse_literal(text: String) -> Result<Int> {
     match text {
-      "" => Err(ParseIntLiteralError("empty integer literal input")),
+      "" => Err(IntLiteralEmpty),
       ["-", ..tail] => match tail {
-        "" => Err(ParseIntLiteralError("sign without digits")),
+        "" => Err(IntLiteralSignWithoutDigits(text)),
         _ => _parse_literal_unsigned(tail, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => Err(ParseIntLiteralError("sign without digits")),
+        "" => Err(IntLiteralSignWithoutDigits(text)),
         _ => _parse_literal_unsigned(tail, 1, 1),
       },
       _ => _parse_literal_unsigned(text, 1, 0),
@@ -657,7 +693,8 @@ impl Int {
 
   @doc """
   Shift `value` left inside the unsigned range represented by `width`.
-  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`; counts too large
+  for the runtime return `Err(ShiftCountTooLarge(...))`.
   ## REPL
   xldr(1)> Int::shl_in(3, 2, BitWidth::W8)
   Ok(12)
@@ -671,7 +708,8 @@ impl Int {
 
   @doc """
   Shift `value` right logically inside the unsigned range represented by `width`.
-  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`; counts too large
+  for the runtime return `Err(ShiftCountTooLarge(...))`.
   ## REPL
   xldr(1)> Int::shr_logical_in(128, 7, BitWidth::W8)
   Ok(1)
@@ -685,7 +723,8 @@ impl Int {
 
   @doc """
   Rotate `value` left inside the unsigned range represented by `width`.
-  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`; counts too large
+  for the runtime return `Err(ShiftCountTooLarge(...))`.
   ## REPL
   xldr(1)> Int::rotl_in(129, 1, BitWidth::W8)
   Ok(3)
@@ -702,7 +741,8 @@ impl Int {
 
   @doc """
   Rotate `value` right inside the unsigned range represented by `width`.
-  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`; counts too large
+  for the runtime return `Err(ShiftCountTooLarge(...))`.
   ## REPL
   xldr(1)> Int::rotr_in(3, 1, BitWidth::W8)
   Ok(129)
@@ -719,23 +759,25 @@ impl Int {
 
   @doc """
   Shift `value` left by `bits`.
-  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`; counts too large
+  for the runtime return `Err(ShiftCountTooLarge(...))`.
   ## REPL
   xldr(1)> Int::shl(3, 2)
   Ok(12)
   """
   @builtin
-  def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
+  def shl(value: Int, bits: Int) -> Result<Int>
 
   @doc """
   Shift `value` right by `bits`.
-  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`; counts too large
+  for the runtime return `Err(ShiftCountTooLarge(...))`.
   ## REPL
   xldr(1)> Int::shr(12, 2)
   Ok(3)
   """
   @builtin
-  def shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
+  def shr(value: Int, bits: Int) -> Result<Int>
 
   @doc """
   Return the absolute value of `value`.
@@ -848,13 +890,13 @@ impl Div for Int {
 
 impl Mod for Int {
   @doc """
-  Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
+  Compute `a mod b` for integers and return `Err(ZeroModuloError)` on zero.
   Failure stays on the value side rather than becoming an implicit exception.
   ## REPL
   xldr(1)> Mod::safe_mod(7, 3)
   Ok(1)
   """
-  @builtin def safe_mod(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError>
+  @builtin def safe_mod(self: Self, rhs: Self) -> Result<Self, ZeroModuloError>
 }
 
 impl Show for Int {

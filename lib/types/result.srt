@@ -137,9 +137,9 @@ impl Result {
 
   Use `cause(...)` when the previous error should remain in the chain.
   ## REPL
-  xldr(1)> Result::map_err(Err(NoneError), EmptyList)
-  Err(EmptyList("Empty List."))
-  xldr(2)> replace_error: (Result<Int> -> Result<Int>) = &Result::map_err(&1, EmptyList())
+  xldr(1)> Result::map_err(Err(NoneError), NotImplemented)
+  Err(NotImplemented("not implemented"))
+  xldr(2)> replace_error: (Result<Int> -> Result<Int>) = &Result::map_err(&1, NotImplemented())
   xldr(3)> replace_error(Ok(1))
   Ok(1)
   """
@@ -164,9 +164,9 @@ impl Result {
 
   This keeps `Error` runtime-managed and opaque while still allowing domain layering.
   ## REPL
-  xldr(1)> Result::cause(Ok(1), EmptyList)
+  xldr(1)> Result::cause(Ok(1), NotImplemented)
   Ok(1)
-  xldr(2)> add_cause: (Result<Int> -> Result<Int>) = &Result::cause(&1, EmptyList())
+  xldr(2)> add_cause: (Result<Int> -> Result<Int>) = &Result::cause(&1, NotImplemented())
   xldr(3)> add_cause(Ok(1))
   Ok(1)
   """
@@ -207,11 +207,11 @@ impl Result {
   Recover from one concrete error kind.
 
   This is a special form: `marker` has the compiler-reserved `ErrorKind`
-  type and accepts only a concrete `deferror` type name, such as `Timeout`,
+  type and accepts only a concrete `deferror` type name, such as `NoneError`,
   including names qualified by a module. Constructor calls, runtime Error
   values, strings, abstract `Error`, and non-error names are rejected.
   The kind marker does not construct an Error and does not depend on the
-  constructor's payload arity. In a complete call capture, keep the concrete
+  constructor's input signature or saved Payload schema. In a complete call capture, keep the concrete
   type name in place; a direct placeholder cannot replace the marker.
   The Error handler follows the ordinary callable rules.
   The handler is evaluated only when
