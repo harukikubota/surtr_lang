@@ -1099,6 +1099,17 @@ impl Checker {
                     }
                 }
             }
+            (AstTy::Generic(_, _, args), Ty::Pid(marker)) if args.len() == 1 => {
+                self.collect_signature_ty_bindings(&args[0], marker, bindings);
+            }
+            (AstTy::Generic(_, name, args), Ty::Enum(_, resolved_args))
+                if matches!(Self::surface_name(name), "Workers" | "WorkerLease")
+                    && args.len() == 1 =>
+            {
+                if let [Ty::Pid(marker)] = resolved_args.as_slice() {
+                    self.collect_signature_ty_bindings(&args[0], marker, bindings);
+                }
+            }
             (AstTy::Generic(_, _, args), Ty::List(inner)) if args.len() == 1 => {
                 self.collect_signature_ty_bindings(&args[0], inner, bindings);
             }

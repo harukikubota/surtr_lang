@@ -199,6 +199,7 @@ pub(super) struct CandidateProbeCheckpoint {
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     explicit_closure_parameters: HashMap<u32, Ty>,
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     safe_operator_results: HashMap<(usize, usize), SourceFact>,
     warnings: WarningBuffer,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
@@ -211,7 +212,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::type_contains_constructor_application(inner),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => Self::type_contains_constructor_application(inner),
             Ty::Tuple(items) => items
                 .iter()
                 .any(Self::type_contains_constructor_application),
@@ -263,7 +265,7 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Pid(_) => false,
+            | Ty::ProcessMarker(_) => false,
         }
     }
 
@@ -294,7 +296,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.unresolved_constructor_application_in_type(inner),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.unresolved_constructor_application_in_type(inner),
             Ty::Tuple(items) => items
                 .iter()
                 .find_map(|item| self.unresolved_constructor_application_in_type(item)),
@@ -337,7 +340,7 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Pid(_) => None,
+            | Ty::ProcessMarker(_) => None,
         }
     }
 
@@ -499,6 +502,7 @@ impl Checker {
             constructor_capabilities: self.constructor_capabilities.clone(),
             explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            process_marker_tyvars: self.process_marker_tyvars.clone(),
             safe_operator_results: self.safe_operator_results.clone(),
             warnings: self.warnings.clone(),
             pattern_binding_aliases: self.pattern_binding_aliases.clone(),
@@ -516,6 +520,7 @@ impl Checker {
         self.constructor_capabilities = checkpoint.constructor_capabilities;
         self.explicit_closure_parameters = checkpoint.explicit_closure_parameters;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
+        self.process_marker_tyvars = checkpoint.process_marker_tyvars;
         self.safe_operator_results = checkpoint.safe_operator_results;
         self.warnings = checkpoint.warnings;
         self.pattern_binding_aliases = checkpoint.pattern_binding_aliases;
@@ -524,7 +529,7 @@ impl Checker {
     fn collect_callable_value_tyvars(ty: &Ty, variables: &mut Vec<u32>) {
         match ty {
             Ty::Func(..) | Ty::ExtractorClosure(_) => Self::collect_ty_vars(ty, variables),
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::MatchResult(inner) => {
+            Ty::List(inner) | Ty::Pid(inner) | Ty::Lazy(inner) | Ty::MatchResult(inner) => {
                 Self::collect_callable_value_tyvars(inner, variables);
             }
             Ty::Tuple(items) | Ty::Enum(_, items) | Ty::SelfApp(items) => {
@@ -553,7 +558,7 @@ impl Checker {
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
-            | Ty::Pid(_)
+            | Ty::ProcessMarker(_)
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error => {}
@@ -2402,7 +2407,8 @@ impl Checker {
                 Ty::List(inner)
                 | Ty::MatchResult(inner)
                 | Ty::ExtractorClosure(inner)
-                | Ty::Lazy(inner) => needs_context(inner),
+                | Ty::Lazy(inner)
+                | Ty::Pid(inner) => needs_context(inner),
                 Ty::Result(ok, error) => needs_context(ok) || needs_context(error),
                 Ty::Tuple(items) => items.iter().any(needs_context),
                 Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
@@ -2424,7 +2430,7 @@ impl Checker {
                 | Ty::Bool
                 | Ty::Unit
                 | Ty::Error
-                | Ty::Pid(_) => false,
+                | Ty::ProcessMarker(_) => false,
             }
         }
         if !constraints
@@ -2846,7 +2852,8 @@ impl Checker {
                 (Ty::MatchResult(left), Ty::MatchResult(right))
                 | (Ty::ExtractorClosure(left), Ty::ExtractorClosure(right))
                 | (Ty::List(left), Ty::List(right))
-                | (Ty::Lazy(left), Ty::Lazy(right)) => {
+                | (Ty::Lazy(left), Ty::Lazy(right))
+                | (Ty::Pid(left), Ty::Pid(right)) => {
                     find(checker, left, right, explicit_slot_for_var)
                 }
                 (Ty::Result(left_ok, left_err), Ty::Result(right_ok, right_err)) => {
@@ -5673,7 +5680,8 @@ impl Checker {
                 Ty::List(inner)
                 | Ty::MatchResult(inner)
                 | Ty::ExtractorClosure(inner)
-                | Ty::Lazy(inner) => contains_trait_constructor_input(inner, trait_args),
+                | Ty::Lazy(inner)
+                | Ty::Pid(inner) => contains_trait_constructor_input(inner, trait_args),
                 Ty::Result(ok, error) => {
                     contains_trait_constructor_input(ok, trait_args)
                         || contains_trait_constructor_input(error, trait_args)
@@ -5722,7 +5730,7 @@ impl Checker {
                 | Ty::Bool
                 | Ty::Unit
                 | Ty::Error
-                | Ty::Pid(_) => false,
+                | Ty::ProcessMarker(_) => false,
             }
         }
         // When a receiverless constructor method's value parameter carries a
@@ -9635,7 +9643,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.count_tyvar_occurrences(inner, needle),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.count_tyvar_occurrences(inner, needle),
             Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .map(|item| self.count_tyvar_occurrences(item, needle))
@@ -9679,7 +9688,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole
-            | Ty::Pid(_) => 0,
+            | Ty::ProcessMarker(_) => 0,
         }
     }
 
@@ -9713,7 +9722,8 @@ impl Checker {
             (Ty::MatchResult(template), Ty::MatchResult(replacement))
             | (Ty::ExtractorClosure(template), Ty::ExtractorClosure(replacement))
             | (Ty::List(template), Ty::List(replacement))
-            | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
+            | (Ty::Lazy(template), Ty::Lazy(replacement))
+            | (Ty::Pid(template), Ty::Pid(replacement)) => self
                 .collect_facet_rebuild_tyvar_replacements(
                     template,
                     replacement,
@@ -10005,6 +10015,9 @@ impl Checker {
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::Pid(inner) => Ty::Pid(Box::new(
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
             Ty::Tuple(items) => Ty::Tuple(
@@ -11155,7 +11168,7 @@ impl Checker {
                                 ));
                             };
                             return Ok(TypedNode {
-                                ty: Ty::Pid(process_name),
+                                ty: Ty::pid(process_name),
                                 span: span.clone(),
                                 node: TypedInner::App(Box::new(typed_func), typed_args),
                             });
@@ -11662,7 +11675,7 @@ impl Checker {
 
         Ok(Some(TypedNode {
             ty: Ty::Result(
-                Box::new(Ty::Pid(worker_process.clone())),
+                Box::new(Ty::pid(worker_process.clone())),
                 Box::new(Ty::Error),
             ),
             span: span.clone(),
@@ -11728,7 +11741,12 @@ impl Checker {
         };
         let typed_pid = self.check_node(pid_expr)?;
         let worker_process = match self.resolve_ty(&typed_pid.ty) {
-            Ty::Pid(process_name) => process_name,
+            Ty::Pid(marker) if matches!(marker.as_ref(), Ty::ProcessMarker(_)) => {
+                let Ty::ProcessMarker(name) = *marker else {
+                    unreachable!()
+                };
+                name
+            }
             other => {
                 return Err(self.process_policy_error(
                     format!(
@@ -11963,7 +11981,7 @@ impl Checker {
             ty: Ty::Result(
                 Box::new(Ty::Enum(
                     "Workers".into(),
-                    vec![Ty::Pid(worker_process.clone())],
+                    vec![Ty::pid(worker_process.clone())],
                 )),
                 Box::new(Ty::Error),
             ),
@@ -12086,7 +12104,7 @@ impl Checker {
         let Ty::Pid(pid_process) = self.resolve_ty(first_param) else {
             return Ok(None);
         };
-        if Self::surface_name(&pid_process) != Self::surface_name(&process_name) {
+        if !matches!(pid_process.as_ref(), Ty::ProcessMarker(name) if name == &process_name) {
             return Ok(None);
         }
         if args.len() != remaining_params.len() {
@@ -12108,7 +12126,7 @@ impl Checker {
             }
         }
         Ok(Some(TypedNode {
-            ty: Ty::Func(vec![Ty::Pid(process_name)], ret),
+            ty: Ty::Func(vec![Ty::pid(process_name)], ret),
             span: span.clone(),
             node: TypedInner::InjectCall(Box::new(typed_func), typed_args),
         }))
@@ -12159,7 +12177,7 @@ impl Checker {
             return Ok(None);
         }
 
-        let pid_ty = Ty::Pid(process_name.clone());
+        let pid_ty = Ty::pid(process_name.clone());
         let typed_pid = match &args[0] {
             ResolvedRecordLitArg::Positional(expr) => {
                 self.check_node_with_expected(expr, Some(&pid_ty))?
@@ -12384,7 +12402,7 @@ impl Checker {
             ));
         };
         Ok(TypedNode {
-            ty: Ty::Pid(capability),
+            ty: Ty::pid(Self::canonical_user_type_name(&capability)),
             span: span.clone(),
             node: TypedInner::ProcessContextHandler {
                 process_name,

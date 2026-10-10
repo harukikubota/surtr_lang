@@ -1798,7 +1798,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => Self::collect_ty_vars(inner, out),
             Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
@@ -1841,7 +1842,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole
-            | Ty::Pid(_) => {}
+            | Ty::ProcessMarker(_) => {}
         }
     }
 
@@ -2306,7 +2307,7 @@ impl Checker {
             Ty::Bool => Some("Boolean".into()),
             Ty::Unit => Some("Unit".into()),
             Ty::Error => Some("Error".into()),
-            Ty::Pid(name) => Some(format!("PID<{name}>")),
+            Ty::Pid(marker) => Some(format!("PID<{}>", self.ty_name(&marker))),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
             Ty::Facet(..) => Some("Facet".into()),
@@ -2337,15 +2338,14 @@ impl Checker {
         }
     }
 
-    fn pid_eq_process_spec_exists(&self, name: &str) -> bool {
-        let implicit_root = (!name.starts_with(sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX))
-            .then(|| format!("{}{}", sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX, name));
-        let mut matches = self.process_specs.iter().filter(|spec| {
-            spec.process_name == name
-                || implicit_root
-                    .as_ref()
-                    .is_some_and(|alias| spec.process_name == *alias)
-        });
+    fn pid_eq_process_spec_exists(&self, marker: &Ty) -> bool {
+        let Ty::ProcessMarker(name) = marker else {
+            return false;
+        };
+        let mut matches = self
+            .process_specs
+            .iter()
+            .filter(|spec| spec.process_name == *name);
         let Some(spec) = matches.next() else {
             return false;
         };
@@ -2679,6 +2679,11 @@ impl Checker {
                     .collect::<Result<_, _>>()?,
                 Box::new(self.expand_trait_self_apps(*ret, target_ty, constructor_slot_vars)?),
             ),
+            Ty::Pid(inner) => Ty::Pid(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.expand_trait_self_apps(
                 *inner,
                 target_ty,
@@ -3092,7 +3097,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.validate_nominal_declaration_constructor_applications(
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.validate_nominal_declaration_constructor_applications(
                 inner, parameters, owner, span,
             )?,
             Ty::Tuple(items) => {
@@ -3151,7 +3157,7 @@ impl Checker {
             | Ty::Error
             | Ty::Hole
             | Ty::Var(_)
-            | Ty::Pid(_) => {}
+            | Ty::ProcessMarker(_) => {}
         }
         Ok(())
     }

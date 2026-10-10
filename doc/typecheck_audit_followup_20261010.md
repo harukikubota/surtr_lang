@@ -2,23 +2,23 @@
 
 2026-10-10、現行ソース・正本文書・既存テストから再調査した。2026-10-10の利用者判断は維持し、古い観測・未確認範囲を現行の不具合と混同しない。
 
-調査開始時のHEADは`717d0fd301f4d51b506ceb72347b74d4bf8134fc`、終了時は`c569e5bab2d229e7ce6d42a1d7428cbeec0a92cc`。間の変更は別作業による`doc/callable_name_and_syntax_classification.md`の削除だけで、対象ソースは同じである。指定された2つの調査書だけを更新した。製品コード・標準定義・正本文書・テストファイルは変更していない。
+最初の再調査では、開始時のHEADは`717d0fd301f4d51b506ceb72347b74d4bf8134fc`、終了時は`c569e5bab2d229e7ce6d42a1d7428cbeec0a92cc`だった。間の変更は別作業による`doc/callable_name_and_syntax_classification.md`の削除だけで、対象ソースは同じだった。この時点では指定された2つの調査書だけを更新し、製品コード・標準定義・正本文書・テストファイルは変更していない。その後の修正結果は、下表と各項目の先頭に追記している。
 
-プロセスの停止・回収は実装・検証を完了し、契約を[Process Runtime 正本](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了)へ反映した。TC-03・04とTC-06のPID側もプロセス関連として別作業へ渡すが、この停止仕様だけで型適合や標準の比較実装まで修正されるとは扱わない。
+プロセスの停止・回収は実装・検証を完了し、契約を[Process Runtime 正本](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了)へ反映した。TC-04の型規則も今回別途修正・検証した。TC-03とTC-06のPID側は未確定のAPI契約が残るため、停止仕様やTC-04だけで解消済みとは扱わない。
 
 ## 対応が必要な項目
 
 | ID | 現行の判定 | 次の対応 |
 |---|---|---|
 | TC-03 | WorkerLease→PIDの暗黙適合を再現 | プロセス側で通常型比較から除去。生成helperとの受渡しを明示契約へ揃える |
-| TC-04 | 未知PID marker、genericの不正適合を再現 | プロセス側でmarkerの解決と型変数の同一性を通常規則へ揃える |
+| TC-04 | 修正・検証済み | markerをcanonical宣言へ解決し、通常の型変数・代入・rigid規則へ統一 |
 | TC-05 | 修正・検証済み | Hole入力の適合例外を除去し、通常関係へ統一。直接呼出しの無視入力契約は維持 |
 | TC-06・Enum | 修正・検証済み | payloadの有無によらず明示impl / deriveの通常proof・dispatchを使う |
 | TC-06・PID | compiler-owned Eqが残存 | プロセス側で標準実装へ移す。`instance_of`のAPIとEqとの接続は未確定 |
 | TC-10 | 文書修正済み | Resultの補助エラー名はドキュメント用で、返却kindの静的制限・網羅検査を行わないと正本へ明記 |
 | TC-11 | 修正・検証済み | 型注釈producerの元TypeErrorをprobe rollback後も保持。候補依存失敗はcandidate情報を維持 |
 
-プロセス以外の確定項目TC-05、TC-06のEnum側、TC-10、TC-11と、[runtime側のRT-11](runtime_audit_followup_20261010.md#rt-11-recoverの説明を現行の通常関数へ揃える)は修正・検証済み。TC-04は今回の実装対象として続ける。
+型検査側の確定項目TC-04、TC-05、TC-06のEnum側、TC-10、TC-11は修正・検証済み。[runtime側のRT-06・RT-09・RT-11](runtime_audit_followup_20261010.md)も含め、今回の8項目は完了ごとに入力を更新し、個別コミットした。
 
 ## TC-05: Hole入力に限ったcallable適合
 
@@ -159,7 +159,15 @@ def leak_list(lease: WorkerLease<Counter>) -> List<PID<Counter>> { [lease] }
 
 ### TC-04: PID markerとgeneric同一性
 
-`checker/types.rs:604-616`の`pid_marker_from_ast`はNamedの文字列を返し、process宣言の存在・種別を検査しない。`2711-2714`のPID比較は片側が`$`始まりなら一致させ、通常の型変数束縛を共有しない。
+**修正・検証済み（level4）。** 2026-10-10、PIDの内側を通常の型表現へ変更し、具体markerは登録済みprocessまたは標準handlerのcanonical identityへ解決する。未知名・通常型・単なるmoduleを拒否し、末尾短名の同一視と文字列の`$` prefixによる適合を除去した。`PID<$P>`は同じ宣言内の通常の型変数を共有する。
+
+markerの許可範囲は通常の代入にも適用し、不正なRTA具体化、別processへの返却、同じgenericへの異種入力を拒否する。署名・fieldで宣言したmarker制約と、ローカル注釈で要求する制約を区別し、普通のrigid変数を本体だけでmarkerへ強化しない。resolve・fresh化・代入・occurs check・canonical比較・特殊化・checkpointはPIDの内側へ再帰する。builtinのWorkers / WorkerLease、生成helper、capture、nominalのmarker型引数、表示、Error payload schemaも追従した。runtimeのcanonical process名とschema / VM versionは維持する。TC-03のlease一般適合とTC-06のPID Eq APIは変更していない。
+
+`crates/scar/tests/pid_marker_identity.rs`の13件で成功・拒否境界を固定した。未知marker、genericの別process返却と異種入力、ローカル注釈のrigid強化、有効nominal marker引数の解決失敗でRedを確認し、全件Greenにした。既束縛Intの拒否とgeneric PID fieldのschema生成・runtime検査は直接の層で固定した。Process Runtime正本と利用者説明を追従し、独立レビューの指摘はすべて解消した。最適化文書の途切れていた説明も補った。
+
+最終の局所検証は`rtk cargo nextest run -p scar -p forge -p sindr -p xldr`が695件成功。初回の全体CIでは既存の失敗fixture2件で検査用helperのmetadata欠落が判明したため、通常コンパイルと同じstaged program入口へ接続した。製品fallbackや期待診断は変更せず、対象2件の成功を確認した。再実行した`rtk cargo nextest run --profile ci --workspace --features rune/tui`は2,446件成功、`rtk proxy cargo run -- test --quiet --all`は終了コード0。quietのため標準テスト件数は記録していない。実PIDの追加CLI検証では、spawnした2つの同process PIDを`take(first, second)`と`identity(first)`へ渡し、その返却PIDを使うメッセージがともに`Ok(1)`を返した。`cargo fmt --all -- --check`と`git diff --check`も成功した。
+
+以下は修正前の調査記録。`checker/types.rs:604-616`の`pid_marker_from_ast`はNamedの文字列を返し、process宣言の存在・種別を検査しない。`2711-2714`のPID比較は片側が`$`始まりなら一致させ、通常の型変数束縛を共有しない。
 
 ```surtr
 def fake(value: PID<NotAProcess>) -> PID<NotAProcess> { value }

@@ -118,6 +118,8 @@ cargo run -q -p rune -- run examples/process/agent_worker_multi/entry.srt
 - `alpha` と `beta` は別 PID なので、片方を更新しても state は混ざりません
 - `PID<T>` は型付きなので、別 process の PID を混ぜると compile error になります
 
+`PID<T>` の `T` には定義済みの process 名を指定します。存在しない名前や `Int` などの通常の型は指定できません。同じ短名でも、`Left::Counter` と `Right::Counter` は別の process です。`PID<$P>` を受け取る汎用関数でも、同じ `$P` の引数には同じ process 型の PID を渡します。標準の入出力 handler はそれぞれ `PID<InHandler>` / `PID<OutHandler>` で表します。
+
 同じ process 型の PID は `==` / `!=` で比較できます。singleton の PID は同じ型なら常に等しく、worker の PID は同じ個体を指すときだけ等しくなります。handler 用の PID は比較対象外です。
 
 singleton と worker の選び方は単純です。

@@ -9,6 +9,7 @@ use diagnostics::{
 struct TypeRelationCheckpoint {
     substitutions: Vec<(u32, Option<Ty>)>,
     tyvar_bounds: Vec<(u32, Option<Vec<String>>)>,
+    process_marker_tyvars: Vec<(u32, bool)>,
     pending_trait_obligations: Vec<(u32, Option<Vec<PendingTraitObligation>>)>,
 }
 
@@ -44,6 +45,10 @@ impl Checker {
                 .iter()
                 .map(|var| (*var, self.tyvar_bounds.get(var).cloned()))
                 .collect(),
+            process_marker_tyvars: tracked
+                .iter()
+                .map(|var| (*var, self.process_marker_tyvars.contains(var)))
+                .collect(),
             pending_trait_obligations: tracked
                 .iter()
                 .map(|var| (*var, self.pending_trait_obligations.get(var).cloned()))
@@ -60,6 +65,13 @@ impl Checker {
                 None => {
                     self.substitutions.remove(&var);
                 }
+            }
+        }
+        for (var, was_marker) in checkpoint.process_marker_tyvars {
+            if was_marker {
+                self.process_marker_tyvars.insert(var);
+            } else {
+                self.process_marker_tyvars.remove(&var);
             }
         }
         for (var, value) in checkpoint.tyvar_bounds {
@@ -611,7 +623,9 @@ impl Checker {
                 }
                 return Ok(None);
             }
-            (Ty::List(a), Ty::List(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => vec![(a, b)],
+            (Ty::List(a), Ty::List(b)) | (Ty::Lazy(a), Ty::Lazy(b)) | (Ty::Pid(a), Ty::Pid(b)) => {
+                vec![(a, b)]
+            }
             (Ty::Result(a, e), Ty::Result(b, f)) => vec![(a, b), (e, f)],
             (Ty::Tuple(a), Ty::Tuple(b)) | (Ty::Enum(_, a), Ty::Enum(_, b))
                 if a.len() == b.len() =>

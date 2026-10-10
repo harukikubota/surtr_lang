@@ -2758,7 +2758,8 @@ impl Checker {
                 update_source: Box::new(self.canonical_ty_key(&update_source)),
                 update_focus: Box::new(self.canonical_ty_key(&update_focus)),
             },
-            Ty::Pid(name) => CanonicalTyKey::Pid(Self::canonical_specialization_name(&name)),
+            Ty::Pid(marker) => CanonicalTyKey::Pid(Box::new(self.canonical_ty_key(&marker))),
+            Ty::ProcessMarker(name) => CanonicalTyKey::ProcessMarker(name),
             Ty::BuiltinFunc { name, params, ret } => CanonicalTyKey::BuiltinFunc {
                 name,
                 params: params
@@ -3557,7 +3558,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
@@ -3621,7 +3623,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole
-            | Ty::Pid(_) => {}
+            | Ty::ProcessMarker(_) => {}
         }
     }
 
@@ -4557,6 +4559,7 @@ impl Checker {
             }
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
+            Ty::Pid(inner) => Ty::Pid(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
                 *kind,
                 Box::new(self.substitute_ty_with_mapping(source, mapping)),

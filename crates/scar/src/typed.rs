@@ -885,7 +885,8 @@ pub enum CanonicalTypeHead {
     Function,
     SelfApplication,
     Facet(crate::types::FacetKind),
-    Pid(String),
+    Pid,
+    ProcessMarker(String),
     Hole,
 }
 

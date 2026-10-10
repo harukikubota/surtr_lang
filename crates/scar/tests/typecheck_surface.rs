@@ -10267,7 +10267,10 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
         })
         .expect("expected pid binding");
     match &rhs.ty {
-        Ty::Pid(symbol) => assert!(symbol == "Counter" || symbol == "Global::Counter"),
+        Ty::Pid(marker) => assert_eq!(
+            marker.as_ref(),
+            &Ty::ProcessMarker("Global::Counter".into())
+        ),
         other => panic!("expected PID<Counter>, got {other:?}"),
     }
 }
@@ -10315,7 +10318,10 @@ fn singleton_genserver_pid_surface_returns_concrete_pid() {
         })
         .expect("expected pid binding");
     match &rhs.ty {
-        Ty::Pid(symbol) => assert!(symbol == "QueueServer" || symbol == "Global::QueueServer"),
+        Ty::Pid(marker) => assert_eq!(
+            marker.as_ref(),
+            &Ty::ProcessMarker("Global::QueueServer".into())
+        ),
         other => panic!("expected PID<QueueServer>, got {other:?}"),
     }
 }

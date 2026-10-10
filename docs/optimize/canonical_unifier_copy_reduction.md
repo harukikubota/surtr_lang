@@ -5,6 +5,8 @@
 ユーザ入力: `resolve` が型部分木を所有 `CanonicalTy` へ再帰コピーし、`unify` と
 `unify_constructor_identity` が各子で再び解決する。深さ D の単項入れ子型では
 構築・割当が概ね O(D²) になる。深さと allocation/time の伸びを比較し、overlap / 非overlap、
+rigid、occurs check の判定を保って再コピーを減らす。
+
 初回の最適化では判定を維持して再コピーを減らした。2026-10-10のTC-05修正では、callable入力のHole例外を除去し、本書の比較規則を通常の構造比較へ追従させた。末尾の最適化時の検証記録は、今回の修正後の検証結果とは区別する。
 
 ## 範囲と契約

@@ -2570,7 +2570,7 @@ mod tests {
         let option_ty = Ty::Enum("Global::Option".into(), vec![user_ty.clone()]);
         assert_eq!(ty_to_string(&option_ty), "Option<User>");
 
-        let pid_ty = Ty::Pid("Global::Worker".into());
+        let pid_ty = Ty::pid("Global::Worker");
         assert_eq!(ty_to_string(&pid_ty), "PID<Worker>");
 
         let result = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
@@ -2579,6 +2579,38 @@ mod tests {
             ty_to_string(&Ty::List(Box::new(result))),
             "List<Result<Int>>"
         );
+    }
+
+    #[test]
+    fn pid_error_schema_preserves_generic_nominal_fields_and_rejects_invalid_markers() {
+        use sindr::ir::ErrorValueSchema as S;
+        let marker = Ty::ProcessMarker("Global::Worker".into());
+        let pid = Ty::Pid(Box::new(marker.clone()));
+        let definition = scar::typed::TypedNominalDefinition {
+            type_param_vars: vec![4],
+            fields: vec![("pid".into(), Ty::Pid(Box::new(Ty::Var(4))))],
+        };
+        let ty = Ty::Struct(
+            "Global::PidBox".into(),
+            NominalType::new(vec![marker.clone()], vec![("pid".into(), pid)]),
+        );
+        let nominals = HashMap::from([("Global::PidBox".into(), definition)]);
+        let enums = HashMap::new();
+        assert_eq!(
+            super::error_value_schema(&ty, &span(0, 1), &enums, &nominals).unwrap(),
+            S::Struct {
+                name: "Global::PidBox".into(),
+                arguments: vec![S::ProcessMarker("Global::Worker".into())],
+                fields: vec![S::Pid(Box::new(S::TypeParameter(0)))],
+            }
+        );
+        for invalid in [
+            Ty::Pid(Box::new(Ty::Var(4))),
+            Ty::Pid(Box::new(Ty::Int)),
+            marker,
+        ] {
+            assert!(super::error_value_schema(&invalid, &span(0, 1), &enums, &nominals).is_err());
+        }
     }
 
     #[test]
@@ -2926,12 +2958,12 @@ mod tests {
             "WorkerLease",
         ] {
             let argument = if matches!(name, "Workers" | "WorkerLease") {
-                Ty::Pid("Global::Worker".into())
+                Ty::pid("Global::Worker")
             } else {
                 Ty::Int
             };
             let expected = if matches!(name, "Workers" | "WorkerLease") {
-                S::Pid("Global::Worker".into())
+                S::Pid(Box::new(S::ProcessMarker("Global::Worker".into())))
             } else {
                 S::Int
             };
@@ -6977,7 +7009,16 @@ fn error_value_schema(
                 result: Box::new(nested(ret, active)?),
             },
             Ty::ExtractorClosure(function) => nested(function, active)?,
-            Ty::Pid(name) => S::Pid(name.to_string()),
+            Ty::Pid(marker) => {
+                if !matches!(marker.as_ref(), Ty::Var(_) | Ty::ProcessMarker(_)) {
+                    return Err(CodegenError {
+                        message: "PID error schema requires a process marker".into(),
+                        span: span.clone(),
+                    });
+                }
+                S::Pid(Box::new(nested(marker, active)?))
+            }
+            Ty::ProcessMarker(name) => S::ProcessMarker(name.clone()),
             Ty::MatchResult(ok) => S::MatchResult(Box::new(nested(ok, active)?)),
             Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
                 let arguments = nominal
@@ -7114,6 +7155,12 @@ fn error_value_schema(
             }
         })
     }
+    if matches!(ty, Ty::ProcessMarker(_)) {
+        return Err(CodegenError {
+            message: "process markers have no standalone runtime value schema".into(),
+            span: span.clone(),
+        });
+    }
     convert(ty, span, enums, nominals, &HashMap::new(), &mut Vec::new())
 }
 
@@ -7145,7 +7192,11 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             "Lazy<{}>",
             ty_to_string_with_type_params(inner, type_params)
         ),
-        Ty::Pid(name) => format!("PID<{}>", surface_rendered_name(name)),
+        Ty::Pid(marker) => format!(
+            "PID<{}>",
+            ty_to_string_with_type_params(marker, type_params)
+        ),
+        Ty::ProcessMarker(name) => surface_rendered_name(name).to_string(),
         Ty::Facet(kind, source, focus, update_source, update_focus) => {
             format!(
                 "Facet<{}, {}, {}, {}, {}>",
@@ -8754,7 +8805,9 @@ impl Codegen {
         fn pending(ty: &Ty) -> bool {
             match ty {
                 Ty::Var(_) | Ty::SelfApp(_) => true,
-                Ty::List(inner) | Ty::Lazy(inner) | Ty::MatchResult(inner) => pending(inner),
+                Ty::List(inner) | Ty::Lazy(inner) | Ty::MatchResult(inner) | Ty::Pid(inner) => {
+                    pending(inner)
+                }
                 Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(pending),
                 Ty::Func(params, ret)
                 | Ty::BuiltinFunc { params, ret, .. }
@@ -14461,7 +14514,7 @@ mod process_runtime_v2_tests {
     fn supervisor_spawn_lowers_to_metadata_arity_shape() {
         let mut gene = Codegen::new();
         let node = TypedNode {
-            ty: Ty::Result(Box::new(Ty::Pid("MyWorker".into())), Box::new(Ty::Error)),
+            ty: Ty::Result(Box::new(Ty::pid("Global::MyWorker")), Box::new(Ty::Error)),
             span: span(1, 48),
             node: TypedInner::SupervisorSpawn {
                 supervisor_process: "MySup".into(),
@@ -14499,7 +14552,10 @@ mod process_runtime_v2_tests {
         let mut gene = Codegen::new();
         let node = TypedNode {
             ty: Ty::Result(
-                Box::new(Ty::Enum("Workers".into(), vec![Ty::Pid("MyWorker".into())])),
+                Box::new(Ty::Enum(
+                    "Workers".into(),
+                    vec![Ty::pid("Global::MyWorker")],
+                )),
                 Box::new(Ty::Error),
             ),
             span: span(1, 64),

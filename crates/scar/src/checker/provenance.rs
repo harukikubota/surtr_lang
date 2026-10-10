@@ -679,6 +679,7 @@ impl Checker {
             Ty::ExtractorClosure(element) => Ok(Ty::ExtractorClosure(Box::new(recurse(element)?))),
             Ty::MatchResult(element) => Ok(Ty::MatchResult(Box::new(recurse(element)?))),
             Ty::List(element) => Ok(Ty::List(Box::new(recurse(element)?))),
+            Ty::Pid(marker) => Ok(Ty::Pid(Box::new(recurse(marker)?))),
             Ty::Tuple(items) => Ok(Ty::Tuple(
                 items.iter().map(recurse).collect::<Result<_, _>>()?,
             )),
@@ -1225,7 +1226,8 @@ impl Checker {
             Ty::List(item)
             | Ty::Lazy(item)
             | Ty::MatchResult(item)
-            | Ty::ExtractorClosure(item) => Self::has_callback_slot(item),
+            | Ty::ExtractorClosure(item)
+            | Ty::Pid(item) => Self::has_callback_slot(item),
             Ty::Result(ok, error) => Self::has_callback_slot(ok) || Self::has_callback_slot(error),
             _ => false,
         }

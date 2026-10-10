@@ -819,7 +819,8 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
         Ty::List(inner)
         | Ty::MatchResult(inner)
         | Ty::ExtractorClosure(inner)
-        | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
+        | Ty::Lazy(inner)
+        | Ty::Pid(inner) => type_contains_unresolved_vars(inner),
         Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
             items.iter().any(type_contains_unresolved_vars)
         }
@@ -844,9 +845,14 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
                     .iter()
                     .any(|(_, field_ty)| type_contains_unresolved_vars(field_ty))
         }
-        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
-            false
-        }
+        Ty::Int
+        | Ty::Float
+        | Ty::Str
+        | Ty::Bool
+        | Ty::Unit
+        | Ty::ProcessMarker(_)
+        | Ty::Hole
+        | Ty::Error => false,
     }
 }
 
@@ -1141,7 +1147,16 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 let [inner] = args.as_slice() else {
                     return Err("PID requires exactly 1 type argument".into());
                 };
-                Ty::Pid(pid_marker_name_from_ty(inner))
+                Ty::Pid(Box::new(builtin_pid_marker_from_ty(inner)?))
+            }
+            "Workers" | "WorkerLease" => {
+                let [inner] = args.as_slice() else {
+                    return Err(format!("{ident} requires exactly 1 type argument"));
+                };
+                Ty::Enum(
+                    ident.to_string(),
+                    vec![Ty::Pid(Box::new(builtin_pid_marker_from_ty(inner)?))],
+                )
             }
             other => Self::builtin_special_enum_ty_for_query(other, &args)
                 .unwrap_or_else(|| Ty::Enum(other.to_string(), args)),
@@ -1202,19 +1217,15 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
     }
 }
 
-fn pid_marker_name_from_ty(ty: &Ty) -> String {
+fn builtin_pid_marker_from_ty(ty: &Ty) -> Result<Ty, String> {
     match ty {
-        Ty::Var(_) => "$Pid".to_string(),
-        Ty::Int => "Int".to_string(),
-        Ty::Float => "Float".to_string(),
-        Ty::Str => "String".to_string(),
-        Ty::Bool => "Boolean".to_string(),
-        Ty::Unit => "Unit".to_string(),
-        Ty::Error => "Error".to_string(),
-        Ty::Hole => "_".to_string(),
-        Ty::Pid(name) => name.clone(),
-        Ty::Enum(name, _) | Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
-        other => format!("{other:?}"),
+        Ty::Var(_) => Ok(ty.clone()),
+        Ty::Enum(name, args)
+            if args.is_empty() && matches!(name.as_str(), "OutHandler" | "InHandler") =>
+        {
+            Ok(Ty::ProcessMarker(format!("Global::{name}")))
+        }
+        _ => Err(format!("invalid builtin PID marker: {ty:?}")),
     }
 }
 
@@ -1292,7 +1303,8 @@ enum CanonicalTyKey {
         update_source: Box<CanonicalTyKey>,
         update_focus: Box<CanonicalTyKey>,
     },
-    Pid(String),
+    Pid(Box<CanonicalTyKey>),
+    ProcessMarker(String),
     BuiltinFunc {
         name: String,
         params: Vec<CanonicalTyKey>,
@@ -1352,6 +1364,7 @@ struct PersistentCheckerState {
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     explicit_closure_parameters: HashMap<u32, Ty>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
@@ -1377,6 +1390,7 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
             constructor_witness_traits: HashMap::new(),
+            process_marker_tyvars: HashSet::new(),
             constructor_capabilities: HashMap::new(),
             explicit_closure_parameters: HashMap::new(),
             signature_aliases: HashMap::new(),
@@ -1402,6 +1416,7 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            process_marker_tyvars: self.process_marker_tyvars.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             signature_aliases: self.signature_aliases.clone(),
@@ -1430,6 +1445,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
             constructor_witness_traits: checkpoint.constructor_witness_traits,
+            process_marker_tyvars: checkpoint.process_marker_tyvars,
             constructor_capabilities: checkpoint.constructor_capabilities,
             explicit_closure_parameters: checkpoint.explicit_closure_parameters,
             signature_aliases: checkpoint.signature_aliases,
@@ -1461,6 +1477,7 @@ pub struct ScarCheckpoint {
     tyvar_bounds: HashMap<u32, Vec<String>>,
     #[serde(default)]
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     explicit_closure_parameters: HashMap<u32, Ty>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
@@ -1857,7 +1874,8 @@ impl ScarSession {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
@@ -1917,7 +1935,7 @@ impl ScarSession {
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
-            | Ty::Pid(_)
+            | Ty::ProcessMarker(_)
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error => {}
@@ -3143,6 +3161,7 @@ struct Checker {
     explicit_closure_parameters: HashMap<u32, Ty>,
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
     alias_expansion_stack: Vec<String>,
@@ -3297,6 +3316,7 @@ impl Checker {
             constructor_capabilities: state.constructor_capabilities,
             explicit_closure_parameters: state.explicit_closure_parameters,
             constructor_witness_traits: state.constructor_witness_traits,
+            process_marker_tyvars: state.process_marker_tyvars,
             signature_aliases: state.signature_aliases,
             pattern_binding_aliases: state.pattern_binding_aliases,
             alias_expansion_stack: Vec::new(),
@@ -3914,7 +3934,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.ty_contains_process_init(&inner),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_process_init(item))
             }
@@ -3944,7 +3965,7 @@ impl Checker {
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
-            | Ty::Pid(_)
+            | Ty::ProcessMarker(_)
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error
@@ -4005,9 +4026,8 @@ impl Checker {
             Some(first)
                 if matches!(
                     self.resolve_ty(first),
-                    Ty::Pid(name)
-                        if Self::surface_name(&name)
-                            == Self::surface_name(&process.process_name)
+                    Ty::Pid(marker)
+                        if matches!(marker.as_ref(), Ty::ProcessMarker(name) if name == &process.process_name)
                 ) =>
             {
                 params.get(1)
@@ -4333,7 +4353,9 @@ impl Checker {
 
     fn ty_contains_handler_capability_pid(&self, ty: &Ty, slots: &HashMap<String, String>) -> bool {
         match self.resolve_ty(ty) {
-            Ty::Pid(name) => slots.values().any(|capability| capability == &name),
+            Ty::Pid(marker) => {
+                matches!(marker.as_ref(), Ty::ProcessMarker(name) if slots.values().any(|capability| Self::canonical_user_type_name(capability) == *name))
+            }
             Ty::Result(ok, err) => {
                 self.ty_contains_handler_capability_pid(&ok, slots)
                     || self.ty_contains_handler_capability_pid(&err, slots)
@@ -4376,7 +4398,8 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Hole => false,
+            | Ty::Hole
+            | Ty::ProcessMarker(_) => false,
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.ty_contains_handler_capability_pid(&source, slots)
                     || self.ty_contains_handler_capability_pid(&focus, slots)
@@ -4390,6 +4413,7 @@ impl Checker {
         let profile = self.profiler.start();
         self.substitutions = child.substitutions.clone();
         self.tyvar_bounds = child.tyvar_bounds.clone();
+        self.process_marker_tyvars = child.process_marker_tyvars.clone();
         for (current, child_use) in self
             .active_capabilities
             .iter_mut()
@@ -4480,6 +4504,7 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            process_marker_tyvars: self.process_marker_tyvars.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             signature_aliases: self.signature_aliases.clone(),
@@ -4505,6 +4530,7 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
             constructor_witness_traits: self.constructor_witness_traits,
+            process_marker_tyvars: self.process_marker_tyvars,
             constructor_capabilities: self.constructor_capabilities,
             explicit_closure_parameters: self.explicit_closure_parameters,
             signature_aliases: self.signature_aliases,

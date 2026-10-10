@@ -764,6 +764,12 @@ process runtime snapshot / VM dump は worker set の観測情報を `worker_set
 
 Worker は `spawn` で生成し、`PID<Proc>` を通して扱う。
 
+`PID<Proc>` の型引数は、登録済み process 宣言の canonical identity、標準 handler capability (`OutHandler` / `InHandler`)、または宣言内の通常の型変数である。未知名、通常の型や単なる module を process marker として受理しない。無修飾の process 名は implicit root の宣言名へ正規化し、末尾の短名が同じ別 namespace の宣言を同一視しない。
+
+`PID<$P>` の `$P` は他の signature generic と同じ変数であり、同じ宣言内の出現は同じ束縛を共有する。異なる process の PID を同じ `$P` の引数へ渡すことや、`PID<$P>` を別の具体 process の PID として返すことは拒否する。PID の marker は型検査・特殊化・canonical 型比較で通常の代入と rigid 変数の規則に従い、文字列の `$` prefix で適合を補わない。runtime には具体化済みの canonical marker を渡す。型変数を marker として使う制約は同じ変数の通常の代入にも適用し、明示的な ReturnTypeArgument で通常型へ具体化することを拒否する。ローカルの PID annotation で、marker として宣言していない rigid signature 変数へ制約を追加しない。nominal 型の generic parameter を PID marker に使う場合も、その型引数には同じ marker の解決・束縛規則を適用する。
+
+Scar の `Pid` は marker 型を子として持つ。具体 marker は process 宣言または標準 handler 宣言の canonical identity を表す内部型とし、runtime 値にはしない。型変数の収集、occurs check、代入、fresh 化、canonical 型比較、特殊化はこの子へ再帰する。Error payload schema も同じ marker 構造を保持し、generic field の型引数を代入してから runtime PID の canonical process 名を検査する。
+
 `PID<Proc>` の `Eq` は compiler-owned capability であり、同じ process type の PID だけを比較する。
 Singleton は process type ごとに一意なので、restart 前後の handle も等しい。
 Worker は同じ instance ID のときだけ等しく、終了後に保持された PID も同じ ID なら等しい。
