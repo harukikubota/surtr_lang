@@ -198,7 +198,7 @@ escape途中の入力を次の行で完成できることは保証しない。�
 | `:sig <target>` | public declaration の signature を表示する。command input は通常の REPL scope で名前解決し、local binding は関数名や trait family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。関数、trait family、operator family、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty!` / `Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。Facet API は callable signature を表示するが、`FacetPathKind` と kind alias は constructor を持たないため `:info` へ誘導する。 |
 | `:info <target>` | 定義、binding、dispatch、operator family / target、singleton process owner、PID binding の解決情報を表示する。command input は通常の REPL scope で名前解決し、local binding は callable family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。一般式 evaluation や旧 command-query 専用 surface には広げず、symbol / family / target / process / binding inspection に留める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
 | `:type <binding>` | REPL binding の型と `RuntimeTypeDisplay` を表示する。これは runtime 表示カテゴリであり compile-space `TypeIdentity` ではない。command input は通常の REPL scope で名前解決し、local binding は callable 名を shadow する。通常の値は visible binding lookup のみを対象とし、定義名、trait target query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。struct / record owner への field-oriented lookup はこの変更では追加しない。 |
-| `:facet <facet-target>` | FacetPath 定義、facet binding、または Facet API 消費の canonical path、5-slot type、derived kind、template/pending stage、API eligibility、slot 確定、result type、segment 一覧、停止点を表示する。Record の `Type._N` は対応する名前付き field と同じアクセスへ正規化するが、表示上の origin は `._N` のまま保持する。表示 metadata は Forge が Scar の typed Facet node から生成する共通情報を用い、Xldr は再構築しない。 |
+| `:facet <facet-target>` | ルート型のメンバー一覧、FacetPath 定義、facet binding、または Facet API 消費の canonical path、5-slot type、derived kind、template/pending stage、API eligibility、slot 確定、result type、segment 一覧、停止点を表示する。Record の `Type._N` は対応する名前付き field と同じアクセスへ正規化するが、表示上の origin は `._N` のまま保持する。表示 metadata は Forge が Scar の typed Facet node から生成する共通情報を用い、Xldr は再構築しない。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 | `:stacktrace [off|verbose|full]` | stack trace 表示モードを切り替える（省略時は現在値表示）。既定値は `off`。`verbose` はエラーメッセージの後に text stack trace を表示する。`full` は HTMLViewer 経由の将来モードとして予約し、現時点では未対応メッセージを返して状態を変えない。`:error` とは分離し、診断密度と stack trace 表示は独立に扱う。 |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
@@ -217,9 +217,11 @@ escape途中の入力を次の行で完成できることは保証しない。�
 - `:sig Ty` は既存どおり constructor / owner signature を表示する。`Facet.Ty` と `Ty.prop` は
   constructor signature を持たないため、それぞれ `:doc Facet.Ty` と `:info Ty` / `:facet Ty.prop`
   へ誘導する
-- `:info Ty` は definition inspection として、`facet root: public | readonly` と全 field の
-  policy (`public` / `readonly` / `private` / `private readonly`) を表示する。private field は
-  通常 source での capability visibility を保ったまま、この表示には含める
+- `:facet Ty` は FacetPath のルート定義を表示する。struct / record の field、enum の variant を名前と型の列で揃え、struct にだけ field policy (`public` / `private` と `readonly`) を付ける。variant の型は payload が 0 個なら `Unit`、1 個ならその型、複数なら tuple とする。定義の型引数名を保持する
+- `:info Ty` は同じ定義一覧を用いる。private field も inspection には含めるが、通常 source の visibility は変えない
+- `Error` は共通 `kind` / `message`、具象 `deferror` は共通情報と保存 Payload の field を表示する。外部 constructor の入力署名は Payload 一覧に含めない。Error を通る path は readonly で、Payload 消費時の局所具象 identity 検査を維持する
+- `Tuple` / `List` / `HashMap` は、それぞれ `Tuple._N`、`List.[index]` / `List.[start..end]`、`HashMap.[key]` の selector 形式を表示する。裸のルートから未確定の要素型や要素数を推測しない
+- ルート判定は可視の宣言 identity を使い、同名 binding に隠された型へ戻らない。非対応型はルート対象外として拒否し、存在しない field 等の path エラーをルート表示で隠さない。引数補完は可視のルート型と Facet binding を候補にする
 - `:facet Path` は Path inspection である。private segment を含む structurally valid Path を
   inspection でき、current REPL scope で binding または Facet API consumption が可能かを
   availability として補足する。通常 source の private capability 規則は変更しない

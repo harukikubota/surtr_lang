@@ -140,11 +140,11 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
     ReplCommandSpec {
         kind: ReplCommandKind::Facet,
         aliases: &["facet"],
-        usage: ":facet <FacetPath|binding>",
-        summary: "Inspect a FacetPath and its API boundaries",
+        usage: ":facet <root|FacetPath|binding>",
+        summary: "Inspect a Facet root, path, and API boundaries",
         detail_help: &[
-            "Usage: :facet <FacetPath|binding>",
-            "Examples: :facet path, :facet Tuple._1, :facet User.password, :facet BitWidth.Any",
+            "Usage: :facet <root|FacetPath|binding>",
+            "Examples: :facet User, :facet Tuple, :facet List, :facet path, :facet Tuple._1, :facet User.password, :facet BitWidth.Any",
             "Shows canonical path, API availability, segment policies, and where the path may stop. Private paths are inspectable but remain unavailable to ordinary REPL source.",
         ],
         arg_completion: ReplCommandArgCompletion::FacetTarget,

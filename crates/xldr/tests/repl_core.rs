@@ -4062,6 +4062,97 @@ fn core_renders_top_level_facet_composition_expressions_without_codegen_leak() {
     );
 }
 
+#[test]
+fn facet_root_inspection_lists_members_and_preserves_path_boundaries() {
+    let mut engine = ReplEngine::from_script_source(
+        "facet_roots.srt",
+        r#"
+defstruct Account {
+  private password: String,
+  readonly age: Int,
+  name: String
+}
+impl Account {
+  def new(password: String, age: Int, name: String) -> Self {
+    Account { password: password, age: age, name: name }
+  }
+}
+defrecord Profile(name: String, age: Int)
+defenum Choice { Empty, One(String), Pair(Int, String) }
+defenum MaybeItem<$T> { Nothing, Item($T) }
+deferror Trouble(code: Int) { |input: String| Self(message: input, code: 42) }
+"#,
+    )
+    .expect("facet roots should bootstrap");
+    let account = rendered_text(&engine.handle_line(":facet Account"));
+    assert!(
+        account.contains("private         password: String"),
+        "{account}"
+    );
+    assert!(account.contains("public readonly age"), "{account}");
+    assert_eq!(account, rendered_text(&engine.handle_line(":info Account")));
+    let profile = rendered_text(&engine.handle_line(":facet Profile"));
+    assert!(profile.contains("- age : Int"), "{profile}");
+    assert!(profile.contains("- name: String"), "{profile}");
+    assert!(!profile.contains("- public"), "{profile}");
+    assert_eq!(profile, rendered_text(&engine.handle_line(":info Profile")));
+    let maybe = rendered_text(&engine.handle_line(":facet MaybeItem"));
+    assert!(maybe.contains("- Item   : $T"), "{maybe}");
+    let choice = rendered_text(&engine.handle_line(":facet Choice"));
+    for row in ["- Empty: Unit", "- One  : String", "- Pair : (Int, String)"] {
+        assert!(choice.contains(row), "{choice}");
+    }
+    for (root, selector) in [
+        ("Tuple", "Tuple._N"),
+        ("List", "List.[index]"),
+        ("HashMap", "HashMap.[key]"),
+    ] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {root}")));
+        assert!(info.contains(selector), "{info}");
+    }
+    let error = rendered_text(&engine.handle_line(":facet Error"));
+    assert!(error.contains("- kind   : String"), "{error}");
+    assert!(error.contains("- message: String"), "{error}");
+    let trouble = rendered_text(&engine.handle_line(":facet Trouble"));
+    for row in ["- code   : Int", "- kind   : String", "- message: String"] {
+        assert!(trouble.contains(row), "{trouble}");
+    }
+    assert!(!trouble.contains("input:"), "{trouble}");
+    assert!(trouble.contains("readonly"), "{trouble}");
+    for (path, canonical) in [
+        ("Trouble.code", "Error.code"),
+        ("Trouble.message", "Error.message"),
+        ("Trouble.kind", "Error.kind"),
+        ("Account.name", "Account.name"),
+    ] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {path}")));
+        assert!(info.contains(&format!("full path: {canonical}")), "{info}");
+    }
+    for root in ["Int", "Result"] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {root}")));
+        assert!(info.contains("not a Facet path root"), "{info}");
+    }
+    let invalid = rendered_text(&engine.handle_line(":facet Account.missing"));
+    assert!(invalid.contains("No field"), "{invalid}");
+    let candidates = engine.completions(":facet ", 7).candidates;
+    for root in [
+        "Account", "Profile", "Choice", "Trouble", "Error", "Boolean", "Tuple", "List", "HashMap",
+    ] {
+        assert!(
+            candidates.iter().any(|candidate| candidate.label == root),
+            "missing {root}: {candidates:?}"
+        );
+    }
+    assert!(!candidates
+        .iter()
+        .any(|candidate| candidate.label == "Int" || candidate.label == "print"));
+    let boolean = rendered_text(&engine.handle_line(":facet Boolean"));
+    assert!(boolean.contains("- False: Unit"), "{boolean}");
+    assert!(boolean.contains("- True : Unit"), "{boolean}");
+    let function = rendered_text(&engine.handle_line(":facet print"));
+    assert!(!function.contains("fields:"), "{function}");
+}
+
 fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
     let mut engine = engine();
 

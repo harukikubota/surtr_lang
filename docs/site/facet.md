@@ -396,6 +396,10 @@ xldr(4)>
 - `:facet path`
   - segment 一覧と、`Result` 化しうる停止点を詳しく確認する
 
+`:facet User` のようにルート型だけを指定すると、フィールド名と型の一覧を表示します。struct では可視性と readonly も表示し、private フィールドも確認できます。enum ではバリアント名と、その path で読み取る型を表示します。`:info User` でも同じ一覧を確認できます。
+
+`:facet Tuple`、`:facet List`、`:facet HashMap` は、要素を指定する形式を表示します。具象エラーでは、共通の `kind`・`message` と保存ペイロードを一覧表示します。ペイロードを読むには同じエラーへの照合に成功した局所束縛が必要で、Error を通る更新はできません。
+
 ### `:facet` の例
 
 ```text
@@ -550,7 +554,7 @@ facet = User.password
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
 - `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。同じレキシカルスコープと内側のクロージャで、`Facet::view(...)` や `->` に使えます。
 - 合成した path は canonical 表示へ圧縮されるので、`User.profile -> Profile.name` を inspect すると `User.profile.name` に見えます。`->` の組み立て履歴そのものは残りません。
-- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|binding>` で確認するのが一番わかりやすいです。
+- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <root|FacetPath|binding>` で確認するのが一番わかりやすいです。
 - 関数へ渡す値には、path を消費した読み取り関数や `Facet::view(...)` の結果を使います。
 - `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。
 - `bulk_update` は DSL ですが path 能力は通常の Facet API と揃っているので、dynamic bracket や `case_*` も同じ感覚で使えます。

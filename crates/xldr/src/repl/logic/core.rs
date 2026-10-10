@@ -1971,7 +1971,7 @@ impl ReplEngine {
             if facet_only && binding.facet_info.is_none() {
                 continue;
             }
-            if !seen.insert(binding.name.as_str()) || !binding.name.starts_with(&prefix) {
+            if !seen.insert(binding.name.clone()) || !binding.name.starts_with(&prefix) {
                 continue;
             }
             candidates.push(ReplCompletionCandidate {
@@ -1988,13 +1988,39 @@ impl ReplEngine {
                 replace_end,
             });
         }
+        if facet_only {
+            for name in self
+                .declaration_index
+                .values()
+                .map(|decl| decl.name.as_str())
+                .chain(std::iter::once("Tuple"))
+            {
+                let label = crate::surface_path_name(name);
+                if !label.starts_with(&prefix)
+                    || self.binding_info(label).is_some()
+                    || self.facet_root_kind_for_symbol(label).is_none()
+                    || !seen.insert(label.to_string())
+                {
+                    continue;
+                }
+                candidates.push(ReplCompletionCandidate {
+                    label: label.to_string(),
+                    replacement: label.to_string(),
+                    kind: ReplCompletionKind::TypePath,
+                    detail: Some("Facet path root".to_string()),
+                    documentation: None,
+                    replace_start,
+                    replace_end,
+                });
+            }
+        }
         if !facet_only {
             for (name, metadata) in &self.process_metadata {
                 if metadata.instance != spire::ast::ProcessInstance::Singleton {
                     continue;
                 }
                 let rendered = name.rsplit("::").next().unwrap_or(name);
-                if !seen.insert(rendered) || !rendered.starts_with(&prefix) {
+                if !seen.insert(rendered.to_string()) || !rendered.starts_with(&prefix) {
                     continue;
                 }
                 candidates.push(ReplCompletionCandidate {
@@ -2921,20 +2947,37 @@ impl ReplEngine {
         }
     }
 
+    fn facet_root_kind_for_symbol(&self, symbol: &str) -> Option<sindr::names::FacetRootKind> {
+        if let Some(decl) = self.visible_declaration(symbol) {
+            // Concrete Error roots carry a stored Payload schema. Their path
+            // consumption remains subject to Scar's local identity checks.
+            return match decl.kind {
+                sigil::DeclarationKind::Deferror => Some(sindr::names::FacetRootKind::TypeRoot),
+                sigil::DeclarationKind::Struct
+                | sigil::DeclarationKind::Record
+                | sigil::DeclarationKind::Enum
+                | sigil::DeclarationKind::BuiltinType => {
+                    if let Some(info) = sindr::names::builtin_symbol_identity_info(&decl.fq_name) {
+                        return info.capabilities.facet_root_path;
+                    }
+                    surtr_analysis::symbol_capabilities_for_declaration_entry(
+                        self.sigil_session.owner_registry(),
+                        decl,
+                    )
+                    .and_then(|capabilities| capabilities.facet_root_path)
+                }
+                _ => None,
+            };
+        }
+        if self.sigil_session.lookup_uid(symbol).is_some() {
+            return None;
+        }
+        sindr::names::builtin_symbol_identity_info(symbol)
+            .and_then(|info| info.capabilities.facet_root_path)
+    }
+
     fn handle_facet_root_doc(&self, ty: &str) -> ReplResult {
-        let kind = self
-            .visible_declaration(ty)
-            .and_then(|decl| {
-                surtr_analysis::symbol_capabilities_for_declaration_entry(
-                    self.sigil_session.owner_registry(),
-                    decl,
-                )
-            })
-            .and_then(|capabilities| capabilities.facet_root_path)
-            .or_else(|| {
-                sindr::names::builtin_symbol_identity_info(ty)
-                    .and_then(|info| info.capabilities.facet_root_path)
-            });
+        let kind = self.facet_root_kind_for_symbol(ty);
         let Some(kind) = kind else {
             return Self::plain(vec![format!("{ty} is not a Facet path root.")]);
         };
@@ -5073,7 +5116,55 @@ impl ReplEngine {
                 return Self::styled(Self::render_facet_info(facet_info));
             }
         }
+        if self.binding_info(trimmed).is_none() {
+            if let Some(kind) = self.facet_root_kind_for_symbol(trimmed) {
+                return self.handle_facet_root(trimmed, kind);
+            }
+            let is_type = self.visible_declaration(trimmed).is_some_and(|decl| {
+                matches!(
+                    decl.kind,
+                    sigil::DeclarationKind::BuiltinType
+                        | sigil::DeclarationKind::Struct
+                        | sigil::DeclarationKind::Record
+                        | sigil::DeclarationKind::Enum
+                        | sigil::DeclarationKind::Deferror
+                )
+            }) || (self.sigil_session.lookup_uid(trimmed).is_none()
+                && sindr::names::builtin_symbol_identity_info(trimmed).is_some());
+            if is_type {
+                return Self::plain(vec![format!("{trimmed} is not a Facet path root.")]);
+            }
+        }
         self.handle_facet_expression(trimmed)
+    }
+
+    fn handle_facet_root(&self, symbol: &str, kind: sindr::names::FacetRootKind) -> ReplResult {
+        if let Some(lines) = self.type_definition_info_lines(symbol) {
+            return Self::styled(lines);
+        }
+        let (root_kind, selectors) = match kind {
+            sindr::names::FacetRootKind::Tuple => ("tuple", vec!["Tuple._N"]),
+            sindr::names::FacetRootKind::List => {
+                ("list", vec!["List.[index]", "List.[start..end]"])
+            }
+            sindr::names::FacetRootKind::HashMap => ("hashmap", vec!["HashMap.[key]"]),
+            sindr::names::FacetRootKind::TypeRoot => {
+                return Self::plain(vec![format!(
+                    "Facet root metadata is missing for {symbol}."
+                )]);
+            }
+        };
+        let mut lines = vec![
+            symbol.to_string(),
+            format!("kind: {root_kind}"),
+            "selectors:".into(),
+        ];
+        lines.extend(
+            selectors
+                .into_iter()
+                .map(|selector| format!("- {selector}")),
+        );
+        Self::styled(lines)
     }
 
     fn handle_facet_expression(&mut self, source_query: &str) -> ReplResult {
@@ -5230,52 +5321,113 @@ impl ReplEngine {
         Self::plain(vec![format!("No signature found for {}", source_query)])
     }
 
+    fn render_member_rows(mut rows: Vec<(Option<String>, String, String)>) -> Vec<String> {
+        rows.sort_by(|left, right| left.1.cmp(&right.1));
+        let policy_width = rows
+            .iter()
+            .filter_map(|row| row.0.as_ref())
+            .map(String::len)
+            .max()
+            .unwrap_or(0);
+        let name_width = rows.iter().map(|row| row.1.len()).max().unwrap_or(0);
+        rows.into_iter()
+            .map(|(policy, name, ty)| match policy {
+                Some(policy) => format!("- {policy:policy_width$} {name:name_width$}: {ty}"),
+                None => format!("- {name:name_width$}: {ty}"),
+            })
+            .collect()
+    }
+
     fn type_definition_info_lines(&self, symbol: &str) -> Option<Vec<String>> {
         let decl = self.visible_declaration(symbol)?;
-        let kind = match decl.kind {
-            sigil::DeclarationKind::Struct => "struct",
-            sigil::DeclarationKind::Record => "record",
+        self.facet_root_kind_for_symbol(symbol)?;
+        let (kind, heading) = match decl.kind {
+            sigil::DeclarationKind::Struct => ("struct", "fields:"),
+            sigil::DeclarationKind::Record => ("record", "fields:"),
+            sigil::DeclarationKind::Enum => ("enum", "variants:"),
+            sigil::DeclarationKind::Deferror => ("error", "fields:"),
+            sigil::DeclarationKind::BuiltinType
+                if crate::surface_path_name(&decl.fq_name) == "Error" =>
+            {
+                ("error", "fields:")
+            }
             _ => return None,
         };
-        let def = self
-            .scar_session
-            .lookup_type_def(&decl.fq_name)
-            .or_else(|| self.scar_session.lookup_type_def(symbol))?;
-        let mut rows = def
-            .fields
-            .iter()
-            .map(|(field, ty)| {
-                let mut policy = if def.private_fields.contains(field) {
-                    "private".to_string()
-                } else {
-                    "public".to_string()
-                };
-                if def.readonly_fields.contains(field) {
-                    policy.push_str(" readonly");
+        let error = kind == "error";
+        let mut rows = Vec::new();
+        let readonly_root;
+        if error {
+            rows.extend(
+                ["kind", "message"]
+                    .into_iter()
+                    .map(|name| (None, name.to_string(), "String".to_string())),
+            );
+            readonly_root = true;
+        } else {
+            readonly_root = false;
+        }
+        let def = if decl.kind == sigil::DeclarationKind::BuiltinType {
+            None
+        } else {
+            Some(self.scar_session.lookup_type_def(&decl.fq_name)?)
+        };
+        if let Some(def) = def {
+            if kind == "enum" {
+                for variant in self.scar_session.enum_variants_of(&decl.fq_name)? {
+                    let focus = match variant.payload.as_slice() {
+                        [] => Ty::Unit,
+                        [ty] => ty.clone(),
+                        payload => Ty::Tuple(payload.to_vec()),
+                    };
+                    rows.push((
+                        None,
+                        variant.short_name.clone(),
+                        Self::definition_ty_display(&focus, def),
+                    ));
                 }
-                (policy, field.clone(), Self::ty_to_string(ty))
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.1.cmp(&right.1));
-        let policy_width = rows.iter().map(|row| row.0.len()).max().unwrap_or(0);
-        let field_width = rows.iter().map(|row| row.1.len()).max().unwrap_or(0);
+            } else {
+                for (field, ty) in &def.fields {
+                    let policy = (kind == "struct").then(|| {
+                        let mut policy = if def.private_fields.contains(field) {
+                            "private"
+                        } else {
+                            "public"
+                        }
+                        .to_string();
+                        if def.readonly_fields.contains(field) {
+                            policy.push_str(" readonly");
+                        }
+                        policy
+                    });
+                    rows.push((policy, field.clone(), Self::definition_ty_display(ty, def)));
+                }
+            }
+        }
         let mut lines = vec![
             crate::surface_path_name(&decl.fq_name).to_string(),
             format!("kind: {kind}"),
             format!(
                 "facet root: {}",
-                if def.readonly_root {
+                if readonly_root || def.is_some_and(|def| def.readonly_root) {
                     "readonly"
                 } else {
                     "public"
                 }
             ),
-            "fields:".to_string(),
+            heading.to_string(),
         ];
-        lines.extend(rows.into_iter().map(|(policy, field, ty)| {
-            format!("- {policy:policy_width$} {field:field_width$}: {ty}")
-        }));
+        lines.extend(Self::render_member_rows(rows));
         Some(lines)
+    }
+
+    fn definition_ty_display(ty: &Ty, def: &scar::env::TypeDefInfo) -> String {
+        let params = def
+            .type_param_vars
+            .iter()
+            .copied()
+            .zip(def.type_params.iter().map(String::as_str))
+            .collect::<Vec<_>>();
+        Self::ty_to_string_with_params(ty, &params)
     }
 
     fn facet_path_kind_info(symbol: &str) -> Option<Vec<String>> {
@@ -5522,6 +5674,10 @@ impl ReplEngine {
     }
 
     fn ty_to_string(ty: &Ty) -> String {
+        Self::ty_to_string_with_params(ty, &[])
+    }
+
+    fn ty_to_string_with_params(ty: &Ty, names: &[(u32, &str)]) -> String {
         match ty {
             Ty::Int => "Int".into(),
             Ty::Float => "Float".into(),
@@ -5529,41 +5685,47 @@ impl ReplEngine {
             Ty::Bool => "Boolean".into(),
             Ty::Unit => "Unit".into(),
             Ty::Hole => "_".into(),
-            Ty::List(inner) => format!("List<{}>", Self::ty_to_string(inner)),
-            Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string(inner)),
+            Ty::List(inner) => format!("List<{}>", Self::ty_to_string_with_params(inner, names)),
+            Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string_with_params(inner, names)),
             Ty::Pid(name) => format!("PID<{}>", crate::surface_rendered_name(name)),
             Ty::Facet(kind, source, focus, update_source, update_focus) => {
                 format!(
                     "Facet<{}, {}, {}, {}, {}>",
                     kind.as_str(),
-                    Self::ty_to_string(source),
-                    Self::ty_to_string(focus),
-                    Self::ty_to_string(update_source),
-                    Self::ty_to_string(update_focus)
+                    Self::ty_to_string_with_params(source, names),
+                    Self::ty_to_string_with_params(focus, names),
+                    Self::ty_to_string_with_params(update_source, names),
+                    Self::ty_to_string_with_params(update_focus, names)
                 )
             }
             Ty::Tuple(items) => format!(
                 "({})",
                 items
                     .iter()
-                    .map(Self::ty_to_string)
+                    .map(|ty| Self::ty_to_string_with_params(ty, names))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
             Ty::SelfApp(args) => format!(
                 "Self<{}>",
                 args.iter()
-                    .map(Self::ty_to_string)
+                    .map(|ty| Self::ty_to_string_with_params(ty, names))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
             Ty::ExtractorClosure(signature) => {
-                format!("ExtractorClosure<{}>", Self::ty_to_string(signature))
+                format!(
+                    "ExtractorClosure<{}>",
+                    Self::ty_to_string_with_params(signature, names)
+                )
             }
             Ty::MatchResult(payload) => {
-                format!("MatchResult<{}>", Self::ty_to_string(payload))
+                format!(
+                    "MatchResult<{}>",
+                    Self::ty_to_string_with_params(payload, names)
+                )
             }
-            Ty::Result(ok, _) => format!("Result<{}>", Self::ty_to_string(ok)),
+            Ty::Result(ok, _) => format!("Result<{}>", Self::ty_to_string_with_params(ok, names)),
             Ty::Struct(name, _) | Ty::Record(name, _) => crate::surface_path_name(name).to_string(),
             Ty::Enum(name, args) => {
                 let name = crate::surface_path_name(name);
@@ -5572,24 +5734,32 @@ impl ReplEngine {
                 } else {
                     let args = args
                         .iter()
-                        .map(Self::ty_to_string)
+                        .map(|ty| Self::ty_to_string_with_params(ty, names))
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!("{name}<{args}>")
                 }
             }
             Ty::Error => "Error".into(),
-            Ty::Var(_) => "_".into(),
+            Ty::Var(id) => names
+                .iter()
+                .find(|(var, _)| var == id)
+                .map(|(_, name)| format!("${}", name.trim_start_matches('$')))
+                .unwrap_or_else(|| "_".into()),
             Ty::Func(params, ret) => {
                 let param_str = params
                     .iter()
-                    .map(Self::ty_to_string)
+                    .map(|ty| Self::ty_to_string_with_params(ty, names))
                     .collect::<Vec<_>>()
                     .join(", ");
                 if param_str.is_empty() {
-                    format!("(-> {})", Self::ty_to_string(ret))
+                    format!("(-> {})", Self::ty_to_string_with_params(ret, names))
                 } else {
-                    format!("({} -> {})", param_str, Self::ty_to_string(ret))
+                    format!(
+                        "({} -> {})",
+                        param_str,
+                        Self::ty_to_string_with_params(ret, names)
+                    )
                 }
             }
             Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
