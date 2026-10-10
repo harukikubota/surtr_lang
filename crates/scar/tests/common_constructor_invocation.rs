@@ -167,6 +167,49 @@ impl Monad for Boxed<$T> {
         .expect("the expected carrier determines both helper calls");
     check("value = Functor::fmap(Monad::return::<Boxed>(1), {|x: Int| x})")
         .expect("an explicit inner constructor head supplies source evidence");
+
+    for prefix in ["", definitions] {
+        for annotation in ["NotAType", "List<Int, String>", "DoBlock<Int>"] {
+            for callback in [
+                format!("{{|x: {annotation}| Ok(x)}}"),
+                format!("{{|x| annotated: {annotation} = x\n Ok(annotated)}}"),
+                format!("({{|x: {annotation}| Ok(x)}})"),
+                format!("{{|x| Monad::return(x) |>= {{|y: {annotation}| Ok(y)}}}}"),
+            ] {
+                // Keep both annotation offsets identical so the complete source facts
+                // can be compared, including nested structured annotation errors.
+                let direct = format!("{prefix}\nvalue = {:16} |>= {callback}", "Ok(1)");
+                let probed = format!("{prefix}\nvalue = Monad::return(1) |>= {callback}");
+                let direct_error =
+                    support::typecheck(support::resolve_with_builtin_prelude(&direct))
+                        .expect_err("invalid annotations must fail for a known carrier");
+                let probed_error =
+                    support::typecheck(support::resolve_with_builtin_prelude(&probed))
+                        .expect_err("invalid annotations must fail before carrier selection");
+                assert_eq!(probed_error, direct_error, "{probed}");
+            }
+        }
+        let source = format!("{prefix}\nvalue = Monad::return(1) |>= {{|x: String| Ok(x)}}");
+        let error = support::typecheck(support::resolve_with_builtin_prelude(&source))
+            .expect_err("valid annotations with incompatible input types still reject candidates");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+        );
+        let diagnostics::DiagnosticData::CandidateSelection(data) = error.structured.unwrap().data
+        else {
+            panic!("expected candidate failures for a type relation error");
+        };
+        assert!(!data.failures.is_empty());
+        assert!(data
+            .failures
+            .iter()
+            .all(|failure| !failure.detail.is_empty()));
+        support::typecheck(support::resolve_with_builtin_prelude(&format!(
+            "{prefix}\nvalue = Monad::return(1) |>= {{|x: Int| Ok(x)}}"
+        )))
+        .expect("a valid callback annotation and concrete result still supply carrier evidence");
+    }
 }
 
 fn generic_receiverless_family_helpers_use_expected_return() {

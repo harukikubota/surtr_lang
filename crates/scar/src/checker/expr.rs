@@ -7252,6 +7252,30 @@ impl Checker {
         self.check_context_bind_with_expected(span, left, right, None)
     }
 
+    /// Roll back speculative checking while returning source type-syntax
+    /// failures separately from candidate-dependent invocation failures.
+    fn probe_constructor_invocation<T>(
+        &mut self,
+        probe: impl FnOnce(&mut Self) -> Result<T, TypeError>,
+    ) -> Result<Result<T, TypeError>, TypeError> {
+        let checkpoint = self.candidate_probe_checkpoint();
+        let retained = Rc::new(RefCell::new(None));
+        let outer_probe = self.type_syntax_probe_error.replace(retained.clone());
+        let result = probe(self);
+        self.type_syntax_probe_error = outer_probe;
+        self.rollback_candidate_probe(checkpoint);
+        if let Some(error) = retained.borrow_mut().take() {
+            if let Some(outer) = &self.type_syntax_probe_error {
+                let mut retained = outer.borrow_mut();
+                if retained.is_none() {
+                    *retained = Some(error.clone());
+                }
+            }
+            return Err(error);
+        }
+        Ok(result)
+    }
+
     /// A receiverless constructor helper exposes its mapped input through its
     /// signature. Probe each carrier with the complete invocation constraints;
     /// only a unique successful carrier may commit its substitutions.
@@ -7332,38 +7356,41 @@ impl Checker {
                 let ResolvedRecordLitArg::Positional(argument) = argument else {
                     continue;
                 };
-                let checkpoint = self.candidate_probe_checkpoint();
-                let observed = match parameter {
-                    Ty::SelfApp(_) => self.check_node(argument).ok().map(|typed| typed.ty),
-                    Ty::Func(inputs, output)
-                        if inputs.len() == 1 && matches!(output.as_ref(), Ty::SelfApp(_)) =>
-                    {
-                        let result = self.env.fresh_tyvar();
-                        let callable = Ty::Func(vec![value_ty.clone()], Box::new(result));
-                        self.check_invocation_argument(
-                            argument,
-                            &callable,
-                            operator.clone(),
-                            index,
-                            None,
-                        )
-                        .ok()
-                        .and_then(|typed| {
-                            self.function_parts(&typed.ty)
-                                .map(|(_, output)| self.resolve_ty(output))
-                        })
-                    }
-                    _ => None,
-                };
-                if let Some(observed) = observed {
-                    carrier_evidence =
-                        match self.constructor_context_type_for(trait_name, &observed, &value_ty) {
-                            ConstructorApplicationOutcome::Applied(context) => Some(context),
-                            ConstructorApplicationOutcome::Deferred { .. }
-                            | ConstructorApplicationOutcome::Rejected { .. } => None,
+                carrier_evidence = self
+                    .probe_constructor_invocation(|checker| {
+                        let observed = match parameter {
+                            Ty::SelfApp(_) => Some(checker.check_node(argument)?.ty),
+                            Ty::Func(inputs, output)
+                                if inputs.len() == 1
+                                    && matches!(output.as_ref(), Ty::SelfApp(_)) =>
+                            {
+                                let result = checker.env.fresh_tyvar();
+                                let callable = Ty::Func(vec![value_ty.clone()], Box::new(result));
+                                let typed = checker.check_invocation_argument(
+                                    argument,
+                                    &callable,
+                                    operator.clone(),
+                                    index,
+                                    None,
+                                )?;
+                                checker
+                                    .function_parts(&typed.ty)
+                                    .map(|(_, output)| checker.resolve_ty(output))
+                            }
+                            _ => None,
                         };
-                }
-                self.rollback_candidate_probe(checkpoint);
+                        Ok(observed.and_then(|observed| {
+                            match checker
+                                .constructor_context_type_for(trait_name, &observed, &value_ty)
+                            {
+                                ConstructorApplicationOutcome::Applied(context) => Some(context),
+                                ConstructorApplicationOutcome::Deferred { .. }
+                                | ConstructorApplicationOutcome::Rejected { .. } => None,
+                            }
+                        }))
+                    })?
+                    .ok()
+                    .flatten();
                 if carrier_evidence.is_some() {
                     break;
                 }
@@ -7376,22 +7403,22 @@ impl Checker {
         let mut accepted = Vec::new();
         let mut failures = Vec::new();
         for candidate in candidates {
-            let checkpoint = self.candidate_probe_checkpoint();
-            let result = self.check_trait_invocation(
-                span,
-                trait_name,
-                method_name,
-                args,
-                None,
-                expected,
-                expected_relation,
-                argument_expected_relation,
-                constructor_failure_reason,
-                explicit,
-                operator.clone(),
-                Some(&candidate),
-            );
-            self.rollback_candidate_probe(checkpoint);
+            let result = self.probe_constructor_invocation(|checker| {
+                checker.check_trait_invocation(
+                    span,
+                    trait_name,
+                    method_name,
+                    args,
+                    None,
+                    expected,
+                    expected_relation,
+                    argument_expected_relation,
+                    constructor_failure_reason,
+                    explicit,
+                    operator.clone(),
+                    Some(&candidate),
+                )
+            })?;
             match result {
                 Ok(_) => accepted.push(candidate.clone()),
                 Err(error) if carrier_evidence.is_some() => return Err(error),

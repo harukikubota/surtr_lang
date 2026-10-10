@@ -2,6 +2,7 @@
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -3098,6 +3099,9 @@ struct Checker {
     is_capture_closure: bool,
     function_return_origin: Option<Span>,
     local_annotation_tyvars: HashMap<String, Ty>,
+    /// Active constructor probes retain errors produced while resolving source
+    /// type syntax. These failures do not depend on a carrier candidate.
+    type_syntax_probe_error: Option<Rc<RefCell<Option<TypeError>>>>,
     /// Declaration-owned generic variables are rigid while their body is
     /// checked. Inference variables may bind to them, but they never bind to a
     /// concrete type (or to a different signature generic) at the definition
@@ -3268,6 +3272,7 @@ impl Checker {
             is_capture_closure: false,
             function_return_origin: None,
             local_annotation_tyvars: HashMap::new(),
+            type_syntax_probe_error: None,
             rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
@@ -3332,6 +3337,7 @@ impl Checker {
         checker.is_capture_closure = self.is_capture_closure;
         checker.function_return_origin = self.function_return_origin.clone();
         checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
+        checker.type_syntax_probe_error = self.type_syntax_probe_error.clone();
         checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();

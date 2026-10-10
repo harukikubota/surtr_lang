@@ -47,6 +47,7 @@ stage内の結果は入力順に扱い、起動済みworkerはjoinする。worke
 
 - Scar の `assert_type_relation` は、失敗時に部分的な型代入と capability / obligation の変更を rollback する。成功した制約だけを後続へ渡す。両側の source fact は照合対象の型とともに保持する。
 - 呼び出しの arity / mode / named 引数、通常の型関係、Trait obligation / dispatch、constructor family / payload / capability は共通の reason を使う。演算子と対応する helper は同じ検査を通し、文脈の違いを `DiagnosticOrigin` に保持する。入れ子の呼び出し・annotation の失敗を外側の演算子へ付け替えない。
+- carrier 未確定の constructor 呼び出しでは、予備検査と候補検査を rollback しても、型注釈を解決する producer が返したエラーをそのまま保持する。未知型や型引数 arity など候補に依存しない失敗は、パラメータ・body・入れ子の注釈の元 span、reason、source fact を返す。正しく解決した注釈との型関係が候補ごとに成立しない場合は `CandidateSelection` の候補情報を保持する。message や structured 情報の有無から失敗を分類せず、最初の候補の失敗を最終診断に採用しない。
 - `cond` の節と `if_let` の発生文脈は Spire / Sigil から Scar まで保持する。分岐診断には全 body の型・span・ordinal と guard の source fact を含める。`cond` の実行は型検査後に既存の `TypedInner::If` へ lowering する。
 - JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
 - constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。familyはcapability継承を表し、別direct parameterのcarrier同一性を暗黙に作らない。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。

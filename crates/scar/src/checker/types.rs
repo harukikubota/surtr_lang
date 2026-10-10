@@ -860,6 +860,21 @@ impl Checker {
         ast_ty: &AstTy,
         context: TypeSyntaxContext,
     ) -> Result<Ty, TypeError> {
+        let result = self.resolve_ast_ty_in_context_inner(ast_ty, context);
+        if let (Err(error), Some(probe)) = (&result, &self.type_syntax_probe_error) {
+            let mut retained = probe.borrow_mut();
+            if retained.is_none() {
+                *retained = Some(error.clone());
+            }
+        }
+        result
+    }
+
+    fn resolve_ast_ty_in_context_inner(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+    ) -> Result<Ty, TypeError> {
         if matches!(ast_ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if Self::builtin_type_is_std_parameter_only(name))
         {
             return Err(TypeError::new(

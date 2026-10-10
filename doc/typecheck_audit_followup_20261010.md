@@ -16,7 +16,7 @@
 | TC-06・Enum | 明示implなしのEqを再現 | 暗黙proof/dispatchを除去し、明示impl / deriveに従う |
 | TC-06・PID | compiler-owned Eqが残存 | プロセス側で標準実装へ移す。`instance_of`のAPIとEqとの接続は未確定 |
 | TC-10 | 文書修正済み | Resultの補助エラー名はドキュメント用で、返却kindの静的制限・網羅検査を行わないと正本へ明記 |
-| TC-11 | probe後の最終診断の情報欠落を再現 | 候補に依存しない注釈エラーの位置・構造化情報を保つ |
+| TC-11 | 修正・検証済み | 型注釈producerの元TypeErrorをprobe rollback後も保持。候補依存失敗はcandidate情報を維持 |
 
 プロセス以外で対応する確定項目はTC-05、TC-06のEnum側、TC-10、TC-11の4件。[runtime側のRT-11](runtime_audit_followup_20261010.md#rt-11-recoverの説明を現行の通常関数へ揃える)を合わせて5件となる。
 
@@ -87,7 +87,11 @@ print(inspect(other_error()))
 
 ## TC-11: probeから最終診断までの情報保持
 
-**診断の修正が必要。成功への不正fallbackは今回見つからない。** 次の3入力を現行CLIで検査した。
+**修正・検証済み（level2）。** 2026-10-10、型注釈を解決するproducerのエラーをconstructor probeで保持し、rollback後も元のTypeErrorを返すようにした。予備検査・候補検査・child checker・nested probeで同じ経路を使い、messageや構造化情報の有無で原因を推測しない。候補依存の型関係失敗は従来のcandidate情報を保持する。
+
+`common_constructor_invocation`では未知型、不正arity、構造化情報を持つ専用型の拒否を、parameter・body・grouping・nested callbackと追加carrierの有無で比較した。既知carrierの診断との完全一致、正常成功、候補依存失敗を固定し、元spanの欠落でRedを確認した。局所のgrouped/constructor検証は10件成功。最終差分の独立レビューは指摘なし。共有の最終検証は`rtk cargo nextest run --profile ci --workspace --features rune/tui`が2,430件成功、`rtk proxy cargo run -- test --quiet --all`が終了コード0。quietのため標準テスト件数は記録していない。
+
+以下は修正前の調査記録。成功への不正fallbackは調査で見つからなかった。 次の3入力を現行CLIで検査した。
 
 ```surtr
 Monad::return(1) |>= {|x: NotAType| Ok(x)}
