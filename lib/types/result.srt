@@ -95,6 +95,30 @@ impl Result {
   }
 
   @doc """
+  Transform an `Ok` payload and preserve `Err` values.
+
+  - `Ok(value)` becomes `Ok(mapper(value))`
+  - `Err(error)` stays `Err(error)` without calling the mapper
+
+  The mapper may return any value, including another `Result` or container.
+  Its return value stays inside the outer `Ok`; nested containers are not flattened.
+  The `Functor` implementation for `Result` delegates to this helper.
+  ## REPL
+  xldr(1)> Result::map_ok(Ok(2), {|item| item + 1})
+  Ok(3)
+  xldr(2)> Result::map_ok(Ok(2), {|item| Ok(item)})
+  Ok(Ok(2))
+  xldr(3)> Result::is_err(Result::map_ok(Err(NoneError), {|item: Int| item + 1}))
+  True
+  """
+  def map_ok(value: Result<$A>, mapper: ($A -> $B)) -> Result<$B> {
+    match value {
+      Ok(inner) => Ok(mapper(inner)),
+      Err(error) => Err(error),
+    }
+  }
+
+  @doc """
   Replace the error branch of a `Result` without preserving the previous cause.
 
   - `Ok(value)` stays `Ok(value)`
@@ -319,10 +343,7 @@ impl Functor for Result<$T> {
   Ok(3)
   """
   def fmap(self: Result<$A>, mapper: ($A -> $B)) -> Result<$B> {
-    match self {
-      Ok(value) => Ok(mapper(value)),
-      _ => self,
-    }
+    Result::map_ok(self, mapper)
   }
 }
 
