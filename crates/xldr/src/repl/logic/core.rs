@@ -32,9 +32,8 @@ use super::command::{
 use super::output::{ReplOutput, ReplResult};
 use super::preload::PreloadCompileMode;
 use super::query::{
-    ast_ty_from_query_arg, format_query_ty, parse_binding_query_type, parse_repl_query,
-    parse_signature_type, CommandQueryParseErrorReason, OperatorTargetQuery, QueryArg,
-    QueryArgKind, ReplQuery, TypedCallQuery,
+    format_query_ty, parse_binding_query_type, parse_repl_query, parse_signature_type,
+    CommandQueryParseErrorReason, ReplQuery,
 };
 use super::{eval, render, session};
 
@@ -74,6 +73,14 @@ use crate::{
     collect_additional_default_std_module_inputs, error_display, LoadError, ModuleStageParseError,
     ModuleStageParseErrorKind, SourceKind,
 };
+
+// Callable documentation belongs to the declaration that produced its code,
+// including specializations materialized after that declaration was shadowed.
+#[derive(Clone, Default)]
+struct CallableDocSnapshots {
+    functions: HashMap<(String, u32, u32), DocEntry>,
+    trait_methods: HashMap<String, Option<DocEntry>>,
+}
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
 const OPERATOR_DOC_TARGETS: &[(&str, &str)] = &[
@@ -236,6 +243,7 @@ struct PreloadedChunkState {
     scar_checkpoint: scar::ScarCheckpoint,
     vm: eldr::InteractiveVm,
     docs: Vec<DocEntry>,
+    callable_doc_snapshots: CallableDocSnapshots,
     signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
@@ -260,6 +268,7 @@ struct DefaultReplBootstrapState {
     bytecode: forge::bytecode::Bytecode,
     vm_source_context: Option<(String, String)>,
     docs: Vec<DocEntry>,
+    callable_doc_snapshots: CallableDocSnapshots,
     signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
@@ -284,6 +293,7 @@ impl DefaultReplBootstrapState {
                 .zip(state.vm.source_file())
                 .map(|(source, file_name)| (source.to_string(), file_name.to_string())),
             docs: state.docs,
+            callable_doc_snapshots: state.callable_doc_snapshots,
             signatures: state.signatures,
             process_metadata: state.process_metadata,
             symbols: state.symbols,
@@ -317,6 +327,7 @@ impl DefaultReplBootstrapState {
             scar_checkpoint: self.scar_checkpoint.clone(),
             vm,
             docs: self.docs.clone(),
+            callable_doc_snapshots: self.callable_doc_snapshots.clone(),
             signatures: self.signatures.clone(),
             process_metadata: self.process_metadata.clone(),
             symbols: self.symbols.clone(),
@@ -709,6 +720,7 @@ pub struct ReplEngine {
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
+    callable_doc_snapshots: CallableDocSnapshots,
     signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
@@ -911,6 +923,29 @@ impl ReplEngine {
         let bootstrap_state = default_repl_bootstrap_state()
             .map_err(repl_load_error_into_load_error)
             .map_err(EldrLoadError::Load)?;
+        let callable_doc_snapshots = CallableDocSnapshots {
+            functions: bootstrap_state
+                .callable_doc_snapshots
+                .functions
+                .iter()
+                .filter(|(_, snapshot)| docs.iter().any(|entry| entry == *snapshot))
+                .map(|(key, snapshot)| (key.clone(), snapshot.clone()))
+                .collect(),
+            trait_methods: bootstrap_state
+                .callable_doc_snapshots
+                .trait_methods
+                .iter()
+                .map(|(key, snapshot)| {
+                    (
+                        key.clone(),
+                        snapshot
+                            .as_ref()
+                            .filter(|snapshot| docs.iter().any(|entry| entry == *snapshot))
+                            .cloned(),
+                    )
+                })
+                .collect(),
+        };
         let mut engine = Self {
             sources: repl_sources.sources,
             module_stages: repl_sources.module_stages,
@@ -927,6 +962,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols,
             docs,
+            callable_doc_snapshots,
             signatures,
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
@@ -1079,6 +1115,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols: state.symbols,
             docs: state.docs,
+            callable_doc_snapshots: state.callable_doc_snapshots,
             signatures: state.signatures,
             process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
@@ -2906,18 +2943,6 @@ impl ReplEngine {
             CommandQueryParseErrorReason::Empty => Target::QueryEmpty,
             CommandQueryParseErrorReason::UnsupportedSymbol
             | CommandQueryParseErrorReason::UnsupportedForm => Target::QueryUnsupported,
-            CommandQueryParseErrorReason::TypedCallMissingClosingParen => {
-                Target::TypedCallMissingClosingParen
-            }
-            CommandQueryParseErrorReason::TypedCallMissingCallee => Target::TypedCallMissingCallee,
-            CommandQueryParseErrorReason::TypedCallInvalidCallee => Target::TypedCallInvalidCallee,
-            CommandQueryParseErrorReason::TypedCallEmptyArgument => Target::TypedCallEmptyArgument,
-            CommandQueryParseErrorReason::OperatorMissingTarget => Target::OperatorMissingTarget,
-            CommandQueryParseErrorReason::UnsupportedArgument => Target::QueryArgumentUnsupported,
-            CommandQueryParseErrorReason::UnterminatedArgumentList => {
-                Target::QueryArgumentListUnterminated
-            }
-            CommandQueryParseErrorReason::InvalidTypeArgument => Target::QueryTypeInvalid,
         }
     }
 
@@ -2935,14 +2960,12 @@ impl ReplEngine {
                 symbol.source.split('.').next().unwrap_or(&symbol.source),
                 symbol.source
             )]),
-            Ok(ReplQuery::TypedCall(query)) => self.handle_doc_typed_call(trimmed, &query),
-            Ok(ReplQuery::OperatorTarget(query)) => self.handle_doc_typed_operator(trimmed, &query),
             Err(err) => self.repl_query_diagnostic(
                 &format!(":doc {trimmed}"),
                 err.message().to_string(),
                 err.span(),
                 Self::query_diagnostic_reason(err.reason()),
-                Some("Accepted forms: symbol, typed call, or operator target.".to_string()),
+                Some("Accepted forms: symbol, Facet root, or field path.".to_string()),
             ),
         }
     }
@@ -2999,6 +3022,25 @@ impl ReplEngine {
     }
 
     fn handle_doc_symbol(&self, source_symbol: &str, symbol: &str) -> ReplResult {
+        if let Some(owner) = symbol.strip_suffix('!') {
+            if let Some(decl) = self.private_declaration(owner) {
+                return ReplResult::ok(Self::private_doc_output(decl));
+            }
+            if let Some(decl) = self.visible_declaration(owner) {
+                match decl.kind {
+                    sigil::DeclarationKind::Struct => {
+                        let extractor = format!("{}::deconstruct", decl.fq_name);
+                        return self.handle_doc_symbol(&extractor, &extractor);
+                    }
+                    sigil::DeclarationKind::Record
+                    | sigil::DeclarationKind::Deferror
+                    | sigil::DeclarationKind::Enum => {
+                        return Self::plain(vec![format!("`{symbol}` is a pattern query. Use `:doc {owner}` for type documentation.")]);
+                    }
+                    _ => {}
+                }
+            }
+        }
         if symbol == "Tuple" {
             return ReplResult::ok(Self::tuple_doc_output());
         }
@@ -3023,46 +3065,14 @@ impl ReplEngine {
         let canonical = self
             .visible_helper_doc_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
+        let canonical = self
+            .visible_declaration(&canonical)
+            .map(|declaration| declaration.fq_name.clone())
+            .unwrap_or(canonical);
         let preferred_kind = Self::definition_doc_kind(&canonical);
-        let matches = if let Some(matches) = self.type_owner_doc_entries(&canonical) {
-            matches
-        } else {
-            let visible = self.visible_doc_entries(&canonical, preferred_kind.clone());
-            if visible.is_empty() {
-                if canonical != symbol || preferred_kind.is_some() {
-                    self.script_preload_doc_entries(&canonical, preferred_kind)
-                } else if let Some(decl) = self.visible_declaration(symbol) {
-                    let expected_signature = self.declaration_signature(decl);
-                    let mut matches = self
-                        .docs
-                        .iter()
-                        .filter(|entry| {
-                            crate::surface_path_name(&entry.qualified_name)
-                                == crate::surface_path_name(&decl.fq_name)
-                        })
-                        .filter(|entry| {
-                            expected_signature.as_ref().is_none_or(|signature| {
-                                entry
-                                    .signature
-                                    .as_ref()
-                                    .is_some_and(|entry_sig| entry_sig == signature)
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    matches.dedup_by(|a, b| {
-                        a.qualified_name == b.qualified_name
-                            && a.kind == b.kind
-                            && a.signature == b.signature
-                            && a.doc == b.doc
-                    });
-                    matches
-                } else {
-                    self.script_preload_doc_entries(symbol, None)
-                }
-            } else {
-                visible
-            }
-        };
+        let matches = self
+            .type_owner_doc_entries(&canonical)
+            .unwrap_or_else(|| self.visible_doc_entries(&canonical, preferred_kind));
 
         match matches.as_slice() {
             [] => self
@@ -3126,161 +3136,11 @@ impl ReplEngine {
         Some(matches)
     }
 
-    fn handle_doc_typed_operator(
-        &self,
-        source_query: &str,
-        query: &OperatorTargetQuery,
-    ) -> ReplResult {
-        if let Some(symbol) = Self::operator_target_symbol(query) {
-            return self
-                .operator_target_doc_entry(query)
-                .map(|entry| {
-                    let signature = self
-                        .operator_target_signature_entry(query)
-                        .map(|(_, signature)| signature);
-                    ReplResult::ok(Self::doc_output_with_symbol_and_signature(
-                        entry,
-                        symbol,
-                        signature,
-                        Vec::new(),
-                    ))
-                })
-                .unwrap_or_else(|| Self::plain(vec![format!("No docs found for {source_query}")]));
-        }
-        let synthetic = TypedCallQuery {
-            callee: Self::canonical_symbol(query.operator).to_string(),
-            args: vec![query.target.clone(), query.target.clone()],
-        };
-        self.handle_doc_typed_call(source_query, &synthetic)
-    }
-
     fn canonical_symbol(symbol: &str) -> &str {
         OPERATOR_DOC_TARGETS
             .iter()
             .find_map(|(alias, target)| (*alias == symbol).then_some(*target))
             .unwrap_or(symbol)
-    }
-
-    fn operator_target_symbol(query: &OperatorTargetQuery) -> Option<String> {
-        let owner = Self::operator_target_owner_name(&query.target)?;
-        let member = Self::operator_target_member_name(query.operator)?;
-        Some(format!("{owner}::{member}"))
-    }
-
-    fn operator_target_signature_entry(
-        &self,
-        query: &OperatorTargetQuery,
-    ) -> Option<(String, String)> {
-        let owner = Self::operator_target_owner_name(&query.target)?;
-        let member = Self::operator_target_member_name(query.operator)?;
-        let symbol = format!("{owner}::{member}");
-        self.signatures
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.kind == DocKind::Function
-                    && Self::operator_target_entry_matches(entry.signature.as_str(), &owner, member)
-            })
-            .map(|entry| {
-                (
-                    entry.qualified_name.clone(),
-                    crate::surface_rendered_name(&entry.signature),
-                )
-            })
-            .or_else(|| self.find_signature(&symbol))
-    }
-
-    fn operator_target_doc_entry<'a>(
-        &'a self,
-        query: &OperatorTargetQuery,
-    ) -> Option<&'a DocEntry> {
-        let owner = Self::operator_target_owner_name(&query.target)?;
-        let member = Self::operator_target_member_name(query.operator)?;
-        self.docs
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.kind == DocKind::Function
-                    && Self::operator_target_entry_matches(
-                        Self::display_signature_for_doc_entry(entry)
-                            .as_deref()
-                            .unwrap_or(""),
-                        &owner,
-                        member,
-                    )
-            })
-            .or_else(|| {
-                let trait_name = Self::operator_target_trait_name(query.operator)?;
-                self.docs.iter().rev().find(|entry| {
-                    entry
-                        .doc
-                        .contains(&format!("`{trait_name}` implementation for `{owner}`"))
-                        || entry.doc.contains(&format!(
-                            "`{trait_name}` implementation for `{owner}`-returning"
-                        ))
-                })
-            })
-    }
-
-    fn operator_target_entry_matches(signature: &str, owner: &str, member: &str) -> bool {
-        (signature.starts_with(&format!("{owner}::{member}("))
-            || signature.starts_with(&format!("{owner}::{member}<"))
-            || signature.contains(&format!("::{member}("))
-            || signature.contains(&format!("::{member}<")))
-            && (signature.contains(&format!(" for {owner}::"))
-                || signature.contains(&format!(" for {owner}<"))
-                || signature.starts_with(&format!("{owner}::{member}("))
-                || signature.starts_with(&format!("{owner}::{member}<")))
-    }
-
-    fn operator_target_owner_name(target: &QueryArg) -> Option<String> {
-        let ty = ast_ty_from_query_arg(target)?;
-        Some(match ty {
-            AstTy::Named(_, name) => name,
-            AstTy::Generic(_, name, _) => name,
-            _ => return None,
-        })
-    }
-
-    fn operator_target_member_name(operator: &str) -> Option<&'static str> {
-        Some(match operator {
-            "+" => "add",
-            "-" => "sub",
-            "*" => "mul",
-            "/" => "safe_div",
-            "%" => "safe_mod",
-            "&&" => "and",
-            "||" => "or",
-            "==" => "eq",
-            "!=" => "neq",
-            "<" => "lt",
-            "<=" => "lte",
-            ">" => "gt",
-            ">=" => "gte",
-            "->" => "compose",
-            "++" => "concat",
-            "|*>" => "fmap",
-            "|>=" => "bind",
-            _ => return None,
-        })
-    }
-
-    fn operator_target_trait_name(operator: &str) -> Option<&'static str> {
-        Some(match operator {
-            "+" => "Add",
-            "-" => "Sub",
-            "*" => "Mul",
-            "/" => "Div",
-            "%" => "Mod",
-            "==" => "Eq",
-            "!=" => "Eq",
-            "<" | "<=" | ">" | ">=" => "Compare",
-            "->" => "Facet",
-            "++" => "Concat",
-            "|*>" => "Functor",
-            "|>=" => "Monad",
-            _ => return None,
-        })
     }
 
     fn definition_doc_kind(symbol: &str) -> Option<DocKind> {
@@ -3334,28 +3194,6 @@ impl ReplEngine {
         matches
     }
 
-    fn script_preload_doc_entries<'a>(
-        &'a self,
-        symbol: &str,
-        kind: Option<DocKind>,
-    ) -> Vec<&'a DocEntry> {
-        let mut matches = self
-            .docs
-            .iter()
-            .filter(|entry| kind.as_ref().is_none_or(|kind| &entry.kind == kind))
-            .filter(|entry| entry.module_path.starts_with("__Script::"))
-            .filter(|entry| Self::symbol_matches(&entry.qualified_name, symbol))
-            .collect::<Vec<_>>();
-        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-        matches.dedup_by(|a, b| {
-            a.qualified_name == b.qualified_name
-                && a.kind == b.kind
-                && a.signature == b.signature
-                && a.doc == b.doc
-        });
-        matches
-    }
-
     fn doc_entry_matches_visible_symbol(&self, entry: &DocEntry, symbol: &str) -> bool {
         if !Self::symbol_matches(&entry.qualified_name, symbol) {
             return false;
@@ -3371,16 +3209,26 @@ impl ReplEngine {
                 && Self::declaration_is_public_surface(decl);
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
-            || (entry.module_path.starts_with("__Script::")
-                && self.sigil_session.lookup_uid(symbol).is_some())
     }
 
     fn qualified_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
-        self.declaration_index.get(symbol).or_else(|| {
-            self.declaration_index
-                .values()
-                .find(|entry| sindr::names::surface_path_eq(&entry.fq_name, symbol))
-        })
+        self.declaration_index
+            .get(symbol)
+            .or_else(|| {
+                self.declaration_index
+                    .values()
+                    .find(|entry| sindr::names::surface_path_eq(&entry.fq_name, symbol))
+            })
+            .or_else(|| {
+                let (owner, member) = symbol.rsplit_once("::")?;
+                let owner = self.visible_declaration(owner)?;
+                let qualified = format!("{}::{member}", owner.fq_name);
+                self.declaration_index.get(&qualified).or_else(|| {
+                    self.declaration_index
+                        .values()
+                        .find(|entry| sindr::names::surface_path_eq(&entry.fq_name, &qualified))
+                })
+            })
     }
 
     fn visible_uid_matches(&self, visible_name: &str, qualified_name: &str) -> bool {
@@ -3851,7 +3699,7 @@ impl ReplEngine {
         (owner.kind == sigil::DeclarationKind::Trait
             && owner.auto_import
             && owner.name == trait_name)
-            .then(|| trait_name.to_string())
+            .then(|| format!("{owner_fq_name}::{symbol}"))
     }
 
     fn visible_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
@@ -4045,7 +3893,14 @@ impl ReplEngine {
             .next()?
         } else {
             match kind {
-                forge::ReplCallableKind::Capture => self.capture_doc_entry(&value)?,
+                forge::ReplCallableKind::Capture => {
+                    let Some(entry) = self.capture_doc_entry(&value) else {
+                        return Some(Self::plain(vec![format!(
+                            "No documentation found for {symbol}."
+                        )]));
+                    };
+                    entry
+                }
                 forge::ReplCallableKind::Closure => self.closure_doc_entry()?,
             }
         };
@@ -4076,23 +3931,58 @@ impl ReplEngine {
     }
 
     fn capture_doc_entry(&self, value: &Value) -> Option<&DocEntry> {
+        use sindr::ir::{CallableTemplateDirectTarget, CallableTemplateKind};
+        use sindr::runtime::CallableTarget;
         let callable = Self::callable_origin_source(value)?;
+        if let (Some(module), Some(name)) = (
+            callable.metadata.module.as_deref(),
+            callable.metadata.name.as_deref(),
+        ) {
+            let qualified = format!("{}::{name}", crate::surface_path_name(module));
+            if let Some(doc) = self.callable_doc_snapshots.trait_methods.get(&qualified) {
+                return doc.as_ref();
+            }
+        }
+        let target = callable
+            .metadata
+            .delegate_function
+            .map(CallableTarget::Function)
+            .unwrap_or_else(|| callable.target.clone());
+        let function = match target {
+            CallableTarget::Function(function) => Some(function),
+            CallableTarget::Template(template) => match &self
+                .vm
+                .bytecode()
+                .callable_templates
+                .iter()
+                .find(|entry| entry.template_id == template)?
+                .kind
+            {
+                CallableTemplateKind::PartialDirectCall { target, .. }
+                | CallableTemplateKind::InjectDirectCall { target, .. } => match target {
+                    CallableTemplateDirectTarget::Function(function) => Some(*function),
+                    CallableTemplateDirectTarget::Builtin(_) => None,
+                },
+                CallableTemplateKind::ComposeDirect { .. } => return None,
+            },
+            CallableTarget::Builtin(_) => None,
+        };
+        if let Some(function) = function {
+            let entry = self.vm.function_entries().get(function as usize)?;
+            let qualified = entry.qualified_name.as_deref()?;
+            return self.callable_doc_snapshots.functions.get(&(
+                crate::surface_path_name(qualified).to_string(),
+                entry.span_start,
+                entry.span_end,
+            ));
+        }
         let module = callable.metadata.module.as_deref()?;
         let name = callable.metadata.name.as_deref()?;
         let qualified = format!("{module}::{name}");
-        self.docs
-            .iter()
-            .find(|entry| entry.qualified_name == qualified && entry.kind == DocKind::Function)
-            .or_else(|| {
-                self.matching_doc_entries(&qualified, None)
-                    .into_iter()
-                    .find(|entry| entry.kind == DocKind::Function)
-            })
-            .or_else(|| {
-                self.matching_doc_entries(name, None)
-                    .into_iter()
-                    .find(|entry| entry.kind == DocKind::Function)
-            })
+        self.docs.iter().find(|entry| {
+            entry.kind == DocKind::Function
+                && sindr::names::surface_path_eq(&entry.qualified_name, &qualified)
+        })
     }
 
     fn binding_doc_details(
@@ -4169,10 +4059,6 @@ impl ReplEngine {
         }
     }
 
-    fn doc_method_tail(qualified_name: &str) -> &str {
-        qualified_name.rsplit("::").next().unwrap_or(qualified_name)
-    }
-
     fn callee_tail(callee: &str) -> &str {
         callee.rsplit("::").next().unwrap_or(callee)
     }
@@ -4205,417 +4091,8 @@ impl ReplEngine {
                 .iter()
                 .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
         );
-        rendered.push(
-            "Use a qualified name or add type annotations, for example `:doc compare(Int, Int)`."
-                .to_string(),
-        );
+        rendered.push("Use a qualified name, for example `:doc Compare::compare`.".to_string());
         rendered
-    }
-
-    fn ambiguous_signature_lines(symbol: &str, entries: &[&SignatureEntry]) -> Vec<String> {
-        let mut rendered = vec![format!("{symbol} has multiple signatures:")];
-        rendered.extend(
-            entries
-                .iter()
-                .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
-        );
-        rendered.push(
-            "Use a qualified name or add type annotations, for example `:sig compare(Int, Int)`."
-                .to_string(),
-        );
-        rendered
-    }
-
-    fn handle_doc_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
-        if let Some(message) = self.invalid_attached_extractor_query_message(query) {
-            return Self::plain(vec![message]);
-        }
-        let arg_types = match self.query_arg_types(query.args.as_slice()) {
-            Ok(arg_types) => arg_types,
-            Err(message) => {
-                return Self::plain(vec![message]);
-            }
-        };
-        if let Some(result) = self.handle_doc_trait_target(&query.callee, &arg_types) {
-            return result;
-        }
-        let matches = self.match_typed_call_docs(query);
-        match matches.as_slice() {
-            [] => self
-                .private_declaration(query.callee.strip_suffix('!').unwrap_or(&query.callee))
-                .map(|entry| ReplResult::ok(Self::private_doc_output(entry)))
-                .unwrap_or_else(|| {
-                    Self::plain(vec![format!("No docs found for {}", source_query)])
-                }),
-            [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
-            entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
-        }
-    }
-
-    fn handle_doc_trait_target(&self, callee: &str, arg_types: &[String]) -> Option<ReplResult> {
-        let decl = self.visible_declaration(callee)?;
-        if decl.kind != sigil::DeclarationKind::Trait {
-            return None;
-        }
-        let entries = self.type_owner_doc_entries(callee)?;
-        let entry = entries.into_iter().next()?;
-        Some(ReplResult::ok(Self::doc_resolved_output_with_details(
-            entry,
-            vec![
-                format!("target: {}", arg_types.join(", ")),
-                "impl docs are not synthesized".to_string(),
-            ],
-        )))
-    }
-
-    fn match_typed_call_docs<'a>(&'a self, query: &TypedCallQuery) -> Vec<&'a DocEntry> {
-        if let Some(matches) = self.match_special_form_typed_call_docs(query) {
-            return matches;
-        }
-        if let Some(matches) = self.match_owner_typed_call_docs(query) {
-            return matches;
-        }
-
-        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
-            return Vec::new();
-        };
-        let Some(receiver_ty) = arg_types.first() else {
-            return Vec::new();
-        };
-        let preferred_trait = METHOD_DOC_TRAIT_ALIASES
-            .iter()
-            .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name))
-            .or_else(|| {
-                OPERATOR_DOC_TRAIT_ALIASES
-                    .iter()
-                    .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
-            });
-        let callee_tail = Self::callee_tail(&query.callee);
-        let callee_is_qualified = Self::is_qualified_symbol(&query.callee);
-        let mut matches = self
-            .docs
-            .iter()
-            .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == callee_tail)
-            .filter(|entry| {
-                if !callee_is_qualified {
-                    return true;
-                }
-                entry.qualified_name == query.callee
-                    || entry
-                        .signature
-                        .as_deref()
-                        .is_some_and(|sig| sig.starts_with(&format!("{}(", query.callee)))
-            })
-            .filter(|entry| {
-                entry.signature.as_deref().is_some_and(|sig| {
-                    if sig.starts_with("impl ") {
-                        return sig.contains(&format!(" for {receiver_ty}::{callee_tail}"));
-                    }
-                    Self::signature_matches_callee(sig, &query.callee)
-                })
-            })
-            .filter(|entry| {
-                entry
-                    .signature
-                    .as_deref()
-                    .is_none_or(|sig| self.signature_accepts_arg_types(sig, &arg_types))
-            })
-            .collect::<Vec<_>>();
-        matches.sort_by_key(|entry| {
-            self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail)
-        });
-        if let Some(best_rank) = matches
-            .first()
-            .map(|entry| self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail))
-        {
-            matches.retain(|entry| {
-                self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail)
-                    == best_rank
-            });
-        }
-        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-        matches
-    }
-
-    fn match_typed_call_signatures<'a>(
-        &'a self,
-        query: &TypedCallQuery,
-    ) -> Vec<&'a SignatureEntry> {
-        if let Some(matches) = self.match_special_form_typed_call_signatures(query) {
-            return matches;
-        }
-        if let Some(matches) = self.match_owner_typed_call_signatures(query) {
-            return matches;
-        }
-
-        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
-            return Vec::new();
-        };
-        let Some(receiver_ty) = arg_types.first() else {
-            return Vec::new();
-        };
-        let preferred_trait = METHOD_DOC_TRAIT_ALIASES
-            .iter()
-            .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name))
-            .or_else(|| {
-                OPERATOR_DOC_TRAIT_ALIASES
-                    .iter()
-                    .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
-            });
-        let callee_tail = Self::callee_tail(&query.callee);
-        let callee_is_qualified = Self::is_qualified_symbol(&query.callee);
-        let mut matches = self
-            .signatures
-            .iter()
-            .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == callee_tail)
-            .filter(|entry| {
-                if !callee_is_qualified {
-                    return true;
-                }
-                entry.qualified_name == query.callee
-                    || entry.signature.starts_with(&format!("{}(", query.callee))
-            })
-            .filter(|entry| {
-                let sig = entry.signature.as_str();
-                if sig.starts_with("impl ") {
-                    return sig.contains(&format!(" for {receiver_ty}::{callee_tail}"));
-                }
-                Self::signature_matches_callee(sig, &query.callee)
-            })
-            .filter(|entry| self.signature_accepts_arg_types(&entry.signature, &arg_types))
-            .collect::<Vec<_>>();
-        matches.sort_by_key(|entry| {
-            self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
-        });
-        if let Some(best_rank) = matches.first().map(|entry| {
-            self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
-        }) {
-            matches.retain(|entry| {
-                self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
-                    == best_rank
-            });
-        }
-        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-        matches
-    }
-
-    fn typed_call_doc_rank(
-        &self,
-        entry: &DocEntry,
-        preferred_trait: Option<&str>,
-        receiver_ty: &str,
-        callee_tail: &str,
-    ) -> u8 {
-        let Some(signature) = entry.signature.as_deref() else {
-            return u8::MAX;
-        };
-        let Some(trait_name) = preferred_trait else {
-            return 0;
-        };
-        if signature.starts_with(&format!(
-            "impl {trait_name} for {receiver_ty}::{callee_tail}"
-        )) {
-            return 0;
-        }
-        if crate::surface_path_name(&entry.qualified_name) == format!("{trait_name}::{callee_tail}")
-            || signature.starts_with(&format!("{trait_name}::{callee_tail}("))
-        {
-            return 1;
-        }
-        if signature.starts_with(&format!("impl {trait_name} for ")) {
-            return 2;
-        }
-        3
-    }
-
-    fn typed_call_signature_rank(
-        &self,
-        entry: &SignatureEntry,
-        preferred_trait: Option<&str>,
-        receiver_ty: &str,
-        callee_tail: &str,
-    ) -> u8 {
-        let signature = entry.signature.as_str();
-        let Some(trait_name) = preferred_trait else {
-            return if signature.starts_with("impl ") { 0 } else { 1 };
-        };
-        if signature.starts_with(&format!(
-            "impl {trait_name} for {receiver_ty}::{callee_tail}"
-        )) {
-            return 0;
-        }
-        if crate::surface_path_name(&entry.qualified_name) == format!("{trait_name}::{callee_tail}")
-            || signature.starts_with(&format!("{trait_name}::{callee_tail}("))
-        {
-            return 1;
-        }
-        if signature.starts_with(&format!("impl {trait_name} for ")) {
-            return 2;
-        }
-        3
-    }
-
-    fn match_special_form_typed_call_docs<'a>(
-        &'a self,
-        query: &TypedCallQuery,
-    ) -> Option<Vec<&'a DocEntry>> {
-        match query.callee.as_str() {
-            "dbg!" => {
-                let mut matches = self
-                    .docs
-                    .iter()
-                    .filter(|entry| entry.kind == DocKind::Function)
-                    .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
-                    .collect::<Vec<_>>();
-                matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-                Some(matches)
-            }
-            _ => None,
-        }
-    }
-
-    fn match_special_form_typed_call_signatures<'a>(
-        &'a self,
-        query: &TypedCallQuery,
-    ) -> Option<Vec<&'a SignatureEntry>> {
-        match query.callee.as_str() {
-            "dbg!" => {
-                let mut matches = self
-                    .signatures
-                    .iter()
-                    .filter(|entry| entry.kind == DocKind::Function)
-                    .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
-                    .collect::<Vec<_>>();
-                matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-                Some(matches)
-            }
-            _ => None,
-        }
-    }
-
-    fn match_owner_typed_call_docs<'a>(
-        &'a self,
-        query: &TypedCallQuery,
-    ) -> Option<Vec<&'a DocEntry>> {
-        if let Some(owner) = query.callee.strip_suffix('!') {
-            let decl = self.visible_declaration(owner)?;
-            if decl.kind != sigil::DeclarationKind::Struct {
-                return Some(Vec::new());
-            }
-            let qualified_name = format!("{}::deconstruct", decl.fq_name);
-            let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
-                return Some(Vec::new());
-            };
-            let mut matches = self
-                .docs
-                .iter()
-                .filter(|entry| entry.kind == DocKind::Function)
-                .filter(|entry| {
-                    crate::surface_path_name(&entry.qualified_name)
-                        == crate::surface_path_name(&qualified_name)
-                })
-                .filter(|entry| {
-                    entry.signature.as_deref().is_none_or(|sig| {
-                        arg_types.is_empty() || self.signature_accepts_arg_types(sig, &arg_types)
-                    })
-                })
-                .collect::<Vec<_>>();
-            matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-            return Some(matches);
-        }
-
-        let decl = self.visible_declaration(&query.callee)?;
-        if decl.kind != sigil::DeclarationKind::Struct {
-            return None;
-        }
-        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
-            return Some(Vec::new());
-        };
-        let qualified_name = format!("{}::new", decl.fq_name);
-        let mut matches = self
-            .docs
-            .iter()
-            .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| {
-                crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(&qualified_name)
-            })
-            .filter(|entry| {
-                entry
-                    .signature
-                    .as_deref()
-                    .is_none_or(|sig| self.signature_accepts_arg_types(sig, &arg_types))
-            })
-            .collect::<Vec<_>>();
-        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-        Some(matches)
-    }
-
-    fn match_owner_typed_call_signatures<'a>(
-        &'a self,
-        query: &TypedCallQuery,
-    ) -> Option<Vec<&'a SignatureEntry>> {
-        if let Some(owner) = query.callee.strip_suffix('!') {
-            let decl = self.visible_declaration(owner)?;
-            if decl.kind != sigil::DeclarationKind::Struct {
-                return Some(Vec::new());
-            }
-            let qualified_name = format!("{}::deconstruct", decl.fq_name);
-            let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
-                return Some(Vec::new());
-            };
-            let mut matches = self
-                .signatures
-                .iter()
-                .filter(|entry| entry.kind == DocKind::Function)
-                .filter(|entry| {
-                    crate::surface_path_name(&entry.qualified_name)
-                        == crate::surface_path_name(&qualified_name)
-                })
-                .filter(|entry| {
-                    arg_types.is_empty()
-                        || self.signature_accepts_arg_types(&entry.signature, &arg_types)
-                })
-                .collect::<Vec<_>>();
-            matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-            return Some(matches);
-        }
-
-        let decl = self.visible_declaration(&query.callee)?;
-        if decl.kind != sigil::DeclarationKind::Struct {
-            return None;
-        }
-        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
-            return Some(Vec::new());
-        };
-        let qualified_name = format!("{}::new", decl.fq_name);
-        let mut matches = self
-            .signatures
-            .iter()
-            .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| {
-                crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(&qualified_name)
-            })
-            .filter(|entry| self.signature_accepts_arg_types(&entry.signature, &arg_types))
-            .collect::<Vec<_>>();
-        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
-        Some(matches)
-    }
-
-    fn invalid_attached_extractor_query_message(&self, query: &TypedCallQuery) -> Option<String> {
-        query.callee.strip_suffix('!')?;
-        None
-    }
-
-    fn is_attached_extractor_owner_query(&self, symbol: &str) -> bool {
-        let Some(owner) = symbol.strip_suffix('!') else {
-            return false;
-        };
-        self.visible_declaration(owner)
-            .is_some_and(|decl| decl.kind == sigil::DeclarationKind::Struct)
     }
 
     fn special_form_doc_entry(&self, symbol: &str) -> Option<&DocEntry> {
@@ -4642,13 +4119,6 @@ impl ReplEngine {
         })
     }
 
-    fn signature_matches_callee(signature: &str, callee: &str) -> bool {
-        signature.starts_with(&format!("{callee}("))
-            || signature.contains(&format!("::{callee}("))
-            || signature.starts_with(&format!("@intrinsic def {callee}<"))
-            || signature.starts_with(&format!("@intrinsic def {callee}("))
-    }
-
     fn find_signature(&self, symbol: &str) -> Option<(String, String)> {
         if symbol == "Tuple" {
             return None;
@@ -4667,6 +4137,10 @@ impl ReplEngine {
         let canonical = self
             .visible_helper_doc_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
+        let canonical = self
+            .visible_declaration(&canonical)
+            .map(|declaration| declaration.fq_name.clone())
+            .unwrap_or(canonical);
         let qualified_lookup = Self::is_qualified_symbol(&canonical);
         if qualified_lookup
             && self
@@ -4825,17 +4299,8 @@ impl ReplEngine {
                 if let Some(result) = self.handle_sig_binding(symbol.source.as_str()) {
                     return result;
                 }
-                if self.is_attached_extractor_owner_query(&symbol) {
-                    return self.handle_sig_typed_call(
-                        trimmed,
-                        &TypedCallQuery {
-                            callee: symbol.source.clone(),
-                            args: Vec::new(),
-                        },
-                    );
-                }
-                if let Some(message) = self.enum_sig_extra_input_message_for_symbol(&symbol) {
-                    return Self::plain(vec![message]);
+                if let Some(result) = self.handle_sig_owner_pattern(&symbol) {
+                    return result;
                 }
                 if let Some((owner, metadata)) =
                     self.process_metadata_for_owner(symbol.source.as_str())
@@ -4851,9 +4316,6 @@ impl ReplEngine {
                     return Self::styled(lines);
                 }
                 if let Some(lines) = self.trait_family_signature_lines(&symbol) {
-                    return Self::styled(lines);
-                }
-                if let Some(lines) = self.operator_impl_signature_lines(&symbol) {
                     return Self::styled(lines);
                 }
                 if let Some(lines) = self.trait_method_family_signature_lines(&symbol) {
@@ -4889,14 +4351,12 @@ impl ReplEngine {
                 symbol.source.split('.').next().unwrap_or(&symbol.source),
                 symbol.source
             )]),
-            Ok(ReplQuery::TypedCall(query)) => self.handle_sig_typed_call(trimmed, &query),
-            Ok(ReplQuery::OperatorTarget(query)) => self.handle_sig_typed_operator(trimmed, &query),
             Err(err) => self.repl_query_diagnostic(
                 &format!(":sig {trimmed}"),
                 err.message().to_string(),
                 err.span(),
                 Self::query_diagnostic_reason(err.reason()),
-                Some("Accepted forms: symbol, typed call, or operator target.".to_string()),
+                Some("Accepted forms: symbol, Facet root, or field path.".to_string()),
             ),
         }
     }
@@ -4969,16 +4429,12 @@ impl ReplEngine {
                 "`{}` is a Facet path. Use `:facet {}`.",
                 symbol.source, symbol.source
             )]),
-            Ok(ReplQuery::TypedCall(query)) => self.handle_info_typed_call(trimmed, &query),
-            Ok(ReplQuery::OperatorTarget(query)) => {
-                self.handle_info_typed_operator(trimmed, &query)
-            }
             Err(err) => self.repl_query_diagnostic(
                 &format!(":info {trimmed}"),
                 err.message().to_string(),
                 err.span(),
                 Self::query_diagnostic_reason(err.reason()),
-                Some("Accepted forms: symbol, typed call, or operator target.".to_string()),
+                Some("Accepted forms: symbol, Facet root, or field path.".to_string()),
             ),
         }
     }
@@ -5540,80 +4996,6 @@ impl ReplEngine {
         Self::styled(lines)
     }
 
-    fn handle_info_typed_call(&mut self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
-        let sig = self.handle_sig_typed_call(source_query, query);
-        let sig_text = Self::repl_result_text(&sig);
-        match sig.output {
-            ReplOutput::EvalError { rendered, .. } => ReplResult::ok(ReplOutput::EvalError {
-                idx: self.results.len(),
-                source: format!(":info {source_query}"),
-                rendered,
-            }),
-            _ => {
-                let mut lines = vec![source_query.to_string(), "kind: function".to_string()];
-                lines.push(format!("origin: {}", Self::origin_for_name(&query.callee)));
-                for block in sig_text.split("\n\n") {
-                    if let Some(rest) = block.strip_prefix("defined:\n  ") {
-                        lines.push(format!("defined: {rest}"));
-                    } else if let Some(rest) = block.strip_prefix("specialized:\n  ") {
-                        lines.push(format!("specialized: {rest}"));
-                    } else {
-                        lines.push(format!("defined: {block}"));
-                    }
-                }
-                Self::styled(lines)
-            }
-        }
-    }
-
-    fn handle_info_typed_operator(
-        &mut self,
-        source_query: &str,
-        query: &OperatorTargetQuery,
-    ) -> ReplResult {
-        if Self::operator_target_symbol(query).is_some() {
-            return self
-                .operator_target_signature_entry(query)
-                .map(|(qualified_name, signature)| {
-                    Self::styled(vec![
-                        source_query.to_string(),
-                        "kind: operator".to_string(),
-                        format!("origin: {}", Self::origin_for_name(&qualified_name)),
-                        format!(
-                            "defined: {}",
-                            Self::render_signature_with_qualified_name(&qualified_name, signature)
-                        ),
-                    ])
-                })
-                .unwrap_or_else(|| {
-                    Self::plain(vec![format!("No signature found for {source_query}")])
-                });
-        }
-        match self.typed_operator_signature(query) {
-            Ok((defined, result_ty)) => Self::styled(vec![
-                source_query.to_string(),
-                "kind: operator".to_string(),
-                format!("origin: {}", Self::origin_for_name(query.operator)),
-                format!("defined: {defined}"),
-                format!(
-                    "specialized: {source_query}: {}",
-                    format_query_ty(&result_ty)
-                ),
-                format!("type: {}", format_query_ty(&result_ty)),
-            ]),
-            Err(message) => self.repl_query_diagnostic(
-                &format!(":info {source_query}"),
-                message,
-                Span {
-                    start: ":info ".chars().count(),
-                    end: format!(":info {source_query}").chars().count(),
-                },
-                diagnostics::ReplDiagnosticReason::QueryEvaluationFailed,
-                None,
-            ),
-        }
-    }
-
     fn origin_for_name(name: &str) -> &'static str {
         if name.contains("REPL::") {
             "repl"
@@ -5627,6 +5009,7 @@ impl ReplEngine {
         }
     }
 
+    #[cfg(test)]
     fn repl_result_text(result: &ReplResult) -> String {
         match &result.output {
             ReplOutput::StyledDoc { lines } | ReplOutput::PlainText { lines } => lines.join("\n"),
@@ -5756,88 +5139,52 @@ impl ReplEngine {
         }
     }
 
-    fn handle_sig_typed_call(&mut self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
-        if let Some(message) = self.invalid_attached_extractor_query_message(query) {
-            return Self::plain(vec![message]);
+    fn handle_sig_owner_pattern(&self, symbol: &str) -> Option<ReplResult> {
+        let owner = symbol.strip_suffix('!')?;
+        if let Some(decl) = self.private_declaration(owner) {
+            return Some(ReplResult::ok(Self::private_sig_output(decl)));
         }
-        if let Some(message) = self.enum_sig_extra_input_message_for_typed_call(query) {
-            return Self::plain(vec![message]);
-        }
-        if let Some(lines) = self.sig_zero_arg_type_owner_fallback(query) {
-            return Self::styled(lines);
-        }
-        if let Some(binding) = self.binding_info(&query.callee) {
-            if let Some(rendered) = self.handle_sig_binding_typed_call(source_query, query, binding)
-            {
-                return rendered;
-            }
-        }
-        if let Some(lines) = self.trait_target_signature_lines(query) {
-            return Self::styled(lines);
-        }
-        let matches = self.match_typed_call_signatures(query);
-        match matches.as_slice() {
-            [entry] => {
-                let defined = Self::render_signature_with_qualified_name(
-                    &entry.qualified_name,
-                    entry.signature.clone(),
-                );
-                let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
-                    Ok(arg_types) => arg_types,
-                    Err(message) => {
-                        return Self::plain(vec![message]);
+        let decl = self.visible_declaration(owner)?;
+        let name = crate::surface_path_name(&decl.fq_name);
+        match decl.kind {
+            sigil::DeclarationKind::Struct => {
+                let extractor = format!("{}::deconstruct", decl.fq_name);
+                Some(match self.find_signature(&extractor) {
+                    Some((qualified, signature)) => {
+                        Self::styled(vec![Self::render_signature_with_qualified_name(
+                            &qualified, signature,
+                        )])
                     }
-                };
-                let rendered = if query.callee == "dbg!" {
-                    defined
-                } else {
-                    let specialized_return = self
-                        .specialize_signature_return(&defined, &arg_types)
-                        .map(|ty| format_query_ty(&ty))
-                        .map(|ret| {
-                            if ret == "Self" {
-                                arg_types.first().map(format_query_ty).unwrap_or(ret)
-                            } else {
-                                ret
-                            }
-                        })
-                        .or_else(|| {
-                            signature_return_type(&defined)
-                                .filter(|ret| *ret == "Self")
-                                .and_then(|_| arg_types.first().map(format_query_ty))
-                        })
-                        .unwrap_or_else(|| {
-                            signature_return_type(&defined).unwrap_or("_").to_string()
-                        });
-                    format!(
-                        "defined:\n  {defined}\n\nspecialized:\n  {}({}) -> {}",
-                        query.callee,
-                        arg_types
-                            .iter()
-                            .map(format_query_ty)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        specialized_return
-                    )
-                };
-                Self::styled(rendered.lines().map(|line| line.to_string()).collect())
+                    None => Self::plain(vec![format!("No signature found for {symbol}")]),
+                })
             }
-            [] => self
-                .private_declaration(query.callee.strip_suffix('!').unwrap_or(&query.callee))
-                .map(|entry| ReplResult::ok(Self::private_sig_output(entry)))
-                .unwrap_or_else(|| {
-                    Self::plain(vec![format!("No signature found for {}", source_query)])
-                }),
-            entries => Self::plain(Self::ambiguous_signature_lines(source_query, entries)),
+            sigil::DeclarationKind::Record | sigil::DeclarationKind::Deferror => {
+                let def = self.scar_session.lookup_type_def(&decl.fq_name)?;
+                let fields = def
+                    .fields
+                    .iter()
+                    .map(|(field, ty)| format!("{field}: {}", Self::definition_ty_display(ty, def)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(Self::styled(vec![format!("{name}({fields}) : {name}")]))
+            }
+            sigil::DeclarationKind::Enum => {
+                let mut lines = self.enum_variant_signature_lines(decl)?;
+                for line in &mut lines {
+                    line.push_str(&format!(" : {name}"));
+                }
+                Some(Self::styled(lines))
+            }
+            _ => None,
         }
     }
 
     fn sig_type_owner_summary_lines(&self, symbol: &str) -> Option<Vec<String>> {
         let decl = self.visible_declaration(symbol)?;
         match decl.kind {
-            sigil::DeclarationKind::Struct | sigil::DeclarationKind::Record => {
-                self.constructor_signature_lines(decl)
-            }
+            sigil::DeclarationKind::Struct
+            | sigil::DeclarationKind::Record
+            | sigil::DeclarationKind::Deferror => self.constructor_signature_lines(decl),
             sigil::DeclarationKind::Enum => self.enum_variant_signature_lines(decl),
             _ => None,
         }
@@ -5892,58 +5239,7 @@ impl ReplEngine {
         if let Some(targets) = self.impl_targets_summary_for_trait(trait_name) {
             lines.push(format!("impl targets: {targets}"));
         }
-        lines.push(format!("try: :sig {symbol}(Int, Int)"));
         Some(lines)
-    }
-
-    fn operator_impl_signature_lines(&self, symbol: &str) -> Option<Vec<String>> {
-        if symbol != "|>=" {
-            return None;
-        }
-        let trait_name = Self::operator_target_trait_name(symbol)?;
-        let member = Self::operator_target_member_name(symbol)?;
-        let mut lines = self
-            .signatures
-            .iter()
-            .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| {
-                let signature = entry.signature.as_str();
-                signature.starts_with(&format!("impl {trait_name}"))
-                    && signature.contains(&format!("::{member}("))
-            })
-            .map(|entry| crate::surface_rendered_name(&entry.signature))
-            .collect::<Vec<_>>();
-        lines.sort();
-        (!lines.is_empty()).then_some(lines)
-    }
-
-    fn trait_target_signature_lines(&self, query: &TypedCallQuery) -> Option<Vec<String>> {
-        let decl = self.visible_declaration(&query.callee)?;
-        if decl.kind != sigil::DeclarationKind::Trait {
-            return None;
-        }
-        let (_, signature) = self.trait_signature_entry(&query.callee)?;
-        let mut lines = Vec::new();
-        for method in Self::trait_signature_methods(&signature) {
-            let Some((method_name, _)) = method.split_once('(') else {
-                continue;
-            };
-            let method_query = TypedCallQuery {
-                callee: method_name.trim().to_string(),
-                args: query.args.clone(),
-            };
-            if let Some(entry) = self
-                .match_typed_call_signatures(&method_query)
-                .into_iter()
-                .next()
-            {
-                lines.push(Self::render_signature_with_qualified_name(
-                    &entry.qualified_name,
-                    entry.signature.clone(),
-                ));
-            }
-        }
-        (!lines.is_empty()).then_some(lines)
     }
 
     fn trait_signature_entry(&self, trait_name: &str) -> Option<(String, String)> {
@@ -6033,54 +5329,6 @@ impl ReplEngine {
             .is_some_and(|tail| !tail.is_empty() && tail.chars().all(|ch| ch.is_ascii_digit()))
     }
 
-    fn enum_sig_extra_input_message_for_symbol(&self, symbol: &str) -> Option<String> {
-        let (owner, _) = symbol.split_once("::")?;
-        self.enum_sig_extra_input_message(owner.trim(), symbol.trim())
-    }
-
-    fn enum_sig_extra_input_message_for_typed_call(
-        &self,
-        query: &TypedCallQuery,
-    ) -> Option<String> {
-        let callee = query.callee.trim();
-        if let Some((owner, _)) = callee.split_once("::") {
-            return self.enum_sig_extra_input_message(owner.trim(), callee);
-        }
-        if query.args.is_empty() {
-            return None;
-        }
-        self.enum_sig_extra_input_message(callee, callee)
-    }
-
-    fn enum_sig_extra_input_message(&self, owner: &str, source: &str) -> Option<String> {
-        let decl = self.visible_declaration(owner)?;
-        (decl.kind == sigil::DeclarationKind::Enum
-            && !matches!(
-                crate::surface_path_name(&decl.fq_name),
-                "Result" | "Boolean"
-            ))
-        .then(|| {
-            format!(
-                "Enum signatures are only available for bare type owners: use `:sig {}` instead of `:sig {}`.",
-                crate::surface_path_name(&decl.fq_name),
-                source
-            )
-        })
-    }
-
-    fn sig_zero_arg_type_owner_fallback(&self, query: &TypedCallQuery) -> Option<Vec<String>> {
-        if !query.args.is_empty() {
-            return None;
-        }
-        let decl = self.visible_declaration(&query.callee)?;
-        match decl.kind {
-            sigil::DeclarationKind::Struct | sigil::DeclarationKind::Record => {
-                self.constructor_signature_lines(decl)
-            }
-            _ => None,
-        }
-    }
-
     fn constructor_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
         if let Some((qualified_name, signature)) = self.constructor_signature_entry(decl) {
             return Some(vec![Self::render_signature_with_qualified_name(
@@ -6096,6 +5344,17 @@ impl ReplEngine {
         &self,
         decl: &sigil::DeclarationEntry,
     ) -> Option<(String, String)> {
+        if decl.kind == sigil::DeclarationKind::Deferror {
+            let (_, signature) = self.find_signature(&decl.fq_name)?;
+            let (_, block) = signature.split_once('{')?;
+            let (_, inputs) = block.split_once('|')?;
+            let (inputs, _) = inputs.split_once('|')?;
+            let owner = crate::surface_path_name(&decl.fq_name);
+            return Some((
+                decl.fq_name.clone(),
+                format!("{owner}({}) -> {owner}", inputs.trim()),
+            ));
+        }
         let constructor_qualified_name = format!("{}::new", decl.fq_name);
         if let Some(signature) = self.find_signature(&constructor_qualified_name) {
             return Some(signature);
@@ -6254,40 +5513,6 @@ impl ReplEngine {
         }
     }
 
-    fn handle_sig_typed_operator(
-        &mut self,
-        source_query: &str,
-        query: &OperatorTargetQuery,
-    ) -> ReplResult {
-        if Self::operator_target_symbol(query).is_some() {
-            return match self.operator_target_signature_entry(query) {
-                Some((qualified_name, signature)) => {
-                    Self::styled(vec![Self::render_signature_with_qualified_name(
-                        &qualified_name,
-                        signature,
-                    )])
-                }
-                None => Self::plain(vec![format!("No signature found for {source_query}")]),
-            };
-        }
-        match self.typed_operator_signature(query) {
-            Ok((defined, result_ty)) => Self::styled(
-                format!(
-                    "defined:\n  {defined}\n\nspecialized:\n  {source_query}: {}",
-                    format_query_ty(&result_ty)
-                )
-                .lines()
-                .map(|line| line.to_string())
-                .collect(),
-            ),
-            Err(message) => Self::plain(vec![message]),
-        }
-    }
-
-    fn query_arg_type(&self, arg: &QueryArg) -> Result<String, String> {
-        self.query_arg_ast_ty(arg).map(|ty| format_query_ty(&ty))
-    }
-
     fn handle_sig_binding(&self, symbol: &str) -> Option<ReplResult> {
         let binding = self.binding_info(symbol)?;
         if let Some(value) = self.vm.get_local(binding.slot_id) {
@@ -6323,40 +5548,6 @@ impl ReplEngine {
         ))
     }
 
-    fn handle_sig_binding_typed_call(
-        &self,
-        source_query: &str,
-        query: &TypedCallQuery,
-        binding: &forge::BindingInfo,
-    ) -> Option<ReplResult> {
-        let Some(func_ty) = self.binding_callable_ty(binding) else {
-            return None;
-        };
-        let AstTy::Func(_, params, ret) = func_ty else {
-            return None;
-        };
-
-        let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
-            Ok(arg_types) => arg_types,
-            Err(message) => {
-                return Some(Self::plain(vec![message]));
-            }
-        };
-
-        if arg_types.len() != params.len() {
-            return Some(self.sig_callable_arity_error(
-                source_query,
-                params.len(),
-                arg_types.len(),
-                &AstTy::Func(Span { start: 0, end: 0 }, params, ret),
-            ));
-        }
-
-        Some(Self::styled(vec![
-            Self::render_callable_application_summary(&query.callee, &arg_types, ret.as_ref()),
-        ]))
-    }
-
     fn render_callable_sig_summary(
         name_or_source: &str,
         ty: &str,
@@ -6367,19 +5558,6 @@ impl ReplEngine {
             forge::ReplCallableKind::Capture => "Capture",
         };
         format!("{name_or_source}: {ty} :: {kind}")
-    }
-
-    fn render_callable_application_summary(
-        callee: &str,
-        arg_types: &[AstTy],
-        return_ty: &AstTy,
-    ) -> String {
-        let args = arg_types
-            .iter()
-            .map(format_query_ty)
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{callee}({args}) -> {}", format_query_ty(return_ty))
     }
 
     fn binding_callable_kind(
@@ -6425,605 +5603,6 @@ impl ReplEngine {
         let ty = parse_binding_query_type(&binding.ty)?;
         (matches!(ty, AstTy::Func(_, _, _)) || Self::is_extractor_closure_query_type(&ty))
             .then_some(ty)
-    }
-
-    fn sig_callable_arity_error(
-        &self,
-        source_query: &str,
-        expected: usize,
-        got: usize,
-        callable_ty: &AstTy,
-    ) -> ReplResult {
-        let spec = diagnostics::simple_error(
-            "ReplQueryError",
-            format!("function expects {} argument(s), got {}", expected, got),
-            Span {
-                start: 0,
-                end: source_query.chars().count(),
-            },
-            Some(format!(
-                "Callable type signature: {}",
-                format_query_ty(callable_ty)
-            )),
-        );
-        let rendered =
-            error_display::diagnostic_lines("REPL", source_query, &spec, self.error_display_mode);
-        ReplResult::ok(ReplOutput::EvalError {
-            idx: self.results.len(),
-            source: format!(":sig {source_query}"),
-            rendered,
-        })
-    }
-
-    fn query_arg_types(&self, args: &[QueryArg]) -> Result<Vec<String>, String> {
-        args.iter().map(|arg| self.query_arg_type(arg)).collect()
-    }
-
-    fn repl_operator_query_unresolved_generic_error() -> String {
-        format!(
-            "Cannot use unresolved generic binding in REPL operator query. {}",
-            REPL_UNRESOLVED_TYPE_HINT
-        )
-    }
-
-    fn repl_typed_operator_operand_error(source: &str) -> String {
-        format!(
-            "Unsupported operator target query operand `{source}`. Use an existing binding or a concrete type such as `(Int -> String)`."
-        )
-    }
-
-    fn query_arg_ast_types(&self, args: &[QueryArg]) -> Result<Vec<AstTy>, String> {
-        args.iter().map(|arg| self.query_arg_ast_ty(arg)).collect()
-    }
-
-    fn query_arg_ast_ty(&self, arg: &QueryArg) -> Result<AstTy, String> {
-        let ty = match &arg.kind {
-            QueryArgKind::Binding(name) => {
-                let Some(ty) = self.binding_type(name) else {
-                    return Err(format!("Unknown query binding `{name}`."));
-                };
-                let parsed = parse_binding_query_type(&ty).ok_or_else(|| {
-                    format!("Binding `{name}` has unsupported query type `{ty}`.")
-                })?;
-                if ast_ty_contains_query_placeholder(&parsed) {
-                    return Err(Self::repl_operator_query_unresolved_generic_error());
-                }
-                Ok(parsed)
-            }
-            QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg)
-                .ok_or_else(|| Self::repl_typed_operator_operand_error(&arg.source)),
-        }?;
-        if ast_ty_contains_query_placeholder(&ty) {
-            return Err(Self::repl_operator_query_unresolved_generic_error());
-        }
-        Ok(ty)
-    }
-
-    fn typed_operator_signature(
-        &self,
-        query: &OperatorTargetQuery,
-    ) -> Result<(String, AstTy), String> {
-        let lhs_ty = self.query_arg_ast_ty(&query.target)?;
-        let rhs_ty = self.query_arg_ast_ty(&query.target)?;
-        match query.operator {
-            "|>" => {
-                let (params, ret) = Self::query_unary_func_parts(&rhs_ty, "|>")?;
-                Self::ensure_query_type_matches(
-                    &lhs_ty,
-                    &params[0],
-                    "`|>` requires the left operand to match the function input type",
-                )?;
-                Ok((
-                    format!(
-                        "Bootstrap::|>(lhs: {}, rhs: {}) -> {}",
-                        format_query_ty(&lhs_ty),
-                        format_query_ty(&rhs_ty),
-                        format_query_ty(&ret)
-                    ),
-                    ret,
-                ))
-            }
-            "|*>" => {
-                let (ctx_arg, _inner_ty, result_ty) = Self::query_map_result(&lhs_ty, &rhs_ty)?;
-                Ok((
-                    format!(
-                        "Functor::fmap(lhs: {}, rhs: {}) -> {}",
-                        format_query_ty(&ctx_arg),
-                        format_query_ty(&rhs_ty),
-                        format_query_ty(&result_ty)
-                    ),
-                    result_ty,
-                ))
-            }
-            "|>=" => {
-                let result_ty = Self::query_bind_result(&lhs_ty, &rhs_ty)?;
-                Ok((
-                    format!(
-                        "Monad::bind(lhs: {}, rhs: {}) -> {}",
-                        format_query_ty(&lhs_ty),
-                        format_query_ty(&rhs_ty),
-                        format_query_ty(&result_ty)
-                    ),
-                    result_ty,
-                ))
-            }
-            "->" => match (&lhs_ty, &rhs_ty) {
-                (
-                    AstTy::Generic(_, left_name, left_args),
-                    AstTy::Generic(_, right_name, right_args),
-                ) if left_name == "Facet"
-                    && right_name == "Facet"
-                    && left_args.len() == 2
-                    && right_args.len() == 2 =>
-                {
-                    Self::ensure_query_type_matches(
-                        &left_args[1],
-                        &right_args[0],
-                        "`->` requires the left focus type to match the right source type",
-                    )?;
-                    let result_ty = AstTy::Generic(
-                        Span { start: 0, end: 0 },
-                        "Facet".to_string(),
-                        vec![left_args[0].clone(), right_args[1].clone()],
-                    );
-                    Ok((
-                        format!(
-                            "Facet::compose(lhs: {}, rhs: {}) -> {}",
-                            format_query_ty(&lhs_ty),
-                            format_query_ty(&rhs_ty),
-                            format_query_ty(&result_ty)
-                        ),
-                        result_ty,
-                    ))
-                }
-                _ => Err("`->` requires Facet path operands.".to_string()),
-            },
-            ">>" => {
-                let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">>")?;
-                let (right_params, right_ret) = Self::query_unary_func_parts(&rhs_ty, ">>")?;
-                Self::ensure_query_type_matches(
-                    &left_ret,
-                    &right_params[0],
-                    "`>>` requires the left output type to match the right input type",
-                )?;
-                let result_ty = AstTy::Func(
-                    Span { start: 0, end: 0 },
-                    vec![left_params[0].clone()],
-                    Box::new(right_ret),
-                );
-                Ok((
-                    format!(
-                        "Bootstrap::>>(lhs: {}, rhs: {}) -> {}",
-                        format_query_ty(&lhs_ty),
-                        format_query_ty(&rhs_ty),
-                        format_query_ty(&result_ty)
-                    ),
-                    result_ty,
-                ))
-            }
-            ">*" => {
-                let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">*")?;
-                let (right_params, right_ret) = Self::query_unary_func_parts(&rhs_ty, ">*")?;
-                let result_inner = match &left_ret {
-                    AstTy::Generic(_, name, args) if name == "Result" && args.len() == 1 => {
-                        Self::ensure_query_type_matches(
-                            &args[0],
-                            &right_params[0],
-                            "`>*` requires the contextual output to match the right input type",
-                        )?;
-                        AstTy::Generic(
-                            Span { start: 0, end: 0 },
-                            "Result".to_string(),
-                            vec![right_ret],
-                        )
-                    }
-                    AstTy::Generic(_, name, args) if name == "List" && args.len() == 1 => {
-                        Self::ensure_query_type_matches(
-                            &args[0],
-                            &right_params[0],
-                            "`>*` requires the contextual output to match the right input type",
-                        )?;
-                        AstTy::Generic(
-                            Span { start: 0, end: 0 },
-                            "List".to_string(),
-                            vec![right_ret],
-                        )
-                    }
-                    other => {
-                        return Err(format!(
-                            "`>*` requires a contextual left output, got {}.",
-                            format_query_ty(other)
-                        ));
-                    }
-                };
-                let result_ty = AstTy::Func(
-                    Span { start: 0, end: 0 },
-                    vec![left_params[0].clone()],
-                    Box::new(result_inner),
-                );
-                Ok((
-                    format!(
-                        "Bootstrap::>*(lhs: {}, rhs: {}) -> {}",
-                        format_query_ty(&lhs_ty),
-                        format_query_ty(&rhs_ty),
-                        format_query_ty(&result_ty)
-                    ),
-                    result_ty,
-                ))
-            }
-            ">=>" => {
-                let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">=>")?;
-                let (right_params, right_ret) = Self::query_unary_func_parts(&rhs_ty, ">=>")?;
-                let result_inner = match (&left_ret, &right_ret) {
-                    (
-                        AstTy::Generic(_, left_name, left_args),
-                        AstTy::Generic(_, right_name, right_args),
-                    ) if left_name == "Result"
-                        && right_name == "Result"
-                        && left_args.len() == 1
-                        && right_args.len() == 1 =>
-                    {
-                        Self::ensure_query_type_matches(
-                            &left_args[0],
-                            &right_params[0],
-                            "`>=>` requires the left contextual output to match the right input type",
-                        )?;
-                        AstTy::Generic(
-                            Span { start: 0, end: 0 },
-                            "Result".to_string(),
-                            vec![right_args[0].clone()],
-                        )
-                    }
-                    (
-                        AstTy::Generic(_, left_name, left_args),
-                        AstTy::Generic(_, right_name, right_args),
-                    ) if left_name == "List"
-                        && right_name == "List"
-                        && left_args.len() == 1
-                        && right_args.len() == 1 =>
-                    {
-                        Self::ensure_query_type_matches(
-                            &left_args[0],
-                            &right_params[0],
-                            "`>=>` requires the left contextual output to match the right input type",
-                        )?;
-                        AstTy::Generic(
-                            Span { start: 0, end: 0 },
-                            "List".to_string(),
-                            vec![right_args[0].clone()],
-                        )
-                    }
-                    _ => {
-                        return Err(
-                            "`>=>` requires matching Result or List context on both sides."
-                                .to_string(),
-                        );
-                    }
-                };
-                let result_ty = AstTy::Func(
-                    Span { start: 0, end: 0 },
-                    vec![left_params[0].clone()],
-                    Box::new(result_inner),
-                );
-                Ok((
-                    format!(
-                        "Bootstrap::>=>(lhs: {}, rhs: {}) -> {}",
-                        format_query_ty(&lhs_ty),
-                        format_query_ty(&rhs_ty),
-                        format_query_ty(&result_ty)
-                    ),
-                    result_ty,
-                ))
-            }
-            other => Err(format!("Unsupported operator query `{other}`.")),
-        }
-    }
-
-    fn signature_accepts_arg_types(&self, signature: &str, arg_types: &[String]) -> bool {
-        let Some(param_types) = Self::signature_param_types(signature) else {
-            return false;
-        };
-        let variadic_index = param_types.iter().position(|param| param.starts_with('*'));
-
-        match variadic_index {
-            Some(index) => {
-                if index != param_types.len().saturating_sub(1) || arg_types.len() < index + 1 {
-                    return false;
-                }
-
-                let fixed_match = param_types[..index]
-                    .iter()
-                    .zip(&arg_types[..index])
-                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg));
-                if !fixed_match {
-                    return false;
-                }
-
-                let variadic_param = param_types[index].trim_start_matches('*').trim();
-                arg_types[index..]
-                    .iter()
-                    .all(|arg| Self::parameter_type_accepts_arg_type(variadic_param, arg))
-            }
-            None => {
-                if param_types.len() != arg_types.len() {
-                    return false;
-                }
-                param_types
-                    .iter()
-                    .zip(arg_types)
-                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg))
-            }
-        }
-    }
-
-    fn signature_param_types(signature: &str) -> Option<Vec<String>> {
-        signature
-            .split_once('(')
-            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(params, _)| params))
-            .map(|params| {
-                split_top_level_commas(params)
-                    .into_iter()
-                    .filter_map(|param| param.split_once(':').map(|(_, ty)| ty.trim().to_string()))
-                    .collect()
-            })
-    }
-
-    fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
-        if param == arg || param == "Self" || param.starts_with('$') {
-            return true;
-        }
-        false
-    }
-
-    fn specialize_signature_return(&self, signature: &str, arg_types: &[AstTy]) -> Option<AstTy> {
-        let (param_types, return_ty) = Self::signature_param_asts_and_return(signature)?;
-        let self_ty = Self::self_type_from_signature(signature)
-            .or_else(|| Self::implicit_self_type_from_args(&param_types, arg_types));
-        let Some(substitutions) =
-            Self::build_type_substitutions(&param_types, arg_types, self_ty.as_ref())
-        else {
-            return match &return_ty {
-                AstTy::Named(_, name) if name == "Self" => self_ty,
-                _ => None,
-            };
-        };
-        Some(Self::substitute_query_ty(
-            &return_ty,
-            &substitutions,
-            self_ty.as_ref(),
-        ))
-    }
-
-    fn signature_param_asts_and_return(signature: &str) -> Option<(Vec<AstTy>, AstTy)> {
-        let params = Self::signature_param_types(signature)?
-            .into_iter()
-            .filter_map(|ty| parse_signature_type(&ty))
-            .collect::<Vec<_>>();
-        let return_ty = signature_return_type(signature).and_then(parse_signature_type)?;
-        Some((params, return_ty))
-    }
-
-    fn self_type_from_signature(signature: &str) -> Option<AstTy> {
-        let for_pos = signature.find(" for ")?;
-        let after_for = &signature[for_pos + " for ".len()..];
-        let method_sep = after_for.find("::")?;
-        parse_signature_type(after_for[..method_sep].trim())
-    }
-
-    fn implicit_self_type_from_args(params: &[AstTy], args: &[AstTy]) -> Option<AstTy> {
-        (params.len() == args.len())
-            .then_some((params.first()?, args.first()?))
-            .and_then(|(param, arg)| match param {
-                AstTy::Named(_, name) if name == "Self" => Some(arg.clone()),
-                _ => None,
-            })
-    }
-
-    fn build_type_substitutions(
-        params: &[AstTy],
-        args: &[AstTy],
-        self_ty: Option<&AstTy>,
-    ) -> Option<HashMap<String, AstTy>> {
-        if params.len() != args.len() {
-            return None;
-        }
-        let mut substitutions = HashMap::new();
-        for (param, arg) in params.iter().zip(args) {
-            if !Self::unify_query_ty(param, arg, &mut substitutions, self_ty) {
-                return None;
-            }
-        }
-        Some(substitutions)
-    }
-
-    fn unify_query_ty(
-        param: &AstTy,
-        arg: &AstTy,
-        substitutions: &mut HashMap<String, AstTy>,
-        self_ty: Option<&AstTy>,
-    ) -> bool {
-        match param {
-            AstTy::Named(_, name) if name == "Self" => self_ty.is_none_or(|ty| ty == arg),
-            AstTy::Named(_, name) if name.starts_with('$') => {
-                if let Some(existing) = substitutions.get(name) {
-                    existing == arg
-                } else {
-                    substitutions.insert(name.clone(), arg.clone());
-                    true
-                }
-            }
-            AstTy::Named(_, name) => matches!(arg, AstTy::Named(_, other) if other == name),
-            AstTy::ImplTrait(_, name) => matches!(arg, AstTy::ImplTrait(_, other) if other == name),
-            AstTy::Generic(_, name, params) => match arg {
-                AstTy::Generic(_, other, args) if name == other && params.len() == args.len() => {
-                    params.iter().zip(args).all(|(param, arg)| {
-                        Self::unify_query_ty(param, arg, substitutions, self_ty)
-                    })
-                }
-                _ => false,
-            },
-            AstTy::Tuple(_, items) => match arg {
-                AstTy::Tuple(_, other) if items.len() == other.len() => items
-                    .iter()
-                    .zip(other)
-                    .all(|(param, arg)| Self::unify_query_ty(param, arg, substitutions, self_ty)),
-                _ => false,
-            },
-            AstTy::Func(_, params, ret) => match arg {
-                AstTy::Func(_, other_params, other_ret) if params.len() == other_params.len() => {
-                    params.iter().zip(other_params).all(|(param, arg)| {
-                        Self::unify_query_ty(param, arg, substitutions, self_ty)
-                    }) && Self::unify_query_ty(ret, other_ret, substitutions, self_ty)
-                }
-                _ => false,
-            },
-        }
-    }
-
-    fn substitute_query_ty(
-        ty: &AstTy,
-        substitutions: &HashMap<String, AstTy>,
-        self_ty: Option<&AstTy>,
-    ) -> AstTy {
-        match ty {
-            AstTy::Named(_, name) if name == "Self" => {
-                self_ty.cloned().unwrap_or_else(|| ty.clone())
-            }
-            AstTy::Named(_, name) if name.starts_with('$') => substitutions
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| ty.clone()),
-            AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => ty.clone(),
-            AstTy::Generic(span, name, args) => AstTy::Generic(
-                span.clone(),
-                name.clone(),
-                args.iter()
-                    .map(|arg| Self::substitute_query_ty(arg, substitutions, self_ty))
-                    .collect(),
-            ),
-            AstTy::Tuple(span, items) => AstTy::Tuple(
-                span.clone(),
-                items
-                    .iter()
-                    .map(|item| Self::substitute_query_ty(item, substitutions, self_ty))
-                    .collect(),
-            ),
-            AstTy::Func(span, params, ret) => AstTy::Func(
-                span.clone(),
-                params
-                    .iter()
-                    .map(|param| Self::substitute_query_ty(param, substitutions, self_ty))
-                    .collect(),
-                Box::new(Self::substitute_query_ty(ret, substitutions, self_ty)),
-            ),
-        }
-    }
-
-    fn query_unary_func_parts(ty: &AstTy, operator: &str) -> Result<(Vec<AstTy>, AstTy), String> {
-        match ty {
-            AstTy::Func(_, params, ret) if params.len() == 1 => {
-                Ok((params.clone(), ret.as_ref().clone()))
-            }
-            AstTy::Func(_, params, _) => Err(format!(
-                "`{operator}` expects a unary function type on this side, got {} parameter(s).",
-                params.len()
-            )),
-            _ => Err(format!(
-                "`{operator}` expects a function type, got {}.",
-                format_query_ty(ty)
-            )),
-        }
-    }
-
-    fn ensure_query_type_matches(lhs: &AstTy, rhs: &AstTy, message: &str) -> Result<(), String> {
-        if format_query_ty(lhs) == format_query_ty(rhs) {
-            Ok(())
-        } else {
-            Err(format!(
-                "{message}: left is {}, right is {}.",
-                format_query_ty(lhs),
-                format_query_ty(rhs)
-            ))
-        }
-    }
-
-    fn query_map_result(lhs_ty: &AstTy, rhs_ty: &AstTy) -> Result<(AstTy, AstTy, AstTy), String> {
-        let (rhs_params, rhs_ret) = Self::query_unary_func_parts(rhs_ty, "|*>")?;
-        match lhs_ty {
-            AstTy::Generic(_, name, args) if name == "Result" && args.len() == 1 => {
-                Self::ensure_query_type_matches(
-                    &args[0],
-                    &rhs_params[0],
-                    "`|*>` requires the container value type to match the function input type",
-                )?;
-                Ok((
-                    lhs_ty.clone(),
-                    args[0].clone(),
-                    AstTy::Generic(
-                        Span { start: 0, end: 0 },
-                        "Result".to_string(),
-                        vec![rhs_ret],
-                    ),
-                ))
-            }
-            AstTy::Generic(_, name, args) if name == "List" && args.len() == 1 => {
-                Self::ensure_query_type_matches(
-                    &args[0],
-                    &rhs_params[0],
-                    "`|*>` requires the container value type to match the function input type",
-                )?;
-                Ok((
-                    lhs_ty.clone(),
-                    args[0].clone(),
-                    AstTy::Generic(Span { start: 0, end: 0 }, "List".to_string(), vec![rhs_ret]),
-                ))
-            }
-            other => Err(format!(
-                "`|*>` requires Result or List on the left, got {}.",
-                format_query_ty(other)
-            )),
-        }
-    }
-
-    fn query_bind_result(lhs_ty: &AstTy, rhs_ty: &AstTy) -> Result<AstTy, String> {
-        let (rhs_params, rhs_ret) = Self::query_unary_func_parts(rhs_ty, "|>=")?;
-        match (lhs_ty, &rhs_ret) {
-            (
-                AstTy::Generic(_, left_name, left_args),
-                AstTy::Generic(_, right_name, right_args),
-            ) if left_name == "Result"
-                && right_name == "Result"
-                && left_args.len() == 1
-                && right_args.len() == 1 =>
-            {
-                Self::ensure_query_type_matches(
-                    &left_args[0],
-                    &rhs_params[0],
-                    "`|>=` requires the container value type to match the function input type",
-                )?;
-                Ok(rhs_ret)
-            }
-            (
-                AstTy::Generic(_, left_name, left_args),
-                AstTy::Generic(_, right_name, right_args),
-            ) if left_name == "List"
-                && right_name == "List"
-                && left_args.len() == 1
-                && right_args.len() == 1 =>
-            {
-                Self::ensure_query_type_matches(
-                    &left_args[0],
-                    &rhs_params[0],
-                    "`|>=` requires the container value type to match the function input type",
-                )?;
-                Ok(rhs_ret)
-            }
-            (other, _) => Err(format!(
-                "`|>=` requires matching contextual types on both sides; left is {}, right is {}.",
-                format_query_ty(other),
-                format_query_ty(&rhs_ret)
-            )),
-        }
     }
 
     fn binding_type(&self, name: &str) -> Option<String> {
@@ -8029,6 +6608,21 @@ impl ReplEngine {
                 for name in &meta.function_defs {
                     self.insert_surface_symbol(name);
                 }
+                collect_callable_doc_snapshots(
+                    &crate::rebase_module_ast_spans(ast.clone(), owner_source_id),
+                    &self.repl_module_path,
+                    &self.repl_module_path,
+                    &mut self.callable_doc_snapshots,
+                );
+                for declaration in &signatures {
+                    self.docs.retain(|entry| {
+                        entry.kind != declaration.kind
+                            || !sindr::names::surface_path_eq(
+                                &entry.qualified_name,
+                                &declaration.qualified_name,
+                            )
+                    });
+                }
                 self.append_docs(docs);
                 self.append_signatures(signatures);
                 self.history_entries.push(ReplHistoryEntry {
@@ -8409,6 +7003,25 @@ fn compile_repl_preload_from_module_stages(
         Some(compile_sources.user_module_path.as_str()),
     );
 
+    let mut callable_doc_snapshots = CallableDocSnapshots::default();
+    for module in module_stage_asts.iter().flatten() {
+        collect_callable_doc_snapshots(
+            &module.ast,
+            &module.module_path,
+            module
+                .doc_module_path
+                .as_deref()
+                .unwrap_or(&module.module_path),
+            &mut callable_doc_snapshots,
+        );
+    }
+    collect_callable_doc_snapshots(
+        &crate::rebase_module_ast_spans(user_ast.clone(), user_source_id),
+        &repl_sources.repl_module_path,
+        &compile_sources.user_module_path,
+        &mut callable_doc_snapshots,
+    );
+
     let mut precollected = if module_stage_asts.len() == snapshot.default_stage_count {
         sigil::PrecollectedDeclarations {
             declaration_index: snapshot.declaration_index().clone(),
@@ -8646,6 +7259,7 @@ fn compile_repl_preload_from_module_stages(
         scar_checkpoint: scar_session.checkpoint(),
         vm,
         docs,
+        callable_doc_snapshots,
         signatures,
         process_metadata,
         symbols,
@@ -9035,6 +7649,105 @@ fn preload_resolve_error(
     }
 }
 
+fn collect_callable_doc_snapshots(
+    ast: &[Ast],
+    runtime_module: &str,
+    doc_module: &str,
+    snapshots: &mut CallableDocSnapshots,
+) {
+    fn qualified(module: &str, name: &str) -> String {
+        let module = crate::surface_path_name(module);
+        let name = crate::surface_path_name(name);
+        if module.is_empty()
+            || name
+                .strip_prefix(module)
+                .is_some_and(|rest| rest.starts_with("::"))
+        {
+            name.to_string()
+        } else {
+            format!("{module}::{name}")
+        }
+    }
+    for statement in ast {
+        match statement {
+            Ast::Def(span, name, ..) | Ast::ExtractorDef(span, name, ..) => {
+                let docs = crate::collect_doc_entries(
+                    &[],
+                    std::slice::from_ref(statement),
+                    Some(doc_module),
+                );
+                if let Some(doc) = docs.into_iter().find(|doc| doc.kind == DocKind::Function) {
+                    snapshots
+                        .functions
+                        .entry((
+                            qualified(runtime_module, name),
+                            span.start as u32,
+                            span.end as u32,
+                        ))
+                        .or_insert(doc);
+                }
+            }
+            Ast::TraitDef(_, owner, _, _, methods, _) => {
+                let docs = crate::collect_doc_entries(
+                    &[],
+                    std::slice::from_ref(statement),
+                    Some(doc_module),
+                );
+                for method in methods {
+                    let member = format!("{owner}::{}", method.name);
+                    let runtime_identity = qualified(runtime_module, &member);
+                    let doc_identity = qualified(doc_module, &member);
+                    let doc = docs
+                        .iter()
+                        .find(|doc| {
+                            doc.kind == DocKind::Function
+                                && sindr::names::surface_path_eq(&doc.qualified_name, &doc_identity)
+                        })
+                        .cloned();
+                    snapshots
+                        .trait_methods
+                        .entry(runtime_identity)
+                        .or_insert(doc);
+                }
+            }
+            Ast::ImplDef(_, owner, _, methods, _) => {
+                let docs = crate::collect_doc_entries(
+                    &[],
+                    std::slice::from_ref(statement),
+                    Some(doc_module),
+                );
+                for method in methods {
+                    let (span, name) = match method {
+                        Ast::Def(span, name, ..) | Ast::ExtractorDef(span, name, ..) => {
+                            (span, name)
+                        }
+                        _ => continue,
+                    };
+                    let name = qualified(owner, name);
+                    if let Some(doc) = docs.iter().find(|doc| {
+                        doc.kind == DocKind::Function
+                            && sindr::names::surface_path_eq(&doc.qualified_name, &name)
+                    }) {
+                        snapshots
+                            .functions
+                            .entry((name, span.start as u32, span.end as u32))
+                            .or_insert_with(|| doc.clone());
+                    }
+                }
+            }
+            Ast::Semi(_, statement) => {
+                collect_callable_doc_snapshots(
+                    std::slice::from_ref(statement.as_ref()),
+                    runtime_module,
+                    doc_module,
+                    snapshots,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 fn bind_preload_script_qualified_names(
     sigil_session: &mut sigil::SigilSession,
     user_ast: &[Ast],
@@ -9048,9 +7761,7 @@ fn bind_preload_script_qualified_names(
             continue;
         };
         let qualified = format!("{module_path}::{name}");
-        if sigil_session.lookup_uid(&qualified).is_none() {
-            sigil_session.define_with_id(&qualified, uid);
-        }
+        sigil_session.define_with_id(&qualified, uid);
     }
 }
 
@@ -9103,20 +7814,6 @@ fn history_value_for_result(
         }
     }
     value.clone()
-}
-
-fn ast_ty_contains_query_placeholder(ty: &AstTy) -> bool {
-    match ty {
-        AstTy::Named(_, name) => matches!(name.as_str(), "_" | "Hole"),
-        AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
-            args.iter().any(ast_ty_contains_query_placeholder)
-        }
-        AstTy::Func(_, params, ret) => {
-            params.iter().any(ast_ty_contains_query_placeholder)
-                || ast_ty_contains_query_placeholder(ret)
-        }
-        _ => false,
-    }
 }
 
 fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<String>) {
@@ -9532,51 +8229,6 @@ pub(crate) fn completion_allowed_at_cursor(input: &str, cursor: usize) -> bool {
         state,
         CompletionLexState::Code | CompletionLexState::Interpolation { .. }
     )
-}
-
-fn split_top_level_commas(input: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0;
-    let mut paren_depth = 0usize;
-    let mut angle_depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for (idx, ch) in input.char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => in_string = true,
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '<' => angle_depth += 1,
-            '>' => angle_depth = angle_depth.saturating_sub(1),
-            ',' if paren_depth == 0 && angle_depth == 0 => {
-                parts.push(input[start..idx].trim());
-                start = idx + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-
-    let tail = input[start..].trim();
-    if !tail.is_empty() || !input.trim().is_empty() {
-        parts.push(tail);
-    }
-    parts
-}
-
-fn signature_return_type(signature: &str) -> Option<&str> {
-    signature.rsplit_once("->").map(|(_, ret)| ret.trim())
 }
 
 #[cfg(test)]
@@ -10403,9 +9055,149 @@ supervisor_init {
         .expect("Error module should initialize");
         let signature = ReplEngine::repl_result_text(&engine.handle_line(":sig SavedValue"));
         assert!(
-            signature.contains("deferror SavedValue(num: Int) { |value: Int| ... }"),
+            signature.contains("SavedValue(value: Int) -> SavedValue"),
             "{signature}"
         );
+    }
+
+    #[test]
+    fn trait_capture_docs_do_not_replace_missing_method_docs() {
+        let mut engine = ReplEngine::from_script_source(
+            "trait_capture_doc.srt",
+            r#"
+@doc """trait body sentinel"""
+deftrait MissingCaptureDoc {
+  def missing(self: Self, rhs: Self) -> Self
+}
+@doc """implementation body sentinel"""
+impl MissingCaptureDoc for Int {
+  @doc """implementation method sentinel"""
+  def missing(self: Self, rhs: Self) -> Self { self + rhs }
+}
+deftrait AuthoredCaptureDoc {
+  @doc """definition method sentinel"""
+  def authored(self: Self, rhs: Self) -> Self
+}
+impl AuthoredCaptureDoc for Int {
+  @doc """unrelated implementation sentinel"""
+  def authored(self: Self, rhs: Self) -> Self { self + rhs }
+}
+"#,
+        )
+        .expect("Trait capture doc fixture should initialize");
+        for source in [
+            "missing_capture: (Int, Int -> Int) = &MissingCaptureDoc::missing",
+            "missing_partial: (Int -> Int) = &missing_capture(1, &1)",
+            "missing_recapture: (Int -> Int) = &missing_partial",
+            "authored_capture: (Int, Int -> Int) = &AuthoredCaptureDoc::authored",
+            "authored_partial: (Int -> Int) = &authored_capture(1, &1)",
+            "authored_recapture: (Int -> Int) = &authored_partial",
+        ] {
+            let result = engine.handle_line(source);
+            assert!(
+                matches!(result.output, ReplOutput::EvalSuccess { .. }),
+                "{source}: {}",
+                ReplEngine::repl_result_text(&result)
+            );
+        }
+        for name in ["missing_capture", "missing_partial", "missing_recapture"] {
+            let doc = engine.handle_line(&format!(":doc {name}"));
+            assert!(
+                !matches!(doc.output, ReplOutput::DocResolved { .. }),
+                "{}",
+                ReplEngine::repl_result_text(&doc)
+            );
+        }
+        for name in ["authored_capture", "authored_partial", "authored_recapture"] {
+            let doc = ReplEngine::repl_result_text(&engine.handle_line(&format!(":doc {name}")));
+            assert!(doc.contains("definition method sentinel"), "{doc}");
+            assert!(!doc.contains("unrelated implementation sentinel"), "{doc}");
+        }
+    }
+
+    #[test]
+    fn generic_capture_docs_keep_declaration_identity_after_binding_shadow() {
+        let mut engine = ReplEngine::from_script_source(
+            "generic_capture_doc.srt",
+            r#"@doc """original generic doc"""
+def documented_echo(value: $A) -> $A { value }
+"#,
+        )
+        .expect("generic capture fixture should initialize");
+        for source in [
+            "old_echo: (Int -> Int) = &documented_echo",
+            "documented_echo = 1",
+            r#"@doc """replacement generic doc""" def documented_echo(value: $A) -> $A { value }"#,
+            "new_echo: (String -> String) = &documented_echo",
+            "recaptured: (Int -> Int) = &old_echo",
+        ] {
+            let result = engine.handle_line(source);
+            assert!(
+                matches!(result.output, ReplOutput::EvalSuccess { .. }),
+                "{}",
+                ReplEngine::repl_result_text(&result)
+            );
+        }
+        for name in ["old_echo", "recaptured"] {
+            let doc = ReplEngine::repl_result_text(&engine.handle_line(&format!(":doc {name}")));
+            assert!(doc.contains("original generic doc"), "{doc}");
+            assert!(!doc.contains("replacement generic doc"), "{doc}");
+        }
+        let doc = ReplEngine::repl_result_text(&engine.handle_line(":doc new_echo"));
+        assert!(doc.contains("replacement generic doc"), "{doc}");
+        assert!(!doc.contains("original generic doc"), "{doc}");
+    }
+
+    #[test]
+    fn owner_pattern_queries_use_payload_shapes_and_type_doc_guidance() {
+        let mut engine = ReplEngine::from_module_source(
+            "pattern_surfaces.srt",
+            r#"
+@doc """record-owner-doc"""
+defrecord QueryRecord(value: Int)
+@doc """error-owner-doc"""
+deferror QueryError(payload: String) { |input: Int| Self(message: "query", payload: "payload") }
+@doc """enum-owner-doc"""
+defenum QueryEnum { Empty, Item(Int) }
+"#,
+        )
+        .expect("pattern query fixture should initialize");
+        for (owner, shape, doc) in [
+            (
+                "QueryRecord",
+                "QueryRecord(value: Int) : QueryRecord",
+                "record-owner-doc",
+            ),
+            (
+                "QueryError",
+                "QueryError(payload: String) : QueryError",
+                "error-owner-doc",
+            ),
+            (
+                "QueryEnum",
+                "QueryEnum::Item(Int) : QueryEnum",
+                "enum-owner-doc",
+            ),
+        ] {
+            let pattern =
+                ReplEngine::repl_result_text(&engine.handle_line(&format!(":sig {owner}!")));
+            assert!(pattern.contains(shape), "{pattern}");
+            let guidance =
+                ReplEngine::repl_result_text(&engine.handle_line(&format!(":doc {owner}!")));
+            assert!(guidance.contains(&format!(":doc {owner}")), "{guidance}");
+            assert!(!guidance.contains(doc), "{guidance}");
+            let type_doc =
+                ReplEngine::repl_result_text(&engine.handle_line(&format!(":doc {owner}")));
+            assert!(type_doc.contains(doc), "{type_doc}");
+        }
+        let constructor = ReplEngine::repl_result_text(&engine.handle_line(":sig QueryError"));
+        assert!(
+            constructor.contains("QueryError(input: Int) -> QueryError"),
+            "{constructor}"
+        );
+        assert!(!constructor.contains("payload: String"), "{constructor}");
+        let variant = ReplEngine::repl_result_text(&engine.handle_line(":sig QueryEnum::Item"));
+        assert!(variant.contains("QueryEnum::Item"), "{variant}");
     }
 
     #[test]

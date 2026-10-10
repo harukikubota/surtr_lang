@@ -98,7 +98,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show documentation for visible symbols, including process surfaces",
         detail_help: &[
             "Usage: :doc <symbol|query>",
-            "Examples: :doc print, :doc Facet.User, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option",
+            "Examples: :doc print, :doc Facet.User, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User::new, :doc Compare::compare, :doc |*>",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },
@@ -109,7 +109,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show signatures for visible callable, family, owner, or process surfaces",
         detail_help: &[
             "Usage: :sig <symbol|query>",
-            "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option",
+            "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig Compare::compare, :sig User!, :sig |*>",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },
@@ -120,8 +120,8 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show derived information for visible symbols, retained query targets, or process handles",
         detail_help: &[
             "Usage: :info <query>",
-            "Accepts: symbol | type-definition | singleton-owner | typed-call | operator-target",
-            "Examples: :info User, :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option",
+            "Accepts: symbol | type-definition | singleton-owner | Facet-root | field-path",
+            "Examples: :info User, :info print, :info Counter, :info pid, :info Compare::compare, :info Facet.User, :info |*>",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },

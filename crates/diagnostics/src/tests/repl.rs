@@ -4,21 +4,21 @@ use super::test_support::*;
 fn repl_query_parse_error_spec_renders_precise_query_span() {
     let spec = repl_query_parse_error_spec(
         "compare(Int, )",
-        "Invalid typed call query: empty argument.",
-        Span { start: 13, end: 13 },
-        ReplDiagnosticReason::TypedCallEmptyArgument,
+        "Unsupported command query form.",
+        Span { start: 7, end: 14 },
+        ReplDiagnosticReason::QueryUnsupported,
     );
 
     assert_eq!(spec.kind, "ReplQueryParseError");
-    assert_eq!(spec.primary_span, Span { start: 13, end: 13 });
+    assert_eq!(spec.primary_span, Span { start: 7, end: 14 });
     assert_eq!(
         spec.help.as_deref(),
-        Some("Provide an argument after the comma, or remove the trailing comma.")
+        Some("Use a name, qualified name, fixed symbol, Facet root, or field path without arguments.")
     );
 
     let rendered = strip_ansi(&render_error("repl", "compare(Int, )", &spec));
-    assert!(rendered.contains("ReplQueryParseError: Invalid typed call query: empty argument."));
-    assert!(rendered.contains("query argument expected here"));
+    assert!(rendered.contains("ReplQueryParseError: Unsupported command query form."));
+    assert!(rendered.contains("query parse error"));
 }
 
 #[test]

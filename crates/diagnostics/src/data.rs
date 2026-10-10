@@ -248,15 +248,6 @@ pub enum ResolveDiagnosticReason {
 pub enum ReplDiagnosticReason {
     QueryEmpty,
     QueryUnsupported,
-    TypedCallMissingClosingParen,
-    TypedCallMissingCallee,
-    TypedCallInvalidCallee,
-    TypedCallEmptyArgument,
-    OperatorMissingTarget,
-    QueryArgumentUnsupported,
-    QueryArgumentListUnterminated,
-    QueryTypeInvalid,
-    QueryEvaluationFailed,
     CommandUnknown,
     CommandArgumentInvalid,
 }
@@ -266,15 +257,6 @@ impl ReplDiagnosticReason {
         match self {
             Self::QueryEmpty => "QueryEmpty",
             Self::QueryUnsupported => "QueryUnsupported",
-            Self::TypedCallMissingClosingParen => "TypedCallMissingClosingParen",
-            Self::TypedCallMissingCallee => "TypedCallMissingCallee",
-            Self::TypedCallInvalidCallee => "TypedCallInvalidCallee",
-            Self::TypedCallEmptyArgument => "TypedCallEmptyArgument",
-            Self::OperatorMissingTarget => "OperatorMissingTarget",
-            Self::QueryArgumentUnsupported => "QueryArgumentUnsupported",
-            Self::QueryArgumentListUnterminated => "QueryArgumentListUnterminated",
-            Self::QueryTypeInvalid => "QueryTypeInvalid",
-            Self::QueryEvaluationFailed => "QueryEvaluationFailed",
             Self::CommandUnknown => "CommandUnknown",
             Self::CommandArgumentInvalid => "CommandArgumentInvalid",
         }

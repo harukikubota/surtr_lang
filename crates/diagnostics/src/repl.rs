@@ -86,33 +86,15 @@ fn repl_focus_span(source: &str, span: &Span) -> Span {
 fn repl_query_label(reason: ReplDiagnosticReason) -> &'static str {
     match reason {
         ReplDiagnosticReason::QueryEmpty => "query expected here",
-        ReplDiagnosticReason::TypedCallEmptyArgument => "query argument expected here",
-        ReplDiagnosticReason::TypedCallMissingClosingParen => {
-            "missing closing `)` for this typed call"
-        }
-        ReplDiagnosticReason::QueryTypeInvalid => "annotated query has an invalid type",
-        ReplDiagnosticReason::OperatorMissingTarget => "operator query is missing a target",
         _ => "query parse error",
     }
 }
 
 fn repl_query_help(reason: ReplDiagnosticReason) -> Option<String> {
     match reason {
-        ReplDiagnosticReason::QueryEmpty => {
-            Some("Provide a symbol, typed call, typed operator, or expression query.".into())
-        }
-        ReplDiagnosticReason::TypedCallEmptyArgument => {
-            Some("Provide an argument after the comma, or remove the trailing comma.".into())
-        }
-        ReplDiagnosticReason::TypedCallMissingClosingParen => {
-            Some("Close the typed call with `)` after the final argument.".into())
-        }
-        ReplDiagnosticReason::QueryTypeInvalid => {
-            Some("Use a complete type expression for the query argument.".into())
-        }
-        ReplDiagnosticReason::OperatorMissingTarget => {
-            Some("Write operator queries as `<operator> <target>` after the REPL command.".into())
-        }
+        ReplDiagnosticReason::QueryEmpty | ReplDiagnosticReason::QueryUnsupported => Some(
+            "Use a name, qualified name, fixed symbol, Facet root, or field path without arguments.".into(),
+        ),
         _ => None,
     }
 }
