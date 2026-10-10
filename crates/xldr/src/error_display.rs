@@ -966,6 +966,7 @@ mod tests {
         let value = Value::Error(Box::new(RichError {
             kind: "Higher".into(),
             message: "higher".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "main.srt".into(),
                 func: "<runtime>".into(),
@@ -978,6 +979,7 @@ mod tests {
             cause: Some(Box::new(RichError {
                 kind: "Lower".into(),
                 message: "lower".into(),
+                payload: Vec::new(),
                 location: Location {
                     file: "main.srt".into(),
                     func: "<runtime>".into(),
@@ -1005,6 +1007,7 @@ mod tests {
         let value = Value::Error(Box::new(RichError {
             kind: "IndexOutOfBounds".into(),
             message: "LHS.len(1) < RHS.len(2)".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "main.srt".into(),
                 func: "<runtime>".into(),
@@ -1039,6 +1042,7 @@ mod tests {
         let value = Value::Error(Box::new(RichError {
             kind: "EmptyList".into(),
             message: "Empty List.".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "main.srt".into(),
                 func: "<runtime>".into(),
@@ -1070,6 +1074,7 @@ mod tests {
         let value = Value::Error(Box::new(RichError {
             kind: "PatternMismatch".into(),
             message: "Pattern did not match.".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "main.srt".into(),
                 func: "<runtime>".into(),

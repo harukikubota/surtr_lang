@@ -400,11 +400,11 @@ fn core_error_generation_site_uses_direct_input_and_unicode_pattern_spans() {
 
     let multiline = engine.handle_line("def fail_unicode() -> Result<Int> {\n  (\"あ\", 11) =? (\"あ\", 2)\n  Ok(0)\n}\nfail_unicode()");
     assert_repl_error_origin(&multiline, 2, 9, "(\"あ\", 11) =? (\"あ\", 2)");
-    assert!(rendered_text(&multiline).contains("PatternMismatch"));
+    assert!(rendered_text(&multiline).contains("IntLiteralPatternMismatch"));
     assert_eq!(rendered_text(&engine.handle_line("2 + 3")), "5");
 }
 
-fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str) {
+fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str, expected: &str) {
     let result = engine.handle_line(source);
     assert!(!result.should_exit, "{source}: {}", rendered_text(&result));
     assert!(
@@ -412,11 +412,7 @@ fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str) {
         "{source}: {}",
         rendered_text(&result)
     );
-    assert_eq!(
-        rendered_text(&result),
-        "(\"PatternMismatch\", \"Pattern did not match.\")",
-        "{source}"
-    );
+    assert_eq!(rendered_text(&result), expected, "{source}");
 }
 
 fn core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl() {
@@ -424,7 +420,7 @@ fn core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl() {
         "match do::<Result> { 2 <- Ok(1); Ok(3) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
         "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine(), source);
+        assert_repl_pattern_mismatch(&mut engine(), source, "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")");
     }
 }
 
@@ -449,7 +445,7 @@ fn core_do_monad_fail_pattern_error_is_preserved_across_chunks() {
         "match mismatch { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
         "match Identity::run(ResultT::run(mismatch_t)) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine, source);
+        assert_repl_pattern_mismatch(&mut engine, source, "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")");
     }
     assert_eq!(rendered_text(&engine.handle_line("saved_closure(1)")), "42");
     assert_eq!(
@@ -464,7 +460,7 @@ fn core_do_monad_fail_safebind_and_alternative_boundaries() {
         "match do::<Result> { Option::Some(value) =? Option<Int>::None; Ok(value) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
         "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { Option::Some(value) =? Option<Int>::None; ResultT::ok::<Identity>(value) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine, source);
+        assert_repl_pattern_mismatch(&mut engine, source, "(\"EnumVariantPatternMismatch\", \"Option pattern expected Some, got None\")");
     }
     let blocked = engine.handle_line("blocked: OptionT<Result, Unit> = Alternative::guard(False)");
     assert!(
@@ -533,7 +529,7 @@ fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
 fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
     let mut engine = ReplEngine::from_module_source(
         "extractor_origins.srt",
-        "deferror Inner { \"inner cause\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped origin\"))\n  }\n  defextractor inner(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    inner(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}",
+        "deferror Inner { \"inner cause\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped origin\"))\n  }\n  defextractor inner(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    inner(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}",
     ).expect("nested Extractor definitions must preload");
     let _ = engine.handle_line("unrelated = \"あ\"");
     for source in [
@@ -678,8 +674,8 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
         .expect("saved definition source must exist")
         .clone();
     let mut restored = ReplEngine::from_eldr(&bytes).expect("snapshot must restore");
-    let fresh = restored.handle_line("Err(EmptyList)");
-    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyList)");
+    let fresh = restored.handle_line("Err(EmptyHeadTailListPattern)");
+    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyHeadTailListPattern)");
     let saved = restored.handle_line(&format!(":save {}", second_path.display()));
     assert!(rendered_text(&saved).contains("saved to"));
     let updated =
@@ -692,7 +688,7 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
     let fresh_source = updated
         .sources
         .iter()
-        .find(|source| source.text.as_deref() == Some("Err(EmptyList)\n"))
+        .find(|source| source.text.as_deref() == Some("Err(EmptyHeadTailListPattern)\n"))
         .expect("new input source must exist");
     assert_ne!(fresh_source.source_id, saved_source.source_id);
     assert_ne!(fresh_source.path, saved_source.path);
@@ -1887,7 +1883,7 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
 
     assert_eq!(
         signature_text(&engine.handle_line(":sig at")).trim(),
-        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+        "List::at(values: List<$A>, index: Int) -> Result<$A, ListIndexOutOfBounds>"
     );
     assert_eq!(
         signature_text(&engine.handle_line(":sig then")).trim(),
@@ -1895,7 +1891,7 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
     );
     assert_eq!(
         signature_text(&engine.handle_line(":sig List::at")).trim(),
-        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+        "List::at(values: List<$A>, index: Int) -> Result<$A, ListIndexOutOfBounds>"
     );
     assert_eq!(
         signature_text(&engine.handle_line(":sig Result::then")).trim(),
@@ -2002,10 +1998,10 @@ fn core_completion_keeps_type_owners_ahead_of_members_for_pascal_case_prefix() {
         vec![
             "Int".to_string(),
             "IntBase".to_string(),
-            "Int::abs".to_string(),
-            "Int::bit_and".to_string(),
-            "Int::bit_not".to_string(),
-            "Int::bit_not_in".to_string(),
+            "IntLiteralEmpty".to_string(),
+            "IntLiteralInvalidDigit".to_string(),
+            "IntLiteralMissingDigits".to_string(),
+            "IntLiteralPatternMismatch".to_string(),
         ]
     );
 }
@@ -2360,6 +2356,7 @@ fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
         bool_labels,
         vec![
             "Boolean",
+            "BooleanLiteralPatternMismatch",
             "Boolean::eqv",
             "Boolean::implies",
             "Boolean::not",
@@ -4614,7 +4611,7 @@ fn core_result_error_reports_diagnostic_without_exiting() {
     let safe_mod = engine.handle_line("Mod::safe_mod(10, 0)");
     assert!(!safe_mod.should_exit);
     assert!(matches!(safe_mod.output, ReplOutput::EvalError { .. }));
-    assert!(rendered_text(&safe_mod).contains("division by zero"));
+    assert!(rendered_text(&safe_mod).contains("modulo by zero"));
 }
 
 fn core_stacktrace_command_controls_result_error_trace_display() {
@@ -4638,7 +4635,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
         ReplOutput::EvalError { .. }
     ));
     let hidden_runtime_text = rendered_text(&hidden_runtime);
-    assert!(hidden_runtime_text.contains("division by zero"));
+    assert!(hidden_runtime_text.contains("modulo by zero"));
     assert!(
         !hidden_runtime_text.contains("Stack trace:"),
         "runtime stacktrace must default to off:\n{hidden_runtime_text}"
@@ -4666,7 +4663,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
     assert!(matches!(shown_runtime.output, ReplOutput::EvalError { .. }));
     let shown_runtime_text = rendered_text(&shown_runtime);
     let runtime_message_idx = shown_runtime_text
-        .find("division by zero")
+        .find("modulo by zero")
         .expect("runtime error message should render");
     let runtime_trace_idx = shown_runtime_text
         .find("Stack trace:")
@@ -5913,7 +5910,10 @@ fn core_process_type_and_info_support_singletons_and_worker_pids() {
 fn core_sig_expression_queries_support_operator_forms() {
     let mut engine = engine();
 
-    for (operator, trait_name, method) in [("/", "Div", "safe_div"), ("%", "Mod", "safe_mod")] {
+    for (operator, trait_name, method, error_kind) in [
+        ("/", "Div", "safe_div", "ZeroDivisionError"),
+        ("%", "Mod", "safe_mod", "ZeroModuloError"),
+    ] {
         let doc = doc_text(&engine.handle_line(&format!(":doc {operator}")));
         assert!(doc.contains(&format!("{trait_name}::{method}")), "{doc}");
         let sig = signature_text(&engine.handle_line(&format!(":sig {operator} Int")));
@@ -5921,7 +5921,7 @@ fn core_sig_expression_queries_support_operator_forms() {
             sig.contains(&format!("impl {trait_name} for Int::{method}")),
             "{sig}"
         );
-        assert!(sig.contains("ZeroDivisionError"), "{sig}");
+        assert!(sig.contains(error_kind), "{sig}");
     }
     let float_sig = signature_text(&engine.handle_line(":sig / Float"));
     assert!(

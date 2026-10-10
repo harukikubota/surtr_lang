@@ -16,12 +16,12 @@ use sindr::builtin::{
     builtin_meta_by_id, BUILTIN_METAS, MATCH_RESULT_ERR_VARIANT, MATCH_RESULT_OK_VARIANT,
     OPTION_NONE_VARIANT, OPTION_SOME_VARIANT,
 };
-use sindr::names::{compiler_global_error_kind, surface_path_name, surface_rendered_name};
+use sindr::names::{surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     quote_surtr_string_literal, Callable, CallableTarget, FileHandleValue, HashMapHandle,
-    ListHandle, Location, RandomGeneratorHandle, RegexCapturesHandle, RegexHandle,
-    RegexMatchHandle, RichError, TypeEntry,
+    ListHandle, RandomGeneratorHandle, RegexCapturesHandle, RegexHandle, RegexMatchHandle,
+    RichError, TypeEntry,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -62,6 +62,7 @@ pub(crate) enum BuiltinContinuation {
     RecoverKind,
     FileWithOpen {
         path: String,
+        mode: VmFileMode,
         handle: FileHandleValue,
     },
     Compose {
@@ -87,13 +88,13 @@ impl BuiltinContinuation {
                     Err(err) => err_result_from_rich_error(err),
                 }
             }
-            Self::FileWithOpen { path, handle } => {
+            Self::FileWithOpen { path, mode, handle } => {
                 let flush = vm.flush_file_resource(handle.id);
                 let close = vm.close_file_resource(handle.id);
                 if let Err(err) = flush {
-                    file_handle_error_result(vm, Some(&path), err)
+                    return file_handle_error_result(vm, &path, mode, err, "FileFlushFailed");
                 } else if let Err(err) = close {
-                    file_handle_error_result(vm, Some(&path), err)
+                    return file_handle_error_result(vm, &path, mode, err, "FileCloseFailed");
                 } else {
                     result?
                 }
@@ -131,11 +132,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "safe_div",
-        func: |vm, args| builtin_safe_div(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_safe_div(vm, args),
     },
     BuiltinImpl {
         name: "safe_mod",
-        func: |vm, args| builtin_safe_mod(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_safe_mod(vm, args),
     },
     BuiltinImpl {
         name: "eprint",
@@ -147,11 +148,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "shl",
-        func: |vm, args| builtin_shl(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_shl(vm, args),
     },
     BuiltinImpl {
         name: "shr",
-        func: |vm, args| builtin_shr(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_shr(vm, args),
     },
     BuiltinImpl {
         name: "len",
@@ -187,27 +188,27 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "test_bit",
-        func: |vm, args| builtin_test_bit(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_test_bit(vm, args),
     },
     BuiltinImpl {
         name: "set_bit",
-        func: |vm, args| builtin_set_bit(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_set_bit(vm, args),
     },
     BuiltinImpl {
         name: "clear_bit",
-        func: |vm, args| builtin_clear_bit(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_clear_bit(vm, args),
     },
     BuiltinImpl {
         name: "toggle_bit",
-        func: |vm, args| builtin_toggle_bit(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_toggle_bit(vm, args),
     },
     BuiltinImpl {
         name: "codepoints",
-        func: |vm, args| builtin_codepoints(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_codepoints(vm, args),
     },
     BuiltinImpl {
         name: "from_codepoints",
-        func: |vm, args| builtin_from_codepoints(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_from_codepoints(vm, args),
     },
     BuiltinImpl {
         name: "map_err",
@@ -275,7 +276,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "map_get",
-        func: |vm, args| builtin_map_get(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_map_get(vm, args),
     },
     BuiltinImpl {
         name: "map_insert",
@@ -331,27 +332,27 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__facet_list_get",
-        func: |vm, args| builtin_facet_list_get(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_facet_list_get(vm, args),
     },
     BuiltinImpl {
         name: "__facet_list_set",
-        func: |vm, args| builtin_facet_list_set(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_facet_list_set(vm, args),
     },
     BuiltinImpl {
         name: "__facet_list_slice_get",
-        func: |vm, args| builtin_facet_list_slice_get(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_facet_list_slice_get(vm, args),
     },
     BuiltinImpl {
         name: "__facet_list_slice_set",
-        func: |vm, args| builtin_facet_list_slice_set(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_facet_list_slice_set(vm, args),
     },
     BuiltinImpl {
         name: "__facet_map_get",
-        func: |vm, args| builtin_facet_map_get(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_facet_map_get(vm, args),
     },
     BuiltinImpl {
         name: "__facet_map_set_existing",
-        func: |vm, args| builtin_facet_map_set_existing(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_facet_map_set_existing(vm, args),
     },
     BuiltinImpl {
         name: "__test_capture_stdout",
@@ -371,7 +372,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "compile",
-        func: |vm, args| builtin_regex_compile(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_regex_compile(vm, args),
     },
     BuiltinImpl {
         name: "matches",
@@ -379,7 +380,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "captures",
-        func: |vm, args| builtin_regex_captures(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_regex_captures(vm, args),
     },
     BuiltinImpl {
         name: "whole",
@@ -391,15 +392,15 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "get",
-        func: |vm, args| builtin_regex_get(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_regex_get(vm, args),
     },
     BuiltinImpl {
         name: "get_name",
-        func: |vm, args| builtin_regex_get_name(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_regex_get_name(vm, args),
     },
     BuiltinImpl {
         name: "find",
-        func: |vm, args| builtin_regex_find(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_regex_find(vm, args),
     },
     BuiltinImpl {
         name: "find_all",
@@ -443,23 +444,23 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "io_get",
-        func: |vm, args| builtin_io_get(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_io_get(vm, args),
     },
     BuiltinImpl {
         name: "io_get_line",
-        func: |vm, args| builtin_io_get_line(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_io_get_line(vm, args),
     },
     BuiltinImpl {
         name: "file_read",
-        func: |vm, args| builtin_file_read(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_file_read(vm, args),
     },
     BuiltinImpl {
         name: "file_write",
-        func: |vm, args| builtin_file_write(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_file_write(vm, args),
     },
     BuiltinImpl {
         name: "file_append",
-        func: |vm, args| builtin_file_append(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_file_append(vm, args),
     },
     BuiltinImpl {
         name: "file_exists",
@@ -467,7 +468,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "file_delete",
-        func: |vm, args| builtin_file_delete(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_file_delete(vm, args),
     },
     BuiltinImpl {
         name: "file_with_open",
@@ -475,15 +476,15 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "file_read_chunk",
-        func: |vm, args| builtin_file_read_chunk(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_file_read_chunk(vm, args),
     },
     BuiltinImpl {
         name: "file_write_chunk",
-        func: |vm, args| builtin_file_write_chunk(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_file_write_chunk(vm, args),
     },
     BuiltinImpl {
         name: "file_flush",
-        func: |vm, args| builtin_file_flush(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_file_flush(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_path",
@@ -495,11 +496,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "filesystem_parent",
-        func: |vm, args| builtin_filesystem_parent(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_parent(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_name",
-        func: |vm, args| builtin_filesystem_name(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_name(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_extension",
@@ -511,35 +512,35 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "filesystem_stat",
-        func: |vm, args| builtin_filesystem_stat(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_stat(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_ls",
-        func: |vm, args| builtin_filesystem_ls(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_ls(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_tree_depth",
-        func: |vm, args| builtin_filesystem_tree_depth(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_tree_depth(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_mkdir",
-        func: |vm, args| builtin_filesystem_mkdir(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_mkdir(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_mkdir_all",
-        func: |vm, args| builtin_filesystem_mkdir_all(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_mkdir_all(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_rm",
-        func: |vm, args| builtin_filesystem_rm(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_rm(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_mv",
-        func: |vm, args| builtin_filesystem_mv(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_mv(vm, args),
     },
     BuiltinImpl {
         name: "filesystem_cp",
-        func: |vm, args| builtin_filesystem_cp(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_filesystem_cp(vm, args),
     },
     BuiltinImpl {
         name: "shell_pwd",
@@ -547,11 +548,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "shell_cd",
-        func: |vm, args| builtin_shell_cd(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_shell_cd(vm, args),
     },
     BuiltinImpl {
         name: "shell_exec",
-        func: |vm, args| builtin_shell_exec(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_shell_exec(vm, args),
     },
     BuiltinImpl {
         name: "seed",
@@ -559,19 +560,19 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "int_until",
-        func: |vm, args| builtin_random_int_until(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_random_int_until(vm, args),
     },
     BuiltinImpl {
         name: "int_range",
-        func: |vm, args| builtin_random_int_range(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_random_int_range(vm, args),
     },
     BuiltinImpl {
         name: "next_int_until",
-        func: |vm, args| builtin_random_next_int_until(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_random_next_int_until(vm, args),
     },
     BuiltinImpl {
         name: "next_int_range",
-        func: |vm, args| builtin_random_next_int_range(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_random_next_int_range(vm, args),
     },
     BuiltinImpl {
         name: "kind",
@@ -603,7 +604,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__dynamic_supervisor_adopt",
-        func: |vm, args| builtin_dynamic_supervisor_adopt(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_dynamic_supervisor_adopt(vm, args),
     },
     BuiltinImpl {
         name: "__dynamic_supervisor_status",
@@ -615,7 +616,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__supervisor_adopt",
-        func: |vm, args| builtin_supervisor_adopt(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_supervisor_adopt(vm, args),
     },
     BuiltinImpl {
         name: "__supervisor_status",
@@ -627,19 +628,19 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__process_state",
-        func: |vm, args| builtin_process_state(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_process_state(vm, args),
     },
     BuiltinImpl {
         name: "__process_store",
-        func: |vm, args| builtin_process_store(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_process_store(vm, args),
     },
     BuiltinImpl {
         name: "__genserver_call_reply",
-        func: |vm, args| builtin_genserver_call_reply(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_genserver_call_reply(vm, args),
     },
     BuiltinImpl {
         name: "__genserver_call_reply_later",
-        func: |vm, args| builtin_genserver_call_reply_later(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_genserver_call_reply_later(vm, args),
     },
     BuiltinImpl {
         name: "__genserver_call_stop_normal",
@@ -651,7 +652,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__genserver_cast_next",
-        func: |vm, args| builtin_genserver_cast_next(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_genserver_cast_next(vm, args),
     },
     BuiltinImpl {
         name: "__genserver_cast_stop_normal",
@@ -671,7 +672,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__out_handler_write",
-        func: |vm, args| builtin_out_handler_write(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_out_handler_write(vm, args),
     },
     BuiltinImpl {
         name: "__process_sleep",
@@ -895,11 +896,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "json_parse",
-        func: |vm, args| builtin_json_parse(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_json_parse(vm, args),
     },
     BuiltinImpl {
         name: "json_stringify",
-        func: |vm, args| builtin_json_stringify(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_json_stringify(vm, args),
     },
     BuiltinImpl {
         name: "string_len",
@@ -931,7 +932,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "uncons",
-        func: |vm, args| builtin_uncons(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_uncons(vm, args),
     },
     BuiltinImpl {
         name: "__flow_pipe_apply",
@@ -991,11 +992,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__test_assert_err_kind",
-        func: |vm, args| builtin_test_assert_err_kind(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_test_assert_err_kind(vm, args),
     },
     BuiltinImpl {
         name: "__test_assert_cause_chain",
-        func: |vm, args| builtin_test_assert_cause_chain(vm, args).map(BuiltinOutcome::Complete),
+        func: |vm, args| builtin_test_assert_cause_chain(vm, args),
     },
     BuiltinImpl {
         name: "map_values",
@@ -1158,7 +1159,10 @@ fn builtin_dynamic_supervisor_spawn(
     vm.start_supervisor_spawn("DynamicSupervisor".into(), None, init)
 }
 
-fn builtin_dynamic_supervisor_adopt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_dynamic_supervisor_adopt(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Pid(pid) = &args[0] else {
         return Err(RuntimeError::new("__dynamic_supervisor_adopt expects PID"));
     };
@@ -1199,7 +1203,7 @@ fn builtin_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutc
     }
 }
 
-fn builtin_supervisor_adopt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_supervisor_adopt(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Str(supervisor_name) = &args[0] else {
         return Err(RuntimeError::new(
             "__supervisor_adopt expects String as supervisor name",
@@ -1257,21 +1261,24 @@ fn builtin_supervisor_workers(
     }
 }
 
-fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__process_state expects PID"));
     };
     vm.process_state(&pid)
 }
 
-fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__process_store expects PID"));
     };
     vm.process_store(&pid, args[1].clone())
 }
 
-fn builtin_genserver_call_reply(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_genserver_call_reply(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__genserver_call_reply expects PID"));
     };
@@ -1281,7 +1288,7 @@ fn builtin_genserver_call_reply(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
 fn builtin_genserver_call_reply_later(
     vm: &mut VM,
     args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new(
             "__genserver_call_reply_later expects PID",
@@ -1319,7 +1326,10 @@ fn builtin_genserver_call_stop_error(vm: &mut VM, args: Vec<Value>) -> Result<Va
     vm.genserver_call_stop_error(&pid, *err)
 }
 
-fn builtin_genserver_cast_next(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_genserver_cast_next(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__genserver_cast_next expects PID"));
     };
@@ -1362,7 +1372,10 @@ fn builtin_process_context_handler(vm: &mut VM, args: Vec<Value>) -> Result<Valu
     vm.process_context_handler(process_name.to_string(), slot.to_string())
 }
 
-fn builtin_out_handler_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_out_handler_write(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Pid(pid) = &args[0] else {
         return Err(RuntimeError::new("__out_handler_write expects PID"));
     };
@@ -1569,43 +1582,37 @@ fn invoke_task_body_with_timeout(
     vm.start_task(body, mode, Some(timeout_ms))
 }
 
-fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => {
             if b.is_zero() {
-                Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
+                language_error_result(vm, "ZeroDivisionError", vec![])
             } else {
-                Ok(ok_result(Value::Int(a / b)))
+                complete(ok_result(Value::Int(a / b)))
             }
         }
         (Value::Float(a), Value::Float(b)) => {
             let (a, b) = expect_finite_float_pair(*a, *b, "safe_div")?;
             if b == 0.0 {
-                Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
+                language_error_result(vm, "ZeroDivisionError", vec![])
             } else {
-                Ok(ok_result(float_value(a / b, "safe_div")?))
+                complete(ok_result(float_value(a / b, "safe_div")?))
             }
         }
         (left, right) => Err(RuntimeError::new(format!(
-            "safe_div expects (Int, Int) or (Float, Float), got ({:?}, {:?})",
-            left, right
+            "safe_div expects numeric pair, got ({left:?}, {right:?})"
         ))),
     }
 }
 
-fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    match (&args[0], &args[1]) {
-        (Value::Int(a), Value::Int(b)) => {
-            if b.is_zero() {
-                Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
-            } else {
-                Ok(ok_result(Value::Int(a % b)))
-            }
-        }
-        (left, right) => Err(RuntimeError::new(format!(
-            "safe_mod expects (Int, Int), got ({:?}, {:?})",
-            left, right
-        ))),
+fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let (Value::Int(a), Value::Int(b)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("safe_mod expects (Int, Int)"));
+    };
+    if b.is_zero() {
+        language_error_result(vm, "ZeroModuloError", vec![])
+    } else {
+        complete(ok_result(Value::Int(a % b)))
     }
 }
 
@@ -1991,34 +1998,34 @@ fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     Ok(Value::Unit)
 }
 
-fn builtin_shl(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_shl(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
-        return Err(RuntimeError::new("shl expects (Int, Int)"));
+        return Err(RuntimeError::new("builtin_shl expects (Int, Int)"));
     };
     let Some(amount) = bits.to_usize() else {
-        return Ok(err_result(
-            _vm,
-            "NegativeShiftCount",
-            &format!("shift amount must be non-negative: {}", bits),
-        ));
+        let kind = if bits.sign() == Sign::Minus {
+            "NegativeShiftCount"
+        } else {
+            "ShiftCountTooLarge"
+        };
+        return language_error_result(vm, kind, vec![Value::Int(bits.clone())]);
     };
-    let shifted = value << amount;
-    Ok(ok_result(Value::Int(shifted)))
+    complete(ok_result(Value::Int(value << amount)))
 }
 
-fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_shr(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
-        return Err(RuntimeError::new("shr expects (Int, Int)"));
+        return Err(RuntimeError::new("builtin_shr expects (Int, Int)"));
     };
     let Some(amount) = bits.to_usize() else {
-        return Ok(err_result(
-            _vm,
-            "NegativeShiftCount",
-            &format!("shift amount must be non-negative: {}", bits),
-        ));
+        let kind = if bits.sign() == Sign::Minus {
+            "NegativeShiftCount"
+        } else {
+            "ShiftCountTooLarge"
+        };
+        return language_error_result(vm, kind, vec![Value::Int(bits.clone())]);
     };
-    let shifted = value >> amount;
-    Ok(ok_result(Value::Int(shifted)))
+    complete(ok_result(Value::Int(value >> amount)))
 }
 
 fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2119,52 +2126,52 @@ fn builtin_bit_not(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
     Ok(Value::Int(!value.clone()))
 }
 
-fn builtin_test_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_test_bit(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("test_bit expects (Int, Int)"));
     };
-    let bit_index = match bit_index_to_usize(vm, index)? {
+    let bit_index = match bit_index_to_usize(index)? {
         Ok(bit_index) => bit_index,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let mask = bit_mask(bit_index);
-    Ok(ok_result(Value::Bool(!(value.clone() & mask).is_zero())))
+    complete(ok_result(Value::Bool(!(value.clone() & mask).is_zero())))
 }
 
-fn builtin_set_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_set_bit(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("set_bit expects (Int, Int)"));
     };
-    let bit_index = match bit_index_to_usize(vm, index)? {
+    let bit_index = match bit_index_to_usize(index)? {
         Ok(bit_index) => bit_index,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let mask = bit_mask(bit_index);
-    Ok(ok_result(Value::Int(value.clone() | mask)))
+    complete(ok_result(Value::Int(value.clone() | mask)))
 }
 
-fn builtin_clear_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_clear_bit(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("clear_bit expects (Int, Int)"));
     };
-    let bit_index = match bit_index_to_usize(vm, index)? {
+    let bit_index = match bit_index_to_usize(index)? {
         Ok(bit_index) => bit_index,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let mask = bit_mask(bit_index);
-    Ok(ok_result(Value::Int(value.clone() & !mask)))
+    complete(ok_result(Value::Int(value.clone() & !mask)))
 }
 
-fn builtin_toggle_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_toggle_bit(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("toggle_bit expects (Int, Int)"));
     };
-    let bit_index = match bit_index_to_usize(vm, index)? {
+    let bit_index = match bit_index_to_usize(index)? {
         Ok(bit_index) => bit_index,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let mask = bit_mask(bit_index);
-    Ok(ok_result(Value::Int(value.clone() ^ mask)))
+    complete(ok_result(Value::Int(value.clone() ^ mask)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2173,7 +2180,7 @@ enum StringEncodingMode {
     Ascii,
 }
 
-fn builtin_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Str(value) = &args[0] else {
         return Err(RuntimeError::new(
             "codepoints expects (String, StringEncoding)",
@@ -2192,27 +2199,22 @@ fn builtin_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErr
                 if ch.is_ascii() {
                     out.push(Value::Int(int(ch as u32)));
                 } else {
-                    return Ok(err_result(
+                    return language_error_result(
                         vm,
-                        "InvalidStringEncoding",
-                        &format!(
-                            "ASCII encoding does not support character at index {}: {}",
-                            idx, ch
-                        ),
-                    ));
+                        "StringAsciiCharacterUnsupported",
+                        vec![Value::Int(idx.into()), Value::Str(ch.to_string())],
+                    );
                 }
             }
             out
         }
     };
-    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+    complete(ok_result(Value::List(ListHandle::from_items(items))))
 }
 
-fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::List(values) = &args[0] else {
-        return Err(RuntimeError::new(
-            "from_codepoints expects (List<Int>, StringEncoding)",
-        ));
+        return Err(RuntimeError::new("from_codepoints expects List<Int>"));
     };
     let encoding = decode_string_encoding(vm, &args[1])?;
     let mut bytes = Vec::with_capacity(values.len());
@@ -2220,47 +2222,42 @@ fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
         let Value::Int(code) = value else {
             return Err(RuntimeError::new("from_codepoints expects List<Int>"));
         };
-        let Some(raw) = code.to_u32() else {
-            return Ok(err_result(
-                vm,
-                "InvalidStringEncoding",
-                &format!("negative code at index {}: {}", idx, code),
-            ));
-        };
         let max = match encoding {
             StringEncodingMode::Utf8 => 255,
             StringEncodingMode::Ascii => 127,
         };
-        if raw > max {
-            let label = match encoding {
-                StringEncodingMode::Utf8 => "UTF-8 byte",
-                StringEncodingMode::Ascii => "ASCII code",
+        let Some(raw) = code.to_u32().filter(|raw| *raw <= max) else {
+            let kind = match encoding {
+                StringEncodingMode::Utf8 => "StringUtf8ByteOutOfRange",
+                StringEncodingMode::Ascii => "StringAsciiCodeOutOfRange",
             };
-            return Ok(err_result(
+            return language_error_result(
                 vm,
-                "InvalidStringEncoding",
-                &format!("{} out of range at index {}: {}", label, idx, raw),
-            ));
-        }
+                kind,
+                vec![Value::Int(idx.into()), Value::Int(code.clone())],
+            );
+        };
         bytes.push(raw as u8);
     }
-
     match String::from_utf8(bytes) {
-        Ok(text) => Ok(ok_result(Value::Str(text))),
+        Ok(text) => complete(ok_result(Value::Str(text))),
         Err(err) => {
-            let utf8_err = err.utf8_error();
-            let detail = match utf8_err.error_len() {
-                Some(len) => format!(
-                    "invalid UTF-8 byte sequence at index {} (len {})",
-                    utf8_err.valid_up_to(),
-                    len
+            let utf8 = err.utf8_error();
+            match utf8.error_len() {
+                Some(len) => language_error_result(
+                    vm,
+                    "StringUtf8InvalidSequence",
+                    vec![
+                        Value::Int(utf8.valid_up_to().into()),
+                        Value::Int(len.into()),
+                    ],
                 ),
-                None => format!(
-                    "incomplete UTF-8 byte sequence at index {}",
-                    utf8_err.valid_up_to()
+                None => language_error_result(
+                    vm,
+                    "StringUtf8IncompleteSequence",
+                    vec![Value::Int(utf8.valid_up_to().into())],
                 ),
-            };
-            Ok(err_result(vm, "InvalidStringEncoding", &detail))
+            }
         }
     }
 }
@@ -2325,62 +2322,58 @@ fn builtin_result_recover_kind(
     })
 }
 
-fn builtin_test_assert_err_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_test_assert_err_kind(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let expected = decode_string_arg(&args[0], "__test_assert_err_kind", "kind")?;
-    let result = decode_result_arg(&args[1], "__test_assert_err_kind", "result")?;
-    match result {
-        Err(error) if error.kind == expected => Ok(ok_result(Value::Unit)),
-        Err(error) => Ok(err_result(
+    match decode_result_arg(&args[1], "__test_assert_err_kind", "result")? {
+        Err(error) if error.kind == expected => complete(ok_result(Value::Unit)),
+        Err(error) => language_error_result(
             vm,
-            "TestAssertionFailed",
-            &format!("expected error kind {expected}, got {}", error.kind),
-        )),
-        Ok(value) => Ok(err_result(
+            "TestErrorKindMismatch",
+            vec![Value::Str(expected.into()), Value::Str(error.kind)],
+        ),
+        Ok(value) => language_error_result(
             vm,
-            "TestAssertionFailed",
-            &format!(
-                "expected Err({expected}), got Ok({})",
-                inspect_value(vm, &value)?
-            ),
-        )),
+            "TestExpectedErrorKind",
+            vec![
+                Value::Str(expected.into()),
+                Value::Str(inspect_value(vm, &value)?),
+            ],
+        ),
     }
 }
 
-fn builtin_test_assert_cause_chain(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_test_assert_cause_chain(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let expected = decode_string_list_arg(&args[0], "__test_assert_cause_chain", "expected")?;
-    let result = decode_result_arg(&args[1], "__test_assert_cause_chain", "result")?;
-    let mut actual = Vec::new();
-    let is_ok = result.is_ok();
-    if let Err(error) = &result {
-        let mut cursor = Some(error);
-        while let Some(error) = cursor {
-            actual.push(error.kind.clone());
-            cursor = error.cause.as_deref();
+    match decode_result_arg(&args[1], "__test_assert_cause_chain", "result")? {
+        Ok(_) => language_error_result(
+            vm,
+            "TestExpectedCauseChain",
+            vec![string_list_value(expected)],
+        ),
+        Err(error) => {
+            let mut actual = Vec::new();
+            let mut cursor = Some(&error);
+            while let Some(error) = cursor {
+                actual.push(error.kind.clone());
+                cursor = error.cause.as_deref();
+            }
+            if expected == actual {
+                complete(ok_result(Value::Unit))
+            } else {
+                language_error_result(
+                    vm,
+                    "TestCauseChainMismatch",
+                    vec![string_list_value(expected), string_list_value(actual)],
+                )
+            }
         }
     }
-    if !is_ok && expected == actual {
-        return Ok(ok_result(Value::Unit));
-    }
-    let detail = if is_ok {
-        "got Ok; expected an Err cause chain".to_string()
-    } else if let Some(index) = expected.iter().zip(&actual).position(|(a, b)| a != b) {
-        format!("first mismatch at index {index}")
-    } else {
-        format!(
-            "length mismatch: expected {}, got {}",
-            expected.len(),
-            actual.len()
-        )
-    };
-    Ok(err_result(
-        vm,
-        "TestAssertionFailed",
-        &format!(
-            "expected cause chain [{}], got [{}]; {detail}",
-            expected.join(", "),
-            actual.join(", ")
-        ),
-    ))
 }
 
 fn builtin_test_approx_equal(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2582,13 +2575,13 @@ fn builtin_map_contains_key(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     Ok(Value::Bool(map.contains_key(key)))
 }
 
-fn builtin_map_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_map_get(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let map = decode_hash_map_arg(&args[0], "map_get", "map")?;
     let key = decode_string_arg(&args[1], "map_get", "key")?;
-    Ok(match map.get(key) {
-        Some(value) => ok_result(value),
-        None => none_result(vm),
-    })
+    match map.get(key) {
+        Some(value) => complete(ok_result(value)),
+        None => language_error_result(vm, "HashMapKeyMissing", vec![Value::Str(key.into())]),
+    }
 }
 
 fn builtin_map_insert(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2615,106 +2608,85 @@ fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
-fn facet_index_to_usize(
-    vm: &VM,
-    index: &SurtrInt,
-    len: usize,
-) -> Result<Result<usize, Value>, RuntimeError> {
-    let value = if index.sign() == Sign::Minus {
-        let abs = (-index).to_usize().ok_or_else(|| {
-            RuntimeError::new("__facet_list index invariant broken for negative value")
-        })?;
-        if abs == 0 || abs > len {
-            return Ok(Err(err_result(
-                vm,
-                "IndexOutOfBounds",
-                &format!("index {index} out of bounds for len {len}"),
-            )));
-        }
-        len - abs
+fn facet_index_to_usize(index: &SurtrInt, len: usize) -> Result<usize, LanguageErrorInput> {
+    let resolved = if index.sign() == Sign::Minus {
+        (-index)
+            .to_usize()
+            .filter(|value| *value > 0 && *value <= len)
+            .map(|value| len - value)
     } else {
-        let Some(value) = index.to_usize() else {
-            return Ok(Err(err_result(
-                vm,
-                "IndexOutOfBounds",
-                &format!("index {index} out of bounds for len {len}"),
-            )));
-        };
-        value
+        index.to_usize().filter(|value| *value < len)
     };
-    if value >= len {
-        return Ok(Err(err_result(
-            vm,
-            "IndexOutOfBounds",
-            &format!("index {index} out of bounds for len {len}"),
-        )));
-    }
-    Ok(Ok(value))
+    resolved.ok_or_else(|| {
+        LanguageErrorInput::new(
+            "FacetListIndexOutOfBounds",
+            vec![Value::Int(index.clone()), Value::Int(len.into())],
+        )
+    })
 }
 
 fn facet_range_to_bounds(
-    vm: &VM,
     start: &SurtrInt,
     end: &SurtrInt,
     len: usize,
-) -> Result<Result<(usize, usize), Value>, RuntimeError> {
-    let start = match facet_index_to_usize(vm, start, len)? {
-        Ok(value) => value,
-        Err(err) => return Ok(Err(err)),
-    };
-    let end = match facet_index_to_usize(vm, end, len)? {
-        Ok(value) => value,
-        Err(err) => return Ok(Err(err)),
-    };
-    if start > end {
-        return Ok(Err(err_result(
-            vm,
-            "IndexOutOfBounds",
-            &format!("range start {start} exceeds end {end} for len {len}"),
-        )));
+) -> Result<(usize, usize), LanguageErrorInput> {
+    let resolved_start = facet_index_to_usize(start, len)?;
+    let resolved_end = facet_index_to_usize(end, len)?;
+    if resolved_start > resolved_end {
+        return Err(LanguageErrorInput::new(
+            "FacetListRangeReversed",
+            vec![
+                Value::Int(start.clone()),
+                Value::Int(end.clone()),
+                Value::Int(len.into()),
+            ],
+        ));
     }
-    Ok(Ok((start, end)))
+    Ok((resolved_start, resolved_end))
 }
 
-fn key_not_found_result(vm: &VM, key: &str) -> Value {
-    err_result(vm, "KeyNotFound", &format!("key not found: {key}"))
+fn key_not_found_result(vm: &VM, key: &str) -> Result<BuiltinOutcome, RuntimeError> {
+    language_error_result(vm, "FacetKeyNotFound", vec![Value::Str(key.into())])
 }
 
-fn builtin_facet_list_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_list_get(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::List(list) = &args[0] else {
         return Err(RuntimeError::new("__facet_list_get expects List"));
     };
     let Value::Int(index) = &args[1] else {
         return Err(RuntimeError::new("__facet_list_get expects Int index"));
     };
-    let index = match facet_index_to_usize(vm, index, list.len())? {
+    let index = match facet_index_to_usize(index, list.len()) {
         Ok(index) => index,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let value = list
         .iter()
         .nth(index)
         .ok_or_else(|| RuntimeError::new("__facet_list_get invariant broken after bounds check"))?;
-    Ok(ok_result(value))
+    complete(ok_result(value))
 }
 
-fn builtin_facet_list_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_list_set(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::List(list) = &args[0] else {
         return Err(RuntimeError::new("__facet_list_set expects List"));
     };
     let Value::Int(index) = &args[1] else {
         return Err(RuntimeError::new("__facet_list_set expects Int index"));
     };
-    let index = match facet_index_to_usize(vm, index, list.len())? {
+    let index = match facet_index_to_usize(index, list.len()) {
         Ok(index) => index,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let mut items = list.iter().collect::<Vec<_>>();
     items[index] = args[2].clone();
-    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+    complete(ok_result(Value::List(ListHandle::from_items(items))))
 }
 
-fn builtin_facet_list_slice_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_list_slice_get(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::List(list) = &args[0] else {
         return Err(RuntimeError::new("__facet_list_slice_get expects List"));
     };
@@ -2726,19 +2698,22 @@ fn builtin_facet_list_slice_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
     let Value::Int(end) = &args[2] else {
         return Err(RuntimeError::new("__facet_list_slice_get expects Int end"));
     };
-    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len())? {
+    let (start, end) = match facet_range_to_bounds(start, end, list.len()) {
         Ok(bounds) => bounds,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let items = list
         .iter()
         .skip(start)
         .take(end - start + 1)
         .collect::<Vec<_>>();
-    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+    complete(ok_result(Value::List(ListHandle::from_items(items))))
 }
 
-fn builtin_facet_list_slice_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_list_slice_set(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::List(list) = &args[0] else {
         return Err(RuntimeError::new("__facet_list_slice_set expects List"));
     };
@@ -2755,31 +2730,34 @@ fn builtin_facet_list_slice_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, 
             "__facet_list_slice_set expects List replacement",
         ));
     };
-    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len())? {
+    let (start, end) = match facet_range_to_bounds(start, end, list.len()) {
         Ok(bounds) => bounds,
-        Err(err) => return Ok(err),
+        Err(err) => return err.invoke(vm),
     };
     let mut items = list.iter().collect::<Vec<_>>();
     items.splice(start..=end, replacement.iter());
-    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+    complete(ok_result(Value::List(ListHandle::from_items(items))))
 }
 
-fn builtin_facet_map_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_map_get(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let map = decode_hash_map_arg(&args[0], "__facet_map_get", "map")?;
     let key = decode_string_arg(&args[1], "__facet_map_get", "key")?;
     match map.get(key) {
-        Some(value) => Ok(ok_result(value)),
-        None => Ok(key_not_found_result(vm, key)),
+        Some(value) => complete(ok_result(value)),
+        None => key_not_found_result(vm, key),
     }
 }
 
-fn builtin_facet_map_set_existing(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_map_set_existing(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let map = decode_hash_map_arg(&args[0], "__facet_map_set_existing", "map")?;
     let key = decode_string_arg(&args[1], "__facet_map_set_existing", "key")?;
     if !map.contains_key(key) {
-        return Ok(key_not_found_result(vm, key));
+        return key_not_found_result(vm, key);
     }
-    Ok(ok_result(Value::HashMap(
+    complete(ok_result(Value::HashMap(
         map.insert(key.to_string(), args[2].clone()),
     )))
 }
@@ -2838,16 +2816,19 @@ fn builtin_facet_case_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Run
     ))
 }
 
-fn builtin_regex_compile(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_regex_compile(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let Value::Str(pattern) = &args[0] else {
         return Err(RuntimeError::new("compile expects String as pattern"));
     };
-
     match Regex::new(pattern) {
-        Ok(_) => Ok(ok_result(Value::Regex(RegexHandle {
+        Ok(_) => complete(ok_result(Value::Regex(RegexHandle {
             pattern: pattern.clone(),
         }))),
-        Err(err) => Ok(err_result(vm, "RegexCompileError", &err.to_string())),
+        Err(err) => language_error_result(
+            vm,
+            "RegexCompileError",
+            vec![Value::Str(pattern.clone()), Value::Str(err.to_string())],
+        ),
     }
 }
 
@@ -2860,14 +2841,18 @@ fn builtin_regex_matches(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     Ok(Value::Bool(re.is_match(input)))
 }
 
-fn builtin_regex_captures(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_regex_captures(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let pattern = decode_regex_arg(&args[0], "captures", "re")?;
     let Value::Str(input) = &args[1] else {
         return Err(RuntimeError::new("captures expects String as input"));
     };
     let re = compile_cached_regex(pattern, "captures")?;
     let Some(captures) = re.captures(input) else {
-        return Ok(none_result(vm));
+        return language_error_result(
+            vm,
+            "RegexCapturesNoMatch",
+            vec![Value::Str(pattern.into()), Value::Str(input.clone())],
+        );
     };
 
     let mut groups = Vec::with_capacity(captures.len());
@@ -2882,7 +2867,7 @@ fn builtin_regex_captures(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
         }
     }
 
-    Ok(ok_result(Value::RegexCaptures(RegexCapturesHandle {
+    complete(ok_result(Value::RegexCaptures(RegexCapturesHandle {
         input: input.clone(),
         groups,
         name_to_index,
@@ -2906,48 +2891,72 @@ fn builtin_regex_capture_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, 
     Ok(Value::Int(int(caps.groups.len() as u64)))
 }
 
-fn builtin_regex_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_regex_get(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let caps = decode_regex_captures_arg(&args[0], "get", "caps")?;
     let Value::Int(index) = &args[1] else {
         return Err(RuntimeError::new("get expects Int as idx"));
     };
-    let Some(index) = index.to_usize() else {
-        return Ok(none_result(vm));
+    let Some(group) = index.to_usize().and_then(|index| caps.groups.get(index)) else {
+        return language_error_result(
+            vm,
+            "RegexCaptureIndexMissing",
+            vec![Value::Int(index.clone())],
+        );
     };
-    let Some((start, end)) = caps.groups.get(index).and_then(|item| *item) else {
-        return Ok(none_result(vm));
+    let Some((start, end)) = *group else {
+        return language_error_result(
+            vm,
+            "RegexCaptureIndexUnmatched",
+            vec![Value::Int(index.clone())],
+        );
     };
-    Ok(ok_result(Value::Str(
-        slice_with_span(&caps.input, start, end, "get")?.to_string(),
+    complete(ok_result(Value::Str(
+        slice_with_span(&caps.input, start, end, "get")?.into(),
     )))
 }
 
-fn builtin_regex_get_name(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_regex_get_name(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let caps = decode_regex_captures_arg(&args[0], "get_name", "caps")?;
     let Value::Str(name) = &args[1] else {
         return Err(RuntimeError::new("get_name expects String as name"));
     };
     let Some(index) = caps.name_to_index.get(name) else {
-        return Ok(none_result(vm));
+        return language_error_result(
+            vm,
+            "RegexCaptureNameMissing",
+            vec![Value::Str(name.clone())],
+        );
     };
-    let Some((start, end)) = caps.groups.get(*index).and_then(|item| *item) else {
-        return Ok(none_result(vm));
+    let group = caps
+        .groups
+        .get(*index)
+        .ok_or_else(|| RuntimeError::new("capture name index exceeds groups"))?;
+    let Some((start, end)) = *group else {
+        return language_error_result(
+            vm,
+            "RegexCaptureNameUnmatched",
+            vec![Value::Str(name.clone())],
+        );
     };
-    Ok(ok_result(Value::Str(
-        slice_with_span(&caps.input, start, end, "get_name")?.to_string(),
+    complete(ok_result(Value::Str(
+        slice_with_span(&caps.input, start, end, "get_name")?.into(),
     )))
 }
 
-fn builtin_regex_find(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_regex_find(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let pattern = decode_regex_arg(&args[0], "find", "re")?;
     let Value::Str(input) = &args[1] else {
         return Err(RuntimeError::new("find expects String as input"));
     };
     let re = compile_cached_regex(pattern, "find")?;
     let Some(matched) = re.find(input) else {
-        return Ok(none_result(vm));
+        return language_error_result(
+            vm,
+            "RegexFindNoMatch",
+            vec![Value::Str(pattern.into()), Value::Str(input.clone())],
+        );
     };
-    Ok(ok_result(Value::RegexMatch(RegexMatchHandle {
+    complete(ok_result(Value::RegexMatch(RegexMatchHandle {
         input: input.clone(),
         start: matched.start(),
         end: matched.end(),
@@ -3061,37 +3070,38 @@ fn builtin_project_args(vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runtime
     Ok(Value::List(ListHandle::from_items(args)))
 }
 
-fn builtin_io_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_io_get(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let prompt = decode_string_arg(&args[0], "io_get", "prompt")?;
-    if let Err(message) = emit_io_prompt(vm, prompt) {
-        return Ok(input_error(vm, &message));
+    if let Err(detail) = emit_io_prompt(vm, prompt) {
+        return language_error_result(
+            vm,
+            "InputPromptWriteFailed",
+            vec![Value::Str(prompt.into()), Value::Str(detail)],
+        );
     }
-
-    if vm.has_injected_stdin() {
-        return Ok(match vm.read_injected_char() {
-            Some(ch) => ok_result(Value::Str(ch)),
-            None => input_error(vm, "end of input"),
-        });
-    }
-
-    let read = if io::stdin().is_terminal() {
+    let read = if vm.has_injected_stdin() {
+        Ok(vm.read_injected_char())
+    } else if io::stdin().is_terminal() {
         read_terminal_char()
     } else {
         read_stdin_char()
     };
-    Ok(match read {
-        Ok(Some(ch)) => ok_result(Value::Str(ch)),
-        Ok(None) => input_error(vm, "end of input"),
-        Err(message) => input_error(vm, &message),
-    })
+    match read {
+        Ok(Some(ch)) => complete(ok_result(Value::Str(ch))),
+        Ok(None) => language_error_result(vm, "InputCharacterEnd", vec![]),
+        Err(error) => error.invoke(vm),
+    }
 }
 
-fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let prompt = decode_string_arg(&args[0], "io_get_line", "prompt")?;
-    if let Err(message) = emit_io_prompt(vm, prompt) {
-        return Ok(input_error(vm, &message));
+    if let Err(detail) = emit_io_prompt(vm, prompt) {
+        return language_error_result(
+            vm,
+            "InputPromptWriteFailed",
+            vec![Value::Str(prompt.into()), Value::Str(detail)],
+        );
     }
-
     let read = if vm.has_injected_stdin() {
         Ok(vm.read_injected_line())
     } else {
@@ -3101,45 +3111,66 @@ fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
             .map(|count| (count > 0).then_some(line))
             .map_err(|err| err.to_string())
     };
-    Ok(match read {
-        Ok(Some(line)) => ok_result(Value::Str(strip_line_ending(line))),
-        Ok(None) => input_error(vm, "end of input"),
-        Err(message) => input_error(vm, &message),
-    })
+    match read {
+        Ok(Some(line)) => complete(ok_result(Value::Str(strip_line_ending(line)))),
+        Ok(None) => language_error_result(vm, "InputLineEnd", vec![]),
+        Err(detail) => language_error_result(vm, "InputLineReadFailed", vec![Value::Str(detail)]),
+    }
 }
 
-fn builtin_file_read(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_file_read(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_string_arg(&args[0], "file_read", "path")?;
-    let host_path = vm.resolve_host_path(path);
-    match fs::read_to_string(&host_path) {
-        Ok(text) => Ok(ok_result(Value::Str(text))),
-        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    let bytes = match fs::read(vm.resolve_host_path(path)) {
+        Ok(bytes) => bytes,
+        Err(err) => return file_path_error_result(vm, path, err, "FileReadFailed", None),
+    };
+    match String::from_utf8(bytes) {
+        Ok(text) => complete(ok_result(Value::Str(text))),
+        Err(err) => language_error_result(
+            vm,
+            "FileReadEncodingError",
+            vec![Value::Str(path.into()), Value::Str(err.to_string())],
+        ),
     }
 }
 
-fn builtin_file_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let path = decode_string_arg(&args[0], "file_write", "path")?;
+fn builtin_file_write(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let path = decode_string_arg(&args[0], "builtin_file_write", "path")?;
     let text = decode_string_arg(&args[1], "file_write", "text")?;
-    let host_path = vm.resolve_host_path(path);
-    match fs::write(&host_path, text) {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    match fs::write(vm.resolve_host_path(path), text) {
+        Ok(()) => complete(ok_result(Value::Unit)),
+        Err(err) => file_path_error_result(vm, path, err, "FileWriteFailed", None),
     }
 }
 
-fn builtin_file_append(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_file_append(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_string_arg(&args[0], "file_append", "path")?;
     let text = decode_string_arg(&args[1], "file_append", "text")?;
     let handle = match vm.open_file_resource(path, VmFileMode::Append) {
         Ok(handle) => handle,
-        Err(err) => return Ok(file_handle_error_result(vm, Some(path), err)),
+        Err(err) => {
+            return file_handle_error_result(
+                vm,
+                path,
+                VmFileMode::Append,
+                err,
+                "FileAppendOpenFailed",
+            )
+        }
     };
+    let (resource_path, mode) = vm
+        .file_resource_context(handle.id)
+        .map_err(|_| RuntimeError::new("newly opened file missing resource context"))?;
     let write_result = vm.write_file_chunk(handle.id, text);
     let close_result = vm.close_file_resource(handle.id);
     match (write_result, close_result) {
-        (Ok(()), Ok(())) => Ok(ok_result(Value::Unit)),
-        (Err(err), _) => Ok(file_handle_error_result(vm, Some(path), err)),
-        (Ok(()), Err(err)) => Ok(file_handle_error_result(vm, Some(path), err)),
+        (Ok(()), Ok(())) => complete(ok_result(Value::Unit)),
+        (Err(err), _) => {
+            file_handle_error_result(vm, &resource_path, mode, err, "FileAppendWriteFailed")
+        }
+        (Ok(()), Err(err)) => {
+            file_handle_error_result(vm, &resource_path, mode, err, "FileAppendCloseFailed")
+        }
     }
 }
 
@@ -3148,12 +3179,12 @@ fn builtin_file_exists(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeE
     Ok(Value::Bool(_vm.resolve_host_path(path).exists()))
 }
 
-fn builtin_file_delete(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let path = decode_string_arg(&args[0], "file_delete", "path")?;
-    let host_path = vm.resolve_host_path(path);
-    match fs::remove_file(&host_path) {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(file_path_error_result(vm, path, err)),
+fn builtin_file_delete(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let path = decode_string_arg(&args[0], "builtin_file_delete", "path")?;
+
+    match fs::remove_file(vm.resolve_host_path(path)) {
+        Ok(()) => complete(ok_result(Value::Unit)),
+        Err(err) => file_path_error_result(vm, path, err, "FileDeleteFailed", None),
     }
 }
 
@@ -3163,47 +3194,61 @@ fn builtin_file_with_open(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcom
     let body = decode_callable_arg(&args[2], "file_with_open", "body")?;
     let handle = match vm.open_file_resource(path, mode) {
         Ok(handle) => handle,
-        Err(err) => {
-            return Ok(BuiltinOutcome::Complete(file_handle_error_result(
-                vm,
-                Some(path),
-                err,
-            )))
-        }
+        Err(err) => return file_handle_error_result(vm, path, mode, err, "FileOpenFailed"),
     };
+    let (resource_path, mode) = vm
+        .file_resource_context(handle.id)
+        .map_err(|_| RuntimeError::new("newly opened file missing resource context"))?;
     Ok(BuiltinOutcome::Call {
         callable: body,
         args: vec![Value::FileHandle(handle.clone())],
         continuation: BuiltinContinuation::FileWithOpen {
-            path: path.to_string(),
+            path: resource_path,
+            mode,
             handle,
         },
     })
 }
 
-fn builtin_file_read_chunk(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let handle = decode_file_handle_arg(&args[0], "file_read_chunk", "file")?;
+fn builtin_file_read_chunk(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "builtin_file_read_chunk", "file")?;
     let max_chars = decode_non_negative_int_arg(&args[1], "file_read_chunk", "max_chars")?;
+    let (path, mode) = match vm.file_resource_context(handle.id) {
+        Ok(context) => context,
+        Err(VmFileError::Closed) => return language_error_result(vm, "FileClosed", vec![]),
+        Err(_) => return Err(RuntimeError::new("file resource context invariant failed")),
+    };
     match vm.read_file_chunk(handle.id, max_chars) {
-        Ok(text) => Ok(ok_result(Value::Str(text))),
-        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+        Ok(text) => complete(ok_result(Value::Str(text))),
+        Err(err) => file_handle_error_result(vm, &path, mode, err, "FileReadChunkFailed"),
     }
 }
 
-fn builtin_file_write_chunk(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let handle = decode_file_handle_arg(&args[0], "file_write_chunk", "file")?;
+fn builtin_file_write_chunk(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "builtin_file_write_chunk", "file")?;
     let text = decode_string_arg(&args[1], "file_write_chunk", "text")?;
+    let (path, mode) = match vm.file_resource_context(handle.id) {
+        Ok(context) => context,
+        Err(VmFileError::Closed) => return language_error_result(vm, "FileClosed", vec![]),
+        Err(_) => return Err(RuntimeError::new("file resource context invariant failed")),
+    };
     match vm.write_file_chunk(handle.id, text) {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+        Ok(()) => complete(ok_result(Value::Unit)),
+        Err(err) => file_handle_error_result(vm, &path, mode, err, "FileWriteChunkFailed"),
     }
 }
 
-fn builtin_file_flush(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let handle = decode_file_handle_arg(&args[0], "file_flush", "file")?;
+fn builtin_file_flush(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "builtin_file_flush", "file")?;
+
+    let (path, mode) = match vm.file_resource_context(handle.id) {
+        Ok(context) => context,
+        Err(VmFileError::Closed) => return language_error_result(vm, "FileClosed", vec![]),
+        Err(_) => return Err(RuntimeError::new("file resource context invariant failed")),
+    };
     match vm.flush_file_resource(handle.id) {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+        Ok(()) => complete(ok_result(Value::Unit)),
+        Err(err) => file_handle_error_result(vm, &path, mode, err, "FileFlushFailed"),
     }
 }
 
@@ -3219,23 +3264,30 @@ fn builtin_filesystem_join(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
     Ok(ok_result(filesystem_file_path(vm, &joined)?))
 }
 
-fn builtin_filesystem_parent(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let path = decode_file_path_arg(vm, &args[0], "filesystem_parent", "path")?;
-    let Some(parent) = Path::new(path).parent() else {
-        return Ok(filesystem_error(vm, "FileSystemInvalidPath", path));
-    };
-    Ok(ok_result(filesystem_file_path(
-        vm,
-        &parent.to_string_lossy(),
-    )?))
+fn builtin_filesystem_parent(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "builtin_filesystem_parent", "path")?;
+    match Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+    {
+        Some(value) => complete(ok_result(filesystem_file_path(vm, &value)?)),
+        None => language_error_result(vm, "FileSystemParentMissing", vec![args[0].clone()]),
+    }
 }
 
-fn builtin_filesystem_name(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let path = decode_file_path_arg(vm, &args[0], "filesystem_name", "path")?;
-    let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
-        return Ok(filesystem_error(vm, "FileSystemInvalidPath", path));
-    };
-    Ok(ok_result(Value::Str(name.to_string())))
+fn builtin_filesystem_name(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "builtin_filesystem_name", "path")?;
+    match Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+    {
+        Some(value) => complete(ok_result(Value::Str(value))),
+        None => language_error_result(vm, "FileSystemNameMissing", vec![args[0].clone()]),
+    }
 }
 
 fn builtin_filesystem_extension(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -3253,56 +3305,73 @@ fn builtin_filesystem_exists(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     Ok(ok_result(Value::Bool(vm.resolve_host_path(path).exists())))
 }
 
-fn builtin_filesystem_stat(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_filesystem_stat(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_file_path_arg(vm, &args[0], "filesystem_stat", "path")?;
-    match filesystem_entry(vm, path)? {
-        Ok(entry) => Ok(ok_result(entry)),
-        Err(err) => Ok(err),
+    match filesystem_entry(vm, path, "FileSystemStatFailed")? {
+        Ok(entry) => complete(ok_result(entry)),
+        Err(error) => filesystem_failure_outcome(vm, error),
     }
 }
 
-fn builtin_filesystem_ls(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_filesystem_ls(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_file_path_arg(vm, &args[0], "filesystem_ls", "path")?;
-    filesystem_snapshot(vm, path, &int(1))
+    filesystem_snapshot(vm, path, &int(1), "FileSystemListFailed")
 }
 
-fn builtin_filesystem_tree_depth(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_filesystem_tree_depth(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_file_path_arg(vm, &args[0], "filesystem_tree_depth", "path")?;
     let Value::Int(depth) = &args[1] else {
-        return Err(RuntimeError::new(format!(
-            "filesystem_tree_depth expects Int as depth, got {:?}",
-            args[1]
-        )));
+        return Err(RuntimeError::new("filesystem_tree_depth expects Int depth"));
     };
     if depth.sign() == Sign::Minus {
-        return Ok(filesystem_error_with_message(
+        return language_error_result(
             vm,
             "FileSystemInvalidDepth",
-            &format!("invalid filesystem tree depth: {depth}"),
-        ));
+            vec![Value::Int(depth.clone())],
+        );
     }
-    filesystem_snapshot(vm, path, depth)
+    filesystem_snapshot(vm, path, depth, "FileSystemTreeReadFailed")
 }
 
-fn builtin_filesystem_mkdir(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let path = decode_file_path_arg(vm, &args[0], "filesystem_mkdir", "path")?;
+fn builtin_filesystem_mkdir(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "builtin_filesystem_mkdir", "path")?;
     let host_path = vm.resolve_host_path(path);
     match fs::create_dir(&host_path) {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+        Ok(()) => complete(ok_result(Value::Unit)),
+        Err(error) => filesystem_failure_outcome(
+            vm,
+            FileSystemFailure {
+                path: path.into(),
+                error,
+                operation: "FileSystemMkdirFailed",
+            },
+        ),
     }
 }
 
-fn builtin_filesystem_mkdir_all(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let path = decode_file_path_arg(vm, &args[0], "filesystem_mkdir_all", "path")?;
+fn builtin_filesystem_mkdir_all(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "builtin_filesystem_mkdir_all", "path")?;
     let host_path = vm.resolve_host_path(path);
     match fs::create_dir_all(&host_path) {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+        Ok(()) => complete(ok_result(Value::Unit)),
+        Err(error) => filesystem_failure_outcome(
+            vm,
+            FileSystemFailure {
+                path: path.into(),
+                error,
+                operation: "FileSystemMkdirAllFailed",
+            },
+        ),
     }
 }
 
-fn builtin_filesystem_rm(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_filesystem_rm(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_file_path_arg(vm, &args[0], "filesystem_rm", "path")?;
     let host_path = vm.resolve_host_path(path);
     let result = match fs::symlink_metadata(&host_path) {
@@ -3311,34 +3380,75 @@ fn builtin_filesystem_rm(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
         Err(err) => Err(err),
     };
     match result {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(filesystem_io_error(vm, path, err)),
-    }
-}
-
-fn builtin_filesystem_mv(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let from = decode_file_path_arg(vm, &args[0], "filesystem_mv", "from")?;
-    let to = decode_file_path_arg(vm, &args[1], "filesystem_mv", "to")?;
-    match fs::rename(vm.resolve_host_path(from), vm.resolve_host_path(to)) {
-        Ok(()) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(filesystem_io_error(vm, from, err)),
-    }
-}
-
-fn builtin_filesystem_cp(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let from = decode_file_path_arg(vm, &args[0], "filesystem_cp", "from")?;
-    let to = decode_file_path_arg(vm, &args[1], "filesystem_cp", "to")?;
-    let from_host = vm.resolve_host_path(from);
-    if from_host.is_dir() {
-        return Ok(filesystem_error_with_message(
+        Ok(()) => complete(ok_result(Value::Unit)),
+        Err(error) => filesystem_failure_outcome(
             vm,
-            "FileSystemUnsupported",
-            "directory copy is not supported",
-        ));
+            FileSystemFailure {
+                path: path.into(),
+                error,
+                operation: "FileSystemRemoveFailed",
+            },
+        ),
     }
-    match fs::copy(from_host, vm.resolve_host_path(to)) {
-        Ok(_) => Ok(ok_result(Value::Unit)),
-        Err(err) => Ok(filesystem_io_error(vm, from, err)),
+}
+
+fn builtin_filesystem_mv(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let from = decode_file_path_arg(vm, &args[0], "builtin_filesystem_mv", "from")?;
+    let to = decode_file_path_arg(vm, &args[1], "builtin_filesystem_mv", "to")?;
+
+    match fs::rename(vm.resolve_host_path(from), vm.resolve_host_path(to)) {
+        Ok(_) => complete(ok_result(Value::Unit)),
+        Err(error) => {
+            let kind = match error.kind() {
+                io::ErrorKind::NotFound => "FileSystemMoveNotFound",
+                io::ErrorKind::PermissionDenied => "FileSystemMovePermissionDenied",
+                io::ErrorKind::AlreadyExists => "FileSystemMoveAlreadyExists",
+                io::ErrorKind::InvalidInput => "FileSystemMoveInvalidPath",
+                _ => "FileSystemMoveFailed",
+            };
+            language_error_result(
+                vm,
+                kind,
+                vec![
+                    args[0].clone(),
+                    args[1].clone(),
+                    Value::Str(error.to_string()),
+                ],
+            )
+        }
+    }
+}
+
+fn builtin_filesystem_cp(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let from = decode_file_path_arg(vm, &args[0], "builtin_filesystem_cp", "from")?;
+    let to = decode_file_path_arg(vm, &args[1], "builtin_filesystem_cp", "to")?;
+    if vm.resolve_host_path(from).is_dir() {
+        return language_error_result(
+            vm,
+            "FileSystemDirectoryCopyUnsupported",
+            vec![args[0].clone(), args[1].clone()],
+        );
+    }
+    match fs::copy(vm.resolve_host_path(from), vm.resolve_host_path(to)) {
+        Ok(_) => complete(ok_result(Value::Unit)),
+        Err(error) => {
+            let kind = match error.kind() {
+                io::ErrorKind::NotFound => "FileSystemCopyNotFound",
+                io::ErrorKind::PermissionDenied => "FileSystemCopyPermissionDenied",
+                io::ErrorKind::AlreadyExists => "FileSystemCopyAlreadyExists",
+                io::ErrorKind::InvalidInput => "FileSystemCopyInvalidPath",
+                _ => "FileSystemCopyFailed",
+            };
+            language_error_result(
+                vm,
+                kind,
+                vec![
+                    args[0].clone(),
+                    args[1].clone(),
+                    Value::Str(error.to_string()),
+                ],
+            )
+        }
     }
 }
 
@@ -3347,82 +3457,106 @@ fn builtin_shell_pwd(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeErr
     Ok(ok_result(filesystem_file_path(vm, &raw)?))
 }
 
-fn builtin_shell_cd(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_shell_cd(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let path = decode_file_path_arg(vm, &args[0], "shell_cd", "path")?;
     let host_path = vm.resolve_host_path(path);
-    if !host_path.is_dir() {
-        return Ok(shell_error_with_message(
-            vm,
-            "ShellWorkingDirectoryNotFound",
-            &format!("shell working directory not found: {path}"),
-        ));
+    match fs::metadata(&host_path) {
+        Ok(metadata) if !metadata.is_dir() => {
+            return language_error_result(
+                vm,
+                "ShellWorkingDirectoryNotDirectory",
+                vec![args[0].clone()],
+            )
+        }
+        Ok(_) => (),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return language_error_result(
+                vm,
+                "ShellWorkingDirectoryNotFound",
+                vec![args[0].clone()],
+            )
+        }
+        Err(error) => {
+            return language_error_result(
+                vm,
+                "ShellWorkingDirectoryInspectFailed",
+                vec![args[0].clone(), Value::Str(error.to_string())],
+            )
+        }
     }
-    let cwd = match canonicalize_shell_cwd(vm, &host_path, path) {
-        Ok(cwd) => cwd,
-        Err(err) => return Ok(err),
-    };
-    vm.set_cwd(cwd);
-    Ok(ok_result(Value::Unit))
+    match fs::canonicalize(&host_path) {
+        Ok(cwd) => {
+            vm.set_cwd(cwd);
+            complete(ok_result(Value::Unit))
+        }
+        Err(error) => language_error_result(
+            vm,
+            "ShellWorkingDirectoryResolveFailed",
+            vec![args[0].clone(), Value::Str(error.to_string())],
+        ),
+    }
 }
 
-fn builtin_shell_exec(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_shell_exec(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let command = decode_string_arg(&args[0], "shell_exec", "command")?;
     let argv = decode_string_list_arg(&args[1], "shell_exec", "args")?;
+    let cwd = filesystem_file_path(vm, &vm.cwd().to_string_lossy())?;
     let output = match Command::new(command)
         .args(&argv)
         .current_dir(vm.cwd())
         .output()
     {
         Ok(output) => output,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Ok(shell_error_with_message(
+        Err(error) => {
+            let kind = if error.kind() == io::ErrorKind::NotFound {
+                "ShellSpawnResourceNotFound"
+            } else {
+                "ShellSpawnFailed"
+            };
+            return language_error_result(
                 vm,
-                "ShellCommandNotFound",
-                &format!("shell command not found: {command}"),
-            ));
-        }
-        Err(err) => {
-            return Ok(shell_error_with_message(
-                vm,
-                "ShellSpawnFailed",
-                &format!("shell spawn failed for {command}: {err}"),
-            ));
+                kind,
+                vec![
+                    Value::Str(command.into()),
+                    string_list_value(argv),
+                    cwd,
+                    Value::Str(error.to_string()),
+                ],
+            );
         }
     };
     let stdout = match String::from_utf8(output.stdout) {
         Ok(text) => text,
-        Err(err) => {
-            return Ok(shell_error_with_message(
+        Err(error) => {
+            return language_error_result(
                 vm,
-                "ShellIoError",
-                &format!("shell stdout is not valid UTF-8: {err}"),
-            ));
+                "ShellStdoutEncodingError",
+                vec![Value::Str(command.into()), Value::Str(error.to_string())],
+            )
         }
     };
     let stderr = match String::from_utf8(output.stderr) {
         Ok(text) => text,
-        Err(err) => {
-            return Ok(shell_error_with_message(
+        Err(error) => {
+            return language_error_result(
                 vm,
-                "ShellIoError",
-                &format!("shell stderr is not valid UTF-8: {err}"),
-            ));
+                "ShellStderrEncodingError",
+                vec![Value::Str(command.into()), Value::Str(error.to_string())],
+            )
         }
     };
     let result = tagged_by_name(
         vm,
         "CommandResult",
         vec![
-            Value::Str(command.to_string()),
-            Value::List(ListHandle::from_items(
-                argv.into_iter().map(Value::Str).collect(),
-            )),
+            Value::Str(command.into()),
+            string_list_value(argv),
             Value::Int(int(output.status.code().unwrap_or(-1))),
             Value::Str(stdout),
             Value::Str(stderr),
         ],
     )?;
-    Ok(ok_result(result))
+    complete(ok_result(result))
 }
 
 fn builtin_random_seed(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -3434,41 +3568,101 @@ fn builtin_random_seed(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeE
     }))
 }
 
-fn builtin_random_int_until(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_random_int_until(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let rng = host_random_generator();
+    let start = int(0);
     let Value::Int(end) = &args[0] else {
-        return Err(RuntimeError::new("int_until expects Int as end"));
+        return Err(RuntimeError::new(
+            "builtin_random_int_until expects Int end",
+        ));
     };
-    random_int_range_result(vm, &int(0), end, host_random_generator())
-        .map(|(value, _)| value.map(ok_result).unwrap_or_else(|err| err))
+    let start = &start;
+    if start >= end {
+        return language_error_result(
+            vm,
+            "InvalidRandomRange",
+            vec![Value::Int(start.clone()), Value::Int(end.clone())],
+        );
+    }
+    let (value, next_rng) = sample_random_int_range(start, end, rng)?;
+    let _ = next_rng;
+    complete(ok_result(value))
 }
 
-fn builtin_random_int_range(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_random_int_range(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let rng = host_random_generator();
     let (Value::Int(start), Value::Int(end)) = (&args[0], &args[1]) else {
-        return Err(RuntimeError::new("int_range expects Int as start/end"));
+        return Err(RuntimeError::new(
+            "builtin_random_int_range expects Int start/end",
+        ));
     };
-    random_int_range_result(vm, start, end, host_random_generator())
-        .map(|(value, _)| value.map(ok_result).unwrap_or_else(|err| err))
+    if start >= end {
+        return language_error_result(
+            vm,
+            "InvalidRandomRange",
+            vec![Value::Int(start.clone()), Value::Int(end.clone())],
+        );
+    }
+    let (value, next_rng) = sample_random_int_range(start, end, rng)?;
+    let _ = next_rng;
+    complete(ok_result(value))
 }
 
-fn builtin_random_next_int_until(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let rng = decode_random_generator_arg(&args[0], "next_int_until", "rng")?;
+fn builtin_random_next_int_until(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
+    let rng = decode_random_generator_arg(&args[0], "builtin_random_next_int_until", "rng")?;
+    let start = int(0);
     let Value::Int(end) = &args[1] else {
-        return Err(RuntimeError::new("next_int_until expects Int as end"));
+        return Err(RuntimeError::new(
+            "builtin_random_next_int_until expects Int end",
+        ));
     };
-    seeded_random_int_range_result(vm, rng, &int(0), end)
+    let start = &start;
+    if start >= end {
+        return language_error_result(
+            vm,
+            "InvalidRandomRange",
+            vec![Value::Int(start.clone()), Value::Int(end.clone())],
+        );
+    }
+    let (value, next_rng) = sample_random_int_range(start, end, rng)?;
+
+    complete(ok_result(Value::Tuple(vec![
+        value,
+        Value::RandomGenerator(next_rng),
+    ])))
 }
 
-fn builtin_random_next_int_range(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let rng = decode_random_generator_arg(&args[0], "next_int_range", "rng")?;
+fn builtin_random_next_int_range(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
+    let rng = decode_random_generator_arg(&args[0], "builtin_random_next_int_range", "rng")?;
     let (Value::Int(start), Value::Int(end)) = (&args[1], &args[2]) else {
-        return Err(RuntimeError::new("next_int_range expects Int as start/end"));
+        return Err(RuntimeError::new(
+            "builtin_random_next_int_range expects Int start/end",
+        ));
     };
-    seeded_random_int_range_result(vm, rng, start, end)
+    if start >= end {
+        return language_error_result(
+            vm,
+            "InvalidRandomRange",
+            vec![Value::Int(start.clone()), Value::Int(end.clone())],
+        );
+    }
+    let (value, next_rng) = sample_random_int_range(start, end, rng)?;
+
+    complete(ok_result(Value::Tuple(vec![
+        value,
+        Value::RandomGenerator(next_rng),
+    ])))
 }
 
 fn emit_io_prompt(vm: &mut VM, prompt: &str) -> Result<(), String> {
     vm.emit_stdout_text(prompt.to_string())
-        .map_err(|err| format!("prompt write failed: {}", err))
+        .map_err(|err| err.to_string())
 }
 
 fn strip_line_ending(mut line: String) -> String {
@@ -3482,68 +3676,89 @@ fn strip_line_ending(mut line: String) -> String {
 }
 
 #[cfg(feature = "terminal-io")]
-fn read_terminal_char() -> Result<Option<String>, String> {
-    crossterm::terminal::enable_raw_mode().map_err(|err| err.to_string())?;
+fn read_terminal_char() -> Result<Option<String>, LanguageErrorInput> {
+    crossterm::terminal::enable_raw_mode().map_err(|err| {
+        LanguageErrorInput::new(
+            "TerminalInputModeStartFailed",
+            vec![Value::Str(err.to_string())],
+        )
+    })?;
     let result = (|| loop {
-        match crossterm::event::read().map_err(|err| err.to_string())? {
+        match crossterm::event::read().map_err(|err| {
+            LanguageErrorInput::new("TerminalInputReadFailed", vec![Value::Str(err.to_string())])
+        })? {
             crossterm::event::Event::Key(event) => break key_event_to_string(event),
             _ => continue,
         }
     })();
-    let disable_result = crossterm::terminal::disable_raw_mode().map_err(|err| err.to_string());
-    match (result, disable_result) {
+    let restored = crossterm::terminal::disable_raw_mode().map_err(|err| {
+        LanguageErrorInput::new(
+            "TerminalInputModeRestoreFailed",
+            vec![Value::Str(err.to_string())],
+        )
+    });
+    match (result, restored) {
         (Ok(value), Ok(())) => Ok(value),
-        (Err(err), _) => Err(err),
-        (_, Err(err)) => Err(err),
+        (Err(error), _) | (_, Err(error)) => Err(error),
     }
 }
 
 #[cfg(not(feature = "terminal-io"))]
-fn read_terminal_char() -> Result<Option<String>, String> {
-    Err("terminal key input is unavailable in this Eldr build".to_string())
+fn read_terminal_char() -> Result<Option<String>, LanguageErrorInput> {
+    Err(LanguageErrorInput::new("TerminalInputUnavailable", vec![]))
 }
 
 #[cfg(feature = "terminal-io")]
-fn key_event_to_string(event: crossterm::event::KeyEvent) -> Result<Option<String>, String> {
+fn key_event_to_string(
+    event: crossterm::event::KeyEvent,
+) -> Result<Option<String>, LanguageErrorInput> {
     use crossterm::event::KeyCode;
-
     let text = match event.code {
         KeyCode::Char(ch) => ch.to_string(),
-        KeyCode::Enter => "\n".to_string(),
-        KeyCode::Tab => "\t".to_string(),
-        KeyCode::Backspace => "\u{8}".to_string(),
-        KeyCode::Esc => "\u{1b}".to_string(),
-        other => return Err(format!("unsupported key input: {:?}", other)),
+        KeyCode::Enter => "\n".into(),
+        KeyCode::Tab => "\t".into(),
+        KeyCode::Backspace => "\u{8}".into(),
+        KeyCode::Esc => "\u{1b}".into(),
+        other => {
+            return Err(LanguageErrorInput::new(
+                "TerminalInputKeyUnsupported",
+                vec![Value::Str(format!("{other:?}"))],
+            ))
+        }
     };
     Ok(Some(text))
 }
 
-fn read_stdin_char() -> Result<Option<String>, String> {
+fn read_stdin_char() -> Result<Option<String>, LanguageErrorInput> {
     let mut stdin = io::stdin().lock();
     let mut buf = [0u8; 4];
-    let mut len = 0usize;
+    let mut len = 0;
     loop {
-        let read = stdin
-            .read(&mut buf[len..len + 1])
-            .map_err(|err| err.to_string())?;
+        let read = stdin.read(&mut buf[len..len + 1]).map_err(|err| {
+            LanguageErrorInput::new(
+                "InputCharacterReadFailed",
+                vec![Value::Str(err.to_string())],
+            )
+        })?;
         if read == 0 {
             return if len == 0 {
                 Ok(None)
             } else {
-                Err("incomplete UTF-8 input before EOF".into())
+                Err(LanguageErrorInput::new("InputCharacterIncomplete", vec![]))
             };
         }
         len += read;
         match std::str::from_utf8(&buf[..len]) {
             Ok(text) => return Ok(text.chars().next().map(|ch| ch.to_string())),
             Err(err) if err.error_len().is_none() && len < buf.len() => continue,
-            Err(err) => return Err(err.to_string()),
+            Err(err) => {
+                return Err(LanguageErrorInput::new(
+                    "InputCharacterEncodingError",
+                    vec![Value::Str(err.to_string())],
+                ))
+            }
         }
     }
-}
-
-fn input_error(vm: &VM, detail: &str) -> Value {
-    err_result(vm, "InputError", detail)
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> Result<String, RuntimeError> {
@@ -3776,47 +3991,21 @@ fn decode_random_generator_arg(
     }
 }
 
-fn seeded_random_int_range_result(
-    vm: &VM,
-    rng: RandomGeneratorHandle,
-    start: &SurtrInt,
-    end: &SurtrInt,
-) -> Result<Value, RuntimeError> {
-    let (sample, next_rng) = random_int_range_result(vm, start, end, rng)?;
-    Ok(match sample {
-        Ok(value) => ok_result(Value::Tuple(vec![value, Value::RandomGenerator(next_rng)])),
-        Err(err) => err,
-    })
-}
-
-fn random_int_range_result(
-    vm: &VM,
+fn sample_random_int_range(
     start: &SurtrInt,
     end: &SurtrInt,
     rng: RandomGeneratorHandle,
-) -> Result<(Result<Value, Value>, RandomGeneratorHandle), RuntimeError> {
+) -> Result<(Value, RandomGeneratorHandle), RuntimeError> {
     let range = end - start;
-    if range <= int(0) {
-        return Ok((Err(invalid_random_range(vm, start, end)), rng));
-    }
-
-    let upper = range.to_biguint().ok_or_else(|| {
-        RuntimeError::new(format!(
-            "random range should be positive after validation, got {}",
-            range
-        ))
-    })?;
+    let upper = range
+        .to_biguint()
+        .filter(|upper| !upper.is_zero())
+        .ok_or_else(|| RuntimeError::new("validated random range must be positive"))?;
     let (offset, next_rng) = sample_biguint_below(&upper, rng);
-    let value = start + BigInt::from_biguint(Sign::Plus, offset);
-    Ok((Ok(Value::Int(value)), next_rng))
-}
-
-fn invalid_random_range(vm: &VM, start: &SurtrInt, end: &SurtrInt) -> Value {
-    err_result(
-        vm,
-        "InvalidRandomRange",
-        &format!("random range must be non-empty: {}..{}", start, end),
-    )
+    Ok((
+        Value::Int(start + BigInt::from_biguint(Sign::Plus, offset)),
+        next_rng,
+    ))
 }
 
 fn sample_biguint_below(
@@ -4102,19 +4291,17 @@ fn lookup_tagged_type_entry<'a>(
         .ok_or_else(|| RuntimeError::new(unknown_message))
 }
 
-fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>, RuntimeError> {
+fn bit_index_to_usize(index: &SurtrInt) -> Result<Result<usize, LanguageErrorInput>, RuntimeError> {
     if index < &int(0) {
-        return Ok(Err(err_result(
-            vm,
+        return Ok(Err(LanguageErrorInput::new(
             "NegativeBitIndex",
-            &format!("bit index must be non-negative: {}", index),
+            vec![Value::Int(index.clone())],
         )));
     }
-
     index
         .to_usize()
         .map(Ok)
-        .ok_or_else(|| RuntimeError::new(format!("bit index out of range for usize: {}", index)))
+        .ok_or_else(|| RuntimeError::new(format!("bit index out of range for usize: {index}")))
 }
 
 fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, RuntimeError> {
@@ -4183,15 +4370,11 @@ struct JsonRuntimeConstructors {
 
 #[derive(Debug)]
 enum JsonStringifyError {
-    Recoverable(String),
+    IntegerOutOfRange(SurtrInt),
     Internal(String),
 }
 
 impl JsonStringifyError {
-    fn recoverable(message: impl Into<String>) -> Self {
-        Self::Recoverable(message.into())
-    }
-
     fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
@@ -4256,7 +4439,17 @@ impl<'de> serde::Deserialize<'de> for JsonObjectEntries<'de> {
 }
 
 enum JsonParseConversionError {
-    Invalid(String),
+    Invalid {
+        line: usize,
+        column: usize,
+        detail: String,
+    },
+    Depth {
+        line: usize,
+        column: usize,
+        depth: usize,
+        limit: usize,
+    },
     Internal(RuntimeError),
 }
 
@@ -4277,14 +4470,23 @@ fn json_decode_error(
     json_parse_error_at(source, offset + preceding_lines + error.column(), detail)
 }
 
-fn json_parse_error_at(source: &str, offset: usize, detail: &str) -> JsonParseConversionError {
+fn json_source_position(source: &str, offset: usize) -> (usize, usize) {
     let prefix = &source.as_bytes()[..offset];
     let line = prefix.iter().filter(|&&byte| byte == b'\n').count() + 1;
     let column = prefix
         .iter()
         .rposition(|&byte| byte == b'\n')
         .map_or(prefix.len(), |newline| prefix.len() - newline - 1);
-    JsonParseConversionError::Invalid(format!("json parse error at {line}:{column}: {detail}"))
+    (line, column)
+}
+
+fn json_parse_error_at(source: &str, offset: usize, detail: &str) -> JsonParseConversionError {
+    let (line, column) = json_source_position(source, offset);
+    JsonParseConversionError::Invalid {
+        line,
+        column,
+        detail: detail.into(),
+    }
 }
 
 fn json_value_to_surtr(
@@ -4325,11 +4527,15 @@ fn json_value_to_surtr(
                     .map_err(|error| json_decode_error(source, text, error))?,
             )],
         )),
-        b'[' | b'{' if depth >= 127 => Err(json_parse_error_at(
-            source,
-            offset + 1,
-            "recursion limit exceeded",
-        )),
+        b'[' | b'{' if depth >= 127 => {
+            let (line, column) = json_source_position(source, offset + 1);
+            Err(JsonParseConversionError::Depth {
+                line,
+                column,
+                depth,
+                limit: 127,
+            })
+        }
         b'[' => {
             let values: Vec<&serde_json::value::RawValue> = serde_json::from_str(text)
                 .map_err(|error| json_decode_error(source, text, error))?;
@@ -4360,7 +4566,7 @@ fn json_value_to_surtr(
     }
 }
 
-fn builtin_json_parse(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_json_parse(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let [Value::Str(text)] = args.as_slice() else {
         return Err(RuntimeError::new("json_parse expects String"));
     };
@@ -4368,23 +4574,52 @@ fn builtin_json_parse(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErr
         Ok(value) => {
             let ctors = json_constructors(vm)?;
             match json_value_to_surtr(&ctors, text, value, 0) {
-                Ok(converted) => Ok(ok_result(converted)),
-                Err(JsonParseConversionError::Invalid(message)) => {
-                    Ok(err_result(vm, "JsonParseError", &message))
-                }
+                Ok(converted) => complete(ok_result(converted)),
+                Err(JsonParseConversionError::Invalid {
+                    line,
+                    column,
+                    detail,
+                }) => language_error_result(
+                    vm,
+                    "JsonParseError",
+                    vec![
+                        Value::Int(line.into()),
+                        Value::Int(column.into()),
+                        Value::Str(detail),
+                    ],
+                ),
+                Err(JsonParseConversionError::Depth {
+                    line,
+                    column,
+                    depth,
+                    limit,
+                }) => language_error_result(
+                    vm,
+                    "JsonParseDepthLimitExceeded",
+                    vec![
+                        Value::Int(line.into()),
+                        Value::Int(column.into()),
+                        Value::Int(depth.into()),
+                        Value::Int(limit.into()),
+                    ],
+                ),
                 Err(JsonParseConversionError::Internal(error)) => Err(error),
             }
         }
-        Err(err) => Ok(err_result(
-            vm,
-            "JsonParseError",
-            &format!(
-                "json parse error at {}:{}: {}",
-                err.line(),
-                err.column(),
-                err
-            ),
-        )),
+        Err(error) => {
+            let raw = error.to_string();
+            let suffix = format!(" at line {} column {}", error.line(), error.column());
+            let detail = raw.strip_suffix(&suffix).unwrap_or(&raw);
+            language_error_result(
+                vm,
+                "JsonParseError",
+                vec![
+                    Value::Int(error.line().into()),
+                    Value::Int(error.column().into()),
+                    Value::Str(detail.into()),
+                ],
+            )
+        }
     }
 }
 
@@ -4394,9 +4629,7 @@ fn bigint_to_json_number(value: &BigInt) -> Result<serde_json::Number, JsonStrin
     } else if let Some(value) = value.to_u64() {
         Ok(serde_json::Number::from(value))
     } else {
-        Err(JsonStringifyError::recoverable(format!(
-            "JsonValue::Int cannot be represented as a JSON number: {value}"
-        )))
+        Err(JsonStringifyError::IntegerOutOfRange(value.clone()))
     }
 }
 
@@ -4429,8 +4662,8 @@ fn surtr_json_to_serde(
                 Value::Float(value) => serde_json::Number::from_f64(*value)
                     .map(serde_json::Value::Number)
                     .ok_or_else(|| {
-                        JsonStringifyError::recoverable(
-                            "JsonValue::Float cannot represent NaN or infinity",
+                        JsonStringifyError::internal(
+                            "JsonValue::Float violated finite-only invariant",
                         )
                     }),
                 got => Err(JsonStringifyError::internal(format!(
@@ -4487,24 +4720,22 @@ fn surtr_json_to_serde(
                 "JsonValue variant has invalid arity: tag {tag}, fields {fields:?}"
             )))
         }
-        other => Err(JsonStringifyError::recoverable(format!(
+        other => Err(JsonStringifyError::internal(format!(
             "json_stringify expects JsonValue, got {other:?}"
         ))),
     }
 }
 
-fn builtin_json_stringify(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_json_stringify(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let [value] = args.as_slice() else {
         return Err(RuntimeError::new("json_stringify expects JsonValue"));
     };
     let ctors = json_constructors(vm)?;
     match surtr_json_to_serde(&ctors, value) {
-        Ok(json) => Ok(ok_result(Value::Str(json.to_string()))),
-        Err(JsonStringifyError::Recoverable(detail)) => Ok(err_result(
-            vm,
-            "JsonEncodeError",
-            &format!("json encode error: {detail}"),
-        )),
+        Ok(json) => complete(ok_result(Value::Str(json.to_string()))),
+        Err(JsonStringifyError::IntegerOutOfRange(value)) => {
+            language_error_result(vm, "JsonIntegerOutOfRange", vec![Value::Int(value)])
+        }
         Err(JsonStringifyError::Internal(message)) => Err(RuntimeError::new(message)),
     }
 }
@@ -4537,46 +4768,44 @@ fn enum_variant_by_name(
 }
 
 /// The Extractor owns its failure Error; consumers decide whether to keep it.
-fn builtin_uncons(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_uncons(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let payload = match args.as_slice() {
         [Value::List(list)] => match list.head_value() {
             Some(head) => {
                 let tail = list
                     .tail_handle()
                     .ok_or_else(|| RuntimeError::new("non-empty list has no tail"))?;
-                Some(Value::Tuple(vec![head, Value::List(tail)]))
+                Ok(Value::Tuple(vec![head, Value::List(tail)]))
             }
-            None => None,
+            None => Err("UnconsEmptyList"),
         },
         [Value::Str(value)] => {
             let mut chars = value.chars();
-            chars.next().map(|head| {
-                Value::Tuple(vec![
+            match chars.next() {
+                Some(head) => Ok(Value::Tuple(vec![
                     Value::Str(head.to_string()),
                     Value::Str(chars.collect()),
-                ])
-            })
+                ])),
+                None => Err("UnconsEmptyString"),
+            }
         }
         [_] => return Err(RuntimeError::new("uncons expects List or String")),
         _ => return Err(RuntimeError::new("uncons expects exactly one argument")),
     };
     match payload {
-        Some(payload) => enum_variant_by_name(
+        Ok(payload) => complete(enum_variant_by_name(
             vm,
             MATCH_RESULT_OK_VARIANT.qualified_name,
             MATCH_RESULT_OK_VARIANT.discriminant,
             vec![payload],
-        ),
-        None => enum_variant_by_name(
-            vm,
-            MATCH_RESULT_ERR_VARIANT.qualified_name,
-            MATCH_RESULT_ERR_VARIANT.discriminant,
-            vec![err_value(builtin_rich_error(
-                vm,
-                "PatternMismatch",
-                "Pattern did not match.",
-            ))],
-        ),
+        )?),
+        Err(kind) => {
+            let tag = vm
+                .type_registry()
+                .tag_by_name(MATCH_RESULT_ERR_VARIANT.qualified_name)
+                .ok_or_else(|| RuntimeError::new("missing MatchResult::Err metadata"))?;
+            vm.language_error_outcome(kind, vec![], Some(tag))
+        }
     }
 }
 
@@ -4656,11 +4885,21 @@ fn filesystem_entry_kind(vm: &VM, metadata: &fs::Metadata) -> Result<Value, Runt
     enum_variant_by_name(vm, name, discriminant, Vec::new())
 }
 
-fn filesystem_entry(vm: &VM, raw_path: &str) -> Result<Result<Value, Value>, RuntimeError> {
+fn filesystem_entry(
+    vm: &VM,
+    raw_path: &str,
+    operation: &'static str,
+) -> Result<Result<Value, FileSystemFailure>, RuntimeError> {
     let host_path = vm.resolve_host_path(raw_path);
     let metadata = match fs::symlink_metadata(&host_path) {
         Ok(metadata) => metadata,
-        Err(err) => return Ok(Err(filesystem_io_error(vm, raw_path, err))),
+        Err(error) => {
+            return Ok(Err(FileSystemFailure {
+                path: raw_path.into(),
+                error,
+                operation,
+            }))
+        }
     };
     let name = Path::new(raw_path)
         .file_name()
@@ -4685,27 +4924,48 @@ fn filesystem_entry(vm: &VM, raw_path: &str) -> Result<Result<Value, Value>, Run
     )?))
 }
 
-fn filesystem_snapshot(vm: &VM, root_raw: &str, max_depth: &BigInt) -> Result<Value, RuntimeError> {
+fn filesystem_snapshot(
+    vm: &VM,
+    root_raw: &str,
+    max_depth: &BigInt,
+    operation: &'static str,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let root_host = vm.resolve_host_path(root_raw);
-    if !root_host.is_dir() {
-        return Ok(filesystem_error(vm, "FileSystemNotDirectory", root_raw));
-    }
-
-    let mut paths = Vec::new();
-    if let Err(err) = collect_filesystem_entries(vm, root_raw, int(1), max_depth, &mut paths) {
-        return Ok(err);
-    }
-    paths.sort();
-
-    let mut entries = Vec::with_capacity(paths.len());
-    for path in paths {
-        match filesystem_entry(vm, &path)? {
-            Ok(entry) => entries.push(entry),
-            Err(err) => return Ok(err),
+    match fs::metadata(&root_host) {
+        Ok(metadata) if !metadata.is_dir() => {
+            return language_error_result(
+                vm,
+                "FileSystemNotDirectory",
+                vec![filesystem_file_path(vm, root_raw)?],
+            )
+        }
+        Ok(_) => (),
+        Err(error) => {
+            return filesystem_failure_outcome(
+                vm,
+                FileSystemFailure {
+                    path: root_raw.into(),
+                    error,
+                    operation,
+                },
+            )
         }
     }
-
-    Ok(ok_result(tagged_by_name(
+    let mut paths = Vec::new();
+    if let Err(error) =
+        collect_filesystem_entries(vm, root_raw, int(1), max_depth, &mut paths, operation)
+    {
+        return filesystem_failure_outcome(vm, error);
+    }
+    paths.sort();
+    let mut entries = Vec::with_capacity(paths.len());
+    for path in paths {
+        match filesystem_entry(vm, &path, operation)? {
+            Ok(entry) => entries.push(entry),
+            Err(error) => return filesystem_failure_outcome(vm, error),
+        }
+    }
+    complete(ok_result(tagged_by_name(
         vm,
         "FileSystemSnapshot",
         vec![
@@ -4721,20 +4981,33 @@ fn collect_filesystem_entries(
     current_depth: BigInt,
     max_depth: &BigInt,
     out: &mut Vec<String>,
-) -> Result<(), Value> {
+    operation: &'static str,
+) -> Result<(), FileSystemFailure> {
     if &current_depth > max_depth {
         return Ok(());
     }
     let host_path = vm.resolve_host_path(raw_path);
     let read_dir = match fs::read_dir(&host_path) {
         Ok(read_dir) => read_dir,
-        Err(err) => return Err(filesystem_io_error(vm, raw_path, err)),
+        Err(error) => {
+            return Err(FileSystemFailure {
+                path: raw_path.into(),
+                error,
+                operation,
+            })
+        }
     };
     let mut children = Vec::new();
     for entry in read_dir {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(err) => return Err(filesystem_io_error(vm, raw_path, err)),
+            Err(error) => {
+                return Err(FileSystemFailure {
+                    path: raw_path.into(),
+                    error,
+                    operation,
+                })
+            }
         };
         let raw_child = Path::new(raw_path)
             .join(entry.file_name())
@@ -4747,24 +5020,10 @@ fn collect_filesystem_entries(
         let is_dir = vm.resolve_host_path(&child).is_dir();
         out.push(child.clone());
         if is_dir {
-            collect_filesystem_entries(vm, &child, &current_depth + 1, max_depth, out)?;
+            collect_filesystem_entries(vm, &child, &current_depth + 1, max_depth, out, operation)?;
         }
     }
     Ok(())
-}
-
-fn canonicalize_shell_cwd(
-    vm: &VM,
-    host_path: &Path,
-    path: &str,
-) -> Result<std::path::PathBuf, Value> {
-    fs::canonicalize(host_path).map_err(|err| {
-        shell_error_with_message(
-            vm,
-            "ShellIoError",
-            &format!("shell failed to canonicalize working directory {path}: {err}"),
-        )
-    })
 }
 
 fn err_value(rich: RichError) -> Value {
@@ -4838,106 +5097,133 @@ fn decode_unit_result_arg(
     }
 }
 
-fn file_path_error_result(vm: &VM, path: &str, err: io::Error) -> Value {
+fn file_path_error_result(
+    vm: &VM,
+    path: &str,
+    err: io::Error,
+    operation: &'static str,
+    mode: Option<VmFileMode>,
+) -> Result<BuiltinOutcome, RuntimeError> {
     let kind = match err.kind() {
         io::ErrorKind::NotFound => "FileNotFound",
         io::ErrorKind::PermissionDenied => "FilePermissionDenied",
         io::ErrorKind::AlreadyExists => "FileAlreadyExists",
         io::ErrorKind::InvalidInput => "FileInvalidPath",
-        io::ErrorKind::InvalidData => "FileEncodingError",
-        _ => "FileIoError",
+        _ => operation,
     };
-    let message = match kind {
-        "FileNotFound" => format!("file not found: {path}"),
-        "FilePermissionDenied" => format!("permission denied: {path}"),
-        "FileAlreadyExists" => format!("file already exists: {path}"),
-        "FileInvalidPath" => format!("invalid path: {path}"),
-        "FileEncodingError" => format!("invalid UTF-8 while reading {path}: {err}"),
-        _ => format!("file I/O failed for {path}: {err}"),
-    };
-    err_result(vm, kind, &message)
+    let mut args = vec![Value::Str(path.into())];
+    if kind == operation {
+        args.push(Value::Str(err.to_string()));
+    }
+    if kind == "FileOpenFailed" {
+        args.push(file_mode_value(
+            vm,
+            mode.ok_or_else(|| RuntimeError::new("FileOpenFailed requires mode"))?,
+        )?);
+    }
+    language_error_result(vm, kind, args)
 }
 
-fn filesystem_io_error(vm: &VM, path: &str, err: io::Error) -> Value {
-    let kind = match err.kind() {
+#[derive(Debug)]
+struct FileSystemFailure {
+    path: String,
+    error: io::Error,
+    operation: &'static str,
+}
+
+fn filesystem_failure_outcome(
+    vm: &VM,
+    failure: FileSystemFailure,
+) -> Result<BuiltinOutcome, RuntimeError> {
+    let kind = match failure.error.kind() {
         io::ErrorKind::NotFound => "FileSystemNotFound",
         io::ErrorKind::PermissionDenied => "FileSystemPermissionDenied",
         io::ErrorKind::AlreadyExists => "FileSystemAlreadyExists",
         io::ErrorKind::InvalidInput => "FileSystemInvalidPath",
-        _ => "FileSystemIoError",
+        _ => failure.operation,
     };
-    let message = match kind {
-        "FileSystemNotFound" => format!("filesystem path not found: {path}"),
-        "FileSystemPermissionDenied" => format!("filesystem permission denied: {path}"),
-        "FileSystemAlreadyExists" => format!("filesystem path already exists: {path}"),
-        "FileSystemInvalidPath" => format!("invalid filesystem path: {path}"),
-        _ => format!("filesystem I/O failed for {path}: {err}"),
+    let path = if kind == "FileSystemInvalidPath" {
+        Value::Str(failure.path.clone())
+    } else {
+        filesystem_file_path(vm, &failure.path)?
     };
-    filesystem_error_with_message(vm, kind, &message)
+    let mut args = vec![path];
+    if kind == failure.operation {
+        args.push(Value::Str(failure.error.to_string()));
+    }
+    language_error_result(vm, kind, args)
 }
 
-fn filesystem_error(vm: &VM, kind: &str, path: &str) -> Value {
-    let message = match kind {
-        "FileSystemNotFound" => format!("filesystem path not found: {path}"),
-        "FileSystemAlreadyExists" => format!("filesystem path already exists: {path}"),
-        "FileSystemPermissionDenied" => format!("filesystem permission denied: {path}"),
-        "FileSystemNotDirectory" => format!("filesystem path is not a directory: {path}"),
-        "FileSystemIsDirectory" => format!("filesystem path is a directory: {path}"),
-        "FileSystemInvalidPath" => format!("invalid filesystem path: {path}"),
-        _ => path.to_string(),
-    };
-    filesystem_error_with_message(vm, kind, &message)
-}
-
-fn filesystem_error_with_message(vm: &VM, kind: &str, message: &str) -> Value {
-    err_result(vm, kind, message)
-}
-
-fn shell_error_with_message(vm: &VM, kind: &str, message: &str) -> Value {
-    err_result(vm, kind, message)
-}
-
-fn file_handle_error_result(vm: &VM, path: Option<&str>, err: VmFileError) -> Value {
+fn file_handle_error_result(
+    vm: &VM,
+    path: &str,
+    mode: VmFileMode,
+    err: VmFileError,
+    operation: &'static str,
+) -> Result<BuiltinOutcome, RuntimeError> {
     match err {
-        VmFileError::Closed => err_result(vm, "FileClosed", "file is already closed"),
-        VmFileError::Io(io_err) => {
-            if let Some(path) = path {
-                file_path_error_result(vm, path, io_err)
-            } else {
-                err_result(vm, "FileIoError", &format!("file I/O failed: {io_err}"))
-            }
-        }
-        VmFileError::Encoding(message) => err_result(vm, "FileEncodingError", &message),
-        VmFileError::Message(message) => err_result(vm, "FileIoError", &message),
+        VmFileError::Closed => language_error_result(vm, "FileClosed", vec![]),
+        VmFileError::Io(err) => file_path_error_result(vm, path, err, operation, Some(mode)),
+        VmFileError::Encoding(detail) => language_error_result(
+            vm,
+            "FileChunkEncodingError",
+            vec![Value::Str(path.into()), Value::Str(detail)],
+        ),
+        VmFileError::NotReadable => language_error_result(
+            vm,
+            "FileHandleNotReadable",
+            vec![Value::Str(path.into()), file_mode_value(vm, mode)?],
+        ),
+        VmFileError::NotWritable => language_error_result(
+            vm,
+            "FileHandleNotWritable",
+            vec![Value::Str(path.into()), file_mode_value(vm, mode)?],
+        ),
     }
 }
 
-fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
-    err_result_from_rich_error(builtin_rich_error(vm, kind, message))
+fn file_mode_value(vm: &VM, mode: VmFileMode) -> Result<Value, RuntimeError> {
+    let (name, discriminant) = match mode {
+        VmFileMode::Read => ("FileMode::Read", 0),
+        VmFileMode::Write => ("FileMode::Write", 1),
+        VmFileMode::Append => ("FileMode::Append", 2),
+        VmFileMode::ReadWrite => ("FileMode::ReadWrite", 3),
+        VmFileMode::ReadAppend => ("FileMode::ReadAppend", 4),
+    };
+    enum_variant_by_name(vm, name, discriminant, vec![])
 }
 
-fn builtin_rich_error(vm: &VM, kind: &str, message: &str) -> RichError {
-    let location = vm.runtime_error_location().unwrap_or_else(|| Location {
-        file: vm.source_file().unwrap_or("<runtime>").to_string(),
-        func: "<builtin>".into(),
-        line: 0,
-        column: 0,
-        span_start: 0,
-        span_end: 0,
-    });
+#[derive(Debug)]
+struct LanguageErrorInput {
+    kind: &'static str,
+    args: Vec<Value>,
+}
 
-    RichError {
-        kind: compiler_global_error_kind(kind),
-        message: message.into(),
-        location,
-        diagnostic: None,
-        cause: None,
-        stack_trace: vm.current_stack_trace_snapshot(),
+impl LanguageErrorInput {
+    fn new(kind: &'static str, args: Vec<Value>) -> Self {
+        Self { kind, args }
+    }
+    fn invoke(self, vm: &VM) -> Result<BuiltinOutcome, RuntimeError> {
+        language_error_result(vm, self.kind, self.args)
     }
 }
 
-fn none_result(vm: &VM) -> Value {
-    err_result(vm, "NoneError", "None Value.")
+fn complete(value: Value) -> Result<BuiltinOutcome, RuntimeError> {
+    Ok(BuiltinOutcome::Complete(value))
+}
+
+fn string_list_value(values: Vec<String>) -> Value {
+    Value::List(ListHandle::from_items(
+        values.into_iter().map(Value::Str).collect(),
+    ))
+}
+
+fn language_error_result(
+    vm: &VM,
+    kind: &str,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
+    vm.language_error_outcome(kind, args, Some(1))
 }
 
 #[cfg(test)]
@@ -4985,6 +5271,579 @@ mod tests {
         assert!(meta.compiler_generated_surfaces.is_empty());
     }
 
+    // Explicit bytecode definitions isolate builtin input selection and Call/Resume.
+    // Standard .srt message templates are exercised by Rune and PureSurtr tests.
+    fn install_builtin_error_fixtures(vm: &mut VM) {
+        use sindr::ir::ErrorValueSchema::*;
+        use sindr::ir::ErrorVariantSchema;
+        let has_path = vm.type_registry().tag_by_name("FilePath").is_some();
+        let path_schema = Struct {
+            name: "FilePath".into(),
+            arguments: vec![],
+            fields: vec![String],
+        };
+        let mode_variants: Vec<_> = ["Read", "Write", "Append", "ReadWrite", "ReadAppend"]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, name)| {
+                let name = format!("FileMode::{name}");
+                vm.type_registry()
+                    .tag_by_name(&name)
+                    .map(|tag| ErrorVariantSchema {
+                        name,
+                        tag,
+                        discriminant: int(index),
+                        fields: vec![],
+                    })
+            })
+            .collect();
+        let has_mode = mode_variants.len() == 5;
+        let mode_schema = Enum {
+            name: "FileMode".into(),
+            arguments: vec![],
+            variants: mode_variants,
+        };
+        vm.install_test_error_constructor("ZeroDivisionError", vec![], "division by zero");
+        vm.install_test_error_constructor("ZeroModuloError", vec![], "modulo by zero");
+        vm.install_test_error_constructor("UnconsEmptyList", vec![], "cannot uncons empty list");
+        vm.install_test_error_constructor(
+            "UnconsEmptyString",
+            vec![],
+            "cannot uncons empty string",
+        );
+        vm.install_test_error_constructor(
+            "NegativeShiftCount",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "ShiftCountTooLarge",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "NegativeBitIndex",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileSystemInvalidDepth",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "RegexCaptureIndexMissing",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "RegexCaptureIndexUnmatched",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "StringAsciiCharacterUnsupported",
+            vec![Int, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "StringUtf8ByteOutOfRange",
+            vec![Int, Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "StringAsciiCodeOutOfRange",
+            vec![Int, Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "StringUtf8InvalidSequence",
+            vec![Int, Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FacetListIndexOutOfBounds",
+            vec![Int, Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InvalidRandomRange",
+            vec![Int, Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "StringUtf8IncompleteSequence",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FacetListRangeReversed",
+            vec![Int, Int, Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "RegexCompileError",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "RegexFindNoMatch",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "RegexCapturesNoMatch",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TestErrorKindMismatch",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TestExpectedErrorKind",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InputPromptWriteFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "ShellStdoutEncodingError",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "ShellStderrEncodingError",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "HashMapKeyMissing",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FacetKeyNotFound",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "RegexCaptureNameMissing",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "RegexCaptureNameUnmatched",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InputCharacterReadFailed",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InputLineReadFailed",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InputCharacterEncodingError",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TerminalInputModeStartFailed",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TerminalInputReadFailed",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TerminalInputModeRestoreFailed",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TerminalInputKeyUnsupported",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileNotFound",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FilePermissionDenied",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileAlreadyExists",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileInvalidPath",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InputCharacterEnd",
+            vec![],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InputLineEnd",
+            vec![],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "InputCharacterIncomplete",
+            vec![],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TerminalInputUnavailable",
+            vec![],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileClosed",
+            vec![],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TestCauseChainMismatch",
+            vec![List(Box::new(String)), List(Box::new(String))],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "TestExpectedCauseChain",
+            vec![List(Box::new(String))],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "JsonParseError",
+            vec![Int, Int, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "JsonParseDepthLimitExceeded",
+            vec![Int, Int, Int, Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "JsonIntegerOutOfRange",
+            vec![Int],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileReadEncodingError",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileChunkEncodingError",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileReadFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileWriteFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileAppendOpenFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileAppendWriteFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileAppendCloseFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileDeleteFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileReadChunkFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileWriteChunkFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileFlushFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        vm.install_test_error_constructor(
+            "FileCloseFailed",
+            vec![String, String],
+            "constructed by the test Error definition",
+        );
+        if has_mode {
+            vm.install_test_error_constructor(
+                "FileOpenFailed",
+                vec![String, String, mode_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_mode {
+            vm.install_test_error_constructor(
+                "FileHandleNotReadable",
+                vec![String, mode_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_mode {
+            vm.install_test_error_constructor(
+                "FileHandleNotWritable",
+                vec![String, mode_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemNotFound",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemAlreadyExists",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemPermissionDenied",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemNotDirectory",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemIsDirectory",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemParentMissing",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemNameMissing",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "ShellWorkingDirectoryNotFound",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "ShellWorkingDirectoryNotDirectory",
+                vec![path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        vm.install_test_error_constructor(
+            "FileSystemInvalidPath",
+            vec![String],
+            "constructed by the test Error definition",
+        );
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemStatFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemListFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemTreeReadFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemMkdirFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemMkdirAllFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemRemoveFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "ShellWorkingDirectoryInspectFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "ShellWorkingDirectoryResolveFailed",
+                vec![path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemDirectoryCopyUnsupported",
+                vec![path_schema.clone(), path_schema.clone()],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemMoveNotFound",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemMovePermissionDenied",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemMoveAlreadyExists",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemMoveInvalidPath",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemMoveFailed",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemCopyNotFound",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemCopyPermissionDenied",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemCopyAlreadyExists",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemCopyInvalidPath",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "FileSystemCopyFailed",
+                vec![path_schema.clone(), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "ShellSpawnResourceNotFound",
+                vec![String, List(Box::new(String)), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+        if has_path {
+            vm.install_test_error_constructor(
+                "ShellSpawnFailed",
+                vec![String, List(Box::new(String)), path_schema.clone(), String],
+                "constructed by the test Error definition",
+            );
+        }
+    }
+
     fn test_vm() -> VM {
         let mut registry = TypeRegistry::new();
         registry.register(TypeEntry {
@@ -4994,11 +5853,13 @@ mod tests {
             field_names: vec!["millis".into()],
             private_flags: vec![true],
         });
-        VM::new(Bytecode {
+        let mut vm = VM::new(Bytecode {
             type_registry: registry,
             ..Bytecode::default()
         })
-        .with_error_capture()
+        .with_error_capture();
+        install_builtin_error_fixtures(&mut vm);
+        vm
     }
 
     fn test_vm_with_types(entries: Vec<TypeEntry>) -> VM {
@@ -5006,11 +5867,13 @@ mod tests {
         for entry in entries {
             registry.register(entry);
         }
-        VM::new(Bytecode {
+        let mut vm = VM::new(Bytecode {
             type_registry: registry,
             ..Bytecode::default()
         })
-        .with_error_capture()
+        .with_error_capture();
+        install_builtin_error_fixtures(&mut vm);
+        vm
     }
 
     fn extractor_vm() -> VM {
@@ -5174,6 +6037,11 @@ mod tests {
             Value::List(ListHandle::from_items(vec![])),
             Value::Str(String::new()),
         ] {
+            let (kind, message) = if matches!(input, Value::List(_)) {
+                ("Global::UnconsEmptyList", "cannot uncons empty list")
+            } else {
+                ("Global::UnconsEmptyString", "cannot uncons empty string")
+            };
             let value = call_builtin(&mut vm, builtin_id("uncons"), vec![input]).unwrap();
             let Value::Tagged { tag, fields } = value else {
                 panic!("expected MatchResult::Err")
@@ -5183,9 +6051,9 @@ mod tests {
             let Value::Error(error) = &fields[1] else {
                 panic!("expected rich Error")
             };
-            assert_eq!(error.kind, "Global::PatternMismatch");
-            assert_eq!(error.message, "Pattern did not match.");
-            assert_eq!(error.location.func, "<builtin>");
+            assert_eq!(error.kind, kind);
+            assert_eq!(error.message, message);
+            assert_eq!(error.location.span_start, 0);
             assert!(error.cause.is_none());
         }
     }
@@ -5210,6 +6078,7 @@ mod tests {
         RichError {
             kind: kind.into(),
             message: message.into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<test>".into(),
                 func: "<test>".into(),
@@ -5672,15 +6541,14 @@ mod tests {
                 panic!("expected error")
             };
             assert_eq!(error.kind, "Global::JsonParseError");
-            assert!(
-                error.message.contains(&format!(
-                    "json parse error at {}:{}:",
-                    original_error.line(),
-                    original_error.column()
-                )),
-                "{}",
-                error.message
+            assert_eq!(
+                &error.payload[..2],
+                &[
+                    Value::Int(original_error.line().into()),
+                    Value::Int(original_error.column().into())
+                ]
             );
+            assert!(matches!(&error.payload[2], Value::Str(detail) if !detail.is_empty()));
         }
         let allowed = format!("{}0{}", "[".repeat(127), "]".repeat(127));
         parse_json_ok(&allowed);
@@ -5693,7 +6561,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(result, Value::Tagged { tag: 1, fields } if matches!(fields.as_slice(), [Value::Error(error)] if error.kind == "Global::JsonParseError" && error.message.contains("recursion limit exceeded")))
+            matches!(result, Value::Tagged { tag: 1, fields } if matches!(fields.as_slice(), [Value::Error(error)] if error.kind == "Global::JsonParseDepthLimitExceeded" && error.payload[2] == Value::Int(int(127)) && error.payload[3] == Value::Int(int(127))))
         );
     }
 
@@ -5707,7 +6575,7 @@ mod tests {
             assert!(
                 matches!(result, Value::Tagged { tag: 1, fields }
                 if matches!(fields.as_slice(), [Value::Error(error)]
-                    if error.kind == "Global::JsonEncodeError")),
+                    if error.kind == "Global::JsonIntegerOutOfRange")),
                 "{text}"
             );
         }
@@ -6122,7 +6990,7 @@ mod tests {
     }
 
     #[test]
-    fn safe_mod_returns_zero_division_error_result() {
+    fn safe_mod_returns_zero_modulo_error_result() {
         let mut vm = test_vm();
         let value = call_builtin(
             &mut vm,
@@ -6133,8 +7001,8 @@ mod tests {
         match value {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "Global::ZeroDivisionError");
-                    assert_eq!(rich.message, "division by zero");
+                    assert_eq!(rich.kind, "Global::ZeroModuloError");
+                    assert_eq!(rich.message, "modulo by zero");
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
             },
@@ -6286,7 +7154,7 @@ mod tests {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
                     assert_eq!(rich.kind, "Global::NegativeShiftCount");
-                    assert_eq!(rich.message, "shift amount must be non-negative: -1");
+                    assert_eq!(rich.payload, vec![Value::Int(int(-1))]);
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
             },
@@ -6320,7 +7188,7 @@ mod tests {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
                     assert_eq!(rich.kind, "Global::NegativeShiftCount");
-                    assert_eq!(rich.message, "shift amount must be non-negative: -1");
+                    assert_eq!(rich.payload, vec![Value::Int(int(-1))]);
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
             },
@@ -6388,7 +7256,7 @@ mod tests {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
                     assert_eq!(rich.kind, "Global::NegativeBitIndex");
-                    assert_eq!(rich.message, "bit index must be non-negative: -1");
+                    assert_eq!(rich.payload, vec![Value::Int(int(-1))]);
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
             },
@@ -6498,8 +7366,8 @@ mod tests {
         match value {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "Global::InvalidStringEncoding");
-                    assert_eq!(rich.message, "ASCII code out of range at index 0: 128");
+                    assert_eq!(rich.kind, "Global::StringAsciiCodeOutOfRange");
+                    assert_eq!(rich.payload, vec![Value::Int(int(0)), Value::Int(int(128))]);
                 }
                 other => panic!("expected Err(Value::Error), got {:?}", other),
             },
@@ -6644,7 +7512,7 @@ mod tests {
         .expect("map_get should return Result");
         assert!(matches!(
             miss,
-            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::NoneError")
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::HashMapKeyMissing" && rich.payload == vec![Value::Str("missing".into())])
         ));
 
         let removed = call_builtin(
@@ -6699,7 +7567,7 @@ mod tests {
                     tag: 1,
                     ref fields
                 }
-                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::IndexOutOfBounds")
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::FacetListIndexOutOfBounds" && rich.payload == vec![Value::Int(int(9)), Value::Int(int(2))])
             ),
             "{missing:?}"
         );
@@ -6742,7 +7610,7 @@ mod tests {
                     tag: 1,
                     ref fields
                 }
-                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::KeyNotFound")
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "Global::FacetKeyNotFound" && rich.payload == vec![Value::Str("missing".into())])
             ),
             "{missing:?}"
         );
@@ -6940,10 +7808,10 @@ mod tests {
         match value {
             Value::Tagged { tag: 1, fields } => match fields.as_slice() {
                 [Value::Error(rich)] => {
-                    assert_eq!(rich.kind, "Global::InputError");
-                    assert_eq!(rich.message, "end of input");
+                    assert_eq!(rich.kind, "Global::InputCharacterEnd");
+                    assert!(rich.payload.is_empty());
                 }
-                other => panic!("expected Err(InputError), got {:?}", other),
+                other => panic!("expected Err(InputCharacterEnd), got {:?}", other),
             },
             other => panic!("expected Err result, got {:?}", other),
         }
@@ -7083,7 +7951,7 @@ mod tests {
 
         assert!(matches!(
             err_kind(&result),
-            "Global::FileSystemPermissionDenied" | "Global::FileSystemIoError"
+            "Global::FileSystemPermissionDenied" | "Global::FileSystemListFailed"
         ));
     }
 
@@ -7113,10 +7981,7 @@ mod tests {
             let [Value::Error(error)] = fields.as_slice() else {
                 panic!("expected error")
             };
-            assert_eq!(
-                error.message,
-                format!("invalid filesystem tree depth: {depth}")
-            );
+            assert_eq!(error.payload, vec![Value::Int(depth.parse().unwrap())]);
         }
         let result = call_builtin(
             &mut vm,
@@ -7207,22 +8072,17 @@ mod tests {
 
         assert!(matches!(
             err_kind(&result),
-            "Global::FileSystemPermissionDenied" | "Global::FileSystemIoError"
+            "Global::FileSystemPermissionDenied" | "Global::FileSystemListFailed"
         ));
     }
 
     #[test]
-    fn shell_cd_canonicalize_error_maps_to_shell_io_error_without_mutating_cwd() {
-        let vm = filesystem_vm();
+    fn shell_cd_missing_directory_preserves_cwd() {
+        let mut vm = filesystem_vm();
         let original = vm.cwd().to_path_buf();
-        let err = super::canonicalize_shell_cwd(
-            &vm,
-            &original.join("missing-after-dir-check"),
-            "missing-after-dir-check",
-        )
-        .expect_err("missing canonical path should map to ShellIoError");
-
-        assert_eq!(err_kind(&err), "Global::ShellIoError");
+        let path = super::filesystem_file_path(&vm, "missing-before-dir-check").unwrap();
+        let value = call_builtin(&mut vm, builtin_id("shell_cd"), vec![path]).unwrap();
+        assert_eq!(err_kind(&value), "Global::ShellWorkingDirectoryNotFound");
         assert_eq!(vm.cwd(), original.as_path());
     }
 
@@ -7327,6 +8187,7 @@ mod tests {
     fn file_with_open_closes_handle_after_err_callback() {
         let dir = sandbox_dir("builtin-file-with-open-err");
         let path = dir.join("err.txt");
+        fs::write(&path, "callback fixture").expect("create readable callback fixture");
         let path_text = path.to_string_lossy().into_owned();
         let mut registry = TypeRegistry::new();
         registry.register(TypeEntry {
@@ -7339,29 +8200,17 @@ mod tests {
         let mut vm = VM::new(Bytecode {
             opcodes: vec![
                 Opcode::LoadConst(0),
-                Opcode::LoadConst(2),
-                Opcode::MakeError { template_id: 0 },
+                Opcode::Call {
+                    fun_idx: 1,
+                    arity: 0,
+                    span_start: 0,
+                    span_end: 1,
+                },
                 Opcode::StructNew { field_count: 1 },
                 Opcode::Return,
             ],
-            constants: vec![
-                Constant::Tag(1),
-                Constant::Str("FileIoError".into()),
-                Constant::Str("boom".into()),
-            ],
+            constants: vec![Constant::Tag(1)],
             type_registry: registry,
-            error_templates: vec![sindr::ir::ErrTemplate {
-                id: 0,
-                kind: "FileIoError".into(),
-                location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-                span_start: 0,
-                span_end: 1,
-                line: 1,
-                column: 1,
-                format: String::new(),
-                num_params: 1,
-                diagnostic: None,
-            }],
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 0,
@@ -7377,6 +8226,8 @@ mod tests {
             ..Bytecode::default()
         })
         .with_error_capture();
+
+        vm.install_test_error_constructor("CallbackFailure", vec![], "boom");
 
         let result = call_builtin(
             &mut vm,
@@ -7541,6 +8392,7 @@ mod tests {
         let value = Value::Error(Box::new(sindr::runtime::RichError {
             kind: "Boom".into(),
             message: "broken".into(),
+            payload: Vec::new(),
             location: sindr::runtime::Location {
                 file: "main.srt".into(),
                 func: "Boom".into(),
@@ -7553,6 +8405,7 @@ mod tests {
             cause: Some(Box::new(sindr::runtime::RichError {
                 kind: "Root".into(),
                 message: "root cause".into(),
+                payload: Vec::new(),
                 location: sindr::runtime::Location {
                     file: "main.srt".into(),
                     func: "Boom".into(),

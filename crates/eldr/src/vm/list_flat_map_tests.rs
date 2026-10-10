@@ -775,6 +775,7 @@ fn process_checkpoint_copies_only_mutated_entry_and_restores_future() {
 fn process_checkpoint_stop_copies_only_owned_detached_task() {
     let expected = list((0..4096).map(|n| Value::Int(int(n))));
     let (mut vm, mapper) = constant_mapper_vm(expected.clone());
+    vm.frames[0].call_site = Some((0, 1));
     let mut futures = Vec::new();
     for owner in [7, 8] {
         let mut computation = flat_map_callable();
@@ -819,6 +820,7 @@ fn flat_map_checkpoint_restores_independent_partial_builder_and_cursor() {
     reset_flat_map_metrics();
     let expected = list((0..4096).map(|n| Value::Int(int(n))));
     let (mut vm, mapper) = constant_mapper_vm(expected.clone());
+    vm.frames[0].call_site = Some((0, 1));
     let mut computation = flat_map_callable();
     computation.lexical_captures = vec![list([Value::Unit]), Value::Callable(mapper)];
     let task = vm.invoke_task(computation, TaskMode::Async).unwrap();

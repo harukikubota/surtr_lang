@@ -16,19 +16,18 @@ use sindr::ir::{
     RuntimeSupervisorPolicy, SourceMap,
 };
 use sindr::names::{compiler_global_error_kind, IMPLICIT_ROOT_NAMESPACE_PREFIX};
-use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
+use sindr::primitives::{int, SurtrInt, ToPrimitive};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
-    Location, PidHandle, RichError, RuntimeCallKind, RuntimeExecutionPhase,
-    RuntimeProcessTraceContext, RuntimeStackFrame, TypeRegistry, Value, WorkerLeaseHandle,
-    WorkersHandle,
+    Location, PidHandle, RichError, RuntimeCallKind, RuntimeExecutionPhase, RuntimeStackFrame,
+    TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::rc::Rc;
 
-use crate::builtin::{call_builtin, BuiltinOutcome};
+use crate::builtin::{call_builtin, BuiltinContinuation, BuiltinOutcome};
 mod continuation;
 #[cfg(test)]
 mod generator_tests;
@@ -115,7 +114,40 @@ impl VmTestDiagnostic {
     fn from_rich_error(error: &RichError, bytecode: &Bytecode) -> Self {
         // Use the saved failure trace, including tail calls. Public Test wrappers
         // may call another assertion; the outer assertion is the user's call.
-        let assertion = if error.kind == compiler_global_error_kind("TestAssertionFailed") {
+        let assertion = if [
+            "TestExplicitFailure",
+            "TestConditionFalse",
+            "TestPredicateRejected",
+            "TestExpectedTrue",
+            "TestExpectedFalse",
+            "TestEqualityMismatch",
+            "TestExpectedUnequal",
+            "TestLessThanFailed",
+            "TestLessEqualFailed",
+            "TestGreaterThanFailed",
+            "TestGreaterEqualFailed",
+            "TestPrefixMissing",
+            "TestSuffixMissing",
+            "TestFragmentMissing",
+            "TestExpectedSome",
+            "TestExpectedSomeValue",
+            "TestExpectedNone",
+            "TestExpectedOk",
+            "TestExpectedOkValue",
+            "TestExpectedErr",
+            "TestExpectedErrMessage",
+            "TestExpectedErrFragment",
+            "TestErrorFragmentMissing",
+            "TestNegativeTolerance",
+            "TestApproxMismatch",
+            "TestErrorKindMismatch",
+            "TestExpectedErrorKind",
+            "TestExpectedCauseChain",
+            "TestCauseChainMismatch",
+        ]
+        .iter()
+        .any(|kind| error.kind == compiler_global_error_kind(kind))
+        {
             error
                 .stack_trace
                 .iter()
@@ -273,7 +305,8 @@ pub(crate) enum VmFileError {
     Closed,
     Io(io::Error),
     Encoding(String),
-    Message(String),
+    NotReadable,
+    NotWritable,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -550,6 +583,15 @@ pub(crate) struct WorkerStrategyState {
     scale: WorkerScaleState,
 }
 
+#[derive(Debug)]
+enum WorkerStrategyDecodeError {
+    Internal(String),
+    OutOfRange {
+        field: String,
+        value: sindr::primitives::SurtrInt,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WorkerScaleState {
     Fix(i64),
@@ -768,6 +810,9 @@ struct FutureRecord {
     waiters: Vec<u64>,
     cancel_on_timeout: bool,
     correlation_id: Option<CorrelationId>,
+    creation_context: Option<(Location, Vec<RuntimeStackFrame>)>,
+    error_generation_pending: bool,
+    init_deadline_timeout: bool,
 }
 
 #[allow(dead_code)]
@@ -2045,52 +2090,52 @@ impl VM {
         &mut self,
         pid: &PidHandle,
         text: String,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<BuiltinOutcome, RuntimeError> {
         match parse_handler_target_identity(&pid.process_name) {
             ("StdOut", _) => {
                 self.emit_stdout_text(text).map_err(|err| {
                     RuntimeError::new(format!("StdOut handler write failed: {err}"))
                 })?;
-                Ok(ok_vm_result(Value::Unit))
+                Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
             }
             ("StdErr", _) => {
                 self.emit_stderr_text(text).map_err(|err| {
                     RuntimeError::new(format!("StdErr handler write failed: {err}"))
                 })?;
-                Ok(ok_vm_result(Value::Unit))
+                Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
             }
-            ("NullOutHandler", _) => Ok(ok_vm_result(Value::Unit)),
+            ("NullOutHandler", _) => Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit))),
             ("FileOutHandler", args) => {
                 let Some(path) = args
                     .iter()
                     .find_map(|(name, value)| (name == "path").then_some(value))
                 else {
-                    return Ok(err_vm_result(self.process_error(
-                        "HandlerInitFailed",
-                        "FileOutHandler requires named argument `path`",
-                    )));
+                    return Err(RuntimeError::new(
+                        "FileOutHandler metadata requires named argument path",
+                    ));
                 };
                 use std::fs::OpenOptions;
                 let mut file = match OpenOptions::new().create(true).append(true).open(path) {
                     Ok(file) => file,
                     Err(err) => {
-                        return Ok(err_vm_result(self.process_error(
-                            "HandlerInitFailed",
-                            &format!("FileOutHandler open failed: {err}"),
-                        )));
+                        return self.language_error_outcome(
+                            "FileOutHandlerOpenFailed",
+                            vec![Value::Str(path.clone()), Value::Str(err.to_string())],
+                            Some(1),
+                        );
                     }
                 };
                 if let Err(err) = file.write_all(text.as_bytes()) {
-                    return Ok(err_vm_result(self.process_error(
-                        "HandlerWriteFailed",
-                        &format!("FileOutHandler write failed: {err}"),
-                    )));
+                    return self.language_error_outcome(
+                        "FileOutHandlerWriteFailed",
+                        vec![Value::Str(path.clone()), Value::Str(err.to_string())],
+                        Some(1),
+                    );
                 }
-                Ok(ok_vm_result(Value::Unit))
+                Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
             }
-            (other, _) => Ok(err_vm_result(self.process_error(
-                "UnknownHandlerTarget",
-                &format!("unknown OutHandler target `{other}`"),
+            (other, _) => Err(RuntimeError::new(format!(
+                "unknown OutHandler metadata target {other}"
             ))),
         }
     }
@@ -2099,28 +2144,45 @@ impl VM {
         &mut self,
         supervisor_name: String,
         pid: PidHandle,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<BuiltinOutcome, RuntimeError> {
         let policy = self.effective_supervisor_policy(&supervisor_name)?;
         if !policy.allow_adopt {
-            return Ok(err_vm_result(self.process_error(
+            return self.language_error_outcome(
                 "SupervisorAdoptForbidden",
-                &format!("{supervisor_name} does not allow adopt"),
-            )));
+                vec![Value::Str(supervisor_name)],
+                Some(1),
+            );
         }
         let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
-            return Ok(err_vm_result(self.process_error(
-                "InvalidPid",
-                &format!("unknown pid {} for {}", pid.id, pid.process_name),
-            )));
+            return self.language_error_outcome(
+                "SupervisorAdoptUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name),
+                    Value::Str(supervisor_name),
+                ],
+                Some(1),
+            );
         };
         if !self.is_adoptable_worker(entry) {
-            return Ok(err_vm_result(self.process_error(
-                "SupervisorAdoptInvalidPid",
-                &format!(
-                    "supervisor adopt accepts only Worker PID with live state, got {}",
-                    pid.process_name
-                ),
-            )));
+            let spec = self
+                .process_runtime
+                .spec_for_id(entry.spec_id)
+                .ok_or_else(|| RuntimeError::new("adopt process references unknown spec"))?;
+            let kind = if spec.instance != RuntimeProcessInstance::Worker {
+                "SupervisorAdoptNonWorker"
+            } else {
+                "SupervisorAdoptWorkerNotLive"
+            };
+            return self.language_error_outcome(
+                kind,
+                vec![
+                    Value::Str(supervisor_name),
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name),
+                ],
+                Some(1),
+            );
         }
 
         let old_supervisor = match &entry.lifecycle_sink {
@@ -2140,7 +2202,7 @@ impl VM {
         };
         entry.lifecycle_sink = Some(LifecycleSink::Supervisor(supervisor_name.clone()));
         self.add_supervisor_child(&supervisor_name, pid.id);
-        Ok(ok_vm_result(Value::Unit))
+        Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
     }
 
     pub(crate) fn supervisor_status(
@@ -2253,21 +2315,31 @@ impl VM {
         }
     }
 
-    fn decode_worker_strategy(&self, value: &Value) -> Result<WorkerStrategyState, String> {
+    fn decode_worker_strategy(
+        &self,
+        value: &Value,
+    ) -> Result<WorkerStrategyState, WorkerStrategyDecodeError> {
         let Value::Tagged { tag, fields } = value else {
-            return Err("worker strategy must be a WorkerStrategy value".into());
+            return Err(WorkerStrategyDecodeError::Internal(
+                "worker strategy must be a WorkerStrategy value".into(),
+            ));
         };
         let Some(entry) = self.type_registry().lookup(*tag) else {
-            return Err("worker strategy has unknown runtime tag".into());
+            return Err(WorkerStrategyDecodeError::Internal(
+                "worker strategy has unknown runtime tag".into(),
+            ));
         };
         if !Self::runtime_type_named(&entry.name, "WorkerStrategy") {
-            return Err("worker strategy must be a WorkerStrategy value".into());
+            return Err(WorkerStrategyDecodeError::Internal(
+                "worker strategy must be a WorkerStrategy value".into(),
+            ));
         }
         let init = Self::worker_strategy_int_field(entry, fields, "init")?;
         let min = Self::worker_strategy_int_field(entry, fields, "min")?;
         let max = Self::worker_strategy_int_field(entry, fields, "max")?;
-        let scale_value = Self::worker_strategy_field(entry, fields, "scale")
-            .ok_or_else(|| "worker strategy missing scale".to_string())?;
+        let scale_value = Self::worker_strategy_field(entry, fields, "scale").ok_or_else(|| {
+            WorkerStrategyDecodeError::Internal("worker strategy missing scale".into())
+        })?;
         let scale = self.decode_worker_scale(scale_value)?;
         Ok(WorkerStrategyState {
             init,
@@ -2277,21 +2349,35 @@ impl VM {
         })
     }
 
-    fn decode_worker_scale(&self, value: &Value) -> Result<WorkerScaleState, String> {
+    fn decode_worker_scale(
+        &self,
+        value: &Value,
+    ) -> Result<WorkerScaleState, WorkerStrategyDecodeError> {
         let Value::Tagged { tag, fields } = value else {
-            return Err("worker scale must be WorkerScale::Fix".into());
+            return Err(WorkerStrategyDecodeError::Internal(
+                "worker scale must be WorkerScale::Fix".into(),
+            ));
         };
         let Some(entry) = self.type_registry().lookup(*tag) else {
-            return Err("worker scale has unknown runtime tag".into());
+            return Err(WorkerStrategyDecodeError::Internal(
+                "worker scale has unknown runtime tag".into(),
+            ));
         };
         if !Self::runtime_type_named(&entry.name, "WorkerScale::Fix") {
-            return Err("worker scale must be WorkerScale::Fix".into());
+            return Err(WorkerStrategyDecodeError::Internal(
+                "worker scale must be WorkerScale::Fix".into(),
+            ));
         }
         let Some(Value::Int(size)) = fields.get(1) else {
-            return Err("WorkerScale::Fix must contain an Int size".into());
+            return Err(WorkerStrategyDecodeError::Internal(
+                "WorkerScale::Fix must contain an Int size".into(),
+            ));
         };
         let Some(size) = size.to_i64() else {
-            return Err("WorkerScale::Fix size must be representable as i64".into());
+            return Err(WorkerStrategyDecodeError::OutOfRange {
+                field: "Fix size".into(),
+                value: size.clone(),
+            });
         };
         Ok(WorkerScaleState::Fix(size))
     }
@@ -2300,13 +2386,18 @@ impl VM {
         entry: &sindr::runtime::TypeEntry,
         fields: &[Value],
         name: &str,
-    ) -> Result<i64, String> {
+    ) -> Result<i64, WorkerStrategyDecodeError> {
         let Some(Value::Int(value)) = Self::worker_strategy_field(entry, fields, name) else {
-            return Err(format!("worker strategy missing Int field `{name}`"));
+            return Err(WorkerStrategyDecodeError::Internal(format!(
+                "worker strategy missing Int field `{name}`"
+            )));
         };
         value
             .to_i64()
-            .ok_or_else(|| format!("worker strategy field `{name}` must be representable as i64"))
+            .ok_or_else(|| WorkerStrategyDecodeError::OutOfRange {
+                field: name.into(),
+                value: value.clone(),
+            })
     }
 
     fn worker_strategy_field<'a>(
@@ -2327,12 +2418,19 @@ impl VM {
                 .unwrap_or(false)
     }
 
-    pub(crate) fn process_state(&mut self, pid: &PidHandle) -> Result<Value, RuntimeError> {
+    pub(crate) fn process_state(
+        &mut self,
+        pid: &PidHandle,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
         let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
-            return Ok(err_vm_result(self.process_error(
-                "InvalidPid",
-                &format!("unknown pid {} for {}", pid.id, pid.process_name),
-            )));
+            return self.language_error_outcome(
+                "ProcessStateUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+            );
         };
         let Some(spec) = self.process_runtime.spec_for_id(entry.spec_id) else {
             return Err(RuntimeError::new(format!(
@@ -2342,16 +2440,18 @@ impl VM {
         };
         if spec.type_name != pid.process_name {
             let actual_name = spec.type_name.clone();
-            return Ok(err_vm_result(self.process_error(
-                "InvalidPid",
-                &format!(
-                    "pid {} belongs to {}, not {}",
-                    pid.id, actual_name, pid.process_name
-                ),
-            )));
+            return self.language_error_outcome(
+                "ProcessStatePidTypeMismatch",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(actual_name),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+            );
         }
         if let Some(state) = entry.state_value.clone() {
-            return Ok(ok_vm_result(state));
+            return Ok(BuiltinOutcome::Complete(ok_vm_result(state)));
         }
         if entry.standby_state_pending {
             return Err(RuntimeError::process_init_failed(format!(
@@ -2359,27 +2459,35 @@ impl VM {
                 pid.id
             )));
         }
-        Ok(err_vm_result(self.process_error(
+        self.language_error_outcome(
             "ProcessStateUnavailable",
-            &format!("pid {} has no materialized state", pid.id),
-        )))
+            vec![
+                Value::Int(int(pid.id)),
+                Value::Str(pid.process_name.clone()),
+            ],
+            Some(1),
+        )
     }
 
     pub(crate) fn process_store(
         &mut self,
         pid: &PidHandle,
         next_state: Value,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<BuiltinOutcome, RuntimeError> {
         let Some(spec_id) = self
             .process_runtime
             .processes
             .get(&pid.id)
             .map(|entry| entry.spec_id)
         else {
-            return Ok(err_vm_result(self.process_error(
-                "InvalidPid",
-                &format!("unknown pid {} for {}", pid.id, pid.process_name),
-            )));
+            return self.language_error_outcome(
+                "ProcessStoreUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+            );
         };
         let Some(spec) = self.process_runtime.spec_for_id(spec_id) else {
             return Err(RuntimeError::new(format!(
@@ -2389,13 +2497,15 @@ impl VM {
         };
         if spec.type_name != pid.process_name {
             let actual_name = spec.type_name.clone();
-            return Ok(err_vm_result(self.process_error(
-                "InvalidPid",
-                &format!(
-                    "pid {} belongs to {}, not {}",
-                    pid.id, actual_name, pid.process_name
-                ),
-            )));
+            return self.language_error_outcome(
+                "ProcessStorePidTypeMismatch",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(actual_name),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+            );
         }
         let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
             return Err(RuntimeError::new(format!(
@@ -2405,7 +2515,7 @@ impl VM {
         };
         entry.state_value = Some(next_state);
         entry.standby_state_pending = false;
-        Ok(ok_vm_result(Value::Unit))
+        Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
     }
 
     pub(crate) fn genserver_call_reply(
@@ -2413,15 +2523,18 @@ impl VM {
         pid: &PidHandle,
         next_state: Value,
         reply: Value,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<BuiltinOutcome, RuntimeError> {
         if let Err(error) = decode_vm_result(
-            self.process_store(pid, next_state)?,
+            match self.process_store(pid, next_state)? {
+                BuiltinOutcome::Complete(value) => value,
+                error => return Ok(error),
+            },
             "__genserver_call_reply",
             "state store",
         )? {
-            return Ok(err_vm_result(error));
+            return Ok(BuiltinOutcome::Complete(err_vm_result(error)));
         }
-        Ok(ok_vm_result(reply))
+        Ok(BuiltinOutcome::Complete(ok_vm_result(reply)))
     }
 
     pub(crate) fn genserver_call_stop_normal(
@@ -2447,15 +2560,18 @@ impl VM {
         &mut self,
         pid: &PidHandle,
         next_state: Value,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<BuiltinOutcome, RuntimeError> {
         if let Err(error) = decode_vm_result(
-            self.process_store(pid, next_state)?,
+            match self.process_store(pid, next_state)? {
+                BuiltinOutcome::Complete(value) => value,
+                error => return Ok(error),
+            },
             "__genserver_cast_next",
             "state store",
         )? {
-            return Ok(err_vm_result(error));
+            return Ok(BuiltinOutcome::Complete(err_vm_result(error)));
         }
-        Ok(ok_vm_result(Value::Unit))
+        Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
     }
 
     pub(crate) fn genserver_cast_stop_normal(
@@ -2636,12 +2752,19 @@ impl VM {
         }
     }
 
-    pub(crate) fn pid_handle_like_from_result(&self, value: Value) -> Result<PidHandle, Value> {
+    pub(crate) fn pid_handle_like_from_result(
+        &self,
+        value: Value,
+        kind: &str,
+    ) -> Result<Result<PidHandle, BuiltinOutcome>, RuntimeError> {
+        let actual = crate::builtin::inspect_value(self, &value)?;
         match decode_ok_pid_result(value) {
-            Some(pid) => Ok(pid),
-            None => Err(err_vm_result(
-                self.process_error("InvalidPid", "expected Ok(PID(...)) result"),
-            )),
+            Some(pid) => Ok(Ok(pid)),
+            None => Ok(Err(self.language_error_outcome(
+                kind,
+                vec![Value::Str(actual)],
+                Some(1),
+            )?)),
         }
     }
 
@@ -2832,6 +2955,127 @@ impl VM {
         Ok(pid)
     }
 
+    #[cfg(test)]
+    pub(crate) fn install_test_error_constructor(
+        &mut self,
+        kind: &str,
+        inputs: Vec<sindr::ir::ErrorValueSchema>,
+        message: &str,
+    ) {
+        let kind = compiler_global_error_kind(kind);
+        if self
+            .bytecode
+            .error_templates
+            .iter()
+            .any(|definition| definition.kind == kind)
+        {
+            return;
+        }
+        if self.bytecode.opcodes.is_empty() {
+            self.bytecode.opcodes.push(Opcode::Halt);
+        }
+        let template_id = self.bytecode.error_templates.len() as u32;
+        let fun_idx = self.bytecode.functions.len() as u32;
+        let entry_pc = self.bytecode.opcodes.len() as u32;
+        let const_idx = self.bytecode.constants.len() as u32;
+        self.bytecode.constants.push(Constant::Str(message.into()));
+        self.bytecode.opcodes.push(Opcode::LoadConst(const_idx));
+        for index in 0..inputs.len() {
+            self.bytecode.opcodes.push(Opcode::LoadLocal(index as u32));
+        }
+        self.bytecode
+            .opcodes
+            .extend([Opcode::MakeError { template_id }, Opcode::Return]);
+        self.bytecode.functions.push(FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals: inputs.len() as u32,
+            arity: inputs.len() as u8,
+            qualified_name: Some(kind.clone()),
+            signature: None,
+            end_pc: self.bytecode.opcodes.len() as u32,
+            span_start: 0,
+            span_end: 1,
+            flags: Default::default(),
+        });
+        self.bytecode.error_templates.push(sindr::ir::ErrTemplate {
+            id: template_id,
+            kind,
+            constructor_fun_idx: fun_idx,
+            input_types: inputs.clone(),
+            payload_fields: inputs
+                .into_iter()
+                .enumerate()
+                .map(|(index, schema)| (format!("field{index}"), schema))
+                .collect(),
+        });
+        self.frames[0].call_site = Some((0, 1));
+    }
+
+    pub(crate) fn language_error_outcome(
+        &self,
+        kind: &str,
+        args: Vec<Value>,
+        wrapper: Option<u32>,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let location = self
+            .runtime_error_location()
+            .ok_or_else(|| RuntimeError::new("Error generation has no source context"))?;
+        self.language_error_outcome_at(
+            kind,
+            args,
+            wrapper,
+            location,
+            self.current_stack_trace_snapshot(),
+        )
+    }
+
+    fn language_error_outcome_at(
+        &self,
+        kind: &str,
+        args: Vec<Value>,
+        wrapper: Option<u32>,
+        location: Location,
+        stack_trace: Vec<RuntimeStackFrame>,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let kind = compiler_global_error_kind(kind);
+        let mut templates = self
+            .bytecode
+            .error_templates
+            .iter()
+            .filter(|template| template.kind == kind);
+        let template = templates
+            .next()
+            .ok_or_else(|| RuntimeError::new(format!("unresolved Error constructor {kind}")))?;
+        if templates.next().is_some() {
+            return Err(RuntimeError::new(format!(
+                "duplicate Error constructor {kind}"
+            )));
+        }
+        if template.input_types.len() != args.len()
+            || !template
+                .input_types
+                .iter()
+                .zip(&args)
+                .all(|(schema, value)| schema.accepts(value, &self.bytecode.type_registry))
+        {
+            return Err(RuntimeError::new(format!(
+                "Error constructor input contract mismatch for {kind}"
+            )));
+        }
+        Ok(BuiltinOutcome::Call {
+            callable: self.callable_for_function(template.constructor_fun_idx),
+            args,
+            continuation: BuiltinContinuation::Runtime(RuntimeContinuation::ErrorConstruction {
+                kind,
+                location,
+                stack_trace,
+                wrapper,
+            }),
+        })
+    }
+
+    #[cfg(test)]
     fn process_error(&self, kind: &str, message: &str) -> RichError {
         let location = self.runtime_error_location().unwrap_or_else(|| Location {
             file: self.source_file().unwrap_or("<runtime>").to_string(),
@@ -2850,7 +3094,7 @@ impl VM {
                 fun_idx: None,
                 call_kind: RuntimeCallKind::ProcessMessage,
                 location: Some(location.clone()),
-                process: Some(RuntimeProcessTraceContext {
+                process: Some(sindr::runtime::RuntimeProcessTraceContext {
                     pid: None,
                     process_name: None,
                     trigger: Some(kind.to_string()),
@@ -2862,18 +3106,50 @@ impl VM {
             .with_stack_trace(stack_trace)
     }
 
-    #[allow(dead_code)]
-    fn process_err_value(&self, kind: &str, message: &str) -> Value {
-        err_vm_result(self.process_error(kind, message))
+    fn stamp_future_context(&mut self, future_id: FutureId) -> Result<(), RuntimeError> {
+        let location = self
+            .runtime_error_location()
+            .ok_or_else(|| RuntimeError::new("future creation has no source context"))?;
+        let context = (location, self.current_stack_trace_snapshot());
+        let future = self
+            .process_runtime
+            .futures
+            .get_mut(&future_id)
+            .ok_or_else(|| RuntimeError::new("created future is missing"))?;
+        future.creation_context = Some(context);
+        Ok(())
     }
 
-    #[allow(dead_code)]
     fn resolve_future_timeout(&mut self, future_id: FutureId) {
-        let timeout_value =
-            self.process_err_value("Timeout", &format!("future {} timed out", future_id));
-        let _ = self
+        if self
             .process_runtime
-            .resolve_future(future_id, timeout_value);
+            .futures
+            .get(&future_id)
+            .is_some_and(|future| future.init_deadline_timeout)
+        {
+            let Some(future) = self.process_runtime.futures.get_mut(&future_id) else {
+                return;
+            };
+            if !matches!(future.state, FutureState::Running) {
+                return;
+            }
+            future.state = FutureState::Cancelled(Value::Unit);
+            future.deadline_tick = None;
+            future.cancel_on_timeout = false;
+            if let Some(correlation) = future.correlation_id.take() {
+                self.process_runtime.reply_table.remove(&correlation);
+            }
+            self.process_runtime
+                .deadline_queue
+                .retain(|entry| entry.future_id != future_id);
+            self.process_runtime.wake_future_waiters(future_id);
+            return;
+        }
+        self.schedule_future_error(
+            future_id,
+            "FutureDeadlineExceeded",
+            vec![Value::Int(int(future_id))],
+        );
     }
 
     pub(crate) fn process_sleep(&mut self, millis: u64) -> Result<Value, RuntimeError> {
@@ -2894,13 +3170,12 @@ impl VM {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn resolve_future_process_down(&mut self, future_id: FutureId, pid: u64) {
-        let process_down = self.process_err_value(
-            "ProcessDown",
-            &format!("target process {} stopped before replying", pid),
+        self.schedule_future_error(
+            future_id,
+            "ProcessReplyTargetStopped",
+            vec![Value::Int(int(future_id)), Value::Int(int(pid))],
         );
-        let _ = self.process_runtime.resolve_future(future_id, process_down);
     }
 
     #[allow(dead_code)]
@@ -3496,8 +3771,11 @@ impl VM {
             VmFileError::Io(io_err) => {
                 format!("File shutdown failed for handle #{handle_id}: {io_err}")
             }
-            VmFileError::Encoding(message) | VmFileError::Message(message) => {
+            VmFileError::Encoding(message) => {
                 format!("File shutdown failed for handle #{handle_id}: {message}")
+            }
+            VmFileError::NotReadable | VmFileError::NotWritable => {
+                format!("File shutdown mode invariant failed for handle #{handle_id}")
             }
         };
         let _ = self.emit_stderr_text(detail);
@@ -4080,6 +4358,14 @@ impl VM {
         Ok(handle)
     }
 
+    pub(crate) fn file_resource_context(
+        &self,
+        handle_id: u64,
+    ) -> Result<(String, VmFileMode), VmFileError> {
+        let file = self.open_files.get(&handle_id).ok_or(VmFileError::Closed)?;
+        Ok((file.path.clone(), file.mode))
+    }
+
     pub(crate) fn read_file_chunk(
         &mut self,
         handle_id: u64,
@@ -4090,10 +4376,7 @@ impl VM {
             .get_mut(&handle_id)
             .ok_or(VmFileError::Closed)?;
         if !open_file.mode.can_read() {
-            return Err(VmFileError::Message(format!(
-                "file handle for {} is not readable in {:?} mode",
-                open_file.path, open_file.mode
-            )));
+            return Err(VmFileError::NotReadable);
         }
         Self::read_utf8_chunk(&mut open_file.file.borrow_mut(), max_chars)
     }
@@ -4108,10 +4391,7 @@ impl VM {
             .get_mut(&handle_id)
             .ok_or(VmFileError::Closed)?;
         if !open_file.mode.can_write() {
-            return Err(VmFileError::Message(format!(
-                "file handle for {} is not writable in {:?} mode",
-                open_file.path, open_file.mode
-            )));
+            return Err(VmFileError::NotWritable);
         }
         open_file
             .file
@@ -4824,119 +5104,6 @@ impl VM {
             Opcode::BitAndInt => self.int_binop(|a, b| Ok(Value::Int(a & b)))?,
             Opcode::BitOrInt => self.int_binop(|a, b| Ok(Value::Int(a | b)))?,
             Opcode::BitXorInt => self.int_binop(|a, b| Ok(Value::Int(a ^ b)))?,
-            Opcode::SafeModInt => {
-                let b = self.pop_int()?;
-                let a = self.pop_int()?;
-                if b.is_zero() {
-                    self.stack.push(err_vm_result(
-                        self.process_error("ZeroDivisionError", "division by zero"),
-                    ));
-                } else {
-                    self.stack.push(ok_vm_result(Value::Int(a % b)));
-                }
-            }
-            Opcode::ShlInt => {
-                let bits = self.pop_int()?;
-                let value = self.pop_int()?;
-                let Some(amount) = bits.to_usize() else {
-                    self.stack.push(err_vm_result(self.process_error(
-                        "NegativeShiftCount",
-                        &format!("shift amount must be non-negative: {}", bits),
-                    )));
-                    return Ok(OpcodeControl::Continue);
-                };
-                self.stack.push(ok_vm_result(Value::Int(value << amount)));
-            }
-            Opcode::ShrInt => {
-                let bits = self.pop_int()?;
-                let value = self.pop_int()?;
-                let Some(amount) = bits.to_usize() else {
-                    self.stack.push(err_vm_result(self.process_error(
-                        "NegativeShiftCount",
-                        &format!("shift amount must be non-negative: {}", bits),
-                    )));
-                    return Ok(OpcodeControl::Continue);
-                };
-                self.stack.push(ok_vm_result(Value::Int(value >> amount)));
-            }
-            Opcode::TestBitInt => {
-                let index = self.pop_int()?;
-                let value = self.pop_int()?;
-                if index < int(0) {
-                    self.stack.push(err_vm_result(self.process_error(
-                        "NegativeBitIndex",
-                        &format!("bit index must be non-negative: {}", index),
-                    )));
-                    return Ok(OpcodeControl::Continue);
-                }
-                let Some(bit_index) = index.to_usize() else {
-                    return Err(RuntimeError::new(format!(
-                        "bit index out of range for usize: {}",
-                        index
-                    )));
-                };
-                let mask = int(1) << bit_index;
-                self.stack
-                    .push(ok_vm_result(Value::Bool(!(value & mask).is_zero())));
-            }
-            Opcode::SetBitInt => {
-                let index = self.pop_int()?;
-                let value = self.pop_int()?;
-                if index < int(0) {
-                    self.stack.push(err_vm_result(self.process_error(
-                        "NegativeBitIndex",
-                        &format!("bit index must be non-negative: {}", index),
-                    )));
-                    return Ok(OpcodeControl::Continue);
-                }
-                let Some(bit_index) = index.to_usize() else {
-                    return Err(RuntimeError::new(format!(
-                        "bit index out of range for usize: {}",
-                        index
-                    )));
-                };
-                let mask = int(1) << bit_index;
-                self.stack.push(ok_vm_result(Value::Int(value | mask)));
-            }
-            Opcode::ClearBitInt => {
-                let index = self.pop_int()?;
-                let value = self.pop_int()?;
-                if index < int(0) {
-                    self.stack.push(err_vm_result(self.process_error(
-                        "NegativeBitIndex",
-                        &format!("bit index must be non-negative: {}", index),
-                    )));
-                    return Ok(OpcodeControl::Continue);
-                }
-                let Some(bit_index) = index.to_usize() else {
-                    return Err(RuntimeError::new(format!(
-                        "bit index out of range for usize: {}",
-                        index
-                    )));
-                };
-                let mask = int(1) << bit_index;
-                self.stack.push(ok_vm_result(Value::Int(value & !mask)));
-            }
-            Opcode::ToggleBitInt => {
-                let index = self.pop_int()?;
-                let value = self.pop_int()?;
-                if index < int(0) {
-                    self.stack.push(err_vm_result(self.process_error(
-                        "NegativeBitIndex",
-                        &format!("bit index must be non-negative: {}", index),
-                    )));
-                    return Ok(OpcodeControl::Continue);
-                }
-                let Some(bit_index) = index.to_usize() else {
-                    return Err(RuntimeError::new(format!(
-                        "bit index out of range for usize: {}",
-                        index
-                    )));
-                };
-                let mask = int(1) << bit_index;
-                self.stack.push(ok_vm_result(Value::Int(value ^ mask)));
-            }
-
             // Arithmetic (Float)
             Opcode::AddFloat => self.float_binop("AddFloat", |a, b| a + b)?,
             Opcode::SubFloat => self.float_binop("SubFloat", |a, b| a - b)?,
@@ -5428,78 +5595,118 @@ impl VM {
             }
 
             Opcode::MakeError { template_id } => {
-                let message = match self.pop_stack()? {
-                    Value::Str(s) => s,
-                    other => {
-                        return Err(RuntimeError::new(format!(
-                            "MakeError expects String, got {:?}",
-                            other
-                        )));
-                    }
-                };
                 let template = self
                     .bytecode
                     .error_templates
                     .get(template_id as usize)
+                    .cloned()
                     .ok_or_else(|| {
-                        RuntimeError::new(format!("Unknown error template: {}", template_id))
+                        RuntimeError::new(format!("Unknown Error schema {template_id}"))
                     })?;
-                let (span_start, span_end) = match template.location_source {
-                    sindr::ir::ErrorLocationSource::ConstructorCallSite => {
-                        self.current_frame()?.call_site.ok_or_else(|| {
-                            RuntimeError::new("Error constructor has no construction source span")
-                        })?
-                    }
-                    sindr::ir::ErrorLocationSource::SourceSpan => {
-                        (template.span_start, template.span_end)
-                    }
-                };
-                let mut location = self
-                    .location_for_span(span_start, span_end, template.kind.clone())
-                    .ok_or_else(|| RuntimeError::new("Error construction span is invalid"))?;
-                if location.line == 0
-                    && sindr::ir::decode_module_source_span(span_start as usize, span_end as usize)
-                        .is_none()
-                    && matches!(
-                        template.location_source,
-                        sindr::ir::ErrorLocationSource::SourceSpan
-                    )
-                {
-                    location.line = template.line;
-                    location.column = template.column;
+                let mut payload = Vec::with_capacity(template.payload_fields.len());
+                for _ in &template.payload_fields {
+                    payload.push(self.pop_stack()?);
                 }
-                let mut error = match &template.diagnostic {
-                    Some(sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch {
-                        lhs,
-                    }) => RichError::new(
-                        template.kind.clone(),
-                        "Pattern did not match.",
-                        location,
-                        None,
-                    )
-                    .with_diagnostic(
-                        sindr::runtime::RuntimeErrorDiagnostic::LiteralPatternMismatch {
-                            lhs: lhs.clone(),
-                            rhs: message,
-                        },
-                    ),
-                    Some(sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
-                        rule,
-                        input_source,
-                    }) => RichError::new(template.kind.clone(), message, location, None)
-                        .with_diagnostic(
-                            sindr::runtime::RuntimeErrorDiagnostic::SafeBindPatternFailure {
-                                rule: rule.clone(),
-                                input_source: input_source.clone(),
-                            },
-                        ),
-                    None => RichError::new(template.kind.clone(), message, location, None),
+                payload.reverse();
+                if !template
+                    .payload_fields
+                    .iter()
+                    .zip(&payload)
+                    .all(|((_, schema), value)| schema.accepts(value, &self.bytecode.type_registry))
+                {
+                    return Err(RuntimeError::new(format!(
+                        "Error payload contract mismatch for {}",
+                        template.kind
+                    )));
+                }
+                let Value::Str(message) = self.pop_stack()? else {
+                    return Err(RuntimeError::new(
+                        "Error construction expects String message",
+                    ));
                 };
-                error = error.with_stack_trace(
-                    self.stack_trace_snapshot_without_head_function(&template.kind),
-                );
+                let (span_start, span_end) = self
+                    .current_frame()?
+                    .call_site
+                    .or(self.error_construction_source())
+                    .ok_or_else(|| {
+                        RuntimeError::new("Error constructor has no generation source span")
+                    })?;
+                let location = self
+                    .location_for_span(span_start, span_end, template.kind.clone())
+                    .ok_or_else(|| RuntimeError::new("Error generation source span is invalid"))?;
+                let mut error = RichError::new(template.kind.clone(), message, location, None);
+                error.payload = payload;
+                error.stack_trace = self.stack_trace_snapshot_without_head_function(&template.kind);
                 self.stack.push(Value::Error(Box::new(error)));
             }
+            Opcode::IsErrorKind { kind } => {
+                let Value::Error(error) = self.pop_stack()? else {
+                    return Err(RuntimeError::new("Error kind check requires Error"));
+                };
+                self.stack.push(Value::Bool(error.kind == kind));
+            }
+            Opcode::GetErrorPayload {
+                kind,
+                field_index,
+                payload_len,
+            } => {
+                let Value::Error(error) = self.pop_stack()? else {
+                    return Err(RuntimeError::new("Error payload access requires Error"));
+                };
+                if error.kind != kind || error.payload.len() != payload_len as usize {
+                    return Err(RuntimeError::new(
+                        "Error payload identity or length contract mismatch",
+                    ));
+                }
+                let definition = self
+                    .bytecode
+                    .error_templates
+                    .iter()
+                    .find(|definition| definition.kind == kind)
+                    .ok_or_else(|| {
+                        RuntimeError::new("Error payload declaration metadata missing")
+                    })?;
+                if definition.payload_fields.len() != error.payload.len()
+                    || !definition.payload_fields.iter().zip(&error.payload).all(
+                        |((_, schema), value)| schema.accepts(value, &self.bytecode.type_registry),
+                    )
+                {
+                    return Err(RuntimeError::new("Error payload type contract mismatch"));
+                }
+                let value = error
+                    .payload
+                    .get(field_index as usize)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::new("Error payload field index out of range"))?;
+                self.stack.push(value);
+            }
+            Opcode::AnnotateError { diagnostic } => {
+                let Value::Error(mut error) = self.pop_stack()? else {
+                    return Err(RuntimeError::new(
+                        "Error diagnostic annotation requires Error",
+                    ));
+                };
+                error.diagnostic = Some(match diagnostic {
+                    sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch { lhs } => {
+                        let actual = error.payload.get(1).ok_or_else(|| {
+                            RuntimeError::new("literal Error payload is missing actual value")
+                        })?;
+                        let rhs = actual
+                            .to_display_string(&self.bytecode.type_registry)
+                            .map_err(|e| RuntimeError::new(e.to_string()))?;
+                        sindr::runtime::RuntimeErrorDiagnostic::LiteralPatternMismatch { lhs, rhs }
+                    }
+                    sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
+                        rule,
+                        input_source,
+                    } => sindr::runtime::RuntimeErrorDiagnostic::SafeBindPatternFailure {
+                        rule,
+                        input_source,
+                    },
+                });
+                self.stack.push(Value::Error(error));
+            }
+            Opcode::RuntimeContractViolation { message } => return Err(RuntimeError::new(message)),
             Opcode::CaptureClosure(num_captured) => {
                 let mut lexical_captures = Vec::with_capacity(num_captured as usize);
                 for _ in 0..num_captured {
@@ -6039,7 +6246,9 @@ impl VM {
         let width = Self::utf8_char_width(first[0]);
         if width == 0 {
             return Err(VmFileError::Encoding(
-                "invalid UTF-8 leading byte while reading file".into(),
+                std::str::from_utf8(&first)
+                    .expect_err("invalid leading byte")
+                    .to_string(),
             ));
         }
 
@@ -6050,8 +6259,8 @@ impl VM {
             bytes.extend(rest);
         }
 
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|err| VmFileError::Encoding(format!("invalid UTF-8 sequence: {err}")))?;
+        let text =
+            std::str::from_utf8(&bytes).map_err(|err| VmFileError::Encoding(err.to_string()))?;
         Ok(text.chars().next())
     }
 
@@ -6282,6 +6491,9 @@ impl ProcessRuntime {
                 waiters: Vec::new(),
                 cancel_on_timeout,
                 correlation_id: None,
+                creation_context: None,
+                error_generation_pending: false,
+                init_deadline_timeout: false,
             },
         );
         future_id
@@ -6341,7 +6553,7 @@ impl ProcessRuntime {
         let Some(future) = self.futures.get_mut(&future_id) else {
             return Vec::new();
         };
-        if !matches!(future.state, FutureState::Running) {
+        if !matches!(future.state, FutureState::Running) || future.error_generation_pending {
             return Vec::new();
         }
         future.state = FutureState::Ready(value);
@@ -6548,6 +6760,7 @@ mod tests {
         ProcessRunOutcome, ProcessStatus, ProcessWaitReason, RuntimeOutputEvent, StepOutcome,
         TaskMode, VmFileError, VmFileMode, VmObservationOptions, VmRuntimeOutputEventSnapshot, VM,
     };
+    use crate::builtin::BuiltinOutcome;
     use crate::error::RuntimeErrorKind;
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, CallableTemplate, CallableTemplateArg,
@@ -6571,15 +6784,40 @@ mod tests {
         ErrTemplate {
             id: 0,
             kind: kind.into(),
-            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-            span_start: 0,
-            span_end: 1,
-            line: 1,
-            column: 1,
-            format: String::new(),
-            num_params: 1,
-            diagnostic: None,
+            constructor_fun_idx: 0,
+            input_types: Vec::new(),
+            payload_fields: Vec::new(),
         }
+    }
+
+    fn replace_inline_error_fixture_with_constructor_call(vm: &mut VM, kind: &str) {
+        let index = vm.bytecode.functions.len() as u32;
+        for opcode in &mut vm.bytecode.opcodes {
+            if matches!(opcode, Opcode::MakeError { template_id: 0 }) {
+                *opcode = Opcode::Call {
+                    fun_idx: index,
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 1,
+                };
+            }
+        }
+        let entry = vm.bytecode.opcodes.len() as u32;
+        vm.bytecode.opcodes.extend([
+            Opcode::LoadLocal(0),
+            Opcode::MakeError { template_id: 0 },
+            Opcode::Return,
+        ]);
+        vm.bytecode
+            .functions
+            .push(function_entry(index, entry, 1, 1, Some(kind)));
+        vm.bytecode.error_templates = vec![ErrTemplate {
+            id: 0,
+            kind: kind.into(),
+            constructor_fun_idx: index,
+            input_types: vec![sindr::ir::ErrorValueSchema::String],
+            payload_fields: vec![],
+        }];
     }
 
     pub(super) fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
@@ -6588,6 +6826,260 @@ mod tests {
             type_registry: TypeRegistry::new(),
             ..Bytecode::default()
         }
+    }
+
+    fn complete(outcome: crate::builtin::BuiltinOutcome) -> Value {
+        let crate::builtin::BuiltinOutcome::Complete(value) = outcome else {
+            panic!("expected immediate success")
+        };
+        value
+    }
+
+    pub(super) fn install_process_error_definitions(vm: &mut VM) {
+        use sindr::ir::ErrorValueSchema::{Int, String as Str};
+        for (kind, inputs, message) in [
+            (
+                "SupervisorAdoptForbidden",
+                vec![Str],
+                "supervisor does not allow adopt",
+            ),
+            (
+                "SupervisorAdoptUnknownPid",
+                vec![Int, Str, Str],
+                "cannot adopt unknown pid",
+            ),
+            (
+                "SupervisorAdoptNonWorker",
+                vec![Str, Int, Str],
+                "cannot adopt non-Worker pid",
+            ),
+            (
+                "SupervisorAdoptWorkerNotLive",
+                vec![Str, Int, Str],
+                "cannot adopt non-live Worker pid",
+            ),
+            (
+                "ProcessStateUnknownPid",
+                vec![Int, Str],
+                "state requested for unknown pid",
+            ),
+            (
+                "ProcessStoreUnknownPid",
+                vec![Int, Str],
+                "store requested for unknown pid",
+            ),
+            (
+                "ProcessStatePidTypeMismatch",
+                vec![Int, Str, Str],
+                "state pid type mismatch",
+            ),
+            (
+                "ProcessStorePidTypeMismatch",
+                vec![Int, Str, Str],
+                "store pid type mismatch",
+            ),
+            (
+                "ProcessStateUnavailable",
+                vec![Int, Str],
+                "has no materialized state",
+            ),
+            (
+                "FileOutHandlerOpenFailed",
+                vec![Str, Str],
+                "FileOutHandler open failed",
+            ),
+            (
+                "FileOutHandlerWriteFailed",
+                vec![Str, Str],
+                "FileOutHandler write failed",
+            ),
+            ("FutureDeadlineExceeded", vec![Int], "future timed out"),
+            (
+                "ProcessReplyTargetStopped",
+                vec![Int, Int],
+                "target process stopped before replying",
+            ),
+        ] {
+            vm.install_test_error_constructor(kind, inputs, message);
+        }
+    }
+
+    #[test]
+    fn future_error_reservation_wins_once_and_preserves_first_failure() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        install_process_error_definitions(&mut vm);
+        let future = vm.process_runtime.allocate_future(None, None, true);
+        vm.stamp_future_context(future).unwrap();
+        vm.resolve_future_timeout(future);
+        let tasks = vm.process_runtime.detached_tasks.len();
+        vm.process_runtime
+            .resolve_future(future, ok_vm_result(Value::Unit));
+        vm.resolve_future_process_down(future, 7);
+        vm.resolve_future_timeout(future);
+        assert_eq!(vm.process_runtime.detached_tasks.len(), tasks);
+        assert!(vm.ready_future_value(future).is_none());
+        vm.drive_ready_detached_tasks().unwrap();
+        let error = decode_vm_result(
+            vm.ready_future_value(future).unwrap(),
+            "test",
+            "reserved future",
+        )
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(error.kind, "Global::FutureDeadlineExceeded");
+        assert_eq!(error.payload, vec![Value::Int(int(future))]);
+        let tasks = vm.process_runtime.detached_tasks.len();
+        vm.resolve_future_timeout(future);
+        assert_eq!(vm.process_runtime.detached_tasks.len(), tasks);
+
+        let successful = vm.process_runtime.allocate_future(None, None, true);
+        vm.process_runtime
+            .resolve_future(successful, ok_vm_result(Value::Unit));
+        vm.resolve_future_timeout(successful);
+        vm.resolve_future_process_down(successful, 7);
+        assert_eq!(
+            vm.ready_future_value(successful),
+            Some(ok_vm_result(Value::Unit))
+        );
+        assert_eq!(vm.process_runtime.detached_tasks.len(), tasks);
+    }
+
+    #[test]
+    fn future_error_constructor_runtime_failure_is_propagated() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        install_process_error_definitions(&mut vm);
+        let definition = vm
+            .bytecode
+            .error_templates
+            .iter()
+            .find(|definition| definition.kind == "Global::FutureDeadlineExceeded")
+            .unwrap();
+        let pc = vm.bytecode.functions[definition.constructor_fun_idx as usize].entry_pc as usize;
+        vm.bytecode.opcodes[pc] = Opcode::RuntimeContractViolation {
+            message: "constructor failed".into(),
+        };
+        let future = vm.process_runtime.allocate_future(None, None, true);
+        vm.stamp_future_context(future).unwrap();
+        vm.resolve_future_timeout(future);
+        let error = vm
+            .drive_ready_detached_tasks()
+            .expect_err("constructor failure must escape the VM scheduler");
+        assert!(error.message.contains("constructor failed"));
+    }
+
+    #[test]
+    fn resolved_error_constructor_runs_with_payload_and_generation_context() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        vm.install_test_error_constructor(
+            "PayloadProbe",
+            vec![sindr::ir::ErrorValueSchema::Int],
+            "definition executed",
+        );
+        let outcome = vm
+            .language_error_outcome("PayloadProbe", vec![Value::Int(42.into())], Some(1))
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            crate::builtin::BuiltinOutcome::Call { .. }
+        ));
+        let value = vm.drive_builtin_outcome(outcome).unwrap();
+        let error = decode_vm_result(value, "test", "Error constructor")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.message, "definition executed");
+        assert_eq!(error.payload, vec![Value::Int(42.into())]);
+        assert_eq!((error.location.span_start, error.location.span_end), (0, 1));
+        assert!(vm
+            .language_error_outcome("PayloadProbe", vec![Value::Str("wrong".into())], Some(1))
+            .is_err());
+        assert!(vm
+            .language_error_outcome("UnknownProbe", vec![], Some(1))
+            .is_err());
+    }
+
+    #[test]
+    fn nested_error_payload_keeps_its_explicit_generation_source() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_source("outer inner".into(), "test.srt".into());
+        vm.install_test_error_constructor("InnerSourceProbe", vec![], "inner");
+        vm.install_test_error_constructor("OuterSourceProbe", vec![], "outer");
+        let template = vm
+            .bytecode
+            .error_templates
+            .iter()
+            .position(|definition| definition.kind == "Global::OuterSourceProbe")
+            .unwrap();
+        let outer = vm.bytecode.error_templates[template].constructor_fun_idx;
+        let inner = vm
+            .bytecode
+            .error_templates
+            .iter()
+            .find(|definition| definition.kind == "Global::InnerSourceProbe")
+            .unwrap()
+            .constructor_fun_idx;
+        vm.bytecode.error_templates[template].payload_fields =
+            vec![("nested".into(), sindr::ir::ErrorValueSchema::Error)];
+        let constant = vm.bytecode.constants.len() as u32;
+        vm.bytecode.constants.push(Constant::Str("outer".into()));
+        let entry = vm.bytecode.opcodes.len() as u32;
+        vm.bytecode.opcodes.extend([
+            Opcode::LoadConst(constant),
+            Opcode::Call {
+                fun_idx: inner,
+                arity: 0,
+                span_start: 5,
+                span_end: 6,
+            },
+            Opcode::MakeError {
+                template_id: template as u32,
+            },
+            Opcode::Return,
+        ]);
+        vm.bytecode.functions[outer as usize].entry_pc = entry;
+        vm.bytecode.functions[outer as usize].end_pc = vm.bytecode.opcodes.len() as u32;
+        let outcome = vm
+            .language_error_outcome("OuterSourceProbe", vec![], Some(1))
+            .unwrap();
+        let result = vm.drive_builtin_outcome(outcome).unwrap();
+        let outer = decode_vm_result(result, "test", "nested error")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!((outer.location.span_start, outer.location.span_end), (0, 1));
+        let Value::Error(inner) = &outer.payload[0] else {
+            panic!("expected nested Error")
+        };
+        assert_eq!((inner.location.span_start, inner.location.span_end), (5, 6));
+    }
+
+    #[test]
+    fn error_payload_instruction_rejects_missing_payload_instead_of_falling_back() {
+        let bytecode = base_bytecode(vec![
+            Opcode::GetErrorPayload {
+                kind: "Global::PayloadProbe".into(),
+                field_index: 0,
+                payload_len: 1,
+            },
+            Opcode::Halt,
+        ]);
+        let mut vm = VM::new(bytecode);
+        let mut context = top_level_context(0, 0);
+        context.stack.push(Value::Error(Box::new(RichError::new(
+            "Global::PayloadProbe",
+            "broken",
+            Location {
+                file: "test.srt".into(),
+                func: "probe".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            None,
+        ))));
+        let StepOutcome::RuntimeError(error) = vm.step_context(&mut context) else {
+            panic!("missing payload must be internal error")
+        };
+        assert!(error.message.contains("length contract"));
     }
 
     fn builtin_id(name: &str) -> u16 {
@@ -7093,56 +7585,6 @@ mod tests {
 
         assert_eq!(ctx.pc, 2);
         assert_eq!(ctx.stack, vec![Value::Int(int(0))]);
-    }
-
-    #[test]
-    fn safe_mod_int_executes_as_one_opcode() {
-        let mut bytecode = base_bytecode(vec![
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::SafeModInt,
-            Opcode::Halt,
-        ]);
-        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(3))];
-        let mut vm = VM::new(bytecode);
-        let mut ctx = top_level_context(0, 0);
-
-        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
-        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
-        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
-
-        assert_eq!(
-            ctx.stack,
-            vec![Value::Tagged {
-                tag: 0,
-                fields: vec![Value::Int(int(1))],
-            }]
-        );
-    }
-
-    #[test]
-    fn safe_mod_int_returns_zero_division_error_result() {
-        let mut bytecode = base_bytecode(vec![
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::SafeModInt,
-            Opcode::Halt,
-        ]);
-        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(0))];
-        let mut vm = VM::new(bytecode);
-        let mut ctx = top_level_context(0, 0);
-
-        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
-        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
-        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
-
-        match ctx.stack.as_slice() {
-            [Value::Tagged { tag: 1, fields }] => match fields.first() {
-                Some(Value::Error(rich)) => assert_eq!(rich.kind, "Global::ZeroDivisionError"),
-                other => panic!("expected Err(Value::Error), got {other:?}"),
-            },
-            other => panic!("expected Err result, got {other:?}"),
-        }
     }
 
     #[test]
@@ -7987,7 +8429,7 @@ mod tests {
             )
             .expect("adopt should succeed");
         assert!(matches!(
-            decode_vm_result(value, "test", "adopt"),
+            decode_vm_result(complete(value), "test", "adopt"),
             Ok(Ok(Value::Unit))
         ));
         let instance = vm
@@ -8031,8 +8473,10 @@ mod tests {
         for _ in 0..2 {
             assert!(matches!(
                 decode_vm_result(
-                    vm.supervisor_adopt("MySup".into(), handle.clone())
-                        .expect("adopt should return Result"),
+                    complete(
+                        vm.supervisor_adopt("MySup".into(), handle.clone())
+                            .expect("adopt should return Result")
+                    ),
                     "test",
                     "adopt",
                 ),
@@ -8081,7 +8525,7 @@ mod tests {
             .expect("handoff adopt should return Result");
 
         assert!(matches!(
-            decode_vm_result(value, "test", "adopt"),
+            decode_vm_result(complete(value), "test", "adopt"),
             Ok(Ok(Value::Unit))
         ));
         assert_eq!(
@@ -8113,6 +8557,7 @@ mod tests {
             ],
         };
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let pid = vm
             .allocate_process_state("Counter".into(), Some(Value::Int(int(7))))
             .expect("singleton process should allocate");
@@ -8127,7 +8572,8 @@ mod tests {
             )
             .expect("adopt rejection should be encoded as Result::Err");
 
-        assert_err_result(value, "SupervisorAdoptInvalidPid", "only Worker");
+        let value = vm.drive_builtin_outcome(value).unwrap();
+        assert_err_result(value, "SupervisorAdoptNonWorker", "non-Worker");
     }
 
     #[test]
@@ -8276,6 +8722,7 @@ mod tests {
         };
 
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let pid = vm
             .allocate_process_state("Counter".into(), Some(Value::Int(int(41))))
             .expect("process allocation should succeed");
@@ -8290,23 +8737,30 @@ mod tests {
         };
 
         assert_eq!(
-            vm.process_state(&ok_pid)
-                .expect("state lookup should succeed"),
+            complete(
+                vm.process_state(&ok_pid)
+                    .expect("state lookup should succeed")
+            ),
             super::ok_vm_result(Value::Int(int(41)))
         );
         let mismatch = vm
             .process_state(&wrong_pid)
             .expect("mismatch should still return Err(Result)");
+        let mismatch = vm.drive_builtin_outcome(mismatch).unwrap();
         assert!(matches!(mismatch, Value::Tagged { tag: 1, .. }));
 
         assert_eq!(
-            vm.process_store(&ok_pid, Value::Int(int(99)))
-                .expect("store should succeed"),
+            complete(
+                vm.process_store(&ok_pid, Value::Int(int(99)))
+                    .expect("store should succeed")
+            ),
             super::ok_vm_result(Value::Unit)
         );
         assert_eq!(
-            vm.process_state(&ok_pid)
-                .expect("updated state should succeed"),
+            complete(
+                vm.process_state(&ok_pid)
+                    .expect("updated state should succeed")
+            ),
             super::ok_vm_result(Value::Int(int(99)))
         );
     }
@@ -8318,7 +8772,8 @@ mod tests {
         }
     }
 
-    fn assert_ok_unit_result(value: Value) {
+    fn assert_ok_unit_result(value: crate::builtin::BuiltinOutcome) {
+        let value = complete(value);
         assert_eq!(value, super::ok_vm_result(Value::Unit));
     }
 
@@ -8460,15 +8915,12 @@ mod tests {
         let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
             .with_output_capture()
             .with_error_capture();
+        install_process_error_definitions(&mut vm);
 
         let without_path = vm
             .out_handler_write(&handler_pid("FileOutHandler"), "ignored".into())
-            .expect("missing path should be a Result error");
-        assert_err_result(
-            without_path,
-            "HandlerInitFailed",
-            "requires named argument `path`",
-        );
+            .expect_err("missing path is metadata corruption");
+        assert!(without_path.message.contains("requires named argument"));
 
         let missing_parent = vm
             .out_handler_write(
@@ -8476,16 +8928,13 @@ mod tests {
                 "ignored".into(),
             )
             .expect("open failure should be a Result error");
-        assert_err_result(missing_parent, "HandlerInitFailed", "open failed");
+        let missing_parent = vm.drive_builtin_outcome(missing_parent).unwrap();
+        assert_err_result(missing_parent, "FileOutHandlerOpenFailed", "open failed");
 
         let unknown = vm
             .out_handler_write(&handler_pid("BogusOutHandler"), "ignored".into())
-            .expect("unknown handler should be a Result error");
-        assert_err_result(
-            unknown,
-            "UnknownHandlerTarget",
-            "unknown OutHandler target `BogusOutHandler`",
-        );
+            .expect_err("unknown handler is metadata corruption");
+        assert!(unknown.message.contains("unknown OutHandler"));
     }
 
     #[test]
@@ -8659,6 +9108,7 @@ mod tests {
             private_flags: vec![true],
         });
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let callable = Callable {
             target: CallableTarget::Builtin(builtin_id("__process_sleep")),
             lexical_captures: vec![Value::Tagged {
@@ -8699,6 +9149,7 @@ mod tests {
         bytecode.error_templates = vec![test_source_error_template("Boom")];
         let mut vm =
             VM::new(bytecode).with_source("Task::async(body)\n".into(), "sample.srt".into());
+        replace_inline_error_fixture_with_constructor_call(&mut vm, "Boom");
         vm.frames[0].call_site = Some((0, 17));
         let callable = vm.callable_for_function(0);
 
@@ -8800,6 +9251,7 @@ mod tests {
             private_flags: vec![true],
         });
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let callable = Callable {
             target: CallableTarget::Builtin(builtin_id("__process_sleep")),
             lexical_captures: vec![Value::Tagged {
@@ -8818,7 +9270,7 @@ mod tests {
             .expect("awaiting timed task should resolve timeout result");
         assert!(matches!(
             value,
-            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Timeout")
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::FutureDeadlineExceeded")
         ));
         assert!(
             vm.process_runtime.reply_table.is_empty(),
@@ -8922,10 +9374,12 @@ mod tests {
             )],
         };
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let pid = vm
             .allocate_process_state("Counter".into(), Some(Value::Int(int(41))))
             .expect("process allocation should succeed");
         let future_id = vm.process_runtime.allocate_future(Some(pid), Some(3), true);
+        vm.stamp_future_context(future_id).unwrap();
         let correlation_id = vm.process_runtime.allocate_correlation_id();
         vm.process_runtime
             .register_reply_waiter(correlation_id, future_id);
@@ -8934,6 +9388,7 @@ mod tests {
 
         let expired = vm.expire_process_deadlines(3);
         assert_eq!(expired, vec![future_id]);
+        vm.drive_ready_detached_tasks().unwrap();
         assert!(!vm.process_runtime.reply_table.contains_key(&correlation_id));
         assert!(vm
             .process_runtime
@@ -9005,6 +9460,7 @@ mod tests {
             vec![Constant::Tag(0), Constant::Int(int(41))],
         );
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
 
         vm.ensure_root_supervisor_booted()
             .expect("boot should succeed");
@@ -9041,6 +9497,7 @@ mod tests {
         );
         bytecode.runtime_boot_plan = RuntimeBootPlan::explicit_singleton("Counter");
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
 
         vm.ensure_root_supervisor_booted()
             .expect("boot should succeed");
@@ -9136,6 +9593,7 @@ mod tests {
             ],
         );
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
 
         vm.ensure_root_supervisor_booted()
             .expect("boot should initialize lazy singleton");
@@ -9187,6 +9645,17 @@ mod tests {
             .expect_err("pending standby singleton should time out during VM init");
 
         assert_eq!(err.kind(), RuntimeErrorKind::ProcessInitTimeout);
+        assert!(
+            vm.last_value().is_none(),
+            "internal timeout signal must not become the public result"
+        );
+        assert!(
+            vm.process_runtime.futures.values().all(|future| !matches!(
+                future.state,
+                super::FutureState::Ready(Value::Unit) | super::FutureState::Cancelled(Value::Unit)
+            )),
+            "internal init callback future must be retired before the timeout is returned"
+        );
         assert!(err.message.contains("Env"));
         assert!(err.context.details.contains(&"phase=VM::Init".into()));
         assert!(err.context.details.contains(&"process_name=Env".into()));
@@ -9220,6 +9689,7 @@ mod tests {
         );
         bytecode.error_templates = vec![test_source_error_template("BootFailure")];
         let mut vm = VM::new(bytecode);
+        replace_inline_error_fixture_with_constructor_call(&mut vm, "BootFailure");
 
         let err = vm
             .ensure_root_supervisor_booted()
@@ -9257,6 +9727,7 @@ mod tests {
             vec![Constant::Tag(0), Constant::Int(int(41))],
         );
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         vm.stack.push(Value::Int(int(7)));
         vm.pc = 0;
 
@@ -9331,6 +9802,7 @@ mod tests {
         ];
         bytecode.error_templates = vec![test_source_error_template("BootFailure")];
         let mut vm = VM::new(bytecode);
+        replace_inline_error_fixture_with_constructor_call(&mut vm, "BootFailure");
 
         let err = vm
             .ensure_root_supervisor_booted()
@@ -9728,16 +10200,12 @@ mod tests {
         bytecode.error_templates = vec![ErrTemplate {
             id: 0,
             kind: "Old".into(),
-            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-            span_start: 0,
-            span_end: 0,
-            line: 1,
-            column: 1,
-            format: "{}".into(),
-            num_params: 1,
-            diagnostic: None,
+            constructor_fun_idx: 0,
+            input_types: Vec::new(),
+            payload_fields: Vec::new(),
         }];
         let mut vm = VM::new(bytecode);
+        vm.frames[0].call_site = Some((10, 20));
 
         let chunk = BytecodeChunk {
             opcodes: vec![
@@ -9758,14 +10226,9 @@ mod tests {
             error_templates: vec![ErrTemplate {
                 id: 0,
                 kind: "NewKind".into(),
-                location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-                span_start: 10,
-                span_end: 20,
-                line: 2,
-                column: 3,
-                format: "{}".into(),
-                num_params: 1,
-                diagnostic: None,
+                constructor_fun_idx: 0,
+                input_types: Vec::new(),
+                payload_fields: Vec::new(),
             }],
             functions: Vec::new(),
             docs: Vec::new(),
@@ -9779,8 +10242,8 @@ mod tests {
             Value::Error(rich) => {
                 assert_eq!(rich.kind, "NewKind");
                 assert_eq!(rich.message, "new message");
-                assert_eq!(rich.location.line, 2);
-                assert_eq!(rich.location.column, 3);
+                assert_eq!(rich.location.line, 0);
+                assert_eq!(rich.location.column, 0);
             }
             other => panic!("expected Value::Error, got {:?}", other),
         }
@@ -9841,16 +10304,12 @@ mod tests {
         bytecode.error_templates = vec![ErrTemplate {
             id: 0,
             kind: "Global::PatternMismatch".into(),
-            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-            span_start: base + 4,
-            span_end: base + 5,
-            line: 0,
-            column: 0,
-            format: String::new(),
-            num_params: 1,
-            diagnostic: None,
+            constructor_fun_idx: 0,
+            input_types: Vec::new(),
+            payload_fields: Vec::new(),
         }];
         let mut vm = VM::new(bytecode).with_source("main()\n".into(), "main.srt".into());
+        vm.frames[0].call_site = Some((base + 4, base + 5));
         vm.run().expect("registered source must execute");
         let Value::Error(error) = vm.last_value().unwrap() else {
             panic!("expected language Error");
@@ -9871,14 +10330,9 @@ mod tests {
         bytecode.error_templates = vec![ErrTemplate {
             id: 0,
             kind: "Failure".into(),
-            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-            span_start: sindr::ir::MODULE_SPAN_STRIDE as u32,
-            span_end: sindr::ir::MODULE_SPAN_STRIDE as u32 + 1,
-            line: 99,
-            column: 42,
-            format: String::new(),
-            num_params: 1,
-            diagnostic: None,
+            constructor_fun_idx: 0,
+            input_types: Vec::new(),
+            payload_fields: Vec::new(),
         }];
         for sources in [
             vec![],
@@ -9894,6 +10348,10 @@ mod tests {
             bytecode.sources = sources;
             let mut vm =
                 VM::new(bytecode.clone()).with_source("main()\n".into(), "main.srt".into());
+            vm.frames[0].call_site = Some((
+                sindr::ir::MODULE_SPAN_STRIDE as u32,
+                sindr::ir::MODULE_SPAN_STRIDE as u32 + 1,
+            ));
             vm.run().expect("source text is optional metadata");
             let Value::Error(error) = vm.last_value().unwrap() else {
                 panic!("expected language Error");
@@ -9917,28 +10375,27 @@ mod tests {
     }
 
     #[test]
-    fn make_error_keeps_inline_pattern_source_span_inside_a_called_frame() {
+    fn resolved_pattern_error_uses_generation_call_span_inside_a_called_frame() {
         let mut bytecode = base_bytecode(vec![
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 0,
+                span_start: 0,
+                span_end: 1,
+            },
+            Opcode::Halt,
             Opcode::LoadConst(0),
             Opcode::MakeError { template_id: 0 },
-            Opcode::Halt,
+            Opcode::Return,
         ]);
+        bytecode.functions = vec![function_entry(0, 2, 0, 0, Some("Global::PatternProbe"))];
         bytecode.constants = vec![Constant::Str("2".into())];
         bytecode.error_templates = vec![ErrTemplate {
             id: 0,
-            kind: "Global::PatternMismatch".into(),
-            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-            span_start: 0,
-            span_end: 1,
-            line: 1,
-            column: 1,
-            format: String::new(),
-            num_params: 1,
-            diagnostic: Some(
-                sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch {
-                    lhs: "1".into(),
-                },
-            ),
+            kind: "Global::PatternProbe".into(),
+            constructor_fun_idx: 0,
+            input_types: Vec::new(),
+            payload_fields: Vec::new(),
         }];
         let mut vm = VM::new(bytecode).with_source("1 =? 2\nmain()\n".into(), "sample.srt".into());
         vm.frames[0].call_site = Some((7, 13));
@@ -9976,14 +10433,9 @@ mod tests {
                 error_templates: vec![ErrTemplate {
                     id: 0,
                     kind: "Boom".into(),
-                    location_source: sindr::ir::ErrorLocationSource::ConstructorCallSite,
-                    span_start: 0,
-                    span_end: 5,
-                    line: 1,
-                    column: 1,
-                    format: "{}".into(),
-                    num_params: 1,
-                    diagnostic: None,
+                    constructor_fun_idx: 0,
+                    input_types: Vec::new(),
+                    payload_fields: Vec::new(),
                 }],
                 functions: Vec::new(),
                 docs: Vec::new(),
@@ -10021,11 +10473,12 @@ mod tests {
         let mut vm = VM::new(bytecode).with_source(source, "REPL".into());
         vm.bytecode.constants = vec![Constant::Int(int(10)), Constant::Int(int(0))];
 
+        vm.install_test_error_constructor("ZeroModuloError", vec![], "modulo by zero");
         vm.run().expect("run should succeed");
         match vm.last_value().cloned().expect("result should be recorded") {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "Global::ZeroDivisionError");
+                    assert_eq!(rich.kind, "Global::ZeroModuloError");
                     assert_eq!(rich.location.line, 1);
                     assert_eq!(rich.location.column, 1);
                     assert_eq!(rich.location.span_start, 0);
@@ -10063,12 +10516,17 @@ mod tests {
             private_flags: vec![false, false],
         });
         let mut vm = VM::new(bytecode).with_source(source, "extractor.srt".into());
+        vm.install_test_error_constructor(
+            "UnconsEmptyString",
+            vec![],
+            "cannot uncons empty string",
+        );
         vm.run().unwrap();
         let Value::Error(error) = vm.last_value().unwrap() else {
             panic!("expected preserved Error")
         };
-        assert_eq!(error.kind, "Global::PatternMismatch");
-        assert_eq!(error.message, "Pattern did not match.");
+        assert_eq!(error.kind, "Global::UnconsEmptyString");
+        assert_eq!(error.message, "cannot uncons empty string");
         assert_eq!(error.location.file, "extractor.srt");
         assert_eq!((error.location.line, error.location.column), (1, 1));
         assert_eq!(
@@ -10666,121 +11124,6 @@ mod tests {
 
         assert_eq!(vm.last_result, Some(Value::Int(int(5))));
         assert!(matches!(vm.stack.first(), Some(Value::Int(value)) if *value == int(-7)));
-    }
-
-    #[test]
-    fn shift_and_bit_index_opcodes_execute_successfully() {
-        let mut bytecode = base_bytecode(vec![
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::ShlInt,
-            Opcode::LoadConst(2),
-            Opcode::LoadConst(3),
-            Opcode::ShrInt,
-            Opcode::LoadConst(4),
-            Opcode::LoadConst(5),
-            Opcode::TestBitInt,
-            Opcode::LoadConst(6),
-            Opcode::LoadConst(3),
-            Opcode::SetBitInt,
-            Opcode::LoadConst(7),
-            Opcode::LoadConst(3),
-            Opcode::ClearBitInt,
-            Opcode::LoadConst(4),
-            Opcode::LoadConst(5),
-            Opcode::ToggleBitInt,
-            Opcode::Halt,
-        ]);
-        bytecode.constants = vec![
-            Constant::Int(int(1)),
-            Constant::Int(int(3)),
-            Constant::Int(int(8)),
-            Constant::Int(int(1)),
-            Constant::Int(int(5)),
-            Constant::Int(int(0)),
-            Constant::Int(int(0)),
-            Constant::Int(int(7)),
-        ];
-
-        let mut vm = VM::new(bytecode);
-        vm.run().expect("run should succeed");
-
-        assert_eq!(
-            vm.stack,
-            vec![
-                Value::Tagged {
-                    tag: 0,
-                    fields: vec![Value::Int(int(8))],
-                },
-                Value::Tagged {
-                    tag: 0,
-                    fields: vec![Value::Int(int(4))],
-                },
-                Value::Tagged {
-                    tag: 0,
-                    fields: vec![Value::Bool(true)],
-                },
-                Value::Tagged {
-                    tag: 0,
-                    fields: vec![Value::Int(int(2))],
-                },
-                Value::Tagged {
-                    tag: 0,
-                    fields: vec![Value::Int(int(5))],
-                },
-                Value::Tagged {
-                    tag: 0,
-                    fields: vec![Value::Int(int(4))],
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn shift_and_bit_index_opcodes_preserve_negative_index_errors() {
-        let mut bytecode = base_bytecode(vec![
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::ShlInt,
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::ShrInt,
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::TestBitInt,
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::SetBitInt,
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::ClearBitInt,
-            Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::ToggleBitInt,
-            Opcode::Halt,
-        ]);
-        bytecode.constants = vec![Constant::Int(int(1)), Constant::Int(int(-1))];
-
-        let mut vm = VM::new(bytecode);
-        vm.run().expect("run should succeed");
-
-        let expected_kinds = [
-            "Global::NegativeShiftCount",
-            "Global::NegativeShiftCount",
-            "Global::NegativeBitIndex",
-            "Global::NegativeBitIndex",
-            "Global::NegativeBitIndex",
-            "Global::NegativeBitIndex",
-        ];
-        for (value, expected_kind) in vm.stack.iter().zip(expected_kinds) {
-            match value {
-                Value::Tagged { tag: 1, fields } => match fields.first() {
-                    Some(Value::Error(rich)) => assert_eq!(rich.kind, expected_kind),
-                    other => panic!("expected Err(Error), got {other:?}"),
-                },
-                other => panic!("expected Err result, got {other:?}"),
-            }
-        }
     }
 
     #[test]
@@ -11443,6 +11786,7 @@ mod tests {
             callable: body,
             args: vec![Value::FileHandle(handle.clone())],
             continuation: crate::builtin::BuiltinContinuation::FileWithOpen {
+                mode: VmFileMode::Write,
                 path: path.to_string_lossy().into(),
                 handle,
             },
@@ -11665,6 +12009,7 @@ mod tests {
             callable: body,
             args: vec![Value::FileHandle(handle.clone())],
             continuation: crate::builtin::BuiltinContinuation::FileWithOpen {
+                mode: VmFileMode::Write,
                 path: path.to_string_lossy().into(),
                 handle,
             },
@@ -11800,6 +12145,7 @@ mod tests {
             vec![Constant::Tag(0), Constant::Int(int(41))],
         );
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         vm.enable_observation(VmObservationOptions::default());
         vm.ensure_root_supervisor_booted()
             .expect("boot should succeed");
@@ -11845,6 +12191,7 @@ mod tests {
             vec![Constant::Tag(0), Constant::Int(int(41))],
         );
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         vm.ensure_root_supervisor_booted()
             .expect("boot should succeed");
 
@@ -12082,7 +12429,10 @@ mod tests {
     }
 
     fn assert_genserver_store_failure_preserves_runtime(
-        operation: impl Fn(&mut VM, &PidHandle) -> Result<Value, super::RuntimeError>,
+        operation: impl Fn(
+            &mut VM,
+            &PidHandle,
+        ) -> Result<crate::builtin::BuiltinOutcome, super::RuntimeError>,
     ) {
         let mut bytecode = base_bytecode(vec![
             Opcode::Halt,
@@ -12106,6 +12456,7 @@ mod tests {
             )],
         };
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let pid = PidHandle {
             id: vm
                 .allocate_supervised_worker(
@@ -12119,7 +12470,10 @@ mod tests {
         let pending = vm
             .genserver_call_reply_later(&pid, Value::Int(int(41)), vm.callable_for_function(0))
             .expect("valid reply later should register a pending callback");
-        assert!(matches!(pending, Value::PendingFuture(_)));
+        assert!(matches!(
+            pending,
+            crate::builtin::BuiltinOutcome::Complete(Value::PendingFuture(_))
+        ));
 
         for invalid_pid in [
             PidHandle {
@@ -12135,15 +12489,21 @@ mod tests {
             let expected = vm
                 .process_store(&invalid_pid, Value::Int(int(99)))
                 .expect("invalid PID should return a language error");
+            let expected = vm.drive_builtin_outcome(expected).unwrap();
             let error = decode_vm_result(expected.clone(), "test", "store")
                 .expect("store result is well formed")
                 .expect_err("invalid PID must fail to store");
             assert_eq!(
                 error.kind,
-                sindr::names::compiler_global_error_kind("InvalidPid")
+                sindr::names::compiler_global_error_kind(if invalid_pid.id != pid.id {
+                    "ProcessStoreUnknownPid"
+                } else {
+                    "ProcessStorePidTypeMismatch"
+                })
             );
             let actual =
                 operation(&mut vm, &invalid_pid).expect("store failure remains a language error");
+            let actual = vm.drive_builtin_outcome(actual).unwrap();
             assert_eq!(
                 actual, expected,
                 "must preserve the original InvalidPid error"
@@ -12189,11 +12549,12 @@ mod tests {
             process_name: "Worker".into(),
         };
 
+        install_process_error_definitions(&mut vm);
         let value = vm
             .genserver_call_reply_later(&pid, Value::Int(int(42)), vm.callable_for_function(0))
             .expect("reply later should start callback");
 
-        let Value::PendingFuture(future_id) = value else {
+        let BuiltinOutcome::Complete(Value::PendingFuture(future_id)) = value else {
             panic!("reply later should suspend on a future");
         };
         assert_eq!(
@@ -12255,10 +12616,11 @@ mod tests {
             metadata: CallableMetadata::default(),
         };
 
+        install_process_error_definitions(&mut vm);
         let value = vm
             .genserver_call_reply_later(&pid, Value::Int(int(42)), callback)
             .expect("reply later should create a reply future");
-        let Value::PendingFuture(reply_future) = value else {
+        let BuiltinOutcome::Complete(Value::PendingFuture(reply_future)) = value else {
             panic!("reply later should return a pending reply future");
         };
         vm.process_runtime.attach_future_deadline(
@@ -12273,7 +12635,7 @@ mod tests {
 
         assert!(matches!(
             vm.ready_future_value(reply_future),
-            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Timeout")
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::FutureDeadlineExceeded")
         ));
         assert!(vm.process_runtime.reply_table.is_empty());
         assert!(vm
@@ -12297,7 +12659,7 @@ mod tests {
 
         assert!(matches!(
             vm.ready_future_value(reply_future),
-            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Timeout")
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::FutureDeadlineExceeded")
         ));
         assert!(vm.process_runtime.detached_tasks.is_empty());
     }
@@ -12369,6 +12731,7 @@ mod tests {
             .collect();
 
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         vm.enable_observation(VmObservationOptions::default());
         vm.ensure_root_supervisor_booted()
             .expect("singleton boot stress should succeed");

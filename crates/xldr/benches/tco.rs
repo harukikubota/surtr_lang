@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use eldr::vm::{VmObservation, VmObservationOptions};
 use eldr::VM;
-use forge::bytecode::{populate_error_template_lines, Bytecode};
+use forge::bytecode::Bytecode;
 use sindr::policy::CompileUnitKind;
 
 const FIB_TAIL_50: &str = r#"
@@ -124,7 +124,6 @@ fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
     .map_err(|e| format!("phase=typecheck; message={}", e))?;
     let mut bytecode =
         forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
-    populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
     Ok(bytecode)
 }

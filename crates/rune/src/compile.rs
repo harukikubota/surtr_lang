@@ -4,9 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use diagnostics::{SourceId, SourceRegistry};
-use forge::bytecode::{
-    populate_error_template_lines, stable_hash_hex, synthesize_source_map, SourceFileEntry,
-};
+use forge::bytecode::{stable_hash_hex, synthesize_source_map, SourceFileEntry};
 use sindr::policy::EntryPoint;
 use spire::ast::{Ast, Span};
 use spire::error::ParseError;
@@ -727,7 +725,6 @@ pub(crate) fn compile_source_with_measurement(
         measurement.codegen = elapsed(codegen_start);
     }
 
-    populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
     bytecode.signatures = signatures;
     bytecode.compile_info.bytecode_version = 1;
@@ -991,7 +988,7 @@ mod tests {
             ),
         ] {
             let source = format!(
-                "import Test;\ndeferror PayloadFailure(detail: String) {{ detail }}\n{source}\n"
+                "import Test;\ndeferror PayloadFailure(detail: String) {{ |detail: String| Self(message: detail, detail) }}\n{source}\n"
             );
             let plan = prepare_script_compile_plan(FILE, &source, None)
                 .expect("assertion input must have a valid script plan");

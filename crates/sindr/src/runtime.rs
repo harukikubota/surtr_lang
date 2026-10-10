@@ -937,6 +937,8 @@ pub struct RuntimeStackFrame {
 pub struct RichError {
     pub kind: String,
     pub message: String,
+    /// Declaration-ordered, heterogeneous Error payload; empty errors use the same representation.
+    pub payload: Vec<Value>,
     pub location: Location,
     pub cause: Option<Box<RichError>>,
     pub diagnostic: Option<RuntimeErrorDiagnostic>,
@@ -954,6 +956,7 @@ impl RichError {
         Self {
             kind,
             message: message.into(),
+            payload: Vec::new(),
             location,
             cause,
             diagnostic: None,
@@ -1285,6 +1288,7 @@ mod tests {
         let value = Value::Error(Box::new(RichError {
             kind: "TestError".into(),
             message: "boom".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1309,6 +1313,7 @@ mod tests {
         let mut value = RichError {
             kind: "Outer".into(),
             message: "outer".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1324,6 +1329,7 @@ mod tests {
         value.append_cause_tail(RichError {
             kind: "Inner".into(),
             message: "inner".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1339,6 +1345,7 @@ mod tests {
         value.append_cause_tail(RichError {
             kind: "Leaf".into(),
             message: "leaf".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1773,6 +1780,7 @@ mod tests {
             fields: vec![Value::Error(Box::new(RichError {
                 kind: "NoneError".into(),
                 message: "null".into(),
+                payload: Vec::new(),
                 location: Location {
                     file: "<repl>".into(),
                     func: "f".into(),
@@ -1798,6 +1806,7 @@ mod tests {
         let mut rich = RichError {
             kind: "Higher".into(),
             message: "higher".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1813,6 +1822,7 @@ mod tests {
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
             message: "lower".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1841,6 +1851,7 @@ mod tests {
         let mut rich = RichError {
             kind: "Higher".into(),
             message: "higher".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1856,6 +1867,7 @@ mod tests {
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
             message: "lower".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1883,6 +1895,7 @@ mod tests {
         let rich = RichError {
             kind: "PatternMismatch".into(),
             message: "Pattern did not match.".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
