@@ -1229,7 +1229,6 @@ impl CanonicalTraitImplPatternKey {
 #[derive(Default)]
 struct CanonicalUnifier {
     bindings: HashMap<u32, Rc<CanonicalTy>>,
-    allow_ignored_callable_inputs: bool,
     rigid_variables: HashSet<u32>,
 }
 // A bound root stays alive while recursive comparisons add new bindings.
@@ -1302,28 +1301,10 @@ impl CanonicalUnifier {
         if left.head != right.head || left.arguments.len() != right.arguments.len() {
             return false;
         }
-        // Preserve the input contract at entry to this function comparison.
-        // An earlier input may bind a variable to Hole, but that must not make
-        // a later input ignored retroactively.
-        let ignored_inputs =
-            if self.allow_ignored_callable_inputs && left.head == CanonicalTypeHead::Function {
-                right
-                    .arguments
-                    .iter()
-                    .enumerate()
-                    .map(|(ordinal, ty)| {
-                        ordinal + 1 < right.arguments.len()
-                            && self.resolve_root(ty).head == CanonicalTypeHead::Hole
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
         left.arguments
             .iter()
             .zip(&right.arguments)
-            .enumerate()
-            .all(|(ordinal, (a, b))| ignored_inputs.get(ordinal) == Some(&true) || self.unify(a, b))
+            .all(|(a, b)| self.unify(a, b))
     }
 
     /// Compare a constructor witness with an observed application.  `Hole`
@@ -2914,7 +2895,6 @@ impl Checker {
             let mut fresh = HashMap::new();
             let mut unifier = CanonicalUnifier {
                 rigid_variables: self.rigid_tyvars.clone(),
-                allow_ignored_callable_inputs: true,
                 ..Default::default()
             };
             let head_args = contract
@@ -3417,7 +3397,6 @@ impl Checker {
             let mut fresh = HashMap::new();
             let mut unifier = CanonicalUnifier {
                 rigid_variables: self.rigid_tyvars.clone(),
-                allow_ignored_callable_inputs: true,
                 ..Default::default()
             };
             let args = info

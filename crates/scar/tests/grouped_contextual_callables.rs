@@ -8,19 +8,21 @@ fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeE
 }
 
 #[test]
-fn grouped_ignored_input_callable_result_accepts_context_operators() {
+fn grouped_hole_input_callable_result_rejects_context_operators() {
     for source in [
         "[1, 2] |*> (always(10))",
         "[1, 2] |*> ((always(10)))",
         "1 |> (always(10))",
         "Ok(1) |>= (always(Ok(10)))",
+        "mapper = always(10)\n[1] |*> mapper",
+        "bound = always(Ok(10))\nOk(1) |>= bound",
     ] {
-        check(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        check(source).expect_err(source);
     }
 }
 
 #[test]
-fn grouped_callable_result_relays_context_in_arguments_annotations_and_returns() {
+fn grouped_hole_input_callable_rejects_concrete_arguments_annotations_and_returns() {
     for expression in ["always(10)", "(always(10))", "((always(10)))"] {
         for source in [
             format!("def use(mapper: (Int -> Int)) -> Int {{ mapper(1) }}\nuse({expression})"),
@@ -28,7 +30,7 @@ fn grouped_callable_result_relays_context_in_arguments_annotations_and_returns()
             format!("def make() -> (Int -> Int) {{ {expression} }}\nmake()"),
             format!("mapper: (Int -> Int) = match True {{ True => {expression}, False => {expression} }}"),
         ] {
-            check(&source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            check(&source).expect_err(&source);
         }
     }
 }
@@ -61,7 +63,7 @@ fn grouped_context_does_not_accept_real_callable_or_return_mismatches() {
 }
 
 #[test]
-fn contextual_callable_branches_use_expected_type_in_both_orders() {
+fn contextual_callable_branches_reject_hole_input_in_both_orders() {
     for (first, second) in [
         ("(always(10))", "(&identity)"),
         ("(&identity)", "((always(10)))"),
@@ -74,13 +76,13 @@ fn contextual_callable_branches_use_expected_type_in_both_orders() {
             format!("if_let(Ok(1), Ok(x), {first}, {second})"),
         ] {
             let source = format!("def identity(value: Int) -> Int {{ value }}\nmapper: (Int -> Int) = {expression}\nmapper(1)");
-            check(&source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            check(&source).expect_err(&source);
         }
     }
 }
 
 #[test]
-fn ignored_input_relation_does_not_relax_identity_or_container_shapes() {
+fn hole_input_relation_does_not_relax_identity_or_container_shapes() {
     for source in [
         "def identity(value: Int) -> Int { value }\nmapper: (_ -> Int) = (&identity)",
         "mapper: (Int, Int -> Int) = (always(10))",
@@ -93,11 +95,11 @@ fn ignored_input_relation_does_not_relax_identity_or_container_shapes() {
 }
 
 #[test]
-fn contextual_branch_join_preserves_ignored_input_and_grouping_boundary() {
+fn contextual_branch_join_preserves_concrete_input_and_grouping_boundary() {
     use scar::typed::TypedInner;
     use scar::types::Ty;
 
-    let program = check("def identity(value: Int) -> Int { value }\nmapper: (Int -> Int) = if(True, ((always(10))), (&identity))").unwrap();
+    let program = check("def identity(value: Int) -> Int { value }\nmapper: (Int -> Int) = if(True, (({|value: Int| 10})), (&identity))").unwrap();
     let rhs = program
         .iter()
         .find_map(|node| match &node.node {
@@ -111,7 +113,28 @@ fn contextual_branch_join_preserves_ignored_input_and_grouping_boundary() {
     let TypedInner::If(_, first, Some(second)) = &rhs.node else {
         panic!("if branches")
     };
-    assert_eq!(first.ty, Ty::Func(vec![Ty::Hole], Box::new(Ty::Int)));
+    assert_eq!(first.ty, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
     assert!(matches!(first.node, TypedInner::EagerBoundary(_)));
     assert_eq!(second.ty, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
+}
+
+#[test]
+fn grouped_concrete_input_closures_and_captures_keep_context() {
+    for expression in [
+        "{|value: Int| 10}",
+        "({|value: Int| 10})",
+        "(({|value: Int| 10}))",
+        "&identity",
+        "(&identity)",
+        "((&identity))",
+    ] {
+        for source in [
+            format!("def identity(value: Int) -> Int {{ value }}\ndef use(mapper: (Int -> Int)) -> Int {{ mapper(1) }}\nuse({expression})"),
+            format!("def identity(value: Int) -> Int {{ value }}\nmapper: (Int -> Int) = {expression}\nmapper(1)"),
+            format!("def identity(value: Int) -> Int {{ value }}\ndef make() -> (Int -> Int) {{ {expression} }}\nmake()"),
+            format!("def identity(value: Int) -> Int {{ value }}\nmapper: (Int -> Int) = match True {{ True => {expression}, False => {expression} }}"),
+        ] {
+            check(&source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
+    }
 }

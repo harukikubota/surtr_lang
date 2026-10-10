@@ -110,64 +110,11 @@ impl Checker {
         callable: &str,
         ordinal: u32,
     ) -> Result<(), TypeError> {
-        self.assert_relation(
-            expected,
-            actual,
-            expected_fact,
-            actual_fact,
-            reason,
-            origin,
-            callable,
-            ordinal,
-            false,
-        )
-    }
-
-    pub(super) fn assert_value_type_relation(
-        &mut self,
-        expected: &Ty,
-        actual: &Ty,
-        expected_fact: SourceFact,
-        actual_fact: SourceFact,
-        reason: TypeDiagnosticReason,
-        origin: DiagnosticOrigin,
-        callable: &str,
-        ordinal: u32,
-    ) -> Result<(), TypeError> {
-        self.assert_relation(
-            expected,
-            actual,
-            expected_fact,
-            actual_fact,
-            reason,
-            origin,
-            callable,
-            ordinal,
-            true,
-        )
-    }
-
-    fn assert_relation(
-        &mut self,
-        expected: &Ty,
-        actual: &Ty,
-        expected_fact: SourceFact,
-        actual_fact: SourceFact,
-        reason: TypeDiagnosticReason,
-        origin: DiagnosticOrigin,
-        callable: &str,
-        ordinal: u32,
-        value_relation: bool,
-    ) -> Result<(), TypeError> {
         // Concrete and rigid-only comparisons cannot bind inference variables.
         // Avoid cloning the candidate-probe state for declaration-owned generics:
         // they are common in standard-library bodies but are immutable here.
         let checkpoint = self.type_relation_checkpoint_for(&[expected, actual]);
-        let compatible = if value_relation {
-            self.value_types_compatible(expected, actual)
-        } else {
-            self.types_compatible(expected, actual)
-        };
+        let compatible = self.types_compatible(expected, actual);
         if matches!(compatible, Ok(true)) {
             return Ok(());
         }
@@ -452,7 +399,7 @@ impl Checker {
                 }
             }
             if let Some(expected) = expected {
-                let relation = self.assert_value_type_relation(
+                let relation = self.assert_type_relation(
                     expected,
                     &body.ty,
                     self.type_fact(SourceRole::Expected, span, expected),

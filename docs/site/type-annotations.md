@@ -206,6 +206,9 @@ keep_one: (_ -> Int) = always(1)
 ```
 
 この `_` は wildcard ではなく、internal な `Hole` marker の surface 表記です。
+`(_ -> Int)` の値を `(Int -> Int)` の引数・注釈・戻り値・分岐・container に渡すことはできません。
+入力型を指定した関数値が必要な場合は、`{|value: Int| 1}` のような closure を使います。
+`keep_one("ignored")` のような直接呼出しでは、入力を使わずに結果を返します。
 ただし、call-site ReturnTypeArgument内の`_`は推論変数であり、`Hole` markerではありません。
 
 - callable input を 1 つ受ける

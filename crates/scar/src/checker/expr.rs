@@ -1614,7 +1614,7 @@ impl Checker {
                         Some(&relation),
                     )?;
                     self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
-                    let relation = self.assert_value_type_relation(&expected, &typed_rhs.ty,
+                    let relation = self.assert_type_relation(&expected, &typed_rhs.ty,
                         self.type_fact(SourceRole::Annotation, Self::ast_ty_span(ast_ty), &expected), self.type_fact(SourceRole::Value, &typed_rhs.span, &typed_rhs.ty),
                         TypeDiagnosticReason::AnnotationTypeMismatch, DiagnosticOrigin::Annotation, "binding", 0);
                     if let Err(error) = relation {
@@ -2343,7 +2343,7 @@ impl Checker {
         else {
             return Ok(());
         };
-        self.assert_value_type_relation(
+        self.assert_type_relation(
             expected,
             &constraints.signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, expected),
@@ -2438,7 +2438,7 @@ impl Checker {
         if !is_stable_context(&canonical_expected, &self.rigid_tyvars) {
             return Ok(());
         }
-        self.assert_value_type_relation(
+        self.assert_type_relation(
             &normalized_expected,
             &constraints.signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, &normalized_expected),
@@ -2490,7 +2490,7 @@ impl Checker {
         }
 
         for argument in &constraints.value_arguments {
-            let relation = self.assert_value_type_relation(
+            let relation = self.assert_type_relation(
                 &argument.expected,
                 &argument.actual,
                 self.type_fact(SourceRole::Expected, span, &argument.expected),
@@ -3783,7 +3783,7 @@ impl Checker {
             if let Some(output) = &contract.ret {
                 let (_, actual_output) =
                     self.unary_function_parts(&typed.ty, op_name, &typed.span)?;
-                self.assert_value_type_relation(
+                self.assert_type_relation(
                     output,
                     &actual_output,
                     self.type_fact(SourceRole::Expected, &typed.span, output),
@@ -6936,9 +6936,6 @@ impl Checker {
         let output = output.clone();
         let actual_output = actual_output.clone();
         for (input, actual_input) in inputs.iter().zip(&actual_inputs) {
-            if matches!(self.resolve_ty(actual_input), Ty::Hole) {
-                continue;
-            }
             self.assert_operand_relation(
                 input,
                 actual_input,
@@ -8615,7 +8612,7 @@ impl Checker {
         if matches!(self.resolve_ty(expected), Ty::Hole) {
             return Ok(());
         }
-        self.assert_value_type_relation(
+        self.assert_type_relation(
             expected,
             &typed.ty,
             self.type_fact(SourceRole::Expected, span, expected),
@@ -14546,7 +14543,7 @@ impl Checker {
         if let Some(other) = &typed_else {
             if let Some(expected) = &callable_expected {
                 for (ordinal, branch) in [&typed_then, other].into_iter().enumerate() {
-                    self.assert_value_type_relation(
+                    self.assert_type_relation(
                         expected,
                         &branch.ty,
                         self.type_fact(SourceRole::Expected, span, expected),
@@ -14612,7 +14609,7 @@ impl Checker {
         };
         self.record_lazy_capture_signature(span, &ty);
         if let Some(expected) = expected {
-            self.assert_value_type_relation(
+            self.assert_type_relation(
                 expected,
                 &ty,
                 self.type_fact(SourceRole::Expected, span, expected),

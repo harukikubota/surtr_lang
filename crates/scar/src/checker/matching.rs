@@ -129,7 +129,7 @@ impl Checker {
                 }
             }
             if let Some(expected) = expected {
-                let relation = self.assert_value_type_relation(
+                let relation = self.assert_type_relation(
                     expected,
                     &body_node.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
@@ -1642,7 +1642,7 @@ impl Checker {
         };
         if let Some(expected) = &callable_expected {
             for (ordinal, branch) in [&then, &otherwise].into_iter().enumerate() {
-                self.assert_value_type_relation(
+                self.assert_type_relation(
                     expected,
                     &branch.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
@@ -1681,7 +1681,7 @@ impl Checker {
         self.record_lazy_capture_signature(span, &ty);
         let required = if then_only { Some(&Ty::Unit) } else { expected };
         if let Some(required) = required {
-            self.assert_value_type_relation(
+            self.assert_type_relation(
                 required,
                 &then.ty,
                 self.type_fact(SourceRole::Expected, span, required),

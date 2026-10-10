@@ -2663,40 +2663,19 @@ impl Checker {
         (inputs.len() == 1).then(|| expected.clone())
     }
 
-    /// Expected value compatibility is directed. An ignored unary input accepts
-    /// the expected input without changing Hole's strict type identity. Outputs
-    /// and every other shape still use the ordinary relation.
-    pub(super) fn value_types_compatible(
-        &mut self,
-        expected: &Ty,
-        actual: &Ty,
-    ) -> Result<bool, TypeError> {
-        let resolved_expected = self.resolve_ty(expected);
-        let resolved_actual = self.resolve_ty(actual);
-        if let (Some((expected_inputs, expected_output)), Some((actual_inputs, actual_output))) = (
-            self.function_parts(&resolved_expected),
-            self.function_parts(&resolved_actual),
-        ) {
-            if expected_inputs.len() == 1 && matches!(actual_inputs, [Ty::Hole]) {
-                let expected_output = self
-                    .function_parts(expected)
-                    .map_or(expected_output, |(_, output)| output)
-                    .clone();
-                let actual_output = self
-                    .function_parts(actual)
-                    .map_or(actual_output, |(_, output)| output)
-                    .clone();
-                return self.types_compatible(&expected_output, &actual_output);
-            }
-        }
-        self.types_compatible(expected, actual)
-    }
-
     pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> Result<bool, TypeError> {
         let profile = self.profiler.start();
         let result = (|| -> Result<bool, TypeError> {
             let expected_bare_occurrence = Self::bare_constructor_occurrence(expected);
             let got_bare_occurrence = Self::bare_constructor_occurrence(got);
+            let expected_function = match expected {
+                Ty::Func(parameters, output) => Some((parameters.as_slice(), output.as_ref())),
+                _ => None,
+            };
+            let got_function = match got {
+                Ty::Func(parameters, output) => Some((parameters.as_slice(), output.as_ref())),
+                _ => None,
+            };
             let expected = self.resolve_ty(expected);
             let got = self.resolve_ty(got);
             let result = match (&expected, &got) {
@@ -2836,6 +2815,12 @@ impl Checker {
                         })?
                 }
                 (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                    // Preserve declaration-owned constructor occurrences while
+                    // comparing every input and output with the ordinary relation.
+                    let (a_params, a_ret) =
+                        expected_function.unwrap_or((a_params.as_slice(), a_ret.as_ref()));
+                    let (b_params, b_ret) =
+                        got_function.unwrap_or((b_params.as_slice(), b_ret.as_ref()));
                     a_params.len() == b_params.len()
                         && try_all(a_params.iter().zip(b_params.iter()), |(a, b)| {
                             self.types_compatible(a, b)
@@ -5079,7 +5064,7 @@ mod tests {
     }
 
     #[test]
-    fn value_relation_and_callable_context_preserve_bare_return_origin() {
+    fn type_relation_and_callable_context_preserve_bare_return_origin() {
         let mut checker = Checker::with_persistent_state(
             crate::test_support::session_from_cached_std_prelude().state,
             TypecheckContext::default(),
@@ -5098,15 +5083,20 @@ mod tests {
             .insert(occurrence, Ty::List(Box::new(Ty::Hole)));
         let bare_return = Ty::SelfApp(vec![Ty::Hole, Ty::Var(occurrence)]);
         let expected = Ty::Func(vec![Ty::Int], Box::new(bare_return));
-        let actual = Ty::Func(vec![Ty::Hole], Box::new(Ty::List(Box::new(Ty::Bool))));
+        let actual = Ty::Func(vec![Ty::Int], Box::new(Ty::List(Box::new(Ty::Bool))));
 
         assert_eq!(
             checker.contextual_callable_expected(Some(&expected)),
             Some(expected.clone())
         );
         assert!(
-            checker.value_types_compatible(&expected, &actual).unwrap(),
+            checker.types_compatible(&expected, &actual).unwrap(),
             "bare return compares carrier identity without equating its mapped payload"
+        );
+        let ignored_input = Ty::Func(vec![Ty::Hole], Box::new(Ty::List(Box::new(Ty::Bool))));
+        assert!(
+            !checker.types_compatible(&expected, &ignored_input).unwrap(),
+            "preserving bare return identity must not relax callable input equality"
         );
     }
 

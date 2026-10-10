@@ -79,7 +79,7 @@
 | `@autoimport` | Trait helper aliasをfile-local preludeへ入れるTrait単位のopt-in |
 | `@derive` | 対応Trait implをresolverが生成する型宣言側annotator |
 
-関数型の入力にある`_`は、関数がその入力を使わないことを表す。期待関数型を与えて式を検査するときも、この入力契約を維持して返り型を推論する。groupingは期待型を内側へ伝え、通常引数・注釈・返り値・分岐とパイプで同じ規則を使う。単項関数値の実際の入力が`_`の場合に限り期待入力を受け入れ、返り型は通常通り照合する。使用する入力型や引数数は従来通り検査する。trait signatureの一致判定、集約型の内部、関数の返り型内へこの適合規則を広げず、`Hole`を一般の型比較のwildcardにしない。既知の期待型を持つ分岐では各枝を期待型へ照合し、枝の順序で結果を変えない。
+関数型の入力にある`_`は、関数がその入力を使わないことを表す。`Hole` は通常の型関係では同じ `Hole` とだけ一致し、実入力が `(_ -> Int)` の関数値を `(Int -> Int)` に適合させない。通常引数・binding・return・分岐・container は同じ型関係を使い、入力・出力・引数数を照合する。grouping は期待型を内側へ伝えるが、この型関係を変えない。既知の期待型を持つ分岐では各枝を期待型へ照合し、枝の順序で結果を変えない。ignored-input callable の直接呼出しでは入力値を観測せず、呼出し先の入力契約に従って値を受け入れる。これは関数値同士の型適合とは別の呼出し規則である。
 
 `Type`は型形状指定のcompiler-special surface name、`TypeConstructor`はcompiler内部のkind/identity分類、
 `TypeCtorTrait`は`Self: Type<...>`を持つTraitの分類であり、相互に同義ではない。
@@ -508,9 +508,9 @@ ReturnTypeArguments、expected return、captured impl-target argumentsを含め�
 | parent coverage | 全称 | child の全 instance を 1 parent impl が cover し、parent `where` を証明できる |
 
 `CanonicalUnifier` の構造比較は変数の束縛先だけをたどり、型部分木を各深さで再コピーしない。
-所有する解決済み型は束縛の追加時と結果の取り出し時に構築する。ignored callable input の判定は、
-その関数型の比較開始時の束縛に基づく。前の入力の照合で変数が `Hole` になっても、後続の入力を
-遡って ignored input にはしない。
+所有する解決済み型は束縛の追加時と結果の取り出し時に構築する。callable の候補適合も入力・出力を
+構造的に照合し、入力の `Hole` を wildcard として扱わない。前の入力の照合で変数が `Hole` に
+束縛された場合も、後続の入力は同じ型 identity として照合する。
 
 ### 3.1 Coherence
 

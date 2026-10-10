@@ -12,17 +12,23 @@
 |---|---|---|
 | TC-03 | WorkerLease→PIDの暗黙適合を再現 | プロセス側で通常型比較から除去。生成helperとの受渡しを明示契約へ揃える |
 | TC-04 | 未知PID marker、genericの不正適合を再現 | プロセス側でmarkerの解決と型変数の同一性を通常規則へ揃える |
-| TC-05 | unary Hole入力の例外が残存 | 例外を除去し、標準署名・正本・成功／拒否テストを揃える |
+| TC-05 | 修正・検証済み | Hole入力の適合例外を除去し、通常関係へ統一。直接呼出しの無視入力契約は維持 |
 | TC-06・Enum | 修正・検証済み | payloadの有無によらず明示impl / deriveの通常proof・dispatchを使う |
 | TC-06・PID | compiler-owned Eqが残存 | プロセス側で標準実装へ移す。`instance_of`のAPIとEqとの接続は未確定 |
 | TC-10 | 文書修正済み | Resultの補助エラー名はドキュメント用で、返却kindの静的制限・網羅検査を行わないと正本へ明記 |
 | TC-11 | 修正・検証済み | 型注釈producerの元TypeErrorをprobe rollback後も保持。候補依存失敗はcandidate情報を維持 |
 
-プロセス以外で対応する確定項目はTC-05、TC-06のEnum側、TC-10、TC-11の4件。[runtime側のRT-11](runtime_audit_followup_20261010.md#rt-11-recoverの説明を現行の通常関数へ揃える)を合わせて5件となる。
+プロセス以外の確定項目TC-05、TC-06のEnum側、TC-10、TC-11と、[runtime側のRT-11](runtime_audit_followup_20261010.md#rt-11-recoverの説明を現行の通常関数へ揃える)は修正・検証済み。TC-04は今回の実装対象として続ける。
 
 ## TC-05: Hole入力に限ったcallable適合
 
-**対応が必要。** `crates/scar/src/checker/types.rs:2654-2677`の`value_types_compatible`は、actualの入力が単項`Ty::Hole`なら入力型を照合せず出力型だけを見る。`types_compatible`そのものではHoleは同じHoleとだけ一致する。2つの関係による例外が、通常値の検査で残っている。
+**修正・検証済み（level4）。** 2026-10-10、value_types_compatibleとassert_value_type_relationの旧wrapper、contextual callableのactual Hole入力skip、CanonicalUnifierの候補適合skipを削除した。通常引数・binding・return・分岐・container・パイプは同じ通常型関係を使う。標準alwaysの署名は変更せず、実入力がHoleのままなら具体入力へ適合させない。ignored-input callableの直接呼出しは既存契約を維持する。
+
+Trait正本・型注釈・テスト方針・最適化文書・Function::alwaysの説明を整合させた。groupedの旧成功を拒否回帰へ変更し、binding経由のmap/bind拒否も独立入力で固定した。通常の明示Int closure / capture、generic推論、branch joinは成功を維持する。Hole flowの旧成功fixtureは同じ入力の拒否fixtureへ移し、grouped成功fixtureは明示Int closureへ追従した。出力のbare constructor originは通常Func構造比較で維持し、同じ出力でもactual Hole入力は拒否する。
+
+通常値の拒否3件とcanonical候補適合の拒否でRedを確認。grouped/constructor検証は10件、canonical/戻り値由来の検証は6件成功。公開fixtureを含む選択検証は23件成功。最終差分の独立レビューは指摘なし。共有の最終CIは2,430件成功、標準Surtr全件は終了コード0（TC-11節のコマンド）。
+
+以下は修正前の調査記録。`crates/scar/src/checker/types.rs:2654-2677`の`value_types_compatible`は、actualの入力が単項`Ty::Hole`なら入力型を照合せず出力型だけを見る。`types_compatible`そのものではHoleは同じHoleとだけ一致する。2つの関係による例外が、通常値の検査で残っている。
 
 現行CLIで次の差を再現した。
 
@@ -149,6 +155,8 @@ def leak_list(lease: WorkerLease<Counter>) -> List<PID<Counter>> { [lease] }
 
 停止・回収仕様はleaseからの新規メッセージを停止受付で拒否するが、WorkerLeaseからPIDへの一般的な型適合を除去するタスクではない。公開Workers::reserveで得た実leaseのEq/adopt投入の実行は今回は行っていない。
 
+2026-10-10の実装範囲の再確認では、TC-03は未確定の署名契約が残るため実装していない。正本のlease利用と裸PID抽出APIなしは確定しているが、生成helperとmessage templateはPID入力に固定されている。capture・高階関数を含めて両targetを受ける明示capability付き型引数にするか、PID/lease別の生成APIにするかは未決定。直接callだけのidentity救済は追加しない。型変数のPID marker同一性を直すTC-04とは分ける。
+
 ### TC-04: PID markerとgeneric同一性
 
 `checker/types.rs:604-616`の`pid_marker_from_ast`はNamedの文字列を返し、process宣言の存在・種別を検査しない。`2711-2714`のPID比較は片側が`$`始まりなら一致させ、通常の型変数束縛を共有しない。
@@ -217,7 +225,7 @@ raw callerは`predeclare.rs:893`のfield、`1143`のEnum payload、`1594`のcons
 
 この残件は内部不変条件エラーの情報保持に限定して調査を継続する。正常なSurtr入力から不正成功または新たな循環原因欠落は再現していない。修正する場合は、破損metadataを最も直接的な層で入力し、元原因を維持する回帰テストを先に置く。TC-11の公開入力での診断劣化を、この未再現の内部候補で代用しない。
 
-## 次の作業単位と検証
+## 次の作業単位と検証（調査時の記録）
 
 プロセス作業と独立して進める順序は、文書のみのTC-10 / RT-11、局所診断のTC-11、通常Eqへの統一であるTC-06のEnum側、型規則整理が必要なTC-05を推奨する。TC-05とPID側の未確定APIは、必要な契約を具体化してから実装へ進む。今回の調査を実装承認や新APIの決定として扱わない。
 
