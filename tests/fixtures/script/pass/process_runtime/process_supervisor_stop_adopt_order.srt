@@ -1,0 +1,67 @@
+defgenserver MigratingWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> {
+    Ok(7)
+  }
+
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+}
+
+defsupervisor OriginalSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+defsupervisor DestinationSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+def child_counts() -> Result<(Int, Int)> {
+  original =? OriginalSup::status()
+  destination =? DestinationSup::status()
+  Ok((original.child_count, destination.child_count))
+}
+
+def adopt_kind(result: Result<Unit>) -> String {
+  match result {
+    Ok(_) => "unexpected adopt success",
+    Err(error) => Error::kind(error),
+  }
+}
+
+supervisor_init {
+  OriginalSup {}
+  DestinationSup {}
+}
+
+pid =? MigratingWorker::init()
+_ =? OriginalSup::adopt(pid)
+print(inspect(child_counts()))
+_ =? DestinationSup::adopt(pid)
+print(inspect(child_counts()))
+print(inspect(MigratingWorker::stop(pid)))
+print(inspect(child_counts()))
+# The former and final owner both reject the retained, reclaimed PID.
+print(adopt_kind(OriginalSup::adopt(pid)))
+print(adopt_kind(DestinationSup::adopt(pid)))
+print(inspect(child_counts()))

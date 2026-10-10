@@ -18,6 +18,16 @@ deferror SupervisorAdoptUnknownPid(pid: Int, process: String, supervisor: String
   Self(message: "supervisor #{supervisor} cannot adopt unknown pid #{pid} for #{process}", pid, process, supervisor)
 }
 
+deferror ProcessStopped(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "process #{pid} (#{process}) is stopping or stopped", pid, process)
+}
+
+deferror WorkersUnavailable(workers: Int, process: String) {
+  |workers: Int, process: String|
+  Self(message: "workers #{workers} for #{process} has no accepting worker", workers, process)
+}
+
 deferror ProcessStateUnknownPid(pid: Int, process: String) {
   |pid: Int, process: String|
   Self(message: "state requested for unknown pid #{pid} for #{process}", pid, process)
@@ -242,6 +252,14 @@ Runtime-managed task handle for an async task body.
 
 @doc """
 Return contract for worker `@call` handlers.
+
+`Stop` closes new message acceptance. Its response does not wait for other
+started handlers or callbacks to finish. New requests to that PID return
+`ProcessStopped`, including after the process body has been reclaimed.
+
+`ReplyLater` stores the next state before starting its callback. A caller
+timeout settles only the caller's result; the callback continues through
+sleep, future, and I/O waits. Its later result does not replace the timeout.
 """
 defenum CallResult<$Reply, $State> {
   Reply($Reply, $State),
@@ -251,6 +269,10 @@ defenum CallResult<$Reply, $State> {
 
 @doc """
 Stop payload for worker `@call` handlers.
+
+`Normal(reply)` returns `Ok(reply)` to this call. `Error(error)` returns that
+error with its original kind, message, location, and cause. Already started
+executions continue; the first accepted Stop fixes the process exit reason.
 """
 defenum StopReply<$Reply> {
   Normal($Reply),
@@ -267,6 +289,10 @@ defenum CastResult<$State> {
 
 @doc """
 Stop payload for worker `@cast` handlers.
+
+Both `Normal` and `Error(error)` acknowledge this cast with `Ok(())`.
+`Error(error)` records the process exit reason. A handler returning `Err(error)`
+instead propagates that error to its caller.
 """
 defenum StopReason {
   Normal,
@@ -278,6 +304,8 @@ Runtime-managed reservation for one worker from a `Workers<$Worker>` handle.
 
 `WorkerLease<$Worker>` is returned by `Workers::reserve(workers)`. Pass the
 lease to the worker message helper that should run on the reserved worker.
+A lease does not authorize messages after Stop: new requests to its original
+PID return `ProcessStopped`. The lease is not redirected to a replacement.
 
 ## Examples
 defgenserver ImageWorkerPool {
@@ -301,7 +329,10 @@ defgenserver ImageWorkerPool {
 
 impl Workers {
   @doc """
-  Submit one message template to an idle worker managed by `workers`.
+  Submit one message template to an accepting worker managed by `workers`.
+
+  Stopping workers are excluded from selection. If no worker accepts new
+  messages, return `WorkersUnavailable` without waiting or retrying.
 
   The worker PID is injected by the runtime; ordinary code passes the worker
   message without a PID. This API is intended for Singleton GenServer pool
@@ -325,7 +356,11 @@ impl Workers {
   @builtin def submit(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<Unit>)) -> Result<Unit>
 
   @doc """
-  Send one message template to every worker in `workers`.
+  Send one message template to each worker accepting messages at the start.
+
+  An empty target set returns `[]`. A target that stops before its message
+  starts returns `ProcessStopped` for that element. Replacement workers do
+  not join a broadcast already in progress.
 
   The target set is runtime-managed. Ordinary code passes the worker message
   without a PID. This API is intended for Singleton GenServer pool
@@ -351,7 +386,10 @@ impl Workers {
   @builtin def broadcast(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>
 
   @doc """
-  Reserve one worker from `workers` and return a lease for later messaging.
+  Reserve one accepting worker from `workers` for later messaging.
+
+  If no worker accepts new messages, return `WorkersUnavailable`. A later
+  message through the lease still checks whether its worker accepts requests.
 
   Use this when work needs an explicit worker reservation before sending the
   next message. This API is intended for Singleton GenServer pool
@@ -375,6 +413,9 @@ impl Workers {
 
   @doc """
   Return the number of workers managed by `workers`.
+
+  Stopping workers remain counted until their started executions finish.
+  Membership removal and replacement start after that completion.
 
   This API is intended for Singleton GenServer pool implementations, usually
   from `@call`, `@cast`, or helper functions inside the `defgenserver` body.

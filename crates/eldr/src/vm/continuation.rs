@@ -59,6 +59,7 @@ impl VM {
             }],
             pending_invocation: Some(Ok(Invocation::Builtin(outcome))),
             cancellation: None,
+            current_process_execution: None,
             pc: 0,
             target: ExecutionTarget::FrameDepth(1),
         }
@@ -138,6 +139,37 @@ impl VM {
         });
         self.pending_invocation = Some(Ok(invocation));
         Ok(())
+    }
+
+    pub(crate) fn managed_process_call_origin(
+        &self,
+    ) -> Result<(Location, Vec<RuntimeStackFrame>), RuntimeError> {
+        let frame = self.continuations.last().ok_or_else(|| {
+            RuntimeError::new("managed process invocation has no return boundary")
+        })?;
+        let ReturnDestination::Stack {
+            previous_site,
+            previous_trace,
+            ..
+        } = &frame.destination
+        else {
+            return Err(RuntimeError::new(
+                "managed process invocation has no caller origin",
+            ));
+        };
+        let (start, end) = previous_site
+            .ok_or_else(|| RuntimeError::new("managed process caller has no source origin"))?;
+        let location = self
+            .location_for_span(start, end, "<process message>")
+            .ok_or_else(|| RuntimeError::new("managed process caller source origin is invalid"))?;
+        let mut trace = self.current_stack_trace_snapshot();
+        if !trace.is_empty() {
+            trace.remove(0);
+        }
+        if let Some(previous) = previous_trace {
+            trace.insert(0, previous.clone());
+        }
+        Ok((location, trace))
     }
 
     pub(super) fn error_construction_source(&self) -> Option<(u32, u32)> {
@@ -332,6 +364,7 @@ impl VM {
                             "missing future return destination",
                         ));
                     }
+                    self.release_internal_process_future(id);
                     self.pending_invocation =
                         Some(Ok(Invocation::Builtin(BuiltinOutcome::Complete(value))));
                 } else {

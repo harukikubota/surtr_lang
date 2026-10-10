@@ -1064,6 +1064,22 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
         1
     );
     assert_eq!(dump["process_runtime"]["counters"]["process_count"], 1);
+    for counter in [
+        "stopping_process_count",
+        "active_process_execution_count",
+        "stopped_identity_count",
+    ] {
+        assert_eq!(dump["process_runtime"]["counters"][counter], 0);
+        assert_eq!(dump["stats"]["process"][counter], 0);
+    }
+    assert_eq!(
+        dump["process_runtime"]["processes"][0]["acceptance"],
+        "accepting"
+    );
+    assert_eq!(
+        dump["process_runtime"]["processes"][0]["active_executions"],
+        0
+    );
     let specs = dump["process_runtime"]["specs"]
         .as_array()
         .expect("process specs should be an array");

@@ -157,6 +157,15 @@ VM 側の責務は次の通り。
 `Waiting(Timer)` に移す。Ready 前の process への call は Ready 待ちに入り、
 call timeout は Ready 待ち時間を含む。
 
+Agent get / set と GenServer call / cast は生成 wrapper の共通実行境界を通す。state 読取前に PID の種別・型・identity と受付を検証して実行 ID を登録し、保存・返答・cleanup までを追跡する。callee の wrapper は runtime 所有の独立した ExecutionContext で進め、caller は結果 future を待つ。call timeout は結果を確定するだけで開始済み callee を取り消さず、callee の存続中も caller へ timeout を配送する。ReplyLater callback は同じ実行の継続とし、timeout 後も終了まで追跡する。
+実行段階は Handling / Postprocessing / Callback を分ける。Handling で登録時の state snapshot を一度だけ読み取り、handler 正常復帰後の `__process_postprocess` で Postprocessing へ移る。store / Stop / ReplyLater は後処理段階だけで許す。境界外・別個体・二度目の state 読取や、Handling / Callback からの保存は RuntimeError とする。
+
+通常 Stop は受付を `Accepting` から `Stopping` へ閉じる。scheduler の Runnable / Waiting とは独立する。新規・未開始要求は `ProcessStopped` で拒否し、開始済み実行の再開・保存・返答は許す。未完了実行が 0 になったときに本体と不要な管理参照を削除する。空の停止済み本体は常設せず、停止完了と runtime 異常の打切りを混同しない。shutdown_timeout は通常 Stop に作用しない。
+
+PID copy / lease / closure は不変 identity を Rc で共有する。identity は個体 ID・canonical な process 型・PID 種別を持ち、本体への強参照を持たない。回収済み identity は copy-on-write の停止識別表に Weak だけを登録し、旧 PID への要求は回収後も ProcessStopped とする。数値 ID の一致だけで別 identity を受理しない。個体 ID の高水位は rollback で戻さず、失敗 chunk の ID を再利用しない。spawn / 停止完了と chunk 管理境界で死んだ Weak を除く。
+
+checkpoint は受付・実行 record・継続・future / reply / waiting / deadline / task・Workers / supervisor・停止識別表を同一時点で保存する。live 側の停止で保存側を変更しない。停止前の checkpoint は rollback に必要な本体の state・継続を保持できるが、旧 PID だけでは保持しない。active VM の本体削除と checkpoint 破棄後の物理解放を区別する。
+
 標準 I/O は VM 内部の stdout/stderr/stdin バッファへ直接触る契約ではなく、
 `StdIn` / `StdOut` / `StdErr` builtin handler への message call として扱う。
 Rust tests と Pure Surtr `Test` DSL は、この handler backend を差し替えて同じ
@@ -167,7 +176,7 @@ buffer semantics を観測できなければならない。
 VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk()` だが、
 内部実行は `ExecutionContext` を介した step 単位に分ける。
 
-- `ExecutionContext` は `pc`、operand stack、call frames、実行 target と、未完了の builtin / callback の継続状態を持つ。
+- `ExecutionContext` は `pc`、operand stack、call frames、実行 target、現在の process 実行 ID と、未完了の builtin / callback の継続状態を持つ。通常 helper は同じ実行を続け、生成 message API は再入でも別実行として受付を確認する。
 - `VM` は bytecode、constant/function/type table、boot plan、process runtime、
   I/O、observer、file resource を所有し続ける。
 - `step_context(ctx)` は `ctx.pc` の opcode 1 個、またはそれに相当する小さな VM 実行単位だけを進める。
@@ -356,7 +365,7 @@ Packed の tail は参照中の buffer 全体を保持し、処理済みの先�
 反復解放し、共有 tail に到達したらその参照だけを減らす。各 head は tail より先に解放する。
 固定深さの List / Tuple / Tagged / Callable に含まれる長い Cons も同じ処理を使う。
 任意の深さに入れ子になったValue木全体の反復解放は未実装である。
-checkpointの共有はprocess・future・detached taskの3表を対象とし、metadataやqueueなどの複製は残る。
+checkpoint は process・future・detached task に加え、停止識別表と実行 record を整合した状態で保存する。metadata や queue などの複製は残る。
 
 ---
 
@@ -465,6 +474,7 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。
 - `__supervisor_workers` は `(supervisor, worker_init, WorkerStrategy)` を受け取る。Eldr v1 は `WorkerScale::Fix(n)` のみ実行する。`init != n` は `WorkerStrategyInitTargetMismatch`、`0 <= min <= n <= max` の違反は `WorkerStrategyBoundsInvalid`、正規 Int の内部固定幅への非表現は `WorkerStrategyFieldOutOfRange` を返す。各定義は条件に必要な値を Payload に保持し、schema・tag・field・型の内部不整合は RuntimeError とする。
 - process runtime snapshot は `worker_sets` を含む。各要素は `id`, `worker_process`, `supervisor`, `target`, `min`, `max`, `member_pids`, `live_count` を持つ。
+- process 一覧は scheduler 状態と受付状態を別に表示し、停止要求中かつ待機中を区別する。停止要求中の本体数、未完了実行数、保持中の停止識別 entry 数を区別し、回収済み個体は一覧と本体件数から除く。`member_pids` / `live_count` と supervisor の child count は停止要求中も個体を含み、停止完了時に一度だけ減る。
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
 - process / workers / task await timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す

@@ -780,6 +780,56 @@ fn process_pid_call(span: &Span, lower_module: &str, process_name: &str) -> Ast 
     )
 }
 
+// Keep PID lookup outside the runtime-owned message execution. State reading,
+// handler evaluation, and every postprocessing path belong to its callback.
+fn process_execution_body(
+    span: &Span,
+    lower_module: &str,
+    process_name: &str,
+    singleton: bool,
+    statements: Vec<Ast>,
+) -> Ast {
+    let mut outer = Vec::new();
+    if singleton {
+        outer.push(pid_bind(span, lower_module, process_name));
+    }
+    outer.push(hidden_runtime_call(
+        span,
+        "__process_execute",
+        vec![
+            var(span, "pid"),
+            Ast::Closure(
+                span.clone(),
+                Vec::new(),
+                Box::new(Ast::Block(span.clone(), statements)),
+            ),
+        ],
+    ));
+    Ast::Block(span.clone(), outer)
+}
+
+fn process_postprocess_call(span: &Span) -> Ast {
+    hidden_runtime_call(span, "__process_postprocess", vec![var(span, "pid")])
+}
+
+fn process_get_statements(span: &Span, call_args: Vec<Ast>) -> Vec<Ast> {
+    vec![
+        process_state_bind(span, "Agent"),
+        Ast::SafeBind(
+            span.clone(),
+            AstPattern::Var(span.clone(), "reply".to_string()),
+            Box::new(call(span, "__agent_get", call_args)),
+            span.clone(),
+        ),
+        process_postprocess_call(span),
+        Ast::ConstructorCall(
+            span.clone(),
+            "Global::Result::Ok".to_string(),
+            vec![positional(var(span, "reply"))],
+        ),
+    ]
+}
+
 fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
     Ast::SafeBind(
         span.clone(),
@@ -839,13 +889,12 @@ fn build_readonly_get_wrapper(
     let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, &surface_params));
-    let body = Ast::Block(
-        span.clone(),
-        vec![
-            pid_bind(span, "Agent", agent_name),
-            process_state_bind(span, "Agent"),
-            call(span, "__agent_get", call_args),
-        ],
+    let body = process_execution_body(
+        span,
+        "Agent",
+        agent_name,
+        true,
+        process_get_statements(span, call_args),
     );
     Ok(Ast::Def(
         span.clone(),
@@ -1111,13 +1160,13 @@ fn build_state_get_wrapper(
     };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
-    let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "Agent", agent_name));
-    }
-    stmts.push(process_state_bind(span, "Agent"));
-    stmts.push(call(span, "__agent_get", call_args));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(
+        span,
+        "Agent",
+        agent_name,
+        singleton,
+        process_get_statements(span, call_args),
+    );
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -1153,9 +1202,6 @@ fn build_state_set_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "Agent", agent_name));
-    }
     stmts.push(process_state_bind(span, "Agent"));
     stmts.push(Ast::SafeBind(
         span.clone(),
@@ -1163,12 +1209,13 @@ fn build_state_set_wrapper(
         Box::new(call(span, "__agent_set", call_args)),
         span.clone(),
     ));
+    stmts.push(process_postprocess_call(span));
     stmts.push(internal_qualified_call(
         span,
         &["Agent", "store"],
         vec![var(span, "pid"), var(span, "next_state")],
     ));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(span, "Agent", agent_name, singleton, stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -1239,9 +1286,6 @@ fn build_genserver_call_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "GenServer", process_name));
-    }
     stmts.push(process_state_bind(span, "GenServer"));
     stmts.push(Ast::SafeBind(
         span.clone(),
@@ -1249,6 +1293,7 @@ fn build_genserver_call_wrapper(
         Box::new(call(span, internal_handler_name, call_args)),
         span.clone(),
     ));
+    stmts.push(process_postprocess_call(span));
     stmts.push(Ast::Match(
         span.clone(),
         Box::new(var(span, "call_result")),
@@ -1329,7 +1374,7 @@ fn build_genserver_call_wrapper(
             },
         ],
     ));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(span, "GenServer", process_name, singleton, stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -1366,9 +1411,6 @@ fn build_genserver_cast_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "GenServer", process_name));
-    }
     stmts.push(process_state_bind(span, "GenServer"));
     stmts.push(Ast::SafeBind(
         span.clone(),
@@ -1376,6 +1418,7 @@ fn build_genserver_cast_wrapper(
         Box::new(call(span, internal_handler_name, call_args)),
         span.clone(),
     ));
+    stmts.push(process_postprocess_call(span));
     stmts.push(Ast::Match(
         span.clone(),
         Box::new(var(span, "cast_result")),
@@ -1425,7 +1468,7 @@ fn build_genserver_cast_wrapper(
             },
         ],
     ));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(span, "GenServer", process_name, singleton, stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),

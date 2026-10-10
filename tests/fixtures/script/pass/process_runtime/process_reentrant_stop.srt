@@ -1,0 +1,129 @@
+defgenserver Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    print("unexpected value handler")
+    Ok(CallResult::Reply(state, state))
+  }
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+  @call
+  def stop_error(_state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Error(ZeroDivisionError())))
+  }
+  @cast
+  def stop_cast(_state: Int) -> Result<CastResult<Int>> {
+    Ok(CastResult::Stop(StopReason::Normal))
+  }
+  @cast
+  def stop_cast_error(_state: Int) -> Result<CastResult<Int>> {
+    Ok(CastResult::Stop(StopReason::Error(ZeroDivisionError())))
+  }
+  @call
+  def outer_reply(state: Int) -> Result<CallResult<Int, Int>> {
+    stopped =? Worker::stop(Process::self())
+    match Worker::value(Process::self()) {
+      Ok(_) => print("unexpected nested call"),
+      Err(error) => print(Error::kind(error)),
+    }
+    Ok(CallResult::Reply(stopped + 1, state + 1))
+  }
+  @cast
+  def outer_next(state: Int) -> Result<CastResult<Int>> {
+    _ =? Worker::stop(Process::self())
+    Ok(CastResult::Next(state + 1))
+  }
+  @call
+  def outer_later(state: Int) -> Result<CallResult<Int, Int>> {
+    _ =? Worker::stop(Process::self())
+    Ok(CallResult::ReplyLater(state + 1, {||
+      Process::sleep(1ms)
+      print("callback finished")
+      Ok(state + 2)
+    }))
+  }
+  @call
+  def increment(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state + 10, state + 10))
+  }
+  @call
+  def outer_store(state: Int) -> Result<CallResult<Int, Int>> {
+    inner =? Worker::increment(Process::self())
+    Ok(CallResult::Reply(inner, state + 1))
+  }
+  @call
+  def relay(state: Int, peer: PID<Worker>) -> Result<CallResult<Int, Int>> {
+    reply =? Worker::value(peer)
+    Ok(CallResult::Reply(reply, state))
+  }
+  @call
+  def relay_or_stop(state: Int, peer: PID<Worker>) -> Result<CallResult<Int, Int>> {
+    match Worker::value(peer) {
+      Ok(reply) => Ok(CallResult::Reply(reply, state)),
+      Err(error) => match Error::kind(error) {
+        "ProcessStopped" => Ok(CallResult::Stop(StopReply::Error(error))),
+        _ => Err(error),
+      },
+    }
+  }
+}
+
+defsupervisor Root {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+supervisor_init { Root {} }
+
+def kind(result: Result<Int>) -> String {
+  match result { Ok(value) => to_string(value), Err(error) => Error::kind(error), }
+}
+def invoke(pid: PID<Worker>, call: (PID<Worker> -> Result<Int>)) -> Result<Int> {
+  call(pid)
+}
+first =? Root::spawn(Worker::init(7))
+print(inspect(Worker::outer_reply(first)))
+print(kind(Worker::value(first)))
+saved = Worker::value()
+print(kind(saved(first)))
+print(kind(invoke(first, Worker::value())))
+print(inspect(first == first))
+second =? Root::spawn(Worker::init(8))
+print(inspect(Worker::outer_next(second)))
+print(kind(Worker::value(second)))
+third =? Root::spawn(Worker::init(9))
+print(inspect(Worker::outer_later(third)))
+print(kind(Worker::value(third)))
+fourth =? Root::spawn(Worker::init(10))
+print(kind(Worker::stop_error(fourth)))
+fifth =? Root::spawn(Worker::init(11))
+print(inspect(Worker::stop_cast(fifth)))
+sixth =? Root::spawn(Worker::init(12))
+print(inspect(Worker::stop_cast_error(sixth)))
+print(kind(Worker::value(sixth)))
+match Root::adopt(sixth) {
+  Ok(_) => print("unexpected adopt"),
+  Err(error) => print(Error::kind(error)),
+}
+seventh =? Root::spawn(Worker::init(13))
+print(kind(Worker::relay(seventh, first)))
+print(kind(Worker::stop(seventh)))
+eighth =? Root::spawn(Worker::init(14))
+print(kind(Worker::relay_or_stop(eighth, first)))
+print(kind(Worker::value(eighth)))
+ninth =? Root::spawn(Worker::init(0))
+print(inspect(Worker::outer_store(ninth)))
+print(kind(Worker::stop(ninth)))

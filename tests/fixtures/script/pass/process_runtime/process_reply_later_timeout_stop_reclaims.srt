@@ -1,0 +1,165 @@
+defagent DeferredSignal {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def phase(state: Int) -> Result<Int> { Ok(state) }
+
+  @set
+  def mark(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}
+
+
+defgenserver DeferredWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  defp wait_for_phase(target: Int) -> Result<Unit> {
+    phase =? DeferredSignal::phase()
+    match phase == target {
+      True => Ok(()),
+      False => {
+        _ =? Process::sleep(1ms)
+        wait_for_phase(target)
+      },
+    }
+  }
+
+  @init
+  def init() -> Result<Int> {
+    print("worker init")
+    Ok(0)
+  }
+
+  @call
+  def delayed(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::ReplyLater(state + 1, {||
+      # This callback remains blocked on a Task future until the caller releases it.
+      task = Task::async({|| wait_for_phase(2)})
+      _ =? DeferredSignal::mark(1)
+      _ =? Task::await(task)
+      print("callback finished")
+      Ok(state + 1)
+    }))
+  }
+
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    print("value handler")
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @cast
+  def touch(state: Int) -> Result<CastResult<Int>> {
+    print("unexpected touch")
+    Ok(CastResult::Next(state))
+  }
+}
+
+defsupervisor DeferredSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+    shutdown_timeout: 1ms
+  }
+}
+
+defgenserver DeferredPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<DeferredWorker>
+  }
+
+defp reply_kind(reply: Result<Int>) -> String {
+  match reply {
+    Ok(_) => "unexpected success",
+    Err(error) => Error::kind(error),
+  }
+}
+
+
+  defp wait_for_replacement(workers: Workers<DeferredWorker>) -> Result<Unit> {
+    status =? DeferredSup::status()
+    match (Workers::size(workers), status.child_count) {
+      (1, 1) => Ok(()),
+      _ => {
+        _ =? Process::sleep(1ms)
+        wait_for_replacement(workers)
+      },
+    }
+  }
+
+  defp wait_for_phase(target: Int) -> Result<Unit> {
+    phase =? DeferredSignal::phase()
+    match phase == target {
+      True => Ok(()),
+      False => {
+        _ =? Process::sleep(1ms)
+        wait_for_phase(target)
+      },
+    }
+  }
+
+  @init
+  def init() -> Result<Workers<DeferredWorker>> {
+    DeferredSup::workers(DeferredWorker::init(), WorkerStrategy::fixed(1))
+  }
+
+  @call
+  def exercise(workers: Workers<DeferredWorker>) -> Result<CallResult<Unit, Workers<DeferredWorker>>> {
+    lease =? Workers::reserve(workers)
+    _ =? DeferredSignal::mark(0)
+    delayed = Task::async({|| DeferredWorker::delayed(lease)})
+    _ =? wait_for_phase(1)
+    print(reply_kind(Task::await(delayed) @timeout(1ms)))
+    print("caller continued")
+    print(inspect(DeferredWorker::stop(lease)))
+    before =? DeferredSup::status()
+    print(inspect((Workers::size(workers), before.child_count)))
+    match Workers::reserve(workers) {
+      Ok(_) => print("unexpected reserve"),
+      Err(error) => print(Error::kind(error)),
+    }
+    match Workers::submit(workers, DeferredWorker::touch()) {
+      Ok(_) => print("unexpected submit"),
+      Err(error) => print(Error::kind(error)),
+    }
+    print(inspect(Workers::broadcast(workers, DeferredWorker::value())))
+    print(reply_kind(DeferredWorker::value(lease)))
+    # Release only after stopped selection and lease rejection have been observed.
+    _ =? DeferredSignal::mark(2)
+    _ =? Task::await(delayed)
+    _ =? wait_for_replacement(workers)
+    after =? DeferredSup::status()
+    print(inspect((Workers::size(workers), after.child_count)))
+    print(inspect(Workers::broadcast(workers, DeferredWorker::value())))
+    print(reply_kind(DeferredWorker::value(lease)))
+    Ok(CallResult::Reply((), workers))
+  }
+}
+
+supervisor_init {
+  DeferredSignal {}
+  DeferredSup {}
+  DeferredPool {}
+}
+
+print(inspect(DeferredPool::exercise()))
