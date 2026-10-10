@@ -394,10 +394,7 @@ impl Monad for Result<$T> {
 }
 
 # Retain the original Error; bind must not produce a successful payload.
-impl MonadFail for Result<$T>
-where
-  $T: MonadFail.$A
-{
+impl MonadFail for Result<$T> {
   def fail::<Result<$T>>(error: Error) -> Result<$T> {
     Err(error)
   }

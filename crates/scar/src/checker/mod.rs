@@ -1,5 +1,6 @@
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -559,6 +560,8 @@ pub(super) enum CandidateApplicability {
 enum ConstructorProjectionFailure {
     Canonicalization,
     MissingImplTargetMetadata,
+    #[serde(skip)]
+    PendingImplMapping,
     UnsatisfiedConstraints,
     NoApplicableImplementation,
     AmbiguousImplementation,
@@ -3038,6 +3041,15 @@ mod specialization_state_tests {
     }
 }
 
+/// Declaration-only dependency discovery. A proof which requests unfinished
+/// metadata is rolled back and retried after those declarations are resolved.
+#[derive(Default)]
+struct ConstructorMappingResolution {
+    pending: HashSet<TraitImplKey>,
+    resolving: HashSet<TraitImplKey>,
+    requests: RefCell<Option<HashSet<TraitImplKey>>>,
+}
+
 struct Checker {
     active_lazy_capture: Option<ActiveLazyCapture>,
     env: TypeEnv,
@@ -3095,6 +3107,7 @@ struct Checker {
     facet_path_kind_decls: HashMap<String, Vec<String>>,
     traits: TraitDefinitions,
     trait_impls: TraitImplementations,
+    constructor_mapping_resolution: ConstructorMappingResolution,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     profiler: TypecheckProfiler,
@@ -3245,6 +3258,7 @@ impl Checker {
             facet_path_kind_decls: HashMap::new(),
             traits: state.traits,
             trait_impls: state.trait_impls,
+            constructor_mapping_resolution: ConstructorMappingResolution::default(),
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: state.trait_methods_by_qualified_name,
             profiler: TypecheckProfiler::new_from_env(),

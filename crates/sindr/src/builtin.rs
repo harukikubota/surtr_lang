@@ -446,6 +446,8 @@ pub const STANDARD_OWNER_IDENTITY_METAS: &[StandardOwnerIdentityMeta] =
         identity: TypeIdentity::TypeConstructor,
     }];
 
+pub const PATTERN_CONTRACT_VIOLATION_BUILTIN: &str = "__pattern_contract_violation";
+
 /// Canonical registry for runtime builtin functions and their source surfaces.
 ///
 /// A builtin id is the entry's position in this slice. Eldr's `BUILTIN_IMPLS`
@@ -3871,7 +3873,13 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
             &[],
         )],
     },
-
+    BuiltinMeta {
+        name: PATTERN_CONTRACT_VIOLATION_BUILTIN,
+        arity: 0,
+        sig_str: "() -> Unit",
+        compiler_generated_surfaces: &[],
+        surfaces: &[],
+    },
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime

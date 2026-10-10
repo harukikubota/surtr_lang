@@ -176,7 +176,6 @@ transition, and the base Monad sequences the two computations.
 impl Applicative for StateT<$S, $M, $T>
 where
   $M: Monad
-  $T: Applicative.$A
 {
   @doc """
   Return a payload without changing the state.
@@ -226,7 +225,6 @@ selected by the mapper.
 impl Monad for StateT<$S, $M, $T>
 where
   $M: Monad
-  $T: Monad.$A
 {
   @doc """
   Return a payload without changing the state.
@@ -267,7 +265,6 @@ Lifting maps a base payload into a pair with the current state.
 impl MonadT<$M> for StateT<$S, $M, $T>
 where
   $M: Monad
-  $T: MonadT.$A
 {
   @doc """
   Lift a base computation while preserving the supplied state.
@@ -295,7 +292,6 @@ impl Alternative for StateT<$S, $M, $T>
 where
   $M: Monad
   $M: Alternative
-  $T: Alternative.$A
 {
   @doc """
   Create an empty StateT when the base has Alternative.
@@ -338,7 +334,6 @@ where
 impl MonadFail for StateT<$S, $M, $T>
 where
   $M: MonadFail
-  $T: MonadFail.$A
 {
   def fail::<StateT<$S, $M, $T>>(error: Error) -> StateT<$S, $M, $T> {
     StateT::new({|_state| MonadFail::fail(error)})

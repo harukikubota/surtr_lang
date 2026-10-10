@@ -239,9 +239,9 @@ pub const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
-        file_name: "traits/operator/monad_fail.srt",
+        file_name: "traits/monad_fail.srt",
         module_path: "MonadFail",
-        source: include_str!("../../../lib/traits/operator/monad_fail.srt"),
+        source: include_str!("../../../lib/traits/monad_fail.srt"),
         stage: StdlibStage::Main,
         variant: StdlibVariant::Default,
     },

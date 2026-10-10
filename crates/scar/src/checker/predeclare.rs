@@ -11,6 +11,12 @@ pub(super) fn is_generated_derive_impl(methods: &[ResolvedTraitImplMethod]) -> b
             .all(|method| method.function_id.compiler_generated)
 }
 
+enum ParentImplCoverage {
+    HeadMismatch,
+    ConstraintMismatch,
+    Covers,
+}
+
 impl Checker {
     fn validate_type_shape_clause(
         clause: Option<&ResolvedWhereClause>,
@@ -2039,14 +2045,15 @@ impl Checker {
             .collect()
     }
 
-    fn constructor_slot_vars_for_impl(
+    fn explicit_constructor_slot_vars_for_impl(
         &self,
         trait_info: &TraitInfo,
         target_ast_ty: &AstTy,
         where_clause: Option<&TypedWhereClause>,
         target_param_vars: &HashMap<String, u32>,
         span: &Span,
-    ) -> Result<(Vec<u32>, Vec<usize>), TypeError> {
+        root: bool,
+    ) -> Result<(Vec<Option<u32>>, Vec<Option<usize>>), TypeError> {
         let target_params = Self::target_top_level_type_params(target_ast_ty);
         let mut mapped_slots = vec![None; trait_info.constructor_slots.len()];
         let mut mapped_params = HashSet::new();
@@ -2118,14 +2125,15 @@ impl Checker {
             }
         }
 
-        if mapped_slots.iter().all(Option::is_none)
+        if root
+            && mapped_slots.iter().all(Option::is_none)
             && trait_info.constructor_slots.len() == 1
             && target_params.len() == 1
         {
             mapped_slots[0] = target_param_vars.get(&target_params[0]).copied();
         }
 
-        if mapped_slots.iter().any(Option::is_none) {
+        if root && mapped_slots.iter().any(Option::is_none) {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -2142,20 +2150,36 @@ impl Checker {
             });
         }
 
-        let vars = mapped_slots.into_iter().flatten().collect::<Vec<_>>();
-        let positions = vars
-            .iter()
-            .map(|var| {
-                let AstTy::Generic(_, _, arguments) = target_ast_ty else {
-                    unreachable!("mapped constructor target is an application")
-                };
-                arguments
-                    .iter()
-                    .position(|argument| matches!(argument, AstTy::Named(_, name) if target_param_vars.get(name) == Some(var)))
-                    .expect("mapped constructor variable must belong to target parameters")
-            })
-            .collect();
-        Ok((vars, positions))
+        let positions = mapped_slots.iter().map(|var| var.map(|var| {
+            let AstTy::Generic(_, _, arguments) = target_ast_ty else {
+                unreachable!("mapped constructor target is an application")
+            };
+            arguments.iter().position(|argument| matches!(argument, AstTy::Named(_, name) if target_param_vars.get(name) == Some(&var)))
+                .expect("mapped constructor variable belongs to target parameters")
+        })).collect();
+        Ok((mapped_slots, positions))
+    }
+
+    fn root_constructor_slot_vars_for_impl(
+        &self,
+        trait_info: &TraitInfo,
+        target_ast_ty: &AstTy,
+        where_clause: Option<&TypedWhereClause>,
+        target_param_vars: &HashMap<String, u32>,
+        span: &Span,
+    ) -> Result<(Vec<u32>, Vec<usize>), TypeError> {
+        let (vars, positions) = self.explicit_constructor_slot_vars_for_impl(
+            trait_info,
+            target_ast_ty,
+            where_clause,
+            target_param_vars,
+            span,
+            true,
+        )?;
+        Ok((
+            vars.into_iter().map(Option::unwrap).collect(),
+            positions.into_iter().map(Option::unwrap).collect(),
+        ))
     }
 
     pub(super) fn trait_head_parameter_constructor_bound(
@@ -2193,10 +2217,11 @@ impl Checker {
         target_ast_ty: &AstTy,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, HashMap<String, u32>), TypeError> {
         let mut tyvars = HashMap::new();
-        let target_ty = self.resolve_signature_ast_ty_in_context(
+        let target_ty = self.resolve_signature_like_ast_ty_in_context(
             target_ast_ty,
             TypeSyntaxContext::General,
             &mut tyvars,
+            super::types::SignatureTyMode::ImplHead { self_ty: None },
         )?;
         let trait_arg_tys = trait_info
             .type_params
@@ -2210,11 +2235,13 @@ impl Checker {
                 {
                     self.resolve_type_constructor_head(arg)
                 } else {
-                    self.resolve_trait_signature_ast_ty_in_context(
+                    self.resolve_signature_like_ast_ty_in_context(
                         arg,
                         TypeSyntaxContext::General,
-                        &target_ty,
                         &mut tyvars,
+                        super::types::SignatureTyMode::ImplHead {
+                            self_ty: Some(&target_ty),
+                        },
                     )
                 }
             })
@@ -2802,6 +2829,7 @@ impl Checker {
         fallback_ret_ty: &sigil::resolved::ResolvedSignatureTy,
         impl_where_clause: Option<&TypedWhereClause>,
         generated_derive: bool,
+        constructor_slot_positions: &[usize],
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>, MethodTypeEnvironment), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
@@ -2941,18 +2969,10 @@ impl Checker {
             Some(&self_ty),
             generated_derive,
         )?;
-        let target_vars = head_bindings
-            .iter()
-            .filter_map(|(name, ty)| match ty {
-                Ty::Var(var) => Some((name.clone(), *var)),
-                _ => None,
-            })
-            .collect();
-        let (slots, _) = self.constructor_slot_vars_for_impl(
-            trait_info,
+        let slots = self.slot_vars_at_positions(
             target_ast_ty,
-            impl_where_clause,
-            &target_vars,
+            &head_bindings,
+            constructor_slot_positions,
             &method.span,
         )?;
         let params = params
@@ -3477,15 +3497,186 @@ impl Checker {
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
             })?;
-            let (constructor_slot_vars, constructor_slot_positions) = self
-                .constructor_slot_vars_for_impl(
+            let has_constructor_parent = trait_info.parents.iter().any(|parent| {
+                !self.traits[&self.trait_key(&parent.trait_id)]
+                    .constructor_slots
+                    .is_empty()
+            });
+            let (constructor_slot_vars, constructor_slot_positions) = if has_constructor_parent {
+                (Vec::new(), Vec::new())
+            } else {
+                self.root_constructor_slot_vars_for_impl(
                     &trait_info,
                     target_ast_ty,
-                    where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
+                    typed_impl_clause.as_ref(),
                     &target_param_vars,
                     span,
-                )?;
+                )?
+            };
 
+            let head_environment = MethodTypeEnvironment {
+                head_bindings: target_param_vars
+                    .iter()
+                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                    .collect(),
+                bindings: target_param_vars
+                    .iter()
+                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                    .collect(),
+                trait_arguments: trait_arg_tys.clone(),
+                self_ty: target_ty.clone(),
+                direct_inputs: super::signatures::DirectConstructorInputs::default(),
+            };
+            let (head_type_list, canonical_environment) =
+                self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
+            let impl_constraints = self
+                .canonical_method_list(
+                    &[],
+                    &[],
+                    &Ty::Unit,
+                    &[],
+                    &[],
+                    &AstTy::Named(span.clone(), "Unit".into()),
+                    typed_impl_clause.as_ref(),
+                    &head_environment,
+                    &canonical_environment,
+                    None,
+                    false,
+                )?
+                .where_constraints;
+            let impl_key =
+                CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);
+            let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+            for existing in existing_impls {
+                if self.trait_key(&existing.trait_id) != trait_key {
+                    continue;
+                }
+                if Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern) {
+                    return Err(TypeError {
+                        structured: None,
+                        message: format!(
+                            "Overlapping trait impls for {}: {} and {}",
+                            trait_id.name,
+                            Self::surface_ast_ty_key(target_ast_ty),
+                            Self::surface_ast_ty_key(&existing.target_ast_ty)
+                        ),
+                        span: span.clone(),
+                        hint: Some("Trait impl patterns must be structurally disjoint; Surtr does not use specialization or declaration-order dispatch.".into()),
+                    });
+                }
+            }
+
+            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "Convert") {
+                self.trait_key_by_short_name("TryConvert")
+            } else if self.trait_matches_short_name(&trait_key, "TryConvert") {
+                self.trait_key_by_short_name("Convert")
+            } else {
+                None
+            };
+            if let Some(peer_trait_key) = exclusive_peer {
+                let peers = self
+                    .trait_impls
+                    .values()
+                    .filter(|existing| self.trait_key(&existing.trait_id) == peer_trait_key)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let peer = peers.into_iter().find(|existing| {
+                    Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern)
+                });
+                if let Some(existing) = peer {
+                    return Err(TypeError {
+                        structured: None,
+                        message: format!(
+                            "{} and {} cannot both be implemented for {} -> {}",
+                            trait_id.name,
+                            existing
+                                .trait_id
+                                .name
+                                .rsplit("::")
+                                .next()
+                                .unwrap_or(&existing.trait_id.name),
+                            Self::surface_ast_ty_key(target_ast_ty),
+                            trait_args
+                                .iter()
+                                .map(Self::ast_ty_key)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+
+            self.trait_impls.insert(
+                impl_key.clone(),
+                Arc::new(TraitImplInfo {
+                    declaration_key: TraitImplDeclarationKey {
+                        pattern: impl_key.clone(),
+                        declaration_id: *declaration_id,
+                    },
+                    head_type_list,
+                    impl_constraints,
+                    method_signature_lists: HashMap::new(),
+                    trait_id: trait_id.clone(),
+                    trait_args: trait_args.clone(),
+                    trait_arg_tys,
+                    target_name,
+                    target_ast_ty: target_ast_ty.clone(),
+                    target_ty,
+                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
+                    generated_derive,
+                    type_param_vars,
+                    type_param_vars_by_name: target_param_vars,
+                    constructor_slot_vars,
+                    constructor_slot_positions,
+                    methods: HashMap::new(),
+                }),
+            );
+            self.constructor_mapping_resolution
+                .pending
+                .insert(impl_key.clone());
+            self.index_trait_impl(impl_key);
+        }
+
+        if declared_trait_impl {
+            self.resolve_impl_constructor_mappings()?;
+        }
+
+        // Methods consume the declaration's resolved mapping, never re-infer it.
+        for stmt in stmts {
+            let Resolved::TraitImplDef(
+                span,
+                declaration_id,
+                trait_id,
+                trait_args,
+                target_ast_ty,
+                where_clause,
+                methods,
+            ) = stmt
+            else {
+                continue;
+            };
+            let trait_key = self.trait_key(trait_id);
+            let trait_info = self.traits[&trait_key].clone();
+            let impl_info = self
+                .trait_impls
+                .values()
+                .find(|info| info.declaration_key.declaration_id == *declaration_id)
+                .expect("collected impl head")
+                .clone();
+            let generated_derive = impl_info.generated_derive;
+            let target_ty = impl_info.target_ty.clone();
+            let target_name = impl_info.target_name.clone();
+            let trait_arg_tys = impl_info.trait_arg_tys.clone();
+            let constructor_slot_vars = impl_info.constructor_slot_vars.clone();
+            let constructor_slot_positions = impl_info.constructor_slot_positions.clone();
+            let typed_impl_clause = impl_info.where_clause.clone();
+            let head_type_list = impl_info.head_type_list.clone();
+            self.validate_nominal_type_well_formed(&target_ty, span, false)?;
+            for argument in &trait_arg_tys {
+                self.validate_nominal_type_well_formed(argument, span, false)?;
+            }
             let mut method_map = HashMap::new();
             for method in methods {
                 method_map.insert(
@@ -3579,36 +3770,6 @@ impl Checker {
                 }
             }
 
-            let head_environment = MethodTypeEnvironment {
-                head_bindings: target_param_vars
-                    .iter()
-                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
-                    .collect(),
-                bindings: target_param_vars
-                    .iter()
-                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
-                    .collect(),
-                trait_arguments: trait_arg_tys.clone(),
-                self_ty: target_ty.clone(),
-                direct_inputs: super::signatures::DirectConstructorInputs::default(),
-            };
-            let (head_type_list, canonical_environment) =
-                self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
-            let impl_constraints = self
-                .canonical_method_list(
-                    &[],
-                    &[],
-                    &Ty::Unit,
-                    &[],
-                    &[],
-                    &AstTy::Named(span.clone(), "Unit".into()),
-                    typed_impl_clause.as_ref(),
-                    &head_environment,
-                    &canonical_environment,
-                    None,
-                    false,
-                )?
-                .where_constraints;
             let mut method_signature_lists = HashMap::new();
             let mut instantiation_contracts = HashMap::new();
             let mut resolved_signatures = HashMap::new();
@@ -3680,6 +3841,7 @@ impl Checker {
                         &trait_method.ret_ty,
                         where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
                         generated_derive,
+                        &constructor_slot_positions,
                     )?;
                 if impl_method.is_builtin {
                     dispatch_overrides.insert(
@@ -3880,165 +4042,239 @@ impl Checker {
                     .expect("declared method")
                     .dispatch_override = Some(dispatch);
             }
-            let impl_key =
-                CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);
-            let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-            for existing in existing_impls {
-                if self.trait_key(&existing.trait_id) != trait_key {
-                    continue;
-                }
-                if Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Overlapping trait impls for {}: {} and {}",
-                            trait_id.name,
-                            Self::surface_ast_ty_key(target_ast_ty),
-                            Self::surface_ast_ty_key(&existing.target_ast_ty)
-                        ),
-                        span: span.clone(),
-                        hint: Some("Trait impl patterns must be structurally disjoint; Surtr does not use specialization or declaration-order dispatch.".into()),
-                    });
-                }
-            }
-
-            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "Convert") {
-                self.trait_key_by_short_name("TryConvert")
-            } else if self.trait_matches_short_name(&trait_key, "TryConvert") {
-                self.trait_key_by_short_name("Convert")
-            } else {
-                None
-            };
-            if let Some(peer_trait_key) = exclusive_peer {
-                let peers = self
-                    .trait_impls
-                    .values()
-                    .filter(|existing| self.trait_key(&existing.trait_id) == peer_trait_key)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let peer = peers.into_iter().find(|existing| {
-                    Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern)
-                });
-                if let Some(existing) = peer {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "{} and {} cannot both be implemented for {} -> {}",
-                            trait_id.name,
-                            existing
-                                .trait_id
-                                .name
-                                .rsplit("::")
-                                .next()
-                                .unwrap_or(&existing.trait_id.name),
-                            Self::surface_ast_ty_key(target_ast_ty),
-                            trait_args
-                                .iter()
-                                .map(Self::ast_ty_key)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-            }
-
-            self.trait_impls.insert(
-                impl_key.clone(),
-                Arc::new(TraitImplInfo {
-                    declaration_key: TraitImplDeclarationKey {
-                        pattern: impl_key.clone(),
-                        declaration_id: *declaration_id,
-                    },
-                    head_type_list,
-                    impl_constraints,
-                    method_signature_lists,
-                    trait_id: trait_id.clone(),
-                    trait_args: trait_args.clone(),
-                    trait_arg_tys,
-                    target_name,
-                    target_ast_ty: target_ast_ty.clone(),
-                    target_ty,
-                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
-                    generated_derive,
-                    type_param_vars,
-                    type_param_vars_by_name: target_param_vars,
-                    constructor_slot_vars,
-                    constructor_slot_positions,
-                    methods: method_map,
-                }),
+            let impl_info = Arc::make_mut(
+                self.trait_impls
+                    .get_mut(&impl_info.declaration_key.pattern)
+                    .expect("registered impl head"),
             );
-            self.index_trait_impl(impl_key);
-        }
-
-        if declared_trait_impl {
-            let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-            for child_impl in &impls {
-                self.validate_parent_impl_chain(child_impl, &mut HashSet::new())?;
-            }
+            impl_info.methods = method_map;
+            impl_info.method_signature_lists = method_signature_lists;
         }
 
         Ok(())
     }
 
-    fn validate_parent_impl_chain(
+    fn slot_vars_at_positions(
+        &self,
+        target: &AstTy,
+        bindings: &HashMap<String, Ty>,
+        positions: &[usize],
+        span: &Span,
+    ) -> Result<Vec<u32>, TypeError> {
+        let mut vars = Vec::new();
+        for position in positions {
+            let argument = match target {
+                AstTy::Generic(_, _, args) => args.get(*position),
+                _ => None,
+            };
+            let Some(AstTy::Named(_, name)) = argument else {
+                return Err(TypeError::new(
+                    "Inherited constructor slot must remain a top-level type parameter of the impl target",
+                    span.clone(),
+                ));
+            };
+            let Some(Ty::Var(var)) = bindings.get(name) else {
+                return Err(TypeError::new(
+                    "Inherited constructor slot must remain a top-level type parameter of the impl target",
+                    span.clone(),
+                ));
+            };
+            if vars.contains(var) {
+                return Err(TypeError::new(
+                    format!(
+                        "Impl target parameter {name} is mapped to more than one constructor slot"
+                    ),
+                    span.clone(),
+                ));
+            }
+            vars.push(*var);
+        }
+        Ok(vars)
+    }
+
+    fn resolve_impl_constructor_mappings(&mut self) -> Result<(), TypeError> {
+        let mut keys = self
+            .constructor_mapping_resolution
+            .pending
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort_by_key(|key| self.trait_impls[key].declaration_key.declaration_id);
+        let result = (|| {
+            for key in keys {
+                self.resolve_impl_constructor_mapping(&key)?;
+            }
+            if !self.constructor_mapping_resolution.pending.is_empty()
+                || self
+                    .constructor_mapping_resolution
+                    .requests
+                    .borrow()
+                    .is_some()
+            {
+                return Err(TypeError::new(
+                    "Internal error: unfinished impl mapping resolution",
+                    Span { start: 0, end: 0 },
+                ));
+            }
+            Ok(())
+        })();
+        // Declaration dependency state never escapes into body checking or a checkpoint.
+        self.constructor_mapping_resolution = ConstructorMappingResolution::default();
+        result
+    }
+
+    fn parent_coverage_with_resolved_mappings(
         &mut self,
-        child_impl: &TraitImplInfo,
-        visiting: &mut HashSet<(String, String)>,
-    ) -> Result<(), TypeError> {
-        let child_trait_key = self.trait_key(&child_impl.trait_id);
-        let visit_key = (child_trait_key.clone(), child_impl.target_name.clone());
-        if !visiting.insert(visit_key.clone()) {
+        parent: &TraitImplInfo,
+        child: &TraitImplInfo,
+    ) -> Result<ParentImplCoverage, TypeError> {
+        loop {
+            assert!(self
+                .constructor_mapping_resolution
+                .requests
+                .borrow()
+                .is_none());
+            *self.constructor_mapping_resolution.requests.borrow_mut() = Some(HashSet::new());
+            let result = self.parent_impl_covers_child(parent, child);
+            let requests = self
+                .constructor_mapping_resolution
+                .requests
+                .borrow_mut()
+                .take()
+                .expect("declaration proof frame");
+            if requests.is_empty() {
+                return result;
+            }
+            // Even a successful trial may have used a pending projection during
+            // canonicalization. Discard every trial result which requested metadata.
+            let mut requests = requests.into_iter().collect::<Vec<_>>();
+            requests.sort_by_key(|key| self.trait_impls[key].declaration_key.declaration_id);
+            for key in requests {
+                self.resolve_impl_constructor_mapping(&key)?;
+            }
+        }
+    }
+
+    fn resolve_impl_constructor_mapping(&mut self, key: &TraitImplKey) -> Result<(), TypeError> {
+        if !self.constructor_mapping_resolution.pending.contains(key) {
             return Ok(());
         }
-        let Some(child_trait) = self.traits.get(&child_trait_key).cloned() else {
-            return Ok(());
-        };
-        for parent in &child_trait.parents {
+        let child = self.trait_impls[key].clone();
+        if !self
+            .constructor_mapping_resolution
+            .resolving
+            .insert(key.clone())
+        {
+            return Err(TypeError::new(
+                format!(
+                    "Constructor slot mapping dependency cycle for {}",
+                    child.trait_id.name
+                ),
+                child.trait_id.span.clone(),
+            ));
+        }
+        let trait_info = self.traits[&self.trait_key(&child.trait_id)].clone();
+        let mut inherited: Option<Vec<usize>> = None;
+        for parent in &trait_info.parents {
             let parent_key = self.trait_key(&parent.trait_id);
-            self.traits.get(&parent_key).ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Unknown parent trait: {}", parent.trait_id.name),
-                span: parent.trait_id.span.clone(),
-                hint: None,
-            })?;
-            let parent_candidates = self
-                .trait_impls
-                .values()
-                .filter(|impl_info| self.trait_key(&impl_info.trait_id) == parent_key)
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut covering_parent = None;
-            for candidate in parent_candidates {
-                if self.parent_impl_covers_child(&candidate, child_impl)? {
-                    covering_parent = Some(candidate);
-                    break;
+            let parent_info = self
+                .traits
+                .get(&parent_key)
+                .ok_or_else(|| {
+                    TypeError::new(
+                        format!("Unknown parent trait: {}", parent.trait_id.name),
+                        parent.trait_id.span.clone(),
+                    )
+                })?
+                .clone();
+            let mut candidates = self.trait_impl_candidate_keys(&parent_key);
+            candidates.sort_by_key(|key| self.trait_impls[key].declaration_key.declaration_id);
+            let mut covered = false;
+            let mut head_covered = false;
+            for candidate_key in candidates {
+                let candidate = self.trait_impls[&candidate_key].clone();
+                match self.parent_coverage_with_resolved_mappings(&candidate, &child)? {
+                    ParentImplCoverage::HeadMismatch => continue,
+                    ParentImplCoverage::ConstraintMismatch => {
+                        head_covered = true;
+                        continue;
+                    }
+                    ParentImplCoverage::Covers => {}
+                }
+                covered = true;
+                self.resolve_impl_constructor_mapping(&candidate_key)?;
+                if parent_info.constructor_slots.is_empty() {
+                    continue;
+                }
+                let positions = self.trait_impls[&candidate_key]
+                    .constructor_slot_positions
+                    .clone();
+                if let Some(previous) = &inherited {
+                    if previous != &positions {
+                        return Err(TypeError::new(
+                            format!("Trait impl {} for {} has conflicting inherited constructor slot mappings from parent {}",
+                                child.trait_id.name, child.target_name, parent.trait_id.name),
+                            child.trait_id.span.clone(),
+                        ));
+                    }
+                } else {
+                    inherited = Some(positions);
                 }
             }
-            let parent_impl = covering_parent.ok_or_else(|| TypeError {
-                structured: None,
-                message: format!(
-                    "Trait impl {} for {} requires parent impl {} for the same target",
-                    child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
-                ),
-                span: child_impl.trait_id.span.clone(),
-                hint: None,
-            })?;
-            if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
-                        child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
-                    ),
-                    span: child_impl.trait_id.span.clone(),
-                    hint: None,
-                });
+            if !covered {
+                let message = if head_covered {
+                    format!(
+                        "Trait impl {} for {} cannot prove parent constraint(s) of {}",
+                        child.trait_id.name, child.target_name, parent.trait_id.name
+                    )
+                } else {
+                    format!(
+                        "Trait impl {} for {} requires parent impl {} for the same target",
+                        child.trait_id.name, child.target_name, parent.trait_id.name
+                    )
+                };
+                return Err(TypeError::new(message, child.trait_id.span.clone()));
             }
-            self.validate_parent_impl_chain(&parent_impl, visiting)?;
         }
-        visiting.remove(&visit_key);
+        if let Some(positions) = inherited {
+            let bindings = child
+                .type_param_vars_by_name
+                .iter()
+                .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                .collect();
+            let vars = self.slot_vars_at_positions(
+                &child.target_ast_ty,
+                &bindings,
+                &positions,
+                &child.trait_id.span,
+            )?;
+            let (_, confirmations) = self.explicit_constructor_slot_vars_for_impl(
+                &trait_info,
+                &child.target_ast_ty,
+                child.where_clause.as_ref(),
+                &child.type_param_vars_by_name,
+                &child.trait_id.span,
+                false,
+            )?;
+            if confirmations
+                .iter()
+                .zip(&positions)
+                .any(|(explicit, inherited)| {
+                    explicit.is_some_and(|explicit| explicit != *inherited)
+                })
+            {
+                return Err(TypeError::new(
+                    format!("Trait impl {} for {} must use the same constructor slot mapping as its parent",
+                        child.trait_id.name, child.target_name),
+                    child.trait_id.span.clone(),
+                ));
+            }
+            let info = Arc::make_mut(self.trait_impls.get_mut(key).expect("collected impl"));
+            info.constructor_slot_vars = vars;
+            info.constructor_slot_positions = positions;
+        }
+        self.constructor_mapping_resolution.resolving.remove(key);
+        self.constructor_mapping_resolution.pending.remove(key);
         Ok(())
     }
 
@@ -4050,9 +4286,11 @@ impl Checker {
         &mut self,
         parent_impl: &TraitImplInfo,
         child_impl: &TraitImplInfo,
-    ) -> Result<bool, TypeError> {
+    ) -> Result<ParentImplCoverage, TypeError> {
         let before_substitutions = self.substitutions.clone();
         let before_rigid = self.rigid_tyvars.clone();
+        let before_bounds = self.tyvar_bounds.clone();
+        let before_witnesses = self.constructor_witness_traits.clone();
         let mut child_vars = Vec::new();
         Self::collect_ty_vars(&child_impl.target_ty, &mut child_vars);
         for arg in &child_impl.trait_arg_tys {
@@ -4072,13 +4310,26 @@ impl Checker {
         for arg in &parent_impl.trait_arg_tys {
             self.instantiate_ty_with_fresh(arg, &mut fresh);
         }
-        let head_covers = self.types_compatible(&parent_target, &child_impl.target_ty);
-        let obligations_hold = head_covers.map(|covers| {
-            covers && self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh)
-        });
+        let obligations_hold = (|| {
+            // Head coverage is structural. Bounds are proved separately below,
+            // rather than making a missing bound look like a head mismatch.
+            let Some(mapping) =
+                self.parent_head_substitution(&parent_target, &child_impl.target_ty, &fresh)?
+            else {
+                return Ok(ParentImplCoverage::HeadMismatch);
+            };
+            self.substitutions.extend(mapping);
+            if self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh)? {
+                Ok(ParentImplCoverage::Covers)
+            } else {
+                Ok(ParentImplCoverage::ConstraintMismatch)
+            }
+        })();
 
         self.substitutions = before_substitutions;
         self.rigid_tyvars = before_rigid;
+        self.tyvar_bounds = before_bounds;
+        self.constructor_witness_traits = before_witnesses;
         obligations_hold
     }
 
@@ -4091,12 +4342,12 @@ impl Checker {
         parent_impl: &TraitImplInfo,
         child_impl: &TraitImplInfo,
         fresh: &HashMap<u32, Ty>,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         let Some(parent_where) = &parent_impl.where_clause else {
-            return true;
+            return Ok(true);
         };
 
-        parent_where.constraints.iter().all(|constraint| {
+        for constraint in &parent_where.constraints {
             let parent_subject =
                 match &constraint.subject {
                     AstTy::Named(_, subject) if subject == "Self" => Some(self.resolve_ty(
@@ -4110,23 +4361,25 @@ impl Checker {
                     _ => None,
                 };
             let Some(parent_subject) = parent_subject else {
-                return false;
+                return Ok(false);
             };
 
-            constraint.bounds.iter().all(|bound| {
+            for bound in &constraint.bounds {
                 let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                    return true;
+                    continue;
                 };
                 let required = self.trait_key(trait_id);
-                self.child_where_entails(child_impl, &parent_subject, &required)
-                    || self.trait_obligation_satisfied_with_args(
-                        &required,
-                        &[],
-                        &parent_subject,
-                        &mut HashSet::new(),
+                if !self.child_where_entails(child_impl, &parent_subject, &required)
+                    && !matches!(
+                        self.probe_trait_head(&required, &[], &parent_subject)?,
+                        ApplicabilityProof::Satisfied(_)
                     )
-            })
-        })
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     fn child_where_entails(
@@ -4661,6 +4914,7 @@ impl Checker {
                         &trait_method.ret_ty,
                         trait_impl.where_clause.as_ref(),
                         trait_impl.generated_derive,
+                        &trait_impl.constructor_slot_positions,
                     )?;
                 let param_names = method
                     .value_parameters
@@ -4847,5 +5101,107 @@ mod shared_registry_tests {
             restored.typecheck(calls("cow_identity(2)")).unwrap()[0].ty,
             Ty::Int
         );
+    }
+}
+
+#[cfg(test)]
+mod constructor_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn declaration_parent_proof_resolves_mapping_through_an_ordinary_trait() {
+        // This test targets declaration coverage. Body checking separately
+        // rejects the deliberately unconsumed capabilities of these empty impls.
+        let ast = spire::parse_with_context(
+            r#"
+deftrait DepRoot where Self: Type<$A> {}
+deftrait DepChild where Self: DepRoot {}
+deftrait Marker {}
+defenum Leaf<$A> { Leaf($A), }
+defenum Bridge<$M> { Bridge($M), }
+defenum DepShell<$L, $A> { Shell($L, $A), }
+impl DepChild for DepShell<Bridge<Leaf<Int>>, $T> {}
+impl DepRoot for DepShell<$L, $A>
+where
+  $L: Marker
+  $A: DepRoot.$A
+{}
+impl Marker for Bridge<$M> where $M: DepChild {}
+impl DepChild for Leaf<$T> {}
+impl DepRoot for Leaf<$T> {}
+"#,
+            spire::ParserContext::project(0),
+        )
+        .unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        checker.predeclare_type_signatures(&resolved).unwrap();
+        checker.predeclare_traits(&resolved).unwrap();
+        let trait_key = checker.trait_key_by_short_name("DepChild").unwrap();
+        let implementation = checker
+            .trait_impl_candidate_keys(&trait_key)
+            .into_iter()
+            .map(|key| &checker.trait_impls[&key])
+            .find(|info| info.target_name.ends_with("DepShell"))
+            .unwrap();
+        assert_eq!(implementation.constructor_slot_positions, vec![1]);
+        assert!(checker.constructor_mapping_resolution.pending.is_empty());
+        assert!(checker.constructor_mapping_resolution.resolving.is_empty());
+        assert!(checker
+            .constructor_mapping_resolution
+            .requests
+            .borrow()
+            .is_none());
+    }
+
+    #[test]
+    fn declaration_mapping_cycle_rejects_reentry_and_clears_transient_state() {
+        let ast = spire::parse_with_context(
+            "deftrait MappingRoot where Self: Type<$A> {}\n\
+             deftrait MappingChild where Self: MappingRoot {}\n\
+             defenum MappingBox<$A> { Box($A), }\n\
+             impl MappingRoot for MappingBox<$A> {}\n\
+             impl MappingChild for MappingBox<$A> {}",
+            spire::ParserContext::project(0),
+        )
+        .unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        checker.check_program(resolved).unwrap();
+        let trait_key = checker.trait_key_by_short_name("MappingChild").unwrap();
+        let key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
+        // Simulate a declaration dependency requesting its own unfinished impl.
+        // Source-level trait inheritance cycles are rejected earlier by closure.
+        checker
+            .constructor_mapping_resolution
+            .pending
+            .insert(key.clone());
+        checker.constructor_mapping_resolution.resolving.insert(key);
+        let substitutions = checker.substitutions.clone();
+        let bounds = checker.tyvar_bounds.clone();
+        let witnesses = checker.constructor_witness_traits.clone();
+        let rigid = checker.rigid_tyvars.clone();
+        let error = checker.resolve_impl_constructor_mappings().unwrap_err();
+        assert!(
+            error.message.contains("mapping dependency cycle"),
+            "{error}"
+        );
+        assert!(checker.constructor_mapping_resolution.pending.is_empty());
+        assert!(checker.constructor_mapping_resolution.resolving.is_empty());
+        assert!(checker
+            .constructor_mapping_resolution
+            .requests
+            .borrow()
+            .is_none());
+        assert_eq!(checker.substitutions, substitutions);
+        assert_eq!(checker.tyvar_bounds, bounds);
+        assert_eq!(checker.constructor_witness_traits, witnesses);
+        assert_eq!(checker.rigid_tyvars, rigid);
     }
 }

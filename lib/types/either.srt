@@ -246,10 +246,7 @@ where
 `Applicative` implementation for `Either`.
 The mapper is inspected first, and the first encountered Left value is kept.
 """
-impl Applicative for Either<$L, $R>
-where
-  $R: Applicative.$A
-{
+impl Applicative for Either<$L, $R> {
   @doc """
   Inject a payload as `Either::Right`.
 
@@ -288,10 +285,7 @@ where
 `Monad` implementation for `Either`.
 Binding continues Right payloads and short-circuits Left values.
 """
-impl Monad for Either<$L, $R>
-where
-  $R: Monad.$A
-{
+impl Monad for Either<$L, $R> {
   @doc """
   Return a payload as `Either::Right`.
 
@@ -341,10 +335,7 @@ impl Convert<Option<$R>> for Either<$L, $R> {
 }
 
 # Retain the original Error; bind must not produce a successful payload.
-impl MonadFail for Either<Error, $T>
-where
-  $T: MonadFail.$A
-{
+impl MonadFail for Either<Error, $T> {
   def fail::<Either<Error, $T>>(error: Error) -> Either<Error, $T> {
     Either::Left(error)
   }

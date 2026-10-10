@@ -1001,6 +1001,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         name: "map_values",
         func: map_values::builtin_map_values,
     },
+    BuiltinImpl {
+        name: sindr::builtin::PATTERN_CONTRACT_VIOLATION_BUILTIN,
+        func: |_vm, _args| {
+            Err(RuntimeError::new(
+                "Internal invariant broken: total pattern binding or match did not match",
+            ))
+        },
+    },
 ];
 
 const _: () = {
@@ -4959,6 +4967,22 @@ mod tests {
             super::BuiltinOutcome::Complete(value) => Ok(value),
             outcome => vm.drive_builtin_outcome(outcome),
         }
+    }
+
+    #[test]
+    fn pattern_contract_violation_returns_runtime_error() {
+        let mut vm = test_vm();
+        let id = builtin_id_by_name(sindr::builtin::PATTERN_CONTRACT_VIOLATION_BUILTIN)
+            .expect("internal builtin");
+        let error = call_builtin(&mut vm, id, Vec::new())
+            .expect_err("totality violation is not a language Err");
+        assert!(
+            error.message.contains("Internal invariant broken"),
+            "{error:?}"
+        );
+        let meta = builtin_meta_by_id(id).unwrap();
+        assert!(meta.surfaces.is_empty());
+        assert!(meta.compiler_generated_surfaces.is_empty());
     }
 
     fn test_vm() -> VM {

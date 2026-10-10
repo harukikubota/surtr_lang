@@ -5,6 +5,7 @@ use sindr::names::{builtin_type_name, builtin_type_usage_policy, BuiltinTypeUsag
 #[derive(Clone, Copy)]
 pub(super) enum SignatureTyMode<'a> {
     Normal,
+    ImplHead { self_ty: Option<&'a Ty> },
     Trait { self_ty: &'a Ty },
     Builtin,
     ResolvedNormal,
@@ -18,6 +19,7 @@ impl<'a> SignatureTyMode<'a> {
             SignatureTyMode::Trait { self_ty } | SignatureTyMode::ResolvedTrait { self_ty } => {
                 Some(self_ty)
             }
+            SignatureTyMode::ImplHead { self_ty } => self_ty,
             SignatureTyMode::Normal
             | SignatureTyMode::Builtin
             | SignatureTyMode::ResolvedNormal
@@ -41,6 +43,7 @@ impl<'a> SignatureTyMode<'a> {
 
     fn without_direct_constructor_name_fallback(self) -> Self {
         match self {
+            SignatureTyMode::ImplHead { self_ty } => SignatureTyMode::ImplHead { self_ty },
             SignatureTyMode::Normal | SignatureTyMode::ResolvedNormal => {
                 SignatureTyMode::ResolvedNormal
             }
@@ -56,7 +59,10 @@ impl<'a> SignatureTyMode<'a> {
     fn allows_direct_constructor_name_fallback(self) -> bool {
         matches!(
             self,
-            SignatureTyMode::Normal | SignatureTyMode::Trait { .. } | SignatureTyMode::Builtin
+            SignatureTyMode::ImplHead { .. }
+                | SignatureTyMode::Normal
+                | SignatureTyMode::Trait { .. }
+                | SignatureTyMode::Builtin
         )
     }
 }
@@ -2490,8 +2496,12 @@ impl Checker {
                             !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
                         }) {
                             let head = self.resolve_type_constructor_head(argument)?;
-                            self.normalize_inferred_constructor_identity(&trait_key, &head)
-                                .unwrap_or(head)
+                            if matches!(mode, SignatureTyMode::ImplHead { .. }) {
+                                head
+                            } else {
+                                self.normalize_inferred_constructor_identity(&trait_key, &head)
+                                    .unwrap_or(head)
+                            }
                         } else {
                             self.resolve_signature_like_ast_ty_in_context(
                                 argument,
@@ -2502,7 +2512,9 @@ impl Checker {
                         };
                         resolved_args.push(resolved);
                     }
-                    self.validate_nominal_type_arguments(&def, &resolved_args, span, true)?;
+                    if !matches!(mode, SignatureTyMode::ImplHead { .. }) {
+                        self.validate_nominal_type_arguments(&def, &resolved_args, span, true)?;
+                    }
                     match def.kind {
                         crate::env::TypeKind::Struct => Ok(Ty::Struct(
                             def.name.clone(),

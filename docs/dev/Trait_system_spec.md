@@ -362,6 +362,8 @@ path 返却は拒否する。`const Facet<...>` の literal bracket 制約は維
 Self は完成した返り型であり、期待型または ReturnTypeArgument から決定する。標準宣言の identity により
 能力を選び、struct の内部表現や同名 Trait から推測しない。通常 callable の失敗は MonadFail、do は
 MonadFail、次に Alternative の順で解決する。Monad 単独は失敗値を構築しない。
+標準宣言の欠落や同名の非標準宣言による代用は契約エラーとし、Alternative へ切り替えない。
+通常 callable の戻り先に必要な impl がなければ拒否する。generic の能力は宣言した bound のみで判定する。
 `fail` は渡された Error を保持し、成功 payload や bind の後続を生成・実行しない。
 標準実装はこの契約を満たす。ユーザー impl の法則証明や実行結果の補正はコンパイラでは行わない。
 
@@ -574,7 +576,23 @@ ProofEnvironment {
 parent coverage は child variables を rigid、parent variables を flexible として一方向 match を行う。
 child `where` を仮定として、substitute 済み parent `where` obligations を同じ solver で証明する。`Self` は
 child impl target に lower する。head coverage、constructor slot mapping、where entailment は別々に診断する。
-複数の disjoint parent impl の和集合による coverage は V1 では行わない。
+複数の disjoint parent impl の和集合による coverage は行わない。
+
+TypeCtorTrait の Root（constructor slot を持つ親がない Trait）は impl の明示指定で対応を確定する。
+スロットが1つ、対象直下の型変数も1つの場合だけ指定を省略できる。候補が複数あれば明示指定を要求する。
+子 impl は、適用範囲を覆い、制約を証明できる親 impl の対応をスロット順に継承する。
+子側の指定は任意の一致確認であり、親の欠如や不足を代用しない。型変数名の違いや、非スロット引数の固定は許可する。
+継承先も直下の型変数位置でなければならず、具象型への固定や複数スロットの同一変数への集約は拒否する。
+複数の constructor parent はすべて同じ対応を要求する。diamond は一致すれば成功し、不一致や循環は拒否する。
+通常 Trait の親はスロットを供給しないが、親能力の検査は行う。子自身の `Self: Type<...>` も親と同じ構成を要求し、
+スロットの追加や対応の上書きを認めない。独立した位置を扱う能力は、継承関係のない TypeCtorTrait として宣言する。
+
+Scar は全 impl の head と制約を収集し、Root と親への依存に沿って対応を確定してから method signature を解決する。
+確定した impl metadata を `Self<$...>`、constructor witness、dispatch と共有し、署名ごとに対応を再推論しない。
+親制約の証明が未確定の対応を必要とした場合、試行状態を戻して依存先を確定し、証明をやり直す。
+依存循環は拒否し、未確定の対応や試行中の制約を署名・本体検査へ持ち越さない。
+宣言順や探索順、型変数名、標準型の名前で対応を選ばない。診断は親 head の不足、親制約不足、継承対応の不一致、
+Root の対応不足を区別する。標準定義は Functor の Root 指定だけを残し、子の重複指定を省く。
 
 親 Trait closure は TraitRef の argument を substitution して導く。`Child<Int>` は `Parent<Int>` を導けても
 `Parent<String>` は導かない。
