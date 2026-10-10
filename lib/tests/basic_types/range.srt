@@ -1,5 +1,14 @@
 import Test;
 
+defstruct UnusualEndpoint { value: Int }
+impl UnusualEndpoint {
+  def new(value: Int) -> Self { UnusualEndpoint { value } }
+}
+impl Eq for UnusualEndpoint {
+  def eq(self: Self, rhs: Self) -> Boolean { self.value == rhs.value }
+  def neq(self: Self, rhs: Self) -> Boolean { True }
+}
+
 test("Range") {
   describe("construction helpers") {
     it("keeps new in declared order and normalized in ascending order") {
@@ -28,6 +37,18 @@ test("Range") {
   }
 
   describe("ordering helpers") {
+    it("negates range equality independently of endpoint neq overrides") {
+      do {
+        left = Range(UnusualEndpoint::new(1), UnusualEndpoint::new(2))
+        same = Range(UnusualEndpoint::new(1), UnusualEndpoint::new(2))
+        different = Range(UnusualEndpoint::new(1), UnusualEndpoint::new(3))
+
+        assert_true(left == same)
+        assert_false(left != same)
+        assert_true(left != different)
+      }
+    }
+
     it("uses lexicographic compare plus structural equality") {
       do {
         left = Range(1, 4)

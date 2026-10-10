@@ -152,13 +152,6 @@ pub fn info_line(line: &str) -> String {
             signature_doc(rest),
         ]);
     }
-    if let Some(rest) = line.strip_prefix("specialized: ") {
-        return concat([
-            styled("specialized", Style::fg(Color::BrightBlack).bold()),
-            styled(": ", Style::fg(Color::BrightBlack)),
-            source_doc(rest),
-        ]);
-    }
     if let Some(rest) = line.strip_prefix("type: ") {
         return concat([
             styled("type", Style::fg(Color::BrightBlack).bold()),

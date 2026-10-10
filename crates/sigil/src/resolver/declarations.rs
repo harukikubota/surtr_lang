@@ -617,7 +617,7 @@ pub fn lower_module_source_ast(
                     ast: module_ast,
                     declared_span: Some(declared_span),
                     owner: None,
-                    module_doc: attrs.doc,
+                    module_doc: None,
                     auto_import: attrs.auto_import,
                     process_spec: None,
                 });
@@ -1406,6 +1406,39 @@ mod declaration_surface_tests {
             user_importable,
             true,
         )
+    }
+
+    #[test]
+    fn trait_impl_lowering_does_not_export_body_doc_as_module_doc() {
+        let ast = spire::parse_with_context(
+            r#"@doc """implementation body"""
+impl Describable for User {
+  @doc """implementation method"""
+  def describe(self: Self) -> String { "user" }
+}"#,
+            spire::ParserContext::module(0, None),
+        )
+        .unwrap();
+        let lowered = lower_module_source_ast(ast, Some("Example"));
+        let implementation = lowered
+            .iter()
+            .find(|module| {
+                module
+                    .ast
+                    .iter()
+                    .any(|stmt| matches!(stmt, Ast::TraitImplDef(..)))
+            })
+            .expect("lowered implementation");
+        assert!(implementation.module_doc.is_none());
+        let Ast::TraitImplDef(_, _, _, _, _, _, attrs) = implementation
+            .ast
+            .iter()
+            .find(|stmt| matches!(stmt, Ast::TraitImplDef(..)))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(attrs.doc.as_deref(), Some("implementation body"));
     }
 
     #[test]

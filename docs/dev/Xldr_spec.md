@@ -194,8 +194,8 @@ escape途中の入力を次の行で完成できることは保証しない。�
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit`, `:q` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する。binding value の再表示は別 surface として扱い、query command には混ぜない。 |
-| `:doc <target>` | public declaration の `@doc` を引く。binding lookup 強制用の `$name` surface は持たない。visible な declaration / process surface を先に解決し、それらに hit しないときだけ binding fallback を行う。callable binding が closure のときは `Closure` type doc と binding 付属の最小補足情報（signature / captures / provenance）を表示する。non-callable value binding は型側 doc へ fallback し、`ret = Ok(1)` のあと `:doc ret` は `Result` 側 doc を返す。retained query surface は trait / 関数 target query (`:doc compare(Int, Int)`)、trait target fallback (`:doc Compare(Int, Int)`)、operator family / target (`:doc |*>`, `:doc |*> Option`)、owner routing (`:doc User`, `:doc User()`, `:doc User!`, `:doc User!()`) である。struct deconstruct doc は source-backed doc を返し、record / error constructor surface は現状の undocumented 出力を維持する。process surface では hidden stdlib surface (`GenServer::spawn` など) と concrete public surface (`MyServer::spawn` など) の両方を引け、concrete query は hidden stdlib doc 本文を流用しつつ表示 symbol / signature だけ concrete 名に差し替える。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とするが、`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。private declaration は undocumented 扱いにせず、private surface であることを明示して拒否する。 |
-| `:sig <target>` | public declaration の signature を表示する。command input は通常の REPL scope で名前解決し、local binding は関数名や trait family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。関数、trait family、operator family、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty!` / `Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。Facet API は callable signature を表示するが、`FacetPathKind` と kind alias は constructor を持たないため `:info` へ誘導する。 |
+| `:doc <target>` | public declaration 自身の `@doc` を引く。Trait 本体と定義内メソッドの doc は独立し、実装側の doc は収集しない。bare helper と演算子は canonical Trait メソッドを参照する。通常関数・capture・preload は現在選択された宣言だけを参照し、別宣言の本文で補わない。closure / extractor closure binding は対応する型の説明、non-callable binding はその型の説明を表示する。Struct の `Ty`・`Ty::new`・`Ty!` は型・constructor・Extractor をそれぞれ参照する。Record・具象Error・Enum の `:doc Ty!` は `:doc Ty` へ案内する。ユーザーが doc を付与できない process 生成メンバーは hidden 標準関数の本文を使い、symbol / signature は具体的な process 名に揃える。通常のユーザー定義メンバーへこの対応を広げない。private 宣言は明示して拒否する。宣言 signature は source の表記を保持し、通常 impl の `Self` は具体的な owner type に正規化する。Trait 定義の `Self` は保持する。 |
+| `:sig <target>` | public declaration の定義 signature を表示する。通常の REPL scope で解決し、local binding は関数名や Trait family を shadow する。qualified 名で宣言を直接参照できる。関数・Trait family・固定演算子・callable binding・process surface を扱う。`:sig Ty` は Struct・Record・具象Error の constructor、Enum では variant constructor 一覧を表示する。`:sig Ty!` は Struct の Extractor、Record・具象Error・Enum のパターン形を表示する。具象Error は constructor のブロック引数とパターンの payload を区別する。引数指定による specialization は行わない。`FacetPathKind` と kind alias は `:info` へ案内する。 |
 | `:info <target>` | 定義、binding、dispatch、operator family / target、singleton process owner、PID binding の解決情報を表示する。command input は通常の REPL scope で名前解決し、local binding は callable family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。一般式 evaluation や旧 command-query 専用 surface には広げず、symbol / family / target / process / binding inspection に留める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
 | `:type <binding>` | REPL binding の型と `RuntimeTypeDisplay` を表示する。これは runtime 表示カテゴリであり compile-space `TypeIdentity` ではない。command input は通常の REPL scope で名前解決し、local binding は callable 名を shadow する。通常の値は visible binding lookup のみを対象とし、定義名、trait target query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。struct / record owner への field-oriented lookup はこの変更では追加しない。 |
 | `:facet <facet-target>` | ルート型のメンバー一覧、FacetPath 定義、facet binding、または Facet API 消費の canonical path、5-slot type、derived kind、template/pending stage、API eligibility、slot 確定、result type、segment 一覧、停止点を表示する。Record の `Type._N` は対応する名前付き field と同じアクセスへ正規化するが、表示上の origin は `._N` のまま保持する。表示 metadata は Forge が Scar の typed Facet node から生成する共通情報を用い、Xldr は再構築しない。 |
@@ -237,17 +237,17 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `:reload` は両モードとも value binding を破棄する
 
 - command query は通常の REPL scope で名前解決し、local binding が関数名や trait family を shadow する
-- 共通 query surface は bare symbol / family query、具象 target を伴う function / trait query、operator family / target query、owner constructor / deconstruct query に限定する
-- typed call query の引数は `Int`, `Result<Int>`, `(Int -> String)` のような concrete type、または現在 visible な binding 名だけを受ける。未解決 generic type variable や任意式は受けない
-- operator target query の target は concrete type または現在 visible な binding 名を受ける
-- `$binding`、capture query、`lhs OP rhs` 形式の旧 operator query は command query surface から除外する
+- 共通 query は名前・修飾名・公開された固定 symbol と `Facet.Ty`・field path を字句として受け付ける。`?` / `!` suffix、TupleCtor の `(,)` とその修飾名を含む。`True`・`False`は Boolean variant の宣言名として照会できる。
+- `:doc` / `:sig` / `:info` は呼び出し、空引数、型引数、引数型、operator target、literal、capture、一般式を拒否する。`Ty!` は REPL 照会表記であり、Record・具象Error・Enum の式やパターンへ `!` を追加しない。
 - `:doc` は value binding で型 doc fallback を行う。`ret = Ok(1)` のあと `:doc ret` は `Result` 側 doc を返す
 - `:sig` は callable / family / owner / process surface を対象にし、non-callable value binding を拒否する
-- retained operator forms は bare operator token (`:sig |*>`, `:doc |*>`) と operator + target (`:sig |*> Option`, `:doc |*> Option`, `:info |*> Option`) だけである
-- 固定関数演算子 `|>` / `>>` / `>*` / `>=>` は `Bootstrap` の builtin 宣言を bare token の `:doc` / `:sig` から引く。`->` は `Facet::compose` の doc / signature に接続する。`/` / `%` は `Div::safe_div` / `Mod::safe_mod` の operator family と具体的な実装 target の doc / signature に接続する。削除済みの関数型 trait や `Compose` の lookup へ戻さない
+- 演算子照会は bare token と修飾された固定 symbol を受け付ける。`:sig |*> Option` などの実装指定は拒否する
+- 固定関数演算子 `|>` / `>>` / `>*` / `>=>` は `Bootstrap` の builtin 宣言を bare token の `:doc` / `:sig` から引く。`->` は `Facet::compose` の doc / signature に接続する。`/` / `%` は `Div::safe_div` / `Mod::safe_mod` の定義メソッドの doc / signature に接続する。削除済みの関数型 trait や `Compose` の lookup へ戻さない
 - facet path / facet API lookup は `:sig` に含めず、completion と `:facet` に委譲する
-- 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で concrete type / binding 解決後の置換結果を表示する
+- 多相関数の `:sig` は定義 signature を表示し、入力引数による置換や実装選択を行わない
 - `:doc` / `:sig` は public declaration を主 query surface とし、private hit を認識できた場合は private-surface guidance を返す
+- 通常関数captureのdocは、元宣言のcanonical名とrebase済みsource spanに対応させてREPL内で保持する。bindingでshadowした後に同名関数を宣言しても、既存captureへ新宣言の本文を渡さない。generic specializationとrecaptureは元宣言の対応を使う。Traitメソッドcaptureは実行先implではなく、metadataが指す定義メソッド自身のdocを参照する。docがないメソッドをTrait本体やimpl本文で補わない。
+- `.eldr` のdoc表示は保存済みDocs chunkを正本にする。既存の部分的なsemantic復元では、互換性を検証した標準環境と保存済みDocEntryが一致するcapture対応だけを復元し、標準bootstrapの本文を無条件に補わない。
 - 具象 process の REPL 公開面は annotation 由来で決まり、annotation 付き関数だけが public surface になる。handler annotation のない `def` は拒否し、`defp` への変更を案内する。`defp` は外部 API を持たず、`:doc` / `:sig` / 補完対象に含めない
 - process public surface の名前解決は通常関数と同じであり、visible な concrete 関数名は `import` により unqualified 参照できる
 - compiler-managed hidden process surface は completion / import 対象には含めないが、`:doc` / `:sig` の process query では `Agent::pid` や `GenServer::spawn` のような hidden lower symbol を明示名で引ける
@@ -260,15 +260,11 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - 例:
   - `:sig Compare`
   - `:sig compare`
-  - `:sig compare(Int, Int)`
-  - `:sig Compare(Int, Int)`
   - `:sig |*>`
-  - `:sig |*> Option`
   - `:doc Compare`
   - `:doc compare`
-  - `:doc Compare(Int, Int)`
   - `:doc User`
-  - `:doc User()`
+  - `:doc User::new`
   - `:doc User!`
   - `:doc ret`
 

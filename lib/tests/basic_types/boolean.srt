@@ -114,6 +114,20 @@ test("Boolean") {
     }
   }
   describe("Eq") {
+    it("uses equality through operators qualified calls and captures") {
+      do {
+        equal: (Boolean, Boolean -> Boolean) = &Eq::eq
+        unequal: (Boolean, Boolean -> Boolean) = &Eq::neq
+
+        assert_true(True == True)
+        assert_true(True != False)
+        assert_true(Eq::eq(False, False))
+        assert_false(Eq::neq(False, False))
+        assert_true(equal(True, True))
+        assert_true(unequal(True, False))
+      }
+    }
+
     it("accepts the same value") {
       do {
         assert_true(eq(True, True))

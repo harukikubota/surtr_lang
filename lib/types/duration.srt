@@ -10,6 +10,7 @@ xldr(1)> 250ms
 xldr(2)> Duration(250)
 Ok(250ms)
 """
+@derive Eq, Compare
 defstruct Duration {
   readonly millis: Int,
 }
@@ -83,34 +84,6 @@ impl Add for Duration {
   """
   def add(self: Self, rhs: Self) -> Self {
     Duration { millis: self.millis + rhs.millis }
-  }
-}
-
-impl Eq for Duration {
-  @doc """
-  Return `True` when both durations have the same millisecond value.
-  ## REPL
-  xldr(1)> 10ms == 10ms
-  True
-  """
-  def eq(self: Self, rhs: Self) -> Boolean {
-    self.millis == rhs.millis
-  }
-}
-
-impl Compare for Duration {
-  @doc """
-  Return the three-way ordering between two durations.
-  ## REPL
-  xldr(1)> compare(10ms, 20ms)
-  Ordering::Less
-  """
-  def compare(self: Self, rhs: Self) -> Ordering {
-    if(
-      self.millis < rhs.millis,
-      Ordering::Less,
-      if(self.millis > rhs.millis, Ordering::Greater, Ordering::Equal),
-    )
   }
 }
 

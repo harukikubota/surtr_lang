@@ -556,7 +556,7 @@ fn test_command_runs_range_library_tests_with_polymorphic_constructor_calls() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[PASS] Range > construction helpers > keeps constructor polymorphism across different endpoint types in one scope"));
-    assert!(stdout.contains("test result: passed=6, failed=0, total=6"));
+    assert!(stdout.contains("test result: passed=7, failed=0, total=7"));
 }
 
 #[test]

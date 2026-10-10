@@ -15,7 +15,7 @@ apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capt
 
 `|>`, `>>`, `>*`, `>=>` は `Bootstrap` の builtin 宣言に対応する固定規則です。関数型への trait impl は不要です。`>*` は `Functor` の `fmap`、`>=>` は `Monad` の `bind` が使える型を要求します。`->` は別の固定規則で、Facet path の `Facet::compose` に対応します。
 
-REPL の `:doc` / `:sig` は `:doc |>`, `:sig >>`, `:doc >*`, `:sig >=>`, `:doc ->` のように演算子記号を直接引けます。`->` は `Facet::compose` の説明と signature を表示します。`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` に対応し、`:sig / Int` のように具体的な実装の signature も確認できます。
+REPL の `:doc` / `:sig` は `:doc |>`, `:sig >>`, `:doc >*`, `:sig >=>`, `:doc ->` のように演算子記号を直接引けます。`->` は `Facet::compose` の説明と signature を表示します。`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` に対応し、`:sig /` で定義側の signature を確認できます。引数型による実装指定は受け付けません。
 
 ## `=` Bind
 

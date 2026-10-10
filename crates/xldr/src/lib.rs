@@ -2026,10 +2026,11 @@ defmod Kernel {
     }
 
     #[test]
-    fn collect_doc_entries_includes_impl_and_trait_docs() {
+    fn collect_doc_entries_keeps_trait_definition_docs_and_excludes_trait_impl_docs() {
         let ast = spire::parse_with_context(
             r#"@doc """Trait docs."""
 deftrait Metric {
+  @doc """Method docs."""
   def add(self: Self, rhs: Self) -> Self
 }
 
@@ -2072,13 +2073,10 @@ impl Metric for Int {
             entry.qualified_name == "Sample::Metric::add"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref() == Some("Metric::add(self: Self, rhs: Self) -> Self")
-                && entry.doc == "Trait docs."
+                && entry.doc == "Method docs."
         }));
-        assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::impl Metric for Int"
-                && entry.kind == DocKind::Type
-                && entry.signature.as_deref() == Some("impl Metric for Int")
-                && entry.doc == "Metric Int docs."
+        assert!(!docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::impl Metric for Int" || entry.doc == "Metric Int docs."
         }));
     }
 
@@ -2121,7 +2119,7 @@ impl User {
     }
 
     #[test]
-    fn collect_doc_entries_includes_impl_method_docs() {
+    fn collect_doc_entries_keeps_inherent_method_docs_and_excludes_trait_impl_method_docs() {
         let ast = spire::parse_with_context(
             r#"defstruct User {
   name: String,
@@ -2179,12 +2177,10 @@ impl Show for Int {
                     == Some("User::deconstruct(self: User) -> MatchResult<String, Error>")
                 && entry.doc == "Deconstruct a user value for pattern matching."
         }));
-        assert!(docs.iter().any(|entry| {
+        assert!(!docs.iter().any(|entry| {
             entry.qualified_name == "Sample::impl Show for Int::to_string"
-                && entry.kind == DocKind::Function
-                && entry.signature.as_deref()
-                    == Some("impl Show for Int::to_string(self: Int) -> String")
-                && entry.doc == "Render `Int` through the standard display surface."
+                || entry.doc == "Render `Int` through the standard display surface."
+                || entry.doc == "String conversion for `Int`."
         }));
     }
 
