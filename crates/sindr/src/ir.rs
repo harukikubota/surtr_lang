@@ -2441,10 +2441,11 @@ mod tests {
                 vec![S::Pid("Global::Worker".into())],
                 Value::WorkerLease(WorkerLeaseHandle {
                     workers_id: 1,
-                    pid: PidHandle {
-                        id: 2,
-                        process_name: "Global::Worker".into(),
-                    },
+                    pid: PidHandle::new(
+                        2,
+                        "Global::Worker".into(),
+                        crate::runtime::PidKind::Worker,
+                    ),
                 }),
             ),
         ];

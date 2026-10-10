@@ -326,10 +326,54 @@ pub enum InfiniteGeneratorProducer {
     Unfold { state: Value, step: Callable },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PidHandle {
+/// Immutable capability category; handler PIDs do not identify processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidKind {
+    Singleton,
+    Worker,
+    Handler,
+}
+
+/// Shared identity only. It must never retain process state or a VM context.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PidIdentity {
     pub id: u64,
     pub process_name: String,
+    pub kind: PidKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PidHandle {
+    identity: Rc<PidIdentity>,
+}
+
+impl PidHandle {
+    pub fn new(id: u64, process_name: String, kind: PidKind) -> Self {
+        Self {
+            identity: Rc::new(PidIdentity {
+                id,
+                process_name,
+                kind,
+            }),
+        }
+    }
+
+    pub fn identity(&self) -> &Rc<PidIdentity> {
+        &self.identity
+    }
+
+    /// Runtime authority is the shared identity, not a coincidentally equal ID.
+    pub fn same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+
+impl std::ops::Deref for PidHandle {
+    type Target = PidIdentity;
+
+    fn deref(&self) -> &Self::Target {
+        &self.identity
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1063,6 +1107,36 @@ pub struct Location {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pid_copy_and_lease_share_identity_without_retaining_process_state() {
+        let pid = super::PidHandle::new(7, "Global::Worker".into(), super::PidKind::Worker);
+        let weak = std::rc::Rc::downgrade(pid.identity());
+        let copy = pid.clone();
+        let lease = super::WorkerLeaseHandle {
+            workers_id: 2,
+            pid: copy,
+        };
+        assert!(pid.same_identity(&lease.pid));
+        assert!(!pid.same_identity(&super::PidHandle::new(
+            7,
+            "Global::Worker".into(),
+            super::PidKind::Worker,
+        )));
+        drop(pid);
+        assert!(weak.upgrade().is_some());
+        drop(lease);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn pid_identity_distinguishes_process_and_handler_capabilities() {
+        let worker = super::PidHandle::new(1, "Global::OutHandler".into(), super::PidKind::Worker);
+        let handler =
+            super::PidHandle::new(1, "Global::OutHandler".into(), super::PidKind::Handler);
+        assert_ne!(worker.kind, handler.kind);
+        assert!(!worker.same_identity(&handler));
+    }
+
     use super::{
         quote_surtr_string_literal, Callable, CallableMetadata, CallableTarget, HashMapHandle,
         ListHandle, Location, RichError, RuntimeErrorDiagnostic, TypeEntry, TypeKind, TypeRegistry,

@@ -23,11 +23,8 @@ pub(super) enum DetachedTaskState {
 #[derive(Debug, Clone)]
 pub(super) enum DetachedCompletion {
     Future(Option<FutureId>),
+    Process { execution_id: u64, callback: bool },
     ErrorFuture(FutureId),
-    Reply {
-        correlation_id: CorrelationId,
-        future_id: FutureId,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +42,9 @@ pub(crate) enum RuntimeContinuation {
         wrapper: Option<u32>,
     },
     Identity,
+    ProcessAwait {
+        future_id: FutureId,
+    },
     TaskCall {
         completion: FutureId,
         previous_trace: Option<RuntimeStackFrame>,
@@ -206,10 +206,9 @@ impl SingletonInit {
         vm.process_runtime
             .singleton_by_name
             .insert(self.process_name.clone(), pid);
-        Ok(BuiltinOutcome::Complete(Value::Pid(PidHandle {
-            id: pid,
-            process_name: self.process_name,
-        })))
+        Ok(BuiltinOutcome::Complete(Value::Pid(
+            vm.process_handle(pid)?,
+        )))
     }
 }
 
@@ -273,6 +272,10 @@ impl RuntimeContinuation {
             };
             return Ok(BuiltinOutcome::Complete(value));
         }
+        if let Self::ProcessAwait { future_id } = self {
+            vm.forget_internal_future(future_id);
+            return Ok(BuiltinOutcome::Complete(result?));
+        }
         if let Self::TaskCall {
             completion,
             previous_trace,
@@ -307,6 +310,7 @@ impl RuntimeContinuation {
             Self::ErrorConstruction { .. } | Self::TaskCall { .. } => unreachable!(),
             Self::Singleton(_) => unreachable!(),
             Self::SingletonAwait { .. } => unreachable!(),
+            Self::ProcessAwait { .. } => unreachable!(),
             Self::Identity => Ok(BuiltinOutcome::Complete(value)),
             Self::StartedTask { task_id, value } => {
                 if !vm.task_reached_startup_boundary(task_id) {
@@ -335,10 +339,7 @@ impl RuntimeContinuation {
                                 None,
                             )?,
                         };
-                        ok_vm_result(Value::Pid(PidHandle {
-                            id: pid,
-                            process_name,
-                        }))
+                        ok_vm_result(Value::Pid(vm.process_handle(pid)?))
                     }
                     Err(error) => err_vm_result(error),
                 };
@@ -486,6 +487,160 @@ impl RuntimeContinuation {
 }
 
 impl VM {
+    #[cfg(test)]
+    pub(crate) fn start_process_execution(
+        &mut self,
+        pid: PidHandle,
+        body: Callable,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let location = self
+            .runtime_error_location()
+            .ok_or_else(|| RuntimeError::new("process test invocation has no source origin"))?;
+        self.start_process_execution_at(pid, body, (location, self.current_stack_trace_snapshot()))
+    }
+
+    pub(crate) fn start_process_execution_at(
+        &mut self,
+        pid: PidHandle,
+        body: Callable,
+        origin: (Location, Vec<RuntimeStackFrame>),
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        if pid.kind == PidKind::Handler {
+            return Err(RuntimeError::new(
+                "handler capability is not a process destination",
+            ));
+        }
+        let actual = self
+            .process_runtime
+            .processes
+            .get(&pid.id)
+            .map(|entry| entry.identity.identity().clone())
+            .or_else(|| {
+                self.process_runtime
+                    .stopped_identities
+                    .get(&pid.id)
+                    .and_then(Weak::upgrade)
+            });
+        let Some(actual) = actual else {
+            return self.language_error_outcome_at(
+                "ProcessStateUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+                origin.0.clone(),
+                origin.1.clone(),
+            );
+        };
+        if actual.process_name != pid.process_name || actual.kind != pid.kind {
+            return self.language_error_outcome_at(
+                "ProcessStatePidTypeMismatch",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(actual.process_name.clone()),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+                origin.0.clone(),
+                origin.1.clone(),
+            );
+        }
+        if !Rc::ptr_eq(&actual, pid.identity()) {
+            return self.language_error_outcome_at(
+                "ProcessStateUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+                origin.0.clone(),
+                origin.1.clone(),
+            );
+        }
+        if self.stopped_identity_matches(&pid)
+            || self
+                .process_runtime
+                .processes
+                .get(&pid.id)
+                .is_some_and(|entry| entry.acceptance == ProcessAcceptance::Stopping)
+        {
+            return self.language_error_outcome_at(
+                "ProcessStopped",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+                origin.0.clone(),
+                origin.1.clone(),
+            );
+        }
+        let entry = self
+            .process_runtime
+            .processes
+            .get(&pid.id)
+            .ok_or_else(|| RuntimeError::new("accepting process has no live body"))?;
+        let Some(initial_state) = entry.state_value.clone() else {
+            if entry.standby_state_pending {
+                return Err(RuntimeError::process_init_failed(
+                    "process execution before initialization completed",
+                ));
+            }
+            return self.language_error_outcome_at(
+                "ProcessStateUnavailable",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+                origin.0.clone(),
+                origin.1.clone(),
+            );
+        };
+        let id = self.process_runtime.next_execution_id;
+        self.process_runtime.next_execution_id = id
+            .checked_add(1)
+            .ok_or_else(|| RuntimeError::new("process execution allocator exhausted"))?;
+        let future = self
+            .process_runtime
+            .allocate_future(Some(pid.id), None, false);
+        self.process_runtime
+            .futures
+            .get_mut(&future)
+            .ok_or_else(|| RuntimeError::new("process execution result future disappeared"))?
+            .creation_context = Some(origin.clone());
+        let mut context = self.prepare_callable_context(body, Vec::new())?;
+        context.current_process_execution = Some(id);
+        self.process_runtime.executions.insert(
+            id,
+            ProcessExecutionRecord {
+                pid: pid.clone(),
+                parent: self.current_process_execution,
+                stage: ProcessExecutionStage::Handling,
+                stored: false,
+                initial_state: Some(initial_state),
+                result_future: future,
+                internal_futures: Vec::new(),
+                origin,
+            },
+        );
+        self.register_runtime_task(
+            Some(pid.id),
+            DetachedTaskState::Runnable(context),
+            DetachedCompletion::Process {
+                execution_id: id,
+                callback: false,
+            },
+        );
+        Ok(BuiltinOutcome::Wait {
+            future_id: future,
+            continuation: BuiltinContinuation::Runtime(RuntimeContinuation::ProcessAwait {
+                future_id: future,
+            }),
+        })
+    }
+
     pub(super) fn schedule_future_error(
         &mut self,
         future_id: FutureId,
@@ -566,7 +721,8 @@ impl VM {
         owner_pid: Option<u64>,
         completion: DetachedCompletion,
     ) -> Result<u64, RuntimeError> {
-        let context = self.prepare_callable_context(callable, args)?;
+        let mut context = self.prepare_callable_context(callable, args)?;
+        context.current_process_execution = None;
         Ok(self.register_runtime_task(owner_pid, DetachedTaskState::Runnable(context), completion))
     }
 
@@ -807,7 +963,7 @@ impl VM {
                         let value = self.ready_future_value(future_id).ok_or_else(|| {
                             RuntimeError::new("scheduled waiting task has no ready future")
                         })?;
-                        self.complete_runtime_task(task.completion, value);
+                        self.complete_runtime_task(task.completion, value)?;
                         continue;
                     }
                 };
@@ -824,6 +980,24 @@ impl VM {
                 task.state = match outcome {
                     ProcessRunOutcome::QuantumExpired => DetachedTaskState::Runnable(context),
                     ProcessRunOutcome::Pending(future_id) => {
+                        if let DetachedCompletion::Process {
+                            execution_id,
+                            callback: false,
+                        } = task.completion
+                        {
+                            let record = self
+                                .process_runtime
+                                .executions
+                                .get(&execution_id)
+                                .ok_or_else(|| {
+                                    RuntimeError::new("suspended wrapper lost execution record")
+                                })?;
+                            if record.stage == ProcessExecutionStage::Callback
+                                && record.result_future == future_id
+                            {
+                                continue;
+                            }
+                        }
                         if let DetachedCompletion::Future(Some(completion)) = task.completion {
                             if self
                                 .process_runtime
@@ -853,26 +1027,73 @@ impl VM {
                         }
                     }
                     ProcessRunOutcome::Halted(Value::PendingFuture(future_id)) => {
+                        if let DetachedCompletion::Process {
+                            execution_id,
+                            callback: false,
+                        } = task.completion
+                        {
+                            if self
+                                .process_runtime
+                                .executions
+                                .get(&execution_id)
+                                .is_some_and(|record| {
+                                    record.stage == ProcessExecutionStage::Callback
+                                        && record.result_future == future_id
+                                })
+                            {
+                                continue;
+                            }
+                        }
                         DetachedTaskState::Waiting {
                             future_id,
                             context: None,
                         }
                     }
                     ProcessRunOutcome::Halted(value) => {
-                        self.complete_runtime_task(task.completion, value);
+                        self.complete_runtime_task(task.completion, value)?;
                         continue;
                     }
                     ProcessRunOutcome::Failed(_) if task.cancelling => {
+                        if let DetachedCompletion::Process { execution_id, .. } = task.completion {
+                            self.finish_process_execution(execution_id)?;
+                        }
                         self.publish_completed_cleanup(&task.completion);
                         continue;
                     }
                     ProcessRunOutcome::Failed(error) => {
+                        if let DetachedCompletion::Process { execution_id, .. } = task.completion {
+                            let pid = self
+                                .process_runtime
+                                .executions
+                                .get(&execution_id)
+                                .ok_or_else(|| {
+                                    RuntimeError::new("failed process task lost execution record")
+                                })?
+                                .pid
+                                .id;
+                            let replies = self.abort_process_executions(pid)?;
+                            self.finish_process_execution(execution_id)?;
+                            while self
+                                .process_runtime
+                                .executions
+                                .values()
+                                .any(|record| record.pid.id == pid)
+                                || replies.iter().any(|id| {
+                                    self.process_runtime
+                                        .futures
+                                        .get(id)
+                                        .is_some_and(|future| future.error_generation_pending)
+                                })
+                            {
+                                self.drive_ready_detached_tasks()?;
+                            }
+                        }
                         return Err(match task.init_context {
                             Some((name, policy, trigger)) => {
                                 Self::with_vm_init_process_context(error, &name, policy, trigger)
                             }
                             None => error,
-                        })
+                        });
                     }
                 };
                 self.process_runtime.detached_tasks.insert(id, task);
@@ -880,6 +1101,7 @@ impl VM {
             Ok(())
         })();
         self.restore_execution_context(saved);
+        self.sweep_stopped_identities();
         result
     }
 
@@ -909,20 +1131,15 @@ impl VM {
                         .get(&id)
                         .is_some_and(|future| future.error_generation_pending)
             }
-            DetachedCompletion::Reply { correlation_id, .. } => !self
-                .process_runtime
-                .reply_table
-                .contains_key(&correlation_id),
+            DetachedCompletion::Process { .. } => false,
             DetachedCompletion::Future(None) => false,
         }
     }
 
     fn publish_completed_cleanup(&mut self, completion: &DetachedCompletion) {
         let id = match completion {
-            DetachedCompletion::Future(Some(id))
-            | DetachedCompletion::ErrorFuture(id)
-            | DetachedCompletion::Reply { future_id: id, .. } => *id,
-            DetachedCompletion::Future(None) => return,
+            DetachedCompletion::Future(Some(id)) | DetachedCompletion::ErrorFuture(id) => *id,
+            DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => return,
         };
         if self.ready_future_value(id).is_some() {
             self.process_runtime.wake_future_waiters(id);
@@ -936,11 +1153,13 @@ impl VM {
             .find_map(|(id, task)| {
                 let produces = match task.completion {
                     DetachedCompletion::Future(Some(future))
-                    | DetachedCompletion::ErrorFuture(future)
-                    | DetachedCompletion::Reply {
-                        future_id: future, ..
-                    } => future == future_id,
+                    | DetachedCompletion::ErrorFuture(future) => future == future_id,
                     DetachedCompletion::Future(None) => false,
+                    DetachedCompletion::Process { execution_id, .. } => self
+                        .process_runtime
+                        .executions
+                        .get(&execution_id)
+                        .is_some_and(|record| record.result_future == future_id),
                 };
                 produces.then_some(*id)
             })
@@ -991,10 +1210,10 @@ impl VM {
                 .detached_tasks
                 .values()
                 .any(|task| match task.completion {
-                    DetachedCompletion::Future(Some(id))
-                    | DetachedCompletion::ErrorFuture(id)
-                    | DetachedCompletion::Reply { future_id: id, .. } => id == future_id,
-                    DetachedCompletion::Future(None) => false,
+                    DetachedCompletion::Future(Some(id)) | DetachedCompletion::ErrorFuture(id) => {
+                        id == future_id
+                    }
+                    DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => false,
                 });
         (!cleanup_pending).then_some(value)
     }
@@ -1027,13 +1246,35 @@ impl VM {
         }
     }
 
-    fn complete_runtime_task(&mut self, completion: DetachedCompletion, value: Value) {
+    fn complete_runtime_task(
+        &mut self,
+        completion: DetachedCompletion,
+        value: Value,
+    ) -> Result<(), RuntimeError> {
         match completion {
+            DetachedCompletion::Process {
+                execution_id,
+                callback,
+            } => {
+                let record = self
+                    .process_runtime
+                    .executions
+                    .get(&execution_id)
+                    .ok_or_else(|| {
+                        RuntimeError::new("process task completed without execution record")
+                    })?;
+                if !callback && record.stage == ProcessExecutionStage::Callback {
+                    return Ok(());
+                }
+                self.process_runtime
+                    .resolve_future(record.result_future, value);
+                self.finish_process_execution(execution_id)?;
+            }
             DetachedCompletion::ErrorFuture(id) => {
                 if let Some(future) = self.process_runtime.futures.get_mut(&id) {
                     future.error_generation_pending = false;
                 }
-                self.complete_runtime_task(DetachedCompletion::Future(Some(id)), value);
+                self.complete_runtime_task(DetachedCompletion::Future(Some(id)), value)?;
             }
             DetachedCompletion::Future(Some(id)) => {
                 self.process_runtime.resolve_future(id, value);
@@ -1050,10 +1291,8 @@ impl VM {
                 }
             }
             DetachedCompletion::Future(None) => {}
-            DetachedCompletion::Reply { correlation_id, .. } => {
-                self.process_runtime.resolve_reply(correlation_id, value);
-            }
         }
+        Ok(())
     }
 
     pub(crate) fn genserver_call_reply_later(
@@ -1072,22 +1311,30 @@ impl VM {
         )? {
             return Ok(BuiltinOutcome::Complete(err_vm_result(error)));
         }
+        let execution_id = self
+            .current_process_execution
+            .ok_or_else(|| RuntimeError::new("ReplyLater outside managed execution"))?;
         let future_id = self
             .process_runtime
-            .allocate_future(Some(pid.id), None, false);
-        self.stamp_future_context(future_id)?;
-        let correlation_id = self.process_runtime.allocate_correlation_id();
+            .executions
+            .get(&execution_id)
+            .ok_or_else(|| RuntimeError::new("ReplyLater from completed execution"))?
+            .result_future;
+        let mut context = self.prepare_callable_context(callback, Vec::new())?;
+        context.current_process_execution = Some(execution_id);
         self.process_runtime
-            .register_reply_waiter(correlation_id, future_id);
-        self.schedule_callback(
-            callback,
-            Vec::new(),
+            .executions
+            .get_mut(&execution_id)
+            .expect("validated record")
+            .stage = ProcessExecutionStage::Callback;
+        self.register_runtime_task(
             Some(pid.id),
-            DetachedCompletion::Reply {
-                correlation_id,
-                future_id,
+            DetachedTaskState::Runnable(context),
+            DetachedCompletion::Process {
+                execution_id,
+                callback: true,
             },
-        )?;
+        );
         Ok(BuiltinOutcome::Complete(Value::PendingFuture(future_id)))
     }
 
@@ -1106,10 +1353,9 @@ impl VM {
             .process_runtime
             .singleton_pid_by_process_name(&process_name)
         {
-            return Ok(BuiltinOutcome::Complete(Value::Pid(PidHandle {
-                id,
-                process_name,
-            })));
+            return Ok(BuiltinOutcome::Complete(Value::Pid(
+                self.process_handle(id)?,
+            )));
         }
         if let Some(detail) = self
             .process_runtime
@@ -1157,7 +1403,8 @@ impl VM {
             callback_future: None,
         }))
         .pending();
-        let context = self.prepare_builtin_context(outcome)?;
+        let mut context = self.prepare_builtin_context(outcome)?;
+        context.current_process_execution = None;
         let future_id = self.process_runtime.allocate_future(None, None, false);
         self.process_runtime.singleton_inits.insert(
             process_name.clone(),
@@ -1179,7 +1426,7 @@ impl VM {
         })
     }
 
-    fn forget_internal_future(&mut self, id: FutureId) {
+    pub(super) fn forget_internal_future(&mut self, id: FutureId) {
         self.process_runtime.futures.remove(&id);
         self.process_runtime
             .deadline_queue
@@ -1324,7 +1571,16 @@ impl VM {
         message: Callable,
         timeout_ms: Option<u64>,
     ) -> Result<BuiltinOutcome, RuntimeError> {
-        let pid = self.next_workers_pid(handle)?;
+        let Some(pid) = self.next_workers_pid(handle)? else {
+            return self.language_error_outcome(
+                "WorkersUnavailable",
+                vec![
+                    Value::Int(int(handle.id)),
+                    Value::Str(handle.process_name.clone()),
+                ],
+                Some(1),
+            );
+        };
         match timeout_ms {
             Some(timeout) => self.start_timed_callback(
                 message,
@@ -1355,6 +1611,12 @@ impl VM {
         let members = state
             .members
             .iter()
+            .filter(|id| {
+                self.process_runtime
+                    .processes
+                    .get(id)
+                    .is_none_or(|entry| entry.acceptance == ProcessAcceptance::Accepting)
+            })
             .map(|id| {
                 let process = self.process_runtime.processes.get(id).ok_or_else(|| {
                     RuntimeError::new(format!("worker {id} has no process state"))
@@ -1363,10 +1625,13 @@ impl VM {
                     .process_runtime
                     .spec_for_id(process.spec_id)
                     .ok_or_else(|| RuntimeError::new(format!("worker {id} has no process spec")))?;
-                Ok(PidHandle {
-                    id: *id,
-                    process_name: spec.type_name.clone(),
-                })
+                if spec.type_name != handle.process_name || process.identity.kind != PidKind::Worker
+                {
+                    return Err(RuntimeError::new(
+                        "broadcast member identity does not match worker set",
+                    ));
+                }
+                Ok(process.identity.clone())
             })
             .collect::<Result<VecDeque<_>, RuntimeError>>()?;
         Ok(RuntimeContinuation::Broadcast {

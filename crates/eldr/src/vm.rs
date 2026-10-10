@@ -19,13 +19,13 @@ use sindr::names::{compiler_global_error_kind, IMPLICIT_ROOT_NAMESPACE_PREFIX};
 use sindr::primitives::{int, SurtrInt, ToPrimitive};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
-    Location, PidHandle, RichError, RuntimeCallKind, RuntimeExecutionPhase, RuntimeStackFrame,
-    TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
+    Location, PidHandle, PidIdentity, PidKind, RichError, RuntimeCallKind, RuntimeExecutionPhase,
+    RuntimeStackFrame, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::builtin::{call_builtin, BuiltinContinuation, BuiltinOutcome};
 mod continuation;
@@ -33,6 +33,10 @@ mod continuation;
 mod generator_tests;
 #[cfg(test)]
 mod list_flat_map_tests;
+#[cfg(test)]
+mod process_identity_tests;
+#[cfg(test)]
+mod process_stop_tests;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
 use continuation::{ContinuationFrame, Invocation};
@@ -233,6 +237,7 @@ struct VmCheckpoint {
     continuations: Vec<ContinuationFrame>,
     pending_invocation: Option<Result<Invocation, RuntimeError>>,
     cancellation: Option<RuntimeError>,
+    current_process_execution: Option<u64>,
     pc: usize,
     exit_code: i32,
     last_result: Option<Value>,
@@ -352,6 +357,9 @@ pub struct VmProcessCounters {
     pub process_spec_count: usize,
     pub singleton_slot_count: usize,
     pub process_count: usize,
+    pub stopping_process_count: usize,
+    pub active_process_execution_count: usize,
+    pub stopped_identity_count: usize,
     pub runnable_process_count: usize,
     pub waiting_process_count: usize,
     pub completed_process_count: usize,
@@ -394,6 +402,8 @@ pub struct VmProcessInstanceSnapshot {
     pub process_name: String,
     pub spec_id: u32,
     pub status: String,
+    pub acceptance: String,
+    pub active_executions: usize,
     pub mailbox_len: usize,
     pub owner: Option<u64>,
     pub standby_state_pending: bool,
@@ -553,6 +563,9 @@ struct ProcessRuntime {
     singleton_inits: BTreeMap<String, SingletonFlight>,
     refilling_worker_sets: BTreeSet<u64>,
     processes: RuntimeTable<ProcessInstance>,
+    stopped_identities: RuntimeTable<Weak<PidIdentity>>,
+    executions: RuntimeTable<ProcessExecutionRecord>,
+    next_execution_id: u64,
     futures: RuntimeTable<FutureRecord>,
     reply_table: BTreeMap<CorrelationId, FutureId>,
     waiting_table: BTreeMap<u64, ProcessWaitReason>,
@@ -610,6 +623,9 @@ impl WorkerStrategyState {
 struct ProcessInstance {
     pid: u64,
     spec_id: u32,
+    identity: PidHandle,
+    acceptance: ProcessAcceptance,
+    stop_reason: Option<ProcessStopReason>,
     status: ProcessStatus,
     mailbox: VecDeque<ProcessMailboxMessage>,
     execution_context: Option<ExecutionContext>,
@@ -617,6 +633,37 @@ struct ProcessInstance {
     owner: Option<u64>,
     lifecycle_sink: Option<LifecycleSink>,
     standby_state_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessAcceptance {
+    Accepting,
+    Stopping,
+}
+
+#[derive(Debug, Clone)]
+enum ProcessStopReason {
+    Normal,
+    Error(RichError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessExecutionStage {
+    Handling,
+    Postprocessing,
+    Callback,
+}
+
+#[derive(Debug, Clone)]
+struct ProcessExecutionRecord {
+    pid: PidHandle,
+    parent: Option<u64>,
+    stage: ProcessExecutionStage,
+    stored: bool,
+    initial_state: Option<Value>,
+    result_future: FutureId,
+    internal_futures: Vec<FutureId>,
+    origin: (Location, Vec<RuntimeStackFrame>),
 }
 
 #[allow(dead_code)]
@@ -634,7 +681,6 @@ enum ProcessStatus {
     Completed,
     Failed,
     Restarting,
-    Stopped,
 }
 
 type FutureId = u64;
@@ -666,6 +712,7 @@ struct ExecutionContext {
     continuations: Vec<ContinuationFrame>,
     pending_invocation: Option<Result<Invocation, RuntimeError>>,
     cancellation: Option<RuntimeError>,
+    current_process_execution: Option<u64>,
     pc: usize,
     target: ExecutionTarget,
 }
@@ -831,11 +878,41 @@ struct RootSupervisorState {
 }
 
 impl ProcessRuntime {
+    fn observed_process_status(&self, process: &ProcessInstance) -> ProcessStatus {
+        let tasks = self
+            .detached_tasks
+            .values()
+            .filter(|task| task.owner_pid == Some(process.pid))
+            .collect::<Vec<_>>();
+        if tasks.iter().any(|task| {
+            matches!(
+                task.state,
+                process_continuation::DetachedTaskState::Runnable(_)
+            )
+        }) {
+            return ProcessStatus::Runnable;
+        }
+        if let Some(future) = tasks.iter().find_map(|task| match task.state {
+            process_continuation::DetachedTaskState::Waiting { future_id, .. } => Some(future_id),
+            _ => None,
+        }) {
+            return ProcessStatus::Waiting(ProcessWaitReason::Future(future));
+        }
+        process.status.clone()
+    }
+
     fn counters(&self) -> VmProcessCounters {
         let mut counters = VmProcessCounters {
             process_spec_count: self.specs_by_id.len(),
             singleton_slot_count: self.singleton_by_name.len(),
             process_count: self.processes.len(),
+            stopping_process_count: self
+                .processes
+                .values()
+                .filter(|entry| entry.acceptance == ProcessAcceptance::Stopping)
+                .count(),
+            active_process_execution_count: self.executions.len(),
+            stopped_identity_count: self.stopped_identities.len(),
             mailbox_message_count: self
                 .processes
                 .values()
@@ -850,12 +927,12 @@ impl ProcessRuntime {
         };
 
         for process in self.processes.values() {
-            match process.status {
+            match self.observed_process_status(process) {
                 ProcessStatus::Runnable => counters.runnable_process_count += 1,
                 ProcessStatus::Waiting(_) => counters.waiting_process_count += 1,
                 ProcessStatus::Completed => counters.completed_process_count += 1,
                 ProcessStatus::Failed => counters.failed_process_count += 1,
-                ProcessStatus::Restarting | ProcessStatus::Stopped => {}
+                ProcessStatus::Restarting => {}
             }
         }
 
@@ -879,7 +956,6 @@ impl ProcessStatus {
             ProcessStatus::Completed => "completed",
             ProcessStatus::Failed => "failed",
             ProcessStatus::Restarting => "restarting",
-            ProcessStatus::Stopped => "stopped",
         }
     }
 }
@@ -926,6 +1002,7 @@ pub struct VM {
     continuations: Vec<ContinuationFrame>,
     pending_invocation: Option<Result<Invocation, RuntimeError>>,
     cancellation: Option<RuntimeError>,
+    current_process_execution: Option<u64>,
     /// Program counter (used by full-program `run`)
     pc: usize,
     /// Source code (for eprint / ariadne)
@@ -989,6 +1066,7 @@ impl VM {
             continuations: Vec::new(),
             pending_invocation: None,
             cancellation: None,
+            current_process_execution: None,
             pc: 0,
             source: None,
             source_file: None,
@@ -2080,10 +2158,11 @@ impl VM {
             )));
         };
         let identity = handler_target_identity(target);
-        Ok(Value::Pid(PidHandle {
-            id: stable_handler_pid(&identity),
-            process_name: identity,
-        }))
+        Ok(Value::Pid(PidHandle::new(
+            stable_handler_pid(&identity),
+            identity,
+            PidKind::Handler,
+        )))
     }
 
     pub(crate) fn out_handler_write(
@@ -2153,17 +2232,39 @@ impl VM {
                 Some(1),
             );
         }
+        if self.stopped_identity_matches(&pid) {
+            return self.language_error_outcome(
+                "SupervisorAdoptWorkerNotLive",
+                vec![
+                    Value::Str(supervisor_name),
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+            );
+        }
         let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
             return self.language_error_outcome(
                 "SupervisorAdoptUnknownPid",
                 vec![
                     Value::Int(int(pid.id)),
-                    Value::Str(pid.process_name),
+                    Value::Str(pid.process_name.clone()),
                     Value::Str(supervisor_name),
                 ],
                 Some(1),
             );
         };
+        if !entry.identity.same_identity(&pid) {
+            return self.language_error_outcome(
+                "SupervisorAdoptUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                    Value::Str(supervisor_name),
+                ],
+                Some(1),
+            );
+        }
         if !self.is_adoptable_worker(entry) {
             let spec = self
                 .process_runtime
@@ -2179,7 +2280,7 @@ impl VM {
                 vec![
                     Value::Str(supervisor_name),
                     Value::Int(int(pid.id)),
-                    Value::Str(pid.process_name),
+                    Value::Str(pid.process_name.clone()),
                 ],
                 Some(1),
             );
@@ -2450,23 +2551,55 @@ impl VM {
                 Some(1),
             );
         }
-        if let Some(state) = entry.state_value.clone() {
+        if !entry.identity.same_identity(pid) {
+            return self.language_error_outcome(
+                "ProcessStateUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+            );
+        }
+        if let Some(id) = self.current_process_execution {
+            let record = self
+                .process_runtime
+                .executions
+                .get_mut(&id)
+                .ok_or_else(|| RuntimeError::new("state from completed process execution"))?;
+            if !record.pid.same_identity(pid) || record.stage != ProcessExecutionStage::Handling {
+                return Err(RuntimeError::new(
+                    "state requires matching wrapper execution",
+                ));
+            }
+            let state = record
+                .initial_state
+                .take()
+                .ok_or_else(|| RuntimeError::new("wrapper initial state was already read"))?;
             return Ok(BuiltinOutcome::Complete(ok_vm_result(state)));
         }
-        if entry.standby_state_pending {
-            return Err(RuntimeError::process_init_failed(format!(
-                "standby process {} reached runtime before init completed",
-                pid.id
-            )));
+        Err(RuntimeError::new("process state outside managed execution"))
+    }
+
+    pub(crate) fn process_postprocess(&mut self, pid: &PidHandle) -> Result<Value, RuntimeError> {
+        let id = self
+            .current_process_execution
+            .ok_or_else(|| RuntimeError::new("process postprocessing outside managed execution"))?;
+        let record = self
+            .process_runtime
+            .executions
+            .get_mut(&id)
+            .ok_or_else(|| RuntimeError::new("process postprocessing from completed execution"))?;
+        if !record.pid.same_identity(pid)
+            || record.stage != ProcessExecutionStage::Handling
+            || record.initial_state.is_some()
+        {
+            return Err(RuntimeError::new(
+                "process postprocessing requires the matching handler after its initial state read",
+            ));
         }
-        self.language_error_outcome(
-            "ProcessStateUnavailable",
-            vec![
-                Value::Int(int(pid.id)),
-                Value::Str(pid.process_name.clone()),
-            ],
-            Some(1),
-        )
+        record.stage = ProcessExecutionStage::Postprocessing;
+        Ok(Value::Unit)
     }
 
     pub(crate) fn process_store(
@@ -2507,6 +2640,40 @@ impl VM {
                 Some(1),
             );
         }
+        if !self
+            .process_runtime
+            .processes
+            .get(&pid.id)
+            .ok_or_else(|| RuntimeError::new("process store lost validated body"))?
+            .identity
+            .same_identity(pid)
+        {
+            return self.language_error_outcome(
+                "ProcessStoreUnknownPid",
+                vec![
+                    Value::Int(int(pid.id)),
+                    Value::Str(pid.process_name.clone()),
+                ],
+                Some(1),
+            );
+        }
+        let execution_id = self
+            .current_process_execution
+            .ok_or_else(|| RuntimeError::new("process store outside managed execution"))?;
+        let execution = self
+            .process_runtime
+            .executions
+            .get_mut(&execution_id)
+            .ok_or_else(|| RuntimeError::new("process store from completed execution"))?;
+        if !execution.pid.same_identity(pid)
+            || execution.stage != ProcessExecutionStage::Postprocessing
+            || execution.stored
+        {
+            return Err(RuntimeError::new(
+                "process store requires the matching unsaved postprocessing execution",
+            ));
+        }
+        execution.stored = true;
         let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
             return Err(RuntimeError::new(format!(
                 "process {} disappeared while storing state",
@@ -2542,7 +2709,7 @@ impl VM {
         pid: &PidHandle,
         reply: Value,
     ) -> Result<Value, RuntimeError> {
-        let _ = self.finalize_process_stop(pid.id, Some(ok_vm_result(reply.clone())), false);
+        self.request_process_stop(pid, ProcessStopReason::Normal)?;
         Ok(ok_vm_result(reply))
     }
 
@@ -2552,7 +2719,7 @@ impl VM {
         err: RichError,
     ) -> Result<Value, RuntimeError> {
         let err_value = err_vm_result(err.clone());
-        let _ = self.finalize_process_stop(pid.id, Some(err_value.clone()), false);
+        self.request_process_stop(pid, ProcessStopReason::Error(err))?;
         Ok(err_value)
     }
 
@@ -2578,7 +2745,7 @@ impl VM {
         &mut self,
         pid: &PidHandle,
     ) -> Result<Value, RuntimeError> {
-        let _ = self.finalize_process_stop(pid.id, None, false);
+        self.request_process_stop(pid, ProcessStopReason::Normal)?;
         Ok(ok_vm_result(Value::Unit))
     }
 
@@ -2587,7 +2754,7 @@ impl VM {
         pid: &PidHandle,
         err: RichError,
     ) -> Result<Value, RuntimeError> {
-        let _ = self.finalize_process_stop(pid.id, Some(err_vm_result(err)), false);
+        self.request_process_stop(pid, ProcessStopReason::Error(err))?;
         Ok(ok_vm_result(Value::Unit))
     }
 
@@ -2608,86 +2775,157 @@ impl VM {
         }
     }
 
-    fn remove_process_deadlines(&mut self, pid: u64) {
-        self.process_runtime.deadline_queue.retain(|entry| {
-            self.process_runtime
-                .futures
-                .get(&entry.future_id)
-                .is_some_and(|future| future.owner != Some(pid))
-        });
+    pub fn sweep_stopped_identities(&mut self) {
+        let dead = self
+            .process_runtime
+            .stopped_identities
+            .iter()
+            .filter_map(|(id, identity)| (identity.strong_count() == 0).then_some(*id))
+            .collect::<Vec<_>>();
+        for id in dead {
+            self.process_runtime.stopped_identities.remove(&id);
+        }
     }
 
-    fn resolve_owned_process_futures(&mut self, pid: u64, skip_future_id: Option<FutureId>) {
-        let owned_futures = self
+    fn stopped_identity_matches(&self, pid: &PidHandle) -> bool {
+        self.process_runtime
+            .stopped_identities
+            .get(&pid.id)
+            .and_then(Weak::upgrade)
+            .is_some_and(|identity| Rc::ptr_eq(&identity, pid.identity()))
+    }
+
+    fn process_handle(&self, id: u64) -> Result<PidHandle, RuntimeError> {
+        self.process_runtime
+            .processes
+            .get(&id)
+            .map(|entry| entry.identity.clone())
+            .ok_or_else(|| RuntimeError::new(format!("process {id} has no live identity")))
+    }
+
+    fn request_process_stop(
+        &mut self,
+        pid: &PidHandle,
+        reason: ProcessStopReason,
+    ) -> Result<(), RuntimeError> {
+        let execution_id = self
+            .current_process_execution
+            .ok_or_else(|| RuntimeError::new("process stop outside managed execution"))?;
+        let record = self
+            .process_runtime
+            .executions
+            .get(&execution_id)
+            .ok_or_else(|| RuntimeError::new("process stop from completed execution"))?;
+        if !record.pid.same_identity(pid) || record.stage != ProcessExecutionStage::Postprocessing {
+            return Err(RuntimeError::new(
+                "process stop requires matching postprocessing execution",
+            ));
+        }
+        let entry = self
+            .process_runtime
+            .processes
+            .get_mut(&pid.id)
+            .ok_or_else(|| RuntimeError::new("process stop lost live body"))?;
+        if entry.acceptance == ProcessAcceptance::Accepting {
+            entry.acceptance = ProcessAcceptance::Stopping;
+            entry.stop_reason = Some(reason);
+            if !entry.mailbox.is_empty() {
+                return Err(RuntimeError::new(
+                    "process mailbox has no dispatch contract",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn abort_process_executions(&mut self, pid: u64) -> Result<Vec<FutureId>, RuntimeError> {
+        let entry = self
+            .process_runtime
+            .processes
+            .get_mut(&pid)
+            .ok_or_else(|| RuntimeError::new("aborted process has no body"))?;
+        entry.acceptance = ProcessAcceptance::Stopping;
+        let replies = self
+            .process_runtime
+            .executions
+            .values()
+            .filter(|record| record.pid.id == pid)
+            .map(|record| record.result_future)
+            .collect::<Vec<_>>();
+        for future in &replies {
+            self.resolve_future_process_down(*future, pid);
+        }
+        self.remove_process_detached_tasks(pid);
+        Ok(replies)
+    }
+
+    fn release_internal_process_future(&mut self, future: FutureId) {
+        let Some(id) = self.current_process_execution else {
+            return;
+        };
+        let Some(record) = self.process_runtime.executions.get_mut(&id) else {
+            return;
+        };
+        if record.internal_futures.contains(&future) {
+            record.internal_futures.retain(|id| *id != future);
+            self.forget_internal_future(future);
+        }
+    }
+
+    fn finish_process_execution(&mut self, id: u64) -> Result<(), RuntimeError> {
+        let record =
+            self.process_runtime.executions.take(&id).ok_or_else(|| {
+                RuntimeError::new("process execution finished twice or disappeared")
+            })?;
+        let pid = record.pid.id;
+        for future in record.internal_futures {
+            self.forget_internal_future(future);
+        }
+        let complete = self
+            .process_runtime
+            .processes
+            .get(&pid)
+            .is_some_and(|entry| entry.acceptance == ProcessAcceptance::Stopping)
+            && !self
+                .process_runtime
+                .executions
+                .values()
+                .any(|record| record.pid.id == pid);
+        if complete {
+            self.reclaim_stopped_process(pid)?;
+        }
+        Ok(())
+    }
+
+    fn reclaim_stopped_process(&mut self, pid: u64) -> Result<(), RuntimeError> {
+        let entry = self.process_runtime.processes.take(&pid).ok_or_else(|| {
+            RuntimeError::new("stopped process body disappeared before reclamation")
+        })?;
+        self.process_runtime
+            .stopped_identities
+            .insert(pid, Rc::downgrade(entry.identity.identity()));
+        self.process_runtime
+            .run_queue
+            .retain(|queued| *queued != pid);
+        self.process_runtime.waiting_table.remove(&pid);
+        if let Some(LifecycleSink::Supervisor(name)) = entry.lifecycle_sink {
+            self.remove_supervisor_child(&name, pid);
+        }
+        // Completed results survive their producer. Remove ownership, not results.
+        let ids = self
             .process_runtime
             .futures
             .iter()
-            .filter_map(|(future_id, future)| {
-                (future.owner == Some(pid)
-                    && matches!(future.state, FutureState::Running)
-                    && Some(*future_id) != skip_future_id)
-                    .then_some(*future_id)
-            })
+            .filter_map(|(id, future)| (future.owner == Some(pid)).then_some(*id))
             .collect::<Vec<_>>();
-        for future_id in owned_futures {
-            self.resolve_future_process_down(future_id, pid);
+        for id in ids {
+            if let Some(future) = self.process_runtime.futures.get_mut(&id) {
+                future.owner = None;
+            }
         }
-    }
-
-    fn process_reply_future_for_pid(&self, pid: u64) -> Option<(CorrelationId, FutureId)> {
-        let ProcessStatus::Waiting(ProcessWaitReason::Reply(correlation_id)) = self
-            .process_runtime
-            .processes
-            .get(&pid)
-            .map(|entry| entry.status.clone())?
-        else {
-            return None;
-        };
-        self.process_runtime
-            .reply_table
-            .get(&correlation_id)
-            .copied()
-            .map(|future_id| (correlation_id, future_id))
-    }
-
-    fn finalize_process_stop(
-        &mut self,
-        pid: u64,
-        reply_value: Option<Value>,
-        _from_callback_timeout: bool,
-    ) -> Vec<u64> {
-        let primary_reply = self.process_reply_future_for_pid(pid);
-        let resumed = if let (Some(value), Some((correlation_id, _))) = (reply_value, primary_reply)
-        {
-            self.process_runtime.resolve_reply(correlation_id, value)
-        } else {
-            Vec::new()
-        };
-        let skip_future_id = primary_reply.map(|(_, future_id)| future_id);
-        self.resolve_owned_process_futures(pid, skip_future_id);
-        self.remove_process_deadlines(pid);
-        self.remove_process_detached_tasks(pid);
         self.remove_worker_from_sets(pid);
-        let supervisor_name = self
-            .process_runtime
-            .processes
-            .get(&pid)
-            .and_then(|entry| entry.lifecycle_sink.clone())
-            .and_then(|sink| match sink {
-                LifecycleSink::Supervisor(name) => Some(name),
-            });
-        if let Some(supervisor_name) = supervisor_name {
-            self.remove_supervisor_child(&supervisor_name, pid);
-        }
-        self.process_runtime.waiting_table.remove(&pid);
-        if let Some(entry) = self.process_runtime.processes.get_mut(&pid) {
-            entry.status = ProcessStatus::Stopped;
-            entry.mailbox.clear();
-            entry.execution_context = None;
-            entry.state_value = None;
-            entry.standby_state_pending = false;
-        }
-        resumed
+        self.sweep_stopped_identities();
+        Ok(())
     }
 
     pub(crate) fn workers_size(&self, handle: &WorkersHandle) -> Result<Value, RuntimeError> {
@@ -2703,45 +2941,66 @@ impl VM {
     pub(crate) fn workers_reserve(
         &mut self,
         handle: &WorkersHandle,
-    ) -> Result<Value, RuntimeError> {
-        let pid = self.next_workers_pid(handle)?;
-        Ok(ok_vm_result(Value::WorkerLease(WorkerLeaseHandle {
-            workers_id: handle.id,
-            pid,
-        })))
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let Some(pid) = self.next_workers_pid(handle)? else {
+            return self.language_error_outcome(
+                "WorkersUnavailable",
+                vec![
+                    Value::Int(int(handle.id)),
+                    Value::Str(handle.process_name.clone()),
+                ],
+                Some(1),
+            );
+        };
+        Ok(BuiltinOutcome::Complete(ok_vm_result(Value::WorkerLease(
+            WorkerLeaseHandle {
+                workers_id: handle.id,
+                pid,
+            },
+        ))))
     }
 
-    fn next_workers_pid(&mut self, handle: &WorkersHandle) -> Result<PidHandle, RuntimeError> {
-        let Some(state) = self.process_runtime.worker_sets.get_mut(&handle.id) else {
-            return Err(RuntimeError::new(format!(
-                "unknown workers handle {} for {}",
-                handle.id, handle.process_name
-            )));
-        };
-        if state.members.is_empty() {
-            return Err(RuntimeError::new(format!(
-                "workers handle {} for {} has no members",
-                handle.id, handle.process_name
-            )));
+    fn next_workers_pid(
+        &mut self,
+        handle: &WorkersHandle,
+    ) -> Result<Option<PidHandle>, RuntimeError> {
+        let state = self
+            .process_runtime
+            .worker_sets
+            .get_mut(&handle.id)
+            .ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "unknown workers handle {} for {}",
+                    handle.id, handle.process_name
+                ))
+            })?;
+        if state.worker_process != handle.process_name {
+            return Err(RuntimeError::new("workers handle process type mismatch"));
         }
-        let member_id = state.members[state.next_index % state.members.len()];
-        state.next_index = (state.next_index + 1) % state.members.len();
-        let Some(process) = self.process_runtime.processes.get(&member_id) else {
-            return Err(RuntimeError::new(format!(
-                "worker pid {} is not registered",
-                member_id
-            )));
-        };
-        let Some(spec) = self.process_runtime.spec_for_id(process.spec_id) else {
-            return Err(RuntimeError::new(format!(
-                "worker pid {} references unknown spec {}",
-                member_id, process.spec_id
-            )));
-        };
-        Ok(PidHandle {
-            id: member_id,
-            process_name: spec.type_name.clone(),
-        })
+        let len = state.members.len();
+        for offset in 0..len {
+            let index = (state.next_index + offset) % len;
+            let member_id = state.members[index];
+            let process = self
+                .process_runtime
+                .processes
+                .get(&member_id)
+                .ok_or_else(|| {
+                    RuntimeError::new(format!("worker pid {member_id} is not registered"))
+                })?;
+            if process.identity.kind != PidKind::Worker
+                || process.identity.process_name != state.worker_process
+            {
+                return Err(RuntimeError::new(
+                    "Workers member identity does not match worker set",
+                ));
+            }
+            if process.acceptance == ProcessAcceptance::Accepting {
+                state.next_index = (index + 1) % len;
+                return Ok(Some(process.identity.clone()));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) fn pid_handle_like(&self, value: &Value) -> Option<PidHandle> {
@@ -2829,7 +3088,8 @@ impl VM {
         matches!(
             entry.status,
             ProcessStatus::Runnable | ProcessStatus::Waiting(_)
-        ) && spec.instance == RuntimeProcessInstance::Worker
+        ) && entry.acceptance == ProcessAcceptance::Accepting
+            && spec.instance == RuntimeProcessInstance::Worker
     }
 
     fn unique_live_supervisor_child_count(&self, supervisor_name: &str) -> i64 {
@@ -2932,7 +3192,10 @@ impl VM {
             )));
         };
         let pid = self.process_runtime.next_pid;
-        self.process_runtime.next_pid += 1;
+        self.process_runtime.next_pid = pid
+            .checked_add(1)
+            .ok_or_else(|| RuntimeError::new("process identity allocator exhausted"))?;
+        self.sweep_stopped_identities();
         let standby_state_pending = self
             .process_runtime
             .spec_for_id(spec_id)
@@ -2943,6 +3206,21 @@ impl VM {
             ProcessInstance {
                 pid,
                 spec_id,
+                identity: PidHandle::new(
+                    pid,
+                    name.clone(),
+                    match self
+                        .process_runtime
+                        .spec_for_id(spec_id)
+                        .expect("validated process spec")
+                        .instance
+                    {
+                        RuntimeProcessInstance::Singleton => PidKind::Singleton,
+                        RuntimeProcessInstance::Worker => PidKind::Worker,
+                    },
+                ),
+                acceptance: ProcessAcceptance::Accepting,
+                stop_reason: None,
                 status: ProcessStatus::Runnable,
                 mailbox: VecDeque::new(),
                 execution_context: None,
@@ -3160,6 +3438,14 @@ impl VM {
         let future_id = self
             .process_runtime
             .allocate_future_after(None, millis, false);
+        if let Some(id) = self.current_process_execution {
+            let record = self
+                .process_runtime
+                .executions
+                .get_mut(&id)
+                .ok_or_else(|| RuntimeError::new("sleep from completed process execution"))?;
+            record.internal_futures.push(future_id);
+        }
         Ok(Value::PendingFuture(future_id))
     }
 
@@ -3302,7 +3588,22 @@ impl VM {
                         pid: process.pid,
                         process_name,
                         spec_id: process.spec_id,
-                        status: process.status.label().into(),
+                        status: self
+                            .process_runtime
+                            .observed_process_status(process)
+                            .label()
+                            .into(),
+                        acceptance: match process.acceptance {
+                            ProcessAcceptance::Accepting => "accepting",
+                            ProcessAcceptance::Stopping => "stopping",
+                        }
+                        .into(),
+                        active_executions: self
+                            .process_runtime
+                            .executions
+                            .values()
+                            .filter(|record| record.pid.id == process.pid)
+                            .count(),
                         mailbox_len: process.mailbox.len(),
                         owner: process.owner,
                         standby_state_pending: process.standby_state_pending,
@@ -3623,6 +3924,8 @@ impl VM {
             return Err(err);
         }
 
+        drop(checkpoint);
+        self.sweep_stopped_identities();
         Ok(result)
     }
 
@@ -3647,6 +3950,7 @@ impl VM {
             continuations: self.continuations.clone(),
             pending_invocation: self.pending_invocation.clone(),
             cancellation: self.cancellation.clone(),
+            current_process_execution: self.current_process_execution,
             pc: self.pc,
             exit_code: self.exit_code,
             last_result: self.last_result.clone(),
@@ -3686,6 +3990,7 @@ impl VM {
         self.continuations = checkpoint.continuations;
         self.pending_invocation = checkpoint.pending_invocation;
         self.cancellation = checkpoint.cancellation;
+        self.current_process_execution = checkpoint.current_process_execution;
         self.pc = checkpoint.pc;
         self.exit_code = checkpoint.exit_code;
         self.last_result = checkpoint.last_result;
@@ -3701,7 +4006,10 @@ impl VM {
         self.test_stdout_cursor = checkpoint.test_stdout_cursor;
         self.test_stderr_cursor = checkpoint.test_stderr_cursor;
         self.stdin_input_cursor = checkpoint.stdin_input_cursor;
+        let next_pid_high_water = self.process_runtime.next_pid;
         self.process_runtime = checkpoint.process_runtime;
+        self.process_runtime.next_pid = self.process_runtime.next_pid.max(next_pid_high_water);
+        self.sweep_stopped_identities();
         self.runtime_clock_anchor = Instant::now();
         self.rollback_open_files(checkpoint.open_files);
         self.batch_shutdown_pending = checkpoint.batch_shutdown_pending;
@@ -3844,6 +4152,7 @@ impl VM {
         self.continuations = context.continuations;
         self.pending_invocation = context.pending_invocation;
         self.cancellation = context.cancellation;
+        self.current_process_execution = context.current_process_execution;
         self.pc = context.pc;
     }
 
@@ -3866,6 +4175,7 @@ impl VM {
 
                 if let Some(value) = resolved {
                     self.current_frame_mut()?.locals[slot_index] = value.clone();
+                    self.release_internal_process_future(future_id);
                     self.stack.push(value);
                     Ok(OpcodeControl::Continue)
                 } else {
@@ -3924,6 +4234,7 @@ impl VM {
             continuations: std::mem::take(&mut self.continuations),
             pending_invocation: self.pending_invocation.take(),
             cancellation: self.cancellation.take(),
+            current_process_execution: self.current_process_execution.take(),
             pc,
             target,
         }
@@ -3943,6 +4254,10 @@ impl VM {
             &mut context.pending_invocation,
         );
         std::mem::swap(&mut self.cancellation, &mut context.cancellation);
+        std::mem::swap(
+            &mut self.current_process_execution,
+            &mut context.current_process_execution,
+        );
         self.pc = context.pc;
         let outcome = self.step_active_context(target.clone());
         match outcome {
@@ -4283,6 +4598,7 @@ impl VM {
         invocation: Invocation,
     ) -> Result<ExecutionContext, RuntimeError> {
         let saved = self.take_execution_context(self.pc, ExecutionTarget::TopLevel);
+        self.current_process_execution = saved.current_process_execution;
         self.frames = saved.frames.clone();
         self.tail_call_breadcrumbs = saved.tail_call_breadcrumbs.clone();
         let site = self.current_frame().ok().and_then(|f| f.call_site);
@@ -5154,26 +5470,34 @@ impl VM {
                 let (Value::Pid(left), Value::Pid(right)) = (left, right) else {
                     return Err(RuntimeError::new("EqPid requires two PID values"));
                 };
-                let left_spec = self
-                    .process_runtime
-                    .spec_by_process_name(&left.process_name)
-                    .ok_or_else(|| {
-                        RuntimeError::new("EqPid received an unregistered process PID")
-                    })?;
-                let right_spec = self
-                    .process_runtime
-                    .spec_by_process_name(&right.process_name)
-                    .ok_or_else(|| {
-                        RuntimeError::new("EqPid received an unregistered process PID")
-                    })?;
-                if left_spec.type_name != right_spec.type_name {
+                for pid in [&left, &right] {
+                    let spec = self
+                        .process_runtime
+                        .spec_by_process_name(&pid.process_name)
+                        .ok_or_else(|| {
+                            RuntimeError::new("EqPid received an unregistered process PID")
+                        })?;
+                    let expected = match spec.instance {
+                        RuntimeProcessInstance::Singleton => PidKind::Singleton,
+                        RuntimeProcessInstance::Worker => PidKind::Worker,
+                    };
+                    if spec.type_name != pid.process_name || expected != pid.kind {
+                        return Err(RuntimeError::new(
+                            "EqPid process identity does not match canonical declaration",
+                        ));
+                    }
+                }
+                if left.process_name != right.process_name || left.kind != right.kind {
                     return Err(RuntimeError::new(
                         "EqPid received PIDs of different process types",
                     ));
                 }
-                let equal = match left_spec.instance {
-                    RuntimeProcessInstance::Singleton => true,
-                    RuntimeProcessInstance::Worker => left.id == right.id,
+                let equal = match left.kind {
+                    PidKind::Singleton => true,
+                    PidKind::Worker => left.id == right.id,
+                    PidKind::Handler => {
+                        return Err(RuntimeError::new("EqPid received handler capability"))
+                    }
                 };
                 self.stack.push(Value::Bool(equal));
             }
@@ -6774,8 +7098,8 @@ mod tests {
     };
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError,
-        RuntimeCallKind, TypeEntry, TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableTarget, Location, PidHandle, PidIdentity, PidKind,
+        RichError, RuntimeCallKind, TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use std::collections::VecDeque;
     use std::fs;
@@ -6858,6 +7182,12 @@ mod tests {
                 vec![Str, Int, Str],
                 "cannot adopt non-live Worker pid",
             ),
+            (
+                "ProcessStopped",
+                vec![Int, Str],
+                "process is stopping or stopped",
+            ),
+            ("WorkersUnavailable", vec![Int, Str], "no accepting worker"),
             (
                 "ProcessStateUnknownPid",
                 vec![Int, Str],
@@ -7247,6 +7577,7 @@ mod tests {
             continuations: Vec::new(),
             pending_invocation: None,
             cancellation: None,
+            current_process_execution: None,
             pc,
             target: ExecutionTarget::TopLevel,
         }
@@ -7317,10 +7648,15 @@ mod tests {
         };
         let mut vm = VM::new(bytecode);
         let pid = |name: &str, id| {
-            Value::Pid(PidHandle {
-                process_name: name.into(),
+            Value::Pid(PidHandle::new(
                 id,
-            })
+                name.into(),
+                match name {
+                    "Global::One" | "Global::Two" => PidKind::Singleton,
+                    "OutHandler" => PidKind::Handler,
+                    _ => PidKind::Worker,
+                },
+            ))
         };
         let mut compare = |left: Value, right: Value| {
             vm.stack.push(left);
@@ -7748,6 +8084,7 @@ mod tests {
             continuations: Vec::new(),
             pending_invocation: None,
             cancellation: None,
+            current_process_execution: None,
             pc: 1,
             target: ExecutionTarget::FrameDepth(1),
         };
@@ -8420,13 +8757,7 @@ mod tests {
             .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
             .expect("worker should allocate");
         let value = vm
-            .supervisor_adopt(
-                "MySup".into(),
-                PidHandle {
-                    id: pid,
-                    process_name: "Worker".into(),
-                },
-            )
+            .supervisor_adopt("MySup".into(), vm.process_handle(pid).unwrap())
             .expect("adopt should succeed");
         assert!(matches!(
             decode_vm_result(complete(value), "test", "adopt"),
@@ -8465,10 +8796,7 @@ mod tests {
         let pid = vm
             .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
             .expect("worker should allocate");
-        let handle = PidHandle {
-            id: pid,
-            process_name: "Worker".into(),
-        };
+        let handle = vm.process_handle(pid).unwrap();
 
         for _ in 0..2 {
             assert!(matches!(
@@ -8515,13 +8843,7 @@ mod tests {
             .expect("worker should allocate under SupA");
 
         let value = vm
-            .supervisor_adopt(
-                "SupB".into(),
-                PidHandle {
-                    id: pid,
-                    process_name: "Worker".into(),
-                },
-            )
+            .supervisor_adopt("SupB".into(), vm.process_handle(pid).unwrap())
             .expect("handoff adopt should return Result");
 
         assert!(matches!(
@@ -8563,13 +8885,7 @@ mod tests {
             .expect("singleton process should allocate");
 
         let value = vm
-            .supervisor_adopt(
-                "MySup".into(),
-                PidHandle {
-                    id: pid,
-                    process_name: "Counter".into(),
-                },
-            )
+            .supervisor_adopt("MySup".into(), vm.process_handle(pid).unwrap())
             .expect("adopt rejection should be encoded as Result::Err");
 
         let value = vm.drive_builtin_outcome(value).unwrap();
@@ -8727,28 +9043,22 @@ mod tests {
             .allocate_process_state("Counter".into(), Some(Value::Int(int(41))))
             .expect("process allocation should succeed");
 
-        let ok_pid = PidHandle {
-            id: pid,
-            process_name: "Counter".into(),
-        };
-        let wrong_pid = PidHandle {
-            id: pid,
-            process_name: "Clock".into(),
-        };
+        let ok_pid = vm.process_handle(pid).unwrap();
+        let wrong_pid = PidHandle::new(pid, "Clock".into(), PidKind::Singleton);
 
-        assert_eq!(
-            complete(
-                vm.process_state(&ok_pid)
-                    .expect("state lookup should succeed")
-            ),
-            super::ok_vm_result(Value::Int(int(41)))
-        );
+        assert!(vm.process_state(&ok_pid).is_err());
         let mismatch = vm
             .process_state(&wrong_pid)
             .expect("mismatch should still return Err(Result)");
         let mismatch = vm.drive_builtin_outcome(mismatch).unwrap();
         assert!(matches!(mismatch, Value::Tagged { tag: 1, .. }));
 
+        enter_process_execution(&mut vm, &ok_pid);
+        assert_eq!(
+            complete(vm.process_state(&ok_pid).unwrap()),
+            super::ok_vm_result(Value::Int(int(41)))
+        );
+        vm.process_postprocess(&ok_pid).unwrap();
         assert_eq!(
             complete(
                 vm.process_store(&ok_pid, Value::Int(int(99)))
@@ -8756,20 +9066,65 @@ mod tests {
             ),
             super::ok_vm_result(Value::Unit)
         );
+        vm.current_process_execution = None;
         assert_eq!(
-            complete(
-                vm.process_state(&ok_pid)
-                    .expect("updated state should succeed")
-            ),
-            super::ok_vm_result(Value::Int(int(99)))
+            vm.process_runtime
+                .processes
+                .get(&ok_pid.id)
+                .unwrap()
+                .state_value,
+            Some(Value::Int(int(99)))
         );
     }
 
+    fn enter_process_execution(vm: &mut VM, pid: &PidHandle) -> u64 {
+        install_process_error_definitions(vm);
+        let id = vm.process_runtime.next_execution_id;
+        vm.process_runtime.next_execution_id += 1;
+        let future = vm
+            .process_runtime
+            .allocate_future(Some(pid.id), None, false);
+        vm.stamp_future_context(future).unwrap();
+        let origin = vm
+            .process_runtime
+            .futures
+            .get(&future)
+            .unwrap()
+            .creation_context
+            .clone()
+            .unwrap();
+        vm.process_runtime.executions.insert(
+            id,
+            super::ProcessExecutionRecord {
+                pid: pid.clone(),
+                parent: vm.current_process_execution,
+                stage: super::ProcessExecutionStage::Handling,
+                stored: false,
+                initial_state: vm
+                    .process_runtime
+                    .processes
+                    .get(&pid.id)
+                    .unwrap()
+                    .state_value
+                    .clone(),
+                result_future: future,
+                internal_futures: Vec::new(),
+                origin,
+            },
+        );
+        vm.current_process_execution = Some(id);
+        id
+    }
+
+    fn enter_process_postprocessing(vm: &mut VM, pid: &PidHandle) -> u64 {
+        let id = enter_process_execution(vm, pid);
+        vm.process_state(pid).unwrap();
+        vm.process_postprocess(pid).unwrap();
+        id
+    }
+
     fn handler_pid(identity: &str) -> PidHandle {
-        PidHandle {
-            id: 0,
-            process_name: identity.to_string(),
-        }
+        PidHandle::new(0, identity.to_string(), PidKind::Handler)
     }
 
     fn assert_ok_unit_result(value: crate::builtin::BuiltinOutcome) {
@@ -12273,18 +12628,15 @@ mod tests {
         vm.process_runtime
             .mark_process_waiting(pid, super::ProcessWaitReason::Reply(correlation_id));
 
-        let resumed =
-            vm.finalize_process_stop(pid, Some(super::ok_vm_result(Value::Int(int(99)))), false);
-
-        assert!(resumed.is_empty());
-        assert!(matches!(
-            vm.process_runtime
-                .processes
-                .get(&pid)
-                .expect("process exists")
-                .status,
-            super::ProcessStatus::Stopped
-        ));
+        let handle = vm.process_handle(pid).unwrap();
+        let execution = enter_process_postprocessing(&mut vm, &handle);
+        vm.process_runtime
+            .resolve_reply(correlation_id, super::ok_vm_result(Value::Int(int(99))));
+        vm.request_process_stop(&handle, super::ProcessStopReason::Normal)
+            .unwrap();
+        assert!(vm.process_runtime.processes.contains_key(&pid));
+        vm.finish_process_execution(execution).unwrap();
+        assert!(!vm.process_runtime.processes.contains_key(&pid));
         assert!(vm.process_runtime.reply_table.is_empty());
         assert!(!vm.process_runtime.waiting_table.contains_key(&pid));
         assert!(vm.process_runtime.deadline_queue.is_empty());
@@ -12320,17 +12672,16 @@ mod tests {
             )],
         };
         let mut vm = VM::new(bytecode);
-        let pid = PidHandle {
-            id: vm
-                .allocate_supervised_worker(
-                    "Worker".into(),
-                    Some(Value::Int(int(41))),
-                    "DynamicSupervisor".into(),
-                )
-                .expect("worker allocation should succeed"),
-            process_name: "Worker".into(),
-        };
+        let allocated = vm
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(41))),
+                "DynamicSupervisor".into(),
+            )
+            .expect("worker allocation should succeed");
+        let pid = vm.process_handle(allocated).unwrap();
 
+        let execution = enter_process_postprocessing(&mut vm, &pid);
         let value = vm
             .genserver_call_stop_error(&pid, vm.process_error("Boom", "boom"))
             .expect("stop error should return a result value");
@@ -12339,22 +12690,17 @@ mod tests {
             value,
             Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Global::Boom")
         ));
-        assert!(matches!(
-            vm.process_runtime
-                .processes
-                .get(&pid.id)
-                .expect("process exists")
-                .status,
-            super::ProcessStatus::Stopped
-        ));
         assert_eq!(
             vm.process_runtime
                 .processes
                 .get(&pid.id)
-                .expect("process exists")
-                .state_value,
-            None
+                .unwrap()
+                .acceptance,
+            super::ProcessAcceptance::Stopping
         );
+        vm.finish_process_execution(execution).unwrap();
+        assert!(!vm.process_runtime.processes.contains_key(&pid.id));
+        assert!(vm.stopped_identity_matches(&pid));
     }
 
     #[test]
@@ -12373,38 +12719,32 @@ mod tests {
             )],
         };
         let mut vm = VM::new(bytecode);
-        let pid = PidHandle {
-            id: vm
-                .allocate_supervised_worker(
-                    "Worker".into(),
-                    Some(Value::Int(int(41))),
-                    "DynamicSupervisor".into(),
-                )
-                .expect("worker allocation should succeed"),
-            process_name: "Worker".into(),
-        };
+        let allocated = vm
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(41))),
+                "DynamicSupervisor".into(),
+            )
+            .expect("worker allocation should succeed");
+        let pid = vm.process_handle(allocated).unwrap();
 
+        let execution = enter_process_postprocessing(&mut vm, &pid);
         let value = vm
             .genserver_cast_stop_normal(&pid)
             .expect("cast stop should return ok unit");
 
         assert!(matches!(value, Value::Tagged { tag: 0, .. }));
-        assert!(matches!(
-            vm.process_runtime
-                .processes
-                .get(&pid.id)
-                .expect("process exists")
-                .status,
-            super::ProcessStatus::Stopped
-        ));
         assert_eq!(
             vm.process_runtime
                 .processes
                 .get(&pid.id)
-                .expect("process exists")
-                .state_value,
-            None
+                .unwrap()
+                .acceptance,
+            super::ProcessAcceptance::Stopping
         );
+        vm.finish_process_execution(execution).unwrap();
+        assert!(!vm.process_runtime.processes.contains_key(&pid.id));
+        assert!(vm.stopped_identity_matches(&pid));
     }
 
     #[test]
@@ -12457,16 +12797,15 @@ mod tests {
         };
         let mut vm = VM::new(bytecode);
         install_process_error_definitions(&mut vm);
-        let pid = PidHandle {
-            id: vm
-                .allocate_supervised_worker(
-                    "Worker".into(),
-                    Some(Value::Int(int(41))),
-                    "DynamicSupervisor".into(),
-                )
-                .expect("worker allocation should succeed"),
-            process_name: "Worker".into(),
-        };
+        let allocated = vm
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(41))),
+                "DynamicSupervisor".into(),
+            )
+            .expect("worker allocation should succeed");
+        let pid = vm.process_handle(allocated).unwrap();
+        enter_process_postprocessing(&mut vm, &pid);
         let pending = vm
             .genserver_call_reply_later(&pid, Value::Int(int(41)), vm.callable_for_function(0))
             .expect("valid reply later should register a pending callback");
@@ -12476,14 +12815,8 @@ mod tests {
         ));
 
         for invalid_pid in [
-            PidHandle {
-                id: pid.id + 1,
-                process_name: "Worker".into(),
-            },
-            PidHandle {
-                id: pid.id,
-                process_name: "OtherWorker".into(),
-            },
+            PidHandle::new(pid.id + 1, "Worker".into(), PidKind::Worker),
+            PidHandle::new(pid.id, "OtherWorker".into(), PidKind::Worker),
         ] {
             let before = format!("{:?}", vm.process_runtime);
             let expected = vm
@@ -12538,18 +12871,17 @@ mod tests {
             )],
         };
         let mut vm = VM::new(bytecode);
-        let pid = PidHandle {
-            id: vm
-                .allocate_supervised_worker(
-                    "Worker".into(),
-                    Some(Value::Int(int(41))),
-                    "DynamicSupervisor".into(),
-                )
-                .expect("worker allocation should succeed"),
-            process_name: "Worker".into(),
-        };
+        let allocated = vm
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(41))),
+                "DynamicSupervisor".into(),
+            )
+            .expect("worker allocation should succeed");
+        let pid = vm.process_handle(allocated).unwrap();
 
         install_process_error_definitions(&mut vm);
+        enter_process_postprocessing(&mut vm, &pid);
         let value = vm
             .genserver_call_reply_later(&pid, Value::Int(int(42)), vm.callable_for_function(0))
             .expect("reply later should start callback");
@@ -12597,16 +12929,14 @@ mod tests {
             )],
         };
         let mut vm = VM::new(bytecode);
-        let pid = PidHandle {
-            id: vm
-                .allocate_supervised_worker(
-                    "Worker".into(),
-                    Some(Value::Int(int(41))),
-                    "DynamicSupervisor".into(),
-                )
-                .expect("worker allocation should succeed"),
-            process_name: "Worker".into(),
-        };
+        let allocated = vm
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(41))),
+                "DynamicSupervisor".into(),
+            )
+            .expect("worker allocation should succeed");
+        let pid = vm.process_handle(allocated).unwrap();
         let callback = Callable {
             target: CallableTarget::Builtin(builtin_id("__process_sleep")),
             lexical_captures: vec![Value::Tagged {
@@ -12617,6 +12947,7 @@ mod tests {
         };
 
         install_process_error_definitions(&mut vm);
+        enter_process_postprocessing(&mut vm, &pid);
         let value = vm
             .genserver_call_reply_later(&pid, Value::Int(int(42)), callback)
             .expect("reply later should create a reply future");

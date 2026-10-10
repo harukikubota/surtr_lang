@@ -681,11 +681,14 @@ fn suspended_process_vm(process_count: u64) -> (VM, usize) {
             ProcessInstance {
                 pid,
                 spec_id: 0,
-                status: if pid % 2 == 0 {
-                    ProcessStatus::Stopped
+                identity: PidHandle::new(pid, "Worker".into(), PidKind::Worker),
+                acceptance: if pid % 2 == 0 {
+                    ProcessAcceptance::Stopping
                 } else {
-                    ProcessStatus::Waiting(ProcessWaitReason::Boot)
+                    ProcessAcceptance::Accepting
                 },
+                stop_reason: None,
+                status: ProcessStatus::Waiting(ProcessWaitReason::Boot),
                 mailbox: VecDeque::new(),
                 execution_context: Some(context.clone()),
                 state_value: None,

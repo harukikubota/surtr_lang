@@ -3879,6 +3879,20 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         compiler_generated_surfaces: &[],
         surfaces: &[],
     },
+    BuiltinMeta {
+        name: "__process_execute",
+        arity: 2,
+        sig_str: "(PID<$Process>, (-> Result<$Reply>)) -> Result<$Reply>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[],
+    },
+    BuiltinMeta {
+        name: "__process_postprocess",
+        arity: 1,
+        sig_str: "(PID<$Process>) -> Unit",
+        compiler_generated_surfaces: &[],
+        surfaces: &[],
+    },
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime

@@ -748,7 +748,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "__workers_reserve",
-        func: |vm, args| builtin_workers_reserve(vm, args).map(BuiltinOutcome::Complete),
+        func: builtin_workers_reserve,
     },
     BuiltinImpl {
         name: "__workers_size",
@@ -1010,6 +1010,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
             ))
         },
     },
+    BuiltinImpl {
+        name: "__process_execute",
+        func: builtin_process_execute,
+    },
+    BuiltinImpl {
+        name: "__process_postprocess",
+        func: builtin_process_postprocess,
+    },
 ];
 
 const _: () = {
@@ -1259,6 +1267,34 @@ fn builtin_supervisor_workers(
             "__supervisor_workers expects supervisor name, worker init callable, and WorkerStrategy",
         )),
     }
+}
+
+fn builtin_process_execute(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
+    let [target, Value::Callable(body)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__process_execute expects PID or WorkerLease and callable",
+        ));
+    };
+    let pid = vm
+        .pid_handle_like(target)
+        .ok_or_else(|| RuntimeError::new("__process_execute expects PID or WorkerLease"))?;
+    let origin = vm.managed_process_call_origin()?;
+    vm.start_process_execution_at(pid, body.clone(), origin)
+}
+
+fn builtin_process_postprocess(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<BuiltinOutcome, RuntimeError> {
+    let [target] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__process_postprocess expects one PID or WorkerLease",
+        ));
+    };
+    let pid = vm
+        .pid_handle_like(target)
+        .ok_or_else(|| RuntimeError::new("__process_postprocess expects PID or WorkerLease"))?;
+    vm.process_postprocess(&pid).map(BuiltinOutcome::Complete)
 }
 
 fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
@@ -1540,7 +1576,7 @@ fn builtin_workers_broadcast_timeout(
     vm.start_workers_broadcast(handle, message.clone(), Some(timeout_ms))
 }
 
-fn builtin_workers_reserve(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_workers_reserve(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
     let [Value::Workers(handle)] = args.as_slice() else {
         return Err(RuntimeError::new(
             "__workers_reserve expects Workers handle",
