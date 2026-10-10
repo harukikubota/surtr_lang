@@ -344,6 +344,29 @@ defmod Bootstrap {
   # loads declarations with no direct value output
   """
   @builtin def include(path: String) -> Unit
+
+  @doc """
+  File name, including its extension, of the source containing this reference.
+  This zero-argument function is called without parentheses. References in a
+  function use its definition source, not the caller.
+  Unavailable in REPL expressions.
+  """
+  @builtin def __FILE__() -> String
+
+  @doc """
+  Absolute parent directory of the source file containing this reference.
+  This zero-argument function is called without parentheses.
+  Unavailable in REPL expressions.
+  """
+  @builtin def __DIR__() -> String
+
+  @doc """
+  One-based line number at the start of this reference in its original source.
+  This zero-argument function is called without parentheses. Interpolations
+  retain their original source position.
+  Unavailable in REPL expressions.
+  """
+  @builtin def __LINE__() -> Int
 }
 
 # `deferror` introduces a concrete recoverable error declaration.

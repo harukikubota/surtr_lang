@@ -44,6 +44,8 @@ pub enum Token {
 
     // ── Identifier ──
     Ident(String),
+    Reflection(sindr::reflection::Reflection),
+    ReservedEnv,
     ReservedCallName(sindr::names::ReservedCallName),
     PatternConsumer(sindr::pattern::PatternConsumer),
     NumberedPlaceholder(String),

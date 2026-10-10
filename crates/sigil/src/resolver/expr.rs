@@ -884,6 +884,8 @@ impl Resolver {
             | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
             | Ast::BuiltinDecl(..)
+            | Ast::BuiltinReflectionDecl(..)
+            | Ast::Reflection(..)
             | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
@@ -2585,7 +2587,10 @@ impl Resolver {
         for stmt in stmts {
             if matches!(stmt, Ast::Import(_, _, _))
                 || matches!(stmt, Ast::SupervisorInit(_, _))
-                || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
+                || matches!(
+                    stmt,
+                    Ast::BuiltinReflectionDecl(..) | Ast::IntrinsicDecl(_, _, _, _)
+                )
                 || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _, _) if is_doc_only_builtin_decl(name))
             {
                 // ImportsResolvedProgram guarantees file imports were applied before resolution.
@@ -3001,6 +3006,7 @@ impl Resolver {
         match node {
             node @ (Ast::PatternConsumerCall(..)
             | Ast::NumberedPlaceholder(..)
+            | Ast::Reflection(..)
             | Ast::Lit(..)
             | Ast::Var(..)
             | Ast::InternalVar(..)
@@ -3049,6 +3055,7 @@ impl Resolver {
             | Ast::TraitDef(..)
             | Ast::TraitImplDef(..)
             | Ast::BuiltinDecl(..)
+            | Ast::BuiltinReflectionDecl(..)
             | Ast::IntrinsicDecl(..)
             | Ast::BuiltinExtractorDecl(..)
             | Ast::BuiltinTypeDecl(..)
@@ -3099,6 +3106,14 @@ impl Resolver {
             Ast::NumberedPlaceholder(span, _) => Err(ResolveError {
                 message: "numbered placeholders are only valid as Pattern projections in apply_pattern or a direct pipe argument".into(), span,
                 diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None }, related_labels: Vec::new(),
+            }),
+            Ast::Reflection(span, value) => Err(ResolveError {
+                message: format!("{} was not materialized from its source before resolution", value.name()),
+                span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant, subject: None,
+                },
+                related_labels: Vec::new(),
             }),
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
 
@@ -4327,6 +4342,18 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
+            Ast::BuiltinReflectionDecl(span, value, _) => Err(ResolveError {
+                message: format!(
+                    "builtin value declaration {} must not reach resolution",
+                    value.name()
+                ),
+                span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
+            }),
             Ast::IntrinsicDecl(span, name, _, _) => Err(ResolveError {
                 message: format!(
                     "Intrinsic declaration `{name}` is docs-only and should not reach resolution"

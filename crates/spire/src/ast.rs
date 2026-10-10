@@ -808,6 +808,12 @@ pub enum Ast {
     /// phases validate the structured signature against canonical metadata.
     IntrinsicDecl(Span, Symbol, IntrinsicSignature, DeclAttrs),
 
+    /// Standard-only declaration of a compiler-owned source reflection function.
+    BuiltinReflectionDecl(Span, sindr::reflection::Reflection, DeclAttrs),
+
+    /// Source atom, materialized before resolution using its original span.
+    Reflection(Span, sindr::reflection::Reflection),
+
     BuiltinExtractorDecl(Span, Symbol, Vec<ExtractorParam>, AstTy, DeclAttrs),
 
     /// Builtin type declaration: `@builtin type Int`

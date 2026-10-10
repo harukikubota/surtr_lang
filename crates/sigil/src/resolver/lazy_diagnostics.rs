@@ -338,6 +338,8 @@ impl Resolver {
             | Ast::SupervisorInit(..)
             | Ast::ExtractorDef(..)
             | Ast::BuiltinDecl(..)
+            | Ast::BuiltinReflectionDecl(..)
+            | Ast::Reflection(..)
             | Ast::IntrinsicDecl(..)
             | Ast::BuiltinExtractorDecl(..)
             | Ast::BuiltinTypeDecl(..)

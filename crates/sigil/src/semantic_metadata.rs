@@ -454,6 +454,17 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     });
                 }
             }
+            Ast::BuiltinReflectionDecl(_, value, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, value.name()),
+                        kind: DocKind::Function,
+                        module_path: surface_path_name(module_path).to_string(),
+                        signature: Some(value.signature()),
+                        doc: doc.clone(),
+                    });
+                }
+            }
             Ast::IntrinsicDecl(_, name, signature, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
@@ -730,6 +741,15 @@ fn collect_signature_entries_for_ast(
                     qualified_name(module_path, name),
                     DocKind::Function,
                     format_fun_signature(name, &[], params, ret_ty),
+                );
+            }
+            Ast::BuiltinReflectionDecl(_, reflection, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, reflection.name()),
+                    DocKind::Function,
+                    reflection.signature(),
                 );
             }
             Ast::IntrinsicDecl(_, name, signature, _) => {

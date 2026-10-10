@@ -283,6 +283,16 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok((name, sp))
             }
+            Token::Reflection(value) => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                format!("{} is reserved for source reflection", value.name()),
+                sp,
+            )),
+            Token::ReservedEnv => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "`__ENV__` is reserved and cannot be defined",
+                sp,
+            )),
             Token::Eof => Err(ParseError::incomplete("identifier", sp)),
             _ => Err(ParseError::syntax(
                 crate::error::ParseErrorReason::PositionRule,
@@ -1745,6 +1755,92 @@ fn validate_top_level_namespace_owner_collisions(ast: &[Ast]) -> Result<(), Pars
     Ok(())
 }
 
+/// Materialize source atoms before module span rebasing and name resolution.
+/// `file_path` must identify a real file; `None` explicitly denotes virtual input.
+pub fn materialize_reflections(
+    ast: Vec<Ast>,
+    source: &str,
+    file_path: Option<&std::path::Path>,
+) -> Result<Vec<Ast>, ParseError> {
+    struct Materializer<'a> {
+        source: &'a str,
+        file_path: Option<&'a std::path::Path>,
+        error: std::cell::RefCell<Option<ParseError>>,
+    }
+    impl AstMapper for Materializer<'_> {
+        fn span(&self, span: Span) -> Span {
+            span
+        }
+        fn reflection(&self, span: Span, value: sindr::reflection::Reflection) -> Ast {
+            use sindr::reflection::Reflection;
+            let literal = match value {
+                Reflection::Line => Ok(Lit::Int(sindr::primitives::int(
+                    1 + self
+                        .source
+                        .chars()
+                        .take(span.start)
+                        .filter(|ch| *ch == '\n')
+                        .count(),
+                ))),
+                Reflection::File | Reflection::Dir => (|| {
+                    let path = self
+                        .file_path
+                        .ok_or("source reflection requires a file source")?;
+                    // Remove `.` components without resolving symlinks or collapsing `..`.
+                    let path = path.components().collect::<std::path::PathBuf>();
+                    let path = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        std::env::current_dir()
+                            .map_err(|_| "cannot determine absolute source path")?
+                            .join(path)
+                    };
+                    let part = if value == Reflection::File {
+                        path.file_name().and_then(|name| name.to_str())
+                    } else {
+                        path.parent().and_then(|parent| parent.to_str())
+                    };
+                    part.map(|part| Lit::Str(part.to_string()))
+                        .ok_or("source path is not a valid UTF-8 file path")
+                })(),
+            };
+            match literal {
+                Ok(literal) => Ast::Lit(span, literal),
+                Err(message) => {
+                    self.error.borrow_mut().get_or_insert_with(|| {
+                        ParseError::syntax(
+                            crate::error::ParseErrorReason::PositionRule,
+                            message,
+                            span.clone(),
+                        )
+                    });
+                    Ast::Reflection(span, value)
+                }
+            }
+        }
+    }
+    let mapper = Materializer {
+        source,
+        file_path,
+        error: std::cell::RefCell::new(None),
+    };
+    let ast = ast
+        .into_iter()
+        .map(|node| map_ast_span(node, &mapper))
+        .collect();
+    match mapper.error.into_inner() {
+        Some(error) => Err(error),
+        None => Ok(ast),
+    }
+}
+
+/// Map all source spans, including nested interpolation expressions.
+pub fn map_ast_spans(ast: Vec<Ast>, map: &dyn Fn(Span) -> Span) -> Vec<Ast> {
+    ast.into_iter()
+        .map(|node| map_ast_span(node, &|span| map(span)))
+        .collect()
+}
+
 pub fn rebase_ast_spans(ast: Vec<Ast>, delta: usize) -> Vec<Ast> {
     ast.into_iter()
         .map(|node| shift_ast_span(node, delta))
@@ -1826,11 +1922,24 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
     map_ast_span(ast, &|span| shift_span(span, delta))
 }
 
-fn map_span(span: Span, map: &dyn Fn(Span) -> Span) -> Span {
-    map(span)
+trait AstMapper {
+    fn span(&self, span: Span) -> Span;
+    fn reflection(&self, span: Span, value: sindr::reflection::Reflection) -> Ast {
+        Ast::Reflection(self.span(span), value)
+    }
 }
 
-fn map_ast_ty(ty: AstTy, map: &dyn Fn(Span) -> Span) -> AstTy {
+impl<F: Fn(Span) -> Span> AstMapper for F {
+    fn span(&self, span: Span) -> Span {
+        self(span)
+    }
+}
+
+fn map_span(span: Span, map: &dyn AstMapper) -> Span {
+    map.span(span)
+}
+
+fn map_ast_ty(ty: AstTy, map: &dyn AstMapper) -> AstTy {
     match ty {
         AstTy::Named(span, name) => AstTy::Named(map_span(span, map), name),
         AstTy::ImplTrait(span, name) => AstTy::ImplTrait(map_span(span, map), name),
@@ -1854,7 +1963,7 @@ fn map_ast_ty(ty: AstTy, map: &dyn Fn(Span) -> Span) -> AstTy {
     }
 }
 
-fn map_where_clause(clause: WhereClause, map: &dyn Fn(Span) -> Span) -> WhereClause {
+fn map_where_clause(clause: WhereClause, map: &dyn AstMapper) -> WhereClause {
     WhereClause {
         span: map_span(clause.span, map),
         constraints: clause
@@ -1889,11 +1998,11 @@ fn map_where_clause(clause: WhereClause, map: &dyn Fn(Span) -> Span) -> WhereCla
     }
 }
 
-fn map_parse_error(error: ParseError, map: &dyn Fn(Span) -> Span) -> ParseError {
-    error.map_spans(|span| map(span.clone()))
+fn map_parse_error(error: ParseError, map: &dyn AstMapper) -> ParseError {
+    error.map_spans(|span| map.span(span.clone()))
 }
 
-fn map_pattern(pat: AstPattern, map: &dyn Fn(Span) -> Span) -> AstPattern {
+fn map_pattern(pat: AstPattern, map: &dyn AstMapper) -> AstPattern {
     match pat {
         AstPattern::Projection {
             span,
@@ -1986,7 +2095,7 @@ fn map_pattern(pat: AstPattern, map: &dyn Fn(Span) -> Span) -> AstPattern {
     }
 }
 
-fn map_value_parameter(param: ValueParameter, map: &dyn Fn(Span) -> Span) -> ValueParameter {
+fn map_value_parameter(param: ValueParameter, map: &dyn AstMapper) -> ValueParameter {
     ValueParameter {
         name: param.name,
         mode: param.mode,
@@ -1997,7 +2106,7 @@ fn map_value_parameter(param: ValueParameter, map: &dyn Fn(Span) -> Span) -> Val
 
 fn map_return_type_argument(
     argument: ReturnTypeArgument,
-    map: &dyn Fn(Span) -> Span,
+    map: &dyn AstMapper,
 ) -> ReturnTypeArgument {
     ReturnTypeArgument {
         ordinal: argument.ordinal,
@@ -2006,7 +2115,7 @@ fn map_return_type_argument(
     }
 }
 
-fn map_extractor_param(param: ExtractorParam, map: &dyn Fn(Span) -> Span) -> ExtractorParam {
+fn map_extractor_param(param: ExtractorParam, map: &dyn AstMapper) -> ExtractorParam {
     ExtractorParam {
         name: param.name,
         ty: param.ty.map(|ty| map_ast_ty(ty, map)),
@@ -2014,15 +2123,15 @@ fn map_extractor_param(param: ExtractorParam, map: &dyn Fn(Span) -> Span) -> Ext
     }
 }
 
-fn map_match_pattern(pat: AstPattern, map: &dyn Fn(Span) -> Span) -> AstPattern {
+fn map_match_pattern(pat: AstPattern, map: &dyn AstMapper) -> AstPattern {
     map_pattern(pat, map)
 }
 
-fn map_decl_attrs(attrs: DeclAttrs, _map: &dyn Fn(Span) -> Span) -> DeclAttrs {
+fn map_decl_attrs(attrs: DeclAttrs, _map: &dyn AstMapper) -> DeclAttrs {
     attrs
 }
 
-fn map_process_spec(mut spec: ProcessSpec, map: &dyn Fn(Span) -> Span) -> ProcessSpec {
+fn map_process_spec(mut spec: ProcessSpec, map: &dyn AstMapper) -> ProcessSpec {
     spec.state = map_ast_ty(spec.state, map);
     spec.handlers = spec
         .handlers
@@ -2053,7 +2162,7 @@ fn map_process_spec(mut spec: ProcessSpec, map: &dyn Fn(Span) -> Span) -> Proces
     spec
 }
 
-fn map_builtin_type_head(head: BuiltinTypeHead, map: &dyn Fn(Span) -> Span) -> BuiltinTypeHead {
+fn map_builtin_type_head(head: BuiltinTypeHead, map: &dyn AstMapper) -> BuiltinTypeHead {
     BuiltinTypeHead {
         span: map_span(head.span, map),
         name: head.name,
@@ -2061,24 +2170,21 @@ fn map_builtin_type_head(head: BuiltinTypeHead, map: &dyn Fn(Span) -> Span) -> B
     }
 }
 
-fn map_record_lit_arg(arg: RecordLitArg, map: &dyn Fn(Span) -> Span) -> RecordLitArg {
+fn map_record_lit_arg(arg: RecordLitArg, map: &dyn AstMapper) -> RecordLitArg {
     match arg {
         RecordLitArg::Positional(expr) => RecordLitArg::Positional(map_ast_span(expr, map)),
         RecordLitArg::Named(name, expr) => RecordLitArg::Named(name, map_ast_span(expr, map)),
     }
 }
 
-fn map_ast_path(path: AstPath, map: &dyn Fn(Span) -> Span) -> AstPath {
+fn map_ast_path(path: AstPath, map: &dyn AstMapper) -> AstPath {
     AstPath {
         span: map_span(path.span, map),
         segments: path.segments,
     }
 }
 
-fn map_facet_path_segment(
-    segment: FacetPathSegment,
-    map: &dyn Fn(Span) -> Span,
-) -> FacetPathSegment {
+fn map_facet_path_segment(segment: FacetPathSegment, map: &dyn AstMapper) -> FacetPathSegment {
     match segment {
         FacetPathSegment::Field { .. } => segment,
         FacetPathSegment::Bracket(expr) => FacetPathSegment::Bracket(FacetBracketExpr {
@@ -2088,7 +2194,7 @@ fn map_facet_path_segment(
     }
 }
 
-fn map_bulk_update_path(path: BulkUpdatePath, map: &dyn Fn(Span) -> Span) -> BulkUpdatePath {
+fn map_bulk_update_path(path: BulkUpdatePath, map: &dyn AstMapper) -> BulkUpdatePath {
     match path {
         BulkUpdatePath::Segments(span, segments) => BulkUpdatePath::Segments(
             map_span(span, map),
@@ -2118,7 +2224,7 @@ fn map_bulk_update_path(path: BulkUpdatePath, map: &dyn Fn(Span) -> Span) -> Bul
 
 fn map_bulk_update_entries(
     entries: Vec<BulkUpdateEntry>,
-    map: &dyn Fn(Span) -> Span,
+    map: &dyn AstMapper,
 ) -> Vec<BulkUpdateEntry> {
     entries
         .into_iter()
@@ -2147,10 +2253,7 @@ fn map_bulk_update_entries(
         .collect()
 }
 
-fn map_do_statements(
-    statements: Vec<AstDoStatement>,
-    map: &dyn Fn(Span) -> Span,
-) -> Vec<AstDoStatement> {
+fn map_do_statements(statements: Vec<AstDoStatement>, map: &dyn AstMapper) -> Vec<AstDoStatement> {
     statements
         .into_iter()
         .map(|statement| match statement {
@@ -2183,7 +2286,7 @@ fn map_do_statements(
         .collect()
 }
 
-fn map_ast_span(ast: Ast, map: &dyn Fn(Span) -> Span) -> Ast {
+fn map_ast_span(ast: Ast, map: &dyn AstMapper) -> Ast {
     match ast {
         Ast::NumberedPlaceholder(span, index) => {
             Ast::NumberedPlaceholder(map_span(span, map), index)
@@ -2210,6 +2313,10 @@ fn map_ast_span(ast: Ast, map: &dyn Fn(Span) -> Span) -> Ast {
                 })
                 .collect(),
         ),
+        Ast::Reflection(span, value) => map.reflection(span, value),
+        Ast::BuiltinReflectionDecl(span, value, attrs) => {
+            Ast::BuiltinReflectionDecl(map_span(span, map), value, attrs)
+        }
         Ast::Lit(span, lit) => Ast::Lit(map_span(span, map), lit),
         Ast::Var(span, name) => Ast::Var(map_span(span, map), name),
         Ast::InternalVar(span, name) => Ast::InternalVar(map_span(span, map), name),
@@ -2873,7 +2980,9 @@ fn map_ast_span(ast: Ast, map: &dyn Fn(Span) -> Span) -> Ast {
 impl Ast {
     pub fn span(&self) -> &Span {
         match self {
-            Ast::PatternConsumerCall(s, _, _)
+            Ast::Reflection(s, _)
+            | Ast::BuiltinReflectionDecl(s, _, _)
+            | Ast::PatternConsumerCall(s, _, _)
             | Ast::NumberedPlaceholder(s, _)
             | Ast::Lit(s, _)
             | Ast::Var(s, _)

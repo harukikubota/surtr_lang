@@ -190,6 +190,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         | Ast::ConstDef(_, _, _, _, attrs)
         | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
         | Ast::BuiltinDecl(_, _, _, _, _, _, attrs)
+        | Ast::BuiltinReflectionDecl(_, _, attrs)
         | Ast::IntrinsicDecl(_, _, _, attrs)
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
@@ -1522,6 +1523,15 @@ impl Parser<'_> {
         span: Span,
         kind: &str,
     ) -> Result<(), ParseError> {
+        if sindr::reflection::Reflection::from_name(name).is_some()
+            || name == sindr::reflection::RESERVED_ENV_NAME
+        {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                format!("{name} is reserved for source reflection"),
+                span,
+            ));
+        }
         if sindr::names::special_enum_variant_alias_meta(name).is_some() {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::DeclarationSyntax,
@@ -5889,6 +5899,12 @@ impl Parser<'_> {
         start: usize,
         attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
+        if matches!(
+            self.tokens.get(self.pos + 1).map(|token| &token.token),
+            Some(Token::Reflection(_))
+        ) {
+            return self.parse_builtin_reflection_decl(start, attrs);
+        }
         let (_def_span, name, return_type_arguments, params, ret_ty, where_clause, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
 
@@ -6105,6 +6121,71 @@ impl Parser<'_> {
     /// `def name(arg: Type, ...) -> Type { expr }`
     pub(super) fn parse_def(&mut self) -> Result<Ast, ParseError> {
         self.parse_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_builtin_reflection_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Def)?;
+        let span = self.peek_span();
+        let Token::Reflection(value) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "@builtin def requires a canonical reflection name",
+                span,
+            ));
+        };
+        self.advance();
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.expect(&Token::RParen)?;
+        }
+        let expected = value.type_name();
+        self.expect(&Token::Arrow)?;
+        let ty = self.parse_type()?;
+        if !matches!(&ty, AstTy::Named(_, name) if name == expected) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                format!("{} must return {expected}", value.name()),
+                super::ast_ty_span(&ty).clone(),
+            ));
+        }
+        if !matches!(self.peek(), Token::Newline | Token::Eof | Token::RBrace) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "@builtin reflection function has no body",
+                self.peek_span(),
+            ));
+        }
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|token| &token.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+        if matches!(
+            self.tokens.get(lookahead).map(|token| &token.token),
+            Some(Token::LBrace)
+        ) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "@builtin reflection function has no body",
+                self.tokens[lookahead].span.clone(),
+            ));
+        }
+        Ok(Ast::BuiltinReflectionDecl(
+            Span {
+                start,
+                end: self.tokens[self.pos - 1].span.end,
+            },
+            value,
+            attrs,
+        ))
     }
 
     pub(super) fn parse_const_def(&mut self) -> Result<Ast, ParseError> {

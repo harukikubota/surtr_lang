@@ -6717,6 +6717,23 @@ mod tests {
         (name.trim().to_string(), param_tys.len() as u8, sig)
     }
 
+    // Source reflection functions are compiler-owned and have no VM IDs.
+    // Validate their declaration contract before excluding them from VM checks.
+    fn parse_runtime_builtin_signature(def_rest: &str) -> Option<(String, u8, String)> {
+        if let Some((name, _)) = def_rest.split_once('(') {
+            if let Some(reflection) = sindr::reflection::Reflection::from_name(name.trim()) {
+                let expected = reflection.signature();
+                assert_eq!(def_rest.trim(), expected, "reflection declaration mismatch");
+                assert!(
+                    builtin_meta_by_name(reflection.name()).is_none(),
+                    "reflection must not have a VM builtin ID"
+                );
+                return None;
+            }
+        }
+        Some(parse_def_signature(def_rest))
+    }
+
     #[test]
     fn builtin_srt_and_builtin_meta_are_aligned() {
         let sources = [
@@ -6763,14 +6780,15 @@ mod tests {
             let line = all_lines[i];
             if let Some(rest) = line.strip_prefix("@builtin def ") {
                 // Inline form: @builtin def name(params) -> ret
-                let entry = parse_def_signature(rest);
-                if let Some(meta) = builtin_meta_by_name(&entry.0) {
-                    // Keep only declarations that map to a concrete runtime
-                    // builtin contract. Some same-name surface declarations
-                    // are lowered as special forms and intentionally have
-                    // different signatures.
-                    if meta.arity == entry.1 && meta.sig_str == entry.2 {
-                        entries.push(entry);
+                if let Some(entry) = parse_runtime_builtin_signature(rest) {
+                    if let Some(meta) = builtin_meta_by_name(&entry.0) {
+                        // Keep only declarations that map to a concrete runtime
+                        // builtin contract. Some same-name surface declarations
+                        // are lowered as special forms and intentionally have
+                        // different signatures.
+                        if meta.arity == entry.1 && meta.sig_str == entry.2 {
+                            entries.push(entry);
+                        }
                     }
                 }
             } else if line == "@builtin" {
@@ -6779,10 +6797,11 @@ mod tests {
                 while j < all_lines.len() {
                     let next = all_lines[j];
                     if let Some(rest) = next.strip_prefix("def ") {
-                        let entry = parse_def_signature(rest);
-                        if let Some(meta) = builtin_meta_by_name(&entry.0) {
-                            if meta.arity == entry.1 && meta.sig_str == entry.2 {
-                                entries.push(entry);
+                        if let Some(entry) = parse_runtime_builtin_signature(rest) {
+                            if let Some(meta) = builtin_meta_by_name(&entry.0) {
+                                if meta.arity == entry.1 && meta.sig_str == entry.2 {
+                                    entries.push(entry);
+                                }
                             }
                         }
                         break;

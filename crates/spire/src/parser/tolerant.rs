@@ -771,6 +771,12 @@ fn recover_to_boundary(parser: &mut Parser<'_>, allow_rbrace: bool) {
 }
 
 fn keyword_token(text: &str) -> (Token, SyntaxTokenKind) {
+    if let Some(value) = sindr::reflection::Reflection::from_name(text) {
+        return (Token::Reflection(value), SyntaxTokenKind::Identifier);
+    }
+    if text == sindr::reflection::RESERVED_ENV_NAME {
+        return (Token::ReservedEnv, SyntaxTokenKind::Identifier);
+    }
     let keyword = match text {
         "True" => Some(Token::True),
         "False" => Some(Token::False),
@@ -907,6 +913,12 @@ fn outline_item_from_ast(node: &Ast) -> Option<SyntaxOutlineItem> {
         Ast::ExtractorDef(span, name, ..) => (
             SyntaxOutlineKind::Extractor,
             Some(name.clone()),
+            span,
+            Vec::new(),
+        ),
+        Ast::BuiltinReflectionDecl(span, value, _) => (
+            SyntaxOutlineKind::Function,
+            Some(value.name().into()),
             span,
             Vec::new(),
         ),
