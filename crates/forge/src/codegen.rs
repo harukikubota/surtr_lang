@@ -334,8 +334,8 @@ fn collect_missing_singleton_calls(
         | TypedInner::TraitDef(..)
         | TypedInner::TraitImplDef(..)
         | TypedInner::BuiltinExtractorDecl(_, _, _)
-        | TypedInner::StructDef(_, _, _, _, _)
-        | TypedInner::RecordDef(_, _, _, _, _) => {}
+        | TypedInner::StructDef(_, _, _, _)
+        | TypedInner::RecordDef(_, _, _, _) => {}
         TypedInner::ErrorConstruct {
             message, payload, ..
         } => {
@@ -3484,8 +3484,6 @@ mod tests {
                         discriminant: 0.into(),
                         payload_arity: 0,
                         optional: false,
-                        focus_readonly_root: false,
-                        focus_type_name: None,
                     };
                     gene.emit_variant_mismatch_result(
                         consumer == 2,
@@ -4139,13 +4137,10 @@ mod tests {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: false,
             segments: vec![TypedFacetSegment::ListIndex {
                 index: Box::new(index),
                 display: "0".into(),
                 literal_index: Some(0.into()),
-                focus_readonly_root: false,
-                focus_type_name: None,
             }],
         };
         let mismatch_end = gene.fresh_label();
@@ -6154,12 +6149,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 segments,
                 stop_points,
                 operation: None,
-                root_policy: if path.source_readonly_root {
-                    "readonly"
-                } else {
-                    "public"
-                }
-                .to_string(),
+                root_policy: "public".to_string(),
                 available_in_current_scope: !path.segments.iter().any(|segment| {
                     matches!(segment, TypedFacetSegment::Field { private: true, .. })
                 }),
@@ -6244,15 +6234,14 @@ fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
         apis.push("view: unavailable (concrete update slots)".to_string());
         apis.push("preview: unavailable (concrete update slots)".to_string());
     }
-    let readonly_boundary = path.source_readonly_root
-        || path.segments.iter().any(|segment| {
-            matches!(
-                segment,
-                TypedFacetSegment::ReadonlyBuiltin { .. }
-                    | TypedFacetSegment::ErrorPayload { .. }
-                    | TypedFacetSegment::Field { readonly: true, .. }
-            )
-        });
+    let readonly_boundary = path.segments.iter().any(|segment| {
+        matches!(
+            segment,
+            TypedFacetSegment::ReadonlyBuiltin { .. }
+                | TypedFacetSegment::ErrorPayload { .. }
+                | TypedFacetSegment::Field { readonly: true, .. }
+        )
+    });
     if path.is_infallible_structural() && !readonly_boundary {
         apis.push("put: available when replacement B derives T".to_string());
     }
@@ -6295,7 +6284,7 @@ fn collect_stmt_meta(
                 facet_info_for_node(rhs),
             );
         }
-        TypedInner::StructDef(_, name, field_names, _, _) => {
+        TypedInner::StructDef(_, name, field_names, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Struct,
@@ -6305,7 +6294,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::RecordDef(_, name, field_names, _, _) => {
+        TypedInner::RecordDef(_, name, field_names, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Record,
@@ -9377,7 +9366,7 @@ impl Codegen {
                 self.emit(Opcode::SetCallableSignature(ty_to_string(&node.ty)));
             }
 
-            TypedInner::StructDef(tag, name, field_names, field_policies, _) => {
+            TypedInner::StructDef(tag, name, field_names, field_policies) => {
                 self.state
                     .type_registry
                     .try_register(TypeEntry {
@@ -9395,7 +9384,7 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::RecordDef(tag, name, field_names, field_policies, _) => {
+            TypedInner::RecordDef(tag, name, field_names, field_policies) => {
                 self.state
                     .type_registry
                     .try_register(TypeEntry {

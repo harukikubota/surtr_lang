@@ -476,7 +476,7 @@ normalized =? Facet::over(User.nickname, user, {|name|
 - `Facet::view(User.profile.name, user)` のような read は許可されます
 - `Facet::set(User.profile.name, user, "bob")` のような深い mutable traversal は拒否されます
 - owner の `impl User` 本体では `Facet::set(User.profile, self, next_profile)` のような property そのものの置換だけが許可されます
-- `@readonly defstruct Profile { ... }` は readonly root になり、`Facet::set(Profile.name, profile, ...)` のような mutable Facet operation を owner を含めて拒否します
+- `@readonly defstruct Profile { ... }` は全フィールドに `readonly` を付けます。通常の readonly field と同じく、owner の `impl Profile` 本体ではフィールドそのものを置換できます。`@readonly` の struct で明示的な `public` field を宣言するとコンパイルエラーになります
 
 `Error.kind` と `Error.message` は常に読み取り専用です。`error.kind` / `error.message` の値アクセスも、標準の `Error::kind` / `Error::message` と同じ読み取りを使います。他の型の Error field を通る path や合成・capture 後の path でも、`set`、`over`、bulk update はコンパイルエラーになります。宣言元や標準コードにも更新権限はありません。cause や location は公開 field ではありません。
 

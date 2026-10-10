@@ -884,7 +884,7 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, type_params, fields, attrs) => {
+                Resolved::StructDef(_, id, type_params, fields, _) => {
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);
                     let ty_fields = fields
@@ -932,7 +932,6 @@ impl Checker {
                             type_param_vars.clone(),
                             private_fields,
                             readonly_fields,
-                            attrs.readonly,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,
@@ -997,7 +996,6 @@ impl Checker {
                             Vec::new(),
                             HashSet::new(),
                             HashSet::new(),
-                            false,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,
@@ -1040,7 +1038,6 @@ impl Checker {
                             Vec::new(),
                             private_fields,
                             HashSet::new(),
-                            false,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,
@@ -1084,7 +1081,6 @@ impl Checker {
                             type_param_vars,
                             HashSet::new(),
                             HashSet::new(),
-                            false,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,

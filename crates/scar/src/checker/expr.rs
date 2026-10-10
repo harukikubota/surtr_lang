@@ -1463,7 +1463,6 @@ impl Checker {
                                             update_focus_ty,
                                             path_kind: path.path_kind,
                                             may_fail: path.may_fail,
-                                            source_readonly_root: path.source_readonly_root,
                                             segments: path.segments,
                                         }),
                                     }
@@ -3352,7 +3351,6 @@ impl Checker {
                 update_focus_ty: self.resolve_ty(&slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
-                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             })),
             TypedInner::PendingFacetPath(path) => Ok(StoredFacetPath::Pending(path)),
@@ -8863,7 +8861,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(&segments),
             may_fail,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments,
         })
     }
@@ -8898,7 +8895,6 @@ impl Checker {
                 update_focus_ty: self.resolve_ty(&update_slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
-                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
             TypedInner::PendingFacetPath(path) => {
@@ -8974,7 +8970,6 @@ impl Checker {
                 TypedFacetPathKind::InfallibleStructural
             },
             may_fail: left_path.may_fail || right_path.may_fail,
-            source_readonly_root: left_path.source_readonly_root,
             segments,
         };
         Ok(TypedNode {
@@ -10732,35 +10727,12 @@ impl Checker {
         Ok((mode, replacement_ty))
     }
 
-    fn readonly_type_name(ty: &Ty) -> Option<&str> {
-        match ty {
-            Ty::Struct(name, _) | Ty::Record(name, _) => Some(Self::surface_name(name)),
-            _ => None,
-        }
-    }
-
     fn check_mutating_facet_path_permissions(
         &self,
         facet_name: &str,
         path: &TypedFacetPath,
         span: &Span,
     ) -> Result<(), TypeError> {
-        if path.source_readonly_root {
-            let resolved_source_ty = self.resolve_ty(&path.source_ty);
-            let type_name = Self::readonly_type_name(&resolved_source_ty).unwrap_or("<anonymous>");
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{} cannot mutably traverse readonly type {}",
-                    facet_name, type_name
-                ),
-                span: span.clone(),
-                hint: Some(
-                    "Use an explicit helper that returns a replacement value instead.".into(),
-                ),
-            });
-        }
-
         for (index, segment) in path.segments.iter().enumerate() {
             let is_final = index + 1 == path.segments.len();
             match segment {
@@ -10775,8 +10747,6 @@ impl Checker {
                     field_name,
                     container_type_name,
                     readonly,
-                    focus_readonly_root,
-                    focus_type_name,
                     ..
                 } => {
                     if *readonly {
@@ -10809,65 +10779,12 @@ impl Checker {
                             });
                         }
                     }
-
-                    if *focus_readonly_root && !is_final {
-                        let type_name = focus_type_name
-                            .as_deref()
-                            .unwrap_or(container_type_name.as_str());
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "{} cannot mutably traverse readonly type {}",
-                                facet_name, type_name
-                            ),
-                            span: span.clone(),
-                            hint: Some(
-                                "Replace the containing property with a freshly computed value instead."
-                                    .into(),
-                            ),
-                        });
-                    }
                 }
-                TypedFacetSegment::Tuple {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::Variant {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::ListIndex {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::ListRange {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::MapKey {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                } => {
-                    if *focus_readonly_root && !is_final {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "{} cannot mutably traverse readonly type {}",
-                                facet_name,
-                                focus_type_name.as_deref().unwrap_or("<anonymous>")
-                            ),
-                            span: span.clone(),
-                            hint: Some(
-                                "Replace the containing value with an updated copy instead.".into(),
-                            ),
-                        });
-                    }
-                }
+                TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::Variant { .. }
+                | TypedFacetSegment::ListIndex { .. }
+                | TypedFacetSegment::ListRange { .. }
+                | TypedFacetSegment::MapKey { .. } => {}
             }
         }
 
@@ -15031,9 +14948,6 @@ impl Checker {
                             index: Box::new(typed_expr),
                             display: display.clone(),
                             literal_index,
-                            focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                                .map(str::to_string),
                         },
                         focus_ty,
                         true,
@@ -15072,9 +14986,6 @@ impl Checker {
                             key: Box::new(typed_expr),
                             display: display.clone(),
                             literal_key,
-                            focus_readonly_root: self.ty_is_readonly_root(&value_ty),
-                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&value_ty))
-                                .map(str::to_string),
                         },
                         value_ty,
                         true,
@@ -15146,9 +15057,6 @@ impl Checker {
                             display: display.clone(),
                             literal_start,
                             literal_end,
-                            focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                                .map(str::to_string),
                         },
                         focus_ty,
                         true,
@@ -15240,9 +15148,6 @@ impl Checker {
                     TypedFacetSegment::Tuple {
                         field_index: index as u32,
                         tuple_len: items.len() as u32,
-                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
-                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
-                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -15322,9 +15227,6 @@ impl Checker {
                         container_type_name: Self::surface_name(&name).to_string(),
                         readonly: field_policy.is_some_and(|policy| policy.readonly),
                         private: field_policy.is_some_and(|policy| policy.private),
-                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
-                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
-                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -15385,9 +15287,6 @@ impl Checker {
                         discriminant: variant.discriminant,
                         payload_arity,
                         optional: *optional,
-                        focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                            .map(str::to_string),
                     },
                     focus_ty,
                     true,
@@ -15517,16 +15416,12 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![TypedFacetSegment::Tuple {
                 field_index: index as u32,
                 tuple_len: match &source_ty {
                     Ty::Tuple(items) => items.len() as u32,
                     _ => unreachable!("source_ty is always Tuple here"),
                 },
-                focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                    .map(str::to_string),
             }],
         };
 
@@ -15606,7 +15501,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&typed_segment)),
             may_fail,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![typed_segment],
         };
 
@@ -15705,7 +15599,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![segment],
         };
         Ok(TypedNode {
@@ -15809,7 +15702,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: false,
             segments: vec![TypedFacetSegment::ErrorPayload {
                 kind: kind.to_string(),
                 field_name: field.to_string(),
@@ -15868,7 +15760,6 @@ impl Checker {
                         update_focus_ty: Ty::Hole,
                         path_kind: TypedFacetPathKind::InfallibleStructural,
                         may_fail,
-                        source_readonly_root: false,
                         segments: vec![segment],
                     };
                     return Ok(TypedNode {
@@ -15974,7 +15865,6 @@ impl Checker {
                 update_focus_ty: Ty::Hole,
                 path_kind: Self::facet_path_kind_for_segments(&segments),
                 may_fail: path.may_fail || may_fail || result_transparent,
-                source_readonly_root: path.source_readonly_root,
                 segments,
             };
             return Ok(TypedNode {
@@ -16002,7 +15892,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
-            source_readonly_root: false,
             segments: vec![segment],
         };
         let out_ty = if source_is_result || path.may_fail {
@@ -16030,13 +15919,6 @@ impl Checker {
         field: &str,
     ) -> Result<TypedNode, TypeError> {
         self.check_field_access_with_expected(span, expr, field, None)
-    }
-
-    fn ty_is_readonly_root(&self, ty: &Ty) -> bool {
-        match self.resolve_ty(ty) {
-            Ty::Struct(name, _) | Ty::Record(name, _) => self.env.is_readonly_root(&name),
-            _ => false,
-        }
     }
 }
 
@@ -16401,7 +16283,6 @@ mod tests {
         name: &str,
         fields: Vec<(&str, Ty)>,
         readonly_fields: &[&str],
-        readonly_root: bool,
     ) {
         checker
             .env
@@ -16418,7 +16299,6 @@ mod tests {
                 .iter()
                 .map(|field| (*field).into())
                 .collect(),
-            readonly_root,
         );
     }
 
@@ -16427,8 +16307,6 @@ mod tests {
         field_name: &str,
         field_index: u32,
         readonly: bool,
-        focus_readonly_root: bool,
-        focus_type_name: Option<&str>,
     ) -> TypedFacetSegment {
         TypedFacetSegment::Field {
             field_name: field_name.into(),
@@ -16438,8 +16316,6 @@ mod tests {
             container_type_name: container_type_name.into(),
             private: false,
             readonly,
-            focus_readonly_root,
-            focus_type_name: focus_type_name.map(str::to_string),
         }
     }
 
@@ -16454,7 +16330,6 @@ mod tests {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: false,
             segments: vec![TypedFacetSegment::ReadonlyBuiltin {
                 field_name: "message".into(),
                 builtin_id: sindr::builtin::builtin_id_by_name("message").unwrap(),
@@ -16469,7 +16344,7 @@ mod tests {
     #[test]
     fn mutating_facet_rejects_deep_traversal_through_readonly_field_even_for_owner() {
         let mut checker = Checker::new(TypecheckContext::default());
-        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[]);
         setup_type(
             &mut checker,
             "User",
@@ -16481,7 +16356,6 @@ mod tests {
                 ),
             )],
             &["profile"],
-            false,
         );
         checker.current_impl_struct_target = Some("User".into());
 
@@ -16501,10 +16375,9 @@ mod tests {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: false,
             segments: vec![
-                field_segment("User", "profile", 0, true, false, Some("Profile")),
-                field_segment("Profile", "name", 0, false, false, Some("String")),
+                field_segment("User", "profile", 0, true),
+                field_segment("Profile", "name", 0, false),
             ],
         };
 
@@ -16518,7 +16391,7 @@ mod tests {
     #[test]
     fn mutating_facet_allows_owner_to_replace_readonly_field_itself() {
         let mut checker = Checker::new(TypecheckContext::default());
-        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[]);
         setup_type(
             &mut checker,
             "User",
@@ -16530,7 +16403,6 @@ mod tests {
                 ),
             )],
             &["profile"],
-            false,
         );
         checker.current_impl_struct_target = Some("User".into());
 
@@ -16553,96 +16425,12 @@ mod tests {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: false,
-            segments: vec![field_segment(
-                "User",
-                "profile",
-                0,
-                true,
-                false,
-                Some("Profile"),
-            )],
+            segments: vec![field_segment("User", "profile", 0, true)],
         };
 
         checker
             .check_mutating_facet_path_permissions("Facet::set", &path, &test_span())
             .expect("owner replacement of readonly field should succeed");
-    }
-
-    #[test]
-    fn mutating_facet_rejects_readonly_root_and_nested_readonly_type_boundaries() {
-        let mut checker = Checker::new(TypecheckContext::default());
-        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], true);
-        setup_type(
-            &mut checker,
-            "User",
-            vec![(
-                "profile",
-                Ty::Struct(
-                    "Profile".into(),
-                    NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-                ),
-            )],
-            &[],
-            false,
-        );
-        checker.current_impl_struct_target = Some("Profile".into());
-
-        let readonly_root_path = TypedFacetPath {
-            source_ty: Ty::Struct(
-                "Profile".into(),
-                NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-            ),
-            focus_ty: Ty::Str,
-            update_source_ty: Ty::Hole,
-            update_focus_ty: Ty::Hole,
-            path_kind: TypedFacetPathKind::InfallibleStructural,
-            may_fail: false,
-            source_readonly_root: true,
-            segments: vec![field_segment(
-                "Profile",
-                "name",
-                0,
-                false,
-                false,
-                Some("String"),
-            )],
-        };
-        let err = checker
-            .check_mutating_facet_path_permissions("Facet::over", &readonly_root_path, &test_span())
-            .expect_err("readonly root should fail");
-        assert!(err.message.contains("readonly type Profile"));
-
-        let nested_readonly_path = TypedFacetPath {
-            source_ty: Ty::Struct(
-                "User".into(),
-                NominalType::monomorphic(vec![(
-                    "profile".into(),
-                    Ty::Struct(
-                        "Profile".into(),
-                        NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-                    ),
-                )]),
-            ),
-            focus_ty: Ty::Str,
-            update_source_ty: Ty::Hole,
-            update_focus_ty: Ty::Hole,
-            path_kind: TypedFacetPathKind::InfallibleStructural,
-            may_fail: false,
-            source_readonly_root: false,
-            segments: vec![
-                field_segment("User", "profile", 0, false, true, Some("Profile")),
-                field_segment("Profile", "name", 0, false, false, Some("String")),
-            ],
-        };
-        let err = checker
-            .check_mutating_facet_path_permissions(
-                "Facet::over_result",
-                &nested_readonly_path,
-                &test_span(),
-            )
-            .expect_err("nested readonly type boundary should fail");
-        assert!(err.message.contains("readonly type Profile"));
     }
 }
 

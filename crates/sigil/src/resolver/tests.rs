@@ -3775,7 +3775,7 @@ fn test_builtin_type_decl_resolution() {
 #[test]
 fn test_struct_readonly_metadata_and_fields_resolve() {
     let ast = spire::parse_with_context(
-        "@readonly\ndefstruct User { private readonly password: String, readonly name: String }",
+        "@readonly\ndefstruct User { private password: String, name: String }",
         spire::ParserContext::project(0),
     )
     .expect("readonly struct should parse");

@@ -5355,16 +5355,12 @@ impl ReplEngine {
         };
         let error = kind == "error";
         let mut rows = Vec::new();
-        let readonly_root;
         if error {
             rows.extend(
                 ["kind", "message"]
                     .into_iter()
                     .map(|name| (None, name.to_string(), "String".to_string())),
             );
-            readonly_root = true;
-        } else {
-            readonly_root = false;
         }
         let def = if decl.kind == sigil::DeclarationKind::BuiltinType {
             None
@@ -5406,14 +5402,7 @@ impl ReplEngine {
         let mut lines = vec![
             crate::surface_path_name(&decl.fq_name).to_string(),
             format!("kind: {kind}"),
-            format!(
-                "facet root: {}",
-                if readonly_root || def.is_some_and(|def| def.readonly_root) {
-                    "readonly"
-                } else {
-                    "public"
-                }
-            ),
+            format!("facet root: {}", if error { "readonly" } else { "public" }),
             heading.to_string(),
         ];
         lines.extend(Self::render_member_rows(rows));

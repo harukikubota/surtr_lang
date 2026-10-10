@@ -4128,7 +4128,6 @@ impl Checker {
             update_focus_ty: self.resolve_ty(&path.update_focus_ty),
             path_kind: path.path_kind,
             may_fail: path.may_fail,
-            source_readonly_root: path.source_readonly_root,
             segments: path
                 .segments
                 .into_iter()
@@ -4143,14 +4142,10 @@ impl Checker {
                 index,
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListIndex {
                 index: self.resolve_typed_node(*index),
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::ListRange {
                 start,
@@ -4158,29 +4153,21 @@ impl Checker {
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListRange {
                 start: self.resolve_typed_node(*start),
                 end: self.resolve_typed_node(*end),
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::MapKey {
                 key,
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::MapKey {
                 key: self.resolve_typed_node(*key),
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             },
             other => other,
         }
@@ -4755,11 +4742,11 @@ impl Checker {
                     .map(|arg| *self.resolve_typed_node(arg))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::StructDef(tag, name, field_names, field_policies) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies)
             }
-            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::RecordDef(tag, name, field_names, field_policies) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, where_clause, methods) => {

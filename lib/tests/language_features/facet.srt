@@ -1,3 +1,29 @@
+@readonly
+defstruct ReadonlyFacetFixture {
+  name: String,
+  scores: List<Int>,
+}
+
+defrecord ReadonlyFacetWrapper(profile: ReadonlyFacetFixture)
+
+impl ReadonlyFacetFixture {
+  def new(name: String, scores: List<Int>) -> Self {
+    ReadonlyFacetFixture { name: name, scores: scores }
+  }
+
+  def rename(self: Self, name: String) -> Result<Self> {
+    Facet::set(ReadonlyFacetFixture.name, self, name)
+  }
+
+  def replace_scores(self: Self, scores: List<Int>) -> Result<Self> {
+    Facet::set(ReadonlyFacetFixture.scores, self, scores)
+  }
+
+  def rename_nested(wrapper: ReadonlyFacetWrapper, name: String) -> Result<ReadonlyFacetWrapper> {
+    Facet::set(ReadonlyFacetWrapper.profile -> ReadonlyFacetFixture.name, wrapper, name)
+  }
+}
+
 defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
 
   def demo_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
@@ -35,6 +61,22 @@ def bind_nominal_facet_source(source: Result<(Config, Int)>) -> Result<Config> {
 import Test;
 
 test("Facet") {
+  describe("readonly fields") {
+    it("allows owners to replace annotation-derived readonly fields") {
+      do {
+        original = ReadonlyFacetFixture("alice", [1, 2])
+        renamed <- ReadonlyFacetFixture::rename(original, "bob")
+        updated <- ReadonlyFacetFixture::replace_scores(renamed, [3, 4])
+        nested <- ReadonlyFacetFixture::rename_nested(ReadonlyFacetWrapper(original), "nested")
+
+        assert_eq("nested", Facet::view(ReadonlyFacetWrapper.profile -> ReadonlyFacetFixture.name, nested))
+        assert_eq("bob", Facet::view(ReadonlyFacetFixture.name, updated))
+        assert_eq([3, 4], Facet::view(ReadonlyFacetFixture.scores, updated))
+        assert_eq("alice", Facet::view(ReadonlyFacetFixture.name, original))
+      }
+    }
+  }
+
   describe("Result binding") {
     it("preserves nominal index failures and skips the continuation") {
       do {

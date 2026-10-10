@@ -1,2 +1,2 @@
 phase: typecheck
-contains: readonly type Profile
+contains: readonly field Profile.name

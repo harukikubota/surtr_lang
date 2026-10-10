@@ -238,7 +238,10 @@ pub enum ComparisonOperator {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedFacetSegment {
     /// A public observation API, never a runtime representation field.
-    ReadonlyBuiltin { field_name: String, builtin_id: u16 },
+    ReadonlyBuiltin {
+        field_name: String,
+        builtin_id: u16,
+    },
     ErrorPayload {
         kind: String,
         field_name: String,
@@ -254,14 +257,10 @@ pub enum TypedFacetSegment {
         container_type_name: String,
         readonly: bool,
         private: bool,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     Tuple {
         field_index: u32,
         tuple_len: u32,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     Variant {
         enum_name: String,
@@ -270,15 +269,11 @@ pub enum TypedFacetSegment {
         discriminant: SurtrInt,
         payload_arity: u32,
         optional: bool,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     ListIndex {
         index: Box<TypedNode>,
         display: String,
         literal_index: Option<SurtrInt>,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     ListRange {
         start: Box<TypedNode>,
@@ -286,15 +281,11 @@ pub enum TypedFacetSegment {
         display: String,
         literal_start: Option<SurtrInt>,
         literal_end: Option<SurtrInt>,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     MapKey {
         key: Box<TypedNode>,
         display: String,
         literal_key: Option<String>,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
 }
 
@@ -332,7 +323,6 @@ pub struct TypedFacetPath {
     pub update_focus_ty: Ty,
     pub path_kind: TypedFacetPathKind,
     pub may_fail: bool,
-    pub source_readonly_root: bool,
     pub segments: Vec<TypedFacetSegment>,
 }
 
@@ -631,11 +621,11 @@ pub enum TypedInner {
     /// Captured function value
     Capture(Box<TypedNode>, Vec<TypedNode>),
 
-    /// Struct definition — tag + name + field names + field policies + readonly-root flag
-    StructDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
+    /// Struct definition — tag + name + field names + field policies
+    StructDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>),
 
-    /// Record definition — tag + name + field names + field policies + readonly-root flag
-    RecordDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
+    /// Record definition — tag + name + field names + field policies
+    RecordDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>),
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),

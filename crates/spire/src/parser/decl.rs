@@ -1507,54 +1507,50 @@ impl Parser<'_> {
         Ok(())
     }
 
-    pub(super) fn parse_field_modifiers(&mut self) -> Result<(Visibility, bool), ParseError> {
+    pub(super) fn parse_field_modifiers(
+        &mut self,
+        struct_readonly: bool,
+    ) -> Result<(Visibility, bool), ParseError> {
         let mut visibility = Visibility::Public;
-        let mut saw_visibility = false;
+        let mut visibility_span = None;
         let mut readonly = false;
-
         loop {
             match self.peek() {
-                Token::Private => {
-                    if saw_visibility {
+                Token::Private | Token::Public => {
+                    if visibility_span.is_some() {
                         return Err(ParseError::syntax(
                             crate::error::ParseErrorReason::DeclarationSyntax,
                             "field visibility may only be specified once",
                             self.peek_span(),
                         ));
                     }
-                    saw_visibility = true;
-                    visibility = Visibility::Private;
-                    self.advance();
-                    self.skip_newlines();
-                }
-                Token::Public => {
-                    if saw_visibility {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "field visibility may only be specified once",
-                            self.peek_span(),
-                        ));
-                    }
-                    saw_visibility = true;
-                    visibility = Visibility::Public;
+                    visibility = if matches!(self.peek(), Token::Private) {
+                        Visibility::Private
+                    } else {
+                        Visibility::Public
+                    };
+                    visibility_span = Some(self.peek_span());
                     self.advance();
                     self.skip_newlines();
                 }
                 Token::Readonly => {
-                    if readonly {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "readonly field modifier may only be specified once",
-                            self.peek_span(),
-                        ));
-                    }
                     readonly = true;
                     self.advance();
                     self.skip_newlines();
                 }
-                _ => return Ok((visibility, readonly)),
+                _ => break,
             }
         }
+        if struct_readonly && visibility == Visibility::Public {
+            if let Some(span) = visibility_span {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "@readonly struct fields cannot be explicitly public",
+                    span,
+                ));
+            }
+        }
+        Ok((visibility, readonly))
     }
 
     pub(super) fn parse_import_selector_list(&mut self) -> Result<(Vec<Symbol>, Span), ParseError> {
@@ -3008,7 +3004,7 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let (visibility, readonly) = self.parse_field_modifiers()?;
+            let (visibility, readonly) = self.parse_field_modifiers(attrs.readonly)?;
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type_in_context(field_type_context.clone())?;
@@ -3417,7 +3413,7 @@ impl Parser<'_> {
                         return Err(ParseError::incomplete(")", self.peek_span()));
                     }
                     self.skip_newlines();
-                    let (visibility, readonly) = self.parse_field_modifiers()?;
+                    let (visibility, readonly) = self.parse_field_modifiers(false)?;
                     if readonly {
                         return Err(ParseError::syntax(
                             crate::error::ParseErrorReason::DeclarationSyntax,

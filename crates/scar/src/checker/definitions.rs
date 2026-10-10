@@ -2782,10 +2782,6 @@ impl Checker {
             .filter(|field| field.readonly)
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>();
-        let readonly_root = self
-            .env
-            .lookup_type_def(&id.name)
-            .is_some_and(|def| def.readonly_root);
         let type_param_vars = type_params
             .iter()
             .filter_map(|param| match tyvars.get(&param.name) {
@@ -2802,7 +2798,6 @@ impl Checker {
                 type_param_vars.clone(),
                 private_fields,
                 readonly_fields,
-                readonly_root,
             )
             .ok_or_else(|| TypeError {
                 structured: None,
@@ -2834,13 +2829,7 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::StructDef(
-                tag,
-                id.name.clone(),
-                field_names,
-                field_policies,
-                readonly_root,
-            ),
+            node: TypedInner::StructDef(tag, id.name.clone(), field_names, field_policies),
         })
     }
 
@@ -2983,7 +2972,6 @@ impl Checker {
                 ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
-        let readonly_root = false;
 
         let tag = self
             .env
@@ -2993,7 +2981,6 @@ impl Checker {
                 Vec::new(),
                 HashSet::new(),
                 HashSet::new(),
-                readonly_root,
             )
             .ok_or_else(|| TypeError {
                 structured: None,
@@ -3019,13 +3006,7 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::RecordDef(
-                tag,
-                id.name.clone(),
-                field_names,
-                field_policies,
-                readonly_root,
-            ),
+            node: TypedInner::RecordDef(tag, id.name.clone(), field_names, field_policies),
         })
     }
 

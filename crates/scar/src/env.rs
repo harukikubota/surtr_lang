@@ -69,7 +69,6 @@ pub struct TypeDefInfo {
     pub field_type_spans: Vec<spire::ast::Span>,
     pub private_fields: HashSet<Symbol>,
     pub readonly_fields: HashSet<Symbol>,
-    pub readonly_root: bool,
     pub state: TypeDefState,
 }
 
@@ -256,7 +255,6 @@ impl TypeEnv {
                 field_type_spans: Vec::new(),
                 private_fields: HashSet::new(),
                 readonly_fields: HashSet::new(),
-                readonly_root: false,
                 state: TypeDefState::Declared,
             }),
         );
@@ -273,7 +271,6 @@ impl TypeEnv {
         type_param_vars: Vec<u32>,
         private_fields: HashSet<Symbol>,
         readonly_fields: HashSet<Symbol>,
-        readonly_root: bool,
     ) -> Option<u32> {
         let key = canonical_type_key(name);
         let def = Arc::make_mut(self.type_defs.get_mut(&key)?);
@@ -281,7 +278,6 @@ impl TypeEnv {
         def.type_param_vars = type_param_vars;
         def.private_fields = private_fields;
         def.readonly_fields = readonly_fields;
-        def.readonly_root = readonly_root;
         def.state = TypeDefState::SignatureResolved;
         Some(def.tag)
     }
@@ -322,11 +318,6 @@ impl TypeEnv {
             private: def.private_fields.contains(field_name),
             readonly: def.readonly_fields.contains(field_name),
         })
-    }
-
-    pub fn is_readonly_root(&self, type_name: &str) -> bool {
-        self.lookup_type_def(type_name)
-            .is_some_and(|def| def.readonly_root)
     }
 
     pub fn is_type_signature_resolved(&self, name: &str) -> bool {
@@ -467,7 +458,6 @@ mod tests {
             vec![7],
             HashSet::from(["secret".into()]),
             HashSet::from(["value".into()]),
-            false,
         );
         parent
             .lookup_type_def_mut("Shared")
@@ -499,7 +489,6 @@ mod tests {
                 vec![19],
                 HashSet::from(["value".into()]),
                 HashSet::from(["secret".into()]),
-                true,
             ),
             Some(tag)
         );
@@ -516,7 +505,6 @@ mod tests {
         changed_policy.field_type_spans[0] = Span { start: 80, end: 84 };
         changed_policy.private_fields.clear();
         changed_policy.readonly_fields.clear();
-        changed_policy.readonly_root = true;
         assert!(!std::ptr::eq(
             parent.lookup_type_def("Shared").unwrap(),
             policy_only.lookup_type_def("Shared").unwrap(),
@@ -527,7 +515,6 @@ mod tests {
         ));
         assert!(!policy_only.is_private_field("Shared", "secret"));
         assert!(!policy_only.is_readonly_field("Shared", "value"));
-        assert!(policy_only.is_readonly_root("Shared"));
         assert_eq!(
             policy_only.lookup_type_def("Shared").unwrap().fields[0].1,
             Ty::Var(7)
@@ -540,7 +527,6 @@ mod tests {
             assert_eq!(definition.field_type_spans[0], Span { start: 10, end: 14 });
             assert!(original.is_private_field("Shared", "secret"));
             assert!(original.is_readonly_field("Shared", "value"));
-            assert!(!original.is_readonly_root("Shared"));
         }
         assert!(!std::ptr::eq(
             parent.lookup_type_def("Shared").unwrap(),
@@ -552,7 +538,6 @@ mod tests {
         ));
         assert!(child.is_private_field("Shared", "value"));
         assert!(child.is_readonly_field("Shared", "secret"));
-        assert!(child.is_readonly_root("Shared"));
 
         child.bind_var(44, Ty::Bool);
         child.pop_var_scope();
@@ -737,7 +722,6 @@ mod tests {
             Vec::new(),
             HashSet::new(),
             HashSet::new(),
-            false,
         );
         assert_eq!(resolved, Some(tag));
         assert!(env.is_type_signature_resolved("ApiError"));
@@ -764,7 +748,6 @@ mod tests {
             Vec::new(),
             HashSet::new(),
             HashSet::new(),
-            false,
         );
 
         assert_eq!(tag, 2);
@@ -788,7 +771,6 @@ mod tests {
             Vec::new(),
             HashSet::from(["password".into()]),
             HashSet::new(),
-            false,
         );
 
         assert!(env.is_private_field("User", "password"));
@@ -808,7 +790,6 @@ mod tests {
             Vec::new(),
             HashSet::new(),
             HashSet::from(["name".into()]),
-            true,
         );
 
         assert!(env.is_readonly_field("Profile", "name"));
@@ -819,8 +800,5 @@ mod tests {
             .expect("field policy should resolve through surface candidates");
         assert!(!policy.private);
         assert!(policy.readonly);
-        assert!(env.is_readonly_root("Profile"));
-        assert!(env.is_readonly_root("Global::Profile"));
-        assert!(env.is_readonly_root("Types::Profile"));
     }
 }

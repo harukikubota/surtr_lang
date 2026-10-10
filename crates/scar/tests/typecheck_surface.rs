@@ -358,8 +358,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         readonly_field_blocks_deep_mutation_but_owner_can_replace_property as fn(),
     ),
     (
-        "readonly_struct_root_blocks_mutating_facet_even_for_owner",
-        readonly_struct_root_blocks_mutating_facet_even_for_owner as fn(),
+        "readonly_struct_fields_allow_owner_replacement",
+        readonly_struct_fields_allow_owner_replacement as fn(),
     ),
     (
         "facet_standalone_tuple_root_is_rejected",
@@ -3185,7 +3185,7 @@ impl User {
     ));
 }
 
-fn readonly_struct_root_blocks_mutating_facet_even_for_owner() {
+fn readonly_struct_fields_allow_owner_replacement() {
     let err = typecheck_with_rules(
         r#"@readonly
 defstruct Profile {
@@ -3202,10 +3202,10 @@ profile = Profile("alice")
 Facet::over(Profile.name, profile, {|name| Ok(name)})"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("readonly root should reject mutating facet");
-    assert!(err.message.contains("readonly type Profile"));
+    .expect_err("readonly fields should reject external mutation");
+    assert!(err.message.contains("readonly field Profile.name"));
 
-    let err = typecheck_with_rules(
+    let typed = typecheck_with_rules(
         r#"@readonly
 defstruct Profile {
   name: String,
@@ -3222,8 +3222,25 @@ impl Profile {
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("readonly root should also reject owner mutation");
-    assert!(err.message.contains("readonly type Profile"));
+    .expect("owner may replace an annotation-derived readonly field");
+    assert!(matches!(
+        typed.last().map(|node| &node.node),
+        Some(TypedInner::Def(..))
+    ));
+
+    let err = typecheck_with_rules(
+        r#"@readonly
+defstruct Profile { scores: List<Int> }
+impl Profile {
+  def new(scores: List<Int>) -> Self { Profile { scores: scores } }
+  def update_score(self: Self) -> Result<Profile> {
+    Facet::set(Profile.scores -> List.[0], self, 9)
+  }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("owner cannot traverse annotation-derived readonly fields");
+    assert!(err.message.contains("readonly field Profile.scores"));
 }
 
 fn facet_standalone_tuple_root_is_rejected() {
@@ -3768,7 +3785,7 @@ User { name: name, age: age }
     let typed = typecheck(resolved).expect("forward struct reference should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _))));
 }
 
 fn generic_struct_single_type_param_typechecks() {
@@ -3904,8 +3921,9 @@ deferror NotFound(code: String) { |code: String| Self(message: "missing #{code}"
         nodes
             .iter()
             .filter_map(|node| match &node.node {
-                TypedInner::StructDef(tag, name, _, _, _)
-                | TypedInner::RecordDef(tag, name, _, _, _) => Some((name.clone(), *tag)),
+                TypedInner::StructDef(tag, name, _, _) | TypedInner::RecordDef(tag, name, _, _) => {
+                    Some((name.clone(), *tag))
+                }
                 TypedInner::DeferrorDef(tag, _, id, _, _) => Some((id.name.clone(), *tag)),
                 _ => None,
             })
@@ -3943,7 +3961,7 @@ print(to_string(value))"#,
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _, _))),
+            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _))),
         "expected namespaced record definition to survive typechecking"
     );
     assert!(

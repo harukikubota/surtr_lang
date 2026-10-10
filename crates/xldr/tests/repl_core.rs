@@ -6881,9 +6881,9 @@ impl User {
     );
 
     let info = rendered_text(&engine.handle_line(":info User"));
-    assert!(info.contains("facet root: readonly"), "{info}");
-    assert!(info.contains("private         password: String"), "{info}");
-    assert!(info.contains("public readonly age"), "{info}");
+    assert!(info.contains("facet root: public"), "{info}");
+    assert!(info.contains("private readonly password: String"), "{info}");
+    assert!(info.contains("public readonly  age"), "{info}");
 
     let facet = rendered_text(&engine.handle_line(":facet User.password"));
     assert!(facet.contains("full path: User.password"), "{facet}");

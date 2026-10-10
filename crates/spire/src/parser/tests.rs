@@ -8744,3 +8744,36 @@ fn test_deferror_payload_header_and_constructor_block_arguments_are_distinct() {
         assert!(matches!(body.as_ref(), Ast::Closure(_, params, _) if params.is_empty()));
     }
 }
+
+#[test]
+fn struct_field_rejects_multiple_visibility_modifiers() {
+    for annotation in ["", "@readonly\n"] {
+        for modifiers in [
+            "public private",
+            "private public",
+            "public public",
+            "private private",
+            "public readonly private",
+            "private readonly public",
+        ] {
+            let source = format!("{annotation}defstruct User {{ {modifiers} name: String }}");
+            let err = parse_with_context(&source, ParserContext::project(0))
+                .expect_err("field visibility may only be specified once");
+            assert!(err
+                .message()
+                .contains("field visibility may only be specified once"));
+        }
+    }
+}
+
+#[test]
+fn readonly_struct_rejects_explicit_public_field() {
+    for modifiers in ["public", "readonly public", "public readonly"] {
+        let source = format!("@readonly\ndefstruct User {{ {modifiers} name: String }}");
+        let err = parse_with_context(&source, ParserContext::project(0))
+            .expect_err("explicit public conflicts with readonly struct");
+        assert!(err
+            .message()
+            .contains("@readonly struct fields cannot be explicitly public"));
+    }
+}

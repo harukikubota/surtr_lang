@@ -3506,7 +3506,7 @@ impl Resolver {
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
                             visibility: f.visibility,
-                            readonly: f.readonly,
+                            readonly: f.readonly || attrs.readonly,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;

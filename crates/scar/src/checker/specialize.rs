@@ -2300,11 +2300,11 @@ impl Checker {
                 }
                 TypedInner::Capture(Box::new(target), args)
             }
-            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::StructDef(tag, name, field_names, field_policies) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies)
             }
-            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::RecordDef(tag, name, field_names, field_policies) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, where_clause, methods) => {
@@ -2367,8 +2367,6 @@ impl Checker {
                 index,
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListIndex {
                 index: self.rewrite_specializations_in_node(
                     *index,
@@ -2380,8 +2378,6 @@ impl Checker {
                 )?,
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::ListRange {
                 start,
@@ -2389,8 +2385,6 @@ impl Checker {
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListRange {
                 start: self.rewrite_specializations_in_node(
                     *start,
@@ -2411,15 +2405,11 @@ impl Checker {
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::MapKey {
                 key,
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::MapKey {
                 key: self.rewrite_specializations_in_node(
                     *key,
@@ -2431,8 +2421,6 @@ impl Checker {
                 )?,
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             },
             other => other,
         })
@@ -4195,11 +4183,11 @@ impl Checker {
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::StructDef(tag, name, field_names, field_policies) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies)
             }
-            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::RecordDef(tag, name, field_names, field_policies) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, where_clause, methods) => {
@@ -4228,7 +4216,6 @@ impl Checker {
             update_focus_ty: self.substitute_ty_with_mapping(&path.update_focus_ty, mapping),
             path_kind: path.path_kind,
             may_fail: path.may_fail,
-            source_readonly_root: path.source_readonly_root,
             segments: path
                 .segments
                 .into_iter()
@@ -4247,14 +4234,10 @@ impl Checker {
                 index,
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListIndex {
                 index: Box::new(self.substitute_typed_node_with_mapping(*index, mapping)),
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::ListRange {
                 start,
@@ -4262,29 +4245,21 @@ impl Checker {
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListRange {
                 start: Box::new(self.substitute_typed_node_with_mapping(*start, mapping)),
                 end: Box::new(self.substitute_typed_node_with_mapping(*end, mapping)),
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::MapKey {
                 key,
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::MapKey {
                 key: Box::new(self.substitute_typed_node_with_mapping(*key, mapping)),
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             },
             other => other,
         }

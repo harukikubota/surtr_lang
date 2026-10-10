@@ -106,7 +106,8 @@ Readonly follows a different rule boundary from private visibility.
 - readonly is checked when mutating Facet operations are applied
 - owner code may replace a readonly field itself
 - writable traversal through a readonly field is rejected
-- `@readonly defstruct` blocks writable Facet operations rooted in that struct
+- `@readonly defstruct` marks every field readonly; owner replacement follows the same rules
+- explicit public fields in an `@readonly defstruct` declaration are rejected
 
 Container bracket expressions follow these additional rules:
 
@@ -249,7 +250,7 @@ impl Facet {
 
   - readonly field traversal is rejected for mutation
   - owner code may replace the readonly field itself when the path ends there
-  - `@readonly defstruct` roots reject `set` entirely
+  - `@readonly defstruct` applies these same rules to every field
 
   For nested updates, compose the path first:
 
