@@ -644,7 +644,8 @@ enum ProcessAcceptance {
 #[derive(Debug, Clone)]
 enum ProcessStopReason {
     Normal,
-    Error(RichError),
+    // Retain the first stop error until reclamation, even without a runtime consumer.
+    Error(#[allow(dead_code)] RichError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -657,12 +658,16 @@ enum ProcessExecutionStage {
 #[derive(Debug, Clone)]
 struct ProcessExecutionRecord {
     pid: PidHandle,
+    // Retain execution ancestry; it does not imply cancellation propagation.
+    #[allow(dead_code)]
     parent: Option<u64>,
     stage: ProcessExecutionStage,
     stored: bool,
     initial_state: Option<Value>,
     result_future: FutureId,
     internal_futures: Vec<FutureId>,
+    // Retain execution provenance; delivery uses the result future's creation context.
+    #[allow(dead_code)]
     origin: (Location, Vec<RuntimeStackFrame>),
 }
 
@@ -7085,8 +7090,8 @@ mod tests {
     };
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableMetadata, CallableTarget, Location, PidHandle, PidIdentity, PidKind,
-        RichError, RuntimeCallKind, TypeEntry, TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableTarget, Location, PidHandle, PidKind, RichError,
+        RuntimeCallKind, TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use std::collections::VecDeque;
     use std::fs;

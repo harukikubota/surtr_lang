@@ -151,6 +151,7 @@ impl InputBuffer {
         self.cursor_byte = 0;
     }
 
+    #[cfg(test)]
     pub(super) fn set(&mut self, text: String) {
         self.cursor_byte = text.len();
         self.text = text;

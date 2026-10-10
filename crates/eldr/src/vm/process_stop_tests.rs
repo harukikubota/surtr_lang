@@ -1010,6 +1010,183 @@ fn timed_caller_deadline_before_dispatch_does_not_start_process_handler() {
 }
 
 #[test]
+fn started_reply_later_survives_broadcast_timeout_without_overwriting_result() {
+    use sindr::runtime::{TypeEntry, TypeKind};
+
+    let (mut vm, pid) = worker_vm();
+    vm.process_runtime
+        .processes
+        .get_mut(&pid.id)
+        .unwrap()
+        .state_value = Some(Value::Int(int(1)));
+    vm.bytecode.type_registry.register(TypeEntry {
+        tag: 200,
+        name: "Duration".into(),
+        kind: TypeKind::Struct,
+        field_names: vec!["millis".into()],
+        private_flags: vec![true],
+    });
+    let callback = builtin(
+        "__process_sleep",
+        vec![Value::Tagged {
+            tag: 200,
+            fields: vec![Value::Int(int(1_000_000))],
+        }],
+    );
+    let call = |name, arity| Opcode::CallBuiltin {
+        builtin_id: sindr::builtin::builtin_id_by_name(name).unwrap(),
+        arity,
+        span_start: 0,
+        span_end: 0,
+    };
+    let body_pc = vm.bytecode.opcodes.len() as u32;
+    vm.bytecode.opcodes.extend([
+        Opcode::LoadLocal(0),
+        call("__process_state", 1),
+        Opcode::Pop,
+        Opcode::LoadLocal(0),
+        call("__process_postprocess", 1),
+        Opcode::Pop,
+        Opcode::LoadLocal(0),
+        Opcode::LoadLocal(1),
+        Opcode::LoadLocal(2),
+        call("__genserver_call_reply_later", 3),
+        Opcode::Return,
+    ]);
+    let body_id = vm.bytecode.functions.len() as u32;
+    vm.bytecode.functions.push(super::tests::function_entry(
+        body_id,
+        body_pc,
+        3,
+        3,
+        Some("Worker::timed_reply_later_body"),
+    ));
+    let body = Callable {
+        target: CallableTarget::Function(body_id),
+        lexical_captures: vec![
+            Value::Pid(pid.clone()),
+            Value::Int(int(2)),
+            Value::Callable(callback),
+        ],
+        metadata: CallableMetadata::default(),
+    };
+    let message_pc = vm.bytecode.opcodes.len() as u32;
+    vm.bytecode.opcodes.extend([
+        Opcode::LoadLocal(1),
+        Opcode::LoadLocal(0),
+        call("__process_execute", 2),
+        Opcode::Return,
+    ]);
+    let message_id = vm.bytecode.functions.len() as u32;
+    vm.bytecode.functions.push(super::tests::function_entry(
+        message_id,
+        message_pc,
+        2,
+        2,
+        Some("Worker::timed_reply_later_message"),
+    ));
+    let message = Callable {
+        target: CallableTarget::Function(message_id),
+        lexical_captures: vec![Value::Callable(body)],
+        metadata: CallableMetadata::default(),
+    };
+    let workers = WorkersHandle {
+        id: 1,
+        process_name: "Worker".into(),
+    };
+    vm.process_runtime.worker_sets.insert(
+        workers.id,
+        WorkerSetState {
+            supervisor_name: "DynamicSupervisor".into(),
+            worker_process: "Worker".into(),
+            init_callable: builtin("print", vec![]),
+            strategy: WorkerStrategyState {
+                init: 0,
+                min: 0,
+                max: 1,
+                scale: WorkerScaleState::Fix(0),
+            },
+            target: 0,
+            members: vec![pid.id],
+            next_index: 0,
+        },
+    );
+
+    let BuiltinOutcome::Resume(BuiltinContinuation::Runtime(broadcast)) = vm
+        .start_workers_broadcast(&workers, message, Some(1_000_000))
+        .unwrap()
+    else {
+        panic!("broadcast must begin with its continuation")
+    };
+    let caller = broadcast.resume(&mut vm, Ok(Value::Unit)).unwrap();
+    let completion = caller_completion(&caller);
+    // Advance real wrapper/callback contexts without letting the deadline decide
+    // whether admission happened. The callback blocks until explicitly released.
+    for _ in 0..4 {
+        vm.drive_ready_detached_tasks().unwrap();
+    }
+    let (execution_id, sleep_future) = vm
+        .process_runtime
+        .detached_tasks
+        .values()
+        .find_map(|task| match (&task.completion, &task.state) {
+            (
+                process_continuation::DetachedCompletion::Process {
+                    execution_id,
+                    callback: true,
+                },
+                process_continuation::DetachedTaskState::Waiting { future_id, .. },
+            ) => Some((*execution_id, *future_id)),
+            _ => None,
+        })
+        .expect("ReplyLater callback must be started and waiting");
+    let record = vm.process_runtime.executions.get(&execution_id).unwrap();
+    assert_eq!(record.stage, ProcessExecutionStage::Callback);
+    assert!(record.stored);
+    assert_eq!(
+        vm.process_runtime.processes[&pid.id].state_value,
+        Some(Value::Int(int(2)))
+    );
+
+    expire_caller_now(&mut vm, completion);
+    let result = vm.drive_builtin_outcome(caller).unwrap();
+    let Value::List(replies) = &result else {
+        panic!("broadcast must return reply results")
+    };
+    let replies = replies.iter().collect::<Vec<_>>();
+    assert_eq!(replies.len(), 1);
+    let timeout = replies[0].clone();
+    assert_eq!(
+        decode_vm_result(timeout.clone(), "test", "broadcast timeout")
+            .unwrap()
+            .unwrap_err()
+            .kind,
+        "Global::FutureDeadlineExceeded"
+    );
+    assert_eq!(vm.raw_ready_future_value(completion), Some(timeout.clone()));
+    assert!(vm.process_runtime.executions.contains_key(&execution_id));
+    assert!(vm.ready_future_value(sleep_future).is_none());
+    assert_eq!(
+        vm.process_runtime.processes[&pid.id].state_value,
+        Some(Value::Int(int(2)))
+    );
+
+    vm.process_runtime
+        .resolve_future(sleep_future, ok_vm_result(Value::Unit));
+    vm.drive_ready_detached_tasks().unwrap();
+    assert_eq!(vm.raw_ready_future_value(completion), Some(timeout));
+    assert_eq!(
+        vm.process_runtime.processes[&pid.id].state_value,
+        Some(Value::Int(int(2)))
+    );
+    assert!(vm.process_runtime.executions.is_empty());
+    assert!(vm.process_runtime.detached_tasks.is_empty());
+    assert!(vm.process_runtime.reply_table.is_empty());
+    assert!(vm.process_runtime.waiting_table.is_empty());
+    assert!(vm.process_runtime.deadline_queue.is_empty());
+}
+
+#[test]
 fn started_normal_handler_saves_once_after_timed_caller_cancellation() {
     let (vm, pid) = worker_vm();
     let mut vm = vm.with_output_capture();
