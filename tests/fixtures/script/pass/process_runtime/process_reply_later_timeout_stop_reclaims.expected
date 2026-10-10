@@ -1,0 +1,16 @@
+worker init
+FutureDeadlineExceeded
+caller continued
+Ok(1)
+(1, 1)
+WorkersUnavailable
+WorkersUnavailable
+[]
+ProcessStopped
+callback finished
+worker init
+(1, 1)
+value handler
+[Ok(0)]
+ProcessStopped
+Ok(())

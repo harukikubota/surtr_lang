@@ -1,0 +1,13 @@
+worker init
+worker init
+broadcast handler
+peer stop
+worker init
+2
+2
+1
+ProcessStopped
+2
+[Ok(1), Ok(0)]
+ProcessStopped
+Ok(())

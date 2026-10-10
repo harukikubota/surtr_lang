@@ -3,6 +3,124 @@ use std::fs;
 
 use crate::common::{repo_root, surtr_command, unique_temp_dir, write_source};
 
+#[test]
+fn process_stopped_reports_rejected_request_origin_through_callable_routes() {
+    let definitions = r#"
+defgenserver Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+def invoke(pid: PID<Worker>, message: (PID<Worker> -> Result<Int>)) -> Result<Int> {
+  message(pid)
+}
+"#;
+    for (route, origin) in [
+        ("Worker::value(pid)", "Worker::value(pid)"),
+        ("captured = Worker::value()\ncaptured(pid)", "captured(pid)"),
+        ("invoke(pid, Worker::value())", "message(pid)"),
+    ] {
+        let source =
+            format!("{definitions}\npid =? Worker::init(7)\n_ =? Worker::stop(pid)\n{route}\n");
+        assert_error_source_location(&source, origin, "ProcessStopped");
+    }
+    let pool = r#"
+defsupervisor Root {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+defgenserver Pool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<Worker>
+  }
+  @init
+  def init() -> Result<Workers<Worker>> {
+    Root::workers(Worker::init(7), WorkerStrategy::fixed(1))
+  }
+  @call
+  def rejected(workers: Workers<Worker>) -> Result<CallResult<Int, Workers<Worker>>> {
+    lease =? Workers::reserve(workers)
+    _ =? Worker::stop(lease)
+    reply =? Worker::value(lease)
+    Ok(CallResult::Reply(reply, workers))
+  }
+}
+supervisor_init { Root {} Pool {} }
+Pool::rejected()
+"#;
+    assert_error_source_location(
+        &format!("{definitions}{pool}"),
+        "Worker::value(lease)",
+        "ProcessStopped",
+    );
+}
+
+#[test]
+fn workers_unavailable_reports_selection_request_origin() {
+    let source = r#"
+defgenserver Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init() -> Result<Int> { Ok(0) }
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+defsupervisor Root {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+defgenserver EmptyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<Worker>
+  }
+  @init
+  def init() -> Result<Workers<Worker>> {
+    Root::workers(Worker::init(), WorkerStrategy::fixed(0))
+  }
+  @call
+  def reserve(workers: Workers<Worker>) -> Result<CallResult<Unit, Workers<Worker>>> {
+    _ =? Workers::reserve(workers)
+    Ok(CallResult::Reply((), workers))
+  }
+}
+supervisor_init { Root {} EmptyPool {} }
+EmptyPool::reserve()
+"#;
+    assert_error_source_location(source, "Workers::reserve(workers)", "WorkersUnavailable");
+}
+
 /// Compare structured offsets and the human caption without depending on Ariadne's layout.
 fn assert_error_source_location(input: &str, origin: &str, kind: &str) -> Value {
     assert_error_source_location_with_bytecode(input, origin, kind, false)

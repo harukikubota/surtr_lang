@@ -1,0 +1,16 @@
+FutureDeadlineExceeded
+caller:direct
+callee:direct
+Ok(1)
+FutureDeadlineExceeded
+caller:capture
+callee:capture
+Ok(2)
+FutureDeadlineExceeded
+caller:workers
+callee:workers
+Ok([Ok(1)])
+FutureDeadlineExceeded
+caller:lease
+callee:lease
+Ok([Ok(2)])

@@ -1,0 +1,154 @@
+defagent HandlerSignal {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def phase(state: Int) -> Result<Int> { Ok(state) }
+
+  @set
+  def mark(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}
+
+def wait_for_phase(target: Int) -> Result<Unit> {
+  phase =? HandlerSignal::phase()
+  match phase == target {
+    True => Ok(()),
+    False => {
+      _ =? Process::sleep(1ms)
+      wait_for_phase(target)
+    },
+  }
+}
+
+defgenserver SlowWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  defp wait_for_phase(target: Int) -> Result<Unit> {
+    phase =? HandlerSignal::phase()
+    match phase == target {
+      True => Ok(()),
+      False => {
+        _ =? Process::sleep(1ms)
+        wait_for_phase(target)
+      },
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def work(state: Int, label: String) -> Result<CallResult<Int, Int>> {
+    _ =? HandlerSignal::mark(1)
+    _ =? wait_for_phase(2)
+    print("callee:" ++ label)
+    Ok(CallResult::Reply(state + 1, state + 1))
+  }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+defsupervisor SlowSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+def result_kind(result: Result<$Reply>) -> String {
+  match result {
+    Ok(_) => "unexpected success",
+    Err(error) => Error::kind(error),
+  }
+}
+
+defgenserver SlowPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<SlowWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<SlowWorker>> {
+    SlowSup::workers(SlowWorker::init(), WorkerStrategy::fixed(1))
+  }
+
+  @call
+  def via_workers(workers: Workers<SlowWorker>) -> Result<CallResult<TaskHandle<List<Result<Int>>>, Workers<SlowWorker>>> {
+    task = Task::async({|| Ok(Workers::broadcast(workers, SlowWorker::work("workers")))})
+    Ok(CallResult::Reply(task, workers))
+  }
+
+  @call
+  def via_lease(workers: Workers<SlowWorker>) -> Result<CallResult<TaskHandle<Int>, Workers<SlowWorker>>> {
+    lease =? Workers::reserve(workers)
+    task = Task::async({|| SlowWorker::work(lease, "lease")})
+    Ok(CallResult::Reply(task, workers))
+  }
+
+  @call
+  def values(workers: Workers<SlowWorker>) -> Result<CallResult<List<Result<Int>>, Workers<SlowWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, SlowWorker::value()), workers))
+  }
+}
+
+supervisor_init {
+  HandlerSignal {}
+  SlowSup {}
+  SlowPool {}
+}
+
+pid =? SlowSup::spawn(SlowWorker::init())
+_ =? HandlerSignal::mark(0)
+direct = Task::async({|| SlowWorker::work(pid, "direct")})
+_ =? wait_for_phase(1)
+print(result_kind(Task::await(direct) @timeout(1ms)))
+print("caller:direct")
+_ =? HandlerSignal::mark(2)
+_ =? Task::await(direct)
+print(inspect(SlowWorker::value(pid)))
+
+_ =? HandlerSignal::mark(0)
+captured = SlowWorker::work("capture")
+capture = Task::async({|| captured(pid)})
+_ =? wait_for_phase(1)
+print(result_kind(Task::await(capture) @timeout(1ms)))
+print("caller:capture")
+_ =? HandlerSignal::mark(2)
+_ =? Task::await(capture)
+print(inspect(SlowWorker::value(pid)))
+
+_ =? HandlerSignal::mark(0)
+workers =? SlowPool::via_workers()
+_ =? wait_for_phase(1)
+print(result_kind(Task::await(workers) @timeout(1ms)))
+print("caller:workers")
+_ =? HandlerSignal::mark(2)
+_ =? Task::await(workers)
+print(inspect(SlowPool::values()))
+
+_ =? HandlerSignal::mark(0)
+lease =? SlowPool::via_lease()
+_ =? wait_for_phase(1)
+print(result_kind(Task::await(lease) @timeout(1ms)))
+print("caller:lease")
+_ =? HandlerSignal::mark(2)
+_ =? Task::await(lease)
+print(inspect(SlowPool::values()))
