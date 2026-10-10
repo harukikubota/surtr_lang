@@ -561,17 +561,15 @@ impl Checker {
         callable: &str,
         span: &Span,
         arity: Option<usize>,
-        return_shape: diagnostics::CallableReturnShape,
     ) -> TypeError {
         let actual_arity = self
             .function_parts(ty)
             .map(|(params, _)| params.len() as u32);
-        let reason =
-            if actual_arity.is_none() && return_shape == diagnostics::CallableReturnShape::Any {
-                TypeDiagnosticReason::NotCallable
-            } else {
-                TypeDiagnosticReason::CallableShapeMismatch
-            };
+        let reason = if actual_arity.is_none() {
+            TypeDiagnosticReason::NotCallable
+        } else {
+            TypeDiagnosticReason::CallableShapeMismatch
+        };
         TypeError::from_structured(StructuredDiagnostic {
             reason: reason.into(),
             origin: DiagnosticOrigin::Call,
@@ -580,7 +578,6 @@ impl Checker {
                 actual_type: Some(self.diagnostic_ty_name(&self.resolve_ty(ty))),
                 expected_arity: arity.map(|arity| arity as u32),
                 actual_arity,
-                return_shape,
             }),
             primary: self.type_fact(SourceRole::CallTarget, span, ty),
             related: vec![],
@@ -939,7 +936,6 @@ impl Checker {
                 actual_type: None,
                 expected_arity: Some(expected as u32),
                 actual_arity: Some(actual as u32),
-                return_shape: diagnostics::CallableReturnShape::Any,
             }),
             primary: SourceFact::untyped(SourceRole::CallTarget, SourceId(0), span.clone()),
             related: vec![],

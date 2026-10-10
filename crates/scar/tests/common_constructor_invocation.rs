@@ -16,7 +16,6 @@ const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
     constructor_case!(callable_result_context_is_shared_by_helpers_and_operators),
     constructor_case!(arrow_uses_fixed_facet_path_contract),
     constructor_case!(trait_result_conflict_preserves_expected_and_actual_direction),
-    constructor_case!(custom_functor_returns_follow_the_shared_plain_inference_policy),
     constructor_case!(registered_carriers_do_not_supply_constructor_inference_evidence),
     constructor_case!(generic_receiverless_family_helpers_use_expected_return),
     constructor_case!(generic_constructor_trait_wrappers_specialize_all_method_roles),
@@ -116,41 +115,6 @@ fn trait_result_conflict_preserves_expected_and_actual_direction() {
     let data = error.structured.unwrap().data.to_json_value();
     assert_eq!(data["expected_type"], "Int");
     assert_eq!(data["actual_type"], "String");
-}
-
-fn custom_functor_returns_follow_the_shared_plain_inference_policy() {
-    let definitions = r#"
-defenum Boxed<$T> { Box($T) }
-impl Functor for Boxed<$T> {
-    def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
-        match self { Boxed::Box(value) => Boxed::Box(mapper(value)) }
-    }
-}
-"#;
-    for (expression, expected_origin) in [
-        (
-            "Functor::fmap(Boxed::Box(1), {|x: Int| Boxed::Box(x)})",
-            diagnostics::DiagnosticOrigin::TraitCall,
-        ),
-        (
-            "Boxed::Box(1) |*> {|x: Int| Boxed::Box(x)}",
-            diagnostics::DiagnosticOrigin::Operator {
-                operator: "|*>".into(),
-            },
-        ),
-    ] {
-        let annotated = format!("{definitions}\nvalue: Boxed<Boxed<Int>> = {expression}");
-        support::typecheck(support::resolve_with_builtin_prelude(&annotated))
-            .expect("an explicit nested carrier context permits a contextual mapper result");
-        let inferred = format!("{definitions}\nvalue = {expression}");
-        let error = support::typecheck(support::resolve_with_builtin_prelude(&inferred))
-            .expect_err("plain mapper policy is independent of the constructor's name");
-        assert_eq!(
-            error.reason(),
-            Some(diagnostics::TypeDiagnosticReason::CallableShapeMismatch)
-        );
-        assert_eq!(error.structured.unwrap().origin, expected_origin);
-    }
 }
 
 fn registered_carriers_do_not_supply_constructor_inference_evidence() {

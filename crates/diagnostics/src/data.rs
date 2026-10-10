@@ -569,18 +569,12 @@ impl SourceFact {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum CallableReturnShape {
-    Any,
-    Plain,
-}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallableShapeData {
     pub callable: String,
     pub actual_type: Option<String>,
     pub expected_arity: Option<u32>,
     pub actual_arity: Option<u32>,
-    pub return_shape: CallableReturnShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

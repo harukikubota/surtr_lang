@@ -69,7 +69,6 @@ struct PreparedTraitInvocation {
     declared_param_tys: Vec<Ty>,
     constructor_receiver_index: Option<usize>,
     prepared_args: Vec<Option<TypedNode>>,
-    plain_output_parameters: Vec<bool>,
 }
 
 enum TraitInvocationPreparation {
@@ -4181,13 +4180,7 @@ impl Checker {
             Ok(typed)
         } else {
             Err(self
-                .callable_shape_error(
-                    &typed.ty,
-                    op_name,
-                    &typed.span,
-                    Some(1),
-                    diagnostics::CallableReturnShape::Any,
-                )
+                .callable_shape_error(&typed.ty, op_name, &typed.span, Some(1))
                 .with_hint(self.compose_function_value_hint(&typed, op_name)))
         }
     }
@@ -4484,22 +4477,10 @@ impl Checker {
         span: &Span,
     ) -> Result<(Ty, Ty), TypeError> {
         let Some((params, ret)) = self.function_parts(ty) else {
-            return Err(self.callable_shape_error(
-                ty,
-                callable,
-                span,
-                Some(1),
-                diagnostics::CallableReturnShape::Any,
-            ));
+            return Err(self.callable_shape_error(ty, callable, span, Some(1)));
         };
         if params.len() != 1 {
-            return Err(self.callable_shape_error(
-                ty,
-                callable,
-                span,
-                Some(1),
-                diagnostics::CallableReturnShape::Any,
-            ));
+            return Err(self.callable_shape_error(ty, callable, span, Some(1)));
         }
         Ok((self.resolve_ty(&params[0]), self.resolve_ty(ret)))
     }
@@ -5795,13 +5776,6 @@ impl Checker {
                 ret_ty = self.resolve_ty(expected);
             }
         }
-        let plain_output_parameters = param_tys
-            .iter()
-            .map(|param| {
-                matches!((param, &ret_ty), (Ty::Func(_, output), Ty::SelfApp(slots))
-                if slots.contains(output.as_ref()))
-            })
-            .collect::<Vec<_>>();
         if !trait_info.constructor_slots.is_empty()
             && args.len() == param_tys.len()
             && !receiverless_head_input
@@ -6083,7 +6057,6 @@ impl Checker {
                 declared_param_tys,
                 constructor_receiver_index,
                 prepared_args,
-                plain_output_parameters,
             },
         ))
     }
@@ -6242,28 +6215,8 @@ impl Checker {
             self_ty,
             declared_param_tys,
             constructor_receiver_index,
-            plain_output_parameters,
             ..
         } = prepared;
-        if expected_ret_ty.is_none() {
-            for (index, arg) in typed_args.iter().enumerate() {
-                if plain_output_parameters[index] {
-                    if let Some((_, output)) = self.function_parts(&arg.ty) {
-                        self.ensure_plain_map_output(
-                            &output,
-                            &format!("{trait_name}::{method_name}"),
-                            arg,
-                        )
-                        .map_err(|mut error| {
-                            if let Some(diagnostic) = &mut error.structured {
-                                diagnostic.origin = DiagnosticOrigin::TraitCall;
-                            }
-                            error
-                        })?;
-                    }
-                }
-            }
-        }
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
 
         self.check_trait_method_constructor_capabilities(
@@ -6731,40 +6684,6 @@ impl Checker {
             .map(Some)
     }
 
-    pub(super) fn ensure_plain_map_output(
-        &self,
-        output_ty: &Ty,
-        op_name: &str,
-        operand: &TypedNode,
-    ) -> Result<(), TypeError> {
-        let contextual = self.constructor_capability_for_type(output_ty).is_some()
-            || self
-                .trait_key_by_short_name("Functor")
-                .is_some_and(|trait_name| {
-                    matches!(
-                        self.constructor_projection(&trait_name, output_ty),
-                        ConstructorProjectionOutcome::Applicable { .. }
-                    )
-                });
-        if contextual {
-            let mut error = self.callable_shape_error(
-                output_ty,
-                op_name,
-                &operand.span,
-                None,
-                diagnostics::CallableReturnShape::Plain,
-            );
-            error
-                .structured
-                .as_mut()
-                .expect("callable shape is structured")
-                .primary = self.type_fact(SourceRole::RightValue, &operand.span, &operand.ty);
-            Err(error)
-        } else {
-            Ok(())
-        }
-    }
-
     fn flow_operator_trait_call(
         &mut self,
         span: &Span,
@@ -6962,7 +6881,6 @@ impl Checker {
                 callable,
                 &argument.span,
                 Some(inputs.len()),
-                diagnostics::CallableReturnShape::Any,
             ));
         }
         let inputs = inputs.to_vec();
@@ -7586,9 +7504,6 @@ impl Checker {
         let trait_args = match kind {
             CompositionOperator::Plain => vec![left_input, left_output, right_output],
             CompositionOperator::Lifted => {
-                if expected_output.is_none() {
-                    self.ensure_plain_map_output(&right_output, label, &typed_right)?;
-                }
                 let outcome =
                     self.constructor_context_type_for("Functor", &left_output, &right_output);
                 let mapped = self.require_constructor_projection_type(
@@ -11455,7 +11370,6 @@ impl Checker {
                     "function",
                     &typed_func.span,
                     None,
-                    diagnostics::CallableReturnShape::Any,
                 )),
             }
         })();
@@ -12577,7 +12491,6 @@ impl Checker {
                             actual_type: None,
                             expected_arity: None,
                             actual_arity: Some(params.len() as u32),
-                            return_shape: diagnostics::CallableReturnShape::Any,
                         }),
                         primary: SourceFact::untyped(
                             SourceRole::CallTarget,
@@ -13278,13 +13191,7 @@ impl Checker {
             Ty::UserFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
-                return Err(self.callable_shape_error(
-                    other,
-                    "capture",
-                    &typed_target.span,
-                    None,
-                    diagnostics::CallableReturnShape::Any,
-                ));
+                return Err(self.callable_shape_error(other, "capture", &typed_target.span, None));
             }
         };
         if let Some(signature) = &capture_signature {

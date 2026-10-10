@@ -499,17 +499,7 @@ print(to_string(plain(3)))"#,
     );
 }
 
-fn flow_operators_reject_context_mismatch_and_monadic_map_rhs() {
-    assert_compile_error(
-        r#"def lift(x: Int) -> Result<Int> {
-  Ok(x + 1)
-}
-
-value: Result<Int> = Ok(1)
-bad = value |*> lift()"#,
-        "expects a plain function return",
-    );
-
+fn flow_bind_rejects_context_mismatch() {
     assert_compile_error(
         r#"def expand(x: Int) -> List<Int> {
   [x]
@@ -528,25 +518,6 @@ bad = value |>= expand()"#,
 value: Result<Int> = Ok(1)
 bad = value |>= maybe_inc()"#,
         "Type constructor family mismatch:",
-    );
-
-    assert_compile_error(
-        r#"value: Option<Int> = Option::Some(1)
-bad = value |*> {|value| Option::Some(value + 1)}"#,
-        "expects a plain function return",
-    );
-
-    assert_compile_error(
-        r#"def parse(text: String) -> Result<Int> {
-  Ok(1)
-}
-
-def render(x: Int) -> Result<String> {
-  Ok(to_string(x))
-}
-
-pipeline = &parse >* &render"#,
-        "expects a plain function return",
     );
 }
 
@@ -1060,8 +1031,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             compose_accepts_closure_returning_calls_without_parentheses as fn(),
         ),
         (
-            "flow_operators_reject_context_mismatch_and_monadic_map_rhs",
-            flow_operators_reject_context_mismatch_and_monadic_map_rhs as fn(),
+            "flow_bind_rejects_context_mismatch",
+            flow_bind_rejects_context_mismatch as fn(),
         ),
         (
             "result_pipeline_usecase_user_lookup_and_render",

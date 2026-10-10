@@ -26,7 +26,6 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             actual_type: Some("Int".into()),
             expected_arity: Some(1),
             actual_arity: None,
-            return_shape: CallableReturnShape::Any,
         }),
         CallableSignatureMetadataMismatch => {
             DiagnosticData::CallableSignature(CallableSignatureData {

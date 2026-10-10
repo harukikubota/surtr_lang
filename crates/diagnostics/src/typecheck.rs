@@ -562,15 +562,12 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             let actual = value.actual_type.clone().unwrap_or_else(|| format!("closure with {} parameter(s)", value.actual_arity.expect("closure shape carries its arity")));
             match reason {
                 TypeDiagnosticReason::NotCallable => format!("Not a function: {actual}"),
-                TypeDiagnosticReason::CallableShapeMismatch => match value.return_shape {
-                    crate::CallableReturnShape::Plain => format!("{} expects a plain function return, got {actual}", value.callable),
-                    crate::CallableReturnShape::Any => match value.expected_arity {
-                        Some(arity) => format!("{} expects a callable with {arity} argument(s), got {actual}", value.callable),
-                        None => {
-                            let expected = input.related.iter().find(|fact| fact.role == crate::SourceRole::Expected).and_then(|fact| fact.ty.as_deref()).expect("non-callable expected shape carries its type fact");
-                            format!("{} does not match expected type {expected}", value.callable)
-                        }
-                    },
+                TypeDiagnosticReason::CallableShapeMismatch => match value.expected_arity {
+                    Some(arity) => format!("{} expects a callable with {arity} argument(s), got {actual}", value.callable),
+                    None => {
+                        let expected = input.related.iter().find(|fact| fact.role == crate::SourceRole::Expected).and_then(|fact| fact.ty.as_deref()).expect("non-callable expected shape carries its type fact");
+                        format!("{} does not match expected type {expected}", value.callable)
+                    }
                 },
                 _ => unreachable!("callable shape requires callable reason"),
             }

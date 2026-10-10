@@ -17,19 +17,18 @@ mod typecheck;
 mod tests;
 
 pub use data::{
-    ArgumentContractData, ArgumentRelationData, BranchAssertionData, BranchForm,
-    CallableReturnShape, CallableShapeData, CallableSignatureData, CandidateFailureData,
-    CandidateSelectionData, ConstraintSubjectData, DeclarationIdentity, DiagnosticData,
-    DiagnosticOrigin, DiagnosticReason, EnumConstructorConstraintStatus,
-    EnumConstructorTypeArgumentData, ParseDiagnosticData, ParseDiagnosticGuidance,
-    ParseDiagnosticReason, PatternDiagnosticData, PatternFailureContext, PatternFailureData,
-    PatternKind, PolicyData, Remediation, ReplDiagnosticData, ReplDiagnosticReason,
-    ResolveDiagnosticData, ResolveDiagnosticReason, ReturnTypeArgumentData, RuntimeData,
-    RuntimeDiagnosticReason, SafeBindRelationData, SourceFact, SourceRole, StructuredDiagnostic,
-    TraitDependencyContext, TraitDependencyData, TraitDependencyLeafPolicy, TraitDependencyStep,
-    TraitDependencyStepKind, TraitDiagnosticIdentity, TraitDispatchData, TraitMethodConstraintData,
-    TraitMethodTypeListData, TraitObligationData, TypeConstructorCarrierData, TypeDiagnosticReason,
-    TypeListRole, TypePolicy,
+    ArgumentContractData, ArgumentRelationData, BranchAssertionData, BranchForm, CallableShapeData,
+    CallableSignatureData, CandidateFailureData, CandidateSelectionData, ConstraintSubjectData,
+    DeclarationIdentity, DiagnosticData, DiagnosticOrigin, DiagnosticReason,
+    EnumConstructorConstraintStatus, EnumConstructorTypeArgumentData, ParseDiagnosticData,
+    ParseDiagnosticGuidance, ParseDiagnosticReason, PatternDiagnosticData, PatternFailureContext,
+    PatternFailureData, PatternKind, PolicyData, Remediation, ReplDiagnosticData,
+    ReplDiagnosticReason, ResolveDiagnosticData, ResolveDiagnosticReason, ReturnTypeArgumentData,
+    RuntimeData, RuntimeDiagnosticReason, SafeBindRelationData, SourceFact, SourceRole,
+    StructuredDiagnostic, TraitDependencyContext, TraitDependencyData, TraitDependencyLeafPolicy,
+    TraitDependencyStep, TraitDependencyStepKind, TraitDiagnosticIdentity, TraitDispatchData,
+    TraitMethodConstraintData, TraitMethodTypeListData, TraitObligationData,
+    TypeConstructorCarrierData, TypeDiagnosticReason, TypeListRole, TypePolicy,
 };
 pub use debug_render::{render_debug_report, DebugLabel};
 pub use parse::{parse_error_spec, parse_policy_error_spec};

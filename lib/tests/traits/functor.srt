@@ -1,0 +1,71 @@
+import Test;
+
+def lift(value: Int) -> Result<Int> { Ok(value + 1) }
+def parse(text: String) -> Result<Int> { Ok(1) }
+def render(value: Int) -> Result<String> { Ok(to_string(value)) }
+
+defenum Boxed<$T> { Box($T) }
+
+impl Functor for Boxed<$T> {
+  def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
+    match self {
+      Boxed::Box(value) => Boxed::Box(mapper(value)),
+    }
+  }
+}
+
+test("Functor") {
+  describe("mapping") {
+    it("preserves a Result returned by the mapper") {
+      do {
+        value: Result<Int> = Ok(1)
+        mapped = value |*> lift()
+
+        assert_ok_eq(Ok(2), mapped)
+      }
+    }
+
+    it("preserves an Option returned by the mapper") {
+      do {
+        value: Option<Int> = Option::Some(1)
+        mapped = value |*> {|item| Option::Some(item + 1)}
+
+        assert_some_eq(Option::Some(2), mapped)
+      }
+    }
+
+    it("preserves an Option returned inside a List") {
+      do {
+        mapped = [1] |*> {|x: Int| Option::Some(x)}
+
+        assert_eq([Option::Some(1)], mapped)
+      }
+    }
+
+    it("preserves the mapper result in lifted composition") {
+      do {
+        pipeline = &parse >* &render
+
+        assert_ok_eq(Ok("1"), pipeline("input"))
+      }
+    }
+
+    it("preserves nested custom containers with inferred and annotated results") {
+      do {
+        annotated_helper: Boxed<Boxed<Int>> = Functor::fmap(Boxed::Box(1), {|x: Int| Boxed::Box(x)})
+        inferred_helper = Functor::fmap(Boxed::Box(1), {|x: Int| Boxed::Box(x)})
+        annotated_operator: Boxed<Boxed<Int>> = Boxed::Box(1) |*> {|x: Int| Boxed::Box(x)}
+        inferred_operator = Boxed::Box(1) |*> {|x: Int| Boxed::Box(x)}
+        Boxed::Box(Boxed::Box(first)) <- Ok(annotated_helper)
+        Boxed::Box(Boxed::Box(second)) <- Ok(inferred_helper)
+        Boxed::Box(Boxed::Box(third)) <- Ok(annotated_operator)
+        Boxed::Box(Boxed::Box(fourth)) <- Ok(inferred_operator)
+
+        assert_eq(1, first)
+        assert_eq(1, second)
+        assert_eq(1, third)
+        assert_eq(1, fourth)
+      }
+    }
+  }
+}
