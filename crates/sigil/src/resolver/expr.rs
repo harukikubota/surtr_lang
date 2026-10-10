@@ -4738,8 +4738,24 @@ impl Resolver {
                     symbol_info,
                     span: span.clone(),
                 };
+                // Only the selected Record declaration admits shorthand. Keep the
+                // source expression shape until this point so qualified paths and
+                // other expressions cannot be mistaken for bare variables.
+                let named_record = self
+                    .declaration_uid_kinds
+                    .get(&uid)
+                    .is_some_and(|kind| matches!(kind, DeclarationKind::Record))
+                    && args
+                        .iter()
+                        .any(|arg| matches!(arg, RecordLitArg::Named(..)));
                 let resolved_args = args
                     .into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(Ast::Var(span, name)) if named_record => {
+                            RecordLitArg::Named(name.clone(), Ast::Var(span, name))
+                        }
+                        other => other,
+                    })
                     .map(|arg| match arg {
                         spire::ast::RecordLitArg::Positional(e) => {
                             Ok(ResolvedRecordLitArg::Positional(self.resolve_node(e)?))

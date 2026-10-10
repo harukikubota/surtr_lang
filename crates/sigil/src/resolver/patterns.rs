@@ -439,22 +439,32 @@ impl Resolver {
                     head_kind,
                     DeclarationKind::Record | DeclarationKind::Deferror
                 ) {
+                    let named_record = matches!(head_kind, DeclarationKind::Record)
+                        && inners
+                            .iter()
+                            .any(|argument| argument.named_pattern.is_some());
                     let mut fields = Vec::with_capacity(inners.len());
                     for argument in inners {
                         let (name, pattern) = if let Some((name, pattern)) = argument.named_pattern
                         {
                             (Some(name), pattern)
                         } else {
-                            (
-                                None,
-                                argument.pattern.ok_or_else(|| {
-                                    deferred_pattern_parse_error(
-                                        argument.pattern_error,
-                                        "Record field argument must be a Pattern",
-                                        argument.span,
-                                    )
-                                })?,
-                            )
+                            let pattern = argument.pattern.ok_or_else(|| {
+                                deferred_pattern_parse_error(
+                                    argument.pattern_error,
+                                    "Record field argument must be a Pattern",
+                                    argument.span,
+                                )
+                            })?;
+                            let name = if named_record {
+                                match pattern.as_ref() {
+                                    AstPattern::Var(_, name) => Some(name.clone()),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+                            (name, pattern)
                         };
                         let pattern = self.select_pattern_argument_roles(*pattern)?;
                         fields.push((name, self.resolve_pattern_inner(pattern, seen, outer)?));

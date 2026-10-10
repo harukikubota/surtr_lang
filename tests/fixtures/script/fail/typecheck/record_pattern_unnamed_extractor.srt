@@ -1,0 +1,7 @@
+defrecord User(name: String, age: Int)
+user = User("Ada", 37)
+probe = *{|value: Int| MatchResult::Ok(value)}
+print(match user {
+  User(name: selected_name, probe(_)) => 1,
+  _ => 0,
+})

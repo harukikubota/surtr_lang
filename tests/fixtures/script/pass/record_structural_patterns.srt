@@ -1,4 +1,6 @@
 defrecord User(name: String, age: Int)
+defrecord Envelope(user: User, revision: Int)
+defrecord Pair(first: Int, second: Int)
 namespace Auth {
   defrecord User(name: String)
 }
@@ -7,10 +9,15 @@ user = User("Ada", 37)
 User(name, age) = user
 User(age: reordered_age, name: reordered_name) = user
 User((typed_name: String), typed_age) = user
+age = 999
+User(name: shorthand_name, age) = user
+name = "outer"
+User(age: shorthand_age, name) = user
+print(inspect((shorthand_name, age, name, shorthand_age)))
 
 print(inspect((name, age, reordered_name, reordered_age, typed_name, typed_age)))
 print(inspect(match user {
-  User(name: "Bob", age: _) => 0,
+  User(name: "Bob", age) => age,
   User(age: years, name: _) => years,
 }))
 
@@ -24,3 +31,12 @@ print(inspect(match user {
   User(age: age_probe(_), name: name_probe(_)) => 1,
   _ => 0,
 }))
+
+# A nested keyword does not change the outer positional classification.
+envelope = Envelope(user, 9)
+Envelope(User(age: nested_age, name), revision) = envelope
+print(inspect((name, nested_age, revision)))
+
+# With no keyword, binding names do not select fields.
+Pair(second, first) = Pair(1, 2)
+print(inspect((first, second)))

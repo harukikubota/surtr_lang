@@ -113,7 +113,7 @@ impl User {
 
 - `User { name }` は `User { name: name }` の sugar
 - shorthand と明示 field は混在可能
-- shorthand は struct literal 専用で、`User(...)` の named argument や pattern には広がらない
+- Struct の shorthand は struct literal 専用で、Struct の `User(...)` / `User::new(...)` の named argument や Pattern には広がらない。Record の名前指定内の省略記法は [Record](./record.md) を参照
 
 `inspect(...)` は構造体の全フィールドを定義順に表示します。private フィールドも省略せず、呼び出し側のスコープや `Show` の有無によって表示を変えません。
 

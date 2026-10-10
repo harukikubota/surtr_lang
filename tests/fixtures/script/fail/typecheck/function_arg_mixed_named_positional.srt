@@ -1,3 +1,4 @@
 def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
 
-value = add3(1, y: 2, z: 3)
+x = 1
+value = add3(x, y: 2, z: 3)

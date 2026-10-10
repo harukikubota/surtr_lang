@@ -197,9 +197,12 @@ defrecord User(name: String, age: Int)
 user = User("Ada", 20)
 User(name, age) = user
 User(age: selected_age, name: selected_name) = user
+User(name: selected_name, age) = user  # age: age の省略記法
 ```
 
-Record は全 field を位置順、または field 名で分解します。名前指定の順序は自由ですが、照合・束縛は宣言順です。重複・未知・不足 field、位置指定との混在、field 名 shorthand は拒否します。`User(name, age)` は位置指定の束縛です。
+Record は全 field を位置順、または field 名で分解します。名前指定がなければ位置指定で、`User(name, age)` は宣言順に束縛します。名前指定が一つ以上あれば、裸の束縛名 `age` は `age: age` の省略記法になります。右側の `age` は新しい束縛です。名前指定の記述順は自由ですが、照合・束縛は宣言順です。入れ子の名前指定は外側の分類に影響しません。
+
+名前指定の中で literal、`_`、型注釈付き Pattern、入れ子の Pattern、Extractor を使うときは field 名が必要です。重複・未知・不足 field、子 Pattern の型不一致、束縛名の重複は拒否します。
 
 Record の外枠は必ず分解できます。子も変数や wildcard など必ず成功する Pattern なら、通常の `=` を使えます。literal や Extractor など失敗し得る子がある場合は、`match` などで結果を扱います。位置指定の子に型注釈を付けるときは `User((name: String), age)` のように括ります。
 

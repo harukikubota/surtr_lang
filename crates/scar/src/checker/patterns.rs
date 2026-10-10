@@ -40,18 +40,16 @@ impl Checker {
                 id.span.clone(),
             ));
         }
-        let named = fields.iter().all(|(name, _)| name.is_some());
-        let positional = fields.iter().all(|(name, _)| name.is_none());
-        if !named && !positional {
-            return Err(TypeError::new(
-                "Record pattern cannot mix named and positional fields",
-                id.span.clone(),
-            ));
-        }
+        let named = fields.iter().any(|(name, _)| name.is_some());
         if named {
             let mut seen = std::collections::HashSet::new();
-            for (name, _) in fields {
-                let name = name.as_ref().expect("named mode checked above");
+            for (name, pattern) in fields {
+                let Some(name) = name.as_ref() else {
+                    return Err(TypeError::new(
+                        "Named Record pattern fields require an explicit field name or a bare binding shorthand",
+                        Self::resolved_pattern_span(pattern)?,
+                    ));
+                };
                 if !seen.insert(name) {
                     return Err(TypeError::new(
                         format!("Duplicate Record pattern field `{name}`"),

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Pattern type mismatch: expected Int, got String
