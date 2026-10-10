@@ -49,13 +49,6 @@
 - 次の作業: metadataやqueueの件数、future数、Builderの長さ、chunk数を分け、実chunk全体の時間とピークメモリを測る。停止済みPIDの回収契約は別に確定する。
 - 受け入れ条件: 失敗したchunkの進捗を破棄して保存位置から再開し、その位置より前のcallbackを呼び直さず、復帰先へ一度だけ結果を渡す。実行中に変更する可変Builderは保存状態から独立させる。失敗したchunkの外部I/Oは巻き戻さない。
 
-### RT-6 追加の List 最適化
-
-- 現状: `reverse` / `append` / `concat` の追加最適化は未着手。各 bind は完成した List を返すため、多段の kM が残る。
-- 未確定点: 個別操作の Builder 化、pipeline の融合、中間 List の省略のうち、どれに効果があるか。一般の nested do は B / E で評価し、常に E = kM と仮定しない。
-- 次の作業: RT-3 の測定を基に対象を選び、generic do と通常の Monad dispatch を基準に評価順・失敗・待機を比較する仕様を作る。
-- 受け入れ条件: 副作用を持つ mapper、空結果、部分 pattern、SafeBind、nested do で値・順序・呼出し回数・失敗後の未評価が一致する。未完成 Builder を公開型、process payload、完成結果へ出さない。
-
 ## 今後の検証と文書更新
 
 着手する項目の契約を直接検証するテストから始め、影響範囲に応じて
