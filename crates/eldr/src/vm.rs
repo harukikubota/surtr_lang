@@ -12,8 +12,8 @@ use sindr::ir::{
     validate_type_registry_append_entries, Bytecode, BytecodeChunk, CallableTemplate,
     CallableTemplateArg, CallableTemplateComposeFlavor, CallableTemplateDirectTarget,
     CallableTemplateKind, Constant, DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget,
-    RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable,
-    RuntimeSupervisorPolicy, SourceMap,
+    RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
+    RuntimeProcessSpecTable, RuntimeSupervisorPolicy, SourceMap,
 };
 use sindr::names::{compiler_global_error_kind, IMPLICIT_ROOT_NAMESPACE_PREFIX};
 use sindr::primitives::{int, SurtrInt, ToPrimitive};
@@ -2117,11 +2117,12 @@ impl VM {
                     override_entry.process_name.clone(),
                     override_entry.policy.clone(),
                 );
-            if override_entry
-                .process_name
-                .rsplit("::")
-                .next()
-                .is_some_and(|name| name == "DynamicSupervisor")
+            if override_entry.process_name == "Global::DynamicSupervisor"
+                && self
+                    .process_runtime
+                    .specs_by_name
+                    .get(&override_entry.process_name)
+                    .is_some_and(|spec| spec.kind == RuntimeProcessKind::DynamicSupervisor)
             {
                 self.process_runtime
                     .root_supervisor
@@ -2340,24 +2341,13 @@ impl VM {
         &self,
         supervisor_name: &str,
     ) -> Result<RuntimeSupervisorPolicy, RuntimeError> {
-        let supervisor_short_name = supervisor_name
-            .rsplit("::")
-            .next()
-            .unwrap_or(supervisor_name);
         if let Some(override_entry) = self
             .bytecode
             .runtime_boot_plan
             .supervisor_overrides
             .iter()
             .rev()
-            .find(|entry| {
-                entry.process_name == supervisor_name
-                    || entry
-                        .process_name
-                        .rsplit("::")
-                        .next()
-                        .is_some_and(|name| name == supervisor_short_name)
-            })
+            .find(|entry| entry.process_name == supervisor_name)
         {
             return Ok(override_entry.policy.clone());
         }
@@ -6720,11 +6710,8 @@ impl ProcessRuntime {
             })
             .collect();
         for spec in &spec_table.entries {
-            if spec
-                .type_name
-                .rsplit("::")
-                .next()
-                .is_some_and(|name| name == "DynamicSupervisor")
+            if spec.type_name == "Global::DynamicSupervisor"
+                && spec.kind == RuntimeProcessKind::DynamicSupervisor
             {
                 if let Some(policy) = spec.supervision.policy.clone() {
                     effective_supervisors.insert("DynamicSupervisor".into(), policy);
@@ -8471,16 +8458,96 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_supervisor_policy_remains_available_without_singleton_boot() {
+    fn supervisor_policy_uses_canonical_names() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![supervisor_spec(0, "Global::DynamicSupervisor")],
+            entries: vec![
+                supervisor_spec(0, "AppA::Sup"),
+                supervisor_spec(1, "AppB::Sup"),
+            ],
         };
         bytecode
             .runtime_boot_plan
             .supervisor_overrides
             .push(RuntimeSupervisorOverrideEntry {
-                process_name: "DynamicSupervisor".into(),
+                process_name: "AppA::Sup".into(),
+                policy: RuntimeSupervisorPolicy {
+                    max_restarts: 77,
+                    ..allow_adopt_policy()
+                },
+            });
+        let vm = VM::new(bytecode);
+        assert_eq!(
+            vm.effective_supervisor_policy("AppA::Sup")
+                .unwrap()
+                .max_restarts,
+            77
+        );
+        assert_eq!(
+            vm.effective_supervisor_policy("AppB::Sup")
+                .unwrap()
+                .max_restarts,
+            allow_adopt_policy().max_restarts
+        );
+        assert!(vm.effective_supervisor_policy("Unknown::Sup").is_err());
+    }
+
+    #[test]
+    fn dynamic_supervisor_policy_ignores_same_short_name() {
+        let mut builtin = supervisor_spec(0, "Global::DynamicSupervisor");
+        builtin.kind = RuntimeProcessKind::DynamicSupervisor;
+        let mut unrelated = supervisor_spec(1, "App::DynamicSupervisor");
+        unrelated.supervision.policy.as_mut().unwrap().max_restarts = 99;
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![builtin, unrelated],
+        };
+        let mut vm = VM::new(bytecode);
+        assert_eq!(
+            vm.effective_supervisor_policy("DynamicSupervisor")
+                .unwrap()
+                .max_restarts,
+            allow_adopt_policy().max_restarts
+        );
+        vm.bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: "App::DynamicSupervisor".into(),
+                policy: RuntimeSupervisorPolicy {
+                    max_restarts: 88,
+                    ..allow_adopt_policy()
+                },
+            });
+        vm.apply_runtime_supervisor_overrides();
+        assert_eq!(
+            vm.effective_supervisor_policy("DynamicSupervisor")
+                .unwrap()
+                .max_restarts,
+            allow_adopt_policy().max_restarts
+        );
+        assert_eq!(
+            vm.effective_supervisor_policy("App::DynamicSupervisor")
+                .unwrap()
+                .max_restarts,
+            88
+        );
+    }
+
+    #[test]
+    fn dynamic_supervisor_policy_remains_available_without_singleton_boot() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                kind: RuntimeProcessKind::DynamicSupervisor,
+                ..supervisor_spec(0, "Global::DynamicSupervisor")
+            }],
+        };
+        bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: "Global::DynamicSupervisor".into(),
                 policy: RuntimeSupervisorPolicy {
                     max_restarts: 33,
                     ..allow_adopt_policy()

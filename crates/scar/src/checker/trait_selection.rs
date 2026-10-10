@@ -476,7 +476,10 @@ impl Checker {
                     .map(|ty| recurse(ty))
                     .collect::<Result<_, _>>()?,
             ),
-            Ty::Pid(name) => CanonicalTy::new(CanonicalTypeHead::Pid(name.clone()), vec![]),
+            Ty::Pid(marker) => CanonicalTy::new(CanonicalTypeHead::Pid, vec![recurse(marker)?]),
+            Ty::ProcessMarker(name) => {
+                CanonicalTy::new(CanonicalTypeHead::ProcessMarker(name.clone()), vec![])
+            }
             Ty::Enum(name, args) => CanonicalTy::new(
                 self.canonical_nominal_head(name)?,
                 args.iter().map(recurse).collect::<Result<_, _>>()?,
@@ -607,6 +610,28 @@ impl Checker {
             }
         }
         match (ast, resolved) {
+            (AstTy::Generic(_, _, args), Ty::Pid(marker)) if args.len() == 1 => {
+                Ok(CanonicalTy::new(
+                    CanonicalTypeHead::Pid,
+                    vec![self.canonical_ast_type(&args[0], marker, raw, environment)?],
+                ))
+            }
+            (AstTy::Generic(_, name, args), Ty::Enum(owner, resolved_args))
+                if matches!(Self::surface_name(name), "Workers" | "WorkerLease")
+                    && args.len() == 1 =>
+            {
+                let [Ty::Pid(marker)] = resolved_args.as_slice() else {
+                    return Err(TypeError::new(
+                        "Invalid worker handle marker type",
+                        Self::ast_ty_span(ast).clone(),
+                    ));
+                };
+                let inner = self.canonical_ast_type(&args[0], marker, raw, environment)?;
+                Ok(CanonicalTy::new(
+                    self.canonical_nominal_head(owner)?,
+                    vec![CanonicalTy::new(CanonicalTypeHead::Pid, vec![inner])],
+                ))
+            }
             (
                 AstTy::Generic(_, _, args),
                 Ty::Struct(owner, _) | Ty::Record(owner, _) | Ty::Enum(owner, _),
@@ -1104,9 +1129,8 @@ impl Checker {
                 CanonicalTypeHead::Facet(kind) => {
                     return format!("Facet<{}, {}>", kind.as_str(), args.join(", "));
                 }
-                CanonicalTypeHead::Pid(name) => {
-                    return format!("PID<{}>", Checker::surface_name(name));
-                }
+                CanonicalTypeHead::Pid => "PID".into(),
+                CanonicalTypeHead::ProcessMarker(name) => Checker::surface_name(name).to_string(),
                 CanonicalTypeHead::Hole => return "_".into(),
             };
             if args.is_empty() {
@@ -1229,7 +1253,6 @@ impl CanonicalTraitImplPatternKey {
 #[derive(Default)]
 struct CanonicalUnifier {
     bindings: HashMap<u32, Rc<CanonicalTy>>,
-    allow_ignored_callable_inputs: bool,
     rigid_variables: HashSet<u32>,
 }
 // A bound root stays alive while recursive comparisons add new bindings.
@@ -1302,28 +1325,10 @@ impl CanonicalUnifier {
         if left.head != right.head || left.arguments.len() != right.arguments.len() {
             return false;
         }
-        // Preserve the input contract at entry to this function comparison.
-        // An earlier input may bind a variable to Hole, but that must not make
-        // a later input ignored retroactively.
-        let ignored_inputs =
-            if self.allow_ignored_callable_inputs && left.head == CanonicalTypeHead::Function {
-                right
-                    .arguments
-                    .iter()
-                    .enumerate()
-                    .map(|(ordinal, ty)| {
-                        ordinal + 1 < right.arguments.len()
-                            && self.resolve_root(ty).head == CanonicalTypeHead::Hole
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
         left.arguments
             .iter()
             .zip(&right.arguments)
-            .enumerate()
-            .all(|(ordinal, (a, b))| ignored_inputs.get(ordinal) == Some(&true) || self.unify(a, b))
+            .all(|(a, b)| self.unify(a, b))
     }
 
     /// Compare a constructor witness with an observed application.  `Hole`
@@ -2280,7 +2285,10 @@ impl Checker {
                 Box::new(args[2].clone()),
                 Box::new(args[3].clone()),
             ),
-            CanonicalTypeHead::Pid(name) => Ty::Pid(name.clone()),
+            CanonicalTypeHead::Pid if args.len() == 1 => Ty::Pid(Box::new(args[0].clone())),
+            CanonicalTypeHead::ProcessMarker(name) if args.is_empty() => {
+                Ty::ProcessMarker(name.clone())
+            }
             CanonicalTypeHead::Hole => Ty::Hole,
             _ => return Err(invalid()),
         })
@@ -2914,7 +2922,6 @@ impl Checker {
             let mut fresh = HashMap::new();
             let mut unifier = CanonicalUnifier {
                 rigid_variables: self.rigid_tyvars.clone(),
-                allow_ignored_callable_inputs: true,
                 ..Default::default()
             };
             let head_args = contract
@@ -3417,7 +3424,6 @@ impl Checker {
             let mut fresh = HashMap::new();
             let mut unifier = CanonicalUnifier {
                 rigid_variables: self.rigid_tyvars.clone(),
-                allow_ignored_callable_inputs: true,
                 ..Default::default()
             };
             let args = info

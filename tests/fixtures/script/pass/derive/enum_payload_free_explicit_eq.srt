@@ -1,0 +1,21 @@
+@derive Eq
+defenum DerivedChoice { One, Two }
+
+defenum EquivalentChoice { One, Two }
+impl Eq for EquivalentChoice {
+  def eq(self: Self, rhs: Self) -> Boolean { True }
+}
+
+def same(lhs: $T, rhs: $T) -> Boolean where $T: Eq { lhs == rhs }
+
+print(inspect(DerivedChoice::One == DerivedChoice::One))
+print(inspect(DerivedChoice::One == DerivedChoice::Two))
+print(inspect(DerivedChoice::One != DerivedChoice::Two))
+print(inspect(Eq::eq(DerivedChoice::One, DerivedChoice::Two)))
+print(inspect(Eq::neq(DerivedChoice::One, DerivedChoice::Two)))
+print(inspect(same(DerivedChoice::One, DerivedChoice::Two)))
+print(inspect(EquivalentChoice::One == EquivalentChoice::Two))
+print(inspect(EquivalentChoice::One != EquivalentChoice::Two))
+print(inspect(Eq::eq(EquivalentChoice::One, EquivalentChoice::Two)))
+print(inspect(Eq::neq(EquivalentChoice::One, EquivalentChoice::Two)))
+print(inspect(same(EquivalentChoice::One, EquivalentChoice::Two)))

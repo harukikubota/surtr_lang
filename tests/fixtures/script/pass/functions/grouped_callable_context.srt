@@ -1,21 +1,21 @@
-def make(label: String, value: Int) -> (_ -> Int) {
+def make(label: String, value: Int) -> (Int -> Int) {
   print(label)
-  always(value)
+  {|input: Int| value}
 }
 
-def make_list(label: String) -> (_ -> List<Int>) {
+def make_list(label: String) -> (Int -> List<Int>) {
   print(label)
-  always([20])
+  {|input: Int| [20]}
 }
 
-def make_option(label: String) -> (_ -> Option<Int>) {
+def make_option(label: String) -> (Int -> Option<Int>) {
   print(label)
-  always(Option::Some(30))
+  {|input: Int| Option::Some(30)}
 }
 
-def make_result(label: String) -> (_ -> Result<Int>) {
+def make_result(label: String) -> (Int -> Result<Int>) {
   print(label)
-  always(Ok(40))
+  {|input: Int| Ok(40)}
 }
 
 def input() -> Int {
@@ -24,7 +24,7 @@ def input() -> Int {
 }
 
 def consume(mapper: (Int -> Int)) -> Int { mapper(1) }
-def returned() -> (Int -> Int) { ((always(50))) }
+def returned() -> (Int -> Int) { (({|input: Int| 50})) }
 def generic::<$A>() -> ($A -> $A) { {|value| value} }
 def identity(value: Int) -> Int { value }
 
@@ -41,8 +41,8 @@ print(inspect(Ok(1) |>= (make_result("result"))))
 failure: Result<Int> = Err(NoneError)
 print(inspect(is_match(failure |>= (make_result("failed result")), Err(_))))
 
-print(inspect(consume((always(50)))))
-annotated: (Int -> Int) = ((always(50)))
+print(inspect(consume(({|input: Int| 50}))))
+annotated: (Int -> Int) = (({|input: Int| 50}))
 print(inspect(annotated(1)))
 returned_mapper = returned()
 print(inspect(returned_mapper(1)))
@@ -51,8 +51,8 @@ captured_mapper: (Int -> Int) = ((&identity))
 print(inspect(generic_mapper(60)))
 print(inspect(captured_mapper(70)))
 
-left: (Int -> Int) = if(True, (always(80)), (&identity))
-right: (Int -> Int) = if(False, (&identity), (always(90)))
+left: (Int -> Int) = if(True, ({|input: Int| 80}), (&identity))
+right: (Int -> Int) = if(False, (&identity), ({|input: Int| 90}))
 print(inspect(left(1)))
 print(inspect(right(1)))
 

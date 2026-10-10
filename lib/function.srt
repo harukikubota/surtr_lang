@@ -54,8 +54,10 @@ defmod Function {
   @doc """
   Return a callable that ignores its input and always yields `value`.
 
-  This is a small pure helper for constant-like closure behavior in pipelines
-  and composition.
+  The returned callable has input type `_` and accepts any value in a direct
+  call. It does not satisfy a concrete callable input type such as `(Int -> Int)`.
+  Use an explicitly typed closure such as `{|input: Int| value}` when a mapper
+  or another higher-order argument requires an `Int` input.
 
   ## REPL
   xldr(1)> keep_one = always(1)

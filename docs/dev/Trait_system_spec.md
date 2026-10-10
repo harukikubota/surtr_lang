@@ -79,7 +79,7 @@
 | `@autoimport` | Trait helper aliasをfile-local preludeへ入れるTrait単位のopt-in |
 | `@derive` | 対応Trait implをresolverが生成する型宣言側annotator |
 
-関数型の入力にある`_`は、関数がその入力を使わないことを表す。期待関数型を与えて式を検査するときも、この入力契約を維持して返り型を推論する。groupingは期待型を内側へ伝え、通常引数・注釈・返り値・分岐とパイプで同じ規則を使う。単項関数値の実際の入力が`_`の場合に限り期待入力を受け入れ、返り型は通常通り照合する。使用する入力型や引数数は従来通り検査する。trait signatureの一致判定、集約型の内部、関数の返り型内へこの適合規則を広げず、`Hole`を一般の型比較のwildcardにしない。既知の期待型を持つ分岐では各枝を期待型へ照合し、枝の順序で結果を変えない。
+関数型の入力にある`_`は、関数がその入力を使わないことを表す。`Hole` は通常の型関係では同じ `Hole` とだけ一致し、実入力が `(_ -> Int)` の関数値を `(Int -> Int)` に適合させない。通常引数・binding・return・分岐・container は同じ型関係を使い、入力・出力・引数数を照合する。grouping は期待型を内側へ伝えるが、この型関係を変えない。既知の期待型を持つ分岐では各枝を期待型へ照合し、枝の順序で結果を変えない。ignored-input callable の直接呼出しでは入力値を観測せず、呼出し先の入力契約に従って値を受け入れる。これは関数値同士の型適合とは別の呼出し規則である。
 
 `Type`は型形状指定のcompiler-special surface name、`TypeConstructor`はcompiler内部のkind/identity分類、
 `TypeCtorTrait`は`Self: Type<...>`を持つTraitの分類であり、相互に同義ではない。
@@ -508,9 +508,9 @@ ReturnTypeArguments、expected return、captured impl-target argumentsを含め�
 | parent coverage | 全称 | child の全 instance を 1 parent impl が cover し、parent `where` を証明できる |
 
 `CanonicalUnifier` の構造比較は変数の束縛先だけをたどり、型部分木を各深さで再コピーしない。
-所有する解決済み型は束縛の追加時と結果の取り出し時に構築する。ignored callable input の判定は、
-その関数型の比較開始時の束縛に基づく。前の入力の照合で変数が `Hole` になっても、後続の入力を
-遡って ignored input にはしない。
+所有する解決済み型は束縛の追加時と結果の取り出し時に構築する。callable の候補適合も入力・出力を
+構造的に照合し、入力の `Hole` を wildcard として扱わない。前の入力の照合で変数が `Hole` に
+束縛された場合も、後続の入力は同じ型 identity として照合する。
 
 ### 3.1 Coherence
 
@@ -708,11 +708,11 @@ well-formedness診断は少なくとも次のmessage、label、helpを構築で�
 
 `@derive` による生成処理は型宣言の所有者に由来するため、private フィールドを処理できる。Scar は生成由来情報を用いてこの権限を保持し、手書きのトレイト実装へは付与しない。トレイト名による可視性の特例は設けない。
 
-標準 `Eq` の compiler-generated な enum 比較は payload のない variant に限る。payload を持つ enum の値比較には、各 payload の `Eq` を要求する明示 impl または `@derive Eq` を使う。variant tag だけの比較を payload を持つ値の Eq として公開しない。
+通常の enum の `Eq` は、payload の有無によらず明示 impl または `@derive Eq` で提供する。enum 宣言だけで compiler が証明や dispatch を補うことはない。`@derive Eq` は各 payload の `Eq` を要求し、variant tag だけの比較を payload を持つ値の Eq として公開しない。
 
 Trait impl target の権限は inherent impl の可否と独立して Sindr の型ポリシーに置く。Error・関数型・Facet・構文／プロトコル用 marker・未確定の opaque/handle 型はユーザ impl を拒否する。PID は singleton / worker に compiler-owned Eq だけを提供し、ユーザ impl と他の Trait capability を拒否する。通常型と Tuple / List / HashMap / Result は通常の coherence 規則に従う。
 
-Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が提供する Eq は信頼済みの標準 `Eq` に限り、payload のない enum と有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。
+Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が暗黙に提供する Eq は信頼済みの標準 `Eq` に限り、有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。
 
 標準 Eq の実装主体は各 `lib/types/*.srt` とする。Unit、Tuple 2〜8、List、HashMap、Result は通常の impl と要素条件を使う。Result の `Ok` 同士は成功値の Eq、`Ok` / `Err` は不一致、`Err` 同士は具象 Error の先頭 kind の一致で判定し、message・cause・場所・診断情報を含めない。Error 自体の Eq / Show / Convert は禁止し、観測は `inspect` / `eprint` と Error の公開 helper を使う。`Test::assert_eq` は Eq obligation と dispatch のみで合否を決め、表示は失敗文の生成に限る。
 
@@ -840,6 +840,6 @@ generalization である。
 
 `/` は `Div::safe_div`、`%` は `Mod::safe_mod` の通常の operator dispatch に接続する。数値型専用 dispatch、旧 concrete owner helper 宣言、互換 wrapper は持たない。ユーザー実装と bounded generic は通常のトレイト規則に従う。両引数と成功型は同じ `Self` であり、暗黙の数値変換や Result unwrap は行わない。
 
-トレイトメソッドは `(Self, Self) -> Result<Self>` と宣言し、エラー位置を固定しない。実装の `Result<Self, E>` は値の型として `Result<Self>` と照合し、`E` は既存のエラー契約 metadata として保持する。トレイト定義の省略を実装のエラー指定禁止として扱わない。ユーザー実装は具体的な `deferror`、抽象 `Error`、エラー位置の省略を指定できる。引数・成功型・通常の impl 制約の照合は緩めない。
+トレイトメソッドは `(Self, Self) -> Result<Self>` と宣言し、エラー位置を指定しない。実装の `Result<Self, E>` は値の型として `Result<Self>` と照合し、`E` はドキュメント用の metadata として保持する。指定したエラー名の存在と記述位置は検査するが、返却 kind の静的制限・網羅検査は行わず、別の kind を返すことだけでは拒否しない。トレイト定義の省略を実装のエラー指定禁止として扱わない。ユーザー実装は具体的な `deferror`、抽象 `Error`、エラー位置の省略を指定できる。引数・成功型・通常の impl 制約の照合は緩めない。
 
-標準実装は `Div for Int`、`Div for Float`、`Mod for Int` で、エラー契約は `ZeroDivisionError` に固定する。標準の `Mod for Float` は提供しない。runtime の整数除算・符号・Float finite-only 制約は既存 builtin の契約を維持する。Facet の `->` は固定構文であり、このユーザー拡張経路に接続しない。
+標準実装は `Div for Int`、`Div for Float`、`Mod for Int` で、ドキュメント用のエラー名には `ZeroDivisionError` を指定する。ゼロ除算時は `Err(ZeroDivisionError)` を返す。標準の `Mod for Float` は提供しない。runtime の整数除算・符号・Float finite-only 制約は既存 builtin の契約を維持する。Facet の `->` は固定構文であり、このユーザー拡張経路に接続しない。

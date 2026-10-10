@@ -6341,6 +6341,45 @@ fn test_defagent_parses_as_dedicated_process_ast_node() {
 }
 
 #[test]
+fn test_process_meta_requires_explicit_init_policy() {
+    for (kind, handler) in [
+        (
+            "defagent",
+            "@get def read(state: Int) -> Result<Int> { Ok(state) }",
+        ),
+        (
+            "defgenserver",
+            "@call def read(state: Int) -> Result<CallResult<Int, Int>> { Ok(Reply(state, state)) }",
+        ),
+    ] {
+        for instance in ["Singleton", "Worker"] {
+            let source = format!(
+                "{kind} Counter {{\n  meta {{\n    instance: {instance}\n    state: Int\n  }}\n  @init def init() -> Result<Int> {{ Ok(0) }}\n  {handler}\n}}"
+            );
+            let error = parse_with_context(&source, ParserContext::module(1, None))
+                .expect_err("process meta must declare init_policy");
+            assert_eq!(error.message(), "meta requires init_policy", "{source}");
+            assert_eq!(
+                error.reason(),
+                crate::error::ParseErrorReason::DeclarationSyntax
+            );
+            assert_eq!(
+                error.guidance(),
+                Some(&crate::error::ParseErrorGuidance::MissingMetaInitPolicy)
+            );
+            assert_eq!(
+                error.span(),
+                &Span {
+                    start: source.find("meta").unwrap(),
+                    end: source.find("meta {").unwrap() + "meta {".len(),
+                },
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_defagent_accepts_standby_init_policy() {
     let ast = parse_with_context(
         r#"defagent Counter {

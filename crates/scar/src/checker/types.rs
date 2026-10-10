@@ -512,7 +512,7 @@ impl Checker {
         fn contains(ty: &Ty) -> bool {
             match ty {
                 Ty::MatchResult(_) => true,
-                Ty::List(inner) | Ty::Lazy(inner) => contains(inner),
+                Ty::List(inner) | Ty::Lazy(inner) | Ty::Pid(inner) => contains(inner),
                 Ty::Tuple(items) | Ty::Enum(_, items) | Ty::SelfApp(items) => {
                     items.iter().any(contains)
                 }
@@ -550,7 +550,7 @@ impl Checker {
         }
     }
 
-    fn resolve_pid_surface_ty(&self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
+    fn resolve_pid_surface_ty(&mut self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
         if args.len() != 1 {
             return Err(TypeError {
                 structured: None,
@@ -559,11 +559,11 @@ impl Checker {
                 hint: None,
             });
         }
-        Ok(Ty::Pid(self.pid_marker_from_ast(&args[0])?))
+        Ok(Ty::Pid(Box::new(self.pid_marker_from_ast(&args[0])?)))
     }
 
     fn resolve_worker_handle_surface_ty(
-        &self,
+        &mut self,
         span: &Span,
         args: &[AstTy],
         handle_name: &str,
@@ -578,7 +578,7 @@ impl Checker {
         }
         Ok(Ty::Enum(
             handle_name.to_string(),
-            vec![Ty::Pid(self.pid_marker_from_ast(&args[0])?)],
+            vec![Ty::Pid(Box::new(self.pid_marker_from_ast(&args[0])?))],
         ))
     }
 
@@ -601,19 +601,104 @@ impl Checker {
         ))
     }
 
-    fn pid_marker_from_ast(&self, ast_ty: &AstTy) -> Result<String, TypeError> {
-        match ast_ty {
-            AstTy::Named(_, name) => Ok(name.clone()),
-            other => Err(TypeError {
-                structured: None,
-                message: "PID<T> expects a process marker such as PID<Counter>".into(),
-                span: Self::ast_ty_span(other).clone(),
-                hint: Some(
-                    "Use the generated process surface marker name, for example PID<Counter>."
-                        .into(),
-                ),
-            }),
+    fn concrete_pid_marker(&self, ast_ty: &AstTy) -> Result<Ty, TypeError> {
+        if let AstTy::Named(_, name) = ast_ty {
+            let canonical = Self::canonical_user_type_name(name);
+            if self
+                .process_specs
+                .iter()
+                .any(|spec| spec.process_name == canonical)
+                || matches!(
+                    canonical.as_str(),
+                    "Global::OutHandler" | "Global::InHandler"
+                )
+            {
+                return Ok(Ty::ProcessMarker(canonical));
+            }
+            return Err(TypeError::new(
+                format!("Unknown PID process marker `{name}`"),
+                Self::ast_ty_span(ast_ty).clone(),
+            ));
         }
+        Err(TypeError::new(
+            "PID<T> expects a declared process marker or a type variable",
+            Self::ast_ty_span(ast_ty).clone(),
+        ))
+    }
+
+    fn constrain_pid_marker_type(
+        &mut self,
+        marker: &Ty,
+        span: &Span,
+        declaration: bool,
+    ) -> Result<(), TypeError> {
+        match self.resolve_ty(marker) {
+            Ty::ProcessMarker(_) => Ok(()),
+            Ty::Var(var) => {
+                if !declaration
+                    && self.rigid_tyvars.contains(&var)
+                    && !self.process_marker_tyvars.contains(&var)
+                {
+                    return Err(TypeError::new(
+                        "PID marker annotation cannot constrain an ordinary signature type variable",
+                        span.clone(),
+                    ));
+                }
+                self.process_marker_tyvars.insert(var);
+                Ok(())
+            }
+            other => Err(TypeError::new(
+                format!(
+                    "PID<T> requires a process marker, got {}",
+                    self.ty_name(&other)
+                ),
+                span.clone(),
+            )),
+        }
+    }
+
+    fn pid_marker_from_ast(&mut self, ast_ty: &AstTy) -> Result<Ty, TypeError> {
+        let marker = match ast_ty {
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?
+            }
+            _ => self.concrete_pid_marker(ast_ty)?,
+        };
+        self.constrain_pid_marker_type(&marker, Self::ast_ty_span(ast_ty), false)?;
+        Ok(marker)
+    }
+
+    fn resolve_signature_pid_surface_ty(
+        &mut self,
+        span: &Span,
+        args: &[AstTy],
+        handle_name: &str,
+        tyvars: &mut HashMap<String, Ty>,
+        mode: SignatureTyMode<'_>,
+    ) -> Result<Ty, TypeError> {
+        let [marker] = args else {
+            return Err(TypeError::new(
+                format!("{handle_name}<T> requires exactly 1 type argument"),
+                span.clone(),
+            ));
+        };
+        let marker = match marker {
+            AstTy::Named(_, name) if name.starts_with('$') => self
+                .resolve_signature_like_ast_ty_in_context(
+                    marker,
+                    TypeSyntaxContext::General,
+                    tyvars,
+                    mode,
+                )?,
+            _ => self.concrete_pid_marker(marker)?,
+        };
+        self.constrain_pid_marker_type(&marker, span, true)?;
+        let pid = Ty::Pid(Box::new(marker));
+        Ok(if handle_name == "PID" {
+            pid
+        } else {
+            Ty::Enum(handle_name.to_string(), vec![pid])
+        })
     }
 
     fn clause_block_type_not_allowed_error(&self, span: &Span, surface_name: &str) -> TypeError {
@@ -856,6 +941,21 @@ impl Checker {
     }
 
     pub(super) fn resolve_ast_ty_in_context(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+    ) -> Result<Ty, TypeError> {
+        let result = self.resolve_ast_ty_in_context_inner(ast_ty, context);
+        if let (Err(error), Some(probe)) = (&result, &self.type_syntax_probe_error) {
+            let mut retained = probe.borrow_mut();
+            if retained.is_none() {
+                *retained = Some(error.clone());
+            }
+        }
+        result
+    }
+
+    fn resolve_ast_ty_in_context_inner(
         &mut self,
         ast_ty: &AstTy,
         context: TypeSyntaxContext,
@@ -1228,11 +1328,15 @@ impl Checker {
                         });
                     }
                     let mut resolved_args = Vec::with_capacity(args.len());
-                    for (argument, bound) in args.iter().zip(&def.type_param_bounds) {
+                    for (index, (argument, bound)) in args.iter().zip(&def.type_param_bounds).enumerate() {
                         let constructor_trait = bound
                             .as_deref()
                             .and_then(|bound| self.declaration_constructor_trait_key(bound));
-                        let resolved = if let Some(trait_key) = constructor_trait.filter(|_| {
+                        let marker_slot = def.type_param_vars.get(index)
+                            .is_some_and(|var| self.process_marker_tyvars.contains(var));
+                        let resolved = if marker_slot {
+                            self.pid_marker_from_ast(argument)?
+                        } else if let Some(trait_key) = constructor_trait.filter(|_| {
                             !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
                         }) {
                             let head = self.resolve_type_constructor_head(argument)?;
@@ -1334,6 +1438,9 @@ impl Checker {
     ) -> Result<Ty, TypeError> {
         if matches!(ast_ty, AstTy::Named(_, name) if Self::surface_name(name) == "_") {
             return Ok(self.env.fresh_tyvar());
+        }
+        if matches!(slot_ty, Ty::Var(var) if self.process_marker_tyvars.contains(var)) {
+            return self.pid_marker_from_ast(ast_ty);
         }
         let is_constructor_slot = match slot_ty {
             Ty::SelfApp(items) => Self::constructor_application_parts(items).is_some(),
@@ -2374,9 +2481,9 @@ impl Checker {
                         Box::new(update_focus),
                     ))
                 }
-                "PID" => self.resolve_pid_surface_ty(span, args),
-                "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
-                "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
+                "PID" => self.resolve_signature_pid_surface_ty(span, args, "PID", tyvars, mode),
+                "Workers" => self.resolve_signature_pid_surface_ty(span, args, "Workers", tyvars, mode),
+                "WorkerLease" => self.resolve_signature_pid_surface_ty(span, args, "WorkerLease", tyvars, mode),
                 "TaskHandle" => {
                     let args = self.require_type_arg_count(
                         span,
@@ -2493,11 +2600,23 @@ impl Checker {
                         });
                     }
                     let mut resolved_args = Vec::with_capacity(args.len());
-                    for (argument, bound) in args.iter().zip(&def.type_param_bounds) {
+                    for (index, (argument, bound)) in args.iter().zip(&def.type_param_bounds).enumerate() {
                         let constructor_trait = bound
                             .as_deref()
                             .and_then(|bound| self.declaration_constructor_trait_key(bound));
-                        let resolved = if let Some(trait_key) = constructor_trait.filter(|_| {
+                        let marker_slot = def.type_param_vars.get(index)
+                            .is_some_and(|var| self.process_marker_tyvars.contains(var));
+                        let resolved = if marker_slot {
+                            let marker = match argument {
+                                AstTy::Named(_, name) if name.starts_with('$') =>
+                                    self.resolve_signature_like_ast_ty_in_context(
+                                        argument, TypeSyntaxContext::General, tyvars, mode,
+                                    )?,
+                                _ => self.concrete_pid_marker(argument)?,
+                            };
+                            self.constrain_pid_marker_type(&marker, Self::ast_ty_span(argument), true)?;
+                            marker
+                        } else if let Some(trait_key) = constructor_trait.filter(|_| {
                             !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
                         }) {
                             let head = self.resolve_type_constructor_head(argument)?;
@@ -2648,40 +2767,19 @@ impl Checker {
         (inputs.len() == 1).then(|| expected.clone())
     }
 
-    /// Expected value compatibility is directed. An ignored unary input accepts
-    /// the expected input without changing Hole's strict type identity. Outputs
-    /// and every other shape still use the ordinary relation.
-    pub(super) fn value_types_compatible(
-        &mut self,
-        expected: &Ty,
-        actual: &Ty,
-    ) -> Result<bool, TypeError> {
-        let resolved_expected = self.resolve_ty(expected);
-        let resolved_actual = self.resolve_ty(actual);
-        if let (Some((expected_inputs, expected_output)), Some((actual_inputs, actual_output))) = (
-            self.function_parts(&resolved_expected),
-            self.function_parts(&resolved_actual),
-        ) {
-            if expected_inputs.len() == 1 && matches!(actual_inputs, [Ty::Hole]) {
-                let expected_output = self
-                    .function_parts(expected)
-                    .map_or(expected_output, |(_, output)| output)
-                    .clone();
-                let actual_output = self
-                    .function_parts(actual)
-                    .map_or(actual_output, |(_, output)| output)
-                    .clone();
-                return self.types_compatible(&expected_output, &actual_output);
-            }
-        }
-        self.types_compatible(expected, actual)
-    }
-
     pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> Result<bool, TypeError> {
         let profile = self.profiler.start();
         let result = (|| -> Result<bool, TypeError> {
             let expected_bare_occurrence = Self::bare_constructor_occurrence(expected);
             let got_bare_occurrence = Self::bare_constructor_occurrence(got);
+            let expected_function = match expected {
+                Ty::Func(parameters, output) => Some((parameters.as_slice(), output.as_ref())),
+                _ => None,
+            };
+            let got_function = match got {
+                Ty::Func(parameters, output) => Some((parameters.as_slice(), output.as_ref())),
+                _ => None,
+            };
             let expected = self.resolve_ty(expected);
             let got = self.resolve_ty(got);
             let result = match (&expected, &got) {
@@ -2708,20 +2806,14 @@ impl Checker {
                 | (Ty::ExtractorClosure(a), Ty::ExtractorClosure(b))
                 | (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b)?,
                 (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b)?,
-                (Ty::Pid(a), Ty::Pid(b)) => {
-                    Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
-                        || a.starts_with('$')
-                        || b.starts_with('$')
-                }
+                (Ty::ProcessMarker(a), Ty::ProcessMarker(b)) => a == b,
+                (Ty::Pid(a), Ty::Pid(b)) => self.types_compatible(a, b)?,
                 (Ty::Pid(expected_process), Ty::Enum(name, args))
                     if name == "WorkerLease" && args.len() == 1 =>
                 {
                     match args.first() {
                         Some(Ty::Pid(actual_process)) => {
-                            Self::canonical_user_type_name(expected_process)
-                                == Self::canonical_user_type_name(actual_process)
-                                || expected_process.starts_with('$')
-                                || actual_process.starts_with('$')
+                            self.types_compatible(expected_process, actual_process)?
                         }
                         _ => false,
                     }
@@ -2821,6 +2913,12 @@ impl Checker {
                         })?
                 }
                 (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                    // Preserve declaration-owned constructor occurrences while
+                    // comparing every input and output with the ordinary relation.
+                    let (a_params, a_ret) =
+                        expected_function.unwrap_or((a_params.as_slice(), a_ret.as_ref()));
+                    let (b_params, b_ret) =
+                        got_function.unwrap_or((b_params.as_slice(), b_ret.as_ref()));
                     a_params.len() == b_params.len()
                         && try_all(a_params.iter().zip(b_params.iter()), |(a, b)| {
                             self.types_compatible(a, b)
@@ -2943,6 +3041,11 @@ impl Checker {
         let profile = self.profiler.start();
         let result = (|| -> Result<bool, TypeError> {
             let ty = self.resolve_ty(ty);
+            if self.process_marker_tyvars.contains(&var)
+                && !matches!(ty, Ty::Var(_) | Ty::ProcessMarker(_))
+            {
+                return Ok(false);
+            }
             let result = if ty == Ty::Var(var) {
                 true
             } else if self.ty_contains_var(&ty, var) {
@@ -2956,6 +3059,18 @@ impl Checker {
                     .unwrap_or_default();
                 match &ty {
                     Ty::Var(other) => {
+                        if self.rigid_tyvars.contains(other)
+                            && self.process_marker_tyvars.contains(&var)
+                            && !self.process_marker_tyvars.contains(other)
+                        {
+                            return Ok(false);
+                        }
+                        if self.process_marker_tyvars.contains(&var)
+                            || self.process_marker_tyvars.contains(other)
+                        {
+                            self.process_marker_tyvars.insert(var);
+                            self.process_marker_tyvars.insert(*other);
+                        }
                         if self.rigid_tyvars.contains(other)
                             && !var_bounds
                                 .iter()
@@ -3197,6 +3312,7 @@ impl Checker {
             | Ty::Lazy(inner) => {
                 self.validate_nominal_type_well_formed(inner, span, defer_unresolved)?;
             }
+            Ty::Pid(marker) => self.constrain_pid_marker_type(marker, span, false)?,
             Ty::Result(ok, err) => {
                 self.validate_nominal_type_well_formed(ok, span, defer_unresolved)?;
                 self.validate_nominal_type_well_formed(err, span, defer_unresolved)?;
@@ -3232,7 +3348,7 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Pid(_) => {}
+            | Ty::ProcessMarker(_) => {}
         }
         Ok(())
     }
@@ -3281,7 +3397,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.nominal_type_uses_capability(inner, &subject, capability),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.nominal_type_uses_capability(inner, &subject, capability),
             Ty::Result(ok, err) => {
                 self.nominal_type_uses_capability(ok, &subject, capability)
                     || self.nominal_type_uses_capability(err, &subject, capability)
@@ -3315,7 +3432,7 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Pid(_) => false,
+            | Ty::ProcessMarker(_) => false,
         }
     }
 
@@ -3327,7 +3444,7 @@ impl Checker {
                 self.ty_contains_var(&inner, needle)
             }
             Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
-            Ty::Pid(_) => false,
+            Ty::Pid(inner) => self.ty_contains_var(&inner, needle),
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.ty_contains_var(&source, needle)
                     || self.ty_contains_var(&focus, needle)
@@ -3377,7 +3494,7 @@ impl Checker {
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
             Ty::Hole => Ty::Hole,
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
-            Ty::Pid(name) => Ty::Pid(name.clone()),
+            Ty::Pid(marker) => Ty::Pid(Box::new(self.resolve_ty(marker))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
                 *kind,
                 Box::new(self.resolve_ty(source)),
@@ -3501,6 +3618,9 @@ impl Checker {
                     if let Ty::Var(new_var) = instantiated {
                         let bounds = self.tyvar_bound_names(*var);
                         self.register_tyvar_bounds(new_var, &bounds);
+                        if self.process_marker_tyvars.contains(var) {
+                            self.process_marker_tyvars.insert(new_var);
+                        }
                         if let Some(trait_key) = self.constructor_witness_traits.get(var).cloned() {
                             self.constructor_witness_traits.insert(new_var, trait_key);
                         }
@@ -3518,7 +3638,7 @@ impl Checker {
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Hole => Ty::Hole,
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
-            Ty::Pid(name) => Ty::Pid(name.clone()),
+            Ty::Pid(marker) => Ty::Pid(Box::new(self.instantiate_ty_with_fresh(marker, fresh))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
                 *kind,
                 Box::new(self.instantiate_ty_with_fresh(source, fresh)),
@@ -3647,7 +3767,7 @@ impl Checker {
             Ty::List(inner) => Ty::List(Box::new(self.substitute_type_def_ty(inner, bindings))),
             Ty::Hole => Ty::Hole,
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_type_def_ty(inner, bindings))),
-            Ty::Pid(name) => Ty::Pid(name.clone()),
+            Ty::Pid(marker) => Ty::Pid(Box::new(self.substitute_type_def_ty(marker, bindings))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
                 *kind,
                 Box::new(self.substitute_type_def_ty(source, bindings)),
@@ -3896,7 +4016,11 @@ impl Checker {
                 "Lazy<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
             ),
-            Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
+            Ty::Pid(marker) => format!(
+                "PID<{}>",
+                self.diagnostic_ty_name_with_state(marker, tyvars, next_tyvar_index)
+            ),
+            Ty::ProcessMarker(name) => Self::surface_name(name).to_string(),
             Ty::Facet(kind, source, focus, update_source, update_focus) => format!(
                 "Facet<{}, {}, {}, {}, {}>",
                 kind.as_str(),
@@ -4020,7 +4144,8 @@ impl Checker {
             Ty::MatchResult(inner) => format!("MatchResult<{}>", self.ty_name(inner)),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
-            Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
+            Ty::Pid(marker) => format!("PID<{}>", self.ty_name(marker)),
+            Ty::ProcessMarker(name) => Self::surface_name(name).to_string(),
             Ty::Facet(kind, source, focus, update_source, update_focus) => {
                 format!(
                     "Facet<{}, {}, {}, {}, {}>",
@@ -4083,7 +4208,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.ty_contains_facet(inner.as_ref()),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.ty_contains_facet(inner.as_ref()),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_facet(item))
             }
@@ -4116,7 +4242,7 @@ impl Checker {
             | Ty::Var(_)
             | Ty::Error
             | Ty::Hole
-            | Ty::Pid(_) => false,
+            | Ty::ProcessMarker(_) => false,
         }
     }
 
@@ -5064,7 +5190,30 @@ mod tests {
     }
 
     #[test]
-    fn value_relation_and_callable_context_preserve_bare_return_origin() {
+    fn pid_annotation_rejects_an_already_bound_ordinary_type_variable() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let marker = checker.env.fresh_tyvar();
+        let Ty::Var(variable) = marker else {
+            unreachable!()
+        };
+        checker.local_annotation_tyvars.insert("$P".into(), marker);
+        checker.substitutions.insert(variable, Ty::Int);
+        let span = Span { start: 0, end: 7 };
+        let annotation = AstTy::Generic(
+            span.clone(),
+            "PID".into(),
+            vec![AstTy::Named(span, "$P".into())],
+        );
+        let error = checker
+            .resolve_ast_ty_in_context(&annotation, TypeSyntaxContext::BindingAnnotation)
+            .expect_err("an existing Int binding cannot acquire process marker identity");
+        assert!(error.message.contains("process marker"));
+        assert!(error.message.contains("Int"));
+        assert!(!checker.process_marker_tyvars.contains(&variable));
+    }
+
+    #[test]
+    fn type_relation_and_callable_context_preserve_bare_return_origin() {
         let mut checker = Checker::with_persistent_state(
             crate::test_support::session_from_cached_std_prelude().state,
             TypecheckContext::default(),
@@ -5083,15 +5232,20 @@ mod tests {
             .insert(occurrence, Ty::List(Box::new(Ty::Hole)));
         let bare_return = Ty::SelfApp(vec![Ty::Hole, Ty::Var(occurrence)]);
         let expected = Ty::Func(vec![Ty::Int], Box::new(bare_return));
-        let actual = Ty::Func(vec![Ty::Hole], Box::new(Ty::List(Box::new(Ty::Bool))));
+        let actual = Ty::Func(vec![Ty::Int], Box::new(Ty::List(Box::new(Ty::Bool))));
 
         assert_eq!(
             checker.contextual_callable_expected(Some(&expected)),
             Some(expected.clone())
         );
         assert!(
-            checker.value_types_compatible(&expected, &actual).unwrap(),
+            checker.types_compatible(&expected, &actual).unwrap(),
             "bare return compares carrier identity without equating its mapped payload"
+        );
+        let ignored_input = Ty::Func(vec![Ty::Hole], Box::new(Ty::List(Box::new(Ty::Bool))));
+        assert!(
+            !checker.types_compatible(&expected, &ignored_input).unwrap(),
+            "preserving bare return identity must not relax callable input equality"
         );
     }
 

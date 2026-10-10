@@ -85,7 +85,7 @@ def parse_bool(text: String) -> Result<Boolean> {
 }
 ```
 
-`Result<T>` が正規表記です。補助表記 `Result<T, E>` は関数定義の直接の戻り値位置だけに書け、関数が返すエラーの契約を示します。値、引数、field、関数型、入れ子の型注釈では `Result<T>` を使います。`NoneError` も例外にはなりません。
+`Result<T>` が正規表記です。補助表記 `Result<T, E>` は関数定義の直接の戻り値位置だけに書け、返すエラーの種類を説明するドキュメント用の情報です。`E` に指定したエラー名の存在は確認しますが、実際に返すエラーの種類は静的に制限せず、網羅検査もしません。別の種類のエラーを返しても、その違いだけでは拒否しません。値、引数、field、関数型、入れ子の型注釈では `Result<T>` を使います。`NoneError` も例外にはなりません。
 
 ```surtr
 def fetch() -> Result<Int, NoneError> { Ok(1) }
@@ -206,6 +206,9 @@ keep_one: (_ -> Int) = always(1)
 ```
 
 この `_` は wildcard ではなく、internal な `Hole` marker の surface 表記です。
+`(_ -> Int)` の値を `(Int -> Int)` の引数・注釈・戻り値・分岐・container に渡すことはできません。
+入力型を指定した関数値が必要な場合は、`{|value: Int| 1}` のような closure を使います。
+`keep_one("ignored")` のような直接呼出しでは、入力を使わずに結果を返します。
 ただし、call-site ReturnTypeArgument内の`_`は推論変数であり、`Hole` markerではありません。
 
 - callable input を 1 つ受ける

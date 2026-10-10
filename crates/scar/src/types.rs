@@ -182,8 +182,12 @@ pub enum Ty {
     /// Compiler-managed facet path capability: `Facet<K, S, A, T, B>`.
     Facet(FacetKind, Box<Ty>, Box<Ty>, Box<Ty>, Box<Ty>),
 
-    /// Process identifier capability: `PID<ProcessName>`
-    Pid(Symbol),
+    /// Process identifier capability with an ordinary type-variable marker.
+    Pid(Box<Ty>),
+
+    /// Canonical process or standard handler declaration identity. Internal
+    /// marker only: it has no standalone surface syntax or runtime value.
+    ProcessMarker(Symbol),
 
     /// Compiler-reserved ignored-input closure marker.
     /// This is not a first-class data type and only appears in restricted
@@ -237,4 +241,11 @@ pub enum Ty {
 
     /// Error type (produced by `deferror`)
     Error,
+}
+
+impl Ty {
+    /// Construct a concrete PID after its producer has resolved the declaration.
+    pub fn pid(name: impl Into<String>) -> Self {
+        Self::Pid(Box::new(Self::ProcessMarker(name.into())))
+    }
 }

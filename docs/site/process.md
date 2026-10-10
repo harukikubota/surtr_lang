@@ -20,6 +20,8 @@ include "./Agents.srt"
 
 `include` の細かい規則は `./language-features.md`、`Result` と `=?` の読み方は `./error-handling.md` にまとめています。
 
+`defagent` / `defgenserver` の `meta` には `instance`、`init_policy`、`state` を明記します。`init_policy` を省略すると構文エラーになります。`Eager` は1回の初期化で状態を確定し、`Standby` は Singleton の Agent / GenServer で Ready になるまで初期化を続けます。Worker には `Eager` を指定します。
+
 ## 関数の可視性
 
 `defagent` / `defgenserver` 内では、handler を `def` とアノテーションで宣言します。外部からは、コンパイラが生成する公開 API を呼びます。handler 本体へ state を渡して直接呼ぶことはできません。
@@ -115,6 +117,8 @@ cargo run -q -p rune -- run examples/process/agent_worker_multi/entry.srt
 - `Worker::init(3)` の型は `Result<PID<Worker>>` です
 - `alpha` と `beta` は別 PID なので、片方を更新しても state は混ざりません
 - `PID<T>` は型付きなので、別 process の PID を混ぜると compile error になります
+
+`PID<T>` の `T` には定義済みの process 名を指定します。存在しない名前や `Int` などの通常の型は指定できません。同じ短名でも、`Left::Counter` と `Right::Counter` は別の process です。`PID<$P>` を受け取る汎用関数でも、同じ `$P` の引数には同じ process 型の PID を渡します。標準の入出力 handler はそれぞれ `PID<InHandler>` / `PID<OutHandler>` で表します。
 
 同じ process 型の PID は `==` / `!=` で比較できます。singleton の PID は同じ型なら常に等しく、worker の PID は同じ個体を指すときだけ等しくなります。handler 用の PID は比較対象外です。
 

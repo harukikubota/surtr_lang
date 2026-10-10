@@ -1109,7 +1109,7 @@ impl Checker {
             ResolvedPattern::AnnotatedWildcard(pattern_span, ast_ty) => {
                 let expected =
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                self.assert_value_type_relation(
+                self.assert_type_relation(
                     &expected,
                     rhs_ty,
                     self.type_fact(
@@ -1135,7 +1135,7 @@ impl Checker {
                         self.local_type_syntax_context()
                     },
                 )?;
-                self.assert_value_type_relation(
+                self.assert_type_relation(
                     &expected,
                     rhs_ty,
                     self.type_fact(

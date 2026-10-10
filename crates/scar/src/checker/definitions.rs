@@ -1099,6 +1099,17 @@ impl Checker {
                     }
                 }
             }
+            (AstTy::Generic(_, _, args), Ty::Pid(marker)) if args.len() == 1 => {
+                self.collect_signature_ty_bindings(&args[0], marker, bindings);
+            }
+            (AstTy::Generic(_, name, args), Ty::Enum(_, resolved_args))
+                if matches!(Self::surface_name(name), "Workers" | "WorkerLease")
+                    && args.len() == 1 =>
+            {
+                if let [Ty::Pid(marker)] = resolved_args.as_slice() {
+                    self.collect_signature_ty_bindings(&args[0], marker, bindings);
+                }
+            }
             (AstTy::Generic(_, _, args), Ty::List(inner)) if args.len() == 1 => {
                 self.collect_signature_ty_bindings(&args[0], inner, bindings);
             }
@@ -1743,7 +1754,7 @@ impl Checker {
             .transpose()?
             .unwrap_or(false);
         let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
-        let relation = self.assert_value_type_relation(
+        let relation = self.assert_type_relation(
             &expected_ret,
             &typed_body.ty,
             self.type_fact(
@@ -2575,7 +2586,7 @@ impl Checker {
                 return Err(err);
             }
             let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
-            let relation = self.assert_value_type_relation(
+            let relation = self.assert_type_relation(
                 &expected_ret,
                 &typed_body.ty,
                 self.type_fact(

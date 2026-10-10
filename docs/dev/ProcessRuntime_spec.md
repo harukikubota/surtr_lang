@@ -102,7 +102,7 @@ defagent Counter {
 | key | 意味 |
 |---|---|
 | `instance` | `Singleton` または `Worker` |
-| `init_policy` | `Eager` または `Standby` |
+| `init_policy` | `Eager` または `Standby`。明記必須 |
 | `state` | process handler が扱う state 型。primitive / container / user-defined のいずれも明記必須 |
 | `handlers` | process-local readonly handler dependency と default target |
 
@@ -119,7 +119,7 @@ defagent Counter {
 
 ### 3.3 `init_policy`
 
-`init_policy` は process 定義側の性質である。
+`init_policy` は process 定義側の性質であり、`defagent` / `defgenserver` の `meta` に必ず明記する。省略は parse error とし、`Eager` へ補完しない。`defsupervisor` はこの項目を受理しない。
 
 | policy | `@init` 戻り値 | 意味 |
 |---|---|---|
@@ -573,6 +573,8 @@ DynamicSupervisor は singleton process として扱い、user-facing API に `s
 pid = DynamicSupervisor::spawn(MyWorker::init(args))
 ```
 
+Supervisor policyと起動overrideはcanonicalな宣言名で照合する。末尾の短名が同じ別namespaceの宣言へoverrideを適用しない。標準DynamicSupervisorの内部keyへ接続するのは、canonicalな`Global::DynamicSupervisor`かつDynamicSupervisor種別の宣言だけとする。表示用の`Global::`除去をpolicy照合へ使わない。incremental compileは可視prefixのruntime metadataから宣言のcanonical名と実policyを復元し、そのpolicyへoverrideを適用する。未定義・曖昧な宣言を既定policyの合成で救済しない。
+
 `defsupervisor` は policy-only declaration とし、`meta` には supervisor policy だけを置く。
 
 - `strategy`
@@ -761,6 +763,12 @@ process runtime snapshot / VM dump は worker set の観測情報を `worker_set
 ### 3.12 Worker lifecycle
 
 Worker は `spawn` で生成し、`PID<Proc>` を通して扱う。
+
+`PID<Proc>` の型引数は、登録済み process 宣言の canonical identity、標準 handler capability (`OutHandler` / `InHandler`)、または宣言内の通常の型変数である。未知名、通常の型や単なる module を process marker として受理しない。無修飾の process 名は implicit root の宣言名へ正規化し、末尾の短名が同じ別 namespace の宣言を同一視しない。
+
+`PID<$P>` の `$P` は他の signature generic と同じ変数であり、同じ宣言内の出現は同じ束縛を共有する。異なる process の PID を同じ `$P` の引数へ渡すことや、`PID<$P>` を別の具体 process の PID として返すことは拒否する。PID の marker は型検査・特殊化・canonical 型比較で通常の代入と rigid 変数の規則に従い、文字列の `$` prefix で適合を補わない。runtime には具体化済みの canonical marker を渡す。型変数を marker として使う制約は同じ変数の通常の代入にも適用し、明示的な ReturnTypeArgument で通常型へ具体化することを拒否する。ローカルの PID annotation で、marker として宣言していない rigid signature 変数へ制約を追加しない。nominal 型の generic parameter を PID marker に使う場合も、その型引数には同じ marker の解決・束縛規則を適用する。
+
+Scar の `Pid` は marker 型を子として持つ。具体 marker は process 宣言または標準 handler 宣言の canonical identity を表す内部型とし、runtime 値にはしない。型変数の収集、occurs check、代入、fresh 化、canonical 型比較、特殊化はこの子へ再帰する。Error payload schema も同じ marker 構造を保持し、generic field の型引数を代入してから runtime PID の canonical process 名を検査する。
 
 `PID<Proc>` の `Eq` は compiler-owned capability であり、同じ process type の PID だけを比較する。
 Singleton は process type ごとに一意なので、restart 前後の handle も等しい。

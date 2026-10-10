@@ -142,8 +142,8 @@ fn typecheck_sources_in_compile_order(
     let mut scar_session = scar::ScarSession::new();
     scar_session.rollback(compile_prefix.scar_checkpoint().clone());
     scar_session
-        .typecheck_with_context(
-            resolved.resolved,
+        .typecheck_staged_program_in_place_with_context(
+            resolved,
             compile_chunk_typecheck_context_for_mode(mode),
         )
         .map_err(|error| CompilePhaseFailure::from(error).with_sources(compile_sources))?;

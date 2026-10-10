@@ -5068,7 +5068,8 @@ impl ReplEngine {
             Ty::Hole => "_".into(),
             Ty::List(inner) => format!("List<{}>", Self::ty_to_string_with_params(inner, names)),
             Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string_with_params(inner, names)),
-            Ty::Pid(name) => format!("PID<{}>", crate::surface_rendered_name(name)),
+            Ty::Pid(marker) => format!("PID<{}>", Self::ty_to_string_with_params(marker, names)),
+            Ty::ProcessMarker(name) => crate::surface_rendered_name(name).to_string(),
             Ty::Facet(kind, source, focus, update_source, update_focus) => {
                 format!(
                     "Facet<{}, {}, {}, {}, {}>",

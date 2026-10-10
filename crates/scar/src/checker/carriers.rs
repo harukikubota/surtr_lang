@@ -670,6 +670,7 @@ impl Checker {
             Ty::MatchResult(inner) => Ty::MatchResult(Box::new(normalize(&inner))),
             Ty::List(inner) => Ty::List(Box::new(normalize(&inner))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(normalize(&inner))),
+            Ty::Pid(inner) => Ty::Pid(Box::new(normalize(&inner))),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(normalize).collect()),
             Ty::SelfApp(items) => Ty::SelfApp(items.iter().map(normalize).collect()),
             Ty::Result(ok, error) => {

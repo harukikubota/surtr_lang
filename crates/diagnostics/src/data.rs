@@ -389,6 +389,7 @@ pub enum ParseDiagnosticGuidance {
     WhereClause,
     MissingMetaState,
     MissingMetaInstance,
+    MissingMetaInitPolicy,
     AnonymousCaptureIdentity,
     AnonymousCaptureRequiresHelper,
     ImmediateAnonymousCall,

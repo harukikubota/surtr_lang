@@ -1172,7 +1172,8 @@ pub enum ErrorValueSchema {
     Tuple(Vec<ErrorValueSchema>),
     Result(Box<ErrorValueSchema>),
     MatchResult(Box<ErrorValueSchema>),
-    Pid(String),
+    Pid(Box<ErrorValueSchema>),
+    ProcessMarker(String),
     Named {
         name: String,
         arguments: Vec<ErrorValueSchema>,
@@ -1216,6 +1217,7 @@ impl ErrorValueSchema {
             Self::Result(item) => Self::Result(Box::new(convert(item)?)),
             Self::MatchResult(item) => Self::MatchResult(Box::new(convert(item)?)),
             Self::HashMap(item) => Self::HashMap(Box::new(convert(item)?)),
+            Self::Pid(marker) => Self::Pid(Box::new(convert(marker)?)),
             Self::Callable { parameters, result } => Self::Callable {
                 parameters: parameters.iter().map(convert).collect::<Option<_>>()?,
                 result: Box::new(convert(result)?),
@@ -1311,7 +1313,10 @@ impl ErrorValueSchema {
                     matches!(fields[1], Value::Error(_))
                 }
             }
-            (Self::Pid(process), Value::Pid(pid)) => &pid.process_name == process,
+            (Self::Pid(marker), Value::Pid(pid)) => {
+                let outer = bindings.last().cloned().unwrap_or_default();
+                matches!(marker.substitute(&outer), Some(Self::ProcessMarker(name)) if name == pid.process_name)
+            }
             (
                 Self::Struct {
                     name,
@@ -1438,11 +1443,9 @@ impl ErrorValueSchema {
                         return false;
                     };
                     return match arguments.as_slice() {
-                        [Self::Pid(expected)] => expected == process,
-                        [Self::Struct { name, .. }
-                        | Self::Enum { name, .. }
-                        | Self::Named { name, .. }
-                        | Self::Recursive { name, .. }] => name == process,
+                        [Self::Pid(marker)] => {
+                            matches!(marker.as_ref(), Self::ProcessMarker(expected) if expected == process)
+                        }
                         _ => false,
                     };
                 }
@@ -2430,7 +2433,7 @@ mod tests {
             ("TaskHandle", vec![S::Int], Value::TaskHandle(1)),
             (
                 "Workers",
-                vec![S::Pid("Global::Worker".into())],
+                vec![S::Pid(Box::new(S::ProcessMarker("Global::Worker".into())))],
                 Value::Workers(WorkersHandle {
                     id: 1,
                     process_name: "Global::Worker".into(),
@@ -2438,7 +2441,7 @@ mod tests {
             ),
             (
                 "WorkerLease",
-                vec![S::Pid("Global::Worker".into())],
+                vec![S::Pid(Box::new(S::ProcessMarker("Global::Worker".into())))],
                 Value::WorkerLease(WorkerLeaseHandle {
                     workers_id: 1,
                     pid: PidHandle::new(
@@ -2488,7 +2491,7 @@ mod tests {
         });
         let schema = |process: &str| S::Named {
             name: "Global::Workers".into(),
-            arguments: vec![S::Pid(process.into())],
+            arguments: vec![S::Pid(Box::new(S::ProcessMarker(process.into())))],
         };
         assert!(schema("Global::Worker").accepts(&value, &TypeRegistry::new()));
         assert!(!schema("Global::OtherWorker").accepts(&value, &TypeRegistry::new()));
@@ -2497,6 +2500,40 @@ mod tests {
             arguments: vec![]
         }
         .accepts(&value, &TypeRegistry::new()));
+    }
+
+    #[test]
+    fn generic_pid_error_schema_preserves_marker_identity_and_rejects_nonmarkers() {
+        use super::ErrorValueSchema as S;
+        use crate::runtime::{PidHandle, PidKind, TypeEntry, TypeKind, TypeRegistry, Value};
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 7,
+            name: "Global::PidBox".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["pid".into()],
+            private_flags: vec![false],
+        });
+        let value = Value::Tagged {
+            tag: 7,
+            fields: vec![Value::Pid(PidHandle::new(
+                1,
+                "Global::Worker".into(),
+                PidKind::Worker,
+            ))],
+        };
+        let schema = |arguments| S::Struct {
+            name: "Global::PidBox".into(),
+            arguments,
+            fields: vec![S::Pid(Box::new(S::TypeParameter(0)))],
+        };
+        assert!(schema(vec![S::ProcessMarker("Global::Worker".into())]).accepts(&value, &registry));
+        assert!(!schema(vec![S::ProcessMarker("Global::Other".into())]).accepts(&value, &registry));
+        assert!(!schema(vec![S::Int]).accepts(&value, &registry));
+        assert!(!schema(vec![]).accepts(&value, &registry));
+        assert!(
+            !S::ProcessMarker("Global::Worker".into()).accepts(&Value::Int(1.into()), &registry)
+        );
     }
 
     #[test]

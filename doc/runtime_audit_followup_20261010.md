@@ -2,9 +2,9 @@
 
 2026-10-10、現行ソース・正本文書・既存テストから再調査した。2026-10-10の利用者判断は維持し、古い観測を現行の不具合として扱わない。
 
-調査開始時のHEADは`717d0fd301f4d51b506ceb72347b74d4bf8134fc`。終了時のHEADは`c569e5bab2d229e7ce6d42a1d7428cbeec0a92cc`で、差分は別作業による`doc/callable_name_and_syntax_classification.md`の削除だけだった。調査対象の製品コード・実行可能テスト・正本文書は同じである。この再調査では本書と型検査の継続調査書だけを更新し、実装・正本文書・テストファイルは変更していない。以下には、別作業で完了した停止・回収修正と今回の文書整理を追記する。
+最初の再調査では、開始時のHEADは`717d0fd301f4d51b506ceb72347b74d4bf8134fc`、終了時は`c569e5bab2d229e7ce6d42a1d7428cbeec0a92cc`だった。差分は別作業による`doc/callable_name_and_syntax_classification.md`の削除だけで、調査対象の製品コード・実行可能テスト・正本文書は同じだった。この時点では本書と型検査の継続調査書だけを更新し、実装・正本文書・テストファイルは変更していない。その後の修正結果は、下表と各項目の先頭に追記している。
 
-プロセスの停止・回収は別作業で実装・検証を完了した。契約は[Process Runtime 正本](../docs/dev/ProcessRuntime_spec.md#3101-メッセージの開始と終了)へ反映し、入力仕様書は削除した。RT-02と停止済み本体の保持は解消済み、RT-12は今回の文書整理で対応済みとする。補充失敗の通知、policyの短名照合、init_policy省略は別件として残す。
+プロセスの停止・回収は別作業で実装・検証を完了した。契約は[Process Runtime 正本](../docs/dev/ProcessRuntime_spec.md#3101-メッセージの開始と終了)へ反映し、入力仕様書は削除した。RT-02と停止済み本体の保持は解消済み、RT-12は文書整理で対応済みとする。policyの短名照合とinit_policy省略は今回の修正で解消し、補充失敗の通知は残件として区別する。
 
 ## 現行の判定
 
@@ -12,16 +12,20 @@
 |---|---|---|
 | RT-02 | 停止・回収修正で解消済み | 実行権限付きの保存と受付閉鎖を正本へ反映。検証記録は末尾 |
 | RT-05 | プロセス側の残件 | 補充initの言語Errの通知・target未達の扱いは停止・回収仕様だけでは未確定 |
-| RT-06 | 修正対象の短名照合が残存 | プロセス側でcanonical identityへ統一。停止・回収仕様の対象とは別 |
-| RT-09 | 省略補完が残存 | プロセス側で`init_policy`省略をparse errorへ変更 |
-| RT-11 | 文書修正が必要 | `Result::recover`をspecial formとする古い説明を除く |
+| RT-06 | 修正・検証済み | overrideとbuiltin接続をcanonical identityへ統一。可視prefixの実policyを維持 |
+| RT-09 | 修正・検証済み | Agent / GenServerのinit_policyを必須化し、専用のparse診断を提供 |
+| RT-11 | 文書修正済み | `Result::recover`の通常関数としての実行と、`recover_kind`のErrorKind専用処理を区別 |
 | RT-12 | 文書整理済み | 旧移行表を削除し、生成API・起動構成・runtimeの責務へ整理 |
 
-プロセス以外で新たに対応する確定項目はRT-11。型検査側の対応項目は[型検査の継続調査書](typecheck_audit_followup_20261010.md)を参照する。
+今回のRT-06・RT-09・RT-11は修正・検証済み。RT-05の通知先と再試行方針は未確定のため実装していない。型検査側の対応項目は[型検査の継続調査書](typecheck_audit_followup_20261010.md)を参照する。
+
+TC-04のPID marker修正後にも全体を検証し、`rtk cargo nextest run --profile ci --workspace --features rune/tui`は2,446件成功、`rtk proxy cargo run -- test --quiet --all`は終了コード0だった。以下の各節に記載した2,430件は、それぞれの修正完了時点の検証結果である。
 
 ## RT-11: recoverの説明を現行の通常関数へ揃える
 
-**対応が必要。文書のみの修正。** 元の「Lazy / Facet / recoverの特別loweringを再構成する」という前提は、recoverについて現行ソースと一致しない。
+**文書修正済み。実装変更なし。** 2026-10-10、`docs/dev/EldrVM_spec.md`の古いspecial form説明を、標準定義の通常関数によるmatchとnullary handler呼出しへ変更した。`recover_kind`のErrorKind専用処理と区別し、Lazy・Facetの既存契約は維持した。`docs/dev/Lazy_spec.md`、`lib/types/result.srt`、`lib/kernel.srt`と照合し、`git diff --check`は成功。文書のみのためコンパイラテストは再実行していない。
+
+以下は修正前の調査記録。元の「Lazy / Facet / recoverの特別loweringを再構成する」という前提は、recoverについて現行ソースと一致しない。
 
 - 現行の`lib/types/result.srt:199`は通常の`def recover(value: Result<$A>, handler: (-> Result<$A>)) -> Result<$A>`である。`match`でOkを返し、Errのときだけ`handler()`を呼ぶ。`@builtin`も専用loweringもない。
 - Sigilの`crates/sigil/src/resolver/expr.rs:220`、Scarの`checker/expr.rs:14803`、Forgeの`codegen.rs:12892`にある専用処理は`recover_kind`である。`ErrorKind`のcanonical identityをhidden ABIへ渡す契約と、通常のrecoverを混同しない。
@@ -56,13 +60,25 @@ print(inspect(Result::recover(Err(NoneError), {|| Ok(1)})))
 
 ### RT-06: policyの短名照合
 
-**修正対象が残存。** `vm.rs:2238-2267`の`effective_supervisor_policy`は完全名に加えて末尾短名でもoverrideを選ぶ。さらに`2033-2052`の`apply_runtime_supervisor_overrides`は末尾が`DynamicSupervisor`ならbuiltinのkeyにも書き込む。この2経路をcanonical identityへ揃える必要がある。
+**修正・検証済み（level4）。** 2026-10-10、VMのoverride適用・policy取得・spec登録で末尾短名の照合を除去した。builtin内部keyへの接続はcanonicalなGlobal::DynamicSupervisorかつDynamicSupervisor種別だけに限定する。Forgeのoverride metadataもcanonical名を保持し、宣言解決失敗を既定policy合成で補う旧fallback・専用helper・定数を削除した。
+
+公開検証で標準prefixの宣言情報がchunkの起動設定へ届かないデグレを確認したため、ForgeSessionがruntime metadataからcanonical名・実policy・handler capabilityを復元し、可視prefixと新規宣言を同じ規則で解決するようにした。前chunkの宣言を保持し、checkpoint rollbackで戻す。未定義・同短名曖昧性は拒否する。schema / VM version、公開構文は変更していない。
+
+通常Supervisorの同短名分離、builtin policyへの同短名混入、canonical名の保持、解決失敗fallbackの拒否でRedを確認。VM / Forgeの局所検証は6件成功。公開moduleでは標準prefixと別namespaceのDynamicSupervisorの曖昧なbare entryを拒否し、既存fixtureで標準override成功を維持した。現行supervisor_init entryはqualified名を受けないため、構文を拡張して同名policyの成功fixtureを作ることはせず、分離はVMの直接テストで検証した。prefix復元・前chunk参照・rollbackと公開fixtureの選択検証は23件成功。
+
+最終差分の独立レビューは指摘なし。全体CIで既存Forgeテストの旧短名期待だけが失敗したためcanonical名へ追従し、局所再検証後のCIは2,430件成功。標準Surtr全件は終了コード0（RT-09節のコマンド）。
+
+以下は修正前の調査記録。 `vm.rs:2238-2267`の`effective_supervisor_policy`は完全名に加えて末尾短名でもoverrideを選ぶ。さらに`2033-2052`の`apply_runtime_supervisor_overrides`は末尾が`DynamicSupervisor`ならbuiltinのkeyにも書き込む。この2経路をcanonical identityへ揃える必要がある。
 
 表示用の`Global::`除去は、別namespaceの同名宣言の同一視を許可しない。受入条件は、同じ短名の異なるsupervisorでpolicyが混ざらず、canonical builtinだけがbuiltin policyを変更すること。通常の複数module入力からの到達性は今回未実測。停止・回収仕様はadopt順序を定めるが、このlookup修正を受入条件に含めていない。
 
 ### RT-09: init_policy省略
 
-**省略補完が残存。** `crates/spire/src/parser/decl.rs:5066`は`init_policy.unwrap_or(InitPolicy::Eager)`を使う。Worker GenServerの正しい宣言から`init_policy: Eager`だけを除く最小入力は、現行`surtr check`で終了コード0だった。
+**修正・検証済み（level3）。** 2026-10-10、共通process meta parserのEager補完を削除し、Agent / GenServerのSingleton / Workerいずれでも省略をparse errorにした。元のmeta位置とDeclarationSyntax reasonを保ち、専用guidanceで明示Eager / Standbyを案内する。明示policyの意味とWorker Standby拒否は維持し、ProcessRuntime正本と利用者説明を追従した。
+
+省略4ケースの回帰でRedを確認。既存missing-state診断の入力は明示policyへ整合させ、init_policy専用Help・labelのテストを追加した。`rtk cargo nextest run -p spire -p diagnostics`は590件成功。最終差分の独立レビューは指摘なし。共有の最終検証は`rtk cargo nextest run --profile ci --workspace --features rune/tui`が2,430件成功、`rtk proxy cargo run -- test --quiet --all`が終了コード0。quietのため標準テスト件数は記録していない。
+
+以下は修正前の調査記録。 `crates/spire/src/parser/decl.rs:5066`は`init_policy.unwrap_or(InitPolicy::Eager)`を使う。Worker GenServerの正しい宣言から`init_policy: Eager`だけを除く最小入力は、現行`surtr check`で終了コード0だった。
 
 利用者判断に従い、後続で省略をparse errorにする。明示Eager / Standbyの意味は維持し、parser・既存成功／拒否例・`docs/dev/ProcessRuntime_spec.md:120`の必須項目・利用者向け説明を揃える。[Process Runtime 第4.11節](../docs/dev/ProcessRuntime_spec.md#411-processstatus)の初期化境界だけでは、この必須化は実施されない。
 

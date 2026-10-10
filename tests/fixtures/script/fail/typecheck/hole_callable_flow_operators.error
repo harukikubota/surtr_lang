@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Return type mismatch: expected (Int -> $A), got (_ -> Int)
