@@ -230,10 +230,10 @@ deftrait Mod {
 }
 ```
 
-標準では `Div for Int`、`Div for Float`、`Mod for Int` を提供します。各標準実装は `Result<Self, ZeroDivisionError>` のエラー契約を持ち、ゼロ除算は `Err(ZeroDivisionError)` です。整数除算・剰余の符号規則と Float の有限値制約は、各標準実装に従います。標準の `Mod for Float` はありません。
+標準では `Div for Int`、`Div for Float`、`Mod for Int` を提供します。各標準実装は `Result<Self, ZeroDivisionError>` と注釈し、ゼロ除算は `Err(ZeroDivisionError)` です。エラー名の注釈はドキュメント用で、返すエラーの種類を静的に制限するものではありません。整数除算・剰余の符号規則と Float の有限値制約は、各標準実装に従います。標準の `Mod for Float` はありません。
 
 通常のトレイト実装規則に従い、ユーザー型も `Div` / `Mod` を実装できます。型変数に `where $A: Div` や `where $A: Mod` を付ければ、その型の演算子とトレイトメソッドを使えます。異種数値の暗黙変換や `Result` の自動 unwrap は行いません。
 
-トレイト定義の `Result<Self>` はエラー契約を固定しません。実装は `Result<Self, DomainDivisionError>` のような独自の `deferror`、抽象 `Error`、エラー位置の省略を既存規則に従って指定できます。`Div` と `Mod` で同じエラーを返す必要はありません。値の型はどちらも `Result<Self>` であり、エラー契約は定義の metadata として保持します。引数と成功型の一致は通常どおり検査します。
+実装は `Result<Self, DomainDivisionError>` のような独自の `deferror`、抽象 `Error`、エラー位置の省略を既存規則に従って指定できます。`Div` と `Mod` で同じエラーを返す必要はありません。値の型はどちらも `Result<Self>` であり、エラー名の注釈はドキュメント用の metadata として保持します。指定したエラー名の存在は確認しますが、返すエラーの種類の静的制限・網羅検査は行いません。引数と成功型の一致は通常どおり検査します。
 
 `/` と `%` は `+`, `-`, `*` と同じ Expr グループで左結合です。例えば `8 / 2 * 3` は除算結果の `Result<Int>` と `Int` の乗算になるため拒否されます。その型不一致診断には、原因となった演算子の具体的なシグネチャが補助ラベルで表示されます。

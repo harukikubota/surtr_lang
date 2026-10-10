@@ -15,7 +15,7 @@
 | TC-05 | unary Hole入力の例外が残存 | 例外を除去し、標準署名・正本・成功／拒否テストを揃える |
 | TC-06・Enum | 明示implなしのEqを再現 | 暗黙proof/dispatchを除去し、明示impl / deriveに従う |
 | TC-06・PID | compiler-owned Eqが残存 | プロセス側で標準実装へ移す。`instance_of`のAPIとEqとの接続は未確定 |
-| TC-10 | 実装は決定どおり。説明に曖昧さが残存 | 具象エラー名の列挙がドキュメント目的であると正本へ明記 |
+| TC-10 | 文書修正済み | Resultの補助エラー名はドキュメント用で、返却kindの静的制限・網羅検査を行わないと正本へ明記 |
 | TC-11 | probe後の最終診断の情報欠落を再現 | 候補に依存しない注釈エラーの位置・構造化情報を保つ |
 
 プロセス以外で対応する確定項目はTC-05、TC-06のEnum側、TC-10、TC-11の4件。[runtime側のRT-11](runtime_audit_followup_20261010.md#rt-11-recoverの説明を現行の通常関数へ揃える)を合わせて5件となる。
@@ -70,7 +70,9 @@ print(inspect(Choice::One == Choice::One))
 
 ## TC-10: 具象エラー名の列挙はドキュメント目的
 
-**正本の説明修正が必要。実装変更は不要。** 次の入力は現行の型検査で成功し、実行結果は`Err(ZeroDivisionError("division by zero"))`だった。
+**文書修正済み。実装変更なし。** 2026-10-10、`docs/site/type-annotations.md`、`docs/site/trait-impls.md`、`docs/dev/Trait_system_spec.md`、`docs/dev/Error_spec.md`、`docs/dev/Xldr_spec.md`を整合させた。指定したエラー名の存在・直接戻り値位置の検査と、ドキュメント用metadataを区別し、返却kindの静的制限・網羅検査を行わないと明記した。変更箇所を現行説明・標準実装と照合し、`git diff --check`は成功。文書のみのためコンパイラテストは再実行していない。
+
+以下は修正前の調査記録。実装変更は不要。 次の入力は現行の型検査で成功し、実行結果は`Err(ZeroDivisionError("division by zero"))`だった。
 
 ```surtr
 def other_error() -> Result<Int, NoneError> { Err(ZeroDivisionError) }
