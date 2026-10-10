@@ -468,7 +468,7 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list index miss は `FacetListIndexOutOfBounds`、逆順 range は `FacetListRangeReversed`、map miss は `FacetKeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値は `inspect` 経由で標準エラー出力へ書き出す
 - `Error::kind` / `Error::message` / `Error::format` / `Error::same_kind` は `Error` 値を introspection / 表示文字列化・kind 比較する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
-- `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
+- `Result::recover` は標準定義の通常関数である。`match` で Ok をそのまま返し、Err の場合だけ nullary handler を呼び出す。通常の関数呼出し・分岐として実行し、専用 lowering や runtime builtin は持たない。`ErrorKind` の canonical identity を hidden ABI に渡す `Result::recover_kind` の専用処理とは区別する
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は `HashMap<String, Value>` の immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。

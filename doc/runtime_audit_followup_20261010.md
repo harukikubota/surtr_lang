@@ -14,14 +14,16 @@
 | RT-05 | プロセス側の残件 | 補充initの言語Errの通知・target未達の扱いは停止・回収仕様だけでは未確定 |
 | RT-06 | 修正対象の短名照合が残存 | プロセス側でcanonical identityへ統一。停止・回収仕様の対象とは別 |
 | RT-09 | 省略補完が残存 | プロセス側で`init_policy`省略をparse errorへ変更 |
-| RT-11 | 文書修正が必要 | `Result::recover`をspecial formとする古い説明を除く |
+| RT-11 | 文書修正済み | `Result::recover`の通常関数としての実行と、`recover_kind`のErrorKind専用処理を区別 |
 | RT-12 | 文書整理済み | 旧移行表を削除し、生成API・起動構成・runtimeの責務へ整理 |
 
 プロセス以外で新たに対応する確定項目はRT-11。型検査側の対応項目は[型検査の継続調査書](typecheck_audit_followup_20261010.md)を参照する。
 
 ## RT-11: recoverの説明を現行の通常関数へ揃える
 
-**対応が必要。文書のみの修正。** 元の「Lazy / Facet / recoverの特別loweringを再構成する」という前提は、recoverについて現行ソースと一致しない。
+**文書修正済み。実装変更なし。** 2026-10-10、`docs/dev/EldrVM_spec.md`の古いspecial form説明を、標準定義の通常関数によるmatchとnullary handler呼出しへ変更した。`recover_kind`のErrorKind専用処理と区別し、Lazy・Facetの既存契約は維持した。`docs/dev/Lazy_spec.md`、`lib/types/result.srt`、`lib/kernel.srt`と照合し、`git diff --check`は成功。文書のみのためコンパイラテストは再実行していない。
+
+以下は修正前の調査記録。元の「Lazy / Facet / recoverの特別loweringを再構成する」という前提は、recoverについて現行ソースと一致しない。
 
 - 現行の`lib/types/result.srt:199`は通常の`def recover(value: Result<$A>, handler: (-> Result<$A>)) -> Result<$A>`である。`match`でOkを返し、Errのときだけ`handler()`を呼ぶ。`@builtin`も専用loweringもない。
 - Sigilの`crates/sigil/src/resolver/expr.rs:220`、Scarの`checker/expr.rs:14803`、Forgeの`codegen.rs:12892`にある専用処理は`recover_kind`である。`ErrorKind`のcanonical identityをhidden ABIへ渡す契約と、通常のrecoverを混同しない。
