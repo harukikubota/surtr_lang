@@ -7,7 +7,7 @@
 ```surtr
 scores = hash!["alice" => 10, "bob" => 20]
 HashMap::map_get(scores, "alice") # Ok(10)
-HashMap::map_get(scores, "carol") # Err。欠落したキーは "carol"
+HashMap::map_get(scores, "carol") # Err(HashMapKeyMissing: hash map key not found: carol)
 HashMap::map_contains_key(scores, "bob") # True
 HashMap::map_len(scores) # 2
 updated = HashMap::map_insert(scores, "alice", 15)
