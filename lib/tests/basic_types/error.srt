@@ -1,5 +1,8 @@
 import Test;
-deferror ApiError(detail: String) { detail }
+deferror ApiError(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
 test("Error") {
   describe("kind") { it("returns the declaration name") {
                        do {

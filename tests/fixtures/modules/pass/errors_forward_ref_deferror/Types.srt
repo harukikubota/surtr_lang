@@ -1,3 +1,4 @@
 deferror NotFound(path: String) {
-  "Not Found: #{path}"
+  |path: String|
+  Self(message: "Not Found: #{path}", path)
 }

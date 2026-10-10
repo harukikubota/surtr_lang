@@ -9,7 +9,10 @@ impl Amount {
   }
 }
 
-deferror InvalidAmountError(value: Int) { "Invalid amount: #{value}" }
+deferror InvalidAmountError(value: Int) {
+  |value: Int|
+  Self(message: "Invalid amount: #{value}", value)
+}
 
 def main() -> Unit {
   amount: Amount = default()

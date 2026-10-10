@@ -135,7 +135,6 @@ impl BuiltinMeta {
             "__operator_int_add" => Opcode::AddInt,
             "__operator_int_sub" => Opcode::SubInt,
             "__operator_int_mul" => Opcode::MulInt,
-            "safe_mod" => Opcode::SafeModInt,
             "__operator_float_add" => Opcode::AddFloat,
             "__operator_float_sub" => Opcode::SubFloat,
             "__operator_float_mul" => Opcode::MulFloat,
@@ -508,7 +507,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "safe_mod",
         arity: 2,
-        sig_str: "(Int, Int) -> Result<Int, ZeroDivisionError>",
+        sig_str: "(Int, Int) -> Result<Int, ZeroModuloError>",
         compiler_generated_surfaces: &[],
         surfaces: &[],
     },
@@ -551,7 +550,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "shl",
         arity: 2,
-        sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
+        sig_str: "(Int, Int) -> Result<Int>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -562,7 +561,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("value", "Int"),
                     builtin_surface_parameter("bits", "Int"),
                 ],
-                "Result<Int, NegativeShiftCount>",
+                "Result<Int>",
                 &[],
             ),
         ],
@@ -570,7 +569,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "shr",
         arity: 2,
-        sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
+        sig_str: "(Int, Int) -> Result<Int>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -581,7 +580,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("value", "Int"),
                     builtin_surface_parameter("bits", "Int"),
                 ],
-                "Result<Int, NegativeShiftCount>",
+                "Result<Int>",
                 &[],
             ),
         ],
@@ -808,7 +807,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "codepoints",
         arity: 2,
-        sig_str: "(String, StringEncoding) -> Result<List<Int>, InvalidStringEncoding>",
+        sig_str: "(String, StringEncoding) -> Result<List<Int>>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -819,7 +818,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("value", "String"),
                     builtin_surface_parameter("encoding", "StringEncoding"),
                 ],
-                "Result<List<Int>, InvalidStringEncoding>",
+                "Result<List<Int>>",
                 &[],
             ),
         ],
@@ -827,7 +826,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "from_codepoints",
         arity: 2,
-        sig_str: "(List<Int>, StringEncoding) -> Result<String, InvalidStringEncoding>",
+        sig_str: "(List<Int>, StringEncoding) -> Result<String>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -838,7 +837,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("values", "List<Int>"),
                     builtin_surface_parameter("encoding", "StringEncoding"),
                 ],
-                "Result<String, InvalidStringEncoding>",
+                "Result<String>",
                 &[],
             ),
         ],
@@ -1105,7 +1104,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "map_get",
         arity: 2,
-        sig_str: "(HashMap<$V>, String) -> Result<$V, NoneError>",
+        sig_str: "(HashMap<$V>, String) -> Result<$V, HashMapKeyMissing>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -1116,7 +1115,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("map", "HashMap<$V>"),
                     builtin_surface_parameter("key", "String"),
                 ],
-                "Result<$V, NoneError>",
+                "Result<$V, HashMapKeyMissing>",
                 &[],
             ),
         ],
@@ -1516,7 +1515,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "captures",
         arity: 2,
-        sig_str: "(Regex, String) -> Result<RegexCaptures, NoneError>",
+        sig_str: "(Regex, String) -> Result<RegexCaptures, RegexCapturesNoMatch>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -1527,7 +1526,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("re", "Regex"),
                     builtin_surface_parameter("input", "String"),
                 ],
-                "Result<RegexCaptures, NoneError>",
+                "Result<RegexCaptures, RegexCapturesNoMatch>",
                 &[],
             ),
         ],
@@ -1571,7 +1570,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "get",
         arity: 2,
-        sig_str: "(RegexCaptures, Int) -> Result<String, NoneError>",
+        sig_str: "(RegexCaptures, Int) -> Result<String>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -1582,7 +1581,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("caps", "RegexCaptures"),
                     builtin_surface_parameter("idx", "Int"),
                 ],
-                "Result<String, NoneError>",
+                "Result<String>",
                 &[],
             ),
         ],
@@ -1590,7 +1589,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "get_name",
         arity: 2,
-        sig_str: "(RegexCaptures, String) -> Result<String, NoneError>",
+        sig_str: "(RegexCaptures, String) -> Result<String>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -1601,7 +1600,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("caps", "RegexCaptures"),
                     builtin_surface_parameter("name", "String"),
                 ],
-                "Result<String, NoneError>",
+                "Result<String>",
                 &[],
             ),
         ],
@@ -1609,7 +1608,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "find",
         arity: 2,
-        sig_str: "(Regex, String) -> Result<RegexMatch, NoneError>",
+        sig_str: "(Regex, String) -> Result<RegexMatch, RegexFindNoMatch>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -1620,7 +1619,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                     builtin_surface_parameter("re", "Regex"),
                     builtin_surface_parameter("input", "String"),
                 ],
-                "Result<RegexMatch, NoneError>",
+                "Result<RegexMatch, RegexFindNoMatch>",
                 &[],
             ),
         ],
@@ -1812,7 +1811,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "io_get",
         arity: 1,
-        sig_str: "(String) -> Result<String, InputError>",
+        sig_str: "(String) -> Result<String>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -1822,7 +1821,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                 &[
                     builtin_surface_parameter("prompt", "String"),
                 ],
-                "Result<String, InputError>",
+                "Result<String>",
                 &[],
             ),
         ],
@@ -1830,7 +1829,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "io_get_line",
         arity: 1,
-        sig_str: "(String) -> Result<String, InputError>",
+        sig_str: "(String) -> Result<String>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -1840,7 +1839,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                 &[
                     builtin_surface_parameter("prompt", "String"),
                 ],
-                "Result<String, InputError>",
+                "Result<String>",
                 &[],
             ),
         ],
@@ -3438,7 +3437,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "json_parse",
         arity: 1,
-        sig_str: "(String) -> Result<JsonValue, JsonParseError>",
+        sig_str: "(String) -> Result<JsonValue>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -3448,7 +3447,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                 &[
                     builtin_surface_parameter("text", "String"),
                 ],
-                "Result<JsonValue, JsonParseError>",
+                "Result<JsonValue>",
                 &[],
             ),
         ],
@@ -3456,7 +3455,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "json_stringify",
         arity: 1,
-        sig_str: "(JsonValue) -> Result<String, JsonEncodeError>",
+        sig_str: "(JsonValue) -> Result<String, JsonIntegerOutOfRange>",
         compiler_generated_surfaces: &[],
         surfaces: &[
             builtin_surface_spec(
@@ -3466,7 +3465,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
                 &[
                     builtin_surface_parameter("value", "JsonValue"),
                 ],
-                "Result<String, JsonEncodeError>",
+                "Result<String, JsonIntegerOutOfRange>",
                 &[],
             ),
         ],

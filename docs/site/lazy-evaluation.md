@@ -279,8 +279,8 @@ positive(3) # Ok(3)
 errorのプレースホルダの正規化型は `(-> Error)` です。error式を固定したキャプチャも作れます。
 
 ```surtr
-Result::map_err(Ok(1), EmptyList) # Ok(1)
-replace_error: (Result<Int> -> Result<Int>) = &Result::map_err(&1, EmptyList())
+Result::map_err(Ok(1), NotImplemented) # Ok(1)
+replace_error: (Result<Int> -> Result<Int>) = &Result::map_err(&1, NotImplemented())
 replace_error(Ok(1)) # Ok(1)
 ```
 
@@ -290,8 +290,8 @@ replace_error(Ok(1)) # Ok(1)
 errorのプレースホルダの正規化型は `(-> Error)` です。`map_err`と同じく、error を返す関数を渡すか、error 式を固定できます。
 
 ```surtr
-Result::cause(Ok(1), EmptyList) # Ok(1)
-add_cause: (Result<Int> -> Result<Int>) = &Result::cause(&1, EmptyList())
+Result::cause(Ok(1), NotImplemented) # Ok(1)
+add_cause: (Result<Int> -> Result<Int>) = &Result::cause(&1, NotImplemented())
 add_cause(Ok(1)) # Ok(1)
 ```
 

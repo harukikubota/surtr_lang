@@ -3,7 +3,7 @@
 CLI と REPL のエラー表示、実行時の詳細表示、スタックトレースの契約をまとめる。
 本書は現行実装の開発者向け仕様であり、表示設定によって評価規則や Error の内容を変更しない。
 診断の構造化データと renderer の規則は [diagnostics.md](diagnostics.md)、
-VM の Error 生成・伝播は [EldrVM_spec.md](EldrVM_spec.md) を正本とする。
+Error の生成・位置・情報保持は [Error_spec.md](Error_spec.md)、VM の表現と実行境界は [EldrVM_spec.md](EldrVM_spec.md) を正本とする。
 
 ## 表示対象
 
@@ -11,7 +11,7 @@ VM の Error 生成・伝播は [EldrVM_spec.md](EldrVM_spec.md) を正本とす
 |---|---|---|
 | 静的診断 | parse / resolve / typecheck / codegen の失敗 | Rune のコンパイル処理、Xldr の入力評価 |
 | VM の実行エラー | `eldr::RuntimeError`。message と実行時 context を持つ | VM 実行・background task・runtime 値の表示検証の失敗 |
-| 言語レベルの Error | `deferror` などが生成する `RichError`。kind、message、location、cause、diagnostic、stack trace を持つ | `run` の最終 Error / `Err(...)`、REPL の評価結果、明示的な `eprint` |
+| 言語レベルの Error | `deferror` などが生成する `RichError`。kind、message、Payload、location、cause、diagnostic、stack trace を持つ | `run` の最終 Error / `Err(...)`、REPL の評価結果、明示的な `eprint` |
 
 `Result::Err` は値として扱える。途中で生成した `Err` をすべて自動表示する規則ではない。
 `run` は最終結果の Error / `Err(...)` を診断として stderr に表示し、終了コードを `1` にする。
@@ -23,13 +23,14 @@ CLI 起動時のエラーと終了処理は [Rune_cli_spec.md](Rune_cli_spec.md)
 
 言語レベルの Error の主キャプションは、その Error を生成した位置を示す。
 
-- 明示的な Error は構築式を指す。
+- 明示的な Error は外部コンストラクタの呼出式を指す。
+- builtin / VM / Forge が定義を呼ぶ場合も発生元 source ID / span を渡し、`deferror` 宣言・内部 `Self` の位置で上書きしない。
 - 構文 Pattern の不一致は実際に失敗した子 Pattern を指す。
 - list の長さ不一致など、構造自体の失敗はその構造 Pattern 全体を指す。
 - 関数、named Extractor、ExtractorClosure、`apply_pattern` で同じ位置規則を使う。
 
 `Err` / `MatchResult::Err` への格納、SafeBind、MonadFail context の partial `<-` は、
-元 Error の kind、message、location、cause を保持する。
+元 Error の kind、message、Payload、location、cause を保持する。
 MonadFail のない Option / List などの partial `<-` は、既存の Alternative の規則に従い
 Error を破棄して empty を返す。この場合、伝播した Error の表示は生じない。
 詳細は [Pattern_spec.md](Pattern_spec.md) と [Do_intrinsic_spec.md](Do_intrinsic_spec.md) を参照する。
@@ -54,7 +55,7 @@ renderer に渡す直前に byte range へ変換する。
 ### テストのアサーション失敗
 
 `surtr test` の失敗イベントでは、標準 `Test` のアサーションが返した
-`Global::TestAssertionFailed` のキャプションを、そのアサーションの呼出式に付ける。
+標準 assertion Error 群のキャプションを、そのアサーションの呼出式に付ける。
 保存済みの stack trace から関数の正規名と呼出位置を取得し、末尾呼出しも同じ規則で扱う。
 `assert_ok_eq` などが内部で `assert_eq` を使う場合は、外側の公開アサーションの呼出式を指す。
 キャプチャしたアサーションも、そのキャプチャを実行した呼出式を指す。

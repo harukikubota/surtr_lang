@@ -1,3 +1,8 @@
+deferror InvalidInfiniteGeneratorCount(requested: Int) {
+  |requested: Int|
+  Self(message: "infinite generator count must be positive: #{requested}", requested)
+}
+
 @doc """
 Standard `InfiniteGenerator` type declaration.
 `InfiniteGenerator<$Item>` models a lazy sequence without normal termination
@@ -47,21 +52,17 @@ impl InfiniteGenerator {
 
   @doc """
   Validate a positive count and collect that many items.
-  A non-positive count returns `InvalidGeneratorCount` before generation.
-  The collected length is also checked, but a normally returning infinite
-  `take` cannot produce too few items.
+  A non-positive count returns `InvalidInfiniteGeneratorCount` before generation.
+  A normally returning infinite `take` always produces the requested length.
   ## REPL
   xldr(1)> InfiniteGenerator::take_exact(InfiniteGenerator::unfold(1, {|n| (n, n + 1)}), 2)
   Ok(([1, 2], InfiniteGenerator(<opaque>)))
   """
   def take_exact(gen: InfiniteGenerator<$Item>, count: Int) -> Result<(List<$Item>, InfiniteGenerator<$Item>)> {
-    if(count <= 0, Err(InvalidGeneratorCount(count)), _take_exact_checked(take(gen, count), count))
+    if(count <= 0, Err(InvalidInfiniteGeneratorCount(count)), Ok(take(gen, count)))
   }
 
-  defp _take_exact_checked(pair: (List<$Item>, InfiniteGenerator<$Item>), count: Int) -> Result<(List<$Item>, InfiniteGenerator<$Item>)> {
-    actual = List::len(pair._0)
-    if(actual == count, Ok(pair), Err(GeneratorShortage(count, actual)))
-  }
+
 
   @doc """
   Take items while the predicate is `True`, checking each item before adding

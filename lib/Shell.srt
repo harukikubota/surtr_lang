@@ -1,21 +1,46 @@
-deferror ShellCommandNotFound(command: String) {
-  "shell command not found: #{command}"
+deferror ShellSpawnResourceNotFound(command: String, args: List<String>, cwd: FilePath, detail: String) {
+  |command: String, args: List<String>, cwd: FilePath, detail: String|
+  Self(message: "shell could not start #{command} in #{to_string(cwd)}: #{detail}", command, args, cwd, detail)
 }
 
-deferror ShellSpawnFailed(detail: String) {
-  detail
+deferror ShellSpawnFailed(command: String, args: List<String>, cwd: FilePath, detail: String) {
+  |command: String, args: List<String>, cwd: FilePath, detail: String|
+  Self(message: "shell spawn failed for #{command} in #{to_string(cwd)}: #{detail}", command, args, cwd, detail)
 }
 
-deferror ShellWorkingDirectoryNotFound(path: String) {
-  "shell working directory not found: #{path}"
+deferror ShellWorkingDirectoryNotFound(path: FilePath) {
+  |path: FilePath|
+  Self(message: "shell working directory not found: #{to_string(path)}", path)
 }
 
-deferror ShellUnsupported(detail: String) {
-  detail
+deferror ShellWorkingDirectoryNotDirectory(path: FilePath) {
+  |path: FilePath|
+  Self(message: "shell working directory is not a directory: #{to_string(path)}", path)
 }
 
-deferror ShellIoError(detail: String) {
-  detail
+deferror ShellWorkingDirectoryInspectFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "shell working directory inspect failed for #{to_string(path)}: #{detail}", path, detail)
+}
+
+deferror ShellUnsupported(feature: String) {
+  |feature: String|
+  Self(message: "shell feature is unsupported: #{feature}", feature)
+}
+
+deferror ShellStdoutEncodingError(command: String, detail: String) {
+  |command: String, detail: String|
+  Self(message: "shell stdout encoding failed for #{command}: #{detail}", command, detail)
+}
+
+deferror ShellStderrEncodingError(command: String, detail: String) {
+  |command: String, detail: String|
+  Self(message: "shell stderr encoding failed for #{command}: #{detail}", command, detail)
+}
+
+deferror ShellWorkingDirectoryResolveFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "shell working directory resolve failed for #{to_string(path)}: #{detail}", path, detail)
 }
 
 @doc """

@@ -1,3 +1,93 @@
+deferror FileOutHandlerOpenFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "FileOutHandler open failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileOutHandlerWriteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "FileOutHandler write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror SupervisorAdoptForbidden(supervisor: String) {
+  |supervisor: String|
+  Self(message: "#{supervisor} does not allow adopt", supervisor)
+}
+
+deferror SupervisorAdoptUnknownPid(pid: Int, process: String, supervisor: String) {
+  |pid: Int, process: String, supervisor: String|
+  Self(message: "supervisor #{supervisor} cannot adopt unknown pid #{pid} for #{process}", pid, process, supervisor)
+}
+
+deferror ProcessStateUnknownPid(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "state requested for unknown pid #{pid} for #{process}", pid, process)
+}
+
+deferror ProcessStoreUnknownPid(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "store requested for unknown pid #{pid} for #{process}", pid, process)
+}
+
+deferror ProcessStatePidTypeMismatch(pid: Int, actual: String, expected: String) {
+  |pid: Int, actual: String, expected: String|
+  Self(message: "state pid #{pid} belongs to #{actual}, not #{expected}", pid, actual, expected)
+}
+
+deferror ProcessStorePidTypeMismatch(pid: Int, actual: String, expected: String) {
+  |pid: Int, actual: String, expected: String|
+  Self(message: "store pid #{pid} belongs to #{actual}, not #{expected}", pid, actual, expected)
+}
+
+deferror WorkerCreationExpectedPid(actual: String) {
+  |actual: String|
+  Self(message: "worker creation expected Ok(PID(...)), got #{actual}", actual)
+}
+
+deferror WorkerRefillExpectedPid(actual: String) {
+  |actual: String|
+  Self(message: "worker refill expected Ok(PID(...)), got #{actual}", actual)
+}
+
+deferror SupervisorAdoptNonWorker(supervisor: String, pid: Int, process: String) {
+  |supervisor: String, pid: Int, process: String|
+  Self(message: "supervisor #{supervisor} cannot adopt non-Worker pid #{pid} (#{process})", supervisor, pid, process)
+}
+
+deferror SupervisorAdoptWorkerNotLive(supervisor: String, pid: Int, process: String) {
+  |supervisor: String, pid: Int, process: String|
+  Self(message: "supervisor #{supervisor} cannot adopt non-live Worker pid #{pid} (#{process})", supervisor, pid, process)
+}
+
+deferror ProcessStateUnavailable(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "pid #{pid} (#{process}) has no materialized state", pid, process)
+}
+
+deferror WorkerStrategyFieldOutOfRange(field: String, value: Int) {
+  |field: String, value: Int|
+  Self(message: "worker strategy field #{field} exceeds runtime limit: #{value}", field, value)
+}
+
+deferror WorkerStrategyInitTargetMismatch(init: Int, target: Int) {
+  |init: Int, target: Int|
+  Self(message: "worker strategy init #{init} differs from target #{target}", init, target)
+}
+
+deferror WorkerStrategyBoundsInvalid(min: Int, target: Int, max: Int) {
+  |min: Int, target: Int, max: Int|
+  Self(message: "worker strategy bounds must satisfy 0 <= #{min} <= #{target} <= #{max}", min, target, max)
+}
+
+deferror FutureDeadlineExceeded(future: Int) {
+  |future: Int|
+  Self(message: "future #{future} timed out", future)
+}
+
+deferror ProcessReplyTargetStopped(future: Int, pid: Int) {
+  |future: Int, pid: Int|
+  Self(message: "target process #{pid} stopped before replying to future #{future}", future, pid)
+}
+
 @doc """
 Process runtime public surface and compiler-managed lowering declarations.
 """

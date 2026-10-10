@@ -1,5 +1,6 @@
 deferror InvalidTaskTransition(reason: String) {
-  "invalid task transition: #{reason}"
+  |reason: String|
+  Self(message: "invalid task transition: #{reason}", reason)
 }
 
 defenum WorkflowTask {

@@ -1,1 +1,1 @@
-Err(Timeout("future 2 timed out"))
+Err(FutureDeadlineExceeded("future 2 timed out"))

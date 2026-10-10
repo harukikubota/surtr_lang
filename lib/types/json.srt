@@ -1,3 +1,18 @@
+deferror JsonFieldMissing(key: String) {
+  |key: String|
+  Self(message: "json field missing at $.#{key}", key)
+}
+
+deferror JsonIndexMissing(index: Int) {
+  |index: Int|
+  Self(message: "json array index missing at $[#{index}]", index)
+}
+
+deferror JsonParseDepthLimitExceeded(line: Int, column: Int, depth: Int, limit: Int) {
+  |line: Int, column: Int, depth: Int, limit: Int|
+  Self(message: "json parse depth #{depth} reached the limit #{limit} at #{line}:#{column}", line, column, depth, limit)
+}
+
 @doc """
 JSON abstract syntax tree used by the standard library.
 `Object` stores values in `HashMap<JsonValue>`, so keys are always `String`
@@ -19,21 +34,49 @@ defenum JsonValue {
 Error returned when JSON text cannot be parsed.
 """
 deferror JsonParseError(line: Int, column: Int, detail: String) {
-  "json parse error at #{line}:#{column}: #{detail}"
+  |line: Int, column: Int, detail: String|
+  Self(message: "json parse error at #{line}:#{column}: #{detail}", line, column, detail)
 }
 
 @doc """
 Error returned when a `JsonValue` does not match the expected shape.
 """
-deferror JsonDecodeError(path: String, expected: String, got: String) {
-  "json decode error at #{path}: expected #{expected}, got #{got}"
+deferror JsonObjectExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected object, got #{got}", path, got)
+}
+
+deferror JsonArrayExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected array, got #{got}", path, got)
+}
+
+deferror JsonStringExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected string, got #{got}", path, got)
+}
+
+deferror JsonIntExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected int, got #{got}", path, got)
+}
+
+deferror JsonFloatExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected float, got #{got}", path, got)
+}
+
+deferror JsonBooleanExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected boolean, got #{got}", path, got)
 }
 
 @doc """
 Error returned when a `JsonValue` cannot be serialized as JSON text.
 """
-deferror JsonEncodeError(detail: String) {
-  "json encode error: #{detail}"
+deferror JsonIntegerOutOfRange(value: Int) {
+  |value: Int|
+  Self(message: "JSON integer cannot be represented as a JSON number: #{value}", value)
 }
 
 defmod Json {
@@ -43,20 +86,20 @@ defmod Json {
   Decimal or exponent literals become `JsonValue::Float(Float)`.
   Malformed user JSON returns `Err(JsonParseError(...))`.
   """
-  @builtin def parse(text: String) -> Result<JsonValue, JsonParseError>
+  @builtin def parse(text: String) -> Result<JsonValue>
 
   @doc """
   Convert `JsonValue` into JSON text.
   Object key order is deterministic and follows `HashMap::entries`.
-  Values that cannot be represented by JSON return `Err(JsonEncodeError(...))`.
+  Values that cannot be represented by JSON return `Err(JsonIntegerOutOfRange(...))`.
   """
-  @builtin def stringify(value: JsonValue) -> Result<String, JsonEncodeError>
+  @builtin def stringify(value: JsonValue) -> Result<String, JsonIntegerOutOfRange>
 
   @doc """
   Decode JSON text into `JsonValue`.
   This is the public text boundary wrapper around `Json::parse`.
   """
-  def decode(text: String) -> Result<JsonValue, JsonParseError> {
+  def decode(text: String) -> Result<JsonValue> {
     Json::parse(text)
   }
 
@@ -64,31 +107,31 @@ defmod Json {
   Encode `JsonValue` into JSON text.
   This is the public text boundary wrapper around `Json::stringify`.
   """
-  def encode(value: JsonValue) -> Result<String, JsonEncodeError> {
+  def encode(value: JsonValue) -> Result<String, JsonIntegerOutOfRange> {
     Json::stringify(value)
   }
 
   @doc """
   Read an object field by key.
-  Returns `Err(JsonDecodeError(...))` when the value is not an object or the
-  field is missing.
+  Returns `JsonObjectExpected` for a non-object and `JsonFieldMissing` for a
+  missing field.
   """
-  def get(value: JsonValue, key: String) -> Result<JsonValue, JsonDecodeError> {
+  def get(value: JsonValue, key: String) -> Result<JsonValue> {
     match value {
-      JsonValue::Object(map) => Result::map_err(HashMap::map_get(map, key), JsonDecodeError("$." ++ key, "field", "missing")),
-      other => Err(JsonDecodeError("$." ++ key, "object", kind(other))),
+      JsonValue::Object(map) => Result::map_err(HashMap::map_get(map, key), JsonFieldMissing(key)),
+      other => Err(JsonObjectExpected("$." ++ key, kind(other))),
     }
   }
 
   @doc """
   Read an array element by index.
-  Returns `Err(JsonDecodeError(...))` when the value is not an array or the
-  index is missing.
+  Returns `JsonArrayExpected` for a non-array and `JsonIndexMissing` for a
+  missing index.
   """
-  def at(value: JsonValue, index: Int) -> Result<JsonValue, JsonDecodeError> {
+  def at(value: JsonValue, index: Int) -> Result<JsonValue> {
     match value {
-      JsonValue::Array(values) => Result::map_err(List::at(values, index), JsonDecodeError("$[#{index}]", "array index", "missing")),
-      other => Err(JsonDecodeError("$[#{index}]", "array", kind(other))),
+      JsonValue::Array(values) => Result::map_err(List::at(values, index), JsonIndexMissing(index)),
+      other => Err(JsonArrayExpected("$[#{index}]", kind(other))),
     }
   }
 
@@ -110,60 +153,60 @@ defmod Json {
   @doc """
   Decode a JSON string value.
   """
-  def as_string(value: JsonValue) -> Result<String, JsonDecodeError> {
+  def as_string(value: JsonValue) -> Result<String> {
     match value {
       JsonValue::String(text) => Ok(text),
-      other => Err(JsonDecodeError("$", "string", kind(other))),
+      other => Err(JsonStringExpected("$", kind(other))),
     }
   }
 
   @doc """
   Decode a JSON integer value.
   """
-  def as_int(value: JsonValue) -> Result<Int, JsonDecodeError> {
+  def as_int(value: JsonValue) -> Result<Int> {
     match value {
       JsonValue::Int(n) => Ok(n),
-      other => Err(JsonDecodeError("$", "int", kind(other))),
+      other => Err(JsonIntExpected("$", kind(other))),
     }
   }
 
   @doc """
   Decode a JSON floating-point value.
   """
-  def as_float(value: JsonValue) -> Result<Float, JsonDecodeError> {
+  def as_float(value: JsonValue) -> Result<Float> {
     match value {
       JsonValue::Float(n) => Ok(n),
-      other => Err(JsonDecodeError("$", "float", kind(other))),
+      other => Err(JsonFloatExpected("$", kind(other))),
     }
   }
 
   @doc """
   Decode a JSON boolean value.
   """
-  def as_bool(value: JsonValue) -> Result<Boolean, JsonDecodeError> {
+  def as_bool(value: JsonValue) -> Result<Boolean> {
     match value {
       JsonValue::Bool(value) => Ok(value),
-      other => Err(JsonDecodeError("$", "boolean", kind(other))),
+      other => Err(JsonBooleanExpected("$", kind(other))),
     }
   }
 
   @doc """
   Decode a JSON array value.
   """
-  def as_array(value: JsonValue) -> Result<List<JsonValue>, JsonDecodeError> {
+  def as_array(value: JsonValue) -> Result<List<JsonValue>> {
     match value {
       JsonValue::Array(values) => Ok(values),
-      other => Err(JsonDecodeError("$", "array", kind(other))),
+      other => Err(JsonArrayExpected("$", kind(other))),
     }
   }
 
   @doc """
   Decode a JSON object value.
   """
-  def as_object(value: JsonValue) -> Result<HashMap<JsonValue>, JsonDecodeError> {
+  def as_object(value: JsonValue) -> Result<HashMap<JsonValue>> {
     match value {
       JsonValue::Object(map) => Ok(map),
-      other => Err(JsonDecodeError("$", "object", kind(other))),
+      other => Err(JsonObjectExpected("$", kind(other))),
     }
   }
 }

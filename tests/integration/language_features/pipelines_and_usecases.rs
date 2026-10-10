@@ -303,7 +303,7 @@ match bound {
 fn pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping() {
     assert_output(
         r#"deferror ParseHandError(detail: String) {
-  detail
+  |detail: String| Self(message: detail, detail)
 }
 
 def is_digit_rank(n: Int) -> Boolean {
@@ -398,12 +398,13 @@ match lifted("x") {
 
 fn compose_chains_accept_prior_compose_expressions_and_function_value_variables() {
     assert_output(
-        r#"def parse(text: String) -> Result<Int> {
-  if(eq(text, "7"), Ok(7), Err(IndexOutOfBounds("bad")))
+        r#"deferror InvalidCount { |detail: String| detail }
+def parse(text: String) -> Result<Int> {
+  if(eq(text, "7"), Ok(7), Err(InvalidCount("bad")))
 }
 
 def require_small(n: Int) -> Result<Int> {
-  if(n < 10, Ok(n), Err(IndexOutOfBounds("too large")))
+  if(n < 10, Ok(n), Err(InvalidCount("too large")))
 }
 
 def double(n: Int) -> Int {
@@ -888,9 +889,9 @@ print(inspect(Facet::view(List.[-2], values)))
 print(inspect(Facet::view(List.[1..2], values)))
 print(inspect(Facet::view(List.[0..-2], values)))"#,
         &[
-            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
-            "Err(IndexOutOfBounds(\"index 1 out of bounds for len 1\"))",
-            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
+            "Err(FacetListIndexOutOfBounds(\"facet list index -2 out of bounds for length 1\"))",
+            "Err(FacetListIndexOutOfBounds(\"facet list index 1 out of bounds for length 1\"))",
+            "Err(FacetListIndexOutOfBounds(\"facet list index -2 out of bounds for length 1\"))",
         ],
     );
 }

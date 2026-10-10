@@ -3577,10 +3577,11 @@ impl Resolver {
                     span: span.clone(),
                 };
                 let mut error_scope = self.scope.child();
+                error_scope.define_with_id("Self", uid);
                 let mut rfields = Vec::new();
                 for f in fields {
                     reject_special_variant_binding(&f.name, &f.span)?;
-                    let uid = error_scope.define(&f.name, f.span.clone());
+                    let uid = error_scope.reserve_id();
                     rfields.push(ResolvedField {
                         id: Some(ResolvedId {
                             name: f.name.clone(),

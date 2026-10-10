@@ -9,14 +9,14 @@ or an Extractor failure supplies an Error to `MonadFail::fail`. The resulting
 value is returned immediately; the remaining statements are skipped.
 
 Here the literal Pattern `True` can fail. A mismatch produces a
-`PatternMismatch` Error, and `MonadFail::fail` for Result constructs `Err(error)`
+`BooleanLiteralPatternMismatch` Error, and `MonadFail::fail` for Result constructs `Err(error)`
 as the function's return value. The successful path returns `Ok(1)`.
 
 xldr(1)> def require_true(value: Boolean) -> Result<Int> { True =? value; Ok(1) }
 xldr(2)> require_true(True)
 Ok(1)
 xldr(3)> match require_true(False) { Err(error) => Error::kind(error), Ok(_) => "success" }
-"PatternMismatch"
+"BooleanLiteralPatternMismatch"
 
 ## Failure in do
 SafeBind and partial Patterns in `<-` use the do block's carrier as their
@@ -33,7 +33,7 @@ xldr(1)> def require_true_do(value: Boolean) -> Result<Int> { do { True <- Ok(va
 xldr(2)> require_true_do(True)
 Ok(1)
 xldr(3)> match require_true_do(False) { Err(error) => Error::kind(error), Ok(_) => "success" }
-"PatternMismatch"
+"BooleanLiteralPatternMismatch"
 
 SafeBind automatically unwraps only the outer layer of a canonical Result on
 its right-hand side. Implementing MonadFail does not make other carriers

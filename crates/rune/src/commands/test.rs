@@ -1220,9 +1220,9 @@ mod tests {
             kind: eldr::vm::VmTestEventKind::Failed,
             io: None,
             diagnostic: Some(eldr::vm::VmTestDiagnostic {
-                kind: "Global::TestAssertionFailed".to_string(),
+                kind: "Global::TestExpectedTrue".to_string(),
                 message: "expected True, got False".to_string(),
-                assertion: Some("assert_eq".to_string()),
+                assertion: Some("assert_true".to_string()),
                 assertion_call_kind: Some(sindr::runtime::RuntimeCallKind::DirectFunction),
                 file: "helper.srt".to_string(),
                 line: 4,
@@ -1236,7 +1236,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             rendered,
-            "Error: Global::TestAssertionFailed: expected True, got False\n  at helper.srt:4:3\n"
+            "Error: Global::TestExpectedTrue: expected True, got False\n  at helper.srt:4:3\n"
         );
     }
 

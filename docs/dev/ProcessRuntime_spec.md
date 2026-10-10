@@ -79,7 +79,7 @@
 | IR / runtime metadata | `RuntimeProcessSpec`、`RuntimeHandlerSpec`、`RuntimeInitSpec`、`RuntimeBootPlan` へ正規化する |
 | codegen | surface syntax ではなく、正規化済み spec と dispatch 情報を VM に渡す |
 | VM / scheduler | `Initializing`、`Ready`、`Waiting`、`deadline_queue`、`waiting_table`、`init_waiters`、process context の handler slot を扱う |
-| standard library | `StandbyInit<T>`、`TimeOutError`、`Process::sleep`、`Task::async`、singleton PID API、`InHandler` / `OutHandler` capability を整理する |
+| standard library | `StandbyInit<T>`、`FutureDeadlineExceeded`、`Process::sleep`、`Task::async`、singleton PID API、`InHandler` / `OutHandler` capability を整理する |
 | diagnostics | 定義、Boot、呼び出し、VM spec 境界の各エラーを分ける |
 
 ---
@@ -603,7 +603,7 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), WorkerStrategy::fixed(4))
 - `snapshot` / `idle_count` / `busy_count` / `drain` / `set_target` は public `Workers` API ではない。pool 固有の観測は VM dump / process runtime snapshot で扱い、post-init に strategy を runtime へ渡す public API は持たない
 - timeout は `submit_timeout` のような別 public API ではなく、`Workers::*` 呼び出しに付く `@timeout(...)` modifier を使う
 
-runtime は `WorkerStrategy` を worker set state に保持し、`Fix(n)` について `init == n` かつ `0 <= min <= n <= max` を検証する。条件を満たさない場合、`Sup::workers` は `Err(InvalidWorkerStrategy)` を返す。
+runtime は `WorkerStrategy` を worker set state に保持し、`Fix(n)` について `init == n` かつ `0 <= min <= n <= max` を検証する。`init != n` は `WorkerStrategyInitTargetMismatch(init, n)`、bounds 違反は `WorkerStrategyBoundsInvalid(min, n, max)` を `Err` で返す。正規の `Int` が内部の固定幅整数へ収まらない場合は `WorkerStrategyFieldOutOfRange(field, value)` を返し、元の整数を保存する。schema・tag・field・型の内部不整合は Rust `RuntimeError` とする。
 
 worker exit 時、runtime は dead PID を membership から除去する。`Workers<$Worker>` handle 自体は削除せず、supervisor policy 配下で target 数まで worker を refill する。したがって user code は closed-set handle を保持し続け、reconcile loop や target 更新 API を持たない。
 
@@ -763,7 +763,7 @@ task = Task::async({||
 result = Task::await(task) @timeout(100ms)
 ```
 
-`@timeout` は直前の runtime-managed call に timeout policy を付与する。timeout した場合、結果値は `Err(TimeOutError)` になる。
+`@timeout` は直前の runtime-managed call に timeout policy を付与する。timeout した場合、結果値は `Err(FutureDeadlineExceeded(...))` になる。この Error の `future: Int` フィールドに期限を超過した future ID を保存する。
 
 `Task::async` は body を開始し、最初の待機・予算切れ・完了まで進んだ後に handle を返す。
 たとえば body が出力してから sleep する場合、その出力は handle を受け取った後の処理より先に起きる。
@@ -797,13 +797,13 @@ result = Task::await(task) @timeout(1s)
 | timeout | 起点 | 終点 | timeout 時 |
 |---|---|---|---|
 | init timeout | process 起動 | `Ready(state)` | `RuntimeError::ProcessInitTimeout` |
-| call timeout | call 開始 | reply | `Err(TimeOutError)` |
-| task timeout | task 開始 | result | `Err(TimeOutError)` |
+| call timeout | call 開始 | reply | `Err(FutureDeadlineExceeded(...))` |
+| task timeout | task 開始 | result | `Err(FutureDeadlineExceeded(...))` |
 | sleep | sleep 開始 | timer wake | error ではない |
 
 Ready 前に call した場合、call timeout は Ready 待ち時間を含む。
 `CallResult::ReplyLater(next_state, callback)` の場合も、外側の call timeout は call entry から開始し、callback の待機・`Process::sleep` 時間を含む。
-外側 timeout が先に到達した場合は reply future を `Err(TimeOutError)` として解決し、reply mapping / deadline を消す。
+外側 timeout が先に到達した場合は reply future を `Err(FutureDeadlineExceeded(...))` として解決し、reply mapping / deadline を消す。
 callback completion が先に解決した場合だけ callback の reply が勝ち、timeout 後に callback が完了しても timed-out reply を上書きしない。
 
 ### 3.16 singleton PID API
@@ -1014,8 +1014,8 @@ handler override の検査:
 | open timing | handler init 時 |
 | lifecycle | handler lifecycle 中は open したまま保持 |
 | shutdown | flush / close |
-| open failure | `RuntimeError::HandlerInitFailed` |
-| write failure | `OutHandler::write` の `Err` |
+| open failure | `Err(FileOutHandlerOpenFailed(path, detail))` |
+| write failure | `OutHandler::write` の `Err(FileOutHandlerWriteFailed(path, detail))` |
 
 同一 VM 内で同じ canonical path を指す `FileOutHandler(path)` が複数出現した場合、runtime は同一 file sink に正規化する。
 
@@ -1589,8 +1589,8 @@ checkpointはprocess・future・detached taskの表とentryを共有し、変更
 | runtime dispatch | handler table に存在しない handler | `runtime-handler-not-found` | runtime process handler was not found. | This indicates compiler / VM spec mismatch. |
 | runtime dispatch | singleton slot が空 | `runtime-singleton-slot-missing` | singleton slot is missing for a required process. | This indicates BootPlan / VM state mismatch. |
 | scheduler | Pending が scheduler に登録できない | `runtime-pending-registration-failed` | process pending state could not be registered. | This indicates runtime scheduler inconsistency. |
-| scheduler | caller timeout | `runtime-call-timeout` | process call timed out. | Returned as `Err(TimeOutError)` to user code. |
-| task | task timeout | `runtime-task-timeout` | task timed out. | Returned as `Err(TimeOutError)` to user code. |
+| scheduler | caller timeout | `runtime-call-timeout` | process call timed out. | Returned as `Err(FutureDeadlineExceeded(...))` to user code. |
+| task | task timeout | `runtime-task-timeout` | task timed out. | Returned as `Err(FutureDeadlineExceeded(...))` to user code. |
 | handler init | `FileOutHandler` の open に失敗 | `runtime-handler-init-failed` | handler init failed. | Check file path, permissions, or host resources. |
 | handler write | `OutHandler::write` が失敗 | `runtime-handler-write-failed` | handler write failed. | Returned as `Err` from `OutHandler::write`. |
 

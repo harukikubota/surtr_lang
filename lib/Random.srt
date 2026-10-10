@@ -10,7 +10,8 @@ Concrete random-module error for empty half-open ranges.
 Random integer helpers require `start < end`.
 """
 deferror InvalidRandomRange(start: Int, end: Int) {
-  "random range must be non-empty: #{start}..#{end}"
+  |start: Int, end: Int|
+  Self(message: "random range must be non-empty: #{start}..#{end}", start, end)
 }
 
 @doc """

@@ -66,7 +66,10 @@ fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
 print("after")"#,
     )
     .expect("Pipeline failed");
-    assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    assert_eq!(
+        stderr,
+        vec!["Error: EmptyHeadTailListPattern: head-tail list pattern requires a non-empty List"]
+    );
 }
 
 fn safebind_string_pattern_empty_propagates_pattern_mismatch() {
@@ -78,7 +81,7 @@ print("after")"#,
     .expect("Pipeline failed");
     assert_eq!(
         stderr,
-        vec!["Error: PatternMismatch: Pattern did not match."]
+        vec!["Error: UnconsEmptyString: cannot uncons empty string"]
     );
 }
 
@@ -90,7 +93,7 @@ fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs() {
     .expect("Pipeline failed");
     assert_eq!(
         stderr,
-        vec!["Error: IndexOutOfBounds: LHS.len(1) < RHS.len(2)"]
+        vec!["Error: ListPatternTooLong: LHS.len(1) < RHS.len(2)"]
     );
 }
 
@@ -102,7 +105,7 @@ fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs() {
     .expect("Pipeline failed");
     assert_eq!(
         stderr,
-        vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]
+        vec!["Error: ListPatternTooShort: LHS.len(2) > RHS.len(1)"]
     );
 }
 
@@ -214,7 +217,7 @@ print("after")"#,
     assert_eq!(stdout, Vec::<String>::new());
     assert_eq!(
         stderr,
-        vec!["Error: PatternMismatch: Pattern did not match."]
+        vec!["Error: ResultVariantPatternMismatch: Result pattern expected Ok, got Err"]
     );
 }
 
@@ -233,7 +236,10 @@ match ret {
 }"#,
     )
     .expect("program should run");
-    assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    assert_eq!(
+        stderr,
+        vec!["Error: EmptyHeadTailListPattern: head-tail list pattern requires a non-empty List"]
+    );
 }
 
 fn safebind_function_early_return_on_err() {
@@ -593,7 +599,7 @@ fn do_extractor_error_is_preserved_in_monad_fail() {
 }
 
 print(inspect(Identity::run(ResultT::run(result))))"#,
-        &["Err(PatternMismatch(\"Pattern did not match.\"))"],
+        &["Err(UnconsEmptyList(\"cannot uncons empty list\"))"],
     );
 }
 
@@ -645,7 +651,7 @@ print("after")"#,
     assert_eq!(stdout, Vec::<String>::new());
     assert_eq!(
         stderr,
-        vec!["Error: PatternMismatch: Pattern did not match."]
+        vec!["Error: EnumVariantPatternMismatch: Option pattern expected Some, got None"]
     );
 }
 
@@ -733,7 +739,7 @@ def load() -> Result<Int, NotFound> {
 }
 
 deferror NotFound(path: String) {
-  "Not Found: #{path}"
+  |path: String| Self(message: "Not Found: #{path}", path)
 }"#,
         &["err"],
     );
@@ -770,7 +776,7 @@ match Mod::safe_mod(1, 0) {
         stderr,
         vec![
             "Error: ZeroDivisionError: division by zero",
-            "Error: ZeroDivisionError: division by zero",
+            "Error: ZeroModuloError: modulo by zero",
         ]
     );
 }
@@ -778,7 +784,7 @@ match Mod::safe_mod(1, 0) {
 fn deferror_interpolated_message_display() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
+  |html: String| Self(message: "Page Not Found. #{html}", html)
 }
 
 err_result: Result<Int> = Err(PageNotFound("404"))
@@ -812,7 +818,7 @@ match ret {
 fn deferror_accepts_raw_error_binding() {
     assert_output(
         r#"deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
+  |html: String| Self(message: "Page Not Found. #{html}", html)
 }
 error = PageNotFound("404")
 print(error.message)"#,
@@ -902,7 +908,7 @@ fn apply_pattern_inside_non_result_do_keeps_its_result_value() {
         .expect("apply_pattern must return its own Result inside the do body");
     assert_eq!(
         output,
-        ["Option::Some(Err(PatternMismatch(\"Pattern did not match.\")))"]
+        ["Option::Some(Err(IntLiteralPatternMismatch(\"Int literal pattern 11 did not match 2\")))"]
     );
 }
 

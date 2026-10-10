@@ -64,10 +64,12 @@ fn assert_error_source_location_with_bytecode(
     assert_eq!(dump["result"]["status"], "result_err", "{dump}\n{source}");
     assert_eq!(dump["result"]["error"]["kind"], kind, "{dump}\n{source}");
     let (origin_source, origin_file, origin, unique) = if origin == "stdlib_parse_error" {
-        (fs::read_to_string(repo_root().join("lib/types/int.srt")).unwrap(),
-         "types/int.srt".to_string(),
-         "ParseIntError(\"invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}\")",
-         false)
+        (
+            fs::read_to_string(repo_root().join("lib/types/int.srt")).unwrap(),
+            "types/int.srt".to_string(),
+            "IntParseInvalidDigit(base, ch, index)",
+            false,
+        )
     } else if definitions
         .as_ref()
         .is_some_and(|definitions| definitions.contains(origin))
@@ -134,7 +136,7 @@ fn assert_error_source_location_with_bytecode(
 
 #[test]
 fn error_source_location_roundtrip_retains_included_generation_site_and_call_trace() {
-    let source = "deferror Rejected(message: String) { message }\ndefmod E {\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"roundtrip\"))\n  }\n}\ndef main() -> Result<Int> {\n  E::checked(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n";
+    let source = "deferror Rejected { |message: String| message }\ndefmod E {\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"roundtrip\"))\n  }\n}\ndef main() -> Result<Int> {\n  E::checked(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n";
     let dump = assert_error_source_location_with_bytecode(
         source,
         "Rejected(\"roundtrip\")",
@@ -156,43 +158,58 @@ fn error_source_location_roundtrip_retains_included_generation_site_and_call_tra
 #[test]
 fn error_source_location_safebind_selects_the_failing_pattern_node() {
     for (setup, binding, origin, kind) in [
-        ("", "1 =? 2", "1", "PatternMismatch"),
-        ("", "(x, 11) =? (3, 2)", "11", "PatternMismatch"),
-        ("", "(\"あ\", 11) =? (\"あ\", 2)", "11", "PatternMismatch"),
-        ("", "[[x]] =? [[]]", "[x]", "IndexOutOfBounds"),
+        ("", "1 =? 2", "1", "IntLiteralPatternMismatch"),
+        ("", "(x, 11) =? (3, 2)", "11", "IntLiteralPatternMismatch"),
+        (
+            "",
+            "(\"あ\", 11) =? (\"あ\", 2)",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
+        ("", "[[x]] =? [[]]", "[x]", "ListPatternTooShort"),
         (
             "empty: Option<Int> = Option::None\n  ",
             "Option::Some(x) =? empty",
             "Option::Some(x)",
-            "PatternMismatch",
+            "EnumVariantPatternMismatch",
         ),
         (
             "",
             "Option::Some(11) =? Option::Some(2)",
             "11",
-            "PatternMismatch",
+            "IntLiteralPatternMismatch",
         ),
         (
             "expected = 11\n  ",
             "^expected =? 2",
             "^expected",
-            "PatternMismatch",
+            "PinnedValuePatternMismatch",
         ),
-        ("", "(x, 11) @ whole =? (3, 2)", "11", "PatternMismatch"),
+        (
+            "",
+            "(x, 11) @ whole =? (3, 2)",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
         (
             "empty: List<Int> = []\n  ",
             "[head, ..tail] =? empty",
             "[head, ..tail]",
-            "EmptyList",
+            "EmptyHeadTailListPattern",
         ),
         (
             "",
             "[first, ..rest] =? \"\"",
             "[first, ..rest]",
-            "PatternMismatch",
+            "UnconsEmptyString",
         ),
-        ("", "[x, y] =? [2]", "[x, y]", "IndexOutOfBounds"),
-        ("", "11 =? Int::parse(\"2\")", "11", "PatternMismatch"),
+        ("", "[x, y] =? [2]", "[x, y]", "ListPatternTooShort"),
+        (
+            "",
+            "11 =? Int::parse(\"2\")",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
     ] {
         let source =
             format!("def main() -> Result<Int> {{\n  {setup}{binding}\n  Ok(0)\n}}\nmain()\n");
@@ -204,15 +221,15 @@ fn error_source_location_safebind_selects_the_failing_pattern_node() {
 fn error_source_location_keeps_generation_site_across_result_and_extractor_propagation() {
     let cases = [
         ("def main() -> Result<Int> {\n  1 =? Err(NoneError)\n  Ok(0)\n}\nmain()\n", "NoneError", "NoneError"),
-        ("def main() -> Result<Int> {\n  value =? Int::parse(\"a\")\n  Ok(value)\n}\nmain()\n", "stdlib_parse_error", "ParseIntError"),
-        ("deferror Rejected(message: String) { message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  value =? source()\n  Ok(value)\n}\nmain()\n", "Rejected(\"generated\")" , "Rejected"),
-        ("deferror Rejected(message: String) { message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  source()\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
-        ("deferror Rejected(message: String) { message }\ndefmod E {\n  defextractor reject(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"generated\"))\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    reject(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}\ndef main() -> Result<Int> {\n  E::outer(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
-        ("defmod E {\n  defextractor check(value: Int) -> MatchResult<Int> {\n    11 =? value\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::check(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "PatternMismatch"),
-        ("defmod E {\n  defextractor identity(value: Int) -> MatchResult<Int> {\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::identity(11) =? Ok(2)\n  Ok(0)\n}\nmain()\n", "11", "PatternMismatch"),
-        ("def main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int|\n    11 =? value\n    MatchResult::Ok(value)\n  }\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "PatternMismatch"),
-        ("deferror Rejected(message: String) { message }\ndef main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected(\"closure\"))}\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"closure\")", "Rejected"),
-        ("def main() -> Result<Int> {\n  _ =? apply_pattern((2, 3), (_, 11))\n  Ok(0)\n}\nmain()\n", "11", "PatternMismatch"),
+        ("def main() -> Result<Int> {\n  value =? Int::parse(\"a\")\n  Ok(value)\n}\nmain()\n", "stdlib_parse_error", "IntParseInvalidDigit"),
+        ("deferror Rejected { |message: String| message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  value =? source()\n  Ok(value)\n}\nmain()\n", "Rejected(\"generated\")" , "Rejected"),
+        ("deferror Rejected { |message: String| message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  source()\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
+        ("deferror Rejected { |message: String| message }\ndefmod E {\n  defextractor reject(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"generated\"))\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    reject(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}\ndef main() -> Result<Int> {\n  E::outer(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
+        ("defmod E {\n  defextractor check(value: Int) -> MatchResult<Int> {\n    11 =? value\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::check(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
+        ("defmod E {\n  defextractor identity(value: Int) -> MatchResult<Int> {\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::identity(11) =? Ok(2)\n  Ok(0)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
+        ("def main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int|\n    11 =? value\n    MatchResult::Ok(value)\n  }\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
+        ("deferror Rejected { |message: String| message }\ndef main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected(\"closure\"))}\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"closure\")", "Rejected"),
+        ("def main() -> Result<Int> {\n  _ =? apply_pattern((2, 3), (_, 11))\n  Ok(0)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
     ];
     for (source, origin, kind) in cases {
         assert_error_source_location(source, origin, kind);
@@ -226,13 +243,13 @@ fn error_source_location_partial_bind_selects_the_failing_child_in_result_contex
         "value =? Identity::run(ResultT::run(do::<ResultT<Identity, _>> {\n    (x, 11) <- ResultT::ok::<Identity>((3, 2))\n    ResultT::ok::<Identity>(x)\n  }))\n  Ok(value)",
     ] {
         let source = format!("def main() -> Result<Int> {{\n  {body}\n}}\nmain()\n");
-        assert_error_source_location(&source, "11", "PatternMismatch");
+        assert_error_source_location(&source, "11", "IntLiteralPatternMismatch");
     }
 }
 
 #[test]
 fn error_source_location_statement_question_preserves_error_and_cause() {
-    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n}\n";
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n}\n";
     for body in [
         "E::source()?\n  Ok(0)",
         "match True { True => { E::source()?\n    () }, False => () }\n  Ok(0)",
@@ -251,7 +268,7 @@ fn error_source_location_statement_question_preserves_error_and_cause() {
 
 #[test]
 fn error_source_location_partial_bind_preserves_monad_fail_errors_and_causes() {
-    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
     for body in [
         "do::<Result> {\n    E::checked(found) <- Ok(2)\n    Ok(found)\n  }",
         "found =? Identity::run(ResultT::run(do::<ResultT<Identity, _>> {\n    E::checked(found) <- ResultT::ok::<Identity>(2)\n    ResultT::ok::<Identity>(found)\n  }))\n  Ok(found)",

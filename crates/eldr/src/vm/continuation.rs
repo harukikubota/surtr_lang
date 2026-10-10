@@ -140,6 +140,18 @@ impl VM {
         Ok(())
     }
 
+    pub(super) fn error_construction_source(&self) -> Option<(u32, u32)> {
+        self.continuations
+            .iter()
+            .rev()
+            .find_map(|frame| match &frame.destination {
+                ReturnDestination::Builtin(BuiltinContinuation::Runtime(
+                    RuntimeContinuation::ErrorConstruction { location, .. },
+                )) => Some((location.span_start, location.span_end)),
+                _ => None,
+            })
+    }
+
     pub(super) fn callable_invocation(
         &mut self,
         callable: Callable,

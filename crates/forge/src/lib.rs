@@ -164,7 +164,7 @@ mod tests {
         })
     }
 
-    fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
+    fn typed_with_builtin_prelude(source: &str) -> scar::typed::TypedProgram {
         let prelude = cached_std_compile_prefix();
         let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
@@ -182,7 +182,6 @@ mod tests {
         scar_session
             .typecheck_staged_program_in_place_with_context(resolved, TypecheckContext::default())
             .expect("source should typecheck")
-            .nodes
     }
 
     fn typed_module_program_with_builtin_prelude(source: &str) -> scar::typed::TypedProgram {
@@ -284,7 +283,7 @@ mod tests {
         let prelude = cached_std_compile_prefix();
         let mut forge_session = ForgeSession::from_bytecode(&prelude.bytecode);
         let (chunk, _) = forge_session
-            .codegen_chunk(typed)
+            .codegen_chunk_typed_program(typed)
             .expect("codegen should succeed");
         compose_bytecode_with_chunk(prelude.bytecode.clone(), chunk)
             .expect("bytecode should compose")
@@ -422,7 +421,7 @@ mod tests {
         semantic_prefix_case!(codegen_typed_program_emits_v2_process_spec_for_standby_process_init),
         semantic_prefix_case!(codegen_rejects_call_arity_above_u8_limit),
         semantic_prefix_case!(special_enum_captures_use_normal_constructor_lowering),
-        semantic_prefix_case!(safe_mod_trait_call_lowers_to_specialized_opcode),
+        semantic_prefix_case!(safe_mod_trait_call_preserves_builtin_source_context),
         semantic_prefix_case!(facet_api_capture_preserves_resolved_callable_metadata),
     ];
 
@@ -1308,15 +1307,10 @@ print("ok")"#,
         assert_eq!(ids, (0..ids.len() as u32).collect::<Vec<_>>());
     }
 
-    fn safe_mod_trait_call_lowers_to_specialized_opcode() {
+    fn safe_mod_trait_call_preserves_builtin_source_context() {
         let bytecode = codegen_source("remainder = Mod::safe_mod(7, 3)");
-
-        assert!(bytecode
-            .opcodes
-            .iter()
-            .any(|op| matches!(op, Opcode::SafeModInt)));
-
-        assert_no_call_builtin(&bytecode, "safe_mod");
+        let id = sindr::builtin::builtin_id_by_name("safe_mod").unwrap();
+        assert!(bytecode.opcodes.iter().any(|op|matches!(op,Opcode::CallBuiltin{builtin_id,arity:2,span_start,span_end} if *builtin_id==id && span_end>span_start)));
     }
 
     #[test]
@@ -1389,7 +1383,7 @@ print("ok")"#,
     }
 
     #[test]
-    fn direct_shift_and_bit_index_builtins_lower_to_specialized_opcodes() {
+    fn fallible_shift_and_bit_index_builtins_preserve_call_continuations() {
         let bytecode = codegen_typed(vec![
             builtin_app(
                 "shl",
@@ -1407,17 +1401,6 @@ print("ok")"#,
             builtin_app("toggle_bit", vec![int_lit(5), int_lit(0)], Ty::Int),
         ]);
 
-        for opcode in [
-            Opcode::ShlInt,
-            Opcode::ShrInt,
-            Opcode::TestBitInt,
-            Opcode::SetBitInt,
-            Opcode::ClearBitInt,
-            Opcode::ToggleBitInt,
-        ] {
-            assert!(bytecode.opcodes.iter().any(|op| *op == opcode));
-        }
-
         for name in [
             "shl",
             "shr",
@@ -1426,7 +1409,11 @@ print("ok")"#,
             "clear_bit",
             "toggle_bit",
         ] {
-            assert_no_call_builtin(&bytecode, name);
+            let id = sindr::builtin::builtin_id_by_name(name).unwrap();
+            assert!(bytecode
+                .opcodes
+                .iter()
+                .any(|op| matches!(op,Opcode::CallBuiltin{builtin_id,..} if *builtin_id==id)));
         }
     }
 
@@ -1608,18 +1595,16 @@ expr = Expr::Halt
 Facet::view(Expr.Add, expr)"#,
         );
 
-        let has_segment_detail = bytecode.constants.iter().any(|constant| {
-            matches!(
-                constant,
-                Constant::Str(message)
-                    if message.contains("Variant mismatch at segment 1")
-                        && message.contains(".Add")
-            )
-        });
-        assert!(
-            has_segment_detail,
-            "expected variant mismatch detail with segment context in constants"
-        );
+        assert!(bytecode
+            .constants
+            .iter()
+            .any(|constant| matches!(constant,Constant::Str(segment) if segment==".Add")));
+        let definition = bytecode
+            .error_templates
+            .iter()
+            .find(|definition| definition.kind == "Global::FacetReadVariantMismatch")
+            .unwrap();
+        assert!(bytecode.opcodes.iter().any(|opcode|matches!(opcode,Opcode::Call{fun_idx,arity:5,..} if *fun_idx==definition.constructor_fun_idx)));
     }
 
     fn bounded_add_generic_helpers_emit_specialized_functions() {

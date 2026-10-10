@@ -459,6 +459,12 @@ REPL と共有する semantic resolver は次を担う。
 - call context から active parameter と expected type を出す signature help
 - typed call / operator target query の意味解決
 
+### Error 宣言の照会
+
+言語上の宣言・局所型・Facet の規則は [Error spec](Error_spec.md) に従う。本節はその検査結果を照会・補完へ反映する契約を定める。
+
+`deferror` の保存 Payload スキーマと先頭ブロックの外部入力署名を区別して照会する。constructor call / capture は入力署名、Error Pattern と field / Facet path は保存フィールドの名前・型・宣言順を使う。単一 Error identity への照合成功で導出した局所具象束縛にだけ Payload の読み取り候補を示す。共通 Error と container から取り出した値の候補へ具象フィールドを混ぜない。同名の別 module の宣言は identity で区別する。
+
 ### 7.1 Command Query Parser
 
 command query parser は Surtr source parser ではない。`spire` の責務は `.srt` source の

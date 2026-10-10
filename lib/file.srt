@@ -9,35 +9,106 @@ Typical mapping:
 - missing file or missing parent path: `FileNotFound`
 - permission failure: `FilePermissionDenied`
 - invalid or unsupported path syntax: `FileInvalidPath`
-- non-UTF-8 text input: `FileEncodingError`
-- other host-side failures: `FileIoError`
+- non-UTF-8 text input: `FileReadEncodingError` or `FileChunkEncodingError`
+- other host-side failures: operation-specific file errors
 """
 deferror FileNotFound(path: String) {
-  "file not found: #{path}"
+  |path: String|
+  Self(message: "file not found: #{path}", path)
 }
 
 deferror FilePermissionDenied(path: String) {
-  "permission denied: #{path}"
+  |path: String|
+  Self(message: "permission denied: #{path}", path)
 }
 
 deferror FileAlreadyExists(path: String) {
-  "file already exists: #{path}"
+  |path: String|
+  Self(message: "file already exists: #{path}", path)
 }
 
 deferror FileInvalidPath(path: String) {
-  "invalid path: #{path}"
+  |path: String|
+  Self(message: "invalid path: #{path}", path)
 }
 
 deferror FileClosed {
   "file is already closed"
 }
 
-deferror FileEncodingError(detail: String) {
-  detail
+deferror FileReadEncodingError(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file read encoding failed for #{path}: #{detail}", path, detail)
 }
 
-deferror FileIoError(detail: String) {
-  detail
+deferror FileChunkEncodingError(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file chunk read encoding failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileReadFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file read failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileWriteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileAppendOpenFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file append open failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileAppendWriteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file append write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileAppendCloseFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file append close failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileDeleteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file delete failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileOpenFailed(path: String, detail: String, mode: FileMode) {
+  |path: String, detail: String, mode: FileMode|
+  Self(message: "file open failed for #{path}: #{detail}", path, detail, mode)
+}
+
+deferror FileReadChunkFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file chunk read failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileWriteChunkFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file chunk write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileFlushFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file flush failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileCloseFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file close failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileHandleNotReadable(path: String, mode: FileMode) {
+  |path: String, mode: FileMode|
+  Self(message: "file handle is not readable for #{path} in mode #{inspect(mode)}", path, mode)
+}
+
+deferror FileHandleNotWritable(path: String, mode: FileMode) {
+  |path: String, mode: FileMode|
+  Self(message: "file handle is not writable for #{path} in mode #{inspect(mode)}", path, mode)
 }
 
 @doc """
@@ -68,7 +139,7 @@ Open mode for `File::with_open`.
 Modes describe how one temporary handle is opened for the callback body.
 
 - `Read`
-  Read-only access. `File::write_chunk` returns `Err(FileIoError(...))`.
+  Read-only access. `File::write_chunk` returns `Err(FileHandleNotWritable(...))`.
 - `Write`
   Create or truncate, then write from the start of the file.
 - `Append`
@@ -121,8 +192,8 @@ defmod File {
   Returns:
   - `Ok(text)` on success
   - `Err(FileNotFound(path))` when the path is missing
-  - `Err(FileEncodingError(...))` when the bytes are not valid UTF-8
-  - `Err(FilePermissionDenied(path))` or `Err(FileIoError(...))` for host-side
+  - `Err(FileReadEncodingError(...))` when the bytes are not valid UTF-8
+  - `Err(FilePermissionDenied(path))` or `Err(FileHandleNotWritable(...))` for host-side
     failures
 
   ## REPL
@@ -229,7 +300,7 @@ defmod File {
   Write UTF-8 text through an opened file handle.
 
   The exact behavior depends on the `FileMode` used to open the handle.
-  Writing through a `FileMode::Read` handle returns `Err(FileIoError(...))`.
+  Writing through a `FileMode::Read` handle returns `Err(FileHandleNotWritable(...))`.
 
   ## REPL
   Create `./tmp/sandbox/` before running this example.

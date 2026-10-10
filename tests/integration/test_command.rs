@@ -346,10 +346,10 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
     assert!(stdout.contains("assert_gte failed:"), "{stdout}");
 
     // A function with the same short name is not a standard assertion. Keep
-    // the Error's construction site, even for TestAssertionFailed itself.
+    // the Error's construction site, even for TestExplicitFailure itself.
     write_source(
         &temp.join("lib/tests/local/helper.srt"),
-        "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestAssertionFailed(\"custom failure\"))\n  }\n}\n",
+        "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestExplicitFailure(\"custom failure\"))\n  }\n}\n",
     );
     write_math_test(
         &temp,
@@ -532,7 +532,7 @@ test("String") {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("[FAIL] String > repeat > bad (lib/tests/local/math.srt)"));
-    assert!(stdout.contains("TestAssertionFailed: expected \"tes\", got \"bad\""));
+    assert!(stdout.contains("TestEqualityMismatch: expected \"tes\", got \"bad\""));
     assert!(stdout.contains("assert_eq(\"tes\", \"bad\")"));
     assert!(stdout.contains("LHS term: \"tes\""));
     assert!(stdout.contains("RHS term: \"bad\""));
@@ -1361,7 +1361,7 @@ fn test_command_extension_scan_and_declaration_failures_are_not_filtered() {
 #[test]
 fn test_command_extension_assertion_type_boundaries() {
     let temp = unique_temp_dir("surtr_test_extension_assertion_types");
-    let source = "import Test;\ndeferror PayloadFailure(detail: String) { detail }\nassert_cause_chain([\"NoneError\"], Err(NoneError))\n";
+    let source = "import Test;\ndeferror PayloadFailure(detail: String) { |detail: String| Self(message: detail, detail) }\nassert_cause_chain([\"NoneError\"], Err(NoneError))\n";
     write_math_test(&temp, source);
     let output = run_surtr(
         &temp,
@@ -1442,10 +1442,7 @@ defmod UserAssertions {
                 "{label}/{name}: {body} => {actual}"
             );
             assert!(
-                actual["detail"]
-                    .as_str()
-                    .unwrap()
-                    .contains("TestAssertionFailed"),
+                actual["detail"].as_str().unwrap().contains("Test"),
                 "{label}/{name}: {actual}"
             );
         }
@@ -1515,7 +1512,7 @@ fn test_command_extended_assertions_return_expected_results() {
 fn test_command_validation_assertions_and_composition() {
     check_assertion_cases(
         "surtr_test_validation_assertions",
-        "deferror MessageFailure(detail: String) { detail }",
+        "deferror MessageFailure(detail: String) { |detail: String| Self(message: detail, detail) }",
         &[
             ("assert pass", "assert(True, \"yes\")", None),
             (
@@ -1683,10 +1680,10 @@ fn test_command_approx_assertion_finite_boundaries() {
 }
 
 const ERROR_KIND_DECLARATIONS: &str = r#"
-deferror PayloadFailure(detail: String) { detail }
+deferror PayloadFailure(detail: String) { |detail: String| Self(message: detail, detail) }
 deferror OtherFailure { "PayloadFailure" }
-namespace First { deferror Same(detail: String) { detail } }
-namespace Second { deferror Same(detail: String) { detail } }
+namespace First { deferror Same(detail: String) { |detail: String| Self(message: detail, detail) } }
+namespace Second { deferror Same(detail: String) { |detail: String| Self(message: detail, detail) } }
 def check_payload(result: Result<$A>) -> Result<()> { Test::assert_err_kind(PayloadFailure, result) }
 def check_chain(result: Result<$A>) -> Result<()> { Test::assert_cause_chain([PayloadFailure, NoneError], result) }
 def make_failure() -> Result<Int> {
@@ -1730,7 +1727,7 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
             (
                 "different namespace",
                 r#"assert_err_kind(First::Same, Err(Second::Same("same")))"#,
-                Some("expected error kind First::Same, got Second::Same"),
+                Some("expected Err kind First::Same, got Second::Same"),
             ),
             (
                 "user function",
@@ -1745,7 +1742,7 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
             (
                 "different kind",
                 "assert_err_kind(PayloadFailure, Err(OtherFailure))",
-                Some("expected error kind"),
+                Some("expected Err kind Global::PayloadFailure, got Global::OtherFailure"),
             ),
             (
                 "root ignores cause",
@@ -1785,12 +1782,12 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             (
                 "reversed names",
                 r#"assert_cause_chain([Second::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#,
-                Some("first mismatch at index 0"),
+                Some("cause chain mismatch at index 0: expected Second::Same, got First::Same"),
             ),
             (
                 "inner mismatch",
                 r#"assert_cause_chain([First::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#,
-                Some("first mismatch at index 1"),
+                Some("cause chain mismatch at index 1: expected First::Same, got Second::Same"),
             ),
             (
                 "missing cause",
@@ -1805,7 +1802,7 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             (
                 "empty Err",
                 "assert_cause_chain([], Err(NoneError))",
-                Some("expected cause chain [], got [Global::NoneError]"),
+                Some("cause chain length mismatch: expected 0, got 1"),
             ),
             ("empty Ok", "assert_cause_chain([], Ok(1))", Some("got Ok")),
             (
@@ -1901,7 +1898,7 @@ fn test_command_long_do_preserves_order_and_short_circuit_without_stack_overflow
     assert!(report["cases"][1]["detail"]
         .as_str()
         .unwrap()
-        .contains("TestAssertionFailed"));
+        .contains("TestExpectedTrue"));
     let _ = fs::remove_dir_all(temp);
 }
 
@@ -2298,10 +2295,10 @@ fn test_command_case_stdin_is_empty_without_consuming_open_host_stdin() {
 import Test;
 
 it("empty case line input") {
-  assert_err_kind(InputError, IO::get_line(""))
+  assert_err_kind(InputLineEnd, IO::get_line(""))
 }
 it("empty case character input") {
-  assert_err_kind(InputError, IO::get(""))
+  assert_err_kind(InputCharacterEnd, IO::get(""))
 }
 host_input = IO::get_line("")
 match host_input {

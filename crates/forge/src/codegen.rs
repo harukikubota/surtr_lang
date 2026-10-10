@@ -37,6 +37,8 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         nodes: typed,
         process_specs: Vec::new(),
         boot_plan: SupervisorInitSpec::default(),
+        enum_definitions: std::collections::HashMap::new(),
+        nominal_definitions: std::collections::HashMap::new(),
     })
 }
 
@@ -46,8 +48,12 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         nodes,
         process_specs,
         boot_plan,
+        enum_definitions,
+        nominal_definitions,
     } = typed;
     let mut gene = Codegen::new();
+    gene.state.enum_types.extend(enum_definitions);
+    gene.state.nominal_types.extend(nominal_definitions);
     gene.emit_program(nodes.clone())?;
     let (opcodes, state) = gene.finalize()?;
     let runtime_process_specs =
@@ -257,7 +263,8 @@ fn collect_match_pattern_expressions<'a>(
         TypedMatchPattern::Tuple(items)
         | TypedMatchPattern::Record(items)
         | TypedMatchPattern::Or(items)
-        | TypedMatchPattern::Constructor { fields: items, .. } => {
+        | TypedMatchPattern::Constructor { fields: items, .. }
+        | TypedMatchPattern::ErrorPayload { fields: items, .. } => {
             for item in items {
                 collect_match_pattern_expressions(item, expressions);
             }
@@ -329,6 +336,26 @@ fn collect_missing_singleton_calls(
         | TypedInner::BuiltinExtractorDecl(_, _, _)
         | TypedInner::StructDef(_, _, _, _, _)
         | TypedInner::RecordDef(_, _, _, _, _) => {}
+        TypedInner::ErrorConstruct {
+            message, payload, ..
+        } => {
+            collect_missing_singleton_calls(
+                message,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            for value in payload {
+                collect_missing_singleton_calls(
+                    value,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
         TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
             collect_missing_singleton_calls(
                 inner,
@@ -796,6 +823,20 @@ pub fn compose_bytecode_with_chunk(
         &mut chunk.callable_templates,
         base.callable_templates.len(),
     )?;
+    let function_floor = chunk
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx as usize)
+        .min();
+    if let Some(floor) = function_floor.filter(|floor| *floor > base.functions.len()) {
+        let delta = floor - base.functions.len();
+        for definition in &mut chunk.error_templates {
+            let index = definition.constructor_fun_idx as usize;
+            if index >= floor {
+                definition.constructor_fun_idx = (index - delta) as u32;
+            }
+        }
+    }
     rebase_chunk_function_ids(
         &mut chunk.opcodes,
         &mut chunk.callable_templates,
@@ -2002,6 +2043,8 @@ struct CodegenState {
     next_slot: u32,
     next_fun_idx: u32,
     type_registry: TypeRegistry,
+    enum_types: HashMap<String, Vec<TypedEnumVariantDef>>,
+    nominal_types: HashMap<String, TypedNominalDefinition>,
     error_templates: Vec<ErrTemplate>,
     dbg_templates: Vec<DbgTemplate>,
     callable_templates: Vec<CallableTemplate>,
@@ -2018,6 +2061,8 @@ impl CodegenState {
             next_slot: 0,
             next_fun_idx: 0,
             type_registry: TypeRegistry::new(),
+            enum_types: HashMap::new(),
+            nominal_types: HashMap::new(),
             error_templates: Vec::new(),
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
@@ -2082,6 +2127,8 @@ impl ForgeSession {
                 next_slot: bytecode.num_locals as u32,
                 next_fun_idx,
                 type_registry: bytecode.type_registry.clone(),
+                enum_types: HashMap::new(),
+                nominal_types: HashMap::new(),
                 error_templates: bytecode.error_templates.clone(),
                 dbg_templates: bytecode.dbg_templates.clone(),
                 callable_templates: bytecode.callable_templates.clone(),
@@ -2098,6 +2145,8 @@ impl ForgeSession {
             nodes: typed,
             process_specs: Vec::new(),
             boot_plan: SupervisorInitSpec::default(),
+            enum_definitions: std::collections::HashMap::new(),
+            nominal_definitions: std::collections::HashMap::new(),
         })
     }
 
@@ -2117,6 +2166,8 @@ impl ForgeSession {
                 nodes: typed,
                 process_specs: Vec::new(),
                 boot_plan: SupervisorInitSpec::default(),
+                enum_definitions: std::collections::HashMap::new(),
+                nominal_definitions: std::collections::HashMap::new(),
             },
             true,
         )
@@ -2131,7 +2182,11 @@ impl ForgeSession {
             nodes,
             process_specs,
             boot_plan,
+            enum_definitions,
+            nominal_definitions,
         } = typed;
+        self.state.enum_types.extend(enum_definitions);
+        self.state.nominal_types.extend(nominal_definitions);
         let typed_for_meta = nodes.clone();
         let (chunk, meta, functions) =
             self.codegen_chunk_nodes_with_options(nodes, top_level_returns_result)?;
@@ -2341,6 +2396,33 @@ mod tests {
         Span, SupervisorInitEntry, SupervisorInitSpec, Visibility,
     };
 
+    fn seed_error_definitions(gene: &mut Codegen) {
+        use sindr::ir::ErrorValueSchema::{Int, String as Str};
+        for (kind, inputs) in [
+            ("IntLiteralPatternMismatch", vec![Int, Int]),
+            ("StringLiteralPatternMismatch", vec![Str, Str]),
+            (
+                "BooleanLiteralPatternMismatch",
+                vec![sindr::ir::ErrorValueSchema::Boolean; 2],
+            ),
+            ("ListPatternTooShort", vec![Int, Int]),
+            ("ListPatternTooLong", vec![Int, Int]),
+            ("EmptyHeadTailListPattern", vec![]),
+            ("PinnedValuePatternMismatch", vec![Str, Str, Str]),
+            ("ResultVariantPatternMismatch", vec![Str, Str]),
+            ("EnumVariantPatternMismatch", vec![Str, Str, Str]),
+        ] {
+            let id = gene.state.error_templates.len() as u32;
+            gene.state.error_templates.push(ErrTemplate {
+                id,
+                kind: sindr::names::compiler_global_error_kind(kind),
+                constructor_fun_idx: 500 + id,
+                input_types: inputs,
+                payload_fields: vec![],
+            });
+        }
+    }
+
     fn span(start: usize, end: usize) -> Span {
         Span { start, end }
     }
@@ -2489,16 +2571,11 @@ mod tests {
 
     fn err_template(id: u32, kind: &str) -> ErrTemplate {
         ErrTemplate {
-            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
             id,
             kind: kind.into(),
-            span_start: 0,
-            span_end: 0,
-            line: 0,
-            column: 0,
-            format: "{message}".into(),
-            num_params: 0,
-            diagnostic: None,
+            constructor_fun_idx: 0,
+            input_types: Vec::new(),
+            payload_fields: Vec::new(),
         }
     }
 
@@ -2731,6 +2808,8 @@ mod tests {
                     ),
                 },
             ],
+            enum_definitions: std::collections::HashMap::new(),
+            nominal_definitions: std::collections::HashMap::new(),
             process_specs: vec![singleton_process_spec(name)],
             boot_plan: SupervisorInitSpec {
                 entries: vec![SupervisorInitEntry {
@@ -2743,6 +2822,139 @@ mod tests {
                 ..SupervisorInitSpec::default()
             },
         }
+    }
+
+    #[test]
+    fn checked_error_schema_covers_builtin_opaque_enum_types() {
+        use sindr::ir::ErrorValueSchema as S;
+        let enums = std::collections::HashMap::new();
+        let nominals = std::collections::HashMap::new();
+        for name in [
+            "Regex",
+            "RegexCaptures",
+            "RegexMatch",
+            "RandomGenerator",
+            "FileHandle",
+        ] {
+            let schema = super::error_value_schema(
+                &Ty::Enum(name.into(), vec![]),
+                &span(0, 1),
+                &enums,
+                &nominals,
+            )
+            .unwrap();
+            assert_eq!(
+                schema,
+                S::Named {
+                    name: format!("Global::{name}"),
+                    arguments: vec![]
+                }
+            );
+            assert!(super::error_value_schema(
+                &Ty::Enum(name.into(), vec![Ty::Int]),
+                &span(0, 1),
+                &enums,
+                &nominals,
+            )
+            .is_err());
+        }
+        for name in [
+            "Generator",
+            "InfiniteGenerator",
+            "TaskHandle",
+            "Workers",
+            "WorkerLease",
+        ] {
+            let argument = if matches!(name, "Workers" | "WorkerLease") {
+                Ty::Pid("Global::Worker".into())
+            } else {
+                Ty::Int
+            };
+            let expected = if matches!(name, "Workers" | "WorkerLease") {
+                S::Pid("Global::Worker".into())
+            } else {
+                S::Int
+            };
+            let schema = super::error_value_schema(
+                &Ty::Enum(name.into(), vec![argument]),
+                &span(0, 1),
+                &enums,
+                &nominals,
+            )
+            .unwrap();
+            assert_eq!(
+                schema,
+                S::Named {
+                    name: format!("Global::{name}"),
+                    arguments: vec![expected]
+                }
+            );
+            assert!(super::error_value_schema(
+                &Ty::Enum(name.into(), vec![]),
+                &span(0, 1),
+                &enums,
+                &nominals,
+            )
+            .is_err());
+        }
+        assert_eq!(
+            super::error_value_schema(
+                &Ty::Enum("HashMap".into(), vec![Ty::Int]),
+                &span(0, 1),
+                &enums,
+                &nominals,
+            )
+            .unwrap(),
+            S::HashMap(Box::new(S::Int))
+        );
+        assert!(super::error_value_schema(
+            &Ty::Enum("HashMap".into(), vec![]),
+            &span(0, 1),
+            &enums,
+            &nominals,
+        )
+        .is_err());
+        assert!(super::error_value_schema(
+            &Ty::Enum("Custom::Regex".into(), vec![]),
+            &span(0, 1),
+            &enums,
+            &nominals,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn checked_error_schema_preserves_task_and_extractor_value_types() {
+        use sindr::ir::ErrorValueSchema as S;
+        let enums = std::collections::HashMap::new();
+        let nominals = std::collections::HashMap::new();
+        let task = super::error_value_schema(
+            &Ty::Enum("TaskHandle".into(), vec![Ty::Int]),
+            &span(0, 1),
+            &enums,
+            &nominals,
+        )
+        .unwrap();
+        assert_eq!(
+            task,
+            S::Named {
+                name: "Global::TaskHandle".into(),
+                arguments: vec![S::Int]
+            }
+        );
+        let extractor = Ty::ExtractorClosure(Box::new(Ty::Func(
+            vec![Ty::Int],
+            Box::new(Ty::MatchResult(Box::new(Ty::Int))),
+        )));
+        let schema = super::error_value_schema(&extractor, &span(0, 1), &enums, &nominals).unwrap();
+        assert_eq!(
+            schema,
+            S::Callable {
+                parameters: vec![S::Int],
+                result: Box::new(S::MatchResult(Box::new(S::Int)))
+            }
+        );
+        assert!(task.accepts(&sindr::runtime::Value::TaskHandle(7), &TypeRegistry::new()));
     }
 
     #[test]
@@ -3183,6 +3395,7 @@ mod tests {
     #[test]
     fn pattern_consumer_expression_result_ignores_outer_alternative() {
         let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
         gene.safe_bind_failure_target = Some(SafeBindFailureTarget::DoAlternative {
             empty: Box::new(lit_node(Ty::Unit, Lit::Unit, span(1, 2))),
         });
@@ -3200,17 +3413,109 @@ mod tests {
             super::ExtractorFailurePolicy::ExpressionResult(end),
         )
         .unwrap();
-        assert_eq!(
-            gene.state.error_templates.len(),
-            1,
+        gene.patch_label(fail);
+        gene.patch_label(end);
+        let (opcodes, _) = gene.finalize().unwrap();
+        assert!(
+            opcodes.iter().any(|opcode| matches!(
+                opcode,
+                Opcode::Call {
+                    fun_idx: 500,
+                    span_start: 7,
+                    span_end: 9,
+                    ..
+                }
+            )),
             "apply_pattern owns its Result independently of surrounding Alternative"
         );
-        assert_eq!(gene.state.error_templates[0].span_start, 7);
+    }
+
+    #[test]
+    fn enum_failure_payload_uses_surface_name_and_keeps_canonical_tag_lookup() {
+        for owner in ["Global::Option", "Global::Tools::Choice"] {
+            for consumer in 0..3 {
+                let mut gene = Codegen::new();
+                seed_error_definitions(&mut gene);
+                for kind in ["FacetReadVariantMismatch", "FacetUpdateVariantMismatch"] {
+                    let id = gene.state.error_templates.len() as u32;
+                    gene.state.error_templates.push(ErrTemplate {
+                        id,
+                        kind: sindr::names::compiler_global_error_kind(kind),
+                        constructor_fun_idx: 500 + id,
+                        input_types: vec![
+                            sindr::ir::ErrorValueSchema::Int,
+                            sindr::ir::ErrorValueSchema::String,
+                            sindr::ir::ErrorValueSchema::String,
+                            sindr::ir::ErrorValueSchema::String,
+                            sindr::ir::ErrorValueSchema::String,
+                        ],
+                        payload_fields: vec![],
+                    });
+                }
+                for (tag, variant) in [(20, "Some"), (21, "None")] {
+                    gene.state.type_registry.register(TypeEntry {
+                        tag,
+                        name: format!("{owner}::{variant}"),
+                        kind: TypeKind::EnumVariant,
+                        field_names: vec![],
+                        private_flags: vec![],
+                    });
+                }
+                gene.safe_bind_failure_target = Some(SafeBindFailureTarget::TopLevel);
+                if consumer == 0 {
+                    gene.emit_safebind_pattern_failure(
+                        &TypedPattern::Constructor {
+                            ty: Ty::Enum(owner.into(), vec![]),
+                            tag: 20,
+                            field_tys: vec![],
+                            fields: vec![],
+                            field_offset: 1,
+                        },
+                        0,
+                        span(1, 2),
+                        super::PatternFailureDestination::EnclosingConsumer,
+                    )
+                    .unwrap();
+                } else {
+                    let segment = TypedFacetSegment::Variant {
+                        enum_name: owner.into(),
+                        variant_name: "Some".into(),
+                        variant_tag: 20,
+                        discriminant: 0.into(),
+                        payload_arity: 0,
+                        optional: false,
+                        focus_readonly_root: false,
+                        focus_type_name: None,
+                    };
+                    gene.emit_variant_mismatch_result(
+                        consumer == 2,
+                        0,
+                        0,
+                        &segment,
+                        owner,
+                        "Some",
+                        &span(1, 2),
+                    )
+                    .unwrap();
+                }
+                let (_, state) = gene.finalize().unwrap();
+                assert!(state.constants.iter().any(|constant| matches!(constant,
+                    Constant::Str(name) if name == sindr::names::surface_path_name(owner))));
+                assert!(!state.constants.iter().any(|constant| matches!(constant,
+                    Constant::Str(name) if name == owner)));
+                assert!(
+                    state.constants.iter().any(|constant| matches!(constant,
+                    Constant::Str(name) if name == "None")),
+                    "canonical actual tag metadata still resolved"
+                );
+            }
+        }
     }
 
     #[test]
     fn pattern_consumer_carrier_payload_result_is_matched_directly() {
         let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
         gene.safe_bind_failure_target = Some(SafeBindFailureTarget::TopLevel);
         gene.state.slot_map.insert(801, 0);
         gene.state.next_slot = 1;
@@ -3237,25 +3542,28 @@ mod tests {
         )
         .expect("carrier payload Result must be matched as a Pattern input");
         let (opcodes, _) = gene.finalize().unwrap();
-        assert_eq!(
-            opcodes
+        assert!(
+            opcodes.iter().any(|opcode| matches!(
+                opcode,
+                Opcode::EqTag
+                    | Opcode::EqLocalTag { .. }
+                    | Opcode::JumpIfLocalTagEq { .. }
+                    | Opcode::JumpIfLocalTagNe { .. }
+            )),
+            "constructor Pattern checks the input Result tag"
+        );
+        assert!(
+            !opcodes
                 .iter()
-                .filter(|opcode| matches!(
-                    opcode,
-                    Opcode::EqTag
-                        | Opcode::EqLocalTag { .. }
-                        | Opcode::JumpIfLocalTagEq { .. }
-                        | Opcode::JumpIfLocalTagNe { .. }
-                ))
-                .count(),
-            1,
-            "only the constructor Pattern checks a tag; payload projection never unwraps it"
+                .any(|opcode| matches!(opcode, Opcode::Call { arity: 1, .. })),
+            "carrier payload projection never inserts Result unwrap"
         );
     }
 
     #[test]
     fn preserving_nested_literal_uses_only_failed_child_source() {
         let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
         gene.safe_bind_failure_target = Some(SafeBindFailureTarget::TopLevel);
         let pattern = TypedPattern::Located(
             span(1, 12),
@@ -3282,13 +3590,16 @@ mod tests {
             super::ExtractorFailurePolicy::Propagate,
         )
         .unwrap();
-        assert_eq!(gene.state.error_templates.len(), 1);
-        let template = &gene.state.error_templates[0];
-        assert_eq!((template.span_start, template.span_end), (7, 8));
-        assert_eq!(
-            template.location_source,
-            sindr::ir::ErrorLocationSource::SourceSpan
-        );
+        let (opcodes, _) = gene.finalize().unwrap();
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::Call {
+                fun_idx: 500,
+                span_start: 7,
+                span_end: 8,
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -3370,6 +3681,74 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn preserving_extractor_delegates_failure_without_a_generic_error_handler() {
+        for expression_result in [false, true] {
+            let mut gene = Codegen::new();
+            seed_match_result_registry(&mut gene);
+            gene.safe_bind_failure_target = Some(SafeBindFailureTarget::TopLevel);
+            gene.state.next_slot = 1;
+            let fail = gene.fresh_label();
+            let end = gene.fresh_label();
+            let policy = if expression_result {
+                super::ExtractorFailurePolicy::ExpressionResult(end)
+            } else {
+                super::ExtractorFailurePolicy::Propagate
+            };
+            let pattern = TypedPattern::Located(
+                span(5, 20),
+                Box::new(TypedPattern::Extractor {
+                    input_ty: Ty::Int,
+                    extractor: resolved_id("extract", None, 89),
+                    extractor_ty: Ty::UserFunc {
+                        fun_idx: 12,
+                        type_params: vec![],
+                        call_substitution: vec![],
+                        params: vec![Ty::Int],
+                        ret: Box::new(Ty::MatchResult(Box::new(Ty::Int))),
+                    },
+                    success_tag: 100,
+                    err_tag: 101,
+                    pre_args: vec![],
+                    seq_tys: vec![Ty::Int],
+                    items: vec![TypedPattern::Located(
+                        span(13, 18),
+                        Box::new(TypedPattern::Var(Ty::Int, resolved_id("value", None, 90))),
+                    )],
+                }),
+            );
+            let decomp = gene
+                .emit_pattern_test_from_local_with_mode(&pattern, 0, fail, &span(1, 22), policy)
+                .expect("Extractor forwards its checked Error without creating a generic failure");
+            gene.emit_pattern_bind_from_local(&pattern, 0, Some(decomp), &span(1, 22))
+                .unwrap();
+            gene.patch_label(fail);
+            gene.patch_label(end);
+            let (opcodes, state) = gene.finalize().unwrap();
+            assert_eq!(
+                opcodes
+                    .iter()
+                    .filter(|opcode| matches!(
+                        opcode,
+                        Opcode::Call {
+                            fun_idx: 12,
+                            arity: 1,
+                            ..
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert!(
+                state.error_templates.is_empty(),
+                "propagation requires no Error constructor"
+            );
+            assert!(!opcodes
+                .iter()
+                .any(|opcode| matches!(opcode, Opcode::MakeError { .. })));
+        }
     }
 
     #[test]
@@ -4350,6 +4729,7 @@ mod tests {
     #[test]
     fn emit_exact_list_safebind_long_failure_uses_list_len_opcode() {
         let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
         gene.state.slot_map.insert(81, 0);
         gene.state.next_slot = 1;
 
@@ -4391,6 +4771,7 @@ mod tests {
     #[test]
     fn literal_safebind_carries_runtime_diagnostic_without_message_markers() {
         let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
         gene.state.slot_map.insert(82, 0);
         gene.state.next_slot = 1;
 
@@ -4411,13 +4792,9 @@ mod tests {
         locate_test_consumer(&mut node);
         gene.emit_node(&node)
             .expect("literal safebind emission should succeed");
-        let (_, state) = gene.finalize().expect("labels should resolve");
+        let (opcodes, state) = gene.finalize().expect("labels should resolve");
 
-        assert!(state.error_templates.iter().any(|template| matches!(
-            &template.diagnostic,
-            Some(sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch { lhs })
-                if lhs == "1"
-        )));
+        assert!(opcodes.iter().any(|opcode|matches!(opcode,Opcode::AnnotateError{diagnostic:sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch{lhs}} if lhs=="1")));
         assert!(state.constants.iter().all(|constant| {
             !matches!(constant, Constant::Str(value) if value.contains("@@lhs") || value.contains("@@rhs"))
         }));
@@ -4435,8 +4812,7 @@ mod tests {
                     .expect_err("missing consumer target cannot implicitly forward a Result");
                 assert!(error.message.contains("failure target"), "{error:?}");
                 let error = gene
-                    .emit_pattern_failure_from_message_stack_with_diagnostic(
-                        "PatternMismatch",
+                    .emit_pattern_failure_from_error_stack(
                         span(2, 4),
                         None,
                         super::PatternFailureDestination::EnclosingConsumer,
@@ -4447,8 +4823,7 @@ mod tests {
         }
         let mut gene = Codegen::new();
         let end = gene.fresh_label();
-        gene.emit_pattern_failure_from_message_stack_with_diagnostic(
-            "PatternMismatch",
+        gene.emit_pattern_failure_from_error_stack(
             span(2, 4),
             None,
             super::PatternFailureDestination::ExpressionResult(end),
@@ -4469,6 +4844,7 @@ mod tests {
     #[test]
     fn emit_do_result_safebind_uses_expression_local_join() {
         let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
         gene.in_function = true;
         gene.state.slot_map.insert(83, 0);
         gene.state.next_slot = 1;
@@ -4743,21 +5119,12 @@ mod tests {
         gene.emit_node(&node)
             .expect("do Alternative SafeBind emission should succeed");
         let (opcodes, state) = gene.finalize().expect("labels should resolve");
-        let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
-
-        assert!(state
-            .error_templates
-            .iter()
-            .any(|template| template.kind == "Global::InvalidMatchResult"));
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::CallBuiltin { builtin_id, .. } if *builtin_id == eprint_id
-        )));
-        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::Halt)));
+        assert!(state.error_templates.is_empty());
+        assert!(opcodes.iter().any(|opcode|matches!(opcode,Opcode::RuntimeContractViolation{message} if message.contains("MatchResult"))));
     }
 
     #[test]
-    fn invalid_extractor_outcome_halts_instead_of_returning_a_user_error() {
+    fn invalid_extractor_outcome_reports_runtime_contract_violation() {
         let mut gene = Codegen::new();
         gene.in_function = true;
         gene.safe_bind_failure_target = Some(SafeBindFailureTarget::EnclosingMonadFail(Box::new(
@@ -4795,7 +5162,9 @@ mod tests {
         gene.emit_invalid_extractor_outcome_failure(&span(1, 8))
             .expect("internal failure emission");
         let (opcodes, _) = gene.finalize().expect("labels resolve");
-        assert!(opcodes.iter().any(|op| matches!(op, Opcode::Halt)));
+        assert!(opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::RuntimeContractViolation { .. })));
         assert!(!opcodes.iter().any(|op| matches!(op, Opcode::Return)));
     }
 
@@ -4875,6 +5244,27 @@ mod tests {
         assert_eq!(bytecode.runtime_boot_plan.singletons.len(), 2);
         assert_eq!(bytecode.docs[0].qualified_name, "Global::base_doc");
         assert_eq!(bytecode.docs[1].qualified_name, "Global::chunk_doc");
+    }
+
+    #[test]
+    fn error_constructor_metadata_follows_function_normalization_and_chunk_rebase() {
+        let mut gene = Codegen::new();
+        gene.state.functions = vec![function_entry(10, 0, 0), function_entry(0, 0, 0)];
+        let mut definition = err_template(0, "Global::ErrorMetadataProbe");
+        definition.constructor_fun_idx = 10;
+        gene.state.error_templates.push(definition);
+        gene.normalize_function_table().unwrap();
+        assert_eq!(gene.state.error_templates[0].constructor_fun_idx, 1);
+
+        let mut chunk = relocatable_chunk();
+        chunk.functions[0].fun_idx = 20;
+        chunk.functions[1].fun_idx = 21;
+        chunk.error_templates[0].constructor_fun_idx = 21;
+        chunk.runtime_process_specs.clear();
+        chunk.runtime_boot_plan = Default::default();
+        let bytecode = compose_bytecode_with_chunk(base_bytecode(), chunk).unwrap();
+        assert_eq!(bytecode.error_templates[1].constructor_fun_idx, 3);
+        assert_eq!(bytecode.functions[3].fun_idx, 3);
     }
 
     #[test]
@@ -5210,6 +5600,7 @@ mod tests {
         let mut base = Bytecode::default();
         base.constants = vec![Constant::Int(10.into())];
         base.error_templates = vec![err_template(0, "Global::OldError")];
+        base.functions = vec![function_entry(0, 0, 0)];
         base.dbg_templates = vec![dbg_template(0)];
 
         let mut session = ForgeSession::from_bytecode(&base);
@@ -5300,13 +5691,18 @@ mod tests {
                 SafeBindFailureTarget::TopLevel,
             ),
         };
-        let (chunk, _) = ForgeSession::new()
+        let mut session = ForgeSession::new();
+        let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
+        session.state.error_templates = gene.state.error_templates;
+        session.state.functions = (0..9).map(|id| function_entry(500 + id, 0, 0)).collect();
+        let (chunk, _) = session
             .codegen_chunk_repl_result(vec![node])
             .expect("REPL SafeBind owns its explicit Result failure channel");
         assert!(chunk
             .opcodes
             .iter()
-            .any(|opcode| matches!(opcode, Opcode::MakeError { .. })));
+            .any(|opcode| matches!(opcode, Opcode::Call { .. })));
         assert!(
             chunk
                 .opcodes
@@ -5514,6 +5910,7 @@ fn facet_segment_label(segment: &TypedFacetSegment) -> String {
             ..
         } => format!("_{index}"),
         TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+        | TypedFacetSegment::ErrorPayload { field_name, .. }
         | TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
         TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
         TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
@@ -5600,6 +5997,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 let label = facet_segment_label(segment);
                 let focus_ty = match segment {
                     TypedFacetSegment::ReadonlyBuiltin { .. } => Ty::Str,
+                    TypedFacetSegment::ErrorPayload { .. } => path.focus_ty.clone(),
                     TypedFacetSegment::Field { .. } | TypedFacetSegment::Tuple { .. } => {
                         match &current_source {
                             Ty::Tuple(items) => match segment {
@@ -5679,7 +6077,8 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     _ => prefix.push_str(&label),
                 }
                 let (kind, fallible, reason, policy) = match segment {
-                    TypedFacetSegment::ReadonlyBuiltin { .. } => {
+                    TypedFacetSegment::ReadonlyBuiltin { .. }
+                    | TypedFacetSegment::ErrorPayload { .. } => {
                         ("observation", false, "builtin observation", "readonly")
                     }
                     TypedFacetSegment::Field {
@@ -5850,6 +6249,7 @@ fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
             matches!(
                 segment,
                 TypedFacetSegment::ReadonlyBuiltin { .. }
+                    | TypedFacetSegment::ErrorPayload { .. }
                     | TypedFacetSegment::Field { readonly: true, .. }
             )
         });
@@ -6371,6 +6771,201 @@ fn trait_short_name(trait_name: &str) -> &str {
         .unwrap_or(trait_name)
 }
 
+fn error_value_schema(
+    ty: &Ty,
+    span: &Span,
+    enums: &HashMap<String, Vec<TypedEnumVariantDef>>,
+    nominals: &HashMap<String, TypedNominalDefinition>,
+) -> Result<sindr::ir::ErrorValueSchema, CodegenError> {
+    fn convert(
+        ty: &Ty,
+        span: &Span,
+        enums: &HashMap<String, Vec<TypedEnumVariantDef>>,
+        nominals: &HashMap<String, TypedNominalDefinition>,
+        sub: &HashMap<u32, sindr::ir::ErrorValueSchema>,
+        active: &mut Vec<(String, Vec<sindr::ir::ErrorValueSchema>)>,
+    ) -> Result<sindr::ir::ErrorValueSchema, CodegenError> {
+        use sindr::ir::ErrorValueSchema as S;
+        let nested = |ty: &Ty, active: &mut Vec<_>| convert(ty, span, enums, nominals, sub, active);
+        Ok(match ty {
+            Ty::Var(id) => {
+                return sub.get(id).cloned().ok_or_else(|| CodegenError {
+                    message: "unresolved Error schema variable".into(),
+                    span: span.clone(),
+                })
+            }
+            Ty::Int => S::Int,
+            Ty::Float => S::Float,
+            Ty::Str => S::String,
+            Ty::Bool => S::Boolean,
+            Ty::Unit => S::Unit,
+            Ty::Error => S::Error,
+            Ty::List(item) => S::List(Box::new(nested(item, active)?)),
+            Ty::Tuple(items) => S::Tuple(
+                items
+                    .iter()
+                    .map(|ty| nested(ty, active))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Ty::Result(ok, _) => S::Result(Box::new(nested(ok, active)?)),
+            Ty::Func(params, ret)
+            | Ty::UserFunc { params, ret, .. }
+            | Ty::BuiltinFunc { params, ret, .. } => S::Callable {
+                parameters: params
+                    .iter()
+                    .map(|ty| nested(ty, active))
+                    .collect::<Result<_, _>>()?,
+                result: Box::new(nested(ret, active)?),
+            },
+            Ty::ExtractorClosure(function) => nested(function, active)?,
+            Ty::Pid(name) => S::Pid(name.to_string()),
+            Ty::MatchResult(ok) => S::MatchResult(Box::new(nested(ok, active)?)),
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                let arguments = nominal
+                    .arguments
+                    .iter()
+                    .map(|ty| nested(ty, active))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let name = name.to_string();
+                if active.iter().any(|(active_name, _)| active_name == &name) {
+                    return Ok(S::Recursive { name, arguments });
+                }
+                let definition = nominals.get(&name).ok_or_else(|| CodegenError {
+                    message: format!("Error schema missing nominal declaration {name}"),
+                    span: span.clone(),
+                })?;
+                if definition.type_param_vars.len() != arguments.len() {
+                    return Err(CodegenError {
+                        message: "Nominal schema type argument arity mismatch".into(),
+                        span: span.clone(),
+                    });
+                }
+                let mut substitution = sub.clone();
+                for (index, id) in definition.type_param_vars.iter().enumerate() {
+                    substitution.insert(*id, S::TypeParameter(index as u32));
+                }
+                active.push((name.clone(), arguments.clone()));
+                let fields = definition
+                    .fields
+                    .iter()
+                    .map(|(_, ty)| convert(ty, span, enums, nominals, &substitution, active))
+                    .collect::<Result<_, _>>()?;
+                active.pop();
+                S::Struct {
+                    name,
+                    arguments,
+                    fields,
+                }
+            }
+            Ty::Enum(name, args) => {
+                let name = name.to_string();
+                let arguments = args
+                    .iter()
+                    .map(|ty| nested(ty, active))
+                    .collect::<Result<Vec<_>, _>>()?;
+                use sindr::names::TypeName;
+                let builtin = sindr::names::builtin_type_name(&name);
+                let opaque_arity = match builtin {
+                    Some(
+                        TypeName::Regex
+                        | TypeName::RegexCaptures
+                        | TypeName::RegexMatch
+                        | TypeName::RandomGenerator
+                        | TypeName::FileHandle,
+                    ) => Some(0),
+                    Some(
+                        TypeName::HashMap
+                        | TypeName::Generator
+                        | TypeName::InfiniteGenerator
+                        | TypeName::Workers
+                        | TypeName::WorkerLease
+                        | TypeName::TaskHandle,
+                    ) => Some(1),
+                    _ => None,
+                };
+                if let Some(arity) = opaque_arity {
+                    if arguments.len() != arity {
+                        return Err(CodegenError {
+                            message: format!("{name} Error schema type argument arity mismatch"),
+                            span: span.clone(),
+                        });
+                    }
+                    if builtin == Some(TypeName::HashMap) {
+                        return Ok(S::HashMap(Box::new(arguments[0].clone())));
+                    }
+                    return Ok(S::Named {
+                        name: compiler_global_error_kind(
+                            builtin.expect("known opaque builtin").as_str(),
+                        ),
+                        arguments,
+                    });
+                }
+                if active.iter().any(|(active_name, _)| active_name == &name) {
+                    return Ok(S::Recursive { name, arguments });
+                }
+                let defs = enums.get(&name).ok_or_else(|| CodegenError {
+                    message: format!("Error schema missing Enum declaration {name}"),
+                    span: span.clone(),
+                })?;
+                active.push((name.clone(), arguments.clone()));
+                let mut variants = Vec::new();
+                for variant in defs {
+                    let Ty::Enum(_, formal) = &variant.enum_ty else {
+                        return Err(CodegenError {
+                            message: "Enum schema template malformed".into(),
+                            span: span.clone(),
+                        });
+                    };
+                    if formal.len() != args.len() {
+                        return Err(CodegenError {
+                            message: "Enum schema type argument arity mismatch".into(),
+                            span: span.clone(),
+                        });
+                    }
+                    let mut substitution = sub.clone();
+                    for (index, formal) in formal.iter().enumerate() {
+                        if let Ty::Var(id) = formal {
+                            substitution.insert(*id, S::TypeParameter(index as u32));
+                        }
+                    }
+                    let fields = variant
+                        .payload_types
+                        .iter()
+                        .map(|ty| convert(ty, span, enums, nominals, &substitution, active))
+                        .collect::<Result<_, _>>()?;
+                    variants.push(sindr::ir::ErrorVariantSchema {
+                        name: variant.constructor_name.clone(),
+                        tag: variant.tag,
+                        discriminant: variant.discriminant.clone(),
+                        fields,
+                    });
+                }
+                active.pop();
+                S::Enum {
+                    name,
+                    arguments,
+                    variants,
+                }
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: format!("unresolved Error runtime type {}", ty_to_string(ty)),
+                    span: span.clone(),
+                })
+            }
+        })
+    }
+    convert(ty, span, enums, nominals, &HashMap::new(), &mut Vec::new())
+}
+
+fn final_error_construct(node: &TypedNode) -> Option<&TypedNode> {
+    match &node.node {
+        TypedInner::ErrorConstruct { .. } => Some(node),
+        TypedInner::Block(items) => items.last().and_then(final_error_construct),
+        _ => None,
+    }
+}
+
 fn ty_to_string(ty: &Ty) -> String {
     ty_to_string_with_type_params(ty, &[])
 }
@@ -6819,16 +7414,10 @@ impl Codegen {
 
     fn direct_builtin_opcode(name: &str, arity: usize) -> Option<Opcode> {
         match name.rsplit("::").next().unwrap_or(name) {
-            "shl" if arity == 2 => Some(Opcode::ShlInt),
-            "shr" if arity == 2 => Some(Opcode::ShrInt),
             "bit_not" if arity == 1 => Some(Opcode::BitNotInt),
             "bit_and" if arity == 2 => Some(Opcode::BitAndInt),
             "bit_or" if arity == 2 => Some(Opcode::BitOrInt),
             "bit_xor" if arity == 2 => Some(Opcode::BitXorInt),
-            "test_bit" if arity == 2 => Some(Opcode::TestBitInt),
-            "set_bit" if arity == 2 => Some(Opcode::SetBitInt),
-            "clear_bit" if arity == 2 => Some(Opcode::ClearBitInt),
-            "toggle_bit" if arity == 2 => Some(Opcode::ToggleBitInt),
             "string_len" if arity == 1 => Some(Opcode::StringLen),
             "len" if arity == 1 => Some(Opcode::ListLen),
             "string_contains" if arity == 2 => Some(Opcode::StringContains),
@@ -7702,6 +8291,59 @@ impl Codegen {
             _ => u32::MAX,
         });
 
+        for stmt in &main_stmts {
+            if let TypedInner::EnumDef(name, variants) = &stmt.node {
+                self.state.enum_types.insert(name.clone(), variants.clone());
+            }
+        }
+        for def in &defs {
+            if let TypedInner::DeferrorDef(_, fun_idx, _id, params, body) = &def.node {
+                let construct = final_error_construct(body).ok_or_else(|| CodegenError {
+                    message: "Error definition missing checked construction".into(),
+                    span: body.span.clone(),
+                })?;
+                let TypedInner::ErrorConstruct {
+                    kind,
+                    payload_fields,
+                    ..
+                } = &construct.node
+                else {
+                    unreachable!()
+                };
+                let template_id = self.state.error_templates.len() as u32;
+                self.state.error_templates.push(ErrTemplate {
+                    id: template_id,
+                    kind: kind.clone(),
+                    constructor_fun_idx: *fun_idx,
+                    input_types: params
+                        .iter()
+                        .map(|param| {
+                            error_value_schema(
+                                &param.ty,
+                                &param.id.span,
+                                &self.state.enum_types,
+                                &self.state.nominal_types,
+                            )
+                        })
+                        .collect::<Result<_, _>>()?,
+                    payload_fields: payload_fields
+                        .iter()
+                        .map(|(name, ty)| {
+                            Ok((
+                                name.clone(),
+                                error_value_schema(
+                                    ty,
+                                    &construct.span,
+                                    &self.state.enum_types,
+                                    &self.state.nominal_types,
+                                )?,
+                            ))
+                        })
+                        .collect::<Result<_, CodegenError>>()?,
+                });
+            }
+        }
+
         for (i, stmt) in main_stmts.iter().enumerate() {
             if self.top_level_returns_result
                 && matches!(
@@ -7825,20 +8467,6 @@ impl Codegen {
 
         let arity = checked_u8_arity(params.len(), &node.span)?;
 
-        let template_id = self.state.error_templates.len() as u32;
-        self.state.error_templates.push(ErrTemplate {
-            location_source: sindr::ir::ErrorLocationSource::ConstructorCallSite,
-            id: template_id,
-            kind: id.name.clone(),
-            span_start: id.span.start as u32,
-            span_end: id.span.end as u32,
-            line: 0,
-            column: 0,
-            format: String::new(),
-            num_params: arity,
-            diagnostic: None,
-        });
-
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
 
@@ -7855,7 +8483,6 @@ impl Codegen {
         self.in_function = true;
         self.emit_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::MakeError { template_id });
         self.emit(Opcode::Return);
 
         let num_locals = self.state.next_slot;
@@ -8048,6 +8675,28 @@ impl Codegen {
     fn emit_node(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
         Self::validate_trait_call_boundary(node)?;
         match &node.node {
+            TypedInner::ErrorConstruct {
+                kind,
+                message,
+                payload,
+                ..
+            } => {
+                self.emit_node(message)?;
+                for value in payload {
+                    self.emit_node(value)?;
+                }
+                let template_id = self
+                    .state
+                    .error_templates
+                    .iter()
+                    .find(|t| &t.kind == kind)
+                    .map(|t| t.id)
+                    .ok_or_else(|| CodegenError {
+                        message: format!("Unresolved checked Error constructor {kind}"),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::MakeError { template_id });
+            }
             TypedInner::Lit(lit) => {
                 let c = self.lit_to_constant(lit);
                 let idx = self.add_constant(c);
@@ -9220,7 +9869,7 @@ impl Codegen {
         }
 
         match &path.segments[segment_idx] {
-            TypedFacetSegment::ReadonlyBuiltin { .. } => {
+            TypedFacetSegment::ReadonlyBuiltin { .. } | TypedFacetSegment::ErrorPayload { .. } => {
                 return Err(CodegenError {
                     message: "Readonly Facet update reached code generation".into(),
                     span: span.clone(),
@@ -9546,14 +10195,15 @@ impl Codegen {
                 if *optional {
                     self.emit_jump(continue_label);
                 } else {
-                    let detail = format!(
-                        "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
-                        segment_idx + 1,
-                        Self::facet_segment_display(&path.segments[segment_idx]),
+                    self.emit_variant_mismatch_result(
+                        true,
+                        current_slot,
+                        segment_idx,
+                        &path.segments[segment_idx],
                         enum_name,
-                        variant_name
-                    );
-                    self.emit_variant_mismatch_result(&detail, span);
+                        variant_name,
+                        span,
+                    )?;
                     self.emit_jump(failure_end);
                 }
 
@@ -9683,6 +10333,20 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         for (segment_idx, segment) in path.segments.iter().enumerate() {
             match segment {
+                TypedFacetSegment::ErrorPayload {
+                    kind,
+                    field_index,
+                    payload_len,
+                    ..
+                } => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetErrorPayload {
+                        kind: kind.clone(),
+                        field_index: *field_index,
+                        payload_len: *payload_len,
+                    });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
                 TypedFacetSegment::ReadonlyBuiltin { builtin_id, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit_trait_builtin(sindr::signature::BuiltinId(*builtin_id), 1, span)?;
@@ -9805,14 +10469,15 @@ impl Codegen {
                     self.emit_jump(continue_label);
 
                     self.patch_label(mismatch_label);
-                    let detail = format!(
-                        "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
-                        segment_idx + 1,
-                        Self::facet_segment_display(segment),
+                    self.emit_variant_mismatch_result(
+                        false,
+                        current_slot,
+                        segment_idx,
+                        segment,
                         enum_name,
-                        variant_name
-                    );
-                    self.emit_variant_mismatch_result(&detail, span);
+                        variant_name,
+                        span,
+                    )?;
                     self.emit_jump(end_label);
 
                     self.patch_label(continue_label);
@@ -9854,6 +10519,7 @@ impl Codegen {
                 ..
             } => format!("._{index}"),
             TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+            | TypedFacetSegment::ErrorPayload { field_name, .. }
             | TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
             TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
             TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
@@ -9886,11 +10552,46 @@ impl Codegen {
         })
     }
 
-    fn emit_variant_mismatch_result(&mut self, detail: &str, span: &Span) {
-        let err_tag = self.add_constant(Constant::Tag(1));
-        self.emit(Opcode::LoadConst(err_tag));
-        self.emit_error_value("VariantMismatch", detail, span);
+    fn emit_variant_mismatch_result(
+        &mut self,
+        update: bool,
+        current_slot: u32,
+        segment_idx: usize,
+        segment: &TypedFacetSegment,
+        enum_name: &str,
+        expected: &str,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(tag));
+        let c = self.add_constant(Constant::Int(int(segment_idx + 1)));
+        self.emit(Opcode::LoadConst(c));
+        for text in [
+            Self::facet_segment_display(segment),
+            surface_path_name(enum_name).to_string(),
+            expected.to_string(),
+        ] {
+            let c = self.add_constant(Constant::Str(text));
+            self.emit(Opcode::LoadConst(c));
+        }
+        self.emit_variant_name_from_local(current_slot, enum_name, span)?;
+        self.emit_language_error_call(
+            if update {
+                "FacetUpdateVariantMismatch"
+            } else {
+                "FacetReadVariantMismatch"
+            },
+            &[
+                sindr::ir::ErrorValueSchema::Int,
+                sindr::ir::ErrorValueSchema::String,
+                sindr::ir::ErrorValueSchema::String,
+                sindr::ir::ErrorValueSchema::String,
+                sindr::ir::ErrorValueSchema::String,
+            ],
+            span,
+        )?;
         self.emit(Opcode::StructNew { field_count: 1 });
+        Ok(())
     }
 
     fn emit_safebind(
@@ -10037,12 +10738,24 @@ impl Codegen {
         span: Span,
         destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
-        self.emit_safebind_rule_failure(
-            "EmptyList",
-            "Empty List.",
-            &format!("head-tail list pattern requires a non-empty {input_source}"),
-            Some(input_source),
+        if self.pattern_failure_is_discarded(&span, destination)? {
+            return Ok(());
+        }
+        if input_source != "List" {
+            return Err(CodegenError {
+                message: "String head-tail must use canonical Uncons extractor".into(),
+                span,
+            });
+        }
+        self.emit_language_error_call("EmptyHeadTailListPattern", &[], &span)?;
+        self.emit_pattern_failure_from_error_stack(
             span,
+            Some(
+                sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
+                    rule: "head-tail list pattern requires a non-empty List".into(),
+                    input_source: Some("List".into()),
+                },
+            ),
             destination,
         )
     }
@@ -10077,28 +10790,70 @@ impl Codegen {
             TypedPattern::As(_, inner, _) => {
                 self.emit_safebind_pattern_failure(inner, value_slot, span, destination)
             }
-            TypedPattern::ListNil(ty) | TypedPattern::ListCons(ty, _, _) => {
-                let input_source = if matches!(ty, Ty::Str) {
-                    "String"
-                } else {
-                    "List"
-                };
-                self.emit_empty_list_failure(input_source, span, destination)
-            }
-            TypedPattern::IntLit(_, _)
-            | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _)
-            | TypedPattern::DurationLit(_, _) => {
+            TypedPattern::ListNil(ty) if matches!(ty, Ty::Str) => {
                 self.emit_literal_pattern_mismatch_failure(pat, value_slot, span, destination)
             }
-            _ => self.emit_safebind_rule_failure(
-                "PatternMismatch",
-                "Pattern did not match.",
-                "pattern must match the SafeBind input",
-                None,
+            TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
+                self.emit_empty_list_failure("List", span, destination)
+            }
+            TypedPattern::IntLit(..)
+            | TypedPattern::StrLit(..)
+            | TypedPattern::BoolLit(..)
+            | TypedPattern::DurationLit(..) => {
+                self.emit_literal_pattern_mismatch_failure(pat, value_slot, span, destination)
+            }
+            TypedPattern::Pin(ty, id, _) => {
+                if self.pattern_failure_is_discarded(&span, destination)? {
+                    return Ok(());
+                }
+                let expected_slot = self.existing_slot_for_id(id, &span)?;
+                let name = self.add_constant(Constant::Str(ty_to_string(ty)));
+                self.emit(Opcode::LoadConst(name));
+                self.emit(Opcode::LoadLocal(expected_slot));
+                self.emit_internal_builtin_call("inspect", 1, &span)?;
+                self.emit(Opcode::LoadLocal(value_slot));
+                self.emit_internal_builtin_call("inspect", 1, &span)?;
+                self.emit_language_error_call(
+                    "PinnedValuePatternMismatch",
+                    &vec![sindr::ir::ErrorValueSchema::String; 3],
+                    &span,
+                )?;
+                self.emit_pattern_failure_from_error_stack(span, None, destination)
+            }
+            TypedPattern::Constructor { ty, tag, .. } => {
+                if self.pattern_failure_is_discarded(&span, destination)? {
+                    return Ok(());
+                }
+                let (enum_name, expected) = self.variant_identity(*tag, &span)?;
+                let kind = if matches!(ty, Ty::Result(..)) {
+                    "ResultVariantPatternMismatch"
+                } else {
+                    "EnumVariantPatternMismatch"
+                };
+                if kind == "EnumVariantPatternMismatch" {
+                    let c =
+                        self.add_constant(Constant::Str(surface_path_name(&enum_name).to_string()));
+                    self.emit(Opcode::LoadConst(c));
+                }
+                let c = self.add_constant(Constant::Str(expected));
+                self.emit(Opcode::LoadConst(c));
+                self.emit_variant_name_from_local(value_slot, &enum_name, &span)?;
+                let arity = if kind == "EnumVariantPatternMismatch" {
+                    3
+                } else {
+                    2
+                };
+                self.emit_language_error_call(
+                    kind,
+                    &vec![sindr::ir::ErrorValueSchema::String; arity],
+                    &span,
+                )?;
+                self.emit_pattern_failure_from_error_stack(span, None, destination)
+            }
+            _ => Err(CodegenError {
+                message: "Pattern failure has no checked language Error contract".into(),
                 span,
-                destination,
-            ),
+            }),
         }
     }
 
@@ -10109,41 +10864,76 @@ impl Codegen {
         span: Span,
         destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
-        if matches!(destination, PatternFailureDestination::EnclosingConsumer)
-            && self.emit_do_alternative_failure_jump(&span)?
-        {
+        if self.pattern_failure_is_discarded(&span, destination)? {
             return Ok(());
         }
-        let Some(lhs_value) = literal_pattern_display(pat) else {
-            return self.emit_safebind_rule_failure(
-                "PatternMismatch",
-                "Pattern did not match.",
-                "literal pattern must equal the SafeBind input",
-                None,
-                span,
-                destination,
-            );
+        use sindr::ir::ErrorValueSchema as S;
+        let (kind, schema, expected) = match pat {
+            TypedPattern::IntLit(_, v) => (
+                "IntLiteralPatternMismatch",
+                S::Int,
+                Constant::Int(v.clone()),
+            ),
+            TypedPattern::StrLit(_, v) => (
+                "StringLiteralPatternMismatch",
+                S::String,
+                Constant::Str(v.clone()),
+            ),
+            TypedPattern::BoolLit(_, v) => (
+                "BooleanLiteralPatternMismatch",
+                S::Boolean,
+                Constant::Bool(*v),
+            ),
+            TypedPattern::DurationLit(_, v) => {
+                let tag = self
+                    .state
+                    .type_registry
+                    .tag_by_name("Duration")
+                    .ok_or_else(|| CodegenError {
+                        message: "Duration runtime declaration missing".into(),
+                        span: span.clone(),
+                    })?;
+                let c = self.add_constant(Constant::Tag(tag));
+                self.emit(Opcode::LoadConst(c));
+                let c = self.add_constant(Constant::Int(v.clone()));
+                self.emit(Opcode::LoadConst(c));
+                self.emit(Opcode::StructNew { field_count: 1 });
+                self.emit(Opcode::LoadLocal(value_slot));
+                let schema = S::Struct {
+                    name: self.state.type_registry.lookup(tag).unwrap().name.clone(),
+                    arguments: Vec::new(),
+                    fields: vec![S::Int],
+                };
+                self.emit_language_error_call(
+                    "DurationLiteralPatternMismatch",
+                    &[schema.clone(), schema],
+                    &span,
+                )?;
+                return self.emit_pattern_failure_from_error_stack(span, None, destination);
+            }
+            TypedPattern::ListNil(ty) if matches!(ty, Ty::Str) => (
+                "StringLiteralPatternMismatch",
+                S::String,
+                Constant::Str(String::new()),
+            ),
+            _ => {
+                return Err(CodegenError {
+                    message: "literal failure is missing typed expected value".into(),
+                    span,
+                })
+            }
         };
-
-        self.emit(Opcode::LoadLocal(value_slot));
-        let inspect_id = Self::builtin_id("inspect").ok_or_else(|| CodegenError {
-            message: "Unknown builtin: inspect".into(),
+        let lhs = literal_pattern_display(pat).ok_or_else(|| CodegenError {
+            message: "literal display metadata missing".into(),
             span: span.clone(),
         })?;
-        self.emit(Opcode::CallBuiltin {
-            builtin_id: inspect_id,
-            arity: 1,
-            span_start: span.start as u32,
-            span_end: span.end as u32,
-        });
-        self.emit_pattern_failure_from_message_stack_with_diagnostic(
-            "PatternMismatch",
+        let c = self.add_constant(expected);
+        self.emit(Opcode::LoadConst(c));
+        self.emit(Opcode::LoadLocal(value_slot));
+        self.emit_language_error_call(kind, &[schema.clone(), schema], &span)?;
+        self.emit_pattern_failure_from_error_stack(
             span,
-            Some(
-                sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch {
-                    lhs: lhs_value,
-                },
-            ),
+            Some(sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch { lhs }),
             destination,
         )
     }
@@ -10152,67 +10942,23 @@ impl Codegen {
         &mut self,
         lhs_len: usize,
         rhs_len: usize,
-        op: &str,
+        _op: &str,
         span: Span,
         destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
-        self.emit_safebind_rule_failure(
-            "IndexOutOfBounds",
-            &format!("LHS.len({}) {} RHS.len({})", lhs_len, op, rhs_len),
-            "fixed-length list pattern requires List.len to match the pattern arity",
-            Some("List"),
-            span,
-            destination,
-        )
-    }
-
-    fn emit_list_len_mismatch_failure_rhs_long(
-        &mut self,
-        lhs_len: usize,
-        remainder_slot: u32,
-        span: Span,
-        destination: PatternFailureDestination,
-    ) -> Result<(), CodegenError> {
-        if matches!(destination, PatternFailureDestination::EnclosingConsumer)
-            && self.emit_do_alternative_failure_jump(&span)?
-        {
+        if self.pattern_failure_is_discarded(&span, destination)? {
             return Ok(());
         }
-        let rem_count_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        self.emit(Opcode::LoadLocal(remainder_slot));
-        self.emit(Opcode::ListLen);
-        self.emit(Opcode::StoreLocal(rem_count_slot));
-
-        let rhs_total_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        let lhs_idx = self.add_constant(Constant::Int(int(lhs_len as u64)));
-        self.emit(Opcode::LoadConst(lhs_idx));
-        self.emit(Opcode::LoadLocal(rem_count_slot));
-        self.emit(Opcode::AddInt);
-        self.emit(Opcode::StoreLocal(rhs_total_slot));
-
-        let prefix_idx =
-            self.add_constant(Constant::Str(format!("LHS.len({}) < RHS.len(", lhs_len)));
-        self.emit(Opcode::LoadConst(prefix_idx));
-        self.emit(Opcode::LoadLocal(rhs_total_slot));
-        let to_string_id = Self::builtin_id("to_string").ok_or_else(|| CodegenError {
-            message: "Unknown builtin: to_string".into(),
-            span: span.clone(),
-        })?;
-        self.emit(Opcode::CallBuiltin {
-            builtin_id: to_string_id,
-            arity: 1,
-            span_start: span.start as u32,
-            span_end: span.end as u32,
-        });
-        self.emit(Opcode::ConcatStr);
-        let suffix_idx = self.add_constant(Constant::Str(")".into()));
-        self.emit(Opcode::LoadConst(suffix_idx));
-        self.emit(Opcode::ConcatStr);
-
-        self.emit_pattern_failure_from_message_stack_with_diagnostic(
-            "IndexOutOfBounds",
+        for length in [lhs_len, rhs_len] {
+            let c = self.add_constant(Constant::Int(int(length)));
+            self.emit(Opcode::LoadConst(c));
+        }
+        self.emit_language_error_call(
+            "ListPatternTooShort",
+            &vec![sindr::ir::ErrorValueSchema::Int; 2],
+            &span,
+        )?;
+        self.emit_pattern_failure_from_error_stack(
             span,
             Some(
                 sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
@@ -10225,29 +10971,34 @@ impl Codegen {
         )
     }
 
-    fn emit_safebind_rule_failure(
+    fn emit_list_len_mismatch_failure_rhs_long(
         &mut self,
-        kind: &str,
-        message: &str,
-        rule: &str,
-        input_source: Option<&str>,
+        lhs_len: usize,
+        remainder_slot: u32,
         span: Span,
         destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
-        if matches!(destination, PatternFailureDestination::EnclosingConsumer)
-            && self.emit_do_alternative_failure_jump(&span)?
-        {
+        if self.pattern_failure_is_discarded(&span, destination)? {
             return Ok(());
         }
-        let message_idx = self.add_constant(Constant::Str(message.into()));
-        self.emit(Opcode::LoadConst(message_idx));
-        self.emit_pattern_failure_from_message_stack_with_diagnostic(
-            kind,
+        let c = self.add_constant(Constant::Int(int(lhs_len)));
+        self.emit(Opcode::LoadConst(c));
+        self.emit(Opcode::LoadLocal(remainder_slot));
+        self.emit(Opcode::ListLen);
+        self.emit(Opcode::LoadConst(c));
+        self.emit(Opcode::AddInt);
+        self.emit_language_error_call(
+            "ListPatternTooLong",
+            &vec![sindr::ir::ErrorValueSchema::Int; 2],
+            &span,
+        )?;
+        self.emit_pattern_failure_from_error_stack(
             span,
             Some(
                 sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
-                    rule: rule.into(),
-                    input_source: input_source.map(str::to_string),
+                    rule: "fixed-length list pattern requires List.len to match the pattern arity"
+                        .into(),
+                    input_source: Some("List".into()),
                 },
             ),
             destination,
@@ -10315,17 +11066,6 @@ impl Codegen {
         self.emit_node(&target.call)
     }
 
-    fn emit_monad_fail_error_value_from_message_stack(
-        &mut self,
-        target: &MonadFailTarget,
-        kind: &str,
-        span: &Span,
-        diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
-    ) -> Result<(), CodegenError> {
-        self.emit_error_value_from_stack_with_diagnostic(kind, span, diagnostic);
-        self.emit_monad_fail_from_error_stack(target)
-    }
-
     fn emit_monad_fail_from_result_local(
         &mut self,
         target: &MonadFailTarget,
@@ -10336,131 +11076,180 @@ impl Codegen {
         self.emit_monad_fail_from_error_stack(target)
     }
 
-    fn emit_pattern_failure_from_message_stack_with_diagnostic(
+    fn pattern_failure_is_discarded(
+        &mut self,
+        span: &Span,
+        destination: PatternFailureDestination,
+    ) -> Result<bool, CodegenError> {
+        Ok(
+            matches!(destination, PatternFailureDestination::EnclosingConsumer)
+                && self.emit_do_alternative_failure_jump(span)?,
+        )
+    }
+
+    fn emit_language_error_call(
         &mut self,
         kind: &str,
+        input: &[sindr::ir::ErrorValueSchema],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let canonical = compiler_global_error_kind(kind);
+        let template = self
+            .state
+            .error_templates
+            .iter()
+            .find(|t| t.kind == canonical)
+            .ok_or_else(|| CodegenError {
+                message: format!("Unresolved Error declaration {canonical}"),
+                span: span.clone(),
+            })?;
+        if template.input_types != input {
+            return Err(CodegenError {
+                message: format!("Error constructor input signature changed: {canonical}"),
+                span: span.clone(),
+            });
+        }
+        let fun_idx = template.constructor_fun_idx;
+        self.emit(Opcode::Call {
+            fun_idx,
+            arity: checked_u8_arity(input.len(), span)?,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
+        Ok(())
+    }
+
+    fn emit_pattern_failure_from_error_stack(
+        &mut self,
         span: Span,
         diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
         destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
+        if let Some(diagnostic) = diagnostic {
+            self.emit(Opcode::AnnotateError { diagnostic });
+        }
+        let error_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(error_slot));
         if let PatternFailureDestination::ExpressionResult(end) = destination {
-            let message_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(message_slot));
-            let tag = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag));
-            self.emit(Opcode::LoadLocal(message_slot));
-            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic);
+            let c = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(c));
+            self.emit(Opcode::LoadLocal(error_slot));
             self.emit(Opcode::StructNew { field_count: 1 });
             self.emit_jump(end);
             return Ok(());
         }
-
-        if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::DoAlternative { .. })
-        ) {
-            self.emit(Opcode::Pop);
-            self.emit_do_alternative_failure_jump(&span)?;
-        } else if let Some(SafeBindFailureTarget::DoMonadFail(target)) =
-            self.safe_bind_failure_target.clone()
-        {
-            let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
-                message: "Internal invariant broken: do Result SafeBind has no local join".into(),
-                span: span.clone(),
-            })?;
-            self.emit_monad_fail_error_value_from_message_stack(
-                &target,
-                kind,
-                &span,
-                diagnostic.clone(),
-            )?;
-            self.emit_jump(end_label);
-        } else if let Some(SafeBindFailureTarget::EnclosingMonadFail(target)) =
-            self.safe_bind_failure_target.clone()
-        {
-            self.emit_monad_fail_error_value_from_message_stack(
-                &target,
-                kind,
-                &span,
-                diagnostic.clone(),
-            )?;
-            self.emit(Opcode::Return);
-        } else if let Some(SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }) =
-            self.safe_bind_failure_target.clone()
-        {
-            let message_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(message_slot));
-            self.emit_match_result_err_header(err_tag, &span)?;
-            self.emit(Opcode::LoadLocal(message_slot));
-            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic);
-            self.emit(Opcode::StructNew { field_count: 2 });
-            self.emit(Opcode::Return);
-        } else if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::TopLevel)
-        ) {
-            if self.top_level_returns_result {
-                let msg_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(msg_slot));
-                let tag_const = self.add_constant(Constant::Tag(1));
-                self.emit(Opcode::LoadConst(tag_const));
-                self.emit(Opcode::LoadLocal(msg_slot));
-                self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
-                self.emit(Opcode::StructNew { field_count: 1 });
-                self.emit(Opcode::Halt);
-            } else {
-                self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
-                let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                    message: "Unknown builtin: eprint".into(),
+        match self.safe_bind_failure_target.clone() {
+            Some(SafeBindFailureTarget::DoMonadFail(target)) => {
+                self.emit(Opcode::LoadLocal(error_slot));
+                self.emit_monad_fail_from_error_stack(&target)?;
+                let end = self.do_safebind_end_label.ok_or_else(|| CodegenError {
+                    message: "do failure join missing".into(),
                     span: span.clone(),
                 })?;
-                self.emit(Opcode::CallBuiltin {
-                    builtin_id: eprint_id,
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
+                self.emit_jump(end);
+            }
+            Some(SafeBindFailureTarget::EnclosingMonadFail(target)) => {
+                self.emit(Opcode::LoadLocal(error_slot));
+                self.emit_monad_fail_from_error_stack(&target)?;
+                self.emit(Opcode::Return);
+            }
+            Some(SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }) => {
+                self.emit_match_result_err_header(err_tag, &span)?;
+                self.emit(Opcode::LoadLocal(error_slot));
+                self.emit(Opcode::StructNew { field_count: 2 });
+                self.emit(Opcode::Return);
+            }
+            Some(SafeBindFailureTarget::TopLevel) if self.top_level_returns_result => {
+                let c = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(c));
+                self.emit(Opcode::LoadLocal(error_slot));
+                self.emit(Opcode::StructNew { field_count: 1 });
                 self.emit(Opcode::Halt);
             }
-        } else {
-            return Err(CodegenError {
-                message: "Internal invariant broken: pattern consumer failure target is missing or invalid".into(),
-                span,
-            });
+            Some(SafeBindFailureTarget::TopLevel) => {
+                self.emit(Opcode::LoadLocal(error_slot));
+                self.emit_internal_builtin_call("eprint", 1, &span)?;
+                self.emit(Opcode::Halt);
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: "Pattern failure target missing or invalid".into(),
+                    span,
+                })
+            }
         }
-
         Ok(())
     }
 
-    fn emit_error_value(&mut self, kind: &str, message: &str, span: &Span) {
-        let message_idx = self.add_constant(Constant::Str(message.into()));
-        self.emit(Opcode::LoadConst(message_idx));
-        self.emit_error_value_from_stack_with_diagnostic(kind, span, None);
+    fn variant_identity(&self, tag: u32, span: &Span) -> Result<(String, String), CodegenError> {
+        let name = if tag == 0 {
+            "Result::Ok"
+        } else if tag == 1 {
+            "Result::Err"
+        } else {
+            &self
+                .state
+                .type_registry
+                .lookup(tag)
+                .ok_or_else(|| CodegenError {
+                    message: "variant declaration metadata missing".into(),
+                    span: span.clone(),
+                })?
+                .name
+        };
+        let (owner, variant) = name.rsplit_once("::").ok_or_else(|| CodegenError {
+            message: "variant declaration identity malformed".into(),
+            span: span.clone(),
+        })?;
+        Ok((owner.to_string(), variant.to_string()))
     }
 
-    fn emit_error_value_from_stack_with_diagnostic(
+    fn emit_variant_name_from_local(
         &mut self,
-        kind: &str,
+        slot: u32,
+        enum_name: &str,
         span: &Span,
-        diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
-    ) {
-        let template_id = self.state.error_templates.len() as u32;
-        self.state.error_templates.push(ErrTemplate {
-            location_source: sindr::ir::ErrorLocationSource::SourceSpan,
-            id: template_id,
-            kind: compiler_global_error_kind(kind),
-            span_start: span.start as u32,
-            span_end: span.end as u32,
-            line: 0,
-            column: 0,
-            format: String::new(),
-            num_params: 1,
-            diagnostic,
+    ) -> Result<(), CodegenError> {
+        let mut variants = Vec::new();
+        if enum_name == "Result" {
+            variants.extend([(0, "Ok".to_string()), (1, "Err".to_string())]);
+        } else {
+            for entry in self.state.type_registry.entries() {
+                if entry.kind == TypeKind::EnumVariant {
+                    if let Some((owner, name)) = entry.name.rsplit_once("::") {
+                        if owner == enum_name {
+                            variants.push((entry.tag, name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        if variants.is_empty() {
+            return Err(CodegenError {
+                message: format!("Enum {enum_name} has no runtime variant metadata"),
+                span: span.clone(),
+            });
+        }
+        let done = self.fresh_label();
+        for (tag, name) in variants {
+            let next = self.fresh_label();
+            self.emit(Opcode::LoadLocal(slot));
+            self.emit(Opcode::GetTag);
+            let c = self.add_constant(Constant::Tag(tag));
+            self.emit(Opcode::LoadConst(c));
+            self.emit(Opcode::EqTag);
+            self.emit_jump_if_false(next);
+            let c = self.add_constant(Constant::Str(name));
+            self.emit(Opcode::LoadConst(c));
+            self.emit_jump(done);
+            self.patch_label(next);
+        }
+        self.emit(Opcode::RuntimeContractViolation {
+            message: format!("unknown runtime variant tag for {enum_name}"),
         });
-        self.emit(Opcode::MakeError { template_id });
+        self.patch_label(done);
+        Ok(())
     }
 
     fn collect_exact_list_pattern_items(pat: &TypedPattern) -> Option<Vec<&TypedPattern>> {
@@ -10663,6 +11452,7 @@ impl Codegen {
                 | TypedPattern::Wildcard(..)
                 | TypedPattern::Tuple(..)
                 | TypedPattern::As(..)
+                | TypedPattern::Extractor { .. }
         ) || matches!(failure_policy, ExtractorFailurePolicy::Discard)
             || (matches!(failure_policy, ExtractorFailurePolicy::Propagate)
                 && matches!(
@@ -11507,23 +12297,10 @@ impl Codegen {
         Ok(item_slots)
     }
 
-    fn emit_invalid_extractor_outcome_failure(&mut self, span: &Span) -> Result<(), CodegenError> {
-        self.emit_error_value(
-            "InvalidMatchResult",
-            "Extractor returned an unknown MatchResult tag.",
-            span,
-        );
-        let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-            message: "Unknown builtin: eprint".into(),
-            span: span.clone(),
-        })?;
-        self.emit(Opcode::CallBuiltin {
-            builtin_id: eprint_id,
-            arity: 1,
-            span_start: span.start as u32,
-            span_end: span.end as u32,
+    fn emit_invalid_extractor_outcome_failure(&mut self, _span: &Span) -> Result<(), CodegenError> {
+        self.emit(Opcode::RuntimeContractViolation {
+            message: "Extractor returned a tag outside canonical MatchResult OK/Err".into(),
         });
-        self.emit(Opcode::Halt);
         Ok(())
     }
 
@@ -11567,6 +12344,10 @@ impl Codegen {
             {
                 remap_function(fun_idx)?;
             }
+        }
+
+        for template in &mut self.state.error_templates {
+            remap_function(&mut template.constructor_fun_idx)?;
         }
 
         for template in &mut self.state.callable_templates {
@@ -12083,19 +12864,9 @@ impl Codegen {
         fail_label: Label,
     ) -> Result<(), CodegenError> {
         self.emit(Opcode::LoadLocal(slot));
-        let kind_id = Self::builtin_id("kind").ok_or_else(|| CodegenError {
-            message: "Unknown builtin: kind".into(),
-            span: Span { start: 0, end: 0 },
-        })?;
-        self.emit(Opcode::CallBuiltin {
-            builtin_id: kind_id,
-            arity: 1,
-            span_start: 0,
-            span_end: 0,
+        self.emit(Opcode::IsErrorKind {
+            kind: expected_kind.to_string(),
         });
-        let kind_const = self.add_constant(Constant::Str(expected_kind.to_string()));
-        self.emit(Opcode::LoadConst(kind_const));
-        self.emit(Opcode::EqStr);
         self.emit_jump_if_false(fail_label);
         Ok(())
     }
@@ -12274,6 +13045,28 @@ impl Codegen {
             TypedMatchPattern::ErrorKind(kind) => {
                 self.emit_error_kind_test_from_local(slot, kind, fail_label)?;
                 MatchPatternDecomp::None
+            }
+            TypedMatchPattern::ErrorPayload { kind, fields } => {
+                self.emit_error_kind_test_from_local(slot, kind, fail_label)?;
+                let mut children = Vec::with_capacity(fields.len());
+                for (index, pattern) in fields.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetErrorPayload {
+                        kind: kind.clone(),
+                        field_index: index as u32,
+                        payload_len: fields.len() as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    let decomp =
+                        self.emit_match_pattern_test(pattern, item_slot, fail_label, err_span)?;
+                    children.push(MatchPatternDecompChild {
+                        slot: item_slot,
+                        decomp,
+                    });
+                }
+                MatchPatternDecomp::Constructor(children)
             }
             TypedMatchPattern::Or(items) => {
                 let success_label = self.fresh_label();
@@ -12485,6 +13278,28 @@ impl Codegen {
                             (inner_slot, None)
                         };
                     self.emit_match_pattern_bind(field_pat, inner_slot, inner_decomp, err_span)?;
+                }
+            }
+            TypedMatchPattern::ErrorPayload { fields, .. } => {
+                let Some(MatchPatternDecomp::Constructor(children)) = decomp else {
+                    return Err(CodegenError {
+                        message: "Error payload has no successful decomposition".into(),
+                        span: err_span.clone(),
+                    });
+                };
+                if children.len() != fields.len() {
+                    return Err(CodegenError {
+                        message: "Error payload decomposition arity mismatch".into(),
+                        span: err_span.clone(),
+                    });
+                }
+                for (pattern, child) in fields.iter().zip(children) {
+                    self.emit_match_pattern_bind(
+                        pattern,
+                        child.slot,
+                        Some(child.decomp),
+                        err_span,
+                    )?;
                 }
             }
             TypedMatchPattern::Constructor {

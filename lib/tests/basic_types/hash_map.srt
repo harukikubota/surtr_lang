@@ -41,15 +41,15 @@ test("HashMap") {
       }
     }
 
-    it("returns Ok for present keys and NoneError for missing keys") {
+    it("returns Ok for present keys and HashMapKeyMissing for missing keys") {
       do {
         map = HashMap::map_insert(HashMap::map_insert(HashMap::empty_map(), "a", 1), "b", 2)
 
         assert_ok_eq(1, HashMap::map_get(map, "a"))
         result = HashMap::map_get(map, "z")
 
-        assert_err_kind(NoneError, result)
-        assert_err_contains("None Value.", result)
+        assert_err_kind(HashMapKeyMissing, result)
+        assert_err_message_eq("hash map key not found: z", result)
       }
     }
   }

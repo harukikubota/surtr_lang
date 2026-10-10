@@ -36,7 +36,10 @@ defenum Mode {
   Prod,
 }
 
-deferror InvalidPort(port: Int) { "invalid port" }
+deferror InvalidPort(port: Int) {
+  |port: Int|
+  Self(message: "invalid port", port)
+}
 ```
 
 使うときの見え方は次の通りです。

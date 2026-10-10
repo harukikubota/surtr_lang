@@ -164,21 +164,21 @@ fn range_literal_rejects_mixed_endpoint_types() {
 fn range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range() {
     assert_runtime_error_via_cli(
         r#"print(inspect(["".."c"]))"#,
-        "InvalidCharRange: start must be a single char",
+        "CharacterRangeStartLengthInvalid: start must be a single character",
     );
 }
 
 fn range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range() {
     assert_runtime_error_via_cli(
         r#"print(inspect(["ab".."c"]))"#,
-        "InvalidCharRange: start must be a single char",
+        "CharacterRangeStartLengthInvalid: start must be a single character",
     );
 }
 
 fn range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range() {
     assert_runtime_error_via_cli(
         r#"print(inspect(["q".."aaa"]))"#,
-        "InvalidCharRange: stop must be a single char",
+        "CharacterRangeStopLengthInvalid: stop must be a single character",
     );
 }
 
@@ -201,7 +201,7 @@ fn safe_xxx_zero_returns_zero_division_error_display() {
         "print(inspect(Div::safe_div(1, 0)))\nprint(inspect(Mod::safe_mod(1, 0)))",
         &[
             "Err(ZeroDivisionError(\"division by zero\"))",
-            "Err(ZeroDivisionError(\"division by zero\"))",
+            "Err(ZeroModuloError(\"modulo by zero\"))",
         ],
     );
 }

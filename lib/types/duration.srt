@@ -14,25 +14,31 @@ defstruct Duration {
   readonly millis: Int,
 }
 
-deferror InvalidDuration(message: String) {
-  message
+deferror NegativeDurationMillis(value: Int) {
+  |value: Int|
+  Self(message: "duration must be non-negative: #{value}", value)
+}
+
+deferror NegativeDurationDifference(lhs_millis: Int, rhs_millis: Int) {
+  |lhs_millis: Int, rhs_millis: Int|
+  Self(message: "duration subtraction would be negative: #{lhs_millis}ms - #{rhs_millis}ms", lhs_millis, rhs_millis)
 }
 
 impl Duration {
   @doc """
   Construct a `Duration` from a millisecond count.
-  Negative values are rejected with `InvalidDuration`.
+  Negative values are rejected with `NegativeDurationMillis`.
 
   ## REPL
   xldr(1)> Duration(10)
   Ok(10ms)
   xldr(2)> Duration(-1)
-  Err(InvalidDuration("duration must be non-negative: -1"))
+  Err(NegativeDurationMillis("duration must be non-negative: -1"))
   """
   def new(value: Int) -> Result<Self, Error> {
     if(
       value < 0,
-      Err(InvalidDuration("duration must be non-negative: #{value}")),
+      Err(NegativeDurationMillis(value)),
       Ok(Duration { millis: value })
     )
   }
@@ -46,12 +52,12 @@ impl Duration {
   xldr(1)> Duration::sub(20ms, 10ms)
   Ok(10ms)
   xldr(2)> Duration::sub(10ms, 20ms)
-  Err(InvalidDuration("duration subtraction would be negative: 10ms - 20ms"))
+  Err(NegativeDurationDifference("duration subtraction would be negative: 10ms - 20ms"))
   """
   def sub(self: Self, rhs: Self) -> Result<Self, Error> {
     if(
       self.millis < rhs.millis,
-      Err(InvalidDuration("duration subtraction would be negative: " ++ to_string(self.millis) ++ "ms - " ++ to_string(rhs.millis) ++ "ms")),
+      Err(NegativeDurationDifference(self.millis, rhs.millis)),
       Duration(self.millis - rhs.millis),
     )
   }

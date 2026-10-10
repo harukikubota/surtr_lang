@@ -55,8 +55,8 @@ note =? File::read("./tmp/sandbox/note.txt")
 
 - `Err(FileNotFound(path))`
 - `Err(FilePermissionDenied(path))`
-- `Err(FileEncodingError(...))`
-- `Err(FileIoError(...))`
+- `Err(FileReadEncodingError(path, detail))`
+- `Err(FileReadFailed(path, detail))`
 
 ### `File::write`
 
@@ -151,7 +151,7 @@ print(inspect(File::read_chunk(handle, 1)))
 - `FileMode::ReadAppend`
   読みつつ追記する
 
-`FileMode::Read` で開いた handle に `File::write_chunk` すると `Err(FileIoError(...))` になります。
+`FileMode::Read` で開いた handle に `File::write_chunk` すると `Err(FileHandleNotWritable(path, mode))` になります。
 
 ## chunked read
 

@@ -1075,7 +1075,7 @@ fn repl_runtime_diagnostic_points_at_the_full_call() {
     );
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
-    assert!(stderr.contains("ZeroDivisionError"));
+    assert!(stderr.contains("ZeroModuloError"));
     assert!(stderr.contains("REPL:1:1"));
     assert!(stderr.contains("Mod::safe_mod(10, 0)"));
 }

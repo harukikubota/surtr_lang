@@ -169,7 +169,7 @@ test("Int") {
       do {
         result = parse_dec("-")
 
-        assert_err_kind(ParseIntError, result)
+        assert_err_kind(IntParseSignWithoutDigits, result)
         assert_err_contains("sign without digits", result)
       }
     }
@@ -177,8 +177,8 @@ test("Int") {
       do {
         result = parse_dec("0xff")
 
-        assert_err_kind(ParseIntError, result)
-        assert_err_contains("invalid digit for decimal integer: x at index 1", result)
+        assert_err_kind(IntParseInvalidDigit, result)
+        assert_err_message_eq("invalid digit for decimal integer: \"x\" at index 1", result)
       }
     }
   }
@@ -203,8 +203,8 @@ test("Int") {
       do {
         result = parse_hex("0xff")
 
-        assert_err_kind(ParseIntError, result)
-        assert_err_contains("invalid digit for hexadecimal integer: x at index 1", result)
+        assert_err_kind(IntParseInvalidDigit, result)
+        assert_err_message_eq("invalid digit for hexadecimal integer: \"x\" at index 1", result)
       }
     }
   }
@@ -224,8 +224,8 @@ test("Int") {
       do {
         result = parse_oct("18")
 
-        assert_err_kind(ParseIntError, result)
-        assert_err_contains("invalid digit for octal integer: 8 at index 1", result)
+        assert_err_kind(IntParseInvalidDigit, result)
+        assert_err_message_eq("invalid digit for octal integer: \"8\" at index 1", result)
       }
     }
   }
@@ -245,8 +245,8 @@ test("Int") {
       do {
         result = parse_bin("102")
 
-        assert_err_kind(ParseIntError, result)
-        assert_err_contains("invalid digit for binary integer: 2 at index 2", result)
+        assert_err_kind(IntParseInvalidDigit, result)
+        assert_err_message_eq("invalid digit for binary integer: \"2\" at index 2", result)
       }
     }
   }
@@ -288,7 +288,7 @@ test("Int") {
       do {
         result = parse_literal("0q123")
 
-        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_kind(IntLiteralUnknownPrefix, result)
         assert_err_contains("unknown integer base prefix: 0q", result)
       }
     }
@@ -297,7 +297,7 @@ test("Int") {
       do {
         result = parse_literal("0x")
 
-        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_kind(IntLiteralMissingDigits, result)
         assert_err_contains("missing digits after integer base prefix: 0x", result)
       }
     }
@@ -306,7 +306,7 @@ test("Int") {
       do {
         result = parse_literal("")
 
-        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_kind(IntLiteralEmpty, result)
         assert_err_contains("empty integer literal input", result)
       }
     }
@@ -315,7 +315,7 @@ test("Int") {
       do {
         result = parse_literal("-")
 
-        assert_err_kind(ParseIntLiteralError, result)
+        assert_err_kind(IntLiteralSignWithoutDigits, result)
         assert_err_contains("sign without digits", result)
       }
     }

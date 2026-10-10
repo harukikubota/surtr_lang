@@ -111,12 +111,12 @@ test("String") {
       }
     }
 
-    it("returns NoneError for a missing prefix") {
+    it("returns StringPrefixMissing for a missing prefix") {
       do {
         result = strip_prefix("surtr", "ur")
 
-        assert_err_kind(NoneError, result)
-        assert_err_contains("None Value.", result)
+        assert_err_kind(StringPrefixMissing, result)
+        assert_err_message_eq("string does not start with \"ur\": \"surtr\"", result)
       }
     }
   }
@@ -128,12 +128,12 @@ test("String") {
       }
     }
 
-    it("returns NoneError for a missing suffix") {
+    it("returns StringSuffixMissing for a missing suffix") {
       do {
         result = strip_suffix("surtr", "su")
 
-        assert_err_kind(NoneError, result)
-        assert_err_contains("None Value.", result)
+        assert_err_kind(StringSuffixMissing, result)
+        assert_err_message_eq("string does not end with \"su\": \"surtr\"", result)
       }
     }
   }
@@ -157,12 +157,12 @@ test("String") {
       }
     }
 
-    it("returns NoneError when not found") {
+    it("returns StringSeparatorMissing when not found") {
       do {
         result = split_once("surtr", "/")
 
-        assert_err_kind(NoneError, result)
-        assert_err_contains("None Value.", result)
+        assert_err_kind(StringSeparatorMissing, result)
+        assert_err_message_eq("string does not contain separator \"/\": \"surtr\"", result)
       }
     }
   }
@@ -295,7 +295,7 @@ test("String") {
       do {
         result = codepoints("あ", StringEncoding::Ascii)
 
-        assert_err_kind(InvalidStringEncoding, result)
+        assert_err_kind(StringAsciiCharacterUnsupported, result)
         assert_err_contains("ASCII encoding does not support character at index 0: あ", result)
       }
     }
@@ -318,7 +318,7 @@ test("String") {
       do {
         result = from_codepoints([128], StringEncoding::Ascii)
 
-        assert_err_kind(InvalidStringEncoding, result)
+        assert_err_kind(StringAsciiCodeOutOfRange, result)
         assert_err_contains("ASCII code out of range at index 0: 128", result)
       }
     }
@@ -327,7 +327,7 @@ test("String") {
       do {
         result = from_codepoints([255], StringEncoding::Utf8)
 
-        assert_err_kind(InvalidStringEncoding, result)
+        assert_err_kind(StringUtf8InvalidSequence, result)
         assert_err_contains("invalid UTF-8 byte sequence at index 0 (len 1)", result)
       }
     }

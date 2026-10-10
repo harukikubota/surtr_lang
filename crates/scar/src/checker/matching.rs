@@ -232,6 +232,9 @@ impl Checker {
                 .lookup_enum_variant_by_constructor_id(id.unique_id)
                 .map(|variant| self.instantiate_enum_variant(&variant).enum_ty),
             ResolvedPattern::Record(id, _) => self.env.lookup_type_def(&id.name).map(|def| {
+                if def.kind == crate::env::TypeKind::ConcreteError {
+                    return Ty::Error;
+                }
                 Ty::Record(
                     def.name.clone(),
                     crate::types::NominalType::monomorphic(def.fields.clone()),
@@ -680,9 +683,28 @@ impl Checker {
             }
             ResolvedPattern::As(inner, alias, alias_ty) => {
                 let typed_inner = self.check_match_subpattern(inner, expected_ty)?;
+                let narrowed_kind =
+                    Self::single_error_pattern_identity(&typed_inner).map(str::to_string);
+                if let Some(annotation) = alias_ty {
+                    let annotation_kind = self.concrete_error_annotation_identity(annotation);
+                    if annotation_kind != narrowed_kind
+                        && (annotation_kind.is_some() || narrowed_kind.is_some())
+                    {
+                        return Err(TypeError::new(
+                            "Error Pattern alias annotation must match its narrowed declaration",
+                            alias.span.clone(),
+                        ));
+                    }
+                }
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
-                    let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
+                    let expected = self.resolve_ast_ty_in_context(
+                        ast_ty,
+                        if narrowed_kind.is_some() {
+                            TypeSyntaxContext::ConcreteErrorLocal
+                        } else {
+                            self.local_type_syntax_context()
+                        },
+                    )?;
                     if !self.types_compatible(&expected, expected_ty)? {
                         return Err(self.pattern_error(
                             TypeDiagnosticReason::PatternTypeMismatch,
@@ -701,6 +723,11 @@ impl Checker {
                     self.resolve_ty(expected_ty)
                 };
                 self.env.bind_var(alias.unique_id, alias_bind_ty);
+                if let Some(kind) = Self::single_error_pattern_identity(&typed_inner) {
+                    self.env
+                        .concrete_error_bindings
+                        .insert(alias.unique_id, kind.to_string());
+                }
                 Ok(TypedMatchPattern::As(Box::new(typed_inner), alias.clone()))
             }
             ResolvedPattern::Wildcard(_) => Ok(TypedMatchPattern::Wildcard),
@@ -740,6 +767,9 @@ impl Checker {
                 Ok(TypedMatchPattern::Tuple(typed_items))
             }
             ResolvedPattern::Record(id, fields) => {
+                if self.env.is_error_constructor(id.unique_id) {
+                    return self.check_error_payload_pattern(id, fields, expected_ty, false);
+                }
                 let (_, ordered) = self.ordered_record_pattern_fields(id, fields, &expected_ty)?;
                 let mut typed = Vec::with_capacity(ordered.len());
                 for (item, field_ty) in ordered {
@@ -869,13 +899,16 @@ impl Checker {
                                 diagnostics::ResolveDiagnosticReason::Pattern,
                             ));
                         }
-                        for ((expected_id, expected_ty), (id, actual_ty)) in
-                            common.iter().zip(bindings.iter())
-                        {
-                            if expected_id.unique_id != id.unique_id || expected_id.name != id.name
-                            {
-                                return Err(Self::deferred_pattern_error("Pattern alternatives must bind the same variables in the same order", id, diagnostics::ResolveDiagnosticReason::Pattern));
-                            }
+                        for (expected_id, expected_ty) in common {
+                            let Some((id, actual_ty)) =
+                                bindings.iter().find(|(id, _)| id.name == expected_id.name)
+                            else {
+                                return Err(Self::deferred_pattern_error(
+                                    "Pattern alternatives must bind the same variables",
+                                    expected_id,
+                                    diagnostics::ResolveDiagnosticReason::Pattern,
+                                ));
+                            };
                             if !self.types_compatible(expected_ty, actual_ty)?
                                 || self.resolve_ty(expected_ty) != self.resolve_ty(actual_ty)
                             {
@@ -930,22 +963,12 @@ impl Checker {
                 if matches!(expected_ty, Ty::Error)
                     && self.env.is_error_constructor(ctor_id.unique_id)
                 {
-                    if !inner_pats.is_empty() {
-                        return Err(self
-                            .pattern_error(
-                                TypeDiagnosticReason::PatternShapeMismatch,
-                                PatternKind::Constructor,
-                                Some("Error kind".into()),
-                                Some("a payload-free pattern".into()),
-                                Some(expected_ty),
-                                Some(0),
-                                Some(inner_pats.len()),
-                                Vec::new(),
-                                &ctor_id.span,
-                            )
-                            .with_hint("Use `Kind @ err: Error` and inspect the Error value."));
-                    }
-                    return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
+                    let fields = inner_pats
+                        .iter()
+                        .cloned()
+                        .map(|pattern| (None, pattern))
+                        .collect::<Vec<_>>();
+                    return self.check_error_payload_pattern(ctor_id, &fields, expected_ty, true);
                 }
                 if matches!(expected_ty, Ty::Bool) {
                     let variant = self
@@ -1292,11 +1315,121 @@ impl Checker {
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::DurationLit(_)
             | TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::ErrorPayload { .. }
             | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
             | TypedMatchPattern::ListCons(_, _)
             | TypedMatchPattern::Extractor { .. } => false,
         }
+    }
+
+    fn single_error_pattern_identity(pattern: &TypedMatchPattern) -> Option<&str> {
+        match pattern {
+            TypedMatchPattern::ErrorKind(kind) | TypedMatchPattern::ErrorPayload { kind, .. } => {
+                Some(kind)
+            }
+            TypedMatchPattern::As(inner, _) => Self::single_error_pattern_identity(inner),
+            TypedMatchPattern::Or(items) => {
+                let first = Self::single_error_pattern_identity(items.first()?)?;
+                items
+                    .iter()
+                    .all(|item| Self::single_error_pattern_identity(item) == Some(first))
+                    .then_some(first)
+            }
+            _ => None,
+        }
+    }
+
+    fn check_error_payload_pattern(
+        &mut self,
+        id: &ResolvedId,
+        fields: &[(Option<String>, ResolvedPattern)],
+        expected: &Ty,
+        kind_only: bool,
+    ) -> Result<TypedMatchPattern, TypeError> {
+        if !matches!(self.resolve_ty(expected), Ty::Error) {
+            return Err(TypeError::new(
+                "Error definition Pattern requires an Error value",
+                id.span.clone(),
+            ));
+        }
+        let kind = id.qualified_name.clone().ok_or_else(|| {
+            TypeError::new(
+                "Error Pattern is missing declaration identity",
+                id.span.clone(),
+            )
+        })?;
+        if kind_only && fields.is_empty() {
+            return Ok(TypedMatchPattern::ErrorKind(kind));
+        }
+        let schema = self
+            .env
+            .lookup_type_def(&id.name)
+            .ok_or_else(|| TypeError::new("Error Payload schema is missing", id.span.clone()))?
+            .fields
+            .clone();
+        if schema.is_empty() && fields.is_empty() {
+            return Ok(TypedMatchPattern::ErrorKind(kind));
+        }
+        if fields.len() != schema.len() {
+            return Err(TypeError::new(
+                format!(
+                    "Error Payload Pattern expects {} fields, got {}",
+                    schema.len(),
+                    fields.len()
+                ),
+                id.span.clone(),
+            ));
+        }
+        let named = fields.iter().any(|(name, _)| name.is_some());
+        let mut ordered: Vec<Option<&ResolvedPattern>> = vec![None; schema.len()];
+        for (position, (name, pattern)) in fields.iter().enumerate() {
+            let index = if named {
+                let name = match name {
+                    Some(name) => name.as_str(),
+                    None => match pattern {
+                        ResolvedPattern::Var(binding) => binding.name.as_str(),
+                        ResolvedPattern::Located(_, inner) => match inner.as_ref() {
+                            ResolvedPattern::Var(binding) => binding.name.as_str(),
+                            _ => return Err(TypeError::new("Error named Payload Pattern requires an explicit field name or bare binding", id.span.clone())),
+                        },
+                        _ => return Err(TypeError::new("Error named Payload Pattern requires an explicit field name or bare binding", id.span.clone())),
+                    },
+                };
+                schema
+                    .iter()
+                    .position(|(field, _)| field == name)
+                    .ok_or_else(|| {
+                        TypeError::new(
+                            format!("Unknown Error Payload field: {}", name),
+                            id.span.clone(),
+                        )
+                    })?
+            } else {
+                position
+            };
+            if ordered[index].is_some() {
+                return Err(TypeError::new(
+                    format!("Duplicate Error Payload field: {}", schema[index].0),
+                    id.span.clone(),
+                ));
+            }
+            ordered[index] = Some(pattern);
+        }
+        let mut typed = Vec::new();
+        for ((name, ty), pattern) in schema.iter().zip(ordered) {
+            let pattern = pattern.ok_or_else(|| {
+                TypeError::new(
+                    format!("Missing Error Payload field: {}", name),
+                    id.span.clone(),
+                )
+            })?;
+            typed.push(self.check_match_subpattern(pattern, ty)?);
+        }
+        Ok(TypedMatchPattern::ErrorPayload {
+            kind,
+            fields: typed,
+        })
     }
 
     fn collect_or_binding_ids(pat: &TypedMatchPattern, out: &mut Vec<ResolvedId>) {
@@ -1313,6 +1446,7 @@ impl Checker {
             }
             TypedMatchPattern::Tuple(items)
             | TypedMatchPattern::Record(items)
+            | TypedMatchPattern::ErrorPayload { fields: items, .. }
             | TypedMatchPattern::Constructor { fields: items, .. }
             | TypedMatchPattern::Extractor { items, .. } => {
                 for item in items {

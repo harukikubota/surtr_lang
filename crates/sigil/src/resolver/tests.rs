@@ -966,7 +966,7 @@ fn resolve_user_with_modules(
 deferror NoneError { "none" }
 deferror ZeroDivisionError { "division by zero" }
 deferror EmptyList { "Empty List." }
-deferror IndexOutOfBounds(detail: String) { detail }"#,
+deferror IndexOutOfBounds(detail: String) { |detail: String| Self(message: detail, detail: detail) }"#,
                 "Bootstrap",
             ),
         ),
@@ -1047,7 +1047,7 @@ fn resolve_user_with_modules_with_warnings(
 deferror NoneError { "none" }
 deferror ZeroDivisionError { "division by zero" }
 deferror EmptyList { "Empty List." }
-deferror IndexOutOfBounds(detail: String) { detail }"#,
+deferror IndexOutOfBounds(detail: String) { |detail: String| Self(message: detail, detail: detail) }"#,
                 "Bootstrap",
             ),
         ),
@@ -1115,7 +1115,7 @@ fn test_precollect_declaration_index_succeeds_without_body_resolution() {
         parse_module_ast(
             r#"def to_int(x: String) -> Int { unknown_name }
 defrecord Pair(left: Int, right: Int)
-deferror Oops(reason: String) { reason }"#,
+deferror Oops(reason: String) { |reason: String| Self(message: reason, reason: reason) }"#,
             "Bootstrap",
         ),
     )]];
@@ -4199,17 +4199,20 @@ fn test_if_let_then_or_binding_is_visible_in_success_block() {
 }
 
 #[test]
-fn test_if_let_or_alternatives_require_same_ordered_binding_names() {
-    for pattern in ["(1, left) | (right, 2)", "(left, right) | (right, left)"] {
+fn test_if_let_or_alternatives_require_same_binding_names() {
+    for pattern in ["(1, left) | (right, 2)"] {
         let source = format!("result = if_let((1, 2), {pattern}, 1, 0)");
         let error = parse_and_resolve_pattern_consumers(&source).expect_err(&source);
-        assert!(
-            error
-                .message
-                .contains("same binding names in the same order"),
-            "{error:?}"
-        );
+        assert!(error.message.contains("same binding names"), "{error:?}");
     }
+}
+
+#[test]
+fn test_if_let_or_alternatives_accept_reordered_binding_names() {
+    parse_and_resolve_pattern_consumers(
+        "result = if_let((1, 2), (left, right) | (right, left), left + right, 0)",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -4303,7 +4306,7 @@ x = ensure(1, &is_even, SomeError)"#,
 #[test]
 fn test_recover_kind_accepts_payload_error_type_name() {
     let resolved = parse_and_resolve(
-        r#"deferror Timeout(detail: String) { detail }
+        r#"deferror Timeout(detail: String) { |detail: String| Self(message: detail, detail: detail) }
 x = Result::recover_kind(Err(Timeout("runtime")), Timeout, {|err| Ok(1)})"#,
     )
     .expect("payload error kind name should resolve");
@@ -4322,7 +4325,7 @@ fn test_recover_kind_rejects_runtime_marker_expressions() {
         "Int",
         "&1",
     ] {
-        let source = format!("deferror Timeout(detail: String) {{ detail }}\nx = Result::recover_kind(Err(Timeout(\"runtime\")), {marker}, {{|err| Ok(1)}})");
+        let source = format!("deferror Timeout(detail: String) {{ |detail: String| Self(message: detail, detail) }}\nx = Result::recover_kind(Err(Timeout(\"runtime\")), {marker}, {{|err| Ok(1)}})");
         let error =
             parse_and_resolve(&source).expect_err("ErrorKind requires a concrete type name");
         assert!(
@@ -4779,9 +4782,7 @@ defrecord Point(x: Float, y: Float)"#,
 fn test_forward_reference_to_deferror_constructor_resolves_to_same_unique_id() {
     let resolved = parse_and_resolve(
         r#"err = PageNotFound("404")
-deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
-}"#,
+deferror PageNotFound(html: String) { |html: String| Self(message: "Page Not Found. #{html}", html: html) }"#,
     )
     .unwrap();
 
@@ -4809,9 +4810,7 @@ err = NotFound("404")
 
 def build_user(name: String) -> String { name }
 defrecord Point(x: Int, y: Int)
-deferror NotFound(code: String) {
-  "missing #{code}"
-}"#;
+deferror NotFound(code: String) { |code: String| Self(message: "missing #{code}", code: code) }"#;
 
     let first = parse_and_resolve(source).unwrap();
     let second = parse_and_resolve(source).unwrap();
@@ -6790,7 +6789,7 @@ defenum Light {
   Red,
   Green,
 }
-deferror Oops(reason: String) { reason }"#,
+deferror Oops(reason: String) { |reason: String| Self(message: reason, reason: reason) }"#,
     )
     .unwrap();
 
@@ -9792,4 +9791,28 @@ fn child_resolvers_share_unchanged_declaration_metadata() {
         })
         .unwrap();
     assert!(!resolver.declaration_uids.contains_key("Child::new"));
+}
+
+#[test]
+fn test_deferror_self_resolves_to_its_declaration_identity() {
+    let resolved = parse_and_resolve(
+        r#"deferror Trouble(code: Int) { |input: Int| Self(message: "trouble", code: input) }"#,
+    )
+    .unwrap();
+    let Resolved::DeferrorDef(_, definition, _, block) = &resolved[0] else {
+        panic!("expected Error declaration")
+    };
+    let Resolved::Closure(_, _, _, body) = block.as_ref() else {
+        panic!("expected constructor block")
+    };
+    let constructor = match body.as_ref() {
+        Resolved::ConstructorCall(_, constructor, _) => constructor,
+        Resolved::Block(_, statements) => match statements.last().unwrap() {
+            Resolved::ConstructorCall(_, constructor, _) => constructor,
+            other => panic!("expected internal construction, got {other:?}"),
+        },
+        other => panic!("expected body, got {other:?}"),
+    };
+    assert_eq!(constructor.unique_id, definition.unique_id);
+    assert_eq!(constructor.qualified_name, definition.qualified_name);
 }

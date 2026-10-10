@@ -23,6 +23,7 @@ pub(super) enum DetachedTaskState {
 #[derive(Debug, Clone)]
 pub(super) enum DetachedCompletion {
     Future(Option<FutureId>),
+    ErrorFuture(FutureId),
     Reply {
         correlation_id: CorrelationId,
         future_id: FutureId,
@@ -37,6 +38,12 @@ pub(super) struct SingletonFlight {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeContinuation {
+    ErrorConstruction {
+        kind: String,
+        location: Location,
+        stack_trace: Vec<RuntimeStackFrame>,
+        wrapper: Option<u32>,
+    },
     Identity,
     TaskCall {
         completion: FutureId,
@@ -224,6 +231,48 @@ impl RuntimeContinuation {
         vm: &mut VM,
         result: Result<Value, RuntimeError>,
     ) -> Result<BuiltinOutcome, RuntimeError> {
+        if let Self::ErrorConstruction {
+            kind,
+            location,
+            stack_trace,
+            wrapper,
+        } = self
+        {
+            let Value::Error(mut error) = result? else {
+                return Err(RuntimeError::new("Error constructor did not return Error"));
+            };
+            if error.kind != kind {
+                return Err(RuntimeError::new(
+                    "Error constructor returned a different declaration",
+                ));
+            }
+            error.location = location;
+            error.stack_trace = stack_trace;
+            let value = Value::Error(error);
+            let value = if let Some(tag) = wrapper {
+                let fields = if tag == 1 {
+                    vec![value]
+                } else {
+                    let entry =
+                        vm.bytecode.type_registry.lookup(tag).ok_or_else(|| {
+                            RuntimeError::new("missing MatchResult wrapper metadata")
+                        })?;
+                    if sindr::builtin::match_result_variant_meta(&entry.name)
+                        != Some(sindr::builtin::MATCH_RESULT_ERR_VARIANT)
+                    {
+                        return Err(RuntimeError::new("noncanonical Error wrapper"));
+                    }
+                    vec![
+                        Value::Int(sindr::builtin::MATCH_RESULT_ERR_VARIANT.discriminant.into()),
+                        value,
+                    ]
+                };
+                Value::Tagged { tag, fields }
+            } else {
+                value
+            };
+            return Ok(BuiltinOutcome::Complete(value));
+        }
         if let Self::TaskCall {
             completion,
             previous_trace,
@@ -255,7 +304,7 @@ impl RuntimeContinuation {
         }
         let value = result?;
         match self {
-            Self::TaskCall { .. } => unreachable!(),
+            Self::ErrorConstruction { .. } | Self::TaskCall { .. } => unreachable!(),
             Self::Singleton(_) => unreachable!(),
             Self::SingletonAwait { .. } => unreachable!(),
             Self::Identity => Ok(BuiltinOutcome::Complete(value)),
@@ -336,9 +385,9 @@ impl RuntimeContinuation {
                 receiving,
             } => {
                 if receiving {
-                    match vm.pid_handle_like_from_result(value) {
+                    match vm.pid_handle_like_from_result(value, "WorkerCreationExpectedPid")? {
                         Ok(pid) => members.push(pid.id),
-                        Err(error) => return Ok(BuiltinOutcome::Complete(error)),
+                        Err(error) => return Ok(error),
                     }
                 }
                 let target = strategy.target();
@@ -381,13 +430,14 @@ impl RuntimeContinuation {
                 receiving,
             } => {
                 if receiving {
-                    let pid = match vm.pid_handle_like_from_result(value) {
-                        Ok(pid) => pid,
-                        Err(error) => {
-                            vm.process_runtime.refilling_worker_sets.remove(&workers_id);
-                            return Ok(BuiltinOutcome::Complete(error));
-                        }
-                    };
+                    let pid =
+                        match vm.pid_handle_like_from_result(value, "WorkerRefillExpectedPid")? {
+                            Ok(pid) => pid,
+                            Err(error) => {
+                                vm.process_runtime.refilling_worker_sets.remove(&workers_id);
+                                return Ok(error);
+                            }
+                        };
                     let state = vm
                         .process_runtime
                         .worker_sets
@@ -436,6 +486,43 @@ impl RuntimeContinuation {
 }
 
 impl VM {
+    pub(super) fn schedule_future_error(
+        &mut self,
+        future_id: FutureId,
+        kind: &str,
+        args: Vec<Value>,
+    ) {
+        let Some(future) = self.process_runtime.futures.get_mut(&future_id) else {
+            return;
+        };
+        if !matches!(future.state, super::FutureState::Running) || future.error_generation_pending {
+            return;
+        }
+        future.error_generation_pending = true;
+        future.deadline_tick = None;
+        future.cancel_on_timeout = false;
+        if let Some(correlation) = future.correlation_id.take() {
+            self.process_runtime.reply_table.remove(&correlation);
+        }
+        self.process_runtime
+            .deadline_queue
+            .retain(|entry| entry.future_id != future_id);
+        let outcome = future
+            .creation_context
+            .clone()
+            .ok_or_else(|| RuntimeError::new("future Error generation has no creation context"))
+            .and_then(|(location, trace)| {
+                self.language_error_outcome_at(kind, args, Some(1), location, trace)
+            });
+        let mut context = Self::standalone_builtin_context(BuiltinOutcome::Complete(Value::Unit));
+        context.pending_invocation = Some(outcome.map(continuation::Invocation::Builtin));
+        self.register_runtime_task(
+            None,
+            DetachedTaskState::Runnable(context),
+            DetachedCompletion::ErrorFuture(future_id),
+        );
+    }
+
     pub(super) fn poll_runtime_deadlines(&mut self) {
         let elapsed = self
             .runtime_clock_anchor
@@ -494,6 +581,15 @@ impl VM {
         let completion = self
             .process_runtime
             .allocate_future_after(None, timeout_ms, true);
+        if matches!(continuation, RuntimeContinuation::Singleton(_)) {
+            self.process_runtime
+                .futures
+                .get_mut(&completion)
+                .expect("new internal init future")
+                .init_deadline_timeout = true;
+        } else {
+            self.stamp_future_context(completion)?;
+        }
         let id = self.schedule_callback(
             callable,
             args,
@@ -538,6 +634,9 @@ impl VM {
         } else {
             None
         };
+        if let Some(id) = completion {
+            self.stamp_future_context(id)?;
+        }
         let previous = self.current_frame()?.trace_frame.clone();
         if let Some((start, end)) = self.current_frame()?.call_site {
             let trace = self.trace_frame_for_task(Self::task_mode_trace_name(mode), start, end);
@@ -613,6 +712,7 @@ impl VM {
             Some(ms) => self.process_runtime.allocate_future_after(None, ms, true),
             None => self.process_runtime.allocate_future(None, None, false),
         };
+        self.stamp_future_context(completion)?;
         self.register_runtime_task(
             None,
             DetachedTaskState::Waiting {
@@ -800,7 +900,15 @@ impl VM {
 
     fn task_completion_ready(&self, task: &DetachedTask) -> bool {
         match task.completion {
-            DetachedCompletion::Future(Some(id)) => self.raw_ready_future_value(id).is_some(),
+            DetachedCompletion::ErrorFuture(id) => self.raw_ready_future_value(id).is_some(),
+            DetachedCompletion::Future(Some(id)) => {
+                self.raw_ready_future_value(id).is_some()
+                    || self
+                        .process_runtime
+                        .futures
+                        .get(&id)
+                        .is_some_and(|future| future.error_generation_pending)
+            }
             DetachedCompletion::Reply { correlation_id, .. } => !self
                 .process_runtime
                 .reply_table
@@ -812,6 +920,7 @@ impl VM {
     fn publish_completed_cleanup(&mut self, completion: &DetachedCompletion) {
         let id = match completion {
             DetachedCompletion::Future(Some(id))
+            | DetachedCompletion::ErrorFuture(id)
             | DetachedCompletion::Reply { future_id: id, .. } => *id,
             DetachedCompletion::Future(None) => return,
         };
@@ -827,6 +936,7 @@ impl VM {
             .find_map(|(id, task)| {
                 let produces = match task.completion {
                     DetachedCompletion::Future(Some(future))
+                    | DetachedCompletion::ErrorFuture(future)
                     | DetachedCompletion::Reply {
                         future_id: future, ..
                     } => future == future_id,
@@ -882,6 +992,7 @@ impl VM {
                 .values()
                 .any(|task| match task.completion {
                     DetachedCompletion::Future(Some(id))
+                    | DetachedCompletion::ErrorFuture(id)
                     | DetachedCompletion::Reply { future_id: id, .. } => id == future_id,
                     DetachedCompletion::Future(None) => false,
                 });
@@ -918,6 +1029,12 @@ impl VM {
 
     fn complete_runtime_task(&mut self, completion: DetachedCompletion, value: Value) {
         match completion {
+            DetachedCompletion::ErrorFuture(id) => {
+                if let Some(future) = self.process_runtime.futures.get_mut(&id) {
+                    future.error_generation_pending = false;
+                }
+                self.complete_runtime_task(DetachedCompletion::Future(Some(id)), value);
+            }
             DetachedCompletion::Future(Some(id)) => {
                 self.process_runtime.resolve_future(id, value);
                 let abandoned =
@@ -944,17 +1061,21 @@ impl VM {
         pid: &PidHandle,
         next_state: Value,
         callback: Callable,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<BuiltinOutcome, RuntimeError> {
         if let Err(error) = decode_vm_result(
-            self.process_store(pid, next_state)?,
+            match self.process_store(pid, next_state)? {
+                BuiltinOutcome::Complete(value) => value,
+                error => return Ok(error),
+            },
             "__genserver_call_reply_later",
             "state store",
         )? {
-            return Ok(err_vm_result(error));
+            return Ok(BuiltinOutcome::Complete(err_vm_result(error)));
         }
         let future_id = self
             .process_runtime
             .allocate_future(Some(pid.id), None, false);
+        self.stamp_future_context(future_id)?;
         let correlation_id = self.process_runtime.allocate_correlation_id();
         self.process_runtime
             .register_reply_waiter(correlation_id, future_id);
@@ -967,7 +1088,7 @@ impl VM {
                 future_id,
             },
         )?;
-        Ok(Value::PendingFuture(future_id))
+        Ok(BuiltinOutcome::Complete(Value::PendingFuture(future_id)))
     }
 
     pub(crate) fn start_singleton(
@@ -1156,22 +1277,35 @@ impl VM {
     ) -> Result<BuiltinOutcome, RuntimeError> {
         let strategy = match self.decode_worker_strategy(&strategy_value) {
             Ok(strategy) => strategy,
-            Err(message) => {
-                return Ok(BuiltinOutcome::Complete(err_vm_result(
-                    self.process_error("InvalidWorkerStrategy", &message),
-                )))
+            Err(WorkerStrategyDecodeError::Internal(message)) => {
+                return Err(RuntimeError::new(message))
+            }
+            Err(WorkerStrategyDecodeError::OutOfRange { field, value }) => {
+                return self.language_error_outcome(
+                    "WorkerStrategyFieldOutOfRange",
+                    vec![Value::Str(field), Value::Int(value)],
+                    Some(1),
+                )
             }
         };
         let target = strategy.target();
-        if strategy.init != target
-            || strategy.min < 0
-            || strategy.min > target
-            || target > strategy.max
-        {
-            return Ok(BuiltinOutcome::Complete(err_vm_result(self.process_error(
-                "InvalidWorkerStrategy",
-                "worker strategy must satisfy init == Fix(n) and 0 <= min <= n <= max",
-            ))));
+        if strategy.init != target {
+            return self.language_error_outcome(
+                "WorkerStrategyInitTargetMismatch",
+                vec![Value::Int(int(strategy.init)), Value::Int(int(target))],
+                Some(1),
+            );
+        }
+        if strategy.min < 0 || strategy.min > target || target > strategy.max {
+            return self.language_error_outcome(
+                "WorkerStrategyBoundsInvalid",
+                vec![
+                    Value::Int(int(strategy.min)),
+                    Value::Int(int(target)),
+                    Value::Int(int(strategy.max)),
+                ],
+                Some(1),
+            );
         }
         Ok(RuntimeContinuation::Workers {
             supervisor,
@@ -1287,7 +1421,8 @@ impl VM {
 mod tests {
     use super::*;
     use crate::vm::tests::{
-        base_bytecode, function_entry, singleton_boot_bytecode, test_runtime_process_spec,
+        base_bytecode, function_entry, install_process_error_definitions, singleton_boot_bytecode,
+        test_runtime_process_spec,
     };
     use sindr::ir::RuntimeProcessKind;
 
@@ -1375,6 +1510,7 @@ mod tests {
             private_flags: vec![true],
         });
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let mut body = Callable {
             target: CallableTarget::Builtin(
                 sindr::builtin::builtin_id_by_name("__process_sleep").unwrap(),
@@ -1395,6 +1531,7 @@ mod tests {
             };
         }
         let completion = vm.process_runtime.allocate_future(None, None, true);
+        vm.stamp_future_context(completion).unwrap();
         let task_id = vm
             .schedule_callback(
                 body,
@@ -1501,6 +1638,7 @@ mod tests {
                 private_flags: vec![true],
             });
             let mut vm = VM::new(bytecode).with_output_capture();
+            install_process_error_definitions(&mut vm);
             let start = vm.start_task(nested_call, TaskMode::Async, None).unwrap();
             assert!(matches!(
                 vm.drive_builtin_outcome(start).unwrap(),
@@ -1530,6 +1668,7 @@ mod tests {
             vec![Constant::Tag(0), Constant::Int(int(42))],
         );
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let first = vm.start_singleton("Counter".into(), None).unwrap();
         let second = vm.start_singleton("Counter".into(), None).unwrap();
         assert_eq!(vm.process_runtime.singleton_inits.len(), 1);
@@ -1596,6 +1735,7 @@ mod tests {
         let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::Jump(1)]);
         bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Task::spin"))];
         let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
         let call = vm
             .start_task(vm.callable_for_function(0), TaskMode::Async, Some(100))
             .unwrap();

@@ -128,8 +128,8 @@ test("InfiniteGenerator") {
       do {
         result = InfiniteGenerator::take_exact(observed_sequence(), -1)
 
-        assert_err_kind(InvalidGeneratorCount, result)
-        assert_err_message_eq("count must be positive: -1", result)
+        assert_err_kind(InvalidInfiniteGeneratorCount, result)
+        assert_err_message_eq("infinite generator count must be positive: -1", result)
         assert_stdout_eq([])
       }
     }

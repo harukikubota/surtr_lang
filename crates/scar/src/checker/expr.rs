@@ -383,6 +383,9 @@ impl Checker {
             return Some(found);
         }
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => recurse(message).or_else(|| payload.iter().find_map(recurse)),
             TypedInner::TraitCall {
                 receiver_ty, args, ..
             } => self
@@ -826,6 +829,13 @@ impl Checker {
             return Some(found);
         }
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => self.find_typed_node(message, inspect).or_else(|| {
+                payload
+                    .iter()
+                    .find_map(|value| self.find_typed_node(value, inspect))
+            }),
             TypedInner::TraitCall { args, .. } => args
                 .iter()
                 .find_map(|arg| self.find_typed_node(arg, inspect)),
@@ -961,6 +971,14 @@ impl Checker {
                 collect(expr, obligations);
             }
             match &node.node {
+                TypedInner::ErrorConstruct {
+                    message, payload, ..
+                } => {
+                    collect(message, obligations);
+                    for value in payload {
+                        collect(value, obligations);
+                    }
+                }
                 TypedInner::TraitCall {
                     obligation, args, ..
                 } => {
@@ -1104,6 +1122,14 @@ impl Checker {
             self.concretize_pending_trait_calls_in_place(expr)?;
         }
         match &mut node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.concretize_pending_trait_calls_in_place(message)?;
+                for value in payload {
+                    self.concretize_pending_trait_calls_in_place(value)?;
+                }
+            }
             TypedInner::SafeBind(
                 _,
                 _,
@@ -1566,9 +1592,22 @@ impl Checker {
                             "Use `=?` for partial destructuring and extractor-driven matches.",
                         ));
                 }
+                let inherited_error_kind = self.resolved_concrete_error_identity(rhs).map(str::to_string);
+                if let ResolvedPattern::Annotated(_, ast_ty) = pat {
+                    let annotation_kind = self.concrete_error_annotation_identity(ast_ty);
+                    if let Some(kind) = inherited_error_kind.as_deref() {
+                        if annotation_kind.as_deref() != Some(kind) {
+                            return Err(TypeError::new("A narrowed Error local annotation must match its concrete declaration", Self::ast_ty_span(ast_ty).clone()));
+                        }
+                    } else if annotation_kind.is_some() {
+                        return Err(TypeError::new("A common Error cannot be cast by a concrete Error annotation", Self::ast_ty_span(ast_ty).clone()));
+                    }
+                }
                 let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
+                        self.resolve_ast_ty_in_context(ast_ty, if inherited_error_kind.is_some() {
+                            TypeSyntaxContext::ConcreteErrorLocal
+                        } else { self.local_type_syntax_context() })?;
                     let relation = ExpectedTypeRelation::annotation(Self::ast_ty_span(ast_ty));
                     let mut typed_rhs = self.check_node_with_expected_relation(
                         rhs,
@@ -1623,10 +1662,16 @@ impl Checker {
                 };
                 let inherited_constructor_provenance =
                     self.constructor_capability_for_node(&typed_rhs);
+                if let (Some(kind), ResolvedPattern::Annotated(binding, _)) = (&inherited_error_kind, pat) {
+                    self.env.concrete_error_bindings.insert(binding.unique_id, kind.clone());
+                }
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                if let Some(kind) = inherited_error_kind {
+                    self.bind_local_error_identity(&typed_pat, &kind);
+                }
                 let binding_constructor_provenance = match pat {
                     ResolvedPattern::Annotated(_, ast_ty) => self
                         .constructor_trait_key_for_ast_ty(ast_ty)
@@ -8212,18 +8257,25 @@ impl Checker {
         None
     }
 
-    fn facet_capture_root(expr: &Resolved) -> Option<&Resolved> {
-        fn root(expr: &Resolved) -> &Resolved {
-            match expr {
-                Resolved::FieldAccess(_, inner, _)
-                | Resolved::FacetSegmentAccess(_, inner, _)
-                | Resolved::Grouped(_, inner) => root(inner),
-                _ => expr,
-            }
+    fn facet_path_root(expr: &Resolved) -> &Resolved {
+        match expr {
+            Resolved::FieldAccess(_, inner, _)
+            | Resolved::FacetSegmentAccess(_, inner, _)
+            | Resolved::Grouped(_, inner) => Self::facet_path_root(inner),
+            _ => expr,
         }
+    }
+
+    fn has_concrete_error_facet_root(&self, expr: &Resolved) -> bool {
+        matches!(Self::facet_path_root(expr), Resolved::Var(_, root)
+            if self.env.is_error_constructor(root.unique_id)
+                || self.env.concrete_error_bindings.contains_key(&root.unique_id))
+    }
+
+    fn facet_capture_root(expr: &Resolved) -> Option<&Resolved> {
         match expr {
             Resolved::Grouped(_, inner) => Self::facet_capture_root(inner),
-            Resolved::Capture(_, target, _) => Some(root(target)),
+            Resolved::Capture(_, target, _) => Some(Self::facet_path_root(target)),
             _ => None,
         }
     }
@@ -8613,6 +8665,7 @@ impl Checker {
                 ..
             } => format!("_{index}"),
             TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+            | TypedFacetSegment::ErrorPayload { field_name, .. }
             | TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
@@ -9077,6 +9130,12 @@ impl Checker {
                 _ => break,
             }
         }
+        if self.has_concrete_error_facet_root(&current) {
+            return Err(TypeError::new(
+                "Concrete Error Facet paths cannot be captured",
+                span.clone(),
+            ));
+        }
         if segments.is_empty() {
             return Err(TypeError {
                 structured: None,
@@ -9270,6 +9329,16 @@ impl Checker {
         source_expr: &Resolved,
         path_input: FacetPathInput<'_>,
     ) -> Result<PreparedFacetInput, TypeError> {
+        // Common fields normalize to an Error path, so check the resolved root first.
+        if self.is_capture_closure
+            && matches!(&path_input, FacetPathInput::Expr(expr)
+                if self.has_concrete_error_facet_root(expr))
+        {
+            return Err(TypeError::new(
+                "Concrete Error Facet paths cannot be captured",
+                span.clone(),
+            ));
+        }
         let (typed_source, source_is_result, source_value_ty) =
             self.check_facet_source_value(op_name, source_expr)?;
         let path = self.check_facet_path_input(
@@ -9279,6 +9348,29 @@ impl Checker {
             &source_value_ty,
             &typed_source.ty,
         )?;
+        if self.is_capture_closure
+            && path
+                .segments
+                .iter()
+                .any(|segment| matches!(segment, TypedFacetSegment::ErrorPayload { .. }))
+        {
+            return Err(TypeError::new(
+                "Concrete Error Facet paths cannot be captured",
+                span.clone(),
+            ));
+        }
+        for (index, segment) in path.segments.iter().enumerate() {
+            if let TypedFacetSegment::ErrorPayload { kind, .. } = segment {
+                if index != 0
+                    || self.resolved_concrete_error_identity(source_expr) != Some(kind.as_str())
+                {
+                    return Err(TypeError::new(
+                        "Concrete Error Payload Facet requires a matching narrowed local binding",
+                        span.clone(),
+                    ));
+                }
+            }
+        }
         Ok(PreparedFacetInput {
             typed_source,
             source_is_result,
@@ -10672,7 +10764,8 @@ impl Checker {
         for (index, segment) in path.segments.iter().enumerate() {
             let is_final = index + 1 == path.segments.len();
             match segment {
-                TypedFacetSegment::ReadonlyBuiltin { field_name, .. } => {
+                TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+                | TypedFacetSegment::ErrorPayload { field_name, .. } => {
                     return Err(TypeError::new(
                         format!("{facet_name} cannot update readonly Error.{field_name}"),
                         span.clone(),
@@ -12422,7 +12515,9 @@ impl Checker {
         expected: Option<&Ty>,
         expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
-        self.check_closure_with_kind(
+        let saved_capture_kind = self.is_capture_closure;
+        self.is_capture_closure = false;
+        let result = self.check_closure_with_kind(
             span,
             params,
             captures,
@@ -12430,7 +12525,9 @@ impl Checker {
             expected,
             expected_relation,
             CallableContext::Closure,
-        )
+        );
+        self.is_capture_closure = saved_capture_kind;
+        result
     }
 
     fn check_closure_with_kind(
@@ -12699,9 +12796,20 @@ impl Checker {
         let saved_capture = self.active_lazy_capture.take();
         self.active_lazy_capture =
             ActiveLazyCapture::new(params, expected, self.resolved_span(body).clone());
+        let saved_capture_kind = self.is_capture_closure;
+        self.is_capture_closure = true;
         let result = self
-            .check_closure(span, params, captures, body, expected, None)
+            .check_closure_with_kind(
+                span,
+                params,
+                captures,
+                body,
+                expected,
+                None,
+                CallableContext::Closure,
+            )
             .map_err(|error| self.lazy_capture_annotation_error(error));
+        self.is_capture_closure = saved_capture_kind;
         self.active_lazy_capture = saved_capture;
         let mut typed = result?;
         let TypedInner::Closure(params, captures, typed_body) = typed.node else {
@@ -12843,7 +12951,17 @@ impl Checker {
                                 hint: None,
                             });
                         }
-                        crate::env::TypeKind::ConcreteError => def.fields.len(),
+                        crate::env::TypeKind::ConcreteError => self
+                            .env
+                            .error_constructor_inputs
+                            .get(&id.unique_id)
+                            .ok_or_else(|| {
+                                TypeError::new(
+                                    "Error constructor input signature is missing",
+                                    span.clone(),
+                                )
+                            })?
+                            .len(),
                     };
                     (
                         Resolved::ConstructorCall(span.clone(), id.clone(), Vec::new()),
@@ -13033,6 +13151,12 @@ impl Checker {
         }
 
         if Self::capture_target_is_facet_path(target) {
+            if self.has_concrete_error_facet_root(target) {
+                return Err(TypeError::new(
+                    "Concrete Error Facet paths cannot be captured",
+                    span.clone(),
+                ));
+            }
             if let Some(expected_ty) = expected {
                 let expected_ty_resolved = self.resolve_ty(expected_ty);
                 if let Ty::Func(params, _) = &expected_ty_resolved {
@@ -15624,6 +15748,77 @@ impl Checker {
         }
     }
 
+    fn bind_local_error_identity(&mut self, pattern: &TypedPattern, kind: &str) {
+        match pattern {
+            TypedPattern::Var(_, binding) => {
+                self.env
+                    .concrete_error_bindings
+                    .insert(binding.unique_id, kind.to_string());
+            }
+            TypedPattern::Located(_, inner) => self.bind_local_error_identity(inner, kind),
+            _ => {}
+        }
+    }
+
+    fn resolved_concrete_error_identity<'a>(&'a self, expression: &Resolved) -> Option<&'a str> {
+        match expression {
+            Resolved::Var(_, id) => self
+                .canonical_pattern_id(id)
+                .ok()
+                .and_then(|id| self.env.concrete_error_bindings.get(&id.unique_id))
+                .map(String::as_str),
+            Resolved::Grouped(_, inner) => self.resolved_concrete_error_identity(inner),
+            _ => None,
+        }
+    }
+
+    pub(super) fn concrete_error_annotation_identity(&self, annotation: &AstTy) -> Option<String> {
+        let AstTy::Named(_, name) = annotation else {
+            return None;
+        };
+        self.env
+            .lookup_type_def(name)
+            .filter(|def| def.kind == crate::env::TypeKind::ConcreteError)
+            .map(|def| def.name.clone())
+    }
+
+    fn error_payload_facet_path(
+        &self,
+        kind: &str,
+        field: &str,
+        span: &Span,
+    ) -> Result<TypedFacetPath, TypeError> {
+        let schema = self.env.lookup_type_def(kind).ok_or_else(|| {
+            TypeError::new("Concrete Error Payload schema is missing", span.clone())
+        })?;
+        let (field_index, (_, focus_ty)) = schema
+            .fields
+            .iter()
+            .enumerate()
+            .find(|(_, (name, _))| name == field)
+            .ok_or_else(|| {
+                TypeError::new(
+                    format!("Unknown Error Payload field: {}", field),
+                    span.clone(),
+                )
+            })?;
+        Ok(TypedFacetPath {
+            source_ty: Ty::Error,
+            focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![TypedFacetSegment::ErrorPayload {
+                kind: kind.to_string(),
+                field_name: field.to_string(),
+                field_index: field_index as u32,
+                payload_len: schema.fields.len() as u32,
+            }],
+        })
+    }
+
     fn check_field_access_with_expected(
         &mut self,
         span: &Span,
@@ -15654,6 +15849,58 @@ impl Checker {
             _ => None,
         };
 
+        if let (Resolved::Var(_, id), Some(field)) = (expr, field) {
+            if self.env.is_error_constructor(id.unique_id) {
+                let kind = id.qualified_name.as_deref().ok_or_else(|| {
+                    TypeError::new(
+                        "Error Facet root is missing declaration identity",
+                        span.clone(),
+                    )
+                })?;
+                if matches!(field, "kind" | "message") {
+                    let segment = Self::pending_field_segment(field.to_string());
+                    let (segment, focus_ty, may_fail) =
+                        self.resolve_facet_segment_for_source_ty(&Ty::Error, &segment, span, true)?;
+                    let path = TypedFacetPath {
+                        source_ty: Ty::Error,
+                        focus_ty: focus_ty.clone(),
+                        update_source_ty: Ty::Hole,
+                        update_focus_ty: Ty::Hole,
+                        path_kind: TypedFacetPathKind::InfallibleStructural,
+                        may_fail,
+                        source_readonly_root: false,
+                        segments: vec![segment],
+                    };
+                    return Ok(TypedNode {
+                        ty: Self::deferred_facet_ty(path.path_kind, Ty::Error, focus_ty),
+                        span: span.clone(),
+                        node: TypedInner::FacetPath(path),
+                    });
+                }
+                let path = self.error_payload_facet_path(kind, field, span)?;
+                return Ok(TypedNode {
+                    ty: Self::deferred_facet_ty(path.path_kind, Ty::Error, path.focus_ty.clone()),
+                    span: span.clone(),
+                    node: TypedInner::FacetPath(path),
+                });
+            }
+            if let Some(kind) = self.env.concrete_error_bindings.get(&id.unique_id).cloned() {
+                if !matches!(field, "kind" | "message") {
+                    let path = self.error_payload_facet_path(&kind, field, span)?;
+                    let source = self.check_node(expr)?;
+                    return Ok(TypedNode {
+                        ty: path.focus_ty.clone(),
+                        span: span.clone(),
+                        node: TypedInner::FacetView {
+                            api: TypedFacetApi::View,
+                            source: Box::new(source),
+                            path,
+                            source_is_result: false,
+                        },
+                    });
+                }
+            }
+        }
         if let Some(root_kind) = Self::facet_root_kind(expr) {
             match root_kind {
                 FacetRootKind::TypeRoot => {

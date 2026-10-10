@@ -61,7 +61,7 @@ print(to_string(chars))         # [a, b, c]
  
 - 整数: `List<Int>`
 - 文字: 文字の検証が入るため `Result<List<String>, Error>`
-文字の endpoint は ASCII 1 文字のみ有効です。`""`、`"ab"`、`"あ"` は `InvalidCharRange` になります (定数でも実行時でも同じ)。
+文字の endpoint は ASCII 1 文字のみ有効です。`""` と `"ab"` は start / stop ごとの `CharacterRangeStartLengthInvalid` / `CharacterRangeStopLengthInvalid`、`"あ"` は `CharacterRangeStartNonAscii` / `CharacterRangeStopNonAscii` になります。定数と実行時入力に同じ規則を適用します。
  
 ## Generator::range: 遅延 range
  
@@ -82,7 +82,7 @@ step は常に `1` です。step を指定する場合や文字を使う場合�
 | `Generator::range_char_step(a, b, step)` | `range_char_step("a", "g", 2)` | `[a, c, e, g]` |
  
 - `step > 0` は昇順、`step < 0` は降順です。
-- `step == 0` は `Err(InvalidRangeStep(...))` です。
+- `step == 0` は整数列なら `ZeroIntegerRangeStep`、文字列なら `ZeroCharacterRangeStep` です。
 - `range_step` / `range_char` / `range_char_step` は `Result` を返すので、`=?` で受けます。
 - 文字 endpoint の制約は range literal と同じです。
 `Generator::take` で、必要な件数と続きの generator を取得できます。

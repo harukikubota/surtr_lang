@@ -3889,9 +3889,9 @@ impl ReplEngine {
             sigil::DeclarationKind::Record => Some(crate::format_record_signature(
                 crate::surface_path_name(&decl.name),
             )),
-            sigil::DeclarationKind::Deferror => {
-                Some(format!("deferror {}", crate::surface_path_name(&decl.name)))
-            }
+            sigil::DeclarationKind::Deferror => self
+                .find_signature(&decl.fq_name)
+                .map(|(_, signature)| crate::surface_rendered_name(&signature)),
             sigil::DeclarationKind::Enum => {
                 Some(format!("defenum {}", crate::surface_path_name(&decl.name)))
             }
@@ -10228,6 +10228,32 @@ supervisor_init {
                 ],
             })
         );
+    }
+
+    #[test]
+    fn error_signature_exposes_payload_and_constructor_inputs_separately() {
+        let mut engine = ReplEngine::from_module_source(
+            "saved_value.srt",
+            "deferror SavedValue(num: Int) { |value: Int| Self(message: \"saved\", num: value) }",
+        )
+        .expect("Error module should initialize");
+        let signature = ReplEngine::repl_result_text(&engine.handle_line(":sig SavedValue"));
+        assert!(
+            signature.contains("deferror SavedValue(num: Int) { |value: Int| ... }"),
+            "{signature}"
+        );
+    }
+
+    #[test]
+    fn error_payload_can_use_an_enum_from_the_repl_prefix() {
+        let mut engine = ReplEngine::from_module_source(
+            "saved_option.srt",
+            "deferror SavedOption(value: Option<Int>) { |input: Option<Int>| Self(message: \"option\", value: input) }",
+        ).expect("Error module should initialize");
+        let value = engine.handle_line(
+            "match SavedOption(Option::Some(7)) { SavedOption(Option::Some(value)) => value, _ => 0 }",
+        );
+        assert_eq!(ReplEngine::repl_result_text(&value), "7");
     }
 
     #[test]

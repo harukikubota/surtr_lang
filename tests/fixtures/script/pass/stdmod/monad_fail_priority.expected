@@ -1,5 +1,5 @@
 fail
-PatternMismatch
+IntLiteralPatternMismatch
 fail
 SourceFailure
 empty

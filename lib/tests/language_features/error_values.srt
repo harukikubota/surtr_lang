@@ -1,4 +1,7 @@
-deferror TransportError(code: Int) { "transported" }
+deferror TransportError(code: Int) {
+  |code: Int|
+  Self(message: "transported", code)
+}
 defrecord ErrorEnvelope(error: Error)
 
 def relay_error(error: Error) -> Error { error }

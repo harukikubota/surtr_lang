@@ -1,10 +1,19 @@
+deferror UnsupportedCount(input: String) {
+  |input: String|
+  Self(message: "unsupported input: #{input}", input)
+}
+deferror CountTooLarge(value: Int) {
+  |value: Int|
+  Self(message: "too large: #{value}", value)
+}
+
 def parse_count(text: String) -> Result<Int> {
   if(eq(text, "7"), Ok(7),
-    if(eq(text, "12"), Ok(12), Err(IndexOutOfBounds("unsupported input: " ++ text))))
+    if(eq(text, "12"), Ok(12), Err(UnsupportedCount(text))))
 }
 
 def require_small(n: Int) -> Result<Int> {
-  if(n < 10, Ok(n), Err(IndexOutOfBounds("too large: " ++ to_string(n))))
+  if(n < 10, Ok(n), Err(CountTooLarge(n)))
 }
 
 def double(n: Int) -> Int {
