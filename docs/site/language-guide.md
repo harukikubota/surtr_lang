@@ -852,8 +852,9 @@ stage、user source の順で読み込みます。完全なモジュール inven
 
 - `Bootstrap`
   - auto-import の起点になる安定アンカー
-  - `NoneError` などの bootstrap concrete error
-- `SpecialTypes`
+- `errors.srt`
+  - `NoneError` などの共通 concrete error と Pattern / Extractor の失敗
+- `special_types.srt`
   - `Unit`, `Hole` の canonical builtin type 宣言
 - `Kernel`
   - auto import される最小の標準 API

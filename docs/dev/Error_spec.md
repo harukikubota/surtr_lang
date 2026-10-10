@@ -6,6 +6,8 @@ Pattern consumer と OR の評価は [Pattern spec](Pattern_spec.md)、failure t
 
 ## 1. 共通 Error と保存 Payload
 
+抽象 `Error` の宣言と操作は `lib/types/error.srt`、共通の具象 Error は `lib/errors.srt` に置く。共通の具象 Error には制御・演算・Pattern・Extractor の失敗を含め、shared standard stage に登録する。型・API 固有の Error はその所有ファイルの末尾に置く。具象 Error はトップレベルの `deferror` とし、ファイルの移動で module member に変えない。
+
 `Error` は具象 Error 定義の開いた集合を共通の型で扱う。閉じた Enum にせず、呼出し連鎖から発生し得る Error の集合や、具象名による網羅性を推論しない。実行時の値は常に `deferror` 由来であり、宣言 identity、message、保存 Payload と、runtime が管理する location、cause、diagnostic、stack trace を持つ。
 
 Payload はフィールド名・型・宣言順を持つ。空 Payload も長さ 0 の同じ保存表現を使う。異なる型の値を保持する保存列であり、Surtr の `List<T>` を要求しない。

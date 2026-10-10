@@ -28,13 +28,12 @@ stage、user source の順で読み込まれます。完全なモジュール in
 - auto import の起点になる安定アンカー
 - loader が最初に読む固定ステージ
 - `import` / `include` builtin function docs の canonical anchor
-- 標準 concrete error の置き場
 - ソース位置リフレクションの `@builtin def` 宣言と説明
 
 `Bootstrap` は「何かでもかんでも置く場所」ではありません。  
 将来 bootstrap 手順が増えても、入口の module 名と順序を固定するために残しています。
-そのうえで、`NoneError` や `ZeroDivisionError` のような universally useful な
-concrete error は、最初の標準ステージから使えるようここに置きます。
+`NoneError` や `ZeroDivisionError`、Pattern / Extractor の共通 Error は、
+`lib/errors.srt` にまとめています。型や API に固有の Error は各定義ファイルにあります。
 同時に、`import` / `include` のような language-provided macro surface も
 `Bootstrap` module 配下の `@builtin def` として source に残します。
 ただし surface 構文では引き続き top-level 専用の special form として扱います。
@@ -55,11 +54,11 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 `lt` / `lte` / `gt` / `gte` も公開し、これらは自動 import されます。
 名前の予約と中置呼出しの規則は[関数名と呼び出し構文](callable-names.md)を参照してください。
 
-### `SpecialTypes`
+### `special_types.srt`
 
 - `special_types.srt` に compiler-special builtin type を集約する
 - 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `DoBlock<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ErrorKind`, `StandbyInit<$T>`, `Hole` をここへ置く
-- `defmod` は持たず、top-level canonical type declaration だけを持つ
+- `defmod` は持たず、型宣言、`Unit` の Trait 実装、待機用の補助関数をまとめる
 - user-facing な振る舞いは各 trait / callable / module surface 側から現れる
 
 ### type modules
@@ -202,7 +201,7 @@ impl String {
 ## 6. いま読むときの目印
 
 - `Bootstrap`
-  - auto import の固定起点と bootstrap error 群
+  - auto import の固定起点と演算子・ソース位置関数の宣言
 - `Kernel`
   - cross-cutting builtin と `Unit`
   - `if` / `if_then` の language-level contract
