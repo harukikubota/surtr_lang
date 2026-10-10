@@ -2,6 +2,39 @@ use super::*;
 use diagnostics::{PatternKind, TypeDiagnosticReason};
 
 impl Checker {
+    /// Builtin HashMap has one value parameter. A user declaration with the same
+    /// final path component must never select this structural contract.
+    pub(super) fn hash_map_pattern_value_ty(&self, ty: &Ty, span: &Span) -> Result<Ty, TypeError> {
+        match self.resolve_ty(ty) {
+            Ty::Enum(name, args) if name == "HashMap" && args.len() == 1 => Ok(args[0].clone()),
+            actual => Err(TypeError::new(
+                format!(
+                    "HashMap Pattern requires canonical HashMap<V>, got {}",
+                    self.ty_name(&actual)
+                ),
+                span.clone(),
+            )),
+        }
+    }
+
+    pub(super) fn check_hash_map_pattern_key(
+        &mut self,
+        key: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let key = self.check_node(key)?;
+        self.ensure_no_runtime_facet_value(&key, "HashMap Pattern key")?;
+        if !self.types_compatible(&Ty::Str, &key.ty)? {
+            return Err(TypeError::new(
+                format!(
+                    "HashMap Pattern key must be String, got {}",
+                    self.ty_name(&key.ty)
+                ),
+                key.span.clone(),
+            ));
+        }
+        Ok(key)
+    }
+
     pub(super) fn ordered_record_pattern_fields<'a>(
         &self,
         id: &ResolvedId,
@@ -202,6 +235,13 @@ impl Checker {
                     .map(|item| self.select_application_pattern(item))
                     .collect::<Result<_, _>>()?,
             ),
+            ResolvedPattern::HashMap(span, entries) => ResolvedPattern::HashMap(
+                span.clone(),
+                entries
+                    .iter()
+                    .map(|(key, child)| Ok((key.clone(), self.select_application_pattern(child)?)))
+                    .collect::<Result<_, TypeError>>()?,
+            ),
             ResolvedPattern::Record(id, fields) => ResolvedPattern::Record(
                 id.clone(),
                 fields
@@ -294,6 +334,13 @@ impl Checker {
                     .into_iter()
                     .map(|item| self.lower_pattern_projections(item, slots))
                     .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::HashMap(span, entries) => ResolvedPattern::HashMap(
+                span,
+                entries
+                    .into_iter()
+                    .map(|(key, child)| Ok((key, self.lower_pattern_projections(child, slots)?)))
+                    .collect::<Result<_, TypeError>>()?,
             ),
             ResolvedPattern::Record(id, fields) => ResolvedPattern::Record(
                 id,
@@ -671,6 +718,11 @@ impl Checker {
     ) -> Result<(), TypeError> {
         match pattern {
             TypedPattern::Located(_, inner) => Self::typed_pattern_bindings(inner, out)?,
+            TypedPattern::HashMap(_, entries) => {
+                for entry in entries {
+                    Self::typed_pattern_bindings(&entry.pattern, out)?;
+                }
+            }
             TypedPattern::Var(_, id) => Self::insert_pattern_binding(out, id)?,
             TypedPattern::As(_, inner, id) => {
                 Self::typed_pattern_bindings(inner, out)?;
@@ -697,6 +749,11 @@ impl Checker {
         out: &mut HashSet<u32>,
     ) -> Result<(), TypeError> {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => {
+                for entry in entries {
+                    Self::typed_match_pattern_bindings(&entry.pattern, out)?;
+                }
+            }
             TypedMatchPattern::Binding(id) => Self::insert_pattern_binding(out, id)?,
             TypedMatchPattern::As(inner, id) => {
                 Self::typed_match_pattern_bindings(inner, out)?;
@@ -730,6 +787,12 @@ impl Checker {
     pub(super) fn pattern_expression_nodes(node: &TypedNode) -> Vec<&TypedNode> {
         fn binding<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedNode>) {
             match pat {
+                TypedPattern::HashMap(_, entries) => {
+                    for entry in entries {
+                        out.push(&entry.key);
+                        binding(&entry.pattern, out);
+                    }
+                }
                 TypedPattern::Located(_, inner) => binding(inner, out),
                 TypedPattern::Extractor {
                     pre_args, items, ..
@@ -754,6 +817,12 @@ impl Checker {
         }
         fn matching<'a>(pat: &'a TypedMatchPattern, out: &mut Vec<&'a TypedNode>) {
             match pat {
+                TypedMatchPattern::HashMap(entries) => {
+                    for entry in entries {
+                        out.push(&entry.key);
+                        matching(&entry.pattern, out);
+                    }
+                }
                 TypedMatchPattern::Extractor {
                     pre_args, items, ..
                 } => {
@@ -799,6 +868,12 @@ impl Checker {
     pub(super) fn pattern_expression_nodes_mut(node: &mut TypedNode) -> Vec<&mut TypedNode> {
         fn binding<'a>(pat: &'a mut TypedPattern, out: &mut Vec<&'a mut TypedNode>) {
             match pat {
+                TypedPattern::HashMap(_, entries) => {
+                    for entry in entries {
+                        out.push(&mut entry.key);
+                        binding(&mut entry.pattern, out);
+                    }
+                }
                 TypedPattern::Located(_, inner) => binding(inner, out),
                 TypedPattern::Extractor {
                     pre_args, items, ..
@@ -823,6 +898,12 @@ impl Checker {
         }
         fn matching<'a>(pat: &'a mut TypedMatchPattern, out: &mut Vec<&'a mut TypedNode>) {
             match pat {
+                TypedMatchPattern::HashMap(entries) => {
+                    for entry in entries {
+                        out.push(&mut entry.key);
+                        matching(&mut entry.pattern, out);
+                    }
+                }
                 TypedMatchPattern::Extractor {
                     pre_args, items, ..
                 } => {
@@ -952,6 +1033,7 @@ impl Checker {
             | ResolvedPattern::AnnotatedWildcard(_, _)
             | ResolvedPattern::Wildcard(_) => true,
             ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
+            ResolvedPattern::HashMap(_, entries) => entries.is_empty(),
             ResolvedPattern::Tuple(items) => items.iter().all(Self::is_total_bind_pattern),
             ResolvedPattern::Record(_, fields) => fields
                 .iter()
@@ -1171,6 +1253,22 @@ impl Checker {
                     typed_items.push(typed_item);
                 }
                 Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
+            }
+            ResolvedPattern::HashMap(pattern_span, entries) => {
+                let value_ty = self.hash_map_pattern_value_ty(rhs_ty, pattern_span)?;
+                let mut typed = Vec::with_capacity(entries.len());
+                for (key, pattern) in entries {
+                    let key = self.check_hash_map_pattern_key(key)?;
+                    let key_span = key.span.clone();
+                    let (pattern, _) = self.check_pattern(pattern, &value_ty, span)?;
+                    typed.push(TypedHashMapPatternEntry {
+                        key,
+                        pattern,
+                        key_span,
+                    });
+                }
+                let ty = self.resolve_ty(rhs_ty);
+                Ok((TypedPattern::HashMap(ty.clone(), typed), ty))
             }
             ResolvedPattern::Record(id, fields) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
@@ -1611,6 +1709,14 @@ impl Checker {
     pub(super) fn bind_typed_pattern(&mut self, pat: &TypedPattern, rhs_ty: &Ty) {
         let rhs_ty = self.resolve_ty(rhs_ty);
         match pat {
+            TypedPattern::HashMap(ty, entries) => {
+                let value_ty = self
+                    .hash_map_pattern_value_ty(ty, &Span { start: 0, end: 0 })
+                    .expect("checked HashMap Pattern must retain canonical input type");
+                for entry in entries {
+                    self.bind_typed_pattern(&entry.pattern, &value_ty);
+                }
+            }
             TypedPattern::Located(_, inner) => self.bind_typed_pattern(inner, &rhs_ty),
             TypedPattern::Var(_, id) => {
                 self.env.bind_var(id.unique_id, rhs_ty.clone());
@@ -1682,6 +1788,14 @@ impl Checker {
 
     pub(super) fn collect_pattern_result_error_types(&self, pat: &TypedPattern, out: &mut Vec<Ty>) {
         match pat {
+            TypedPattern::HashMap(_, entries) => {
+                if !entries.is_empty() {
+                    out.push(Ty::Error);
+                }
+                for entry in entries {
+                    self.collect_pattern_result_error_types(&entry.pattern, out);
+                }
+            }
             TypedPattern::Located(_, inner) => self.collect_pattern_result_error_types(inner, out),
             TypedPattern::Constructor { fields, .. } => {
                 for field in fields {
@@ -1714,6 +1828,28 @@ impl Checker {
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _)
             | TypedPattern::DurationLit(_, _) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod hash_map_pattern_tests {
+    use super::*;
+
+    #[test]
+    fn hash_map_pattern_rejects_same_spelling_in_other_namespace() {
+        let checker = Checker::new(TypecheckContext::default());
+        let span = Span { start: 3, end: 10 };
+        assert_eq!(
+            checker
+                .hash_map_pattern_value_ty(&Ty::Enum("HashMap".into(), vec![Ty::Int]), &span)
+                .unwrap(),
+            Ty::Int
+        );
+        for name in ["Local::HashMap", "Global::HashMap"] {
+            assert!(checker
+                .hash_map_pattern_value_ty(&Ty::Enum(name.into(), vec![Ty::Int]), &span)
+                .is_err());
         }
     }
 }

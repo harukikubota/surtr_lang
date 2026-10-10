@@ -1475,6 +1475,12 @@ impl Checker {
             TypedPattern::Located(_, inner) => {
                 self.ensure_self_rebinding_types_inner(inner, span, expected_self)
             }
+            TypedPattern::HashMap(_, entries) => {
+                for entry in entries {
+                    self.ensure_self_rebinding_types_inner(&entry.pattern, span, expected_self)?;
+                }
+                Ok(())
+            }
             TypedPattern::Var(bind_ty, id) => {
                 if id.name == "self" {
                     let Some(expected) = expected_self else {

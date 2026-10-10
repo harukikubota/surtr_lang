@@ -4322,6 +4322,17 @@ impl Checker {
                 source,
                 Box::new(self.substitute_typed_pattern_with_mapping(*inner, mapping)),
             ),
+            TypedPattern::HashMap(ty, entries) => TypedPattern::HashMap(
+                self.substitute_ty_with_mapping(&ty, mapping),
+                entries
+                    .into_iter()
+                    .map(|entry| TypedHashMapPatternEntry {
+                        key: self.substitute_typed_node_with_mapping(entry.key, mapping),
+                        pattern: self.substitute_typed_pattern_with_mapping(entry.pattern, mapping),
+                        key_span: entry.key_span,
+                    })
+                    .collect(),
+            ),
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(self.substitute_ty_with_mapping(&ty, mapping), id)
             }
@@ -4421,6 +4432,17 @@ impl Checker {
         mapping: &HashMap<u32, Ty>,
     ) -> TypedMatchPattern {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => TypedMatchPattern::HashMap(
+                entries
+                    .into_iter()
+                    .map(|entry| TypedHashMapMatchPatternEntry {
+                        key: self.substitute_typed_node_with_mapping(entry.key, mapping),
+                        pattern: self
+                            .substitute_typed_match_pattern_with_mapping(entry.pattern, mapping),
+                        key_span: entry.key_span,
+                    })
+                    .collect(),
+            ),
             TypedMatchPattern::Binding(id) => TypedMatchPattern::Binding(id),
             TypedMatchPattern::Pin { id, ty, dispatch } => TypedMatchPattern::Pin {
                 id,
@@ -4931,6 +4953,28 @@ impl Checker {
                     self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
                 TypedPattern::Pin(ty, id, dispatch)
             }
+            TypedPattern::HashMap(ty, entries) => {
+                let ty = normalized_ty(self, &ty, expected_ty);
+                let value_ty = self.hash_map_pattern_value_ty(&ty, span)?;
+                let entries = entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(TypedHashMapPatternEntry {
+                            key: self
+                                .specialize_extractor_pre_args(vec![entry.key], context)?
+                                .remove(0),
+                            pattern: self.concretize_specialized_typed_pattern(
+                                entry.pattern,
+                                Some(&value_ty),
+                                span,
+                                context,
+                            )?,
+                            key_span: entry.key_span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?;
+                TypedPattern::HashMap(ty, entries)
+            }
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(normalized_ty(self, &ty, expected_ty), id)
             }
@@ -5073,6 +5117,24 @@ impl Checker {
         context: &mut SpecializationContext<'_>,
     ) -> Result<TypedMatchPattern, TypeError> {
         Ok(match pattern {
+            TypedMatchPattern::HashMap(entries) => TypedMatchPattern::HashMap(
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(TypedHashMapMatchPatternEntry {
+                            key: self
+                                .specialize_extractor_pre_args(vec![entry.key], context)?
+                                .remove(0),
+                            pattern: self.concretize_specialized_match_pattern(
+                                entry.pattern,
+                                span,
+                                context,
+                            )?,
+                            key_span: entry.key_span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+            ),
             TypedMatchPattern::Pin { id, ty, dispatch } => {
                 let dispatch =
                     self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
@@ -5156,6 +5218,10 @@ impl Checker {
 
     fn typed_match_pattern_has_pending_dispatch(pattern: &TypedMatchPattern) -> bool {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => entries.iter().any(|entry| {
+                Self::typed_node_has_pending_trait_call(&entry.key)
+                    || Self::typed_match_pattern_has_pending_dispatch(&entry.pattern)
+            }),
             TypedMatchPattern::Pin { dispatch, .. } => {
                 matches!(
                     dispatch,
@@ -5186,6 +5252,10 @@ impl Checker {
 
     fn typed_pattern_has_pending_dispatch(pattern: &TypedPattern) -> bool {
         match pattern {
+            TypedPattern::HashMap(_, entries) => entries.iter().any(|entry| {
+                Self::typed_node_has_pending_trait_call(&entry.key)
+                    || Self::typed_pattern_has_pending_dispatch(&entry.pattern)
+            }),
             TypedPattern::Located(_, inner) => Self::typed_pattern_has_pending_dispatch(inner),
             TypedPattern::Pin(_, _, dispatch) => matches!(dispatch, TraitDispatch::Pending),
             TypedPattern::As(_, inner, _) => Self::typed_pattern_has_pending_dispatch(inner),

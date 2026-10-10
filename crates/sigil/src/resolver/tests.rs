@@ -9860,3 +9860,39 @@ impl User {
         .message
         .contains("Undefined function second/1"));
 }
+
+#[test]
+fn hashmap_pattern_keys_keep_outer_binding_identity() {
+    let resolved = parse_and_resolve("key = \"a\"\nmap = hash![\"a\" => 1]\nmatch map { hash![\"a\" => key, key => x, ^key => _] => x, _ => 0 }").unwrap();
+    let Resolved::Bind(_, ResolvedPattern::Var(outer), _) = &resolved[0] else {
+        panic!("outer binding")
+    };
+    let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+        panic!("match")
+    };
+    let ResolvedPattern::HashMap(_, entries) = arms[0].pattern.unlocated() else {
+        panic!("HashMap")
+    };
+    let ResolvedPattern::Var(shadow) = &entries[0].1 else {
+        panic!("shadow binding")
+    };
+    assert_ne!(shadow.unique_id, outer.unique_id);
+    for (key, _) in &entries[1..] {
+        assert!(matches!(key, Resolved::Var(_, id) if id.unique_id == outer.unique_id));
+    }
+}
+
+#[test]
+fn hashmap_pattern_keys_cannot_reference_new_bindings() {
+    for key in ["key", "^key"] {
+        let source = format!(
+            "map = hash![\"a\" => 1]\nmatch map {{ hash![\"a\" => key, {key} => _] => 0, _ => 1 }}"
+        );
+        assert!(parse_and_resolve(&source).is_err());
+    }
+    let error = parse_and_resolve(
+        "map = hash![\"a\" => 1]\nmatch map { hash![\"a\" => x, \"b\" => x] => 0, _ => 1 }",
+    )
+    .unwrap_err();
+    assert!(error.message.contains("Duplicate"), "{}", error.message);
+}

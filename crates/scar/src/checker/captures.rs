@@ -183,6 +183,11 @@ impl Checker {
         }
         fn binding(pat: &TypedPattern, outer: &HashSet<u32>, out: &mut Vec<ResolvedId>) {
             match pat {
+                TypedPattern::HashMap(_, entries) => {
+                    for entry in entries {
+                        binding(&entry.pattern, outer, out);
+                    }
+                }
                 TypedPattern::Located(_, inner) => binding(inner, outer, out),
                 TypedPattern::Pin(_, id, _) => reference(id, outer, out),
                 TypedPattern::Extractor {
@@ -225,6 +230,11 @@ impl Checker {
                     }
                     for item in items {
                         matching(item, outer, out);
+                    }
+                }
+                TypedMatchPattern::HashMap(entries) => {
+                    for entry in entries {
+                        matching(&entry.pattern, outer, out);
                     }
                 }
                 TypedMatchPattern::As(inner, _) => matching(inner, outer, out),

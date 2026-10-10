@@ -38,6 +38,7 @@ if_let_then(Ok("alice"), Ok(name), print(name)) # 成功時だけ表示
 | `pattern @ whole` | 照合した値全体を別名でも束縛する |
 | `(left, right)` | Tuple の各要素を子 Pattern で照合する |
 | `[]`、`[a, b]`、`[head, ..tail]` | List または String を分解・照合する |
+| `hash![key => child, ...]` | HashMap の指定キーの存在と値を照合する |
 | `Ok(child)`、`Type::Variant(child)` | variant を照合して payload を分解する |
 | `User(name, age)` | Record の分解、または Struct の attached Extractor を使う |
 | `Failure(field)` | Error の種類を照合し、保存フィールドを分解する |
@@ -96,6 +97,27 @@ match "日本" {
 ```
 
 式位置の `[head, ..tail]` は List 構築です。Pattern 位置の分解とは区別します。`Kernel::uncons(head, tail)` も先頭と残りを分解しますが、保持する失敗 Error まで同一ではありません。たとえば空 List に対する head-tail Pattern は `EmptyHeadTailListPattern`、直接の `uncons` は `UnconsEmptyList` を返します。空 String の `uncons` は `UnconsEmptyString` です。
+
+### HashMap
+
+`hash![key => child, ...]` では、指定したキーが存在し、その値が子 Pattern に一致するかを調べます。追加のキーは許容します。キーには String 型の式、または外側の値を参照する `^name` を使います。
+
+```surtr
+key = "score"
+scores = hash!["score" => 42, "bonus" => 10]
+match scores {
+  hash![^key => value] => value,
+  _ => 0,
+} # 42
+is_match(scores, hash!["score" => _]) # True。キーの存在も必要
+apply_pattern(scores, hash!["score" => _1]) # Ok(42)
+```
+
+キーと子は記述順に一度ずつ評価し、最初の失敗で止まります。キー式は Pattern を始める前の scope を使うため、その Pattern の新しい束縛を参照できません。同じキーを複数回書くと、すべての子を照合します。束縛名の重複は使えません。
+
+非空 Pattern は失敗し得るため、通常の `=` では使えません。空の `hash![]` は空かどうかを調べず、どの HashMap にも成功します。空かどうかは `HashMap::map_len(map) == 0` で調べてください。`match` では `hash![]` を最後の arm として使えます。
+
+キー欠落を `apply_pattern` や SafeBind で保持すると、`HashMapKeyMissing` の message に欠落キーが入り、発生位置はそのキー指定を指します。子の不一致はその子の Error を保持します。SafeBind は RHS の Result を外側一段だけ分解し、map の中の Result 値はそのまま照合します。API と分解の例は [HashMap](./hash_map.md) を参照してください。
 
 ### Enum・Result・Error
 
@@ -246,6 +268,7 @@ if_let(pair, (1, x) | (2, x), x, 0) # 42
 | Boolean | `True` / `False` |
 | Result・一般 Enum | 外側の全 variant |
 | List・String | 空と非空の形 |
+| HashMap | `hash![]` が catch-all。キー部分集合の組み合わせは解析しない |
 | Tuple・Record | 単一 arm のすべての子が catch-all かを再帰判定 |
 | その他 | `_` や変数束縛などの catch-all が必要 |
 
@@ -372,6 +395,7 @@ pipe は最外 call の直接の式引数へ入力を渡します。Pattern 位�
 ## 関連ページと標準 API
 
 - [Extractors](./extractors.md): 定義・ExtractorClosure・`Extractor::from_result`
+- [HashMap](./hash_map.md): String キーの map と構造的 Pattern
 - [Record](./record.md) / [Structs](./structs.md): 型ごとの構築と分解
 - [Error Handling](./error-handling.md) / [do](./do.md): 失敗の保持・伝播
 - [型注釈](./type-annotations.md) / [言語リファレンス](./language-reference.md): 型記法と構文の制約

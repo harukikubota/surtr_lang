@@ -327,6 +327,8 @@ pub enum AstPattern {
     ListNil(Span),
     /// `[head, ..tail]`
     ListCons(Span, Box<AstPattern>, Box<AstPattern>),
+    /// `hash![key => child, ...]`; keys are expressions in the outer scope.
+    HashMap(Span, Vec<(Ast, AstPattern)>),
     /// Integer literal in pattern position.
     IntLit(Span, SurtrInt),
     /// String literal in pattern position.

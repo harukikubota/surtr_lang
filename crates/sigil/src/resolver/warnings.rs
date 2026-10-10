@@ -381,6 +381,12 @@ fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
                 collect_pattern_usage(inner, usage);
             }
         }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                collect_node_usage(key, usage);
+                collect_pattern_usage(child, usage);
+            }
+        }
         ResolvedPattern::Record(_, fields) => {
             for (_, inner) in fields {
                 collect_pattern_usage(inner, usage);

@@ -221,6 +221,12 @@ fn collect_pattern_expressions<'a>(
                 collect_pattern_expressions(item, expressions);
             }
         }
+        TypedPattern::HashMap(_, entries) => {
+            for entry in entries {
+                expressions.push(&entry.key);
+                collect_pattern_expressions(&entry.pattern, expressions);
+            }
+        }
         TypedPattern::As(_, inner, _) => collect_pattern_expressions(inner, expressions),
         TypedPattern::ListCons(_, head, tail) => {
             collect_pattern_expressions(head, expressions);
@@ -253,6 +259,12 @@ fn collect_match_pattern_expressions<'a>(
             expressions.extend(pre_args);
             for item in items {
                 collect_match_pattern_expressions(item, expressions);
+            }
+        }
+        TypedMatchPattern::HashMap(entries) => {
+            for entry in entries {
+                expressions.push(&entry.key);
+                collect_match_pattern_expressions(&entry.pattern, expressions);
             }
         }
         TypedMatchPattern::As(inner, _) => collect_match_pattern_expressions(inner, expressions),
@@ -6434,6 +6446,19 @@ fn collect_pattern_binding_infos(
         | TypedPattern::StrLit(_, _)
         | TypedPattern::BoolLit(_, _)
         | TypedPattern::DurationLit(_, _) => {}
+        TypedPattern::HashMap(_, entries) => {
+            for entry in entries {
+                collect_pattern_binding_infos(
+                    &entry.pattern,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                    callable_captures,
+                    facet_info.clone(),
+                );
+            }
+        }
         TypedPattern::Tuple(_, items) => {
             for item in items {
                 collect_pattern_binding_infos(
@@ -7204,6 +7229,7 @@ enum PatternDecomp {
     None,
     Tuple(Vec<PatternDecompChild>),
     Constructor(Vec<PatternDecompChild>),
+    HashMap(Vec<PatternDecompChild>),
     ListCons {
         head: Box<PatternDecompChild>,
         tail: Box<PatternDecompChild>,
@@ -7228,6 +7254,7 @@ enum MatchPatternDecomp {
     None,
     Tuple(Vec<MatchPatternDecompChild>),
     Constructor(Vec<MatchPatternDecompChild>),
+    HashMap(Vec<MatchPatternDecompChild>),
     ListCons {
         head: Box<MatchPatternDecompChild>,
         tail: Box<MatchPatternDecompChild>,
@@ -11442,6 +11469,7 @@ impl Codegen {
                 | TypedPattern::Tuple(..)
                 | TypedPattern::As(..)
                 | TypedPattern::Extractor { .. }
+                | TypedPattern::HashMap(..)
         ) || matches!(failure_policy, ExtractorFailurePolicy::Discard)
             || (matches!(failure_policy, ExtractorFailurePolicy::Propagate)
                 && matches!(
@@ -11512,6 +11540,60 @@ impl Codegen {
         Ok(decomp)
     }
 
+    /// Evaluate a key once at its own source span. A missing key retains the
+    /// canonical map_get Error; value patterns receive the whole stored value.
+    fn emit_hash_map_pattern_lookup(
+        &mut self,
+        key: &TypedNode,
+        key_span: &Span,
+        map_slot: u32,
+        fail_label: Label,
+        policy: ExtractorFailurePolicy,
+    ) -> Result<u32, CodegenError> {
+        self.emit(Opcode::LoadLocal(map_slot));
+        self.emit_node(key)?;
+        self.emit_internal_builtin_call("map_get", 2, key_span)?;
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let ok = self.add_constant(Constant::Tag(0));
+        self.emit(Opcode::LoadConst(ok));
+        self.emit(Opcode::EqTag);
+        let success = self.fresh_label();
+        self.emit_jump_if_true(success);
+        match policy {
+            ExtractorFailurePolicy::Discard => self.emit_jump(fail_label),
+            ExtractorFailurePolicy::Propagate
+                if matches!(
+                    self.safe_bind_failure_target,
+                    Some(SafeBindFailureTarget::DoAlternative { .. })
+                ) =>
+            {
+                self.emit_jump(fail_label)
+            }
+            _ => {
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                let destination = match policy {
+                    ExtractorFailurePolicy::ExpressionResult(end) => {
+                        PatternFailureDestination::ExpressionResult(end)
+                    }
+                    _ => PatternFailureDestination::EnclosingConsumer,
+                };
+                self.emit_pattern_failure_from_error_stack(key_span.clone(), None, destination)?;
+            }
+        }
+        self.patch_label(success);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        let value_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(value_slot));
+        Ok(value_slot)
+    }
+
     fn emit_pattern_test_inner(
         &mut self,
         pat: &TypedPattern,
@@ -11548,6 +11630,30 @@ impl Codegen {
                 self.emit(Opcode::EqInt);
                 self.emit_jump_if_false(fail_label);
                 PatternDecomp::None
+            }
+            TypedPattern::HashMap(_, entries) => {
+                let mut children = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let value_slot = self.emit_hash_map_pattern_lookup(
+                        &entry.key,
+                        &entry.key_span,
+                        slot,
+                        fail_label,
+                        failure_policy,
+                    )?;
+                    let decomp = self.emit_pattern_test_from_local_with_mode(
+                        &entry.pattern,
+                        value_slot,
+                        fail_label,
+                        err_span,
+                        failure_policy,
+                    )?;
+                    children.push(PatternDecompChild {
+                        slot: value_slot,
+                        decomp,
+                    });
+                }
+                PatternDecomp::HashMap(children)
             }
             TypedPattern::Tuple(_, items) => {
                 let mut children = Vec::with_capacity(items.len());
@@ -11847,6 +11953,32 @@ impl Codegen {
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _)
             | TypedPattern::DurationLit(_, _) => {}
+            TypedPattern::HashMap(_, entries) => {
+                // Empty maps are total and need no runtime decomposition.
+                if entries.is_empty() {
+                    return Ok(());
+                }
+                let Some(PatternDecomp::HashMap(children)) = decomp else {
+                    return Err(CodegenError {
+                        message: "HashMap binding has no successful decomposition".into(),
+                        span: err_span.clone(),
+                    });
+                };
+                if children.len() != entries.len() {
+                    return Err(CodegenError {
+                        message: "HashMap decomposition arity mismatch".into(),
+                        span: err_span.clone(),
+                    });
+                }
+                for (entry, child) in entries.iter().zip(children) {
+                    self.emit_pattern_bind_from_local(
+                        &entry.pattern,
+                        child.slot,
+                        Some(child.decomp),
+                        err_span,
+                    )?;
+                }
+            }
             TypedPattern::Tuple(_, items) => {
                 self.emit_tuple_pattern_items_from_local(items, slot, decomp, err_span, None)?;
             }
@@ -13089,6 +13221,29 @@ impl Codegen {
                 }
                 MatchPatternDecomp::Tuple(children)
             }
+            TypedMatchPattern::HashMap(entries) => {
+                let mut children = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let value_slot = self.emit_hash_map_pattern_lookup(
+                        &entry.key,
+                        &entry.key_span,
+                        slot,
+                        fail_label,
+                        ExtractorFailurePolicy::Discard,
+                    )?;
+                    let decomp = self.emit_match_pattern_test(
+                        &entry.pattern,
+                        value_slot,
+                        fail_label,
+                        err_span,
+                    )?;
+                    children.push(MatchPatternDecompChild {
+                        slot: value_slot,
+                        decomp,
+                    });
+                }
+                MatchPatternDecomp::HashMap(children)
+            }
             TypedMatchPattern::Record(fields) => {
                 let mut children = Vec::with_capacity(fields.len());
                 for (index, field_pat) in fields.iter().enumerate() {
@@ -13239,6 +13394,31 @@ impl Codegen {
                         (item_slot, None)
                     };
                     self.emit_match_pattern_bind(item, item_slot, item_decomp, err_span)?;
+                }
+            }
+            TypedMatchPattern::HashMap(entries) => {
+                if entries.is_empty() {
+                    return Ok(());
+                }
+                let Some(MatchPatternDecomp::HashMap(children)) = decomp else {
+                    return Err(CodegenError {
+                        message: "HashMap match binding has no successful decomposition".into(),
+                        span: err_span.clone(),
+                    });
+                };
+                if children.len() != entries.len() {
+                    return Err(CodegenError {
+                        message: "HashMap match decomposition arity mismatch".into(),
+                        span: err_span.clone(),
+                    });
+                }
+                for (entry, child) in entries.iter().zip(children) {
+                    self.emit_match_pattern_bind(
+                        &entry.pattern,
+                        child.slot,
+                        Some(child.decomp),
+                        err_span,
+                    )?;
                 }
             }
             TypedMatchPattern::Record(fields) => {

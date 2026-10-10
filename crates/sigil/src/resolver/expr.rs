@@ -19,6 +19,12 @@ pub(super) fn visit_pattern_expressions(
     visit: &mut impl FnMut(&Ast) -> Result<(), ResolveError>,
 ) -> Result<(), ResolveError> {
     match pattern {
+        AstPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                visit(key)?;
+                visit_pattern_expressions(child, visit)?;
+            }
+        }
         AstPattern::Call(_, _, args) => {
             for arg in args {
                 if let Some(expr) = &arg.expression {
@@ -53,6 +59,12 @@ fn rewrite_pattern_expressions(
     rewrite: &mut impl FnMut(Ast) -> Result<Ast, ResolveError>,
 ) -> Result<(), ResolveError> {
     match pattern {
+        AstPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                *key = rewrite(key.clone())?;
+                rewrite_pattern_expressions(child, rewrite)?;
+            }
+        }
         AstPattern::Call(_, _, args) => {
             for arg in args {
                 if let Some(expr) = arg.expression.take() {
@@ -117,6 +129,7 @@ fn do_pattern_span(pattern: &AstPattern) -> Span {
         AstPattern::Var(span, _)
         | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
+        | AstPattern::HashMap(span, _)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
         | AstPattern::IntLit(span, _)

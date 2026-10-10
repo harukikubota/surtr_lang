@@ -89,6 +89,7 @@ cargo clean
   - [Kernel](./docs/site/kernel.md)
   - [Process](./docs/site/process.md)
   - [Pattern matching](./docs/site/pattern-matching.md)
+  - [HashMap](./docs/site/hash_map.md)
   - [Extractors](./docs/site/extractors.md)
   - [Language features](./docs/site/language-features.md)
 - Developer docs in `docs/dev/`

@@ -18,6 +18,32 @@ named 内の裸の束縛名 `field` は `field: field` に正規化する。右�
 
 Record の外枠は total である。子もすべて total の場合だけ通常 Bind `=` を許可する。partial な子があれば Pattern 全体も partial として `=` で拒否し、`match` / `if_let` などの consumer で使う。単一 arm が catch-all かどうかは子 Pattern まで再帰的に判定する。複数 arm の部分 Pattern を合成した構造的網羅性解析は行わない。Record Pattern は `MatchResult` を生成せず、一般 Extractor の事前引数・payload arity・失敗伝播規則を使わない。
 
+## HashMap の構造的 Pattern
+
+`hash![key => value_pattern, ...]` は canonical な `HashMap<V>` の指定キーと値を照合する。キーは String 型の通常式、または外側の束縛を参照する `^name` とし、値は V に対する子 Pattern とする。子は再帰的に照合する。未指定キーは許容し、その値は検査しない。同じキーを複数回指定した場合は各値 Pattern を順に検査する。束縛名の重複は静的エラーとする。
+
+キー式と pin は Pattern 開始前の scope で解決する。同じ Pattern が作る新規束縛は参照できず、外側に同名束縛があれば外側を参照する。未束縛名は Sigil の名前解決エラー、非 String キーと対象型の不一致は Scar の型エラーとする。OR・alias・projection・子 Pattern の制約は consumer ごとの既存規則に従う。
+
+対象を一度だけ評価し、エントリの記述順に、キー式を一度評価する（pin は参照値を取得する）、キーを検索する、取得した値を子 Pattern で照合する、の順に進む。最初のキー欠落または子の失敗で停止し、以降のキー式・子 Pattern・guard・本文・continuation は評価しない。全エントリが成功してから consumer の成功処理へ進む。
+
+非空 Pattern は値側が `_` でもキーの存在を要求するため partial とし、通常 Bind `=` では拒否する。空の `hash![]` は任意の HashMap に成功する total Pattern で、対象型が HashMap と決まれば catch-all とする。キー部分集合を複数 arm から合成する網羅性解析は行わない。arm の数によって戻り型や網羅性の既存規則を切り替えない。
+
+| consumer | 成功 | 失敗 |
+|---|---|---|
+| `match` | guard が成立する arm の本文 | 次の候補へ進む |
+| `if_let` / `if_let_then` / `is_match` | 既存の成功処理 | 既存の分岐または False |
+| SafeBind `=?` | 束縛して続行 | 現在の failure target |
+| `apply_pattern` | projection の Ok | 元 Error を保持した Err |
+| do partial `<-` | bind の payload を照合して続行 | do-local failure target |
+
+SafeBind の RHS は canonical Result の外側一段だけを射影する。RHS が Err ならキーを検査せず、元 Error を失敗先へ渡す。non-Result の HashMap は全体を照合し、partial Pattern のみ受理する。空 Pattern の SafeBind は `Result<HashMap<V>>` には使えるが、non-Result の HashMap には使えない。キーや map 内の Result 値を自動 unwrap しない。`hash!["a" => x]` は値全体を束縛し、`hash!["a" => Ok(x)]` は Ok payload を照合する。後者に Err があれば constructor 不一致になる。
+
+失敗先は通常 callable の返り型の MonadFail、do 内の `MonadFail > Alternative > Monad`、do 外の Extractor / ExtractorClosure 本文の compiler-owned MatchResult target に従う。Alternative による失敗では Error を破棄して empty へ進む。
+
+キー欠落は canonical な `HashMapKeyMissing(key)` とする。message は `hash map key not found: <key>`、保存 Payload は実際に検索した String 値、発生位置は失敗したエントリのキー指定位置とする。message には最初の欠落キーだけを含め、pin の変数名、親キー、後続キー、map 全体を加えない。入れ子の HashMap は内側で欠落したキーとその位置を使う。値 Pattern の失敗は子自身の Error とし、kind・message・Payload・location・cause を保つ。親の汎用 Error で包み直さない。runtime の内部不整合は RuntimeError とする。
+
+Spire は式位置の map literal と Pattern 位置を区別し、キー式・子 Pattern・キーの source span を保持する。Sigil はすべてのキーを Pattern 開始前の scope で解決し、子の束縛は consumer の成功 scope へ渡す。Scar は canonical HashMap の型とキー型、partial / total、catch-all を検査する。Forge は共通 Pattern lowering で既存の `HashMap::map_get` と Error constructor を使い、記述順・一度評価・短絡と consumer ごとの失敗処理を保つ。
+
 ## Error Pattern
 
 Error 名だけの Pattern は kind を照合し、子 Pattern を指定すると kind 一致後に保存 Payload を分解する。外部コンストラクタの入力は分解しない。宣言・名前付きフィールド・局所具象束縛・readonly Facet の規則は [Error spec](Error_spec.md) を正本とする。
@@ -329,7 +355,7 @@ Error を返す consumer policy と Extractor の返却 carrier 解釈は共通 
 
 ## match の網羅性解析の範囲
 
-網羅性は guard のない arm だけから判定する。binding / wildcard、および子がすべて catch-all の tuple / Record は単一 arm の catch-all になる。compiler-owned な `Duration::deconstruct` も子がすべて catch-all なら同じ判定を行う。一般の Extractor は catch-all とみなさない。
+網羅性は guard のない arm だけから判定する。binding / wildcard、空の HashMap Pattern、および子がすべて catch-all の tuple / Record は単一 arm の catch-all になる。compiler-owned な `Duration::deconstruct` も子がすべて catch-all なら同じ判定を行う。一般の Extractor は catch-all とみなさない。
 
 catch-all がない場合、Boolean / Result / enum は外側の variant、List は空 / head-tail、String は空文字 / `uncons` の被覆を検査する。OR と as-pattern を介した被覆も扱うが、constructor の payload や list の子 Pattern がすべての値を覆うかまでは解析しない。したがって、外側の被覆として受理された `match` でも、子 Pattern による実行時の取りこぼしがあり得る。複数 arm の子 Pattern を合成した一般的な構造的網羅性の証明は現行契約に含めない。
 

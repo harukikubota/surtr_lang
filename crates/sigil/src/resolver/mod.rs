@@ -1049,6 +1049,12 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
                 rebase_pattern(inner, base, offset);
             }
         }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                rebase_resolved_node(key, base, offset);
+                rebase_pattern(child, base, offset);
+            }
+        }
         ResolvedPattern::Record(id, fields) => {
             rebase_resolved_id(id, base, offset);
             for (_, inner) in fields {

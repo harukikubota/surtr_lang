@@ -1,0 +1,1 @@
+match hash!["a" => "a"] { hash!["a" => fresh, fresh => _] => True, _ => False, }

@@ -657,6 +657,8 @@ pub enum TypedPattern {
     BoolLit(Ty, bool),
     DurationLit(Ty, SurtrInt),
     Tuple(Ty, Vec<TypedPattern>),
+    /// Ordered String keys and child patterns; only an empty entry list is total.
+    HashMap(Ty, Vec<TypedHashMapPatternEntry>),
     /// Enum/Result constructor pattern checked through the common MatchBlock rules.
     Constructor {
         ty: Ty,
@@ -675,6 +677,21 @@ pub enum TypedPattern {
         seq_tys: Vec<Ty>,
         items: Vec<TypedPattern>,
     },
+}
+
+/// Key source positions survive specialization for missing-key Error origins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedHashMapPatternEntry {
+    pub key: TypedNode,
+    pub pattern: TypedPattern,
+    pub key_span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedHashMapMatchPatternEntry {
+    pub key: TypedNode,
+    pub pattern: TypedMatchPattern,
+    pub key_span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -770,6 +787,7 @@ pub enum TypedMatchPattern {
     Tuple(Vec<TypedMatchPattern>),
     /// Total structural Record head; children may still be partial.
     Record(Vec<TypedMatchPattern>),
+    HashMap(Vec<TypedHashMapMatchPatternEntry>),
     /// Constructor tag + field patterns + payload field offset.
     Constructor {
         tag: u32,

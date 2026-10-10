@@ -100,6 +100,12 @@ do 本文内の `apply_pattern` は自身の `Result` を返す式であり、�
 各binding/continuationの実行ごとにRHSを一度評価し、failureとなった経路の後続continuationを実行しない。
 List等の分岐carrierでは、後続continuationを各payloadについて実行する。
 
+### HashMap Pattern
+
+`hash![key => child, ...]` の非空 Pattern は partial なので、do の `<-` と non-Result RHS の SafeBind で使える。`<-` は carrier の payload 全体を照合する。SafeBind は canonical Result の外側一段だけを射影し、RHS の Err ではキー式を実行せず元 Error を失敗先へ渡す。map 内の Result 値には自動射影を追加しない。
+
+空の `hash![]` は total とし、通常 Bind と total `<-` で使える。SafeBind では `Result<HashMap<V>>` の RHS は受理し、non-Result の HashMap は total non-Result の既存分類で拒否する。キー欠落は `HashMapKeyMissing`、子の不一致は子自身の Error を使い、MonadFail route は情報を保持、Alternative route は破棄する。照合はエントリの記述順に進み、最初の失敗以降のキー式・子 Pattern・continuation は未評価とする。型・scope・位置の正本は [HashMap Pattern](Pattern_spec.md#hashmap-の構造的-pattern) を参照する。
+
 ### Error Pattern と Payload の保持
 
 SafeBind と do partial `<-` では Error 定義 Pattern による直接ダウンキャストを拒否する。`Err(error)` など Error 全体の運搬と通常 Extractor は既存規則に従う。局所具象束縛・readonly・Payload の保持は [Error spec](Error_spec.md) を参照する。Result 専用の RHS 一段射影、MonadFail > Alternative > Monad、ResultT の内側 Result 失敗層は本書の規則を維持する。

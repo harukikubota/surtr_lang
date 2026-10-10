@@ -485,6 +485,8 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     DurationLit(Span, SurtrInt),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
+    /// Ordered lookups with expression keys resolved before pattern bindings.
+    HashMap(Span, Vec<(Resolved, ResolvedPattern)>),
     /// Compiler-owned structural Record pattern. Named fields are normalized by Scar.
     Record(ResolvedId, Vec<(Option<Symbol>, ResolvedPattern)>),
     Extractor(ResolvedId, Vec<Resolved>, Vec<ResolvedPattern>),

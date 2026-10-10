@@ -1740,6 +1740,18 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
             inner: Box::new(rewrite_self_pattern(*inner, target)),
             annotation: annotation.map(|ty| rewrite_self_type(ty, target)),
         },
+        AstPattern::HashMap(span, entries) => AstPattern::HashMap(
+            span,
+            entries
+                .into_iter()
+                .map(|(key, child)| {
+                    (
+                        rewrite_self_ast(key, target),
+                        rewrite_self_pattern(child, target),
+                    )
+                })
+                .collect(),
+        ),
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(span, name, rewrite_self_type(ty, target))
         }

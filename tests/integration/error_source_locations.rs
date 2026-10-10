@@ -158,6 +158,30 @@ fn error_source_location_roundtrip_retains_included_generation_site_and_call_tra
 #[test]
 fn error_source_location_safebind_selects_the_failing_pattern_node() {
     for (setup, binding, origin, kind) in [
+        (
+            "",
+            "hash![\"欠落\" => _] =? hash![\"a\" => 1]",
+            "\"欠落\"",
+            "HashMapKeyMissing",
+        ),
+        (
+            "key = \"absent\"\n  ",
+            "hash![^key => _] =? hash![\"a\" => 1]",
+            "^key",
+            "HashMapKeyMissing",
+        ),
+        (
+            "inner: HashMap<Int> = hash![]\n  ",
+            "hash![\"a\" => hash![\"nested\" => _]] =? hash![\"a\" => inner]",
+            "\"nested\"",
+            "HashMapKeyMissing",
+        ),
+        (
+            "",
+            "hash![\"a\" => 11] =? hash![\"a\" => 2]",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
         ("", "1 =? 2", "1", "IntLiteralPatternMismatch"),
         ("", "(x, 11) =? (3, 2)", "11", "IntLiteralPatternMismatch"),
         (
@@ -369,4 +393,19 @@ fn assert_oversized_source_rejected(entry: &std::path::Path, rejected_source: &s
         "oversized source must not be mapped to Bootstrap: {stderr}"
     );
     assert!(output.stdout.is_empty(), "oversized input must not execute");
+}
+
+#[test]
+fn error_source_location_hash_map_consumers_keep_key_origin() {
+    for source in [
+        r#"apply_pattern(hash!["a" => 1], hash!["apply-missing" => _])"#,
+        r#"do::<Result> { hash!["do-missing" => _] <- Ok(hash!["a" => 1]); Ok(0) }"#,
+    ] {
+        let origin = if source.starts_with("apply_pattern") {
+            "\"apply-missing\""
+        } else {
+            "\"do-missing\""
+        };
+        assert_error_source_location(source, origin, "HashMapKeyMissing");
+    }
 }

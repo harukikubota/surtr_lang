@@ -2325,6 +2325,7 @@ impl ScarSession {
         }
         match pattern {
             TypedPattern::Located(_, _) => unreachable!("metadata handled before dispatch"),
+            TypedPattern::HashMap(ty, _) => Self::rewrite_fun_indices_in_ty(ty, rewrites),
             TypedPattern::Pin(ty, _, dispatch) => {
                 Self::rewrite_fun_indices_in_ty(ty, rewrites);
                 Self::rewrite_fun_indices_in_dispatch(dispatch, rewrites);
@@ -2360,6 +2361,12 @@ impl ScarSession {
         }
         match pattern {
             TypedPattern::Located(_, _) => unreachable!("metadata handled before dispatch"),
+            TypedPattern::HashMap(_, entries) => {
+                for entry in entries {
+                    Self::rewrite_fun_indices_in_node(&mut entry.key, rewrites);
+                    Self::rewrite_fun_indices_in_pattern(&mut entry.pattern, rewrites);
+                }
+            }
             TypedPattern::As(_, inner, _) => {
                 Self::rewrite_fun_indices_in_pattern(inner, rewrites);
             }
@@ -2398,6 +2405,12 @@ impl ScarSession {
         rewrites: &HashMap<u32, u32>,
     ) {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => {
+                for entry in entries {
+                    Self::rewrite_fun_indices_in_node(&mut entry.key, rewrites);
+                    Self::rewrite_fun_indices_in_match_pattern(&mut entry.pattern, rewrites);
+                }
+            }
             TypedMatchPattern::As(inner, _) => {
                 Self::rewrite_fun_indices_in_match_pattern(inner, rewrites)
             }
@@ -4758,6 +4771,12 @@ impl Checker {
             ResolvedPattern::ListCons(head, tail) => {
                 self.validate_constructor_pattern(head, constructor_traits)?;
                 self.validate_constructor_pattern(tail, constructor_traits)?;
+            }
+            ResolvedPattern::HashMap(_, entries) => {
+                for (key, child) in entries {
+                    self.validate_constructor_body_positions(key, constructor_traits)?;
+                    self.validate_constructor_pattern(child, constructor_traits)?;
+                }
             }
             ResolvedPattern::Extractor(_, pre_args, items) => {
                 for arg in pre_args {
