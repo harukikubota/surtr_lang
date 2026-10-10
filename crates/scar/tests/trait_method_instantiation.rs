@@ -314,3 +314,77 @@ wrap("left")
         .expect("specialized wrapper call");
     assert_eq!(call.ty, Ty::Str);
 }
+
+#[test]
+fn generated_boolean_eq_uses_canonical_builtin_dispatch() {
+    let boolean_source = include_str!("../../../lib/types/boolean.srt")
+        .replace("@derive Eq\n", "")
+        .replace(
+            "@builtin\ndefenum Boolean",
+            "@derive Eq\n@builtin\ndefenum Boolean",
+        );
+    let stages = support::std_module_stages_with_overrides(&[("Boolean", &boolean_source)]);
+    let index = sigil::precollect_declaration_index(&stages).expect("precollect");
+    let ast = spire::parse_with_context(
+        "Eq::eq(True, False)\nEq::neq(True, False)\n",
+        spire::ParserContext::project(0),
+    )
+    .expect("parse");
+    let resolved = sigil::resolve_staged_program(&stages, ast, &index, None).expect("resolve");
+    let nodes = scar::typecheck_with_context(
+        resolved,
+        scar::TypecheckContext {
+            runtime_policy: sindr::policy::RuntimeSourcePolicy::std_module(),
+            enforce_builtin_type_contracts: true,
+            allow_private_facet_inspection: false,
+        },
+    )
+    .expect("typecheck");
+    for method in ["eq", "neq"] {
+        let expected = sindr::builtin::builtin_function_metas()
+            .iter()
+            .filter_map(sindr::builtin::BuiltinMeta::trait_method)
+            .find(|meta| {
+                meta.trait_name == "Eq"
+                    && meta.method_name == method
+                    && meta.targets.contains(&sindr::names::TypeName::Boolean)
+            })
+            .expect("canonical Boolean equality metadata")
+            .builtin_id;
+        assert!(nodes.iter().any(|node| matches!(&node.node,
+            TypedInner::TraitCall {
+                method_name, dispatch: TraitDispatch::Static(TraitDispatchTarget::Builtin(actual)), ..
+            } if method_name == method && *actual == expected
+        )), "generated Boolean {method} must use its canonical builtin");
+    }
+}
+
+#[test]
+fn generated_user_enum_equality_keeps_user_dispatch() {
+    let nodes = check("@derive Eq\ndefenum Switch { On, Off }\nEq::eq(Switch::On, Switch::Off)");
+    assert!(
+        nodes.iter().any(|node| matches!(
+            &node.node,
+            TypedInner::TraitCall {
+                dispatch: TraitDispatch::Static(TraitDispatchTarget::UserFunction { .. }),
+                ..
+            }
+        )),
+        "ordinary enum derive must retain its generated implementation"
+    );
+}
+
+#[test]
+fn range_derives_require_endpoint_traits() {
+    for operation in ["Eq::eq", "Compare::compare"] {
+        let source = format!(
+            "defstruct Endpoint {{ value: Int }}\nimpl Endpoint {{ def new(value: Int) -> Self {{ Endpoint {{ value }} }} }}\n{operation}(Range(Endpoint::new(1), Endpoint::new(2)), Range(Endpoint::new(1), Endpoint::new(2)))"
+        );
+        let ast =
+            spire::parse_with_context(&source, spire::ParserContext::project(0)).expect("parse");
+        let resolved = support::resolve_ast_with_builtin_prelude(ast).expect("resolve");
+        let error = support::typecheck(resolved).expect_err("endpoint Trait must be required");
+        assert!(error.message.contains("Endpoint"), "{error:?}");
+        assert!(!error.message.contains("must define `new`"), "{error:?}");
+    }
+}

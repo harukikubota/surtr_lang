@@ -3845,7 +3845,13 @@ impl Checker {
                         generated_derive,
                         &constructor_slot_positions,
                     )?;
-                if impl_method.is_builtin {
+                let generated_boolean_equality = generated_derive
+                    && trait_info.compiler_owned_equality
+                    && matches!(
+                        self.canonical_request(&target_ty)?.head,
+                        CanonicalTypeHead::Builtin(sindr::names::TypeName::Boolean)
+                    );
+                if impl_method.is_builtin || generated_boolean_equality {
                     dispatch_overrides.insert(
                         method_name.clone(),
                         self.trait_dispatch_override(

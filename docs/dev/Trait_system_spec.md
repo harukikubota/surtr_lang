@@ -716,6 +716,8 @@ Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁�
 
 標準 Eq の実装主体は各 `lib/types/*.srt` とする。Unit、Tuple 2〜8、List、HashMap、Result は通常の impl と要素条件を使う。Result の `Ok` 同士は成功値の Eq、`Ok` / `Err` は不一致、`Err` 同士は具象 Error の先頭 kind の一致で判定し、message・cause・場所・診断情報を含めない。Error 自体の Eq / Show / Convert は禁止し、観測は `inspect` / `eprint` と Error の公開 helper を使う。`Test::assert_eq` は Eq obligation と dispatch のみで合否を決め、表示は失敗文の生成に限る。
 
+標準 `Boolean` は `@derive Eq` で能力を宣言する。生成由来情報、canonical Eq の `compiler_owned_equality`、canonical target head の `TypeName::Boolean` が揃う生成メソッドだけを、Sindr の既存 metadata を介して Boolean `eq` / `neq` builtin dispatch へ接続する。
+
 ### 4.3 `Default` derive の生成境界
 
 `Default` trait の標準契約は次で固定する。
