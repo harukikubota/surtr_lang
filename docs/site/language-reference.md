@@ -584,7 +584,7 @@ Pattern は照合位置に直接記述します。通常の式や第一級の値
 - tuple Pattern `(left, right)`（1要素の tuple Pattern は使えない）
 - list Pattern `[]`、`[first, second]`、`[head, ..tail]`。String の head / tail 分解にも `[head, ..tail]` を使う
 - 入れ子になった constructor pattern
-- Record の構造的 Pattern `User(name, age)` / `User(age: selected_age, name: selected_name)`（全 field を指定する）
+- Record の構造的 Pattern `User(name, age)` / `User(age: selected_age, name: selected_name)` / `User(name: selected_name, age)`（全 field を指定する。名前指定内の裸の束縛名は同名 field の省略記法）
 - named Extractor または束縛済み ExtractorClosure の `head(pre_args..., payload_patterns...)`
 - OR Pattern `p1 | p2`（`match` arm、`if_let`、`if_let_then`、binding-free な `is_match`。子 Pattern 内でも使用可能）
 
@@ -609,6 +609,7 @@ value.field
 - `Type { ... }` 構造体リテラルは `impl Type` の同型メソッド本体内でのみ使用可能
 - struct literal の field は `field: expr` または shorthand の `field` を使える
 - shorthand は `field: field` の sugar で、`Type { name, age: next_age }` のように混在可能
+- Struct の `Type(...)` / `Type::new(...)` や Struct Pattern にはこの shorthand を追加しない
 - `Type::new` は import 対象外
 - `Type(...)` の pattern 側は `Type::deconstruct(...)` を要求する
 
@@ -616,8 +617,10 @@ private field と property access を含む構造体全体の契約は `./struct
 
 ### 引数規約
 
-- 名前付き引数は利用可能
-- 位置引数と名前付き引数の混在は禁止
+- 通常の関数呼出しと Struct の `Type(...)` / `Type::new(...)` は名前付き引数を使えるが、位置引数との混在は禁止
+- Record 構築は名前指定がなければ位置指定、名前指定が一つ以上あれば名前指定として扱う。名前指定内の裸の変数 `field` は `field: field` の省略記法で、任意式には field 名が必要
+- Record は全 field の指定が必要。名前指定の記述順は自由で、構築値の評価・配置は宣言順。入れ子の名前指定は外側の分類に影響しない
+- constructor capture の引数は位置指定だけで、Record の省略記法は使えない
 
 ## 7. 組込み関数
 

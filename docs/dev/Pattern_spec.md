@@ -10,7 +10,11 @@ named Extractor と ExtractorClosure は入力を1個以上取り、最後の入
 
 ## Record の構造的 Pattern
 
-`defrecord User(name: String, age: Int)` の `User(name, age)` は compiler-owned な構造的 Pattern として分解する。`User(age: selected_age, name: selected_name)` は field 名で対応付け、照合・binding は宣言順に行う。どちらも全 field が必要で、named と positional の混在、重複・未知・不足 field、field 名 shorthand は拒否する。
+`defrecord User(name: String, age: Int)` の `User(name, age)` は compiler-owned な構造的 Pattern として分解する。各 Record 項目列に keyword 指定がなければ positional、keyword 指定が一つ以上あれば named と確定する。入れ子の子にある keyword は外側の分類に影響しない。named から positional へ戻すフォールバックは設けない。
+
+named 内の裸の束縛名 `field` は `field: field` に正規化する。右側は既存変数の参照ではなく新たな Pattern 束縛である。literal、wildcard（`_` など）、型注釈付き Pattern、入れ子の構造的 Pattern、Extractor 等には明示的な field 名を要求する。`User(name: selected_name, age)` は受理し、`User(name: selected_name, _)` は拒否する。positional の子 Pattern は既存の規則に従う。
+
+正規化後は全 field を宣言に対応付け、重複・未知・不足 field、子 Pattern の型不一致、重複した束縛を拒否する。`User(age: selected_age, name: selected_name)` のような named の記述順によらず、照合・binding は field 宣言順に行う。Spire は項目列の分類と shorthand の構造・ソース位置を保持し、Sigil は Pattern 束縛として解決する。Scar は field 名・型・個数を検査し、後続フェーズへ宣言順に正規化した子を渡す。Struct の attached Extractor、Enum、constructor capture の受理範囲は広げない。
 
 Record の外枠は total である。子もすべて total の場合だけ通常 Bind `=` を許可する。partial な子があれば Pattern 全体も partial として `=` で拒否し、`match` / `if_let` などの consumer で使う。単一 arm が catch-all かどうかは子 Pattern まで再帰的に判定する。複数 arm の部分 Pattern を合成した構造的網羅性解析は行わない。Record Pattern は `MatchResult` を生成せず、一般 Extractor の事前引数・payload arity・失敗伝播規則を使わない。
 

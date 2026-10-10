@@ -3630,14 +3630,11 @@ impl Checker {
         let tag = def.tag;
         let mut typed_fields = vec![None; def.fields.len()];
 
-        let all_positional = args
+        let named = args
             .iter()
-            .all(|a| matches!(a, ResolvedRecordLitArg::Positional(_)));
-        let all_named = args
-            .iter()
-            .all(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)));
+            .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)));
 
-        if all_positional {
+        if !named {
             if args.len() != def.fields.len() {
                 return Err(TypeError::from_structured(
                     self.argument_contract_diagnostic(
@@ -3678,9 +3675,24 @@ impl Checker {
                     typed_fields[i] = Some(typed_val);
                 }
             }
-        } else if all_named {
+        } else {
             let mut seen = HashSet::new();
             for arg in args {
+                if let ResolvedRecordLitArg::Positional(expr) = arg {
+                    let mut diagnostic = self.argument_contract_diagnostic(
+                        TypeDiagnosticReason::ArgumentModeMismatch,
+                        &id.name,
+                        None,
+                        def.fields.len(),
+                        args.len(),
+                        self.resolved_span(expr),
+                        DiagnosticOrigin::Call,
+                    );
+                    diagnostic.remediation = Some(diagnostics::Remediation::Help {
+                        text: "Named Record arguments require an explicit field name or a bare variable shorthand".into(),
+                    });
+                    return Err(TypeError::from_structured(diagnostic));
+                }
                 if let ResolvedRecordLitArg::Named(name, expr) = arg {
                     if !seen.insert(name.clone()) {
                         return Err(TypeError::from_structured(
@@ -3735,18 +3747,6 @@ impl Checker {
                     typed_fields[idx] = Some(typed_val);
                 }
             }
-        } else {
-            return Err(TypeError::from_structured(
-                self.argument_contract_diagnostic(
-                    TypeDiagnosticReason::ArgumentModeMismatch,
-                    &id.name,
-                    None,
-                    def.fields.len(),
-                    args.len(),
-                    span,
-                    DiagnosticOrigin::Call,
-                ),
-            ));
         }
 
         let final_fields: Vec<TypedNode> = typed_fields

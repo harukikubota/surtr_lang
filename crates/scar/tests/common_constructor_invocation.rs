@@ -12,6 +12,7 @@ macro_rules! constructor_case {
 }
 
 const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
+    constructor_case!(record_keyword_shorthand_checks_field_contract),
     constructor_case!(constructor_invocations_propagate_expected_return),
     constructor_case!(callable_result_context_is_shared_by_helpers_and_operators),
     constructor_case!(arrow_uses_fixed_facet_path_contract),
@@ -295,5 +296,59 @@ kept: List<Int> = keep_applicative([4])
             map_functor_specializations[0], map_functor_specializations[1],
             "mapped output type must participate in the specialization key"
         );
+    }
+}
+
+fn record_keyword_shorthand_checks_field_contract() {
+    let prefix = "defrecord User(name: String, age: Int)\nname = \"Ada\"\nage = 37\nyears = 38\n";
+    for expression in [
+        "User(name: name, age)",
+        "User(age: age, name)",
+        "User(name, age)",
+    ] {
+        let source = format!("{prefix}value = {expression}");
+        support::typecheck_with_rules(&source, sindr::policy::RuntimeSourcePolicy::script())
+            .unwrap_or_else(|error| panic!("{expression}: {error:?}"));
+    }
+    use diagnostics::TypeDiagnosticReason as Reason;
+    for (expression, reason) in [
+        ("User(name: name, 37)", Some(Reason::ArgumentModeMismatch)),
+        (
+            "User(name: name, age + 1)",
+            Some(Reason::ArgumentModeMismatch),
+        ),
+        (
+            "User(name: name, name.length)",
+            Some(Reason::ArgumentModeMismatch),
+        ),
+        (
+            "User(name: name, years)",
+            Some(Reason::UnknownNamedArgument),
+        ),
+        (
+            "User(name: name, age, age: 37)",
+            Some(Reason::DuplicateArgument),
+        ),
+        ("User(name: name)", Some(Reason::MissingArgument)),
+        (
+            "User(name: name, age: \"37\")",
+            Some(Reason::ArgumentTypeMismatch),
+        ),
+    ] {
+        let source = format!("{prefix}value = {expression}");
+        let error =
+            support::typecheck_with_rules(&source, sindr::policy::RuntimeSourcePolicy::script())
+                .expect_err(expression);
+        assert_eq!(error.reason(), reason, "{expression}: {error:?}");
+        if reason == Some(Reason::ArgumentModeMismatch) {
+            assert!(
+                error
+                    .hint
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("explicit field name or a bare variable shorthand"),
+                "{expression}: {error:?}"
+            );
+        }
     }
 }
