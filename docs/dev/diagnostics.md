@@ -240,6 +240,8 @@ list の長さや空入力など構造自体の不一致は、失敗した構造
 REPL も同じ生成位置の契約を使う。入力単位のソースを保持し、後続入力で呼び出した関数・Extractor 内の
 Error は生成元の入力内の行・列を指す。`eprint` はその位置をそのまま表示する。
 
+停止要求済み・回収済みの process への新規要求を拒否する `ProcessStopped` は、その要求の呼出し位置を生成元にする。Stop handler、生成 wrapper の内部 builtin、deferror 宣言の位置へ置き換えない。direct / capture / 高階関数 / Workers / lease の各経路も同じ source origin 契約を使う。kind は canonical な Error 宣言の identity から得て、message の表示文字列から推測しない。timeout や後発 reply との競合で確定済み Error の位置を上書きしない。
+
 ### JSON
 
 `serializable_diagnostic_by_id` が出力する次の値を安定させる。

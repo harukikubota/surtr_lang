@@ -83,6 +83,10 @@
 - 背景:
   - ただし、process runtime / REPL 深部は今回の対象外とし、さらに大きめの panic-safe 化は個別設計が必要なため残す。
   - この issue は実装方針が固まった機能仕様ではなく、次回 cleanup の入力台帳として扱う。
+- 2026-10-10 の対応範囲:
+  - [Process Runtime の停止契約](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了) に基づき、通常 Stop の受付閉鎖、開始済み wrapper / ReplyLater の終了追跡、本体と不要な参照の回収、旧 PID への ProcessStopped、Weak 停止識別表の管理を実装した。caller timeout は callee を取り消さず、一度だけ結果を配送する。
+  - state 読取・handler・後処理の段階を Handling / Postprocessing / Callback に分け、store / Stop / ReplyLater は生成 wrapper の後処理段階だけに制限する。停止前・停止要求中 checkpoint の復元と ID 非再利用、Workers / supervisor の完了時整理も対象とした。最終検証結果は[実行時の継続調査書](runtime_audit_followup_20261010.md#2026-10-10-停止回収修正の最終検証)に記録した。
+  - この対応は process cleanup 全体、Lazy 初期化、未開始 FIFO、fairness、生成 call / capture 一般化、一般の restart / shutdown driver の完了を意味しない。
 - 残タスク:
   - Spire:
     - process-owner pattern rewriting を `Annotated` / `Pin` / `Or` / `As` へ拡張する。これは process surface に触れるため後回し。
@@ -93,7 +97,7 @@
   - Forge:
     - top-level failure path、error-result construction、variant payload extraction、result-error transform の重複 emission helper 化を検討する。
   - Eldr:
-    - process runtime の残 cleanup は、process surface / VM scheduling への影響範囲を分けてから扱う。
+    - 停止・終了・回収と caller timeout の改修を除く process runtime の残 cleanup は、process surface / VM scheduling への影響範囲を分けてから扱う。Lazy / FIFO / fairness は OI-030 に残す。
   - Xldr / REPL:
     - `:save .eldr` / directory-ish names の validation、`:help` topic coverage、`:history` header/row format、command query pipe duplicate placeholder validationを整理する。
 - 受け入れ条件:
@@ -156,10 +160,14 @@
   - Process Runtime v2 の public surface は `docs/dev/ProcessRuntime_spec.md` へ整理済みだが、Lazy init、Ready 前 call、`Pending` / resume、init timeout、runtime status 表現はまだ VM 内部契約として完全に畳み切れていない。
   - `Process::sleep`、Task timeout、ReplyLater timeout、worker call timeout は deadline / future / waiting table を共有し始めており、今後の cleanup は surface 追加ではなく scheduler 内部契約の収束として扱う。
   - Worker wait API、generic receive、Task supervision は v2 public surface ではないため、この issue の対象外とする。
+- 2026-10-10 の対応範囲:
+  - 通常 Stop は新規受付を閉じ、開始済み wrapper / ReplyLater callback の future / timer 待機からの再開と cleanup を終了まで追跡する。caller timeout は先に結果を配送し、callee を取り消さず、遅延 reply で結果を上書きしない。Task / init 自身の timeout 取消は別契約として維持する。
+  - 停止完了時の本体、不要な waiting / reply / deadline / task / owner 参照と Workers / supervisor 所属の整理、回収後の ProcessStopped、Weak 停止識別の掃除、checkpoint 復元と ID 非再利用を実装した。scheduler 状態と受付状態、停止要求中の本体数・未完了実行数・停止識別 entry 数を観測で分ける。確定 future の結果は caller 用に保持する。
+  - 現在の mailbox は未使用で、非空状態は RuntimeError とする。新たな未開始 queue を実装済みとはしない。Lazy 初期化全体、Ready 前 FIFO、fairness は残件であり、停止改修の最終検証件数・結果は既存監査に追記する。
 - 未確定点:
   - Lazy `@init` の `Pending` / `PendingAfter` retry と `init_waiters` を、通常の future / deadline queue とどこまで共通化するか
   - Ready 前 call を FIFO 待機にする場合の caller timeout、init timeout、init failure の優先順位
-  - runtime process status を `Allocated` / `Initializing` / `Ready` / `Waiting` / `Failed` のどこまで VM snapshot / diagnostics に出すか
+  - PID 割当前の init flight、Lazy retry と Ready 前待機を VM snapshot / diagnostics へどう出すか。生存本体の scheduler 状態と停止受付状態の分離は確定済みとする
   - heavy process の fairness を step budget / scheduler quantum で扱うか、現行の pending point だけで十分とするか
 - 受け入れ条件:
   - Lazy init、sleep、Task、ReplyLater、runtime-managed call timeout が同じ deadline / waiting cleanup 規則で説明できる。

@@ -187,6 +187,73 @@ Ok(("hit-odd", 89))
 - `@call` handler は reply 値と次 state をまとめて返します
 - worker を直接並べるだけでなく、GenServer を前段に置いて routing や cache policy を集約できます
 
+## Worker の停止と呼出し失敗
+
+Worker GenServer の handler は `CallResult::Stop(...)` / `CastResult::Stop(...)` で停止を要求できます。Stop の応答を受け取った時点で新しい要求の受付は閉じていますが、すでに開始した処理の終了までは保証しません。停止前から sleep / future / I/O を待つ処理は再開し、状態保存や返答まで進みます。終了を待つ Worker 用の join / await API はありません。
+
+停止要求後の同じ PID への新しい call / cast は `Err(ProcessStopped(...))` です。capture、高階関数、Workers、lease を経由しても同じ kind を返し、handler は実行しません。古い PID は保持できますが、新しい個体へ自動的に転送されません。
+
+たとえば、次の Worker 定義を `Session.srt` に置きます。
+
+```surtr
+defgenserver Session {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+}
+```
+
+呼出し側では message の本文ではなく `Error::kind` で停止を判定します。この例は停止を検知したときだけ新しい PID を作り、それ以外の Error はそのまま返します。
+
+```surtr
+include "./Session.srt"
+
+def value_or_replace(pid: PID<Session>) -> Result<(PID<Session>, Int)> {
+  match Session::value(pid) {
+    Ok(value) => Ok((pid, value)),
+    Err(error) => match Error::kind(error) {
+      "ProcessStopped" => {
+        replacement =? Session::init(0)
+        value =? Session::value(replacement)
+        Ok((replacement, value))
+      },
+      _ => Err(error),
+    },
+  }
+}
+
+pid =? Session::init(7)
+_ =? Session::stop(pid)
+(current, value) =? value_or_replace(pid)
+print(inspect((pid == current, value)))
+// (False, 0)
+```
+
+PID の差し替えが不要なら、通常どおり `value =? Session::value(pid)` で元の Error を伝播できます。呼出し側も Worker GenServer なら、受け取った Error を `CallResult::Stop(StopReply::Error(error))` や `CastResult::Stop(StopReason::Error(error))` へ渡して自身の停止理由にできます。runtime が caller を自動停止させることはありません。
+
+call の `StopReply::Normal(reply)` は `Ok(reply)`、`StopReply::Error(error)` は元の `Err(error)` を返します。cast の Stop は Normal / Error ともに `Ok(())` を返し、Error は終了理由になります。cast handler 自身の `Err` や停止済み宛先への拒否は公開 API の `Result` で受け取ります。Stop は Worker GenServer で使い、singleton と init では使えません。
+
+call の `@timeout` は caller の待機結果を `FutureDeadlineExceeded` にします。すでに開始した handler や ReplyLater callback はその後も進むため、timeout を見て同じ副作用の要求を再送する場合は、先の処理が後で完了することを考慮してください。ReplyLater の遅延結果は timeout 結果を上書きしません。通常 Stop は callback の終了も待ち、`shutdown_timeout` を指定しても開始済み処理を打ち切りません。
+
+Workers は停止要求中の個体を新しい割当から外します。`Workers::size` と supervisor の child count は停止完了までその個体を含み、完了後に所属を解除して補充します。選択できる個体がないと `submit` / `reserve` は `WorkersUnavailable`、`broadcast` は空 list を返します。既存 lease も停止済み個体へ新しい要求を送ると ProcessStopped になり、補充個体へ自動的に差し替わりません。
+
 ## Handler と supervisor_init
 
 process は `handlers {}` で I/O 先のような dependency を宣言できます。利用側は普通の API を呼びつつ、起動時に handler を差し替えられます。

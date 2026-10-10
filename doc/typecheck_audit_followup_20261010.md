@@ -4,7 +4,7 @@
 
 調査開始時のHEADは`717d0fd301f4d51b506ceb72347b74d4bf8134fc`、終了時は`c569e5bab2d229e7ce6d42a1d7428cbeec0a92cc`。間の変更は別作業による`doc/callable_name_and_syntax_classification.md`の削除だけで、対象ソースは同じである。指定された2つの調査書だけを更新した。製品コード・標準定義・正本文書・テストファイルは変更していない。
 
-プロセスの停止・回収は[修正中の仕様書](process_stop_and_reclamation_revision_spec.md)で扱う。TC-03・04とTC-06のPID側もプロセス関連として別作業へ渡すが、この停止仕様だけで型適合や標準の比較実装まで修正されるとは扱わない。
+プロセスの停止・回収は実装・検証を完了し、契約を[Process Runtime 正本](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了)へ反映した。TC-03・04とTC-06のPID側もプロセス関連として別作業へ渡すが、この停止仕様だけで型適合や標準の比較実装まで修正されるとは扱わない。
 
 ## 対応が必要な項目
 
@@ -66,7 +66,7 @@ print(inspect(Choice::One == Choice::One))
 
 利用者判断は「PIDは`instance_of`として標準が実装する」。名称、公開署名、Eqとの接続、標準だけに必要な実装権限を実装前に具体化する必要がある。本調査で新しいAPIを決めない。
 
-停止・回収仕様第5節はsingletonの型単位／Workerの個体単位のEqを維持するが、標準実装へ移すタスクは持たない。比較の意味を変えず実装主体を移す別件として管理する。名前だけでcompilerが能力を補う経路へ戻さない。Enum側の除去とPID側の未確定APIを、一つの完了条件へ混ぜない。
+[Process Runtime 第3.12節](../docs/dev/ProcessRuntime_spec.md#312-worker-lifecycle)はsingletonの型単位／Workerの個体単位のEqを維持するが、標準実装へ移すタスクは持たない。比較の意味を変えず実装主体を移す別件として管理する。名前だけでcompilerが能力を補う経路へ戻さない。Enum側の除去とPID側の未確定APIを、一つの完了条件へ混ぜない。
 
 ## TC-10: 具象エラー名の列挙はドキュメント目的
 

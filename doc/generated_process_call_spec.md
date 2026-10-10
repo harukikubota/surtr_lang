@@ -2,6 +2,8 @@
 
 状態: 設計案、未実装。2026-10-02。level4（呼び出し・capture・生成関数の契約変更）。
 
+2026-10-10 追記: [Process Runtime の停止契約](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了) の共通実行境界と回収契約へ追従した。Eldr の停止改修は実装・検証済みであり、本書の PID 補完・capture・Workers template 移行の実装完了を意味しない。
+
 ## 1. ユーザが指定した境界
 
 - プロセスの定義と呼び出しをコンパイラ生成で接続する。
@@ -15,6 +17,7 @@
 ## 2. 正規シグネチャを一つにする
 
 状態を扱うハンドラ `(State, A...) -> Result<CallResult<R, State>>` から、通信する公開関数 `(PID<P>, A...) -> Result<R>` を生成する。cast も同じ宛先規則を使い、既存の返り値契約に従う。
+cast の公開署名は `Result<Unit>` を維持し、停止宛先への拒否と handler 自身の `Err` を返す。送信手続きだけの成功や fire-and-forget へ変更しない。
 
 ハンドラ本体の state と、公開関数の receiver PID は別の役割である。公開関数の通常呼び出しが、ハンドラ本体を呼び出し元のプロセスで直接実行する経路に変わってはならない。
 
@@ -37,6 +40,7 @@ payload の引数数を N とする。位置引数の規則は次のとおり。
 引数の型を見て省略形・明示形を切り替えない。形を決めた後は通常の引数検査を一度だけ行い、型エラー時に別の解釈へ戻らない。payload 自体が PID 型でもこの規則は同じである。
 
 明示した PID は実際に送信先として使用する。型検査と評価だけを行って捨てる経路は削除する。異なる process 型の PID は型エラーにする。
+指定した古い個体を新個体へ転送しない。singleton の型単位の Eq と個体の受付状態は別の契約であり、等価性を転送の根拠にしない。
 
 PID 補完後は通常の引数評価規則を使い、引数式を複製しない。補完する式は生成済みの公開関数 `P::pid()` の呼び出しとし、その本体だけが内部 GenServer 操作へ接続する。ユーザの call site へ内部操作を直接露出させない。省略 PID の取得も補完された第一引数として評価する。singleton の参照は現在の正本にある論理 identity を維持する。
 
@@ -101,6 +105,20 @@ payload が 0 個の場合、`Counter::ping()` は即時の call、`&Counter::pi
 
 ここでいう compiler-only は Surtr ソースのアクセス規則であり、外部 Erlang コードから BEAM の export を呼べないという保証ではない。Erlang / Elixir からの直接メッセージ送信や内部生成関数への直接呼び出しは、Surtr のプロセス契約の保証対象外とする。外部からの入力契約違反まで一律に Result に変換することは要求しない。
 
+### 5.1 生成 wrapper の共通実行境界
+
+停止・完了・回収の正本は [Process Runtime のメッセージ実行](../docs/dev/ProcessRuntime_spec.md#3101-メッセージの開始と終了) と [停止契約](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了) とする。今回の Eldr 改修では、canonical hidden builtin `__process_execute` が宛先検証、受付確認、state snapshot 取得、実行 record 登録を原子的に行う。生成 wrapper の body closure は登録後にその snapshot を消費して handler を実行し、state 保存・返答・cleanup まで同じ実行を続ける。Agent の get / set も同じ境界を使い、名前文字列や state 読取回数から実行開始を推測しない。
+
+実行段階は `Handling → Postprocessing → Callback` とする。state snapshot は Handling で一度だけ読み取り、handler の正常復帰後に生成 wrapper の canonical hidden builtin `__process_postprocess` が Postprocessing へ移す。store / Stop / ReplyLater は後処理段階だけで許し、snapshot 読取済みという条件だけで保存を許可しない。ReplyLater は callback へ段階を移し、後処理の権限を引き継がない。境界外の process_state を生存本体への通常読取へ戻す旧成功経路は削除する。
+
+PID 取得、capture 作成、Workers 選択、lease 取得だけでは開始済みとしない。direct / capture / 高階関数 / Workers / lease 経由でも、生成 wrapper が実行される境界で同じ受付確認をする。runtime が Stop を受理した後の新規要求は、handler を開始せず `ProcessStopped(pid, process)` を返す。型不一致、未知 PID、内部契約違反を停止として扱わない。現在の Eldr mailbox は未使用であり、非空なら内部契約違反とする。新しい未開始 queue の実装をこの改修の完了条件へ加えない。
+
+開始済み wrapper は停止要求後も state 保存と返答を完了できるが、保存によって受付を再開しない。再入の子 call は別実行として受付を確認する。ReplyLater は同じ実行を callback へ移譲し、caller timeout 後も継続と cleanup の終了まで追跡する。callback に state 保存権限を渡さない。通常 Stop の Normal / Error は強制取消ではなく、開始済み処理の終了後に本体を回収する。返答と timeout は一度だけ確定する。
+
+旧 PID は不変 identity を共有し、state・mailbox・継続を保持しない。回収後の同じ PID にも同じ ProcessStopped kind・payload・message を返す。Eldr の停止識別表は Weak を持ち、参照のない entry を管理境界で除く。新規拒否の source origin は呼出し位置とし、Stop handler や deferror 宣言の位置で上書きしない。元の Error の伝播も kind / message / location / cause を維持する。
+
+この共通境界への接続と、本書の単一正規シグネチャ・PID 補完・bare capture・Workers template の一般化は別の変更である。停止改修の検証結果だけで本書全体を実装済みとは扱わない。
+
 ## 6. 現行との差分と周辺の未確定事項
 
 - Scar の `try_check_worker_message_template_app` は PID 不足を `InjectCall` にする。これは廃止する。
@@ -121,4 +139,4 @@ payload が 0 個の場合、`Counter::ping()` は即時の call、`&Counter::pi
 
 重要な拒否例は worker の PID 不足、異なる process 型の PID、関数値への引数不足、内部 GenServer の参照、同名ユーザ関数への誤った補完である。payload 0 個、payload に PID を含む場合、名前付きの欠落・重複、singleton の省略／明示の対も固定する。
 
-今回は仕様作成のみ。実装・実行可能テストの変更、実行テストは行わない。実装時は直接の契約テストから始め、level4 の CI workspace・標準 SRT テストと独立レビューを行う。
+本書の呼出し一般化は仕様作成までであり、未実装の項目を停止改修の実装・検証へ混ぜない。停止改修の検証結果は[実行時の継続調査書](runtime_audit_followup_20261010.md#2026-10-10-停止回収修正の最終検証)に記録した。本書を実装する際は直接の契約テストから始め、level4 の CI workspace・標準 SRT テストと独立レビューを行う。
