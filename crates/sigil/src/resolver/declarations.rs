@@ -3128,7 +3128,7 @@ impl Resolver {
         }
     }
 
-    pub(super) fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
+    pub(super) fn lower_impl_defs(&mut self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
         for statement in &stmts {
             validate_definition_return_type_arguments(&self.owner_registry, statement)?;
         }
@@ -3220,6 +3220,27 @@ impl Resolver {
                     }
 
                     let lowered_module_path = self.current_module_path.as_deref();
+                    let members = methods
+                        .iter()
+                        .filter_map(|method| {
+                            let name = match method {
+                                Ast::Def(_, name, ..)
+                                | Ast::ExtractorDef(_, name, ..)
+                                | Ast::BuiltinDecl(_, name, ..)
+                                | Ast::BuiltinExtractorDecl(_, name, ..) => name,
+                                _ => return None,
+                            };
+                            Some((
+                                name.clone(),
+                                lower_impl_member_name(lowered_module_path, &target, name),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    for (_, lowered_name) in &members {
+                        self.impl_member_scopes
+                            .insert(lowered_name.clone(), members.clone());
+                    }
+
                     for method in methods {
                         match method {
                             Ast::Def(

@@ -1238,6 +1238,8 @@ struct Resolver {
     pattern_proxies: Option<HashMap<String, ResolvedId>>,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
+    /// Lexical member names for each lowered inherent impl declaration.
+    impl_member_scopes: HashMap<String, Vec<(String, String)>>,
     declaration_entries: Arc<HashMap<String, DeclarationEntry>>,
     declaration_uids: Arc<HashMap<String, u32>>,
     declaration_uid_kinds: Arc<HashMap<u32, DeclarationKind>>,

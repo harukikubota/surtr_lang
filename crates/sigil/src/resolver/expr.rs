@@ -2134,6 +2134,7 @@ impl Resolver {
             capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
+            impl_member_scopes: HashMap::new(),
             declaration_entries: Arc::new(HashMap::new()),
             declaration_uids: Arc::new(HashMap::new()),
             declaration_uid_kinds: Arc::new(HashMap::new()),
@@ -2155,6 +2156,7 @@ impl Resolver {
             capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
+            impl_member_scopes: HashMap::new(),
             declaration_entries: Arc::new(HashMap::new()),
             declaration_uids: Arc::new(HashMap::new()),
             declaration_uid_kinds: Arc::new(HashMap::new()),
@@ -2225,6 +2227,28 @@ impl Resolver {
             kind,
             inferred_owner.as_deref(),
         )
+    }
+
+    fn inherent_impl_body_scope(&self, name: &str, span: &Span) -> Result<Scope, ResolveError> {
+        let mut scope = self.scope.child();
+        if let Some(members) = self.impl_member_scopes.get(name) {
+            for (member, lowered_name) in members {
+                let uid = self
+                    .scope
+                    .lookup(lowered_name)
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Missing predeclared impl member: {lowered_name}"),
+                        span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                            subject: Some(lowered_name.clone()),
+                        },
+                        related_labels: Vec::new(),
+                    })?;
+                scope.define_with_id(member, uid);
+            }
+        }
+        Ok(scope)
     }
 
     fn symbol_info_for_declaration(
@@ -2538,6 +2562,7 @@ impl Resolver {
         program: super::imports::ImportsResolvedProgram,
     ) -> Result<Vec<Resolved>, ResolveError> {
         let stmts = super::derive::expand_derive_annotations(program.into_statements())?;
+        self.impl_member_scopes.clear();
         let stmts = self.lower_impl_defs(stmts)?;
         self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
@@ -3696,7 +3721,7 @@ impl Resolver {
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
-                let mut body_scope = self.scope.child();
+                let mut body_scope = self.inherent_impl_body_scope(&name, &span)?;
                 // Ensure self-recursion inside this definition binds to this declaration,
                 // not to a newer same-name declaration predeclared later in the chunk.
                 body_scope.define_with_id(&name, fun_uid);
@@ -3797,7 +3822,7 @@ impl Resolver {
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
-                let mut body_scope = self.scope.child();
+                let mut body_scope = self.inherent_impl_body_scope(&name, &span)?;
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();

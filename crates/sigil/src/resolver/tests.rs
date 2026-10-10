@@ -9816,3 +9816,47 @@ fn test_deferror_self_resolves_to_its_declaration_identity() {
     assert_eq!(constructor.unique_id, definition.unique_id);
     assert_eq!(constructor.qualified_name, definition.qualified_name);
 }
+
+#[test]
+fn inherent_impl_sibling_calls_share_script_and_module_scope() {
+    let source = r#"defstruct User { age: Int }
+impl User {
+  def first(self: Self) -> Int { second(self) }
+  def second(self: Self) -> Int { self.age }
+  def shadow(self: Self, second: (User -> Int)) -> Int { second(self) }
+}"#;
+    let nodes = resolve(parse(source).unwrap()).expect("script impl siblings resolve");
+    let first = nodes
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "Global::User::first" => {
+                Some(body)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let second_uid = nodes
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, ..) if id.name == "Global::User::second" => Some(id.unique_id),
+            _ => None,
+        })
+        .unwrap();
+    let Resolved::Block(_, body) = first.as_ref() else {
+        panic!("expected body block")
+    };
+    let Resolved::App(_, callee, _) = &body[0] else {
+        panic!("expected call: {first:?}")
+    };
+    let Resolved::Var(_, callee) = callee.as_ref() else {
+        panic!("expected function: {callee:?}")
+    };
+    assert_eq!(callee.unique_id, second_uid);
+    let module_stages = vec![staged_modules_from_source_ast(parse(source).unwrap(), None)];
+    resolve_user_with_modules("", &module_stages).expect("module impl siblings resolve");
+    let outside = format!("{source}\ndef outside(user: User) -> Int {{ second(user) }}");
+    assert!(resolve(parse(&outside).unwrap())
+        .unwrap_err()
+        .message
+        .contains("Undefined function second/1"));
+}

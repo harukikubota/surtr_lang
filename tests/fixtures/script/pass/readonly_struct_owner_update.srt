@@ -1,0 +1,24 @@
+@readonly
+defstruct Counter {
+    value: Int,
+    private step: Int,
+}
+
+impl Counter {
+    def new(value: Int, step: Int) -> Self {
+        Counter { value, step }
+    }
+
+    def increment(self: Self) -> Self {
+        put(~self.value, self.value + self.step)
+    }
+
+    def advance_twice(self: Self) -> Self {
+        increment(increment(self))
+    }
+}
+
+original = Counter(10, 1)
+updated = Counter::advance_twice(original)
+print(to_string(updated.value))
+print(to_string(original.value))
