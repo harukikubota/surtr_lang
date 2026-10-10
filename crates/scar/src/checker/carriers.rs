@@ -280,6 +280,9 @@ impl Checker {
             .iter()
             .map(|failure| match failure {
                 ConstructorProjectionFailure::ProofError(error) => error.message.clone(),
+                ConstructorProjectionFailure::PendingImplMapping => {
+                    "pending declaration mapping".into()
+                }
                 ConstructorProjectionFailure::Canonicalization => {
                     "constructor type cannot be canonicalized".to_string()
                 }

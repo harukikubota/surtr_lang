@@ -610,12 +610,26 @@ impl Checker {
             (
                 AstTy::Generic(_, _, args),
                 Ty::Struct(owner, _) | Ty::Record(owner, _) | Ty::Enum(owner, _),
-            ) => Ok(CanonicalTy::new(
-                self.canonical_nominal_head(owner)?,
-                args.iter()
-                    .map(|arg| self.resolve_canonical_ast_type(arg, raw, environment))
-                    .collect::<Result<_, _>>()?,
-            )),
+            ) => {
+                let arguments = match resolved {
+                    Ty::Struct(_, nominal) | Ty::Record(_, nominal) => &nominal.arguments,
+                    Ty::Enum(_, arguments) => arguments,
+                    _ => unreachable!("nominal type guard"),
+                };
+                if args.len() != arguments.len() {
+                    return Err(TypeError::new(
+                        "Internal error: resolved nominal argument arity mismatch",
+                        Self::ast_ty_span(ast).clone(),
+                    ));
+                }
+                Ok(CanonicalTy::new(
+                    self.canonical_nominal_head(owner)?,
+                    args.iter()
+                        .zip(arguments)
+                        .map(|(arg, ty)| self.canonical_ast_type(arg, ty, raw, environment))
+                        .collect::<Result<_, _>>()?,
+                ))
+            }
             (AstTy::Tuple(_, args), Ty::Tuple(types)) => Ok(CanonicalTy::new(
                 CanonicalTypeHead::Tuple,
                 args.iter()
@@ -2199,6 +2213,35 @@ pub(super) enum ApplicabilityProof {
 }
 
 impl Checker {
+    pub(super) fn parent_head_substitution(
+        &self,
+        parent: &Ty,
+        child: &Ty,
+        fresh: &HashMap<u32, Ty>,
+    ) -> Result<Option<HashMap<u32, Ty>>, TypeError> {
+        let mut unifier = CanonicalUnifier {
+            rigid_variables: self.rigid_tyvars.clone(),
+            ..Default::default()
+        };
+        if !unifier.unify(
+            &self.canonical_request(parent)?,
+            &self.canonical_request(child)?,
+        ) {
+            return Ok(None);
+        }
+        let mut mapping = HashMap::new();
+        for ty in fresh.values() {
+            if let Ty::Var(var) = ty {
+                let resolved =
+                    self.canonical_to_ty(&unifier.resolve(&CanonicalTy::variable(*var)))?;
+                if resolved != Ty::Var(*var) {
+                    mapping.insert(*var, resolved);
+                }
+            }
+        }
+        Ok(Some(mapping))
+    }
+
     pub(super) fn canonical_request(&self, ty: &Ty) -> Result<CanonicalTy, TypeError> {
         let ty = self.resolve_ty(ty);
         let ty = match ty {
@@ -3465,14 +3508,6 @@ impl Checker {
         let mut failures = Vec::new();
         for key in self.trait_impl_candidate_keys(trait_name) {
             let info = &self.trait_impls[&key];
-            if info.constructor_slot_vars.is_empty() {
-                return ConstructorProjectionOutcome::Rejected {
-                    failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
-                        expected: info.constructor_slot_positions.len(),
-                        actual: 0,
-                    }],
-                };
-            }
             let Some(target) = info
                 .head_type_list
                 .entries
@@ -3493,6 +3528,29 @@ impl Checker {
             };
             if !unifier.unify(&target, &requested) {
                 continue;
+            }
+            if self.constructor_mapping_resolution.pending.contains(&key) {
+                let mut requests = self.constructor_mapping_resolution.requests.borrow_mut();
+                let Some(requests) = requests.as_mut() else {
+                    return ConstructorProjectionOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::ProofError(Box::new(TypeError::new(
+                            "Internal error: unfinished constructor mapping outside declaration proof",
+                            info.trait_id.span.clone(),
+                        )))],
+                    };
+                };
+                requests.insert(key.clone());
+                return ConstructorProjectionOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::PendingImplMapping],
+                };
+            }
+            if info.constructor_slot_vars.is_empty() {
+                return ConstructorProjectionOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                        expected: info.constructor_slot_positions.len(),
+                        actual: 0,
+                    }],
+                };
             }
             let unresolved_inputs = request_variables
                 .iter()
