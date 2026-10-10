@@ -37,7 +37,6 @@ VM・保存スキーマのバージョンは上げない。
 
 ### トレイト定義
 
-Trait本体とメソッドの収集を分離し、docを共有しない。
 Trait本体は本体自身の`@doc`だけを、メソッドはそのメソッド自身の`@doc`だけを使う。
 メソッドに`@doc`がなければ、ドキュメントがないと案内する。
 Trait本体や具体的な実装のdocで補う経路は設けない。
@@ -60,14 +59,7 @@ ASTの`attrs.doc`は保持し、parserの許可条件は変えない。
 宣言・実装そのものの名前、型、定義位置、signatureは引き続き必要なので削除しない。
 `collect_signature_entries`の`TraitImplDef`収集はdoc収集から独立して維持する。
 
-通常の`impl Type`メンバー自身のdoc、bindingから型docへの参照、process本体・メンバー自身のdocを維持する。
-`Boolean::not`、`Duration::new`、`Duration::deconstruct`などの参照先は変えない。
-`MyServer::pid`など具体的なprocessの生成メンバーは、hidden標準関数の本文を表示する経路を維持する。
-
 ### 通常関数・プロセスの追加調査
-
-通常関数・プロセスについても、doc欠如を別宣言で補う経路がないか調べた。
-以下はソースと既存テストによる確認で、実行再現は行っていない。
 
 | 経路 | 現状と修正対象 |
 |---|---|
@@ -89,9 +81,6 @@ module本体・型本体のdocを通常関数へ複製する収集経路は見�
 名前が未解決なら未解決と案内し、別の関数のdocで成功扱いしない。
 対象宣言にdocがなければ、ドキュメントがないと案内する。
 
-captureも元のcanonical宣言のdocだけを参照する。`printer = &print`から`Kernel::print`を引く参照は維持するが、
-元宣言にdocがないときに別moduleの同名関数を選ばない。
-
 ユーザーがdocを付与できないprocessの生成メンバーには、既存のhidden標準関数docを表示する。
 対象は`MyServer::pid`、workerの`spawn`、Supervisor系の`spawn`・`adopt`・`status`・`workers`である。
 表示symbolとsignatureは具体的なprocess名に揃える。docを付ける新しい構文は設けない。
@@ -107,11 +96,30 @@ closureから`Closure`、extractor closureから`ExtractorClosure`、non-callabl
 
 共通parserは式や型引数を解析せず、次の字句形だけを受け付ける。
 
+| クエリ | 参照対象 |
+|---|---|
+| `:doc Ty` | 型定義自身のdoc |
+| `:doc Ty::new` | Structのconstructorを定義する通常メソッド自身のdoc |
+| `:doc Ty!` | Struct専用。対応する構造体Extractor自身のdoc。型docで補わない |
+| `:sig Ty::fun` | 通常関数、またはTrait定義側のメソッドのsignature |
+| `:sig Ty` | Struct・Record・Enum・具象Errorのconstructor。具象Errorではブロックの引数位置を示す |
+| `:sig Ty!` | Structでは構造体Extractor、Record・具象Error・Enumではパターンマッチングの形。具象Errorではpayloadを示す |
+
+Enumには型自身の単一constructorがないため、`:sig Ty`はvariant constructorの一覧、
+`:sig Ty!`はvariantごとのパターン形を表示する。
+Traitメソッドの修飾ownerはTrait定義であり、具体的な実装を型指定で選ぶ入力は設けない。
+Record・具象Error・Enumの`Ty!`はREPL照会用の表記であり、Surtr式やパターン構文に`!`を追加しない。
+これらに`:doc Ty!`は対応させず、型の説明には`:doc Ty`を案内する。
+
+現行のowner extractor照会はStructだけを扱う（`core.rs:4570`）。
+Record・具象Error・Enumの`:sig Ty!`と具象Errorのconstructor表示は、今回の表示契約として整備する。
+constructorとパターンの表示は、それぞれ現行の宣言・型情報を参照し、互いのsignatureを代用しない。
+
 | 形 | 例 | 扱い |
 |---|---|---|
 | 名前・修飾名 | `Compare`, `compare`, `Compare::compare`, `Boolean::not`, `User::new` | 維持 |
 | callable名のsuffix | `predicate?`, `dbg!`, `User!` | 現行の名前規則とowner extractor参照を維持 |
-| 公開演算子・特殊形式の固定symbol | `==`, `/`, `|*>`, `(,)`, `=`, `=?`, `Kernel::=?`など | 現行の公開symbolの集合を維持。一般式にはしない |
+| 公開演算子・特殊形式の固定symbol | `==`, `/`, `|*>`, `(,)`, `=`, `=?`, `Kernel::=?`など | 現行の公開symbolを維持。TupleCtor演算子`(,)`とその修飾名も固定symbolとして扱い、引数リストを解析しない |
 | Facet root | `Facet.User` | 維持。`:doc`はroot説明、`:sig`は既存の案内、`:info`は既存の型照会 |
 | field path | `User.field` | 現行の案内を維持。`:info`でもfield情報の新規表示はせず、`:facet User.field`へ案内 |
 
@@ -119,8 +127,6 @@ closureから`Closure`、extractor closureから`ExtractorClosure`、non-callabl
 `compare(Int, Int)`、`Compare(Int, Int)`、`Boolean::not(Boolean)`、`|*> Option`、
 generic型のクエリ、literal、capture、一般式をsymbol扱いして継続しない。
 
-空引数の`User()`・`User!()`もcall形式として廃止する案とする。
-型docは`User`、constructor docは`User::new`、extractor docは`User!`へ統一する。
 既存の`:doc User()`と`:doc User`は参照先が違うので、前者を単純に`User`へ置換しない。
 
 `TypedCall`・`OperatorTarget`とその専用構造体・引数分割・型指定解析・診断理由を削除する。
@@ -128,7 +134,8 @@ generic型のクエリ、literal、capture、一般式をsymbol扱いして継�
 現行の「空白のない任意文字列をSymbolにする」判定は、名前の字句検証へ置き換える。
 文字単位の診断spanは維持する。
 
-`User!`を内部で空引数`TypedCallQuery`に変換する経路も削除し、owner extractorへ直接接続する。
+`User!`を内部で空引数`TypedCallQuery`に変換する経路も削除し、
+宣言種別に応じたExtractor／パターンの表示へ直接接続する。
 `:sig`の定義signature、Trait family、process owner一覧などは維持し、
 入力の引数型からのspecializationと実装選択だけを廃止する。
 `:info`の通常の定義・binding照会も維持する。
@@ -146,7 +153,6 @@ generic型のクエリ、literal、capture、一般式をsymbol扱いして継�
 
 `Range`の現在の`neq`は要素側の`Eq::neq`を呼ぶが、deriveの`neq`は生成した`eq`本体の反転になる
 （`crates/sigil/src/resolver/derive.rs:690-711`）。要素型が独自の`neq`をoverrideすると結果が変わり得る。
-ユーザーのderive移行了承を受け、この差を移行後の契約として明記する。derive側へ特例は追加しない。
 
 削除する手書き実装の型固有の説明・例は、各型の既存`@doc`へ統合する。
 新しくderiveへdocを付ける構文は設けない。
@@ -182,7 +188,6 @@ Sigilの未解決ASTに型名の綴りで`builtin`属性を付ける方法は採
 ## 実装順序と正本の追従
 
 Boolean生成実装のdispatch契約が処理系に及ぶため、実装時はlevel 4とする。
-当初のREPL中心のlevel 3から、この追加条件に合わせて引き上げる。
 
 1. `docs/dev/Xldr_spec.md`のdoc参照・許可クエリ・specialization例を整合させる。
    具体的なprocessの生成メンバーへのhidden本文流用規則（`:197,252`）は維持する。
@@ -224,6 +229,14 @@ stdlib cacheはcompiler build keyと標準ソースを材料にしている
   ユーザー定義メンバーへこの本文流用を広げない。
 - 型指定付きTraitクエリ・通常関数クエリ・演算子の実装指定を3コマンドとも拒否する。
   空引数call形式も拒否し、constructorとextractorの名前による参照を成功させる。
+- `:doc Ty`とStructの`:doc Ty::new`・`:doc Ty!`は異なる対象を参照し、互いの本文で補わない。
+  Record・具象Error・Enumの`:doc Ty!`は型docへ誘導する。
+- `:sig Ty`でStruct・Record・Enum・具象Errorのconstructorを表示し、
+  `:sig Ty!`ではStructのExtractorとRecord・具象Error・Enumのパターン形を表示する。
+  具象Errorのブロック引数位置とpayloadを区別する。
+- `Ty()`・`Ty!()`・`fun(Ty)`など、クエリ入力の呼び出し・引数指定を拒否する。
+  TupleCtor演算子`(,)`とその修飾名の直接クエリは成功させる。
+  出力signature・パターン形の括弧は保持する。
 - `@doc`の付与条件テストは従来どおり通る。実装docはASTにはあり、通常doc metadataにはない。
 - `Duration`・`Range`の成功比較と必要な要素Traitの拒否境界を既存テストで固定する。
   Rangeの独自`neq`境界は移行後の生成契約を直接検証する。
@@ -247,8 +260,3 @@ Spireは付与条件を変更しないため既存のdoc境界テストを選ぶ
 
 今回行ったのは主担当と2サブエージェントによるソース・既存テスト・正本文書の読み取り調査。
 テスト実行・性能測定・HTML生成の検証は行っていない。
-クエリの形は調査担当が再点検した。その後、ユーザー指示によりTrait本体とメソッドのdoc共有を禁止し、
-メソッド自身にdocがない場合の案内を仕様と受入条件に反映した。
-続いて通常関数・プロセスを2サブエージェントで調べ、通常関数の別宣言docへのフォールバックの除去を修正対象へ追加した。
-プロセスの生成メンバーはユーザーがdocを付与できないため、ユーザー指示により既存のhidden標準関数doc参照を維持する。
-この追加調査でTraitImplの`module_doc`経由の収集も確認し、実装doc非収集の修正対象へ追加した。
