@@ -115,7 +115,6 @@ where
 impl Applicative for OptionT<$M, $T>
 where
   $M: Monad
-  $T: Applicative.$A
 {
   @doc """
   Inject a payload through the base Applicative.
@@ -164,7 +163,6 @@ where
 impl Monad for OptionT<$M, $T>
 where
   $M: Monad
-  $T: Monad.$A
 {
   @doc """
   Return a payload as a present OptionT value.
@@ -203,7 +201,6 @@ Lifting maps each base payload to `Option::Some` and preserves base failures.
 impl MonadT<$M> for OptionT<$M, $T>
 where
   $M: Monad
-  $T: MonadT.$A
 {
   @doc """
   Lift a base computation by mapping each payload to Option::Some.
@@ -226,7 +223,6 @@ where
 impl Alternative for OptionT<$M, $T>
 where
   $M: Monad
-  $T: Alternative.$A
 {
   @doc """
   Create OptionT-level absence through the base Applicative.

@@ -181,7 +181,6 @@ where
 impl Applicative for EitherT<$L, $M, $T>
 where
   $M: Monad
-  $T: Applicative.$A
 {
   @doc """
   Inject a payload through the base Applicative as Right.
@@ -236,7 +235,6 @@ where
 impl Monad for EitherT<$L, $M, $T>
 where
   $M: Monad
-  $T: Monad.$A
 {
   @doc """
   Return a payload as a Right value.
@@ -281,7 +279,6 @@ Lifting maps each base payload to `Either::Right` and preserves base failures.
 impl MonadT<$M> for EitherT<$L, $M, $T>
 where
   $M: Monad
-  $T: MonadT.$A
 {
   @doc """
   Lift a base computation by mapping each payload to Either::Right.
@@ -300,7 +297,6 @@ where
 impl MonadFail for EitherT<Error, $M, $T>
 where
   $M: Monad
-  $T: MonadFail.$A
 {
   def fail::<EitherT<Error, $M, $T>>(error: Error) -> EitherT<Error, $M, $T> {
     EitherT::left(error)
