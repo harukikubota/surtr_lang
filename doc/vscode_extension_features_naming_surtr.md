@@ -42,78 +42,14 @@ VS Code の言語拡張は大きく 2 系統に分けて考えると整理しや
 
 ## 最低限ほしいもの
 
-## 1. 言語登録
-
-### 役割
-- `.surtr` を Surtr として認識させる
-- editor 上で language id を統一する
-
-### 推奨
-- language id: `surtr`
-- extensions: `.surtr`
-- aliases: `Surtr`, `surtr`
-
----
-
 ## 2. Language Configuration
 
 ### 役割
 基本編集体験を作る。
 
 ### 入れるもの
-- line comment
 - block comment
-- bracket pairs
-- auto closing pairs
-- surrounding pairs
 - folding markers
-- indentation rules
-- word pattern
-
-### Surtr 向けに重要
-- `do ... end`
-- `match ... end`
-- `impl ... end`
-- `def ... end`
-- パイプや演算子を壊さない word 定義
-
----
-
-## 3. シンタックスハイライト
-
-### 役割
-コードの可読性を最初に上げる。
-
-### 実装方針
-- TextMate grammar を使う
-- 正規表現ベースで字句分類する
-- まずは lexical に割り切る
-
-### 優先して色分けするもの
-- keyword
-- type name
-- module name
-- function name らしき識別子
-- variant / constructor
-- string
-- number
-- comment
-- operator
-- attribute
-- builtin
-
-### Surtr で特に重要
-- `def`
-- `impl`
-- `match`
-- `if`
-- `else`
-- `do`
-- `end`
-- `Ok`
-- `Err`
-- `true`
-- `false`
 
 ---
 
@@ -123,20 +59,9 @@ VS Code の言語拡張は大きく 2 系統に分けて考えると整理しや
 記述量を下げる。
 
 ### 最低限
-- `def`
-- `impl`
-- `match`
 - `if`
-- `Result` 系
 - テスト用テンプレート
 - import / module 宣言
-
-### 例
-- `defn`
-- `match`
-- `impl`
-- `ok`
-- `err`
 
 ---
 
@@ -205,12 +130,7 @@ VSCode 側でも span をそのまま diagnostics に流せると価値が高い
 アウトライン表示やファイル内移動を強くする。
 
 ### 対象
-- `def`
-- `impl`
 - `type`
-- `defenum`
-- `deferror`
-- module
 
 ### 効果
 - 長いファイルでも追いやすい
@@ -314,18 +234,14 @@ TextMate より正確な色分けを行う。
 ## 15. REPL / CLI 連携
 
 ### 候補
-- ファイル実行
 - 選択範囲実行
 - REPL を開く
 - 実行結果を Output panel に出す
-- バイトコードダンプ
-- JSON inspect 実行
 
 ### 例
 - `surtr.runFile`
 - `surtr.runSelection`
 - `surtr.repl.open`
-- `surtr.bytecode.dumpJson`
 
 ---
 
@@ -346,22 +262,6 @@ Surtr / Eldr はここが差別化ポイントになりやすい。
 ---
 
 ## 推奨構成
-
-## A. 最小構成拡張
-最初の 1 本目としておすすめ。
-
-### 含めるもの
-- language registration
-- language configuration
-- syntax highlight
-- snippets
-- diagnostics
-- document symbols
-
-### 目的
-まず「編集できる」「読める」「エラーが見える」を揃える。
-
----
 
 ## B. 言語機能拡張
 次に足すもの。
@@ -410,22 +310,6 @@ Surtr / Eldr はここが差別化ポイントになりやすい。
 
 ## 推奨命名案
 
-## 1. 言語サポート本体
-
-### Display Name
-- `Surtr Language Support`
-
-### Extension Identifier
-- `surtr-lang.surtr-language-support`
-
-### language id
-- `surtr`
-
-### scope name
-- `source.surtr`
-
----
-
 ## 2. LSP / 高機能版
 
 ### Display Name
@@ -467,7 +351,6 @@ Surtr / Eldr はここが差別化ポイントになりやすい。
 `surtr.<domain>.<action>`
 
 ### 実行系
-- `surtr.run.file`
 - `surtr.run.selection`
 - `surtr.repl.open`
 - `surtr.repl.sendSelection`
@@ -477,7 +360,6 @@ Surtr / Eldr はここが差別化ポイントになりやすい。
 - `surtr.goto.references`
 
 ### ツール系
-- `surtr.bytecode.dumpJson`
 - `surtr.bytecode.openViewer`
 - `surtr.inspect.tokens`
 - `surtr.inspect.ast`
@@ -494,9 +376,7 @@ Surtr / Eldr はここが差別化ポイントになりやすい。
 - `surtr.lsp.enabled`
 - `surtr.semanticTokens.enabled`
 - `surtr.repl.path`
-- `surtr.compiler.path`
 - `surtr.bytecode.viewer.enabled`
-- `surtr.diagnostics.onSave`
 - `surtr.diagnostics.onType`
 
 ---
@@ -563,35 +443,10 @@ Surtr / Eldr はここが差別化ポイントになりやすい。
 
 ---
 
-## 推奨結論
-
-現時点では次がよい。
-
-### まず作る
-- `Surtr Language Support`
-
-### 次に足す
-- `Surtr Tools`
-
-### 必要なら分離
-- `Eldr Viewer`
-
-つまり、
-
-- **言語定義と見た目**
-- **LSP 的な賢い機能**
-- **VM / Bytecode / Viewer**
-
-の 3 層で分ける。
-
----
-
 ## 最終提案
 
 ## MVP で入れるべきもの
-- 言語登録
 - Language Configuration
-- シンタックスハイライト
 - Snippets
 - Diagnostics
 - Document Symbol

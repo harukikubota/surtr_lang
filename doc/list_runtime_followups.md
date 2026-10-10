@@ -2,8 +2,7 @@
 
 更新日: 2026-10-03。状態: 未解決事項の調査・設計用。
 
-共通の予算付き driver、builtin continuation、Packed List、`List::flat_map` の builtin 化は実装済み。
-以下には追加の性能改善と、実装中に確認した既存のコンパイル問題を残す。
+以下には追加の性能改善を残す。
 最適化の採用方式や実時間の目標値は、各項目の調査後に決める。
 
 ## 現行の契約と参照先
@@ -46,15 +45,13 @@
 ### RT-5 REPL checkpoint の残るコピー量
 
 - 現状: process・future・detached taskの3表とentryをcheckpointで共有し、変更時に表のindexと対象entryを複製する方式へ移行した。可変Builderはそのentryの初回変更時に独立させる。通常の実行切替えでは引き続き複製しない。
-- 確認済み: Builder長25の停止・待機process数1/8/32×checkpoint数1/4/16の9条件で、保存時のBuilder cloneはprocess数×checkpoint数から0になった。32 process×16回では12,800要素のコピーを省いた。測定条件と単発の経過時間は[release audit](v0.1_release_codebase_audit.md)に記録している。
 - 残る範囲: metadata、singleton/worker表、waiting/reply表、queueの複製と、変更時の表indexの複製が残る。これらの共有を広げるかは未決定で、runtime全体の定数時間保存を保証しない。
 - 次の作業: metadataやqueueの件数、future数、Builderの長さ、chunk数を分け、実chunk全体の時間とピークメモリを測る。停止済みPIDの回収契約は別に確定する。
 - 受け入れ条件: 失敗したchunkの進捗を破棄して保存位置から再開し、その位置より前のcallbackを呼び直さず、復帰先へ一度だけ結果を渡す。実行中に変更する可変Builderは保存状態から独立させる。失敗したchunkの外部I/Oは巻き戻さない。
-- 検証: 対象entryだけの複製、process/futureのrollbackと更新保持、別ownerのtaskを複製しないstop、Builder/cursorの再開を確認した。既存のVM/REPL rollback・成功chunkの継続実行も維持する。
 
 ### RT-6 追加の List 最適化
 
-- 現状: `map` / `filter` は標準ソースで `flat_map` を組み合わせ、Builder を使う共有 builtin 経路へ移行済み。専用 builtin は追加していない。`reverse` / `append` / `concat` の追加最適化は未着手。各 bind は完成した List を返すため、多段の kM が残る。
+- 現状: `reverse` / `append` / `concat` の追加最適化は未着手。各 bind は完成した List を返すため、多段の kM が残る。
 - 未確定点: 個別操作の Builder 化、pipeline の融合、中間 List の省略のうち、どれに効果があるか。一般の nested do は B / E で評価し、常に E = kM と仮定しない。
 - 次の作業: RT-3 の測定を基に対象を選び、generic do と通常の Monad dispatch を基準に評価順・失敗・待機を比較する仕様を作る。
 - 受け入れ条件: 副作用を持つ mapper、空結果、部分 pattern、SafeBind、nested do で値・順序・呼出し回数・失敗後の未評価が一致する。未完成 Builder を公開型、process payload、完成結果へ出さない。
