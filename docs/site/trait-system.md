@@ -122,7 +122,7 @@ where
 
 `$A` は constructor slot、`$B` は `mapper` の型から導入されるスロットである。`$B` を `<$B>` として method 宣言に重ねて書かない。
 
-実装対象が複数の型引数を持つ場合は、Trait slot への対応を `TraitName.$Slot` で指定する。
+constructor slot を持つ親がない Trait では、実装対象の型引数が複数なら `TraitName.$Slot` で対応を指定する。
 
 ```surtr
 impl Functor for Pair<$L, $R>
@@ -139,6 +139,9 @@ where
 ```
 
 `$L` は capture parameter、`$R` は `Functor.$A` に対応する parameter である。
+`Applicative` や `Monad` の子 impl は親の対応を引き継ぐため、同じ指定を繰り返す必要はない。
+親 impl は子の対象全体を覆い、必要な制約を満たすものが必要である。子で指定を残す場合も親と同じ位置に限る。
+複数の親から異なる対応を引き継ぐことや、継承した位置を具象型へ固定することはできない。
 `Functor.$A` は通常 trait bound の例外ではなく、TypeConstructor trait の slot-map RHS です。
 
 `Self<$A>` は declaration の impl target を置換する型位置 marker です。`Self::f()` と `Type::f()` は value-level owner path としては不正です。

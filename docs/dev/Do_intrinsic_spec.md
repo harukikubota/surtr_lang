@@ -66,6 +66,7 @@ partial `<-`と合法なSafeBindのfailure targetは共通FailureEffectで、
 - どちらもなし: capability error。Monad単独ではfailure targetを構築しない。
 
 `MonadFail` の constructor shape と payload slot は親 `Monad` から引き継ぐ。失敗先は返り型・期待型・宣言した generic bound から決定し、SafeBind の RHS は推論元にしない。通常 callable では `MonadFail` のみを使い、do 内だけで `Alternative::empty` を次の候補とする。metadata の不正や曖昧な dispatch を Alternative への切替えで隠さない。
+標準 MonadFail 宣言の欠落・同名の非標準宣言も契約エラーとし、carrier の能力不足とは区別する。
 OptionT は標準 MonadFail を持たず、do の Pattern failure は Alternative で処理する。base の Err は bind 自身が保持する。
 `guard`はこの選択に参加せず、常に通常のAlternative callである。
 nested doやdo内の別callableはそれぞれ自身のfailure contextを持ち、外側からeffectを借りない。

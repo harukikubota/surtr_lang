@@ -494,6 +494,9 @@ typed contract は callable identity / 確定 signature、型検査済み事前�
 builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、Eldr の BUILTIN_IMPLS と対応させる。各フェーズへ builtin ID / 表示名を直書きしない。専用 Opcode を前提にせず、既存 Closure / call / branch / return の表現を利用する。
 
 未知 tag / variant、不正 field 数、壊れた callable metadata、payload representation 不一致は内部契約違反として即時 failure にする。利用者の Err、PatternMismatch、次の match arm、Alternative::empty へ fallback しない。
+通常 Bind / match の全域性が実行時に破れた場合も、compiler-only builtin `__pattern_contract_violation` により
+RuntimeError とする。周囲の SafeBind 失敗先へ転送しない。SafeBind の consumer 失敗先が欠落した typed IR は
+Forge の内部契約エラーとして拒否する。`apply_pattern` の Result と Extractor 本文の MatchResult は明示された契約を使う。
 
 ## 検証境界
 

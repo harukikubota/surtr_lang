@@ -445,6 +445,7 @@ Opcode は以下のカテゴリを持つ。
 - handler write / read が VM 継続不能な形で失敗した場合
 
 `Value::Error` は正常なデータフローであり、`RuntimeError` と混同しない。
+compiler-only builtin `__pattern_contract_violation` は全域と判定された Bind / match の破綻を RuntimeError として停止する。公開 surface や言語の Err 値は持たない。
 
 ---
 
