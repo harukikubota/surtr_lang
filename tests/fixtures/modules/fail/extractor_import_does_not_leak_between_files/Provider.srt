@@ -1,0 +1,5 @@
+defmod Selected {
+  defextractor select(value: Int) -> MatchResult<Int> {
+    MatchResult::Ok(value)
+  }
+}

@@ -1,0 +1,7 @@
+import Selected::select
+
+defmod ScopedConsumer {
+  def accepts(value: Int) -> Boolean {
+    is_match(value, select(_))
+  }
+}

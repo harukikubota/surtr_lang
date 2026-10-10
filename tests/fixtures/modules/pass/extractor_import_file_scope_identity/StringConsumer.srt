@@ -1,0 +1,8 @@
+import SelectedStrings
+
+defmod StringConsumer {
+  def run(value: String) -> Unit {
+    print(if_let(value, select(selected), selected, "failure"))
+    print(if_let(value, SelectedStrings::select(selected), selected, "failure"))
+  }
+}

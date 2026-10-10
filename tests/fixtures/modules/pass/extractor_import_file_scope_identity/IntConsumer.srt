@@ -1,0 +1,8 @@
+import SelectedInts::select
+
+defmod IntConsumer {
+  def run(value: Int) -> Unit {
+    print(to_string(if_let(value, select(10, selected), selected, 0)))
+    print(to_string(if_let(value, SelectedInts::select(20, selected), selected, 0)))
+  }
+}

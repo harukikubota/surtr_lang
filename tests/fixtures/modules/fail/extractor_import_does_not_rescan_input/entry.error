@@ -1,0 +1,3 @@
+phase: typecheck
+contains: Extractor select expects Int, got String
+contains: Extractor type signature: (Int -> MatchResult<Int>)

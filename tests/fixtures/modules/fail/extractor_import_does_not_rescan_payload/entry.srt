@@ -1,0 +1,3 @@
+import Selected
+
+print(to_string(is_match(1, select(_))))
