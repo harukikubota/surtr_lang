@@ -497,6 +497,13 @@ fn parse_program_with_module_sources<'a>(
     let user_source = sources.source(user_source_id).unwrap_or("");
     let parse_user_start = std::time::Instant::now();
     let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
+        .and_then(|ast| {
+            spire::materialize_reflections(
+                ast,
+                user_source,
+                sources.file_name(user_source_id).map(std::path::Path::new),
+            )
+        })
         .map_err(|script_err: ParseError| {
             RuneError::diagnostic(
                 1,

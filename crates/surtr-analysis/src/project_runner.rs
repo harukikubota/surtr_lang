@@ -120,6 +120,7 @@ pub fn extract_project_runner_result(
         CompileUnitKind::Project,
         None,
     )
+    .and_then(|ast| spire::materialize_reflections(ast, &input.source, Some(&input.project_file)))
     .map_err(|error| {
         let span = error.span();
         vec![RunnerDiagnostic {

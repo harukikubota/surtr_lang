@@ -99,7 +99,8 @@ impl DocumentParseCache {
             input.source_kind,
             input.compile_unit_kind,
             input.module_path.map(str::to_owned),
-        );
+        )
+        .and_then(|ast| spire::materialize_reflections(ast, input.source, Some(path)));
         #[cfg(test)]
         {
             let mut stats = self.stats.lock().expect("parse statistics lock poisoned");
@@ -135,7 +136,7 @@ impl DocumentParseCache {
         }
         #[cfg(test)]
         let started = std::time::Instant::now();
-        let result = parse_document_tolerant(
+        let mut result = parse_document_tolerant(
             input.source,
             input.source_id,
             input.source_kind,
@@ -143,6 +144,14 @@ impl DocumentParseCache {
             input.module_path.map(str::to_owned),
             cursor_char_offset,
         );
+        match spire::materialize_reflections(
+            std::mem::take(&mut result.ast),
+            input.source,
+            Some(path),
+        ) {
+            Ok(ast) => result.ast = ast,
+            Err(error) => result.diagnostics.push(spire::ParseDiagnostic::from(error)),
+        }
         #[cfg(test)]
         {
             let mut stats = self.stats.lock().expect("parse statistics lock poisoned");
