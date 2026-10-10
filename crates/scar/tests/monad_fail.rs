@@ -96,3 +96,90 @@ inspect(relay(Err(NoneError)))"#;
         "value: Result<Int> = relay(Err(NoneError))",
     ));
 }
+
+fn check_full_program(
+    resolved: Vec<sigil::resolved::Resolved>,
+) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeError> {
+    scar::typecheck_with_context(
+        resolved,
+        scar::TypecheckContext {
+            runtime_policy: sindr::policy::RuntimeSourcePolicy::std_module(),
+            enforce_builtin_type_contracts: true,
+            allow_private_facet_inspection: false,
+        },
+    )
+}
+
+#[test]
+fn missing_canonical_monad_fail_declaration_is_a_contract_error() {
+    use sigil::resolved::Resolved;
+    for source in [
+        "def relay(value: Result<Int>) -> Result<Int> { x =? value\n Ok(x) }",
+        "value: Option<Int> = do::<Option> { Option::Some(x) <- Option::Some(Option::Some(1)); Option::Some(x) }",
+    ] {
+        let mut resolved = support::resolve_program_with_builtin_prelude(source);
+        resolved.retain(|node| !matches!(node,
+            Resolved::TraitDef(_, id, ..) | Resolved::TraitImplDef(_, _, id, ..)
+                if id.qualified_name.as_deref() == Some("MonadFail")
+        ));
+        let error = check_full_program(resolved).expect_err("missing declaration cannot switch to Alternative");
+        assert_eq!(error.reason(), Some(diagnostics::TypeDiagnosticReason::TypecheckInvariantViolation), "{error:?}");
+    }
+}
+
+#[test]
+fn nonstandard_same_name_declaration_cannot_supply_canonical_failure_capability() {
+    use sigil::resolved::Resolved;
+    let mut resolved = support::resolve_program_with_builtin_prelude(
+        "def relay(value: Result<Int>) -> Result<Int> { x =? value\n Ok(x) }",
+    );
+    let mut impostor = resolved
+        .iter()
+        .find(|node| {
+            matches!(node,
+                Resolved::TraitDef(_, id, ..) if id.qualified_name.as_deref() == Some("MonadFail")
+            )
+        })
+        .expect("standard declaration")
+        .clone();
+    if let Resolved::TraitDef(_, id, _, _, methods, _) = &mut impostor {
+        id.qualified_name = Some("Impostor::MonadFail".into());
+        id.unique_id = u32::MAX - 10;
+        methods.clear();
+    }
+    resolved.retain(|node| {
+        !matches!(node,
+            Resolved::TraitDef(_, id, ..) | Resolved::TraitImplDef(_, _, id, ..)
+                if id.qualified_name.as_deref() == Some("MonadFail")
+        )
+    });
+    resolved.insert(0, impostor);
+    let error = check_full_program(resolved)
+        .expect_err("a same-name Trait cannot replace canonical MonadFail");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TypecheckInvariantViolation),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn result_failure_requires_its_monad_fail_impl() {
+    use sigil::resolved::Resolved;
+    use spire::ast::AstTy;
+    let mut resolved = support::resolve_program_with_builtin_prelude(
+        "def relay(value: Result<Int>) -> Result<Int> { x =? value\n Ok(x) }",
+    );
+    resolved.retain(|node| !matches!(node,
+        Resolved::TraitImplDef(_, _, id, _, AstTy::Generic(_, target, _), ..)
+            if id.qualified_name.as_deref() == Some("MonadFail") && target.rsplit("::").next() == Some("Result")
+    ));
+    let error = check_full_program(resolved)
+        .err()
+        .expect("Result spelling must not bypass its impl requirement");
+    assert!(error.message.contains("MonadFail"), "{error:?}");
+    assert_ne!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TypecheckInvariantViolation)
+    );
+}

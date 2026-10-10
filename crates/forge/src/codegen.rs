@@ -2844,7 +2844,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_match_routes_last_failure_through_pattern_mismatch_path() {
+    fn emit_match_routes_totality_violation_to_internal_runtime_error() {
         let mut gene = Codegen::new();
         let scrutinee = lit_node(Ty::Bool, Lit::Bool(false), span(1, 6));
         let body = lit_node(Ty::Bool, Lit::Bool(true), span(10, 14));
@@ -2861,18 +2861,14 @@ mod tests {
         .expect("match emission should succeed");
 
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
-        let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
-        assert!(opcodes.iter().any(|opcode| {
-            matches!(
-                opcode,
-                Opcode::CallBuiltin {
-                    builtin_id,
-                    arity: 1,
-                    ..
-                } if *builtin_id == eprint_id
-            )
-        }));
-        assert!(matches!(opcodes.last(), Some(Opcode::Halt)));
+        let trap_id = Codegen::builtin_id(sindr::builtin::PATTERN_CONTRACT_VIOLATION_BUILTIN)
+            .expect("contract violation builtin");
+        assert!(opcodes.iter().any(|opcode| matches!(opcode,
+            Opcode::CallBuiltin { builtin_id, arity: 0, .. } if *builtin_id == trap_id
+        )));
+        assert!(!opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StructNew { .. })));
     }
 
     #[test]
@@ -3215,6 +3211,7 @@ mod tests {
     #[test]
     fn pattern_consumer_carrier_payload_result_is_matched_directly() {
         let mut gene = Codegen::new();
+        gene.safe_bind_failure_target = Some(SafeBindFailureTarget::TopLevel);
         gene.state.slot_map.insert(801, 0);
         gene.state.next_slot = 1;
         let input_ty = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
@@ -3259,6 +3256,7 @@ mod tests {
     #[test]
     fn preserving_nested_literal_uses_only_failed_child_source() {
         let mut gene = Codegen::new();
+        gene.safe_bind_failure_target = Some(SafeBindFailureTarget::TopLevel);
         let pattern = TypedPattern::Located(
             span(1, 12),
             Box::new(TypedPattern::Tuple(
@@ -4425,6 +4423,39 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn consumer_failure_helpers_reject_a_missing_typed_target() {
+        for in_function in [false, true] {
+            for top_level_returns_result in [false, true] {
+                let mut gene = Codegen::new();
+                gene.in_function = in_function;
+                gene.top_level_returns_result = top_level_returns_result;
+                let error = gene
+                    .emit_propagate_result_from_local(0, span(2, 4))
+                    .expect_err("missing consumer target cannot implicitly forward a Result");
+                assert!(error.message.contains("failure target"), "{error:?}");
+                let error = gene
+                    .emit_pattern_failure_from_message_stack_with_diagnostic(
+                        "PatternMismatch",
+                        span(2, 4),
+                        None,
+                        super::PatternFailureDestination::EnclosingConsumer,
+                    )
+                    .expect_err("missing consumer target cannot implicitly construct an Err");
+                assert!(error.message.contains("failure target"), "{error:?}");
+            }
+        }
+        let mut gene = Codegen::new();
+        let end = gene.fresh_label();
+        gene.emit_pattern_failure_from_message_stack_with_diagnostic(
+            "PatternMismatch",
+            span(2, 4),
+            None,
+            super::PatternFailureDestination::ExpressionResult(end),
+        )
+        .expect("apply_pattern owns its explicit Result destination");
+    }
+
     fn do_safebind_origins() -> DoSafeBindOrigins {
         DoSafeBindOrigins {
             do_span: span(0, 40),
@@ -5231,6 +5262,68 @@ mod tests {
 
     #[test]
     fn forge_session_codegen_chunk_repl_result_uses_result_halt_path_for_failures() {
+        let list_ty = Ty::List(Box::new(Ty::Int));
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 8),
+            node: TypedInner::SafeBind(
+                TypedPattern::Located(
+                    span(1, 4),
+                    Box::new(TypedPattern::ListCons(
+                        list_ty.clone(),
+                        Box::new(TypedPattern::Located(
+                            span(2, 3),
+                            Box::new(TypedPattern::Wildcard(Ty::Int)),
+                        )),
+                        Box::new(TypedPattern::Located(
+                            span(3, 4),
+                            Box::new(TypedPattern::Wildcard(list_ty.clone())),
+                        )),
+                    )),
+                ),
+                Box::new(TypedNode {
+                    ty: Ty::Result(Box::new(list_ty.clone()), Box::new(Ty::Error)),
+                    span: span(5, 7),
+                    node: TypedInner::ConstructorCall(
+                        0,
+                        vec![TypedNode {
+                            ty: list_ty.clone(),
+                            span: span(5, 7),
+                            node: TypedInner::ListNil,
+                        }],
+                    ),
+                }),
+                SafeBindRhsProjection::CanonicalResultOnce {
+                    payload_ty: list_ty,
+                    error_ty: Ty::Error,
+                },
+                SafeBindFailureTarget::TopLevel,
+            ),
+        };
+        let (chunk, _) = ForgeSession::new()
+            .codegen_chunk_repl_result(vec![node])
+            .expect("REPL SafeBind owns its explicit Result failure channel");
+        assert!(chunk
+            .opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::MakeError { .. })));
+        assert!(
+            chunk
+                .opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 }))
+                .count()
+                >= 2
+        );
+        assert!(!chunk
+            .opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::CallBuiltin { .. })));
+        assert!(matches!(chunk.opcodes.last(), Some(Opcode::Halt)));
+    }
+
+    #[test]
+    fn forge_session_repl_result_total_bind_violation_uses_internal_runtime_error() {
         let mut session = ForgeSession::new();
         let node = TypedNode {
             ty: Ty::Unit,
@@ -5253,14 +5346,16 @@ mod tests {
             .codegen_chunk_repl_result(vec![node])
             .expect("repl result chunk should succeed");
 
-        assert!(chunk
-            .opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 })));
+        let trap_id = Codegen::builtin_id(sindr::builtin::PATTERN_CONTRACT_VIOLATION_BUILTIN)
+            .expect("contract violation builtin");
+        assert!(chunk.opcodes.iter().any(|opcode| matches!(opcode,
+            Opcode::CallBuiltin { builtin_id, arity: 0, span_start: 5, span_end: 7 }
+                if *builtin_id == trap_id
+        )));
         assert!(!chunk
             .opcodes
             .iter()
-            .any(|opcode| matches!(opcode, Opcode::CallBuiltin { .. })));
+            .any(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 })));
         assert!(matches!(chunk.opcodes.last(), Some(Opcode::Halt)));
     }
 }
@@ -7997,7 +8092,7 @@ impl Codegen {
                 self.emit_jump(success_label);
 
                 self.patch_label(fail_label);
-                self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+                self.emit_total_pattern_contract_violation(rhs.span.clone())?;
 
                 self.patch_label(success_label);
                 // Bind produces Unit
@@ -10159,8 +10254,20 @@ impl Codegen {
         )
     }
 
-    fn emit_pattern_mismatch_failure(&mut self, span: Span) -> Result<(), CodegenError> {
-        self.emit_pattern_failure("PatternMismatch", "Pattern did not match.", span)
+    fn emit_total_pattern_contract_violation(&mut self, span: Span) -> Result<(), CodegenError> {
+        let builtin_id = Self::builtin_id(sindr::builtin::PATTERN_CONTRACT_VIOLATION_BUILTIN)
+            .ok_or_else(|| CodegenError {
+                message: "Internal invariant broken: pattern contract violation builtin missing"
+                    .into(),
+                span: span.clone(),
+            })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id,
+            arity: 0,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
+        Ok(())
     }
 
     fn validate_match_result_tag(
@@ -10208,17 +10315,6 @@ impl Codegen {
         self.emit_node(&target.call)
     }
 
-    fn emit_monad_fail_error_value(
-        &mut self,
-        target: &MonadFailTarget,
-        kind: &str,
-        message: &str,
-        span: &Span,
-    ) -> Result<(), CodegenError> {
-        self.emit_error_value(kind, message, span);
-        self.emit_monad_fail_from_error_stack(target)
-    }
-
     fn emit_monad_fail_error_value_from_message_stack(
         &mut self,
         target: &MonadFailTarget,
@@ -10238,99 +10334,6 @@ impl Codegen {
         self.emit(Opcode::LoadLocal(result_slot));
         self.emit(Opcode::GetField { field_index: 0 });
         self.emit_monad_fail_from_error_stack(target)
-    }
-
-    fn emit_pattern_failure(
-        &mut self,
-        kind: &str,
-        message: &str,
-        span: Span,
-    ) -> Result<(), CodegenError> {
-        if self.emit_do_alternative_failure_jump(&span)? {
-            return Ok(());
-        }
-        if let Some(SafeBindFailureTarget::DoMonadFail(target)) =
-            self.safe_bind_failure_target.clone()
-        {
-            let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
-                message: "Internal invariant broken: do Result SafeBind has no local join".into(),
-                span: span.clone(),
-            })?;
-            self.emit_monad_fail_error_value(&target, kind, message, &span)?;
-            self.emit_jump(end_label);
-        } else if let Some(SafeBindFailureTarget::EnclosingMonadFail(target)) =
-            self.safe_bind_failure_target.clone()
-        {
-            self.emit_monad_fail_error_value(&target, kind, message, &span)?;
-            self.emit(Opcode::Return);
-        } else if let Some(SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }) =
-            self.safe_bind_failure_target.clone()
-        {
-            self.emit_match_result_err_header(err_tag, &span)?;
-            self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew { field_count: 2 });
-            self.emit(Opcode::Return);
-        } else if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::TopLevel)
-        ) {
-            self.emit_top_level_pattern_failure(kind, message, span)?;
-        } else if self.in_function {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Return);
-        } else if self.top_level_returns_result {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Halt);
-        } else {
-            self.emit_error_value(kind, message, &span);
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin {
-                builtin_id: eprint_id,
-                arity: 1,
-                span_start: span.start as u32,
-                span_end: span.end as u32,
-            });
-            self.emit(Opcode::Halt);
-        }
-        Ok(())
-    }
-
-    fn emit_top_level_pattern_failure(
-        &mut self,
-        kind: &str,
-        message: &str,
-        span: Span,
-    ) -> Result<(), CodegenError> {
-        if self.top_level_returns_result {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Halt);
-        } else {
-            self.emit_error_value(kind, message, &span);
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin {
-                builtin_id: eprint_id,
-                arity: 1,
-                span_start: span.start as u32,
-                span_end: span.end as u32,
-            });
-            self.emit(Opcode::Halt);
-        }
-        Ok(())
     }
 
     fn emit_pattern_failure_from_message_stack_with_diagnostic(
@@ -10422,42 +10425,13 @@ impl Codegen {
                 });
                 self.emit(Opcode::Halt);
             }
-        } else if self.in_function {
-            let msg_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(msg_slot));
-
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(msg_slot));
-            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Return);
-        } else if self.top_level_returns_result {
-            let msg_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(msg_slot));
-
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(msg_slot));
-            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Halt);
         } else {
-            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic);
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin {
-                builtin_id: eprint_id,
-                arity: 1,
-                span_start: span.start as u32,
-                span_end: span.end as u32,
+            return Err(CodegenError {
+                message: "Internal invariant broken: pattern consumer failure target is missing or invalid".into(),
+                span,
             });
-            self.emit(Opcode::Halt);
         }
+
         Ok(())
     }
 
@@ -11317,27 +11291,13 @@ impl Codegen {
                 });
                 self.emit(Opcode::Halt);
             }
-        } else if self.in_function {
-            self.emit(Opcode::LoadLocal(result_slot));
-            self.emit(Opcode::Return);
-        } else if self.top_level_returns_result {
-            self.emit(Opcode::LoadLocal(result_slot));
-            self.emit(Opcode::Halt);
         } else {
-            self.emit(Opcode::LoadLocal(result_slot));
-            self.emit(Opcode::GetField { field_index: 0 });
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin {
-                builtin_id: eprint_id,
-                arity: 1,
-                span_start: span.start as u32,
-                span_end: span.end as u32,
+            return Err(CodegenError {
+                message: "Internal invariant broken: pattern consumer failure target is missing or invalid".into(),
+                span,
             });
-            self.emit(Opcode::Halt);
         }
+
         Ok(())
     }
 
@@ -11783,7 +11743,7 @@ impl Codegen {
             }
             TypedInner::Match(scrutinee, arms) => {
                 if arms.is_empty() {
-                    self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
+                    self.emit_total_pattern_contract_violation(scrutinee.span.clone())?;
                     return Ok(());
                 }
 
@@ -11827,7 +11787,7 @@ impl Codegen {
                 }
 
                 self.patch_label(mismatch_label);
-                self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
+                self.emit_total_pattern_contract_violation(scrutinee.span.clone())?;
             }
             TypedInner::Semi(inner) => {
                 self.emit_node(inner)?;
@@ -12211,7 +12171,7 @@ impl Codegen {
         arms: &[TypedMatchArm],
     ) -> Result<(), CodegenError> {
         if arms.is_empty() {
-            return self.emit_pattern_mismatch_failure(scrutinee.span.clone());
+            return self.emit_total_pattern_contract_violation(scrutinee.span.clone());
         }
 
         let eager_slots = arms
@@ -12260,7 +12220,7 @@ impl Codegen {
         }
 
         self.patch_label(mismatch_label);
-        self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
+        self.emit_total_pattern_contract_violation(scrutinee.span.clone())?;
         self.patch_label(end_label);
         Ok(())
     }
