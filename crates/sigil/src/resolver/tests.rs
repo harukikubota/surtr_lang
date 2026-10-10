@@ -6045,6 +6045,423 @@ print(to_string(add(7, 3)))"#,
     assert!(error.message.contains("Import conflict"), "{error:?}");
 }
 
+fn extractor_import_forms(owner: &str) -> [String; 3] {
+    [
+        format!("import {owner}"),
+        format!("import {owner}::unique_ext"),
+        format!("import {owner}::{{unique_ext}}"),
+    ]
+}
+
+fn extractor_import_environment(
+    left: &str,
+    right: &str,
+    auto_import_left: bool,
+) -> ResolveEnvironment {
+    let mut stages = standard_test_stages().clone();
+    let mut left = staged_module("ExtractorLeft", parse_module_ast(left, "ExtractorLeft"));
+    left.auto_import = auto_import_left;
+    stages.push(vec![
+        left,
+        staged_module("ExtractorRight", parse_module_ast(right, "ExtractorRight")),
+    ]);
+    ResolveEnvironment::from_stages(&stages).expect("Extractor import environment")
+}
+
+#[test]
+fn extractor_import_forms_preserve_selected_declaration_and_pattern_uid() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        false,
+    );
+    let declared = environment
+        .global_scope
+        .lookup("ExtractorLeft::unique_ext")
+        .unwrap();
+    let other = environment
+        .global_scope
+        .lookup("ExtractorRight::unique_ext")
+        .unwrap();
+    assert_ne!(declared, other);
+    assert_eq!(
+        environment.declaration_uid_kinds[&declared],
+        DeclarationKind::Extractor
+    );
+    for import in extractor_import_forms("ExtractorLeft") {
+        let mut session =
+            SigilSession::from_environment(&environment, None, ResolveResumeState::default())
+                .unwrap();
+        let source = format!("{import}\nmatch (1, 1) {{ (unique_ext(2, left), ExtractorLeft::unique_ext(2, right)) => (left, right), _ => (0, 0) }}");
+        let resolved = session.resolve(parse(&source).unwrap()).expect(&source);
+        assert_eq!(session.lookup_uid("unique_ext"), Some(declared), "{import}");
+        assert_eq!(
+            session.lookup_uid("ExtractorLeft::unique_ext"),
+            Some(declared)
+        );
+        assert_eq!(
+            session.lookup_uid("ExtractorRight::unique_ext"),
+            Some(other)
+        );
+        let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+            panic!("expected match: {resolved:?}")
+        };
+        let ResolvedPattern::Tuple(items) = arms[0].pattern.unlocated() else {
+            panic!("expected tuple Pattern")
+        };
+        for item in items {
+            let ResolvedPattern::Extractor(head, pre_args, children) = item.unlocated() else {
+                panic!("expected selected named Extractor: {item:?}")
+            };
+            assert_eq!(head.unique_id, declared, "{import}");
+            assert_eq!(
+                head.qualified_name.as_deref().map(global_surface_name),
+                Some("ExtractorLeft::unique_ext")
+            );
+            assert_eq!(pre_args.len(), 1);
+            assert_eq!(children.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn extractor_import_conflicts_do_not_overload_by_type_or_preargument_count() {
+    let extractor = "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }";
+    for other in [
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        "def unique_ext(value: Int) -> Int { value }",
+    ] {
+        let environment = extractor_import_environment(extractor, other, false);
+        for (first, second) in [
+            ("ExtractorLeft", "ExtractorRight"),
+            ("ExtractorRight", "ExtractorLeft"),
+        ] {
+            for first_import in extractor_import_forms(first) {
+                for second_import in extractor_import_forms(second) {
+                    let source = format!("{first_import}\n{second_import}");
+                    let error =
+                        super::resolve(parse(&source).unwrap(), &environment).expect_err(&source);
+                    assert_eq!(
+                        error.diagnostic.reason,
+                        crate::error::ResolveErrorReason::Import,
+                        "{source}: {error:?}"
+                    );
+                    assert!(
+                        error.message.contains("Import conflict")
+                            && error.message.contains("unique_ext"),
+                        "{source}: {error:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn extractor_file_imports_keep_if_let_heads_and_success_binding_uids_independent() {
+    let providers = vec![
+        staged_module(
+            "ExtractorLeft",
+            parse_module_ast(
+                "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+                "ExtractorLeft",
+            ),
+        ),
+        staged_module(
+            "ExtractorRight",
+            parse_module_ast(
+                "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+                "ExtractorRight",
+            ),
+        ),
+    ];
+    let consumers = vec![
+        staged_module(
+            "ExtractorIntConsumer",
+            parse_module_ast(
+                "import ExtractorLeft::unique_ext\ndef run(value: Int) -> (Int, Int) { (if_let(value, unique_ext(10, selected), selected, 0), if_let(value, ExtractorLeft::unique_ext(20, selected), selected, 0)) }",
+                "ExtractorIntConsumer",
+            ),
+        ),
+        staged_module(
+            "ExtractorStringConsumer",
+            parse_module_ast(
+                "import ExtractorRight\ndef run(value: String) -> (String, String) { (if_let(value, unique_ext(selected), selected, \"failure\"), if_let(value, ExtractorRight::unique_ext(selected), selected, \"failure\")) }",
+                "ExtractorStringConsumer",
+            ),
+        ),
+    ];
+    for reverse in [false, true] {
+        let mut stages = standard_test_stages().clone();
+        stages.push(providers.clone());
+        let mut ordered_consumers = consumers.clone();
+        if reverse {
+            ordered_consumers.reverse();
+        }
+        stages.push(ordered_consumers);
+        let index = precollect_declaration_index(&stages).unwrap();
+        let resolved = resolve_staged_program(&stages, Vec::new(), &index, None)
+            .expect("file-local Extractor imports resolve in either module order");
+        let declarations = resolved
+            .iter()
+            .filter_map(|node| match node {
+                Resolved::ExtractorDef(_, id, ..) => Some((
+                    global_surface_name(id.qualified_name.as_deref().unwrap()).to_string(),
+                    id.unique_id,
+                )),
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let mut binding_ids = HashSet::new();
+        let mut consumer_count = 0;
+        for node in &resolved {
+            let Resolved::Def(_, id, _, _, _, _, body, _) = node else {
+                continue;
+            };
+            let Some(name) = id.qualified_name.as_deref().map(global_surface_name) else {
+                continue;
+            };
+            let (extractor_name, pre_arity) = match name {
+                "ExtractorIntConsumer::run" => ("ExtractorLeft::unique_ext", 1),
+                "ExtractorStringConsumer::run" => ("ExtractorRight::unique_ext", 0),
+                _ => continue,
+            };
+            consumer_count += 1;
+            let Resolved::Block(_, nodes) = body.as_ref() else {
+                panic!("expected consumer block")
+            };
+            let [Resolved::TupleLiteral(_, calls)] = nodes.as_slice() else {
+                panic!("expected consumer tuple")
+            };
+            assert_eq!(calls.len(), 2);
+            for call in calls {
+                let Resolved::IfLet(_, _, arms, false) = call else {
+                    panic!("expected if_let")
+                };
+                let ResolvedPattern::Extractor(head, pre_args, children) =
+                    arms[0].pattern.unlocated()
+                else {
+                    panic!("expected named Extractor")
+                };
+                assert_eq!(
+                    head.unique_id, declarations[extractor_name],
+                    "{name}, reverse={reverse}"
+                );
+                assert_eq!(pre_args.len(), pre_arity);
+                let [child] = children.as_slice() else {
+                    panic!("expected one payload binding")
+                };
+                let ResolvedPattern::Var(binding) = child.unlocated() else {
+                    panic!("expected success binding")
+                };
+                assert_eq!(binding.name, "selected");
+                let Resolved::Var(_, reference) = &arms[0].body else {
+                    panic!("expected success reference")
+                };
+                assert_eq!(
+                    reference.unique_id, binding.unique_id,
+                    "{name}, reverse={reverse}"
+                );
+                assert!(
+                    binding_ids.insert(binding.unique_id),
+                    "success bindings must be independent: {name}, reverse={reverse}"
+                );
+            }
+        }
+        assert_eq!(consumer_count, 2);
+        assert_eq!(binding_ids.len(), 4);
+    }
+}
+
+#[test]
+fn extractor_duplicate_imports_reject_every_module_member_list_pair() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "def unrelated() -> Int { 0 }",
+        false,
+    );
+    for first in extractor_import_forms("ExtractorLeft") {
+        for second in extractor_import_forms("ExtractorLeft") {
+            let source = format!("{first}\n{second}");
+            let error = super::resolve(parse(&source).unwrap(), &environment).expect_err(&source);
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Import,
+                "{source}: {error:?}"
+            );
+            assert!(
+                error.message.contains("Duplicate import")
+                    && error.message.contains("ExtractorLeft"),
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn extractor_autoimport_keeps_uid_and_rejects_explicit_duplicates_and_conflicts() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(limit: String, value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        true,
+    );
+    let declared = environment
+        .global_scope
+        .lookup("ExtractorLeft::unique_ext")
+        .unwrap();
+    let mut session =
+        SigilSession::from_environment(&environment, None, ResolveResumeState::default()).unwrap();
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+    let resolved = session
+        .resolve(parse("match 1 { unique_ext(value) => value, _ => 0 }").unwrap())
+        .unwrap();
+    let Resolved::Match(_, _, arms) = &resolved[0] else {
+        panic!("expected match")
+    };
+    let ResolvedPattern::Extractor(head, _, _) = arms[0].pattern.unlocated() else {
+        panic!("expected Extractor")
+    };
+    assert_eq!(head.unique_id, declared);
+    for (owner, message) in [
+        ("ExtractorLeft", "Duplicate import"),
+        ("ExtractorRight", "Import conflict"),
+    ] {
+        for import in extractor_import_forms(owner) {
+            let error = session.resolve(parse(&import).unwrap()).expect_err(&import);
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Import,
+                "{import}: {error:?}"
+            );
+            assert!(error.message.contains(message), "{import}: {error:?}");
+            assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+        }
+    }
+}
+
+#[test]
+fn extractor_duplicate_qualified_declarations_reject_extractors_and_functions() {
+    let extractor =
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }";
+    let other_extractor = "defextractor unique_ext(limit: String, value: String) -> MatchResult<String> { MatchResult::Ok(value) }";
+    let function = "def unique_ext(value: Int) -> Int { value }";
+    for (first, second) in [
+        (extractor, extractor),
+        (extractor, other_extractor),
+        (other_extractor, extractor),
+        (extractor, function),
+        (function, extractor),
+    ] {
+        let mut stages = standard_test_stages().clone();
+        stages.push(vec![
+            staged_module(
+                "ExtractorDuplicate",
+                parse_module_ast(first, "ExtractorDuplicate"),
+            ),
+            staged_module(
+                "ExtractorDuplicate",
+                parse_module_ast(second, "ExtractorDuplicate"),
+            ),
+        ]);
+        let error =
+            ResolveEnvironment::from_stages(&stages).expect_err("duplicate callable identity");
+        assert!(
+            error
+                .message
+                .contains("Duplicate fully-qualified declaration")
+                && error.message.contains("ExtractorDuplicate::unique_ext"),
+            "{first}\n{second}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn extractor_autoimport_conflicts_reject_type_prearity_and_function_overloads() {
+    let extractor = "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }";
+    for other in [
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        "def unique_ext(value: Int) -> Int { value }",
+    ] {
+        for reverse in [false, true] {
+            let mut modules = vec![
+                staged_auto_import_module(
+                    "ExtractorLeft",
+                    parse_module_ast(extractor, "ExtractorLeft"),
+                ),
+                staged_auto_import_module(
+                    "ExtractorRight",
+                    parse_module_ast(other, "ExtractorRight"),
+                ),
+            ];
+            if reverse {
+                modules.reverse();
+            }
+            let mut stages = standard_test_stages().clone();
+            stages.push(modules);
+            let environment = ResolveEnvironment::from_stages(&stages).unwrap();
+            let error = super::resolve(parse("0").unwrap(), &environment)
+                .expect_err("conflicting autoimport declarations must fail before application");
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Import
+            );
+            assert!(
+                error.message.contains("Auto-import conflict")
+                    && error.message.contains("unique_ext")
+                    && error.message.contains("ExtractorLeft")
+                    && error.message.contains("ExtractorRight"),
+                "{other}, reverse={reverse}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn extractor_session_import_failures_and_rollback_preserve_identity() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        false,
+    );
+    let declared = environment
+        .global_scope
+        .lookup("ExtractorLeft::unique_ext")
+        .unwrap();
+    let mut session =
+        SigilSession::from_environment(&environment, None, ResolveResumeState::default()).unwrap();
+    for source in [
+        "import ExtractorLeft::unique_ext\nimport ExtractorRight::unique_ext",
+        "import ExtractorLeft::unique_ext\nmissing_after_extractor_import",
+        "import ExtractorLeft::unique_ext\nimport ExtractorLeft::unique_ext",
+    ] {
+        session.resolve(parse(source).unwrap()).expect_err(source);
+        assert_eq!(session.lookup_uid("unique_ext"), None, "{source}");
+        assert!(session.last_imports().success_labels.is_empty());
+    }
+    let before = session.checkpoint();
+    session
+        .resolve(parse("import ExtractorLeft::unique_ext").unwrap())
+        .unwrap();
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+    let labels = session.last_imports().success_labels.clone();
+    assert_eq!(labels, vec!["ExtractorLeft::unique_ext"]);
+    let error = session
+        .resolve(parse("import ExtractorRight::unique_ext").unwrap())
+        .expect_err("conflicting session import");
+    assert!(error.message.contains("Import conflict"));
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+    assert_eq!(session.last_imports().success_labels, labels);
+    session.rollback(before);
+    assert_eq!(session.lookup_uid("unique_ext"), None);
+    assert!(session.last_imports().success_labels.is_empty());
+    session
+        .resolve(parse("import ExtractorLeft::{unique_ext}").unwrap())
+        .unwrap();
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+}
+
 #[test]
 fn test_warning_explicit_unused_function_import_warns() {
     let module_stages = vec![vec![staged_module(

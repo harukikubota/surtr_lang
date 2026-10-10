@@ -1,0 +1,11 @@
+defmod SelectedInts {
+  defextractor select(offset: Int, value: Int) -> MatchResult<Int> {
+    MatchResult::Ok(offset + value)
+  }
+}
+
+defmod SelectedStrings {
+  defextractor select(value: String) -> MatchResult<String> {
+    MatchResult::Ok(value)
+  }
+}
