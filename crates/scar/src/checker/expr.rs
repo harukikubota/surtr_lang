@@ -3402,6 +3402,11 @@ impl Checker {
 
     fn clear_facet_pattern_bindings(&mut self, pattern: &TypedPattern) {
         match pattern {
+            TypedPattern::HashMap(_, entries) => {
+                for entry in entries {
+                    self.clear_facet_pattern_bindings(&entry.pattern);
+                }
+            }
             TypedPattern::Located(_, inner) => self.clear_facet_pattern_bindings(inner),
             TypedPattern::Var(_, id) => {
                 self.facet_bindings.remove(&id.unique_id);
@@ -10839,7 +10844,7 @@ impl Checker {
         Ok(())
     }
 
-    fn ensure_no_runtime_facet_value(
+    pub(super) fn ensure_no_runtime_facet_value(
         &self,
         value: &TypedNode,
         context: &str,

@@ -9137,6 +9137,11 @@ fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<
             collect_unresolved_pattern_binding_names(head, names);
             collect_unresolved_pattern_binding_names(tail, names);
         }
+        TypedPattern::HashMap(_, entries) => {
+            for entry in entries {
+                collect_unresolved_pattern_binding_names(&entry.pattern, names);
+            }
+        }
         TypedPattern::Tuple(_, items)
         | TypedPattern::Constructor { fields: items, .. }
         | TypedPattern::Extractor { items, .. } => {

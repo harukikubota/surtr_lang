@@ -383,6 +383,12 @@ fn collect_pattern_captures(
                 collect_pattern_captures(inner, bound, free);
             }
         }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                collect_captures_inner(key, &mut bound.clone(), free);
+                collect_pattern_captures(child, bound, free);
+            }
+        }
         ResolvedPattern::Record(_, fields) => {
             for (_, inner) in fields {
                 collect_pattern_captures(inner, bound, free);
@@ -425,6 +431,11 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         ResolvedPattern::Constructor(_, inners) => {
             for inner in inners {
                 collect_bind_pattern_bindings(inner, bound);
+            }
+        }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (_, child) in entries {
+                collect_bind_pattern_bindings(child, bound);
             }
         }
         ResolvedPattern::Record(_, fields) => {

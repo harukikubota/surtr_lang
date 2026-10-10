@@ -2018,6 +2018,11 @@ impl Checker {
                 nominal.arguments.get(*index).cloned()
             }
             (Ty::List(element), Projection::Element) => Some(element.as_ref().clone()),
+            (Ty::Enum(name, arguments), Projection::Element)
+                if name == "HashMap" && arguments.len() == 1 =>
+            {
+                Some(arguments[0].clone())
+            }
             (
                 Ty::MatchResult(payload),
                 Projection::Field {
@@ -2431,6 +2436,12 @@ impl Checker {
             TypedPattern::Located(_, inner) => {
                 self.pattern_provenance_bindings(inner, source, bindings)
             }
+            TypedPattern::HashMap(_, entries) => {
+                let payload = self.project_provenance(source, &Projection::Element, &Ty::Hole);
+                for entry in entries {
+                    self.pattern_provenance_bindings(&entry.pattern, &payload, bindings);
+                }
+            }
             TypedPattern::Var(_, id) => {
                 bindings.insert(id.unique_id, source.clone());
             }
@@ -2513,6 +2524,12 @@ impl Checker {
         bindings: &mut Bindings,
     ) {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => {
+                let payload = self.project_provenance(source, &Projection::Element, &Ty::Hole);
+                for entry in entries {
+                    self.match_provenance_bindings(&entry.pattern, &payload, bindings);
+                }
+            }
             TypedMatchPattern::Binding(id) => {
                 bindings.insert(id.unique_id, source.clone());
             }

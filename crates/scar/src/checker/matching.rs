@@ -17,6 +17,7 @@ impl Checker {
             | ResolvedPattern::Constructor(head, _)
             | ResolvedPattern::Extractor(head, _, _)
             | ResolvedPattern::Record(head, _) => head.span.clone(),
+            ResolvedPattern::HashMap(span, _) => span.clone(),
             ResolvedPattern::Wildcard(span)
             | ResolvedPattern::AnnotatedWildcard(span, _)
             | ResolvedPattern::ListNil(span)
@@ -212,6 +213,9 @@ impl Checker {
                 "Duration".into(),
                 NominalType::monomorphic(Vec::new()),
             )),
+            ResolvedPattern::HashMap(_, _) => {
+                Some(Ty::Enum("HashMap".into(), vec![self.env.fresh_tyvar()]))
+            }
             ResolvedPattern::Tuple(items) => Some(Ty::Tuple(
                 items
                     .iter()
@@ -346,6 +350,19 @@ impl Checker {
                     ))
                 }
             }
+            // HashMap keys form an open set. Nonempty subsets never establish
+            // coverage; an unguarded empty Pattern was handled as catch-all above.
+            Ty::Enum(enum_name, _) if enum_name == "HashMap" => Err(self.pattern_error(
+                TypeDiagnosticReason::NonExhaustiveMatch,
+                PatternKind::Match,
+                None,
+                None,
+                Some(scrut_ty),
+                None,
+                None,
+                vec!["_".into()],
+                span,
+            )),
             Ty::Enum(enum_name, _) => {
                 self.check_enum_like_match_exhaustive(span, enum_name, scrut_ty, arms)
             }
@@ -765,6 +782,21 @@ impl Checker {
                     typed_items.push(self.check_match_subpattern(item, item_ty)?);
                 }
                 Ok(TypedMatchPattern::Tuple(typed_items))
+            }
+            ResolvedPattern::HashMap(span, entries) => {
+                let value_ty = self.hash_map_pattern_value_ty(expected_ty, span)?;
+                let mut typed = Vec::with_capacity(entries.len());
+                for (key, pattern) in entries {
+                    let key = self.check_hash_map_pattern_key(key)?;
+                    let key_span = key.span.clone();
+                    let pattern = self.check_match_subpattern(pattern, &value_ty)?;
+                    typed.push(TypedHashMapMatchPatternEntry {
+                        key,
+                        pattern,
+                        key_span,
+                    });
+                }
+                Ok(TypedMatchPattern::HashMap(typed))
             }
             ResolvedPattern::Record(id, fields) => {
                 if self.env.is_error_constructor(id.unique_id) {
@@ -1296,6 +1328,7 @@ impl Checker {
             TypedMatchPattern::Tuple(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
+            TypedMatchPattern::HashMap(entries) => entries.is_empty(),
             TypedMatchPattern::Record(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
@@ -1434,6 +1467,11 @@ impl Checker {
 
     fn collect_or_binding_ids(pat: &TypedMatchPattern, out: &mut Vec<ResolvedId>) {
         match pat {
+            TypedMatchPattern::HashMap(entries) => {
+                for entry in entries {
+                    Self::collect_or_binding_ids(&entry.pattern, out);
+                }
+            }
             TypedMatchPattern::Binding(id) => out.push(id.clone()),
             TypedMatchPattern::As(inner, alias) => {
                 Self::collect_or_binding_ids(inner, out);

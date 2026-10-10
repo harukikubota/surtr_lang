@@ -127,6 +127,9 @@ impl Resolver {
 
     fn pattern_expression_roles_selected(pattern: &AstPattern) -> bool {
         match pattern {
+            AstPattern::HashMap(_, entries) => entries
+                .iter()
+                .all(|(_, child)| Self::pattern_expression_roles_selected(child)),
             AstPattern::Call(_, _, arguments) => arguments.iter().all(|argument| {
                 !(argument.expression.is_some() && argument.pattern.is_some())
                     && argument

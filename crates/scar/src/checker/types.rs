@@ -4789,6 +4789,17 @@ impl Checker {
             TypedPattern::Located(source, inner) => {
                 TypedPattern::Located(source, Box::new(self.resolve_typed_pattern(*inner)))
             }
+            TypedPattern::HashMap(ty, entries) => TypedPattern::HashMap(
+                self.resolve_ty(&ty),
+                entries
+                    .into_iter()
+                    .map(|entry| TypedHashMapPatternEntry {
+                        key: *self.resolve_typed_node(entry.key),
+                        pattern: self.resolve_typed_pattern(entry.pattern),
+                        key_span: entry.key_span,
+                    })
+                    .collect(),
+            ),
             TypedPattern::Var(ty, id) => TypedPattern::Var(self.resolve_ty(&ty), id),
             TypedPattern::Pin(ty, id, dispatch) => {
                 TypedPattern::Pin(self.resolve_ty(&ty), id, dispatch)
@@ -4868,6 +4879,16 @@ impl Checker {
         pattern: TypedMatchPattern,
     ) -> TypedMatchPattern {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => TypedMatchPattern::HashMap(
+                entries
+                    .into_iter()
+                    .map(|entry| TypedHashMapMatchPatternEntry {
+                        key: *self.resolve_typed_node(entry.key),
+                        pattern: self.resolve_typed_match_pattern(entry.pattern),
+                        key_span: entry.key_span,
+                    })
+                    .collect(),
+            ),
             TypedMatchPattern::Binding(id) => TypedMatchPattern::Binding(id),
             TypedMatchPattern::Pin { id, ty, dispatch } => TypedMatchPattern::Pin {
                 id,

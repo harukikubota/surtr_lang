@@ -18,6 +18,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [`@derive`](./derive.md)
 - [構造体](./structs.md)
 - [Record](./record.md)
+- [HashMap](./hash_map.md)
 - [Identity](./identity.md)
 - [Reader](./reader.md)
 - [State](./state.md)

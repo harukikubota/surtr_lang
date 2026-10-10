@@ -1,0 +1,26 @@
+def lookup(map: HashMap<$V>, key: String) -> Result<$V> {
+  hash![key => value] =? map
+  Ok(value)
+}
+map = hash!["a" => 2, "extra" => 3]
+key = "a"
+print(inspect(match map { hash![^key => n] => n, _ => 0, }))
+print(inspect(is_match(map, hash!["a" => 2])))
+print(inspect(is_match(map, hash!["missing" => _])))
+print(inspect(if_let(map, hash!["a" => n], n + 1, 0)))
+if_let_then(map, hash!["a" => n], print(inspect(n)))
+print(inspect(apply_pattern(map, hash!["a" => _1])))
+print(inspect(match map { hash![] => True, }))
+hash![] = map
+print(inspect(is_match(map, hash!["a" => 2, "a" => 2])))
+print(inspect(is_match(map, hash!["a" => 2, "a" => 3])))
+print(inspect(match map { hash!["a" => 1] | hash!["a" => 2] => True, _ => False, }))
+key = "outer"
+print(inspect(match hash!["outer" => "inner"] { hash![key => key] => key, _ => "no", }))
+print(inspect(is_match(hash!["a" => hash!["z" => 1]], hash!["a" => hash!["z" => 1]])))
+outer = "a"
+print(inspect(match hash!["a" => "inner"] { hash![outer => outer, outer => _] => outer, _ => "no", }))
+captured_key = "a"
+reader: (HashMap<Int> -> Int) = {|map: HashMap<Int>| match map { hash![^captured_key => value] => value, _ => 0, }}
+print(inspect(reader(hash!["a" => 12])))
+print(inspect(lookup(hash!["a" => "generic"], "a")))

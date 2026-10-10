@@ -1,0 +1,1 @@
+match hash!["a" => 1] { hash!["a" => x, "a" => x] => x, _ => 0, }

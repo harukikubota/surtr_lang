@@ -1539,6 +1539,18 @@ fn rewrite_process_owner_pattern(
                 .map(|arg| rewrite_process_owner_pattern(arg, old_name, new_name))
                 .collect(),
         ),
+        AstPattern::HashMap(span, entries) => AstPattern::HashMap(
+            span,
+            entries
+                .into_iter()
+                .map(|(key, child)| {
+                    (
+                        rewrite_process_owner_refs(key, old_name, new_name),
+                        rewrite_process_owner_pattern(child, old_name, new_name),
+                    )
+                })
+                .collect(),
+        ),
         AstPattern::Tuple(span, items) => AstPattern::Tuple(
             span,
             items
@@ -1757,6 +1769,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
         | AstPattern::AnnotatedWildcard(span, _)
+        | AstPattern::HashMap(span, _)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
         | AstPattern::IntLit(span, _)
@@ -1773,6 +1786,13 @@ fn pattern_span(pat: &AstPattern) -> &Span {
 
 fn pattern_depth(pat: &AstPattern) -> usize {
     match pat {
+        AstPattern::HashMap(_, entries) => {
+            1 + entries
+                .iter()
+                .map(|(_, child)| pattern_depth(child))
+                .max()
+                .unwrap_or(0)
+        }
         AstPattern::ListCons(_, head, tail) => 1 + pattern_depth(head).max(pattern_depth(tail)),
         AstPattern::Constructor(_, _, inners)
         | AstPattern::Tuple(_, inners)
@@ -1895,6 +1915,13 @@ fn map_pattern(pat: AstPattern, map: &dyn Fn(Span) -> Span) -> AstPattern {
         AstPattern::AnnotatedWildcard(span, ty) => {
             AstPattern::AnnotatedWildcard(map_span(span, map), map_ast_ty(ty, map))
         }
+        AstPattern::HashMap(span, entries) => AstPattern::HashMap(
+            map_span(span, map),
+            entries
+                .into_iter()
+                .map(|(key, child)| (map_ast_span(key, map), map_pattern(child, map)))
+                .collect(),
+        ),
         AstPattern::ListNil(span) => AstPattern::ListNil(map_span(span, map)),
         AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
             map_span(span, map),

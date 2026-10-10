@@ -8777,3 +8777,11 @@ fn readonly_struct_rejects_explicit_public_field() {
             .contains("@readonly struct fields cannot be explicitly public"));
     }
 }
+
+#[test]
+fn hashmap_structural_pattern_syntax() {
+    parse("match map { hash![^key => [x, ..xs], \"nested\" => hash![]] => x, _ => 0 }")
+        .expect("HashMap structural patterns accept expressions, pins and nested children");
+    parse("hash![] = map").expect("empty HashMap pattern is valid binding syntax");
+    assert!(parse("match map { hash![\"a\" x] => 1, _ => 0 }").is_err());
+}

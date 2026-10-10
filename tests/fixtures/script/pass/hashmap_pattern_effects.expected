@@ -1,0 +1,21 @@
+input
+key-a
+child:2
+key-b
+child:3
+guard-body
+5
+first
+False
+missing
+False
+Err(NoneError("None Value."))
+safe-key
+safe-body
+Ok(2)
+Ok(4)
+Ok(7)
+Ok(6)
+Option::None
+[8]
+Ok(9)

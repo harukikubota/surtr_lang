@@ -120,6 +120,57 @@ impl Parser<'_> {
         )
     }
 
+    fn parse_hash_map_pattern(&mut self) -> Result<AstPattern, ParseError> {
+        let start = self.advance().span.start;
+        self.expect(&Token::Bang)?;
+        let bracket = self.expect(&Token::LBrack)?;
+        self.with_parse_nesting(bracket, |parser| {
+            let mut entries = Vec::new();
+            parser.skip_newlines();
+            while !matches!(parser.peek(), Token::RBrack) {
+                let key = if matches!(parser.peek(), Token::Caret) {
+                    let pin = parser.advance().span;
+                    let (name, span) = parser.expect_ident()?;
+                    if name == "self" && parser.impl_target_stack.is_empty() {
+                        return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::PatternSyntax,
+                            "`self` can only be used inside impl methods",
+                            span,
+                        ));
+                    }
+                    Ast::Var(
+                        Span {
+                            start: pin.start,
+                            end: span.end,
+                        },
+                        name,
+                    )
+                } else {
+                    parser.parse_non_assignment_expr()?
+                };
+                parser.skip_newlines();
+                parser.expect(&Token::FatArrow)?;
+                parser.skip_newlines();
+                let value = parser.parse_pattern()?;
+                entries.push((key, value));
+                parser.skip_newlines();
+                if !matches!(parser.peek(), Token::Comma) {
+                    break;
+                }
+                parser.advance();
+                parser.skip_newlines();
+            }
+            let end = parser.expect(&Token::RBrack)?;
+            Ok(AstPattern::HashMap(
+                Span {
+                    start,
+                    end: end.end,
+                },
+                entries,
+            ))
+        })
+    }
+
     fn parse_list_bind_pattern(&mut self) -> Result<AstPattern, ParseError> {
         let sp = self.peek_span();
         self.with_parse_nesting(sp.clone(), |parser| {
@@ -385,6 +436,7 @@ impl Parser<'_> {
                 let annotation = if matches!(self.peek(), Token::Colon) { self.advance(); self.skip_newlines(); Some(self.parse_type()?) } else { None };
                 Ok(AstPattern::Projection { span: sp.clone(), index, inner: Box::new(AstPattern::Wildcard(sp)), annotation })
             }
+            Token::Ident(name) if name == "hash" && matches!(self.tokens.get(self.pos + 1).map(|token| &token.token), Some(Token::Bang)) => self.parse_hash_map_pattern(),
             Token::Ident(name) if name.starts_with('_') => {
                 self.advance();
                 if matches!(self.peek(), Token::Colon) {
@@ -681,6 +733,9 @@ fn pattern_or_span(pattern: &AstPattern) -> Option<&Span> {
             .iter()
             .filter_map(|arg| arg.pattern.as_deref())
             .find_map(pattern_or_span),
+        AstPattern::HashMap(_, entries) => {
+            entries.iter().find_map(|(_, child)| pattern_or_span(child))
+        }
         AstPattern::Or(span, _) => Some(span),
         AstPattern::As(_, inner, _, _, _) | AstPattern::Projection { inner, .. } => {
             pattern_or_span(inner)
@@ -710,6 +765,9 @@ pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
             .iter()
             .filter_map(|arg| arg.pattern.as_deref())
             .any(pattern_contains_pin),
+        AstPattern::HashMap(_, entries) => {
+            entries.iter().any(|(_, child)| pattern_contains_pin(child))
+        }
         AstPattern::Pin(_, _) => true,
         AstPattern::As(_, inner, _, _, _) | AstPattern::Projection { inner, .. } => {
             pattern_contains_pin(inner)

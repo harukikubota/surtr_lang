@@ -259,6 +259,12 @@ fn process_self_param(span: &Span, agent_name: &str) -> ValueParameter {
 
 fn rewrite_process_pattern_self_refs(pattern: &mut AstPattern) {
     match pattern {
+        AstPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                *key = rewrite_process_self_refs(key.clone());
+                rewrite_process_pattern_self_refs(child);
+            }
+        }
         AstPattern::Call(_, _, args) => {
             for arg in args {
                 if let Some(expr) = arg.expression.take() {

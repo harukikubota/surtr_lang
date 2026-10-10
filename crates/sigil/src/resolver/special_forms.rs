@@ -359,6 +359,9 @@ pub(super) fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
         AstPattern::Constructor(_, _, inners)
         | AstPattern::Tuple(_, inners)
         | AstPattern::Or(_, inners) => inners.iter().any(pattern_has_binding_vars),
+        AstPattern::HashMap(_, entries) => entries
+            .iter()
+            .any(|(_, child)| pattern_has_binding_vars(child)),
         AstPattern::Call(_, _, args) => args
             .iter()
             .filter_map(|arg| arg.pattern.as_deref())
@@ -382,6 +385,7 @@ pub(super) fn ast_pattern_span(pattern: &AstPattern) -> &Span {
         | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
         | AstPattern::AnnotatedWildcard(span, _)
+        | AstPattern::HashMap(span, _)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
         | AstPattern::IntLit(span, _)

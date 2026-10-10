@@ -583,6 +583,7 @@ Pattern は照合位置に直接記述します。通常の式や第一級の値
 - pin `^name`（外側で束縛済みの値と `Eq` で比較）
 - tuple Pattern `(left, right)`（1要素の tuple Pattern は使えない）
 - list Pattern `[]`、`[first, second]`、`[head, ..tail]`。String の head / tail 分解にも `[head, ..tail]` を使う
+- HashMap Pattern `hash![key => child, ...]`（String キーの存在と値を照合し、追加キーを許容する。空 Pattern は任意の HashMap に成功する）
 - 入れ子になった constructor pattern
 - Record の構造的 Pattern `User(name, age)` / `User(age: selected_age, name: selected_name)` / `User(name: selected_name, age)`（全 field を指定する。名前指定内の裸の束縛名は同名 field の省略記法）
 - named Extractor または束縛済み ExtractorClosure の `head(pre_args..., payload_patterns...)`
@@ -850,7 +851,7 @@ defmod Bootstrap {
 
 `Extractor::from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B>)>` は通常SRTの標準APIです。単項callableをcaptureし、各Pattern occurrenceで1回実行します。外側Resultだけをunwrapし、成功payloadと元Errorを保持します。Option/raw/入力0個/複数入力の暗黙変換はありません。
 
-詳しい使い方は [Pattern Matching](./pattern-matching.md) と [Extractors](./extractors.md)、実装契約は [Pattern / Extractor 実装契約](../dev/Pattern_spec.md) を参照してください。
+詳しい使い方は [Pattern Matching](./pattern-matching.md)、[HashMap](./hash_map.md)、[Extractors](./extractors.md)、実装契約は [Pattern / Extractor 実装契約](../dev/Pattern_spec.md) を参照してください。
 
 ## 12. 現在のスコープ外
 

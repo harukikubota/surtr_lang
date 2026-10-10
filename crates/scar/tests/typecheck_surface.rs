@@ -47,6 +47,7 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
+    surface_case!(hash_map_pattern_type_boundaries),
     surface_case!(pattern_failure_diagnostics_show_target_origins),
     surface_case!(facet_view_capture_infers_source_from_path),
     surface_case!(facet_view_capture_preserves_constraints),
@@ -12161,5 +12162,58 @@ fn pattern_failure_diagnostics_show_target_origins() {
             .iter()
             .any(|label| label.message == "do_carrier: Identity<Int>"));
         assert_eq!(diagnostic.data.to_json_value()["kind"], "PatternFailure");
+    }
+}
+
+fn hash_map_pattern_type_boundaries() {
+    for source in [
+        r#"map = hash!["a" => 2]
+answer = match map { hash!["a" => value] => value, hash![] => 0 }"#,
+        r#"map = hash!["a" => 2]
+hash![] = map"#,
+        r#"map = hash!["a" => 2]
+answer = apply_pattern(map, hash!["a" => _1])"#,
+        r#"map = hash!["a" => Ok(2)]
+answer = match map { hash!["a" => value] => value, hash![] => Ok(0) }"#,
+    ] {
+        typecheck_with_standard_environment(source)
+            .expect("HashMap success boundary should typecheck");
+    }
+    for (source, message) in [
+        (
+            r#"map = hash!["a" => 2]
+answer = match map { hash![1 => _] => True, _ => False }"#,
+            "HashMap Pattern key must be String",
+        ),
+        (
+            r#"map = hash!["a" => 2]
+hash!["a" => value] = map"#,
+            "Only total MatchBlock patterns",
+        ),
+        (
+            r#"map = hash!["a" => 2]
+hash![] =? map"#,
+            "not a SafeBind target",
+        ),
+        (
+            r#"map = hash!["a" => 2]
+answer = match map { hash!["a" => _] => True }"#,
+            "exhaustive",
+        ),
+        (
+            r#"answer = match 2 { hash![] => True, _ => False }"#,
+            "HashMap",
+        ),
+    ] {
+        let error = typecheck_with_standard_environment(source)
+            .expect_err("HashMap rejection boundary should fail");
+        assert!(
+            error
+                .message
+                .to_lowercase()
+                .contains(&message.to_lowercase()),
+            "expected {message}, got {}",
+            error.message
+        );
     }
 }
