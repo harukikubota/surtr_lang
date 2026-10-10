@@ -84,7 +84,7 @@ fn module_pipeline_cache_key(compile_sources: &CompileSources, mode: TestCompile
 
             key.push_str(file_name);
             key.push('\x1f');
-            key.push_str(&module.module_path);
+            key.push_str(&format!("{:?}", module.module_path));
             key.push('\x1f');
             key.push_str(source_kind);
             key.push('\x1f');

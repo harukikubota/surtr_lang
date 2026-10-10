@@ -1536,14 +1536,32 @@ fn process_stdlib_declares_common_process_family_modules() {
     }
 }
 
+fn process_module_source(name: &str) -> String {
+    let ast = spire::parse_with_context(
+        PROCESS_MODULE_SOURCE,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("process standard source should parse");
+    let span = ast
+        .into_iter()
+        .find_map(|node| match node {
+            spire::ast::Ast::Defmod(span, module_name, _, _)
+                if module_name == format!("Global::{name}") =>
+            {
+                Some(span)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{name} module should exist"));
+    PROCESS_MODULE_SOURCE
+        .chars()
+        .skip(span.start)
+        .take(span.end - span.start)
+        .collect()
+}
+
 fn process_module_only_declares_public_runtime_helpers() {
-    let process_start = PROCESS_MODULE_SOURCE
-        .find("defmod Process")
-        .expect("Process module should exist");
-    let out_handler_start = PROCESS_MODULE_SOURCE
-        .find("defmod OutHandler")
-        .expect("OutHandler module should follow Process");
-    let process_module = &PROCESS_MODULE_SOURCE[process_start..out_handler_start];
+    let process_module = process_module_source("Process");
 
     assert!(
         !process_module.contains("@hidden"),
@@ -1566,13 +1584,7 @@ fn process_module_only_declares_public_runtime_helpers() {
 }
 
 fn process_stdlib_declares_agent_lower_surface_with_regular_surface_docs() {
-    let agent_start = PROCESS_MODULE_SOURCE
-        .find("defmod Agent")
-        .expect("Agent module should exist");
-    let process_start = PROCESS_MODULE_SOURCE
-        .find("defmod Process")
-        .expect("Process module should follow Agent");
-    let agent_module = &PROCESS_MODULE_SOURCE[agent_start..process_start];
+    let agent_module = process_module_source("Agent");
 
     for surface in [
         "def pid::<",
@@ -7729,17 +7741,23 @@ fn special_form_builtin_decl_must_live_at_its_canonical_std_qname() {
 }
 
 fn kernel_does_not_allow_removed_concat_builtin() {
-    let module_stages = std_module_stages_with_overrides(&[(
-        "Kernel",
+    let ast = spire::parse_with_context(
         r#"defmod Kernel {
   @builtin def concat(left: $A, right: $A) -> String
 }"#,
-    )]);
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("removed builtin fixture should parse");
+    let module_stages = vec![sigil::staged_modules_from_source_ast(ast, None)];
     let declaration_index =
         sigil::precollect_declaration_index(&module_stages).expect("std modules should precollect");
     let err = sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
         .expect_err("concat is no longer a declared runtime builtin");
-    assert!(err.message.contains("Unknown builtin declaration: concat"));
+    assert!(
+        err.message.contains("Unknown builtin declaration: concat"),
+        "{}",
+        err.message
+    );
 }
 
 fn if_auto_forces_zero_arg_closure_once_for_branch_type() {

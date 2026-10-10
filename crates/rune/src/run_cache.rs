@@ -175,7 +175,7 @@ fn push_module_pipeline_key(key: &mut String, compile_sources: &xldr::CompileSou
                 .unwrap_or("");
             key.push_str(file_name);
             key.push('\x1f');
-            key.push_str(&module.module_path);
+            key.push_str(&format!("{:?}", module.module_path));
             key.push('\x1f');
             key.push_str(xldr::source_kind_cache_key(module.source_kind));
             key.push('\x1f');

@@ -529,7 +529,7 @@ pub fn collect_additional_default_std_module_inputs() -> Result<Vec<ModuleInput>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedModule {
     pub source_id: SourceId,
-    pub module_path: String,
+    pub module_path: Option<String>,
     pub source_kind: SourceKind,
 }
 
@@ -563,7 +563,7 @@ fn build_module_sources_from_stage_specs(
             idx += 1;
             stage_bindings.push(StagedModule {
                 source_id: binding.source_id,
-                module_path: binding.module_path.clone().unwrap_or_default(),
+                module_path: binding.module_path.clone(),
                 source_kind: binding.kind,
             });
         }
@@ -584,7 +584,7 @@ fn build_module_sources_from_stage_specs(
     Ok(ModuleSources {
         sources: collected.sources,
         builtin_source_id: builtin.source_id,
-        builtin_module_path: Some(builtin.module_path.clone()),
+        builtin_module_path: builtin.module_path.clone(),
         module_source_ids,
         module_stages,
     })
@@ -607,7 +607,7 @@ pub(crate) fn stdlib_module_spec_cache_key(stdlib_variant: StdlibVariant) -> Str
     for spec in stdlib_module_specs(stdlib_variant) {
         key.push_str(spec.file_name);
         key.push('\x1e');
-        key.push_str(spec.module_path);
+        key.push_str(&format!("{:?}", spec.module_path));
         key.push('\x1e');
         key.push_str(match spec.stage {
             StdlibStage::Bootstrap => "bootstrap",
@@ -639,7 +639,7 @@ pub fn is_default_std_module_path(module_path: &str) -> bool {
     let module_path = module_path.strip_prefix("Global::").unwrap_or(module_path);
     STDLIB_MODULE_SPECS
         .iter()
-        .any(|spec| spec.module_path == module_path)
+        .any(|spec| spec.module_path == Some(module_path))
 }
 
 pub fn is_default_std_module_file_name(file_name: &str) -> bool {
@@ -666,18 +666,19 @@ pub fn collect_module_sources_with_stdlib_variant(
 ) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
     // modules are appended afterwards so they can depend on
-    // `Bootstrap -> [SpecialTypes + Function + Kernel + other std modules]` but never precede them.
+    // `Bootstrap -> shared standard definitions` but never precede them.
     let mut stage_specs = vec![Vec::new(), Vec::new()];
     for spec in stdlib_module_specs(stdlib_variant) {
         let stage_index = match spec.stage {
             StdlibStage::Bootstrap => 0,
             StdlibStage::Main | StdlibStage::TestExtension => 1,
         };
-        stage_specs[stage_index].push(SourceDescriptor::std_module(
-            spec.file_name,
-            spec.source,
-            spec.module_path,
-        ));
+        stage_specs[stage_index].push(SourceDescriptor {
+            file_name: spec.file_name.into(),
+            source: spec.source.into(),
+            kind: SourceKind::StdDefinitionSource,
+            module_path: spec.module_path.map(str::to_owned),
+        });
     }
 
     if !extra_std_sources.is_empty() {
@@ -721,7 +722,7 @@ pub fn extend_module_sources_with_module_stages(
                 by_file.get(&module.file_name)
             {
                 if *source_kind != SourceKind::DefinitionSource
-                    || module_path != &module.module_path
+                    || module_path.as_deref() != Some(module.module_path.as_str())
                     || module_sources.sources.source(*source_id) != Some(module.source.as_str())
                 {
                     return Err(LoadError::ConflictingSource {
@@ -738,7 +739,7 @@ pub fn extend_module_sources_with_module_stages(
                     (
                         source_id,
                         SourceKind::DefinitionSource,
-                        module.module_path.clone(),
+                        Some(module.module_path.clone()),
                     ),
                 );
                 source_id
@@ -746,7 +747,7 @@ pub fn extend_module_sources_with_module_stages(
             module_sources.module_source_ids.push(source_id);
             modules.push(StagedModule {
                 source_id,
-                module_path: module.module_path.clone(),
+                module_path: Some(module.module_path.clone()),
                 source_kind: SourceKind::DefinitionSource,
             });
         }
@@ -947,7 +948,8 @@ mod tests {
             .iter()
             .all(|spec| spec.variant == StdlibVariant::Default));
         assert!(test_specs.iter().any(|spec| {
-            spec.module_path == TEST_STD_MODULE_PATH && spec.variant == StdlibVariant::TestEnabled
+            spec.module_path == Some(TEST_STD_MODULE_PATH)
+                && spec.variant == StdlibVariant::TestEnabled
         }));
         assert!(stdlib_module_spec_cache_key(StdlibVariant::TestEnabled)
             .contains("variant=test-enabled"));
@@ -1008,19 +1010,21 @@ mod tests {
         );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
-        assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
+        assert_eq!(
+            loaded.module_stages[0][0].module_path.as_deref(),
+            Some("Bootstrap")
+        );
         assert_eq!(
             loaded.module_stages[1].len(),
             stdlib_stage_len(StdlibVariant::Default, StdlibStage::Main)
         );
         let std_paths = loaded.module_stages[1]
             .iter()
-            .map(|module| module.module_path.as_str())
+            .filter_map(|module| module.module_path.as_deref())
             .collect::<Vec<_>>();
         assert_eq!(
             std_paths,
             vec![
-                "SpecialTypes",
                 "Function",
                 "Kernel",
                 "Add",
@@ -1145,7 +1149,10 @@ mod tests {
         let explicit_standard = ModuleInput {
             file_name: standard.file_name.clone(),
             source: standard.source.clone(),
-            module_path: prefix.module_stages[0][0].module_path.clone(),
+            module_path: prefix.module_stages[0][0]
+                .module_path
+                .clone()
+                .expect("Bootstrap has a module path"),
         };
         assert!(
             matches!(
@@ -1180,7 +1187,7 @@ mod tests {
         );
         let std_paths = loaded.module_stages[1]
             .iter()
-            .map(|module| module.module_path.as_str())
+            .filter_map(|module| module.module_path.as_deref())
             .collect::<Vec<_>>();
         assert_eq!(std_paths.last().copied(), Some("Test"));
     }
@@ -1281,12 +1288,11 @@ mod tests {
         );
         let std_paths = loaded.module_stages[1]
             .iter()
-            .map(|module| module.module_path.as_str())
+            .filter_map(|module| module.module_path.as_deref())
             .collect::<Vec<_>>();
         assert_eq!(
             std_paths,
             vec![
-                "SpecialTypes",
                 "Function",
                 "Kernel",
                 "Add",
@@ -1350,9 +1356,18 @@ mod tests {
                 "StyledDoc",
             ]
         );
-        assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
-        assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
-        assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");
+        assert_eq!(
+            loaded.module_stages[2][0].module_path.as_deref(),
+            Some("Std::Math")
+        );
+        assert_eq!(
+            loaded.module_stages[3][0].module_path.as_deref(),
+            Some("Std::String")
+        );
+        assert_eq!(
+            loaded.module_stages[3][1].module_path.as_deref(),
+            Some("Std::List")
+        );
     }
 
     #[test]

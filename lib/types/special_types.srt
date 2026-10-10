@@ -1,6 +1,6 @@
 # Compiler-special builtin type declarations.
-# This file intentionally has no module body; it only hosts canonical builtin
-# type heads and Extractor result variants reserved by the compiler.
+# This file has no module body. It hosts canonical builtin type heads,
+# Extractor result variants, Unit trait implementations, and hidden standby helpers.
 
 @doc """
 Standard `Unit` type declaration.
@@ -146,7 +146,6 @@ Ok(1)
 """
 @builtin type ErrorKind
 
-
 @doc """
 Compiler-reserved process initialization protocol marker.
 `StandbyInit<$T>` may only appear as the successful value inside a Standby process
@@ -155,14 +154,16 @@ It is not an ordinary public API or data transport type.
 """
 @builtin type StandbyInit<$T>
 
-@hidden
-@builtin def Pending::<$T>() -> StandbyInit<$T>
-
-@hidden
-@builtin def PendingAfter::<$T>(duration: Duration) -> StandbyInit<$T>
-
-@hidden
-@builtin def Ready(value: $T) -> StandbyInit<$T>
+@doc """
+Compiler-reserved ignored-input closure marker.
+Use level: callable surface marker only.
+`Hole` is not a first-class data type.
+It exists only as the canonical builtin type behind `_` when a callable value
+intentionally accepts an input that is not observed, or when both update-side
+slots of `Facet<K, S, A, T, B>` are deferred. Do not use it as plain data,
+field, container element, or return hole.
+"""
+@builtin type Hole
 
 impl Eq for Unit {
   def eq(self: Self, rhs: Self) -> Boolean {
@@ -204,14 +205,11 @@ impl Convert<String> for Unit {
   }
 }
 
+@hidden
+@builtin def Pending::<$T>() -> StandbyInit<$T>
 
-@doc """
-Compiler-reserved ignored-input closure marker.
-Use level: callable surface marker only.
-`Hole` is not a first-class data type.
-It exists only as the canonical builtin type behind `_` when a callable value
-intentionally accepts an input that is not observed, or when both update-side
-slots of `Facet<K, S, A, T, B>` are deferred. Do not use it as plain data,
-field, container element, or return hole.
-"""
-@builtin type Hole
+@hidden
+@builtin def PendingAfter::<$T>(duration: Duration) -> StandbyInit<$T>
+
+@hidden
+@builtin def Ready(value: $T) -> StandbyInit<$T>

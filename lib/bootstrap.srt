@@ -1,7 +1,3 @@
-deferror ZeroModuloError() {
-  Self(message: "modulo by zero")
-}
-
 @doc """
 Bootstrap module.
 
@@ -13,7 +9,8 @@ and `Bootstrap` is the first explicit example of that rule in the standard
 library.
 Cross-cutting builtin values live in `kernel.srt`, builtin type declarations
 live at the top level of their corresponding files, and the abstract `Error`
-type itself lives in `error.srt`.
+type itself lives in `types/error.srt`. Shared concrete errors live in
+`errors.srt` in the main standard stage.
 """
 
 @autoimport
@@ -368,45 +365,3 @@ defmod Bootstrap {
   """
   @builtin def __LINE__() -> Int
 }
-
-# `deferror` introduces a concrete recoverable error declaration.
-# Bootstrap carries the most universally useful standard errors so they are
-# available from the first standard-library stage.
-
-@doc """
-Concrete bootstrap error for "no value" situations.
-`NoneError` is the standard failure used by optional-style sugar such as `T?`.
-`T?` now lowers to `Option<T>`.
-Use `Result<T>` with `Err(NoneError)` when "missing value" should participate in
-Result-style failure propagation. A function definition may document this contract
-with `Result<T, NoneError>` in its direct return position.
-"""
-deferror NoneError { "None Value." }
-
-@doc """
-Concrete bootstrap error for division by zero.
-The standard `Div` implementations for `Int` and `Float` return this through
-`Err(...)` instead of trapping. Modulo by zero returns `ZeroModuloError`.
-The traits do not fix their error contract; user implementations may declare
-their own errors.
-"""
-deferror ZeroDivisionError { "division by zero" }
-
-@doc """
-Error for a head-tail List pattern applied to an empty List.
-List APIs have their own errors for empty input.
-## REPL
-xldr(1)> apply_pattern([], [_1: Int, .._])
-Err(EmptyHeadTailListPattern("head-tail list pattern requires a non-empty List"))
-"""
-deferror EmptyHeadTailListPattern() {
-  Self(message: "head-tail list pattern requires a non-empty List")
-}
-
-@doc """
-Concrete bootstrap error for placeholder code paths that are intentionally
-unfinished.
-Use this with `todo()` when a function should type-check before the final
-implementation is ready.
-"""
-deferror NotImplemented { "not implemented" }

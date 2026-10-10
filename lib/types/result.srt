@@ -29,40 +29,8 @@ defenum Result<$T> {
   Err(Error),
 }
 
-impl Eq for Result<$T>
-where
-  $T: Eq
-{
-  def eq(self: Self, rhs: Self) -> Boolean {
-    match self {
-      Ok(left) => match rhs {
-        Ok(right) => Eq::eq(left, right),
-        Err(_) => False,
-      },
-      Err(left) => match rhs {
-        Ok(_) => False,
-        Err(right) => Error::same_kind(left, right),
-      },
-    }
-  }
-}
-
 @autoimport
 impl Result {
-  defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
-    match values {
-      [] => Ok(List::reverse(acc_rev)),
-      [head, ..tail] => _all_cons(head, tail, acc_rev),
-    }
-  }
-
-  defp _all_cons(head: Result<$A>, tail: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
-    match head {
-      Ok(value) => _all_go(tail, [value, ..acc_rev]),
-      Err(error) => Err(error),
-    }
-  }
-
   @doc """
   Helper for matching on `Result` success vs failure.
   This is not a general-purpose combinator, but it is a common enough pattern that it deserves a helper.
@@ -293,11 +261,6 @@ impl Result {
     }
   }
 
-  defp _tap_ok_value(value: Result<$A>, f: ($A -> Unit), inner: $A) -> Result<$A> {
-    f(inner)
-    value
-  }
-
   @doc """
   Observe failure values and return the original `Result` unchanged.
   ## REPL
@@ -311,11 +274,6 @@ impl Result {
     }
   }
 
-  defp _tap_err_value(value: Result<$A>, f: (Error -> Unit), err: Error) -> Result<$A> {
-    f(err)
-    value
-  }
-
   @doc """
   Continue with `next` only when the left `Result` is `Ok(...)`.
   ## REPL
@@ -326,6 +284,48 @@ impl Result {
     match value {
       Ok(_) => next(),
       Err(error) => Err(error),
+    }
+  }
+
+  defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
+    match values {
+      [] => Ok(List::reverse(acc_rev)),
+      [head, ..tail] => _all_cons(head, tail, acc_rev),
+    }
+  }
+
+  defp _all_cons(head: Result<$A>, tail: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
+    match head {
+      Ok(value) => _all_go(tail, [value, ..acc_rev]),
+      Err(error) => Err(error),
+    }
+  }
+
+  defp _tap_ok_value(value: Result<$A>, f: ($A -> Unit), inner: $A) -> Result<$A> {
+    f(inner)
+    value
+  }
+
+  defp _tap_err_value(value: Result<$A>, f: (Error -> Unit), err: Error) -> Result<$A> {
+    f(err)
+    value
+  }
+}
+
+impl Eq for Result<$T>
+where
+  $T: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    match self {
+      Ok(left) => match rhs {
+        Ok(right) => Eq::eq(left, right),
+        Err(_) => False,
+      },
+      Err(left) => match rhs {
+        Ok(_) => False,
+        Err(right) => Error::same_kind(left, right),
+      },
     }
   }
 }
@@ -439,11 +439,17 @@ impl Convert<Either<Error, $A>> for Result<$A> {
   }
 }
 
-impl Convert<Result<$A>> for Either<Error, $A> {
-  def to::<Result<$A>>(self: Self) -> Result<$A> {
+impl Convert<Option<$T>> for Result<$T> {
+  @doc """
+  Convert `Result<$T>` into `Option<$T>`, dropping the concrete error value.
+  ## REPL
+  xldr(1)> to::<Option>(Ok(1))
+  Option::Some(1)
+  """
+  def to::<Option<$T>>(self: Self) -> Option<$T> {
     match self {
-      Either::Right(value) => Ok(value),
-      Either::Left(error) => Err(error),
+      Ok(value) => Option::Some(value),
+      Err(_) => Option::None,
     }
   }
 }

@@ -16,13 +16,15 @@ fn standard_test_stages() -> &'static Vec<Vec<StagedModuleAst>> {
                 spec.source,
                 spire::ParserContext::module(
                     index as u32 + 1,
-                    (spec.module_path == "Facet").then(|| spec.module_path.to_string()),
+                    spec.module_path
+                        .filter(|path| *path == "Facet")
+                        .map(str::to_owned),
                 )
                 .with_rules(spire::ParseRules::std_module()),
             )
             .expect("standard source parses");
             let fallback =
-                const_only_fallback_module_path(&ast, Some(spec.module_path)).map(str::to_owned);
+                const_only_fallback_module_path(&ast, spec.module_path).map(str::to_owned);
             let stage_index = usize::from(spec.stage != sindr::stdlib::StdlibStage::Bootstrap);
             stages[stage_index].extend(staged_modules_from_source_ast(ast, fallback.as_deref()));
         }

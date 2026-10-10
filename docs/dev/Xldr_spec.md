@@ -74,11 +74,11 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 
 - セッション開始時に標準 definition source を `Bootstrap` stage、その後の shared standard stage の順で読み込む。test extension は variant が有効な場合に shared standard stage へ追加する
 - 標準モジュールの完全な inventory、順序、stage 分割は [`STDLIB_MODULE_SPECS`](../../crates/sindr/src/stdlib.rs) を正本とし、本書へ重複列挙しない
-- `Bootstrap` source は auto-import アンカーとして先頭に置く。Error 定義は stage-0 で扱える固定・空 Payload の定義だけをここで登録する。String 補間・inspect・通常型を必要とする入力付き / Pattern / Facet Error は shared standard stage の `kernel.srt` 等に置く
-- `SpecialTypes` source では `Unit`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `DoBlock<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ErrorKind`, `StandbyInit<$T>` の canonical builtin type head を登録する
-- `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin と、同ファイルのトップレベルにある入力付き / Pattern / Facet Error を登録する
+- `Bootstrap` source は auto-import アンカーとして stage 0 の先頭に置く。共通 Error は固定・空 Payload と入力付きの両方を shared standard stage の `errors.srt` に登録する。Pattern / Extractor の共通 Error もここに含め、型・API 固有の Error は各所有ファイルに置く
+- `special_types.srt` source では `Unit`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `DoBlock<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ErrorKind`, `StandbyInit<$T>` の canonical builtin type head を登録する
+- `Kernel` source は `defmod Kernel` 配下の cross-cutting builtin と共通 Extractor を登録する。関数型 alias は `function.srt`、Facet 固有 Error は `facet.srt`、List の要素アクセス Error は `types/list.srt` に置く
 - 各 type file の top-level では対応する canonical builtin type head を登録する
-- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/function.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/facet.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/Random.srt`, `lib/file.srt`, `lib/FileSystem.srt`, `lib/IO.srt`, `lib/Shell.srt`, `lib/styled_doc.srt`, `lib/test.srt` を同一段として読み込む
+- `errors.srt` は Main / Default として登録し、通常実行とテスト実行の両方で一度だけ読み込む。標準登録表の `module_path` は省略可能とし、`errors.srt` と `types/special_types.srt` のような定義バンドルは `None` とする。stage 情報・parser 入力・キャッシュキー・診断にも名前の有無を保持し、空文字や仮のモジュール名で補完しない
 - module stage の import 可視性は「前 stage + 同一 stage」とする。同一 stage 内の標準定義ソース / 通常 module は file 読み込み順に依存せず明示 import / auto import でき、later stage 参照は compile error とする
 - loader は追加標準定義ソースも `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準定義ソースと重複するものはデフォルト入力から除外する。symlinkは実体pathで探索範囲とtests除外を照合し、root外のソースを含めない。同じ実体は一度だけ収集し、祖先linkによる再訪は行わない
 - 通常スクリプト用の標準ソース登録はvariantごとにプロセス内で一度収集する。各入口はその登録を複製し、include stageと入口を追加する。prefix内のSourceIdとstage順序を保ち、同じファイル名の本文・source kind・module pathが異なる登録は読み込みエラーとする。同じソースの再登録でもstage内のmodule重複を隠さない

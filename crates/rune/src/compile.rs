@@ -1359,7 +1359,7 @@ print(to_string(1))
             module_source_ids: vec![module_source_id],
             module_stages: vec![vec![StagedModule {
                 source_id: module_source_id,
-                module_path: "MahjongCli".into(),
+                module_path: Some("MahjongCli".into()),
                 source_kind: SourceKind::DefinitionSource,
             }]],
             stdlib_variant: xldr::StdlibVariant::Default,
@@ -1395,7 +1395,7 @@ print(to_string(1))
             module_source_ids: vec![module_source_id],
             module_stages: vec![vec![StagedModule {
                 source_id: module_source_id,
-                module_path: "MahjongCli".into(),
+                module_path: Some("MahjongCli".into()),
                 source_kind: SourceKind::DefinitionSource,
             }]],
             stdlib_variant: xldr::StdlibVariant::Default,

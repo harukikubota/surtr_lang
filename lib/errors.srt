@@ -1,0 +1,126 @@
+# Shared concrete errors for control flow, arithmetic, Extractors, and Patterns.
+
+deferror ZeroModuloError() {
+  Self(message: "modulo by zero")
+}
+
+# `deferror` introduces a concrete recoverable error declaration.
+# Shared concrete errors are registered in the main standard-library stage.
+
+@doc """
+Shared concrete error for "no value" situations.
+`NoneError` is the standard failure used by optional-style sugar such as `T?`.
+`T?` now lowers to `Option<T>`.
+Use `Result<T>` with `Err(NoneError)` when "missing value" should participate in
+Result-style failure propagation. A function definition may document this contract
+with `Result<T, NoneError>` in its direct return position.
+"""
+deferror NoneError { "None Value." }
+
+@doc """
+Shared concrete error for division by zero.
+The standard `Div` implementations for `Int` and `Float` return this through
+`Err(...)` instead of trapping. Modulo by zero returns `ZeroModuloError`.
+The traits do not fix their error contract; user implementations may declare
+their own errors.
+"""
+deferror ZeroDivisionError { "division by zero" }
+
+@doc """
+Error for a head-tail List pattern applied to an empty List.
+List APIs have their own errors for empty input.
+## REPL
+xldr(1)> apply_pattern([], [_1: Int, .._])
+Err(EmptyHeadTailListPattern("head-tail list pattern requires a non-empty List"))
+"""
+deferror EmptyHeadTailListPattern() {
+  Self(message: "head-tail list pattern requires a non-empty List")
+}
+
+@doc """
+Shared concrete error for placeholder code paths that are intentionally
+unfinished.
+Use this with `todo()` when a function should type-check before the final
+implementation is ready.
+"""
+deferror NotImplemented { "not implemented" }
+
+deferror UnconsEmptyList() {
+  Self(message: "cannot uncons empty list")
+}
+
+deferror UnconsEmptyString() {
+  Self(message: "cannot uncons empty string")
+}
+
+# Error construction uses the main standard stage, including Show and inspect.
+deferror IntLiteralPatternMismatch(expected: Int, actual: Int) {
+  |expected: Int, actual: Int|
+  Self(message: "Int literal pattern #{expected} did not match #{actual}", expected, actual)
+}
+
+deferror StringLiteralPatternMismatch(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(
+    message: "String literal pattern #{inspect(expected)} did not match #{inspect(actual)}",
+    expected,
+    actual,
+  )
+}
+
+deferror BooleanLiteralPatternMismatch(expected: Boolean, actual: Boolean) {
+  |expected: Boolean, actual: Boolean|
+  Self(message: "Boolean literal pattern #{expected} did not match #{actual}", expected, actual)
+}
+
+deferror DurationLiteralPatternMismatch(expected: Duration, actual: Duration) {
+  |expected: Duration, actual: Duration|
+  Self(message: "Duration literal pattern #{expected} did not match #{actual}", expected, actual)
+}
+
+deferror PinnedValuePatternMismatch(value_type: String, expected_repr: String, actual_repr: String) {
+  |value_type: String, expected_repr: String, actual_repr: String|
+  Self(
+    message: "pinned #{value_type} value #{expected_repr} did not match #{actual_repr}",
+    value_type,
+    expected_repr,
+    actual_repr,
+  )
+}
+
+deferror ResultVariantPatternMismatch(expected_variant: String, actual_variant: String) {
+  |expected_variant: String, actual_variant: String|
+  Self(
+    message: "Result pattern expected #{expected_variant}, got #{actual_variant}",
+    expected_variant,
+    actual_variant,
+  )
+}
+
+deferror EnumVariantPatternMismatch(enum_name: String, expected_variant: String, actual_variant: String) {
+  |enum_name: String, expected_variant: String, actual_variant: String|
+  Self(
+    message: "#{enum_name} pattern expected #{expected_variant}, got #{actual_variant}",
+    enum_name,
+    expected_variant,
+    actual_variant,
+  )
+}
+
+deferror ListPatternTooShort(expected_length: Int, actual_length: Int) {
+  |expected_length: Int, actual_length: Int|
+  Self(
+    message: "LHS.len(#{expected_length}) > RHS.len(#{actual_length})",
+    expected_length,
+    actual_length,
+  )
+}
+
+deferror ListPatternTooLong(expected_length: Int, actual_length: Int) {
+  |expected_length: Int, actual_length: Int|
+  Self(
+    message: "LHS.len(#{expected_length}) < RHS.len(#{actual_length})",
+    expected_length,
+    actual_length,
+  )
+}

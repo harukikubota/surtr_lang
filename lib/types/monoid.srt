@@ -1,5 +1,3 @@
-type Semigroup<$A> = ($A, $A -> $A)
-
 @doc """
 An associative operation together with its identity value.
 
@@ -16,3 +14,5 @@ impl Monoid {
     Monoid { empty, combine }
   }
 }
+
+type Semigroup<$A> = ($A, $A -> $A)

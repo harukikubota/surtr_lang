@@ -162,17 +162,3 @@ where
     }))
   }
 }
-
-impl Convert<ResultT<$M, $A>> for EitherT<Error, $M, $A>
-where
-  $M: Monad
-{
-  def to::<ResultT<$M, $A>>(self: Self) -> ResultT<$M, $A> {
-    ResultT::new(Functor::fmap(self.inner, {|either|
-      match either {
-        Either::Right(value) => Ok(value),
-        Either::Left(error) => Err(error),
-      }
-    }))
-  }
-}
