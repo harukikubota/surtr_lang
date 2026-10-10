@@ -37,14 +37,19 @@ pub(crate) fn typecheck_with_context(
     session.typecheck_in_place_with_context(resolved, context)
 }
 
-fn parse_std_module_stage(source: &str, module_path: &str) -> Vec<sigil::StagedModuleAst> {
+fn parse_std_module_stage(source: &str, module_path: Option<&str>) -> Vec<sigil::StagedModuleAst> {
     let ast = spire::parse_with_context(
         source,
-        spire::ParserContext::module(0, (module_path == "Facet").then(|| module_path.into()))
-            .with_rules(spire::ParseRules::std_module()),
+        spire::ParserContext::module(
+            0,
+            module_path
+                .filter(|path| *path == "Facet")
+                .map(str::to_owned),
+        )
+        .with_rules(spire::ParseRules::std_module()),
     )
-    .unwrap_or_else(|error| panic!("standard module {module_path} should parse: {error:?}"));
-    let fallback = sigil::const_only_fallback_module_path(&ast, Some(module_path));
+    .unwrap_or_else(|error| panic!("standard source {module_path:?} should parse: {error:?}"));
+    let fallback = sigil::const_only_fallback_module_path(&ast, module_path);
     sigil::staged_modules_from_source_ast(ast, fallback)
 }
 
@@ -115,7 +120,7 @@ pub(crate) fn build_std_module_stages(
     let mut stages = vec![Vec::new(), Vec::new()];
     for (name, _) in overrides {
         assert!(
-            stdlib_module_specs(StdlibVariant::Default).any(|spec| spec.module_path == *name),
+            stdlib_module_specs(StdlibVariant::Default).any(|spec| spec.module_path == Some(*name)),
             "unknown standard module override: {name}"
         );
     }
@@ -124,7 +129,10 @@ pub(crate) fn build_std_module_stages(
             StdlibStage::Bootstrap => 0,
             StdlibStage::Main | StdlibStage::TestExtension => 1,
         };
-        let source = pick_override(spec.module_path, spec.source, overrides);
+        let source = spec
+            .module_path
+            .map(|path| pick_override(path, spec.source, overrides))
+            .unwrap_or(spec.source);
         stages[stage_index].extend(parse_std_module_stage(source, spec.module_path));
     }
     stages

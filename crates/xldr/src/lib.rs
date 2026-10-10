@@ -183,7 +183,7 @@ pub enum ModuleStageParseErrorKind {
         span: spire::ast::Span,
     },
     WorkerSpawnFailure {
-        module_path: String,
+        module_path: Option<String>,
         message: String,
     },
 }
@@ -201,7 +201,12 @@ impl ModuleStageParseError {
             ModuleStageParseErrorKind::WorkerSpawnFailure {
                 module_path,
                 message,
-            } => format!("cannot start parser worker for module `{module_path}`: {message}"),
+            } => match module_path {
+                Some(module_path) => {
+                    format!("cannot start parser worker for module `{module_path}`: {message}")
+                }
+                None => format!("cannot start parser worker for definition source: {message}"),
+            },
             ModuleStageParseErrorKind::DuplicateModulePath {
                 module_path,
                 first_file_name,
@@ -620,7 +625,7 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
             key.push('\x1e');
             key.push_str(file_name);
             key.push('\x1e');
-            key.push_str(&module.module_path);
+            key.push_str(&format!("{:?}", module.module_path));
             key.push('\x1e');
             key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');
@@ -1067,7 +1072,7 @@ fn stdlib_semantic_cache_material(
         .module_stages
         .iter()
         .flatten()
-        .any(|module| module.module_path == "Test")
+        .any(|module| module.module_path.as_deref() == Some("Test"))
     {
         StdlibVariant::TestEnabled
     } else {
@@ -1088,7 +1093,7 @@ fn stdlib_semantic_cache_material(
                 .unwrap_or("");
             key.push_str(file_name);
             key.push('\x1e');
-            key.push_str(&module.module_path);
+            key.push_str(&format!("{:?}", module.module_path));
             key.push('\x1e');
             key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');

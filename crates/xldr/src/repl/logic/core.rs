@@ -8155,7 +8155,11 @@ fn parse_stage_modules_parallel(
                                 module.source_id.0,
                                 module.source_kind,
                                 compile_unit_kind,
-                                (module.module_path == "Facet").then(|| "Facet".into()),
+                                module
+                                    .module_path
+                                    .as_deref()
+                                    .filter(|path| *path == "Facet")
+                                    .map(str::to_owned),
                             ),
                             sources
                                 .file_name(module.source_id)
@@ -8167,7 +8171,7 @@ fn parse_stage_modules_parallel(
                         })?;
                         let fallback_module_path = sigil::const_only_fallback_module_path(
                             &parsed,
-                            Some(module.module_path.as_str()),
+                            module.module_path.as_deref(),
                         );
                         Ok(crate::lower_module_source_ast(parsed, fallback_module_path))
                     }),
@@ -8314,7 +8318,7 @@ mod tests {
         let source_id = sources.register("failed.srt", "defmod Failed {}");
         let module = StagedModule {
             source_id,
-            module_path: "Failed".into(),
+            module_path: Some("Failed".into()),
             source_kind: SourceKind::DefinitionSource,
         };
         let error = finish_stage_parse_worker(
@@ -8350,7 +8354,7 @@ mod tests {
     fn stage_parser_worker_panic_keeps_its_payload() {
         let module = StagedModule {
             source_id: SourceId(0),
-            module_path: "Broken".into(),
+            module_path: Some("Broken".into()),
             source_kind: SourceKind::DefinitionSource,
         };
         let failure = std::panic::catch_unwind(|| {

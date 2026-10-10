@@ -834,7 +834,7 @@ fn library_sources_fingerprint() -> Result<String, RuneError> {
     for module in modules {
         payload.push_str(&module.file_name);
         payload.push('\x1f');
-        payload.push_str(&module.module_path);
+        payload.push_str(&format!("{:?}", module.module_path));
         payload.push('\x1f');
         payload.push_str(&stable_hash_hex(&module.source));
         payload.push('\x1e');

@@ -183,8 +183,8 @@ impl AnalysisService {
         let ast = if let Some(document) = active_document.as_ref() {
             let module_path = if context.context.source_kind == SourceKind::StdDefinitionSource {
                 standard_module_spec_for_path(&context, &context.context.active_file)
-                    .filter(|spec| spec.module_path == "Facet")
-                    .map(|spec| spec.module_path.to_string())
+                    .filter(|spec| spec.module_path == Some("Facet"))
+                    .and_then(|spec| spec.module_path.map(str::to_owned))
             } else {
                 module_path_for_document(context.context.mode.clone(), &context.context.active_file)
             };
@@ -998,10 +998,12 @@ fn standard_sources() -> Result<&'static PreparedStandardSources, &'static Strin
                     0,
                     SourceKind::StdDefinitionSource,
                     CompileUnitKind::DefinitionCheck,
-                    (spec.module_path == "Facet").then(|| spec.module_path.to_string()),
+                    spec.module_path
+                        .filter(|path| *path == "Facet")
+                        .map(str::to_owned),
                 )
                 .map_err(|error| format!("{}: {}", spec.file_name, error.message()))?;
-                let fallback = sigil::const_only_fallback_module_path(&ast, Some(spec.module_path));
+                let fallback = sigil::const_only_fallback_module_path(&ast, spec.module_path);
                 let modules = sigil::staged_modules_from_source_ast(ast.clone(), fallback);
                 for mut module in modules {
                     module.source_index = source_indices[stage];
@@ -1494,8 +1496,8 @@ fn build_staged_modules(
             };
             let standard_module = standard_module_spec_for_path(context, &file.path);
             let parser_module_path = standard_module
-                .filter(|spec| spec.module_path == "Facet")
-                .map(|spec| spec.module_path.to_string());
+                .filter(|spec| spec.module_path == Some("Facet"))
+                .and_then(|spec| spec.module_path.map(str::to_owned));
             let ast = service.parse_cache.strict(
                 &file.path,
                 ParseInput {
@@ -1515,7 +1517,7 @@ fn build_staged_modules(
                     *semantic_index =
                         semantic_index_with_source_locations(semantic_index, &file.path, &ast);
                     let fallback_module_path = if let Some(spec) = standard_module {
-                        sigil::const_only_fallback_module_path(&ast, Some(spec.module_path))
+                        sigil::const_only_fallback_module_path(&ast, spec.module_path)
                             .map(str::to_string)
                     } else {
                         fallback_module_path_for_const_only_project_file(&file.path, &ast)
