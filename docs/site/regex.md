@@ -7,7 +7,7 @@ compile した正規表現値を `Regex` として保持し、マッチ判定、
 
 - `re"pattern"` / `re'pattern'` は `Regex::compile("pattern")` へ lower される sugar です
 - `Regex::matches` は部分一致です。全体一致したいときは `^...$` を使います
-- `Regex::captures` や `Regex::find` は対象がないと `Err(NoneError)` を返します
+- `Regex::captures` は対象がないと `RegexCapturesNoMatch`、`Regex::find` は `RegexFindNoMatch` を返します。pattern と input を保存します
 
 ## 生成
 
@@ -42,8 +42,8 @@ Surtrの文字列解析と正規表現エンジンの検証は別の段階です
 
 - `Regex::compile(pattern: String) -> Result<Regex, RegexCompileError>`
 - `Regex::matches(re: Regex, input: String) -> Boolean`
-- `Regex::captures(re: Regex, input: String) -> Result<RegexCaptures, NoneError>`
-- `Regex::find(re: Regex, input: String) -> Result<RegexMatch, NoneError>`
+- `Regex::captures(re: Regex, input: String) -> Result<RegexCaptures, RegexCapturesNoMatch>`
+- `Regex::find(re: Regex, input: String) -> Result<RegexMatch, RegexFindNoMatch>`
 - `Regex::find_all(re: Regex, input: String) -> List<RegexMatch>`
 - `Regex::split(re: Regex, input: String) -> List<String>`
 - `Regex::replace(re: Regex, input: String, replacement: String) -> String`
@@ -69,8 +69,8 @@ print(id)
 
 - `RegexCaptures::whole(caps: RegexCaptures) -> String`
 - `RegexCaptures::capture_count(caps: RegexCaptures) -> Int`
-- `RegexCaptures::get(caps: RegexCaptures, idx: Int) -> Result<String, NoneError>`
-- `RegexCaptures::get_name(caps: RegexCaptures, name: String) -> Result<String, NoneError>`
+- `RegexCaptures::get(caps: RegexCaptures, idx: Int) -> Result<String>`
+- `RegexCaptures::get_name(caps: RegexCaptures, name: String) -> Result<String>`
 - `RegexMatch::text(m: RegexMatch) -> String`
 - `RegexMatch::start(m: RegexMatch) -> Int`
 - `RegexMatch::end(m: RegexMatch) -> Int`
@@ -108,7 +108,9 @@ print(inspect(Regex::group_names(rx)))
   - 正規表現のコンパイル前に拒否する
 - `RegexCompileError`
   - pattern 自体が不正
-- `NoneError`
+- 対象なし: `RegexCapturesNoMatch` / `RegexFindNoMatch`
+- 存在しない group: `RegexCaptureIndexMissing` / `RegexCaptureNameMissing`
+- 存在するが照合に参加しなかった group: `RegexCaptureIndexUnmatched` / `RegexCaptureNameUnmatched`
   - マッチが見つからない
   - 指定した capture index / name が存在しない
 

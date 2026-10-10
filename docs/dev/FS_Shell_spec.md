@@ -123,68 +123,57 @@ defstruct CommandResult {
 
 ### 2.2 Error surface
 
-FS / Shell 失敗は concrete `deferror` family として定義する。
+FS / Shell 失敗は concrete `deferror` family として定義する。宣言・生成・Payload の保持は [Error spec](Error_spec.md) に従い、本節は操作ごとの失敗条件と入力を定める。
 Rust の `std::io::ErrorKind` や OS error code をそのまま public contract にしない。
 
-最低限、次の error kind を標準 surface に置く。各 error の message は次を既定文言にする。
+入力と同名・同型・同順の値を Payload に保存する。FileSystem と Shell の path は `FilePath`、不正 raw path は `String`、OS や decode の detail は外部原文として渡す。生成側は完成 message を作らず、標準定義本文が各操作の文型を持つ。署名と message の一次情報は [`lib/FileSystem.srt`](../../lib/FileSystem.srt) と [`lib/Shell.srt`](../../lib/Shell.srt) とする。
+
+| Error | コンストラクタ入力・保存 Payload |
+|---|---|
+| `FileSystemParentMissing` | `path: FilePath` |
+| `FileSystemNameMissing` | `path: FilePath` |
+| `FileSystemMoveFailed` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemMoveNotFound` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemMovePermissionDenied` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemMoveAlreadyExists` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemMoveInvalidPath` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemCopyFailed` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemCopyNotFound` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemCopyPermissionDenied` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemCopyAlreadyExists` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemCopyInvalidPath` | `from: FilePath, to: FilePath, detail: String` |
+| `FileSystemNotFound` | `path: FilePath` |
+| `FileSystemAlreadyExists` | `path: FilePath` |
+| `FileSystemPermissionDenied` | `path: FilePath` |
+| `FileSystemNotDirectory` | `path: FilePath` |
+| `FileSystemIsDirectory` | `path: FilePath` |
+| `FileSystemInvalidPath` | `raw: String` |
+| `FileSystemInvalidDepth` | `depth: Int` |
+| `FileSystemDirectoryCopyUnsupported` | `from: FilePath, to: FilePath` |
+| `FileSystemStatFailed` | `path: FilePath, detail: String` |
+| `FileSystemListFailed` | `path: FilePath, detail: String` |
+| `FileSystemTreeReadFailed` | `path: FilePath, detail: String` |
+| `FileSystemMkdirFailed` | `path: FilePath, detail: String` |
+| `FileSystemMkdirAllFailed` | `path: FilePath, detail: String` |
+| `FileSystemRemoveFailed` | `path: FilePath, detail: String` |
+| `ShellSpawnResourceNotFound` | `command: String, args: List<String>, cwd: FilePath, detail: String` |
+| `ShellSpawnFailed` | `command: String, args: List<String>, cwd: FilePath, detail: String` |
+| `ShellWorkingDirectoryNotFound` | `path: FilePath` |
+| `ShellWorkingDirectoryNotDirectory` | `path: FilePath` |
+| `ShellWorkingDirectoryInspectFailed` | `path: FilePath, detail: String` |
+| `ShellUnsupported` | `feature: String` |
+| `ShellStdoutEncodingError` | `command: String, detail: String` |
+| `ShellStderrEncodingError` | `command: String, detail: String` |
+| `ShellWorkingDirectoryResolveFailed` | `path: FilePath, detail: String` |
 
 ```surtr
-deferror FileSystemNotFound(path: String) {
-  "filesystem path not found: #{path}"
-}
-
-deferror FileSystemAlreadyExists(path: String) {
-  "filesystem path already exists: #{path}"
-}
-
-deferror FileSystemPermissionDenied(path: String) {
-  "filesystem permission denied: #{path}"
-}
-
-deferror FileSystemNotDirectory(path: String) {
-  "filesystem path is not a directory: #{path}"
-}
-
-deferror FileSystemIsDirectory(path: String) {
-  "filesystem path is a directory: #{path}"
-}
-
-deferror FileSystemInvalidPath(path: String) {
-  "invalid filesystem path: #{path}"
-}
-
-deferror FileSystemInvalidDepth(depth: Int) {
-  "invalid filesystem tree depth: #{depth}"
-}
-
-deferror FileSystemUnsupported(detail: String) {
-  detail
-}
-
-deferror FileSystemIoError(detail: String) {
-  detail
-}
-
-deferror ShellCommandNotFound(command: String) {
-  "shell command not found: #{command}"
-}
-
-deferror ShellSpawnFailed(detail: String) {
-  detail
-}
-
-deferror ShellWorkingDirectoryNotFound(path: String) {
-  "shell working directory not found: #{path}"
-}
-
-deferror ShellUnsupported(detail: String) {
-  detail
-}
-
-deferror ShellIoError(detail: String) {
-  detail
+deferror FileSystemNotFound(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem path not found: #{to_string(path)}", path)
 }
 ```
+
+move / copy は from・to・OS detail を保存し、失敗 endpoint を推測しない。Shell の host NotFound は command 欠落を確定せず、`ShellSpawnResourceNotFound` に command・args・cwd・OS detail を渡す。汎用の旧 detail 入口を残さない。
 
 関数定義の直接の戻り値位置に限り、詳細な error contract 表記として `Result<T, Error>` を使ってよい。
 値やその他の型注釈で使う型 head は既存方針どおり `Result<T>` である。
@@ -214,7 +203,7 @@ defmod FS {
 }
 ```
 
-`FS::ls` は直下 entry だけを取得する。
+`FS::ls` は直下 entry だけを取得する。root の前提判定は symlink を辿る metadata で不在・権限拒否・非 directory・その他取得失敗を分ける。その他取得失敗は ls なら `FileSystemListFailed`、tree なら `FileSystemTreeReadFailed` とする。tree の途中の失敗はその対象 path を保存する。子 entry の symlink 判定は従来の意味を維持する。
 `FS::tree_depth(path, depth)` は root 配下を depth まで再帰的に取得する。
 `depth < 0` は `Err(FileSystemInvalidDepth(depth))` を返す。
 探索中の深さと指定した深さは `Int` のまま比較し、固定幅整数の上限を設けない。
@@ -223,7 +212,7 @@ defmod FS {
 `rm_all` は v1 に含めない。
 
 `FS::cp` は v1 では file copy を対象にする。directory copy は
-`Err(FileSystemUnsupported("directory copy is not supported"))` を返す。
+`Err(FileSystemDirectoryCopyUnsupported(from, to))` を返す。
 
 ### 2.4 Snapshot querying
 
@@ -264,8 +253,8 @@ defmod Shell {
 
 `Shell::cd` は Surtr VM / 実行コンテキストの working directory を変更する。
 host parent process の cwd を変更する契約ではない。
-directory として受理した path の canonicalize に失敗した場合は
-`Err(ShellIoError)` を返し、VM context cwd は変更しない。
+path の前提判定は symlink を辿る metadata を使い、成功して非 directory の場合だけ `ShellWorkingDirectoryNotDirectory` とする。不在は `ShellWorkingDirectoryNotFound`、その他取得失敗は `ShellWorkingDirectoryInspectFailed` とする。directory として受理した path の canonicalize に失敗した場合は
+`Err(ShellWorkingDirectoryResolveFailed(path, detail))` を返し、VM context cwd は変更しない。
 
 `Shell::exec(command, args)` は shell parser を通さず、`command` と `args` を
 分離して実行する。起動できた場合、process の終了 code が非ゼロでも
@@ -338,7 +327,7 @@ VM は `Shell::pwd` / `Shell::cd` 用に execution context cwd を持つ。
 `std::env::set_current_dir` へ直接寄せない。実装上どうしても host cwd を使う場合でも、
 公開契約は VM context cwd とし、テストで漏れを検出する。
 directory 判定後の canonicalize が失敗した場合、`Shell::cd` は
-`Err(ShellIoError)` を返して現在の VM context cwd を保持する。
+`Err(ShellWorkingDirectoryResolveFailed(path, detail))` を返して現在の VM context cwd を保持する。
 
 ### 3.4 Shell execution
 
@@ -348,7 +337,7 @@ directory 判定後の canonicalize が失敗した場合、`Shell::cd` は
 - Windows: 同等の host process API
 
 stdout / stderr は UTF-8 text として返す。UTF-8 変換不能時は lossless binary API を
-v1 に導入せず、`Err(ShellIoError(detail))` を返す。
+v1 に導入せず、`Err(ShellStdoutEncodingError(command, detail))` / `Err(ShellStderrEncodingError(command, detail))` を返す。
 
 environment override、stdin input、timeout、shell parser 付き実行は v1 に含めない。
 

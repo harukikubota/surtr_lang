@@ -145,17 +145,19 @@ print(text) # surtr
 
 ## エラーの読み方
 
-- parse failure: `JsonParseError`
-- schema mismatch: `JsonDecodeError`
-- stringify failure: `JsonEncodeError`
+- parse failure: `JsonParseError`。位置と parser の説明を保存します
+- 深さ制限: `JsonParseDepthLimitExceeded`
+- フィールド / index 欠落: `JsonFieldMissing` / `JsonIndexMissing`
+- 型不一致: `JsonStringExpected` など、期待する型ごとの Error
+- JSON number へ表せない整数: `JsonIntegerOutOfRange`
 
-標準の `JsonValue` からの decode は、型が合わないと `Err(JsonDecodeError(...))` を返します。
+標準の `JsonValue` からの decode は、型が合わないと期待する型ごとの Error を返し、対象 path と実際の JSON 型名を保存します。
 
 ```surtr
 json =? Json::decode("42")
 result = Decode::decode::<String>(json)
 match result {
   Ok(_) => print("unexpected-ok"),
-  Err(err) => print(Error::kind(err)), # JsonDecodeError
+  Err(err) => print(Error::kind(err)), # JsonStringExpected
 }
 ```

@@ -226,7 +226,7 @@ source ID を符号化する現行の span 範囲は、各 source の Unicode sc
 
 renderer は `message`、`labels`、`notes`、`help` をそれぞれ headline、source caption、note、help として出力する。Ariadne の色、罫線、空白、label の順序は安定契約にしない。
 
-言語レベルの Error の主キャプションは、その Error を生成したソース位置を使う。
+言語レベルの Error の主キャプションは、[Error spec](Error_spec.md) の生成位置を使う。
 明示的な `deferror` の構築は構築式、構文 Pattern の不一致は実際に失敗した子 Pattern を指す。
 list の長さや空入力など構造自体の不一致は、失敗した構造 Pattern 全体を指す。
 入れ子の失敗を親 Pattern、alias、SafeBind の RHS、外側の呼出し位置へ置き換えない。
@@ -341,3 +341,7 @@ local head は選ばれた lexical identity の型を検査し、named Extractor
 関数名末尾の `?` は Spire が関数名位置だけで受理する。変数・束縛・フィールド・Extractor 名などの不正な位置は構文エラーとし、名前解決や型検査の結果を使った再解析は行わない。suffix 名の解決失敗は通常の名前解決診断を維持し、suffix を取り除いて再検索しない。
 
 Scar は解決・正規化した署名の返り型が canonical Boolean でない宣言を拒否し、宣言の span に Boolean 制約と実際の返り型を示す。未確定型・コンテナ型・関数型は拒否する。型 alias の既存規則は変更しない。`predicate?(value)?` の最後の `?` に対する拒否は、既存の文末アンラップ診断を維持する。廃止済み OptionalSelector も構文位置で拒否する。
+
+## Error Payload の診断
+
+宣言・入力・Payload・内部構築・局所具象型・Facet の成功／拒否条件は [Error spec](Error_spec.md) を正本とする。拒否診断では、可能なら宣言側と指定側の位置を併記し、生成ノードの位置だけを表示しない。runtime Error の主キャプションには、同仕様の生成位置を使う。診断用の source facts を message や Error 名から再構成しない。

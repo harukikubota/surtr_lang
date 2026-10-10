@@ -179,7 +179,8 @@ Negative counts stay as recoverable values instead of becoming implicit
 runtime traps.
 """
 deferror NegativeRepeatCount(count: Int) {
-  "repeat count must be non-negative: #{count}"
+  |count: Int|
+  Self(message: "repeat count must be non-negative: #{count}", count)
 }
 
 impl String {
@@ -330,7 +331,7 @@ ret = List::reverse(acc)
 - `HashMap::map_from_entries(List<(String, $V)>) -> HashMap<$V>`
 - `HashMap::map_len(map) -> Int`
 - `HashMap::map_contains_key(map, key) -> Boolean`
-- `HashMap::map_get(map, key) -> Result<$V>`（miss は `Err(NoneError)`）
+- `HashMap::map_get(map, key) -> Result<$V>`（miss は `Err(HashMapKeyMissing(key))`）
 - `HashMap::map_insert(map, key, value) -> HashMap<$V>`
 - `HashMap::map_remove(map, key) -> HashMap<$V>`
 - `HashMap::map_keys(map) -> List<String>`
@@ -459,7 +460,7 @@ Token.Ident
 ```
 
 - selector は PascalCase 固定
-- 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
+- 実行時の値がその variant でなければ `Err(FacetReadVariantMismatch(...))` になる
 
 ネストした path は `->` または `Facet::compose` でつなぎます。
 

@@ -90,7 +90,7 @@ Extractor の返却は canonical `MatchResult::Ok` / `MatchResult::Err` の enum
 field 0 は variant discriminant、field 1 は payload とし、Err payload は runtime Error 値である。
 `GetTag` / `GetField` は canonical MatchResult の field 数・discriminant・Err payload を検査し、
 不正な表現を VM error にする。`Kernel::uncons` は通常 builtin として List / String を分解し、
-空入力の PatternMismatch Error と元の source location を返す。Scar までに List と String の
+空 List の `UnconsEmptyList` / 空 String の `UnconsEmptyString` と元の source location を返す。Scar までに List と String の
 concrete 静的契約を選択済みとし、Eldr が generic target や Union の型判定を提供するものではない。
 同じ runtime primitive を共有しても consumer 側は型検査済み contract を受け取り、元 Error を保持または破棄する。
 
@@ -211,7 +211,7 @@ VM の実行時設定が test / describe / it の名前フィルター、一覧�
 VM 実行異常で中断した active case も一件の Failed に確定する。スコープの Err は ScopeFailed として別に記録する。
 
 実行するケースの開始時だけ stdout / stderr / stdin を分離し、終了時に走査側のバッファへ戻す。
-ケースのstdinは空の専用バッファから開始する。`push_stdin`で入力を追加する前と、追加した入力を消費した後は、`IO::get` / `IO::get_line`がEOFの`InputError`を返す。ケース内ではホストstdinを読まず、終了後は走査側の入力元と読み取り位置を復元する。
+ケースのstdinは空の専用バッファから開始する。`push_stdin`で入力を追加する前と、追加した入力を消費した後は、`IO::get` / `IO::get_line`がEOFの `InputCharacterEnd` / `InputLineEnd`を返す。ケース内ではホストstdinを読まず、終了後は走査側の入力元と読み取り位置を復元する。
 非実行ケースは IO を初期化・消費しない。走査出力をケース出力に含めない。
 計測を指定した実行ケースだけ単調時計の経過 ns を保持する。それ以外は未計測とする。
 選択・表示の設定は VM の実行時設定であり、コンパイルキャッシュのキーに加えない。
@@ -270,30 +270,28 @@ Unicodeエスケープは小文字16進数・不要な先頭ゼロなしとす�
 
 - `kind`
 - `message`
+- `payload: Vec<Value>`。空の場合も長さ 0 の同じ保存表現
 - `location`
 - `cause: Option<RichError>`
+- `diagnostic` と `stack_trace`
 
-`cause` は runtime 管理の線形 chain とする。
+Error の宣言・構築・生成責務・情報保持・生成位置は [Error spec](Error_spec.md) を正本とする。VM は検査済みの定義と metadata を受け取り、以下の実行境界を担う。
 
-`location` は Error を生成したソース位置を保持し、主キャプションもこの位置を使う。
-明示的な Error の構築はその構築式、構文 Pattern の不一致は失敗した子 Pattern、
-構造自体の不一致はその構造 Pattern を指す。既存 Error の carrier への格納や伝播で位置を更新しない。
-新しい Error による wrap は、新しい Error の構築位置と元 Error の cause を保持する。
-`stack_trace` は呼出し経路の追跡用であり、先頭 frame の位置を Error の生成位置として使わない。
-Source map から確定した位置を受け渡し、表示文や Error 名から位置を推測しない。
+`ErrTemplate` は canonical kind、コンストラクタの `fun_idx`、入力型の列、Payload の名前・型・宣言順を保持する。独立した message テンプレートは持たない。builtin / VM と Forge の生成コードは、解決済みコンストラクタを Call / Resume と継続処理で実行する。Rust helper から VM を同期再帰駆動しない。コンパイル中のコンストラクタ評価も行わない。
 
-compile / surface 契約との対応は次のとおり。
+コンストラクタ末尾の `MakeError` は、計算済みの String message と Payload を宣言スキーマに従って stack から取り出し、生成元位置を付けた `RichError` を作る。外部コンストラクタを再呼出しする命令ではない。`IsErrorKind` は canonical kind を照合し、`GetErrorPayload` は identity・Payload 長・field index・保存値の型を検証して読み取る。命令・metadata の不整合は RuntimeError とし、空 Payload や推測した値で救済しない。
 
-- source に現れる `Error` は abstract failure view であり、runtime 実体は常に concrete `deferror` 由来の `RichError`
-- `Error` は不透明な通常値として引数、戻り値、field、container、closure capture に保持でき、スコープ・関数・module を越えて渡せる
-- Error の移送や再格納で kind / message / location / cause を再生成しない。`Ok(error)` は成功値であり、Error の存在だけでは失敗伝播しない
-- 抽象 Error の直接生成、具象 payload の分解、Error 自体への Trait impl / derive は公開しない。kind / message だけを読み取り専用の値アクセス・Facet として公開し、標準 builtin へ接続する
-- `Result::recover_kind` の marker は標準引数専用の `ErrorKind` とし、具体的な `deferror` 型名だけを受ける。Sigil は修飾名を含む canonical 型 identity を確定し、Forge はその `fq_name` を静的 metadata から hidden builtin `__recover_kind` へ渡す。Eldr は内部 ABI の kind 文字列を照合して handler を呼び出す。marker は Error の生成や constructor 呼び出しを行わず、利用者が任意の文字列を渡せる surface は提供しない。
-- `Test::assert_err_kind(marker, result)` も同じ ErrorKind の宣言 identity 解決・検証を使う。Err の kind が一致すれば `Ok(())`、Ok または異種の Err なら `TestAssertionFailed`。payload や表示文字列は比較しない。marker を一般の値として束縛・転送する能力は追加しない。
-- `Test::assert_cause_chain(expected, result)` は最外側の Err から cause へ辿る kind の列を、静的な宣言 identity の列と比較する。順序・長さ・重複を含め完全一致なら `Ok(())`、不一致・Ok・空の期待列なら `TestAssertionFailed`。payload・message・位置は比較せず、result は一度だけ評価する。診断は期待列・実際列と、最初の不一致位置（0始まり）または長さの違いを含める。Forge は列を hidden builtin の `List<String>` metadata へ lower する。
+入力と保存 Payload の runtime 値を検査済みスキーマへ照合する。長さ・型・順序、nominal identity と型引数、Enum の tag と variant fields の不整合は RuntimeError とする。generic な再帰型のスキーマは有限の定義テンプレートと参照で保持し、具体的な型引数を無限展開しない。増分 chunk も prefix を含む検査済み定義を使い、既存 bytecode の値や表示名から型を復元しない。
+
+`cause` は runtime 管理の線形 chain とする。コンストラクタ実行へ生成元の source ID / span を渡し、`location` と既存の cause / diagnostic / stack trace を共通の生成処理で統合する。`stack_trace` は呼出し経路用であり、先頭 frame で `location` を上書きしない。型・局所具象情報・readonly の静的制約は Scar の検査結果に従う。
+
+API と内部 ABI の対応は次のとおり。共通の identity と ErrorKind の制約は [Error spec](Error_spec.md)、API ごとの marker 構文は [Lazy spec](Lazy_spec.md) に従う。
+
+- `Result::recover_kind` では、Sigil が確定した canonical identity の `fq_name` を Forge が静的 metadata から hidden builtin `__recover_kind` へ渡す。Eldr は内部 ABI の kind 文字列を照合して handler を呼び出す。marker 自体は Error を生成せず、コンストラクタも呼び出さない。
+- `Test::assert_err_kind(marker, result)` も同じ ErrorKind の宣言 identity 解決・検証を使う。Err の kind が一致すれば `Ok(())`、異種の Err は `TestErrorKindMismatch`、Ok は `TestExpectedErrorKind`。payload や表示文字列は比較しない。marker を一般の値として束縛・転送する能力は追加しない。
+- `Test::assert_cause_chain(expected, result)` は最外側の Err から cause へ辿る kind の列を、静的な宣言 identity の列と比較する。順序・長さ・重複を含め完全一致なら `Ok(())`、不一致は `TestCauseChainMismatch`、Ok は `TestExpectedCauseChain`。payload・message・位置は比較せず、result は一度だけ評価する。診断は期待列・実際列と、最初の不一致位置（0始まり）または長さの違いを含める。Forge は列を hidden builtin の `List<String>` metadata へ lower する。
 - Lazyの正規化とeager入力の評価順は[Lazy spec](Lazy_spec.md)に従う。VMへLazy markerは渡さず、確定した分岐と通常call命令を実行する。branchをruntime callableとして表す場合も呼び出しは一回とし、戻り値がcallableでも追加で実行しない。
 
-- parallel error は持たない
 - `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける
 - `Result::chain(head, tail)` は右 error chain の末尾に左 error chain を付ける
 - `Result::map_err(result, err)` は既存 error chain を捨てて `err` chain で置き換える
@@ -369,10 +367,10 @@ checkpointの共有はprocess・future・detached taskの3表を対象とし、m
 無限の producer は `Unfold { state, step }` を持つ。両方とも生成と List の取得を担当し、取得後の変換・選別・集計は List モジュールに任せる。
 
 - 有限の unfold step は `State -> Option<(Item, State)>`。`None` だけが正常終端で、item 自体の `Result` / `Option` はデータとして保つ。
-- private な有限 pull builtin `gen_step` は `Option<(Item, Generator<Item>)>` を返す。公開 `Generator::next` は標準定義でこれを `Ok((item, rest))` / `Err(NoneError)` に変換する。step の終端 protocol と公開 API の戻り値は別の契約とする。
+- private な有限 pull builtin `gen_step` は `Option<(Item, Generator<Item>)>` を返す。公開 `Generator::next` は標準定義でこれを `Ok((item, rest))` / `Err(GeneratorExhausted)` に変換する。step の終端 protocol と公開 API の戻り値は別の契約とする。
 - 無限の unfold step は `State -> (Item, State)`。`InfiniteGenerator::next` は `(Item, InfiniteGenerator<Item>)` を直接返す。
 - handle は不変で、構築や opaque 表示では step を呼ばない。進行は返された rest を使う。同じ handle を新しい呼出しで再利用すると、保存 state から再評価する。
-- take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `Err(NoneError)` を返す。
+- take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `Err(GeneratorExhausted)` を返す。
 - 条件停止した item は List に含めず、その生成前の handle を rest とする。再利用ではその位置を再評価する。step の RuntimeError や不正 carrier を終端や途中までの成功 List に変換しない。
 - callback、条件判定、List への一件追加は共通の builtin continuation と VM 予算で進める。一回の取得の中断・再開で callback を重複実行しない。通常の切替えでは状態を移動し、checkpoint は独立した状態を保持する。
 - materialize は flat_map と同じ private `ListBuilder` を使い、完了時だけ buffer を ListHandle に移す。非空は既存の Packed、空は Empty になる。巨大な count の初期予約容量を制限しても、BigInt の要求件数と結果は切り詰めない。
@@ -401,9 +399,8 @@ Opcode は以下のカテゴリを持つ。
 補足:
 
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
-- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` / `ShlInt` / `ShrInt` / `TestBitInt` / `SetBitInt` / `ClearBitInt` / `ToggleBitInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` / `shl` / `shr` / `test_bit` / `set_bit` / `clear_bit` / `toggle_bit` の direct call を対象にした monomorphic fast-path とする
-- `ShlInt` / `ShrInt` は負 shift count を `RuntimeError` ではなく `Err(NegativeShiftCount(...))` の `Result` 値として返す
-- `TestBitInt` / `SetBitInt` / `ClearBitInt` / `ToggleBitInt` は負 bit index を `RuntimeError` ではなく `Err(NegativeBitIndex(...))` の `Result` 値として返す
+- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
+- `safe_mod` / `shl` / `shr` / `test_bit` / `set_bit` / `clear_bit` / `toggle_bit` は通常の `CallBuiltin` で実行する。失敗時は呼び出し元の位置を保持し、標準の Error 定義を継続経由で呼び出して `Result` を返す。
 - `StoreConstLocal { const_idx, local_idx }` は `LoadConst(const_idx); StoreLocal(local_idx)` と同じ意味の圧縮 opcode とする。operand stack へ中間値を push せず、定数値を現在フレームの local slot に直接保存する。`const_idx` は `LoadConst` と同じ relocation / verifier 規則に従う
 - `CopyLocal { src_local_idx, dst_local_idx }` は `LoadLocal(src_local_idx); StoreLocal(dst_local_idx)` と同じ意味の圧縮 opcode とする。operand stack を経由せず、現在フレーム内で local 値を clone して保存する
 - `EqLocalTag { local_idx, tag_const_idx }` は `LoadLocal(local_idx); GetTag; LoadConst(tag_const_idx); EqTag` と同じ意味の圧縮 opcode とする。`tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う
@@ -458,15 +455,15 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - VM は `builtin_id` により実装関数をディスパッチする
 - `Facet<K, S, A, T, B>` は compile-time capability であり runtime value を持たない。`Facet::view` / `Facet::preview` / `Facet::put` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::compose` / Facet `->` 合成 は compile-time lowering 対象で、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
 - Facet API が `Result<S, E>` source を受ける場合、VM は `Err(E)` に対して traversal、rebuild、mapper を実行せず同じ error を返す。これは API-level lift であり Facet slot `S` を `Result<S, E>` に変更しない
-- Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
-- Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list miss は `IndexOutOfBounds`、map miss は `KeyNotFound` を `Result` で返す
+- Facet の variant mismatch は `FacetReadVariantMismatch` / `FacetUpdateVariantMismatch` の定義を呼び、segment index・表示・enum 名・期待 variant 名・実 variant 名を入力と Payload に保持する。内部 tag / registry 不整合は RuntimeError とし、未知名で救済しない
+- Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list index miss は `FacetListIndexOutOfBounds`、逆順 range は `FacetListRangeReversed`、map miss は `FacetKeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値は `inspect` 経由で標準エラー出力へ書き出す
 - `Error::kind` / `Error::message` / `Error::format` / `Error::same_kind` は `Error` 値を introspection / 表示文字列化・kind 比較する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は `HashMap<String, Value>` の immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。
-- `__supervisor_workers` は `(supervisor, worker_init, WorkerStrategy)` を受け取る。Eldr v1 は `WorkerScale::Fix(n)` のみ実行し、`init == n` かつ `0 <= min <= n <= max` を満たさない場合は `Err(InvalidWorkerStrategy)` を返す。
+- `__supervisor_workers` は `(supervisor, worker_init, WorkerStrategy)` を受け取る。Eldr v1 は `WorkerScale::Fix(n)` のみ実行する。`init != n` は `WorkerStrategyInitTargetMismatch`、`0 <= min <= n <= max` の違反は `WorkerStrategyBoundsInvalid`、正規 Int の内部固定幅への非表現は `WorkerStrategyFieldOutOfRange` を返す。各定義は条件に必要な値を Payload に保持し、schema・tag・field・型の内部不整合は RuntimeError とする。
 - process runtime snapshot は `worker_sets` を含む。各要素は `id`, `worker_process`, `supervisor`, `target`, `min`, `max`, `member_pids`, `live_count` を持つ。
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
 - process / workers / task await timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
@@ -478,7 +475,7 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - `Float` helper surface では `abs`, `min`, `max`, `floor`, `ceil`, `round`, `trunc`, `pi`, `e` を提供する
 
 `__test_approx_equal` は有限 Float の絶対誤差比較を行う。差の overflow は False とし、非有限値を Surtr の値として返さない。
-`Test::assert_approx` が比較結果と負の許容誤差を `TestAssertionFailed` に変換する。
+`Test::assert_approx` が比較結果と負の許容誤差を `TestApproxMismatch` / `TestNegativeTolerance` に変換する。
 
 ### 7.1 Json builtins
 
@@ -490,7 +487,7 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - `Object` は `HashMapHandle` に変換する。duplicate key は JSON parser 側の後勝ち値を採用する
 - `json_stringify` は `HashMapHandle` の deterministic key order を使って object を出力する
 - malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
-- `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
+- JSON number へ表現できない Int は `JsonIntegerOutOfRange(value)` を返す。finite-only Float、JsonValue の型、registry、variant arity の内部契約違反は RuntimeError とする
 
 標準モジュールの inventory、順序、stage 分割は compile 側の
 [`STDLIB_MODULE_SPECS`](../../crates/sindr/src/stdlib.rs) を正本とする。同一 stage 内の import は
@@ -580,7 +577,8 @@ script、include、標準定義、REPL の入力単位を呼出し側の単一 s
 
 source metadata は省略可能である。符号化した ID の登録がなければ、その ID と元の符号化 span を
 保持し、ファイル表示を `<source:ID>`、行・列を 0 にする。符号化した module span に対応する
-source text がない場合も行・列は 0 とする。符号化していない span は Error template の保存済み座標を使える。
+source text がない場合も行・列は 0 とする。符号化していない span は実行ソースの本文から行・列を求め、
+本文がない場合は 0 とする。Error 定義の位置や別ソースの座標で補完しない。
 別ファイルの本文や外側の call span から生成位置を推測しない。
 `Line` / `SpnT` / `PcSp` は viewer 用の索引として、この runtime の位置契約と区別する。
 

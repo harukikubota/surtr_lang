@@ -91,12 +91,7 @@ carrier の推論元にせず、末尾の Unit を最終 Monad 値へ暗黙 wrap
 ブロック末尾の `?` を一律に禁じる構文規則は追加しない。
 optional 型や FacetPath optional segment の既存 `?` と構文所有者を区別し、fallback は設けない。
 
-MonadFail routeはRHS Err、既存pattern Errorのkind/message/location/causeを保存する。
-Extractor / ExtractorClosure は MatchResult を返し、Err の元 Error を MonadFail route で保持する。Alternative route は破棄する。Extractor / ExtractorClosure 本文内でも do の failure は do-local target に接続し、外側 MatchResult へ直接 return しない。
-partial `<-`のno-matchは共通pattern ErrorをMonadFailで保持し、Alternative routeではemptyにする。
-MonadFail route の主キャプションは Error の生成位置であり、構文 Pattern では失敗した子、
-構造自体の不一致ではその構造 Pattern を指す。Extractor 内や RHS 内で生成した既存 Error を
-`<-` の位置へ置き換えない。新しい Error で wrap した場合はその構築位置を使う。
+MonadFail route は RHS Err と Pattern failure の元 Error を保持し、Alternative route は破棄する。情報保持と生成位置は [Error spec](Error_spec.md) に従い、`<-` の位置へ置き換えない。Extractor / ExtractorClosure 本文内でも do の failure は do-local target に接続し、外側 MatchResult へ直接 return しない。
 標準 MonadFail は Result、Either<Error, A>、ResultT、EitherT<Error, M, A>、および base が MonadFail の ReaderT / StateT に提供する。
 MonadFail を持たない Option / List / OptionT 等は現行の Alternative route を維持し、Extractor Error を破棄する。
 partial `<-` は `Monad::bind` が渡した payload 全体を照合し、その payload が `Result` でも
@@ -104,6 +99,10 @@ SafeBind の外側一段の自動分解を追加しない。`Ok(x) <- [Ok(1), Er
 do 本文内の `apply_pattern` は自身の `Result` を返す式であり、外側 carrier の failure target を使わない。
 各binding/continuationの実行ごとにRHSを一度評価し、failureとなった経路の後続continuationを実行しない。
 List等の分岐carrierでは、後続continuationを各payloadについて実行する。
+
+### Error Pattern と Payload の保持
+
+SafeBind と do partial `<-` では Error 定義 Pattern による直接ダウンキャストを拒否する。`Err(error)` など Error 全体の運搬と通常 Extractor は既存規則に従う。局所具象束縛・readonly・Payload の保持は [Error spec](Error_spec.md) を参照する。Result 専用の RHS 一段射影、MonadFail > Alternative > Monad、ResultT の内側 Result 失敗層は本書の規則を維持する。
 
 ## Phase ownershipとlowering
 

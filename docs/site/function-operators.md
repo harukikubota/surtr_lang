@@ -289,7 +289,7 @@ SafeBind の流れは次です。
 
 - RHS が `Err(...)` なら現在の failure target に従い、errorを保持するか`empty`へ接続して早期終了します
 - nested Result は再帰的に分解せず、内側の `Ok` / `Err` は通常 constructor pattern として照合します
-- Extractor の `MatchResult::Err` は元 Error を保持し、一般の pattern mismatch は `PatternMismatch` Error にします。構造 pattern 固有の failure kind は維持します
+- Extractor の `MatchResult::Err` は元 Error を保持し、literal・pin・variant の不一致は、それぞれの条件に対応する Error にします。構造 pattern 固有の failure kind は維持します
 - LHS には `uncons`、literal match、Extractor を再帰的に書けます
 - 上のチェックが全部成功したときだけ変数が束縛されて続行します
 

@@ -22,7 +22,10 @@ Surtr でコード中に `Error` と書かれていても、それは「失敗�
 runtime にある実体は常に `deferror` で定義した具象 error です。
 
 ```surtr
-deferror InvalidPort(port: Int) { "invalid port" }
+deferror InvalidPort(port: Int) {
+  |port: Int|
+  Self(message: "invalid port", port)
+}
 
 ret: Result<Int> = Err(InvalidPort(0))
 ```
@@ -32,7 +35,10 @@ ret: Result<Int> = Err(InvalidPort(0))
 `Error` は内部表現を公開しない通常値です。引数、戻り値、型注釈、field、container、closure に保存して渡せます。`Err(err)` で取り出した Error もスコープの外へ返せます。
 
 ```surtr
-deferror InvalidPort(port: Int) { "invalid port" }
+deferror InvalidPort(port: Int) {
+  |port: Int|
+  Self(message: "invalid port", port)
+}
 def relay(error: Error) -> Error { error }
 error: Error = relay(InvalidPort(0))
 errors: List<Error> = [error]
@@ -40,9 +46,187 @@ saved: Result<Error> = Ok(error)
 ```
 
 `Ok(error)` は成功です。`value =? Ok(error)` は Error を束縛して続行します。
-抽象 `Error` の直接構築、具象 error の payload 分解、Error 自体への Trait impl はできません。
+抽象 `Error` の直接構築と Error 自体への Trait impl はできません。保存した値は具象 Error Pattern で取り出せます。
 
 `error.kind` と `error.message` は、それぞれ `Error::kind(error)` と `Error::message(error)` と同じ文字列を返します。`Error.kind` と `Error.message` は読み取り専用の Facet path です。他の型の Error field を経由する `Failure.error.message` も読み取り専用で、`set`・`over`・bulk update は使えません。cause や location などの内部 field は公開しません。
+
+## Error の定義・生成・分解
+
+### 定義する
+
+`deferror` のヘッダには保存するフィールド、本体先頭の `|...|` にはコンストラクタの入力を書きます。末尾の `Self(...)` で message と保存値を指定します。入力と保存値は同じ名前・型でなくても構いません。
+
+```surtr
+deferror InvalidPort(port: Int) {
+  |input: Int|
+  Self(message: "invalid port: #{input}", port: input)
+}
+```
+
+保存フィールドがない Error は `deferror NoValue { "no value" }` と書けます。`deferror NoValue() { Self(message: "no value") }` も同じ空フィールドの定義です。String を返す形では、分岐の結果から message を作れます。
+
+```surtr
+deferror MissingInput {
+  |blank: Boolean|
+  if(blank, "blank input", "missing input")
+}
+```
+
+`Self(...)` による内部構築は、定義本体のトップレベルかつ末尾に直接置きます。分岐の内側や束縛の右辺には置けません。次はコンパイルエラーです。
+
+```surtr
+# NG: 分岐の内側で Self(...) を構築している
+deferror BranchConstruction {
+  |blank: Boolean|
+  if(blank, Self(message: "blank input"), Self(message: "missing input"))
+}
+```
+
+分岐と保存フィールドを組み合わせる場合は、String や保存値を先に計算します。
+
+```surtr
+deferror InvalidPort(port: Int) {
+  |input: Int|
+  message = if(input < 0, "negative port", "invalid port")
+  Self(message: message, port: input)
+}
+```
+
+### 生成する
+
+定義名を呼び出すと、入力を受け取って共通 `Error` を返します。生成しただけでは、保存フィールドにアクセスできる具象型にはなりません。
+
+```surtr
+err: Error = InvalidPort(0)
+err.message                 # OK: 共通情報はそのまま読める
+failed: Result<Int> = Err(err)
+```
+
+引数はキーワード指定がなければ宣言順で対応します。キーワードを一つでも書くと、裸変数は同名の指定になります。
+
+```surtr
+deferror PairError(left: Int, right: Int) {
+  |a: Int, b: Int|
+  left = a
+  right = b
+  Self(message: "pair", left, right)
+}
+a = 1
+b = 2
+PairError(b, a)    # 位置指定: a は 2、b は 1
+PairError(a: a, b) # 名前指定: a は 1、b は 2
+```
+
+内部の `Self(...)` と保存値の Pattern も同じ指定規則です。名前指定の列に任意の式を混ぜて、残りの位置を推測させることはできません。
+
+### 分解する
+
+`InvalidPort` だけなら種類を照合し、`InvalidPort(port)` なら保存した値も取り出します。コンストラクタの入力 `input` ではなく、保存フィールド `port` を照合します。
+
+```surtr
+def describe_port(error: Error) -> String {
+  match error {
+    InvalidPort(port) @ e => "#{port}: #{e.message}",
+    other => other.message,
+  }
+}
+```
+
+単一の種類への照合が成功した `@ e` では、`e.port` も読めます。この読み取りは `match`、`if_let`、`if_let_then` の成功側のレキシカルスコープに限ります。同じ成功側の別名と、そこで作る通常のクロージャは読み取りを引き継ぎます。
+
+通常の関数や List・Tuple・field を通して運ぶと共通 `Error` として扱います。保存値は保持されるので、取り出した Error を再び照合してから読んでください。異なる種類の OR 全体につけた alias も共通 `Error` です。範囲とクロージャの例は [Error Pattern](./pattern-matching.md#error-の照合とダウンキャスト) を参照してください。
+
+`is_match(InvalidPort(0), InvalidPort(0))` は保存値の一致を Boolean で返します。`is_match` は変数束縛と alias を作りません。
+
+## コンパイルエラーになる例
+
+次の NG 例はそれぞれ独立した拒否例です。`InvalidPort` と `PairError` は上の定義を使います。
+
+### 定義のフィールドや最終結果が合わない
+
+`kind` と `message` は保存フィールド名に使えません。保存フィールドを宣言した場合は、String だけを返しても構築できません。`Self(...)` では宣言したフィールドを不足・重複なく、正しい型で指定します。
+
+```surtr
+# NG: message は共通情報なので保存フィールド名にできない
+deferror ReservedField(message: Int) { |value: Int| "invalid" }
+
+# NG: 保存フィールドがあるのに String だけを返している
+deferror MissingPayload(port: Int) { |input: Int| "invalid port" }
+
+# NG: port が指定されていない
+deferror MissingField(port: Int) { |input: Int| Self(message: "invalid port") }
+
+# NG: port は Int であり、String を保存できない
+deferror WrongFieldType(port: Int) {
+  |input: Int|
+  Self(message: "invalid port", port: "zero")
+}
+```
+
+`Self(...)` を一度変数へ代入し、その変数を末尾で返す形も拒否されます。
+
+```surtr
+# NG: 内部構築が末尾の直接式ではない
+deferror StoredConstruction(port: Int) {
+  |input: Int|
+  saved = Self(message: "invalid port", port: input)
+  saved
+}
+```
+
+### コンストラクタの入力指定が合わない
+
+生成時は、保存フィールド名ではなく本体の入力名・型に合わせます。引数の不足・未知名・重複・型不一致を拒否します。
+
+```surtr
+InvalidPort()                  # NG: input が不足
+InvalidPort(input: "zero")     # NG: input は Int
+InvalidPort(port: 0)           # NG: 入力名は port ではなく input
+InvalidPort(input: 0, input: 1) # NG: input が重複
+PairError(a: 1, 2)             # NG: 名前指定の残りを位置で推測しない
+```
+
+### 照合せずに保存フィールドを読む・具象型を付ける
+
+`err.message` と `err.kind` は共通 `Error` でも読めます。保存フィールドを読むには、先に種類を照合する必要があります。具象型の注釈を付けてもダウンキャストにはなりません。
+
+```surtr
+err = InvalidPort(0)
+err.message                   # OK
+err.port                      # NG: まだ共通 Error
+typed: InvalidPort = err       # NG: 型注釈によるダウンキャスト
+```
+
+### Error のパスを更新する・具象パスをキャプチャする
+
+Error の共通情報と保存フィールドは読み取り専用です。共通 root の読み取りキャプチャは使えますが、具象 Error を root にしたパスはキャプチャできません。
+
+```surtr
+read: (Error -> String) = &Error.message # OK
+read_message = &InvalidPort.message     # NG: 具象 Error root
+read_port = &InvalidPort.port           # NG: 具象 Error root
+```
+
+```surtr
+err = InvalidPort(0)
+match err {
+  InvalidPort @ e => Facet::set(InvalidPort.port, e, 1), # NG: readonly
+  _ => err,
+}
+```
+
+保存フィールドを読んだ値自体は通常値です。元の Error を変更せず、その値を別の処理へ渡すことはできます。
+
+### 許可されていない位置で Error Pattern を使う
+
+Error 定義 Pattern を通常の `=`、SafeBind `=?`、do の `<-`、`apply_pattern` に使うことはできません。種類の分岐には `match`、`if_let`、`if_let_then` を使います。
+
+```surtr
+InvalidPort(port) = InvalidPort(0)       # NG: 通常の束縛
+InvalidPort(port) =? Ok(InvalidPort(0))  # NG: SafeBind での直接照合
+is_match(InvalidPort(0), InvalidPort(port)) # NG: is_match は束縛を作らない
+is_match(InvalidPort(0), InvalidPort @ e)  # NG: is_match は alias を作らない
+```
 
 ## Result の variant と型推論
 
@@ -71,12 +255,12 @@ def first_or_error(xs: List<Int>) -> Result<Int> {
 ```
 
 この種の API は、利用者視点では `Option<T>` ではなく
-`Result<T, NoneError>` を返す失敗 API として読むのが自然です。
+`Result<T, ListFirstEmpty>` を返す失敗 API として読むのが自然です。
 
 ```surtr
 match List::first([10, 20, 30]) {
   Ok(value) => to_string(value),
-  Err(NoneError) => "empty",
+  Err(ListFirstEmpty) => "empty",
   Err(err) => inspect(err),
 }
 ```
@@ -116,7 +300,7 @@ def render_bool(text: String) -> String {
 
 ### `Result` の等価性
 
-`Result<T>` の `Eq` は `T: Eq` を要求します。`Ok` 同士は成功値の `Eq` を使い、`Ok` と `Err` は異なります。`Err` 同士は先頭の具象 error kind だけを比較し、message、cause、発生位置や診断情報は比較しません。`Error::same_kind` はこの kind 判定用の helper であり、`Error` 自体の `Eq` や `Show` を提供するものではありません。
+`Result<T>` の `Eq` は `T: Eq` を要求します。`Ok` 同士は成功値の `Eq` を使い、`Ok` と `Err` は異なります。`Err` 同士は先頭の具象 error kind だけを比較し、message、保存した値、cause、発生位置や診断情報は比較しません。`Error::same_kind` はこの kind 判定用の helper であり、`Error` 自体の `Eq` や `Show` を提供するものではありません。
 
 `inspect(result)` は表示の観測です。等価性を検査するときは `Eq::eq`、表示そのものを検査するときは `inspect` の戻り値を比較します。
 

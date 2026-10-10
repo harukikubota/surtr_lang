@@ -13,7 +13,7 @@ Extractor は `match` や `=?` で使う「分解の入口」です。
 
 これは `$Tail` や Union を対象にする1個の generic Extractor ではありません。適用する値から、`List<$T>` と `String` のどちらか一方の concrete な静的契約が選ばれます。runtime 実装は共有できますが、SRT だけで定義する場合は型ごとに別の Extractor として記述します。
 
-Pattern の `[head, ..tail]` も同じ head / tail の分解を表します。ただし、list の構造的 Pattern と `uncons(...)` では失敗 Error が異なります。空 list の `[head, ..tail]` は `EmptyList`、`uncons(head, tail)` は `PatternMismatch` を返します。分岐ではどちらも不一致ですが、`=?` や `apply_pattern` ではこの違いが保持されます。
+Pattern の `[head, ..tail]` も同じ head / tail の分解を表します。ただし、list の構造的 Pattern と `uncons(...)` では失敗 Error が異なります。空 List の `[head, ..tail]` は `EmptyHeadTailListPattern`、`uncons(head, tail)` は `UnconsEmptyList` を返します。空 String の `uncons` は `UnconsEmptyString` です。分岐ではどちらも不一致ですが、`=?` や `apply_pattern` ではこの違いが保持されます。
 
 ## user-defined extractor
 

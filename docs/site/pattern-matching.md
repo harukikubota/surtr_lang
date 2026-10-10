@@ -40,6 +40,7 @@ if_let_then(Ok("alice"), Ok(name), print(name)) # 成功時だけ表示
 | `[]`、`[a, b]`、`[head, ..tail]` | List または String を分解・照合する |
 | `Ok(child)`、`Type::Variant(child)` | variant を照合して payload を分解する |
 | `User(name, age)` | Record の分解、または Struct の attached Extractor を使う |
+| `Failure(field)` | Error の種類を照合し、保存フィールドを分解する |
 | `head(...)` | named Extractor または束縛済みの ExtractorClosure を使う |
 | `p1 \| p2` | 左から候補を試す。利用位置に制限がある |
 | `_1`〜`_16` | `apply_pattern` 専用の projection |
@@ -94,7 +95,7 @@ match "日本" {
 }
 ```
 
-式位置の `[head, ..tail]` は List 構築です。Pattern 位置の分解とは区別します。`Kernel::uncons(head, tail)` も先頭と残りを分解しますが、保持する失敗 Error まで同一ではありません。たとえば空 List に対する head-tail Pattern は `EmptyList`、直接の `uncons` は `PatternMismatch` を返します。
+式位置の `[head, ..tail]` は List 構築です。Pattern 位置の分解とは区別します。`Kernel::uncons(head, tail)` も先頭と残りを分解しますが、保持する失敗 Error まで同一ではありません。たとえば空 List に対する head-tail Pattern は `EmptyHeadTailListPattern`、直接の `uncons` は `UnconsEmptyList` を返します。空 String の `uncons` は `UnconsEmptyString` です。
 
 ### Enum・Result・Error
 
@@ -107,7 +108,7 @@ match Ok(42) {
 }
 ```
 
-Error の子 Pattern では、具象 error 型名で kind を照合します。Error の payload を constructor の子として分解することはできません。Error 全体を観測するときは alias を使います。
+Error の子 Pattern では、具象 Error 名だけなら kind を照合し、子 Pattern を書くと保存フィールドを宣言順で分解します。名前指定ではフィールド名で対応付けます。Error 全体も使うときは alias を付けます。
 
 ```surtr
 match Err(ZeroDivisionError) {
@@ -118,6 +119,76 @@ match Err(ZeroDivisionError) {
 ```
 
 `Err(Err(...))` は外側の Error を Result として再分解する形なので拒否されます。内側の Result の失敗を照合する形は `Ok(Err(...))` です。`Result::recover_kind` の `ErrorKind` 引数は専用の型名マーカーであり、Pattern を値として渡す機能ではありません。Error の観測・保持の制約は [Error Handling](./error-handling.md) を参照してください。
+
+### Error の照合とダウンキャスト
+
+単一の Error 名への照合が成功すると、alias はその具象 Error として扱われます。保存フィールドを読める範囲は、その arm の guard・本文と、そこで定義したクロージャの中です。共通情報の `message` と `kind` は、照合のない共通 `Error` からも読めます。
+
+```surtr
+deferror InvalidCount(count: Int) {
+  |input: Int|
+  Self(message: "invalid count", count: input)
+}
+err: Error = InvalidCount(-1)
+match err {
+  InvalidCount(count) @ e when e.count < 0 => "#{count}:#{e.count}",
+  other => other.message,
+}
+is_match(InvalidCount(-1), InvalidCount(-1)) # True。変数束縛は作らない
+```
+
+`if_let` と `if_let_then` では成功側だけが同じ範囲になります。`is_match` は Boolean を返すだけなので、別の式で元の Error を具象型として扱うことはできません。
+
+異なる種類の OR 全体につけた alias は共通 `Error` です。子 Pattern で取り出した値は使えますが、Error 全体の alias から保存フィールドは読めません。
+
+```surtr
+deferror InvalidSize(count: Int) {
+  |input: Int|
+  Self(message: "invalid size", count: input)
+}
+match err {
+  InvalidCount(count) | InvalidSize(count) @ e => "#{e.message}:#{count}",
+  other => other.message,
+}
+```
+
+```surtr
+match err {
+  InvalidCount | InvalidSize @ e => e.count, # compile error: e は共通 Error
+  _ => 0,
+}
+```
+
+具象型としてのアクセスは、照合した束縛のレキシカルスコープ内に限ります。そこから通常クロージャへ捕捉すれば、クロージャの中でも保存フィールドを読めます。次のクロージャは `Int` を返すため、`match` の外から呼べます。
+
+```surtr
+reader = match err {
+  InvalidCount @ e => {|| e.count},
+  _ => {|| 0},
+}
+reader() # -1
+```
+
+Error 自体を `match` や関数の戻り値、List などの要素として取り出すと、共通 `Error` として扱います。保存フィールドを読むには再び照合してください。
+
+```surtr
+returned = match err {
+  InvalidCount @ e => e,
+  other => other,
+}
+returned.message # OK: 共通情報
+
+match returned {
+  InvalidCount @ e => e.count, # OK: 再照合した arm の中
+  _ => 0,
+}
+```
+
+```surtr
+returned.count # compile error: match の戻り値は共通 Error
+```
+
+具象 Error Pattern を使えるのは `match`、`if_let`、`if_let_then`、束縛を作らない `is_match` です。通常の `=`、SafeBind `=?`、do の `<-`、`apply_pattern` には使えません。取り出した Error 全体を運ぶ通常の束縛や Extractor は使えます。
 
 ### Record・Struct
 
@@ -152,7 +223,7 @@ guard は `when` で書き、Boolean を返します。Pattern の束縛は guar
 
 ### OR Pattern
 
-`p1 | p2` は `match` arm、`if_let`、`if_let_then`、束縛を作らない `is_match` で使えます。子 Pattern 内でも使えます。同じ OR の全候補は、同じ順序で同じ名前・型の変数を束縛する必要があります。`is_match` では、alias を含め、全候補の変数束縛を禁止します。
+`p1 | p2` は `match` arm、`if_let`、`if_let_then`、束縛を作らない `is_match` で使えます。子 Pattern 内でも使えます。同じ OR の全候補は、同じ名前・型・個数の変数を束縛する必要があります。Pattern 内での順序は異なっても構いません。`is_match` では、alias を含め、全候補の変数束縛を禁止します。
 
 ```surtr
 pair = (2, 42)
@@ -178,6 +249,8 @@ if_let(pair, (1, x) | (2, x), x, 0) # 42
 Result／Enum の payload や List／String の子まで、複数 arm を合成して完全に被覆する解析は行いません。子に値の制限がある Pattern や一般の Extractor を使う場合は、残りの入力を受ける arm を明示してください。標準 `Duration` の分解には、子がすべて catch-all なら単一 arm を受理する規則があります。
 
 基本例は [`lib/tests/language_features/control.srt`](../../lib/tests/language_features/control.srt)、OR の例は [`tests/fixtures/script/pass/patterns/`](../../tests/fixtures/script/pass/patterns/)、拒否例は [`tests/fixtures/script/fail/exhaustiveness/`](../../tests/fixtures/script/fail/exhaustiveness/) にあります。
+
+各候補の束縛名・型・個数が同じなら、Pattern を走査する順序は異なっても構いません。たとえば `(x, y) | (y, x)` はどちらも同じ名前と型を束縛します。成功した候補の値を名前で対応付け、guard と branch は一回だけ実行します。候補内の同名重複は拒否されます。
 
 ## Extractor を Pattern に使う
 

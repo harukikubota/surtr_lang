@@ -22,6 +22,7 @@ Surtr は、全仕様を一枚の集約文書へ複製しません。現行挙�
 | builtin 名・signature・ID 順 | `../../crates/sindr/src/builtin.rs` の `BUILTIN_METAS` |
 | 標準定義の stage・ロード順 | `../../crates/sindr/src/stdlib.rs` の `STDLIB_MODULE_SPECS` |
 | source kind と compile policy | `../../crates/sindr/src/policy.rs` |
+| Error の宣言・Payload・局所型・生成責務・情報保持 | [`Error_spec.md`](./Error_spec.md) |
 | 診断構造と span | [`diagnostics.md`](./diagnostics.md) |
 | エラー表示・実行時オプション・REPL の表示レベル | [`display_error.md`](./display_error.md) |
 | 未確定事項 | `../../doc/open-issues.md` |
@@ -33,6 +34,7 @@ API 一覧、builtin 一覧、標準モジュールの完全なロード順な�
 
 - [関数名の `?` suffix](./Callable_name_spec.md)
 - [文字列リテラルの実装契約](./String_literal_spec.md)
+- [Error implementation contract](./Error_spec.md)
 - [EldrVM spec](./EldrVM_spec.md)
 - [FS / Shell spec](./FS_Shell_spec.md)
 - [Json / Encode / Decode spec](./Json_spec.md)

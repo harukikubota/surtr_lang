@@ -85,6 +85,8 @@ depthは型の先頭に連続する0引数関数の段数である。引数付�
 
 ## PatternとErrorKindの境界
 
+Error の宣言 identity と通常値の制約は [Error spec](Error_spec.md) に従う。本節は Pattern と marker を受け取る API の構文・capture 境界を定める。
+
 Pattern consumerの完全call capture、固定Pattern、bindingを伴う成功branchのDirectExpression、照合前scopeのeager式は[Pattern spec](Pattern_spec.md#pattern-consumerのキャプチャと成功scope)に従う。
 Pattern自体・DirectExpressionBlock自体をplaceholderで置き換えず、特殊ブロック内への新しいplaceholder許可やpipeの引数注入規則を追加しない。
 `&N`、projectionの`_N`、pipeの`_N`はそれぞれの構文・役割を維持する。
@@ -92,7 +94,7 @@ Pattern自体・DirectExpressionBlock自体をplaceholderで置き換えず、�
 `Result::recover_kind` と `Test::assert_err_kind` の `ErrorKind` は Lazy 入力ではない。標準builtinの直接parameterだけに許可し、利用者の型注釈や入れ子の型・container・field・returnへ公開しない。
 `Test::assert_cause_chain(expected: List<ErrorKind>, result)` の expected だけは具体的な `deferror` 名を並べた直接 List literal（空列を含む）を受ける。各要素は同じ宣言 identity 規則で解決し、実行時の List 値として評価しない。動的 List、spread、要素や列全体の placeholder は拒否する。この署名は一般の `List<ErrorKind>` の束縛・転送を許可しない。
 Sigilは修飾名を含む具体的な`deferror`型名を解決する。constructor call、runtime Error、文字列、抽象`Error`、直接placeholderは拒否する。
-constructorのpayload arityは関係しない。Forgeはcanonical identityを静的kind metadataへ消去し、Eldrはhidden ABIでkindを照合する。
+コンストラクタ入力 arity と保存 Payload arity は marker 解決に関係しない。Forgeはcanonical identityを静的kind metadataへ消去し、Eldrはhidden ABIでkindを照合する。
 利用者向けのkind値・constructor・Error生成能力や、旧Lazy marker／任意文字列へのfallbackを設けない。内部ABIの詳細は[EldrVM spec](EldrVM_spec.md)に従う。
 
 ## 診断と検証
