@@ -581,7 +581,8 @@ defmod Test {
   @doc """
   Supply text for `IO::get` and `IO::get_line` in the current test case.
   Append `input` without adding a newline and return `Ok(())`.
-  After this call, reads use only this buffer and return `Err(InputError(...))` when it is exhausted.
+  Each case starts with an empty input buffer. Reads use only this buffer and return
+  `Err(InputError(...))` before input is supplied or when it is exhausted.
   """
   def push_stdin(input: String) -> Result<()> {
     __test_push_stdin(input)

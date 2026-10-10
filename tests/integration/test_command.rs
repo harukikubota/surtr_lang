@@ -2166,6 +2166,86 @@ fn test_command_shared_include_prefix_keeps_entries_independent() {
     let _ = fs::remove_dir_all(temp);
 }
 
+#[test]
+fn test_command_case_stdin_is_empty_without_consuming_open_host_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let temp = unique_temp_dir("surtr_test_case_empty_stdin");
+    write_source(
+        &temp.join("lib/tests/local/stdin.srt"),
+        r#"import IO;
+import Test;
+
+it("empty case line input") {
+  assert_err_kind(InputError, IO::get_line(""))
+}
+it("empty case character input") {
+  assert_err_kind(InputError, IO::get(""))
+}
+host_input = IO::get_line("")
+match host_input {
+  Ok(text) => print(text),
+  Err(error) => eprint(error),
+}
+"#,
+    );
+    let mut child = surtr_command()
+        .args(["test", "lib/tests/local/stdin.srt", "--format=json"])
+        .current_dir(&temp)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("test command should start");
+    let mut host_stdin = child.stdin.take().expect("host stdin pipe should exist");
+    // Keep the writer open throughout execution: EOF must come from the case
+    // buffer, not from a closed host pipe. Spare lines let the old runner fail
+    // both assertions and finish instead of blocking after consuming sentinel.
+    let input = format!("sentinel\n{}", "spare\n".repeat(32));
+    if let Err(error) = host_stdin.write_all(input.as_bytes()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("failed to populate open host stdin: {error}");
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            status => {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .expect("killed child should be reaped");
+                drop(host_stdin);
+                panic!(
+                    "test command did not finish with host stdin open: {status:?}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .expect("finished child should be reaped");
+    drop(host_stdin);
+    let report = test_json(&output);
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["summary"]["passed"], 2, "{report}");
+    assert_eq!(report["summary"]["failed"], 0, "{report}");
+    assert_eq!(
+        report["scripts"][0]["io"]["stdout"],
+        serde_json::json!(["sentinel"]),
+        "case reads must preserve host input for the top-level read: {report}",
+    );
+    let _ = fs::remove_dir_all(temp);
+}
+
 #[cfg(unix)]
 fn run_surtr_with_terminal_stderr(temp: &Path, args: &[&str]) -> (Output, String) {
     use std::io::Read;
