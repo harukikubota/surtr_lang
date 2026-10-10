@@ -77,6 +77,13 @@ pub const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
+        file_name: "errors.srt",
+        module_path: None,
+        source: include_str!("../../../lib/errors.srt"),
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
         file_name: SPECIAL_TYPES_FILE,
         module_path: None,
         source: SPECIAL_TYPES_SOURCE,

@@ -1,59 +1,9 @@
-deferror RegexFindNoMatch(pattern: String, input: String) {
-  |pattern: String, input: String|
-  Self(message: "regex #{inspect(pattern)} found no match in #{inspect(input)}", pattern, input)
-}
-
-deferror RegexCapturesNoMatch(pattern: String, input: String) {
-  |pattern: String, input: String|
-  Self(message: "regex #{inspect(pattern)} captured no match in #{inspect(input)}", pattern, input)
-}
-
-deferror RegexCaptureIndexMissing(index: Int) {
-  |index: Int|
-  Self(message: "regex capture index not found: #{index}", index)
-}
-
-deferror RegexCaptureNameMissing(name: String) {
-  |name: String|
-  Self(message: "regex capture name not found: #{name}", name)
-}
-
-deferror RegexCaptureIndexUnmatched(index: Int) {
-  |index: Int|
-  Self(message: "regex capture index did not participate: #{index}", index)
-}
-
-deferror RegexCaptureNameUnmatched(name: String) {
-  |name: String|
-  Self(message: "regex capture name did not participate: #{name}", name)
-}
-
 @doc """
 Standard `Regex` type declaration.
 `Regex` is an opaque compiled regular expression value handled by runtime
 builtins.
 """
 @builtin type Regex
-
-@doc """
-Standard `RegexCaptures` type declaration.
-Represents one successful capture set produced by `Regex::captures`.
-"""
-@builtin type RegexCaptures
-
-@doc """
-Standard `RegexMatch` type declaration.
-Represents one concrete match span produced by `Regex::find` / `Regex::find_all`.
-"""
-@builtin type RegexMatch
-
-@doc """
-Regex compile error returned by `Regex::compile`.
-"""
-deferror RegexCompileError(pattern: String, detail: String) {
-  |pattern: String, detail: String|
-  Self(message: "regex compile failed for #{inspect(pattern)}: #{detail}", pattern, detail)
-}
 
 impl Regex {
   @doc """
@@ -224,4 +174,54 @@ impl RegexMatch {
   4
   """
   @builtin def end(m: RegexMatch) -> Int
+}
+
+@doc """
+Standard `RegexCaptures` type declaration.
+Represents one successful capture set produced by `Regex::captures`.
+"""
+@builtin type RegexCaptures
+
+@doc """
+Standard `RegexMatch` type declaration.
+Represents one concrete match span produced by `Regex::find` / `Regex::find_all`.
+"""
+@builtin type RegexMatch
+
+deferror RegexFindNoMatch(pattern: String, input: String) {
+  |pattern: String, input: String|
+  Self(message: "regex #{inspect(pattern)} found no match in #{inspect(input)}", pattern, input)
+}
+
+deferror RegexCapturesNoMatch(pattern: String, input: String) {
+  |pattern: String, input: String|
+  Self(message: "regex #{inspect(pattern)} captured no match in #{inspect(input)}", pattern, input)
+}
+
+deferror RegexCaptureIndexMissing(index: Int) {
+  |index: Int|
+  Self(message: "regex capture index not found: #{index}", index)
+}
+
+deferror RegexCaptureNameMissing(name: String) {
+  |name: String|
+  Self(message: "regex capture name not found: #{name}", name)
+}
+
+deferror RegexCaptureIndexUnmatched(index: Int) {
+  |index: Int|
+  Self(message: "regex capture index did not participate: #{index}", index)
+}
+
+deferror RegexCaptureNameUnmatched(name: String) {
+  |name: String|
+  Self(message: "regex capture name did not participate: #{name}", name)
+}
+
+@doc """
+Regex compile error returned by `Regex::compile`.
+"""
+deferror RegexCompileError(pattern: String, detail: String) {
+  |pattern: String, detail: String|
+  Self(message: "regex compile failed for #{inspect(pattern)}: #{detail}", pattern, detail)
 }

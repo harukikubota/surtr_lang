@@ -1,31 +1,3 @@
-deferror ListFirstEmpty() {
-  Self(message: "first requires a nonempty list")
-}
-
-deferror ListLastEmpty() {
-  Self(message: "last requires a nonempty list")
-}
-
-deferror ListMaximumEmpty() {
-  Self(message: "maximum requires a nonempty list")
-}
-
-deferror ListMinimumEmpty() {
-  Self(message: "minimum requires a nonempty list")
-}
-
-deferror ListMinMaxEmpty() {
-  Self(message: "minmax requires a nonempty list")
-}
-
-deferror ListFindNoMatch() {
-  Self(message: "no list element satisfies the predicate")
-}
-
-deferror ListFindMapNoValue() {
-  Self(message: "no list element produces Some")
-}
-
 @doc """
 Standard `List` type declaration.
 `List` is the homogeneous sequence type used by list literals and list
@@ -59,34 +31,6 @@ Examples:
 - `Facet::set(List.[1..2], [10, 20, 30, 40], [99])`
 """
 @builtin type List<$A>
-
-@doc """
-Stepper for `List::reduce_while`.
-`Resume(next)` continues with the next accumulator, while `Stop(done)` ends the
-reduction immediately.
-"""
-defenum ReduceStep<$A> {
-  Resume($A),
-  Stop($A),
-}
-
-impl Eq for List<$A>
-where
-  $A: Eq
-{
-  def eq(self: Self, rhs: Self) -> Boolean {
-    match self {
-      [] => match rhs {
-        [] => True,
-        [_, .._] => False,
-      },
-      [head, ..tail] => match rhs {
-        [] => False,
-        [other_head, ..other_tail] => Eq::eq(head, other_head) && Eq::eq(tail, other_tail),
-      },
-    }
-  }
-}
 
 impl List {
   @doc """
@@ -135,148 +79,6 @@ impl List {
   3
   """
   @builtin def len(values: List<$A>) -> Int
-
-  defp _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
-    match values {
-      [] => acc,
-      [head, ..tail] => _list_reverse_go(tail, cons(head, acc)),
-    }
-  }
-
-  defp _index_out_of_bounds::<$A>(index: Int, len: Int) -> Result<$A, ListIndexOutOfBounds> {
-    Err(ListIndexOutOfBounds(index, len))
-  }
-
-  defp _last_go(current: $A, rest: List<$A>) -> $A {
-    match rest {
-      [] => current,
-      [head, ..tail] => _last_go(head, tail),
-    }
-  }
-
-  defp _at_go(values: List<$A>, index: Int, original_index: Int, len: Int) -> Result<$A, ListIndexOutOfBounds> {
-    match values {
-      [] => _index_out_of_bounds(original_index, len),
-      [head, ..tail] => if(index == 0, Ok(head), _at_go(tail, index - 1, original_index, len)),
-    }
-  }
-
-  defp _take_go(values: List<$A>, remaining: Int) -> List<$A> {
-    if(
-      remaining <= 0,
-      [],
-      match values {
-        [] => [],
-        [head, ..tail] => cons(head, _take_go(tail, remaining - 1)),
-      },
-    )
-  }
-
-  defp _drop_go(values: List<$A>, remaining: Int) -> List<$A> {
-    if(
-      remaining <= 0,
-      values,
-      match values {
-        [] => [],
-        [_, ..tail] => _drop_go(tail, remaining - 1),
-      },
-    )
-  }
-
-  defp _partition_go(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
-    match values {
-      [] => ([], []),
-      [head, ..tail] => _partition_cons(head, tail, pred),
-    }
-  }
-
-  defp _partition_cons(head: $A, tail: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
-    rest = _partition_go(tail, pred)
-    if(
-      pred(head),
-      (cons(head, rest._0), rest._1),
-      (rest._0, cons(head, rest._1)),
-    )
-  }
-
-  defp _take_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
-    match values {
-      [] => [],
-      [head, ..tail] => if(pred(head), cons(head, _take_while_go(tail, pred)), []),
-    }
-  }
-
-  defp _drop_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
-    match values {
-      [] => [],
-      [head, ..tail] => if(pred(head), _drop_while_go(tail, pred), values),
-    }
-  }
-
-  defp _max_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
-    match values {
-      [] => current,
-      [head, ..tail] => _max_by_go(
-        tail,
-        match cmp(head, current) {
-          Ordering::Less | Ordering::Equal => current,
-          Ordering::Greater => head,
-        },
-        cmp,
-      ),
-    }
-  }
-
-  defp _min_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
-    match values {
-      [] => current,
-      [head, ..tail] => _min_by_go(
-        tail,
-        match cmp(head, current) {
-          Ordering::Less => head,
-          Ordering::Equal | Ordering::Greater => current,
-        },
-        cmp,
-      ),
-    }
-  }
-
-  defp _min_max_go(values: List<$A>, current: ($A, $A), cmp: ($A, $A -> Ordering)) -> ($A, $A) {
-    match values {
-      [] => current,
-      [head, ..tail] => _min_max_go(
-        tail,
-        (
-          match cmp(head, current._0) {
-            Ordering::Less => head,
-            _ => current._0,
-          },
-          match cmp(head, current._1) {
-            Ordering::Greater => head,
-            _ => current._1,
-          },
-        ),
-        cmp,
-      ),
-    }
-  }
-
-  defp _insert_sorted(value: $A, sorted: List<$A>, cmp: ($A, $A -> Ordering)) -> List<$A> {
-    match sorted {
-      [] => [value],
-      [head, ..tail] => match cmp(value, head) {
-        Ordering::Less => [value, ..sorted],
-        Ordering::Equal | Ordering::Greater => [head, .._insert_sorted(value, tail, cmp)],
-      },
-    }
-  }
-
-  defp _dedup_groups(groups: List<($A, Int)>) -> List<$A> {
-    match groups {
-      [] => [],
-      [head, ..tail] => [head._0, .._dedup_groups(tail)],
-    }
-  }
 
   @doc """
   Append `right` after `left`.
@@ -716,6 +518,166 @@ impl List {
   [(1, "a"), (2, "b")]
   """
   @builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
+
+  defp _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
+    match values {
+      [] => acc,
+      [head, ..tail] => _list_reverse_go(tail, cons(head, acc)),
+    }
+  }
+
+  defp _index_out_of_bounds::<$A>(index: Int, len: Int) -> Result<$A, ListIndexOutOfBounds> {
+    Err(ListIndexOutOfBounds(index, len))
+  }
+
+  defp _last_go(current: $A, rest: List<$A>) -> $A {
+    match rest {
+      [] => current,
+      [head, ..tail] => _last_go(head, tail),
+    }
+  }
+
+  defp _at_go(values: List<$A>, index: Int, original_index: Int, len: Int) -> Result<$A, ListIndexOutOfBounds> {
+    match values {
+      [] => _index_out_of_bounds(original_index, len),
+      [head, ..tail] => if(index == 0, Ok(head), _at_go(tail, index - 1, original_index, len)),
+    }
+  }
+
+  defp _take_go(values: List<$A>, remaining: Int) -> List<$A> {
+    if(
+      remaining <= 0,
+      [],
+      match values {
+        [] => [],
+        [head, ..tail] => cons(head, _take_go(tail, remaining - 1)),
+      },
+    )
+  }
+
+  defp _drop_go(values: List<$A>, remaining: Int) -> List<$A> {
+    if(
+      remaining <= 0,
+      values,
+      match values {
+        [] => [],
+        [_, ..tail] => _drop_go(tail, remaining - 1),
+      },
+    )
+  }
+
+  defp _partition_go(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    match values {
+      [] => ([], []),
+      [head, ..tail] => _partition_cons(head, tail, pred),
+    }
+  }
+
+  defp _partition_cons(head: $A, tail: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    rest = _partition_go(tail, pred)
+    if(
+      pred(head),
+      (cons(head, rest._0), rest._1),
+      (rest._0, cons(head, rest._1)),
+    )
+  }
+
+  defp _take_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => if(pred(head), cons(head, _take_while_go(tail, pred)), []),
+    }
+  }
+
+  defp _drop_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => if(pred(head), _drop_while_go(tail, pred), values),
+    }
+  }
+
+  defp _max_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
+    match values {
+      [] => current,
+      [head, ..tail] => _max_by_go(
+        tail,
+        match cmp(head, current) {
+          Ordering::Less | Ordering::Equal => current,
+          Ordering::Greater => head,
+        },
+        cmp,
+      ),
+    }
+  }
+
+  defp _min_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
+    match values {
+      [] => current,
+      [head, ..tail] => _min_by_go(
+        tail,
+        match cmp(head, current) {
+          Ordering::Less => head,
+          Ordering::Equal | Ordering::Greater => current,
+        },
+        cmp,
+      ),
+    }
+  }
+
+  defp _min_max_go(values: List<$A>, current: ($A, $A), cmp: ($A, $A -> Ordering)) -> ($A, $A) {
+    match values {
+      [] => current,
+      [head, ..tail] => _min_max_go(
+        tail,
+        (
+          match cmp(head, current._0) {
+            Ordering::Less => head,
+            _ => current._0,
+          },
+          match cmp(head, current._1) {
+            Ordering::Greater => head,
+            _ => current._1,
+          },
+        ),
+        cmp,
+      ),
+    }
+  }
+
+  defp _insert_sorted(value: $A, sorted: List<$A>, cmp: ($A, $A -> Ordering)) -> List<$A> {
+    match sorted {
+      [] => [value],
+      [head, ..tail] => match cmp(value, head) {
+        Ordering::Less => [value, ..sorted],
+        Ordering::Equal | Ordering::Greater => [head, .._insert_sorted(value, tail, cmp)],
+      },
+    }
+  }
+
+  defp _dedup_groups(groups: List<($A, Int)>) -> List<$A> {
+    match groups {
+      [] => [],
+      [head, ..tail] => [head._0, .._dedup_groups(tail)],
+    }
+  }
+}
+
+impl Eq for List<$A>
+where
+  $A: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    match self {
+      [] => match rhs {
+        [] => True,
+        [_, .._] => False,
+      },
+      [head, ..tail] => match rhs {
+        [] => False,
+        [other_head, ..other_tail] => Eq::eq(head, other_head) && Eq::eq(tail, other_tail),
+      },
+    }
+  }
 }
 
 @doc """
@@ -820,4 +782,54 @@ impl Alternative for List<$T> {
   def choose(left: List<$A>, right: List<$A>) -> List<$A> {
     List::append(left, right)
   }
+}
+
+@doc """
+Stepper for `List::reduce_while`.
+`Resume(next)` continues with the next accumulator, while `Stop(done)` ends the
+reduction immediately.
+"""
+defenum ReduceStep<$A> {
+  Resume($A),
+  Stop($A),
+}
+
+deferror ListFirstEmpty() {
+  Self(message: "first requires a nonempty list")
+}
+
+deferror ListLastEmpty() {
+  Self(message: "last requires a nonempty list")
+}
+
+deferror ListMaximumEmpty() {
+  Self(message: "maximum requires a nonempty list")
+}
+
+deferror ListMinimumEmpty() {
+  Self(message: "minimum requires a nonempty list")
+}
+
+deferror ListMinMaxEmpty() {
+  Self(message: "minmax requires a nonempty list")
+}
+
+deferror ListFindNoMatch() {
+  Self(message: "no list element satisfies the predicate")
+}
+
+deferror ListFindMapNoValue() {
+  Self(message: "no list element produces Some")
+}
+
+@doc """
+Error for out-of-bounds List element access.
+The original index and length are stored in Payload.
+## REPL
+xldr(1)> List::at([10], 2)
+Err(ListIndexOutOfBounds("list index 2 out of bounds for length 1"))
+"""
+deferror ListIndexOutOfBounds(index: Int, length: Int) {
+  |index: Int, length: Int|
+  Self(message: "list index #{index} out of bounds for length #{length}", index, length)
 }

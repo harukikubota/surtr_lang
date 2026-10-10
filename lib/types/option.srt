@@ -222,18 +222,3 @@ impl Convert<Result<$T>> for Option<$T> {
     }
   }
 }
-
-impl Convert<Option<$T>> for Result<$T> {
-  @doc """
-  Convert `Result<$T>` into `Option<$T>`, dropping the concrete error value.
-  ## REPL
-  xldr(1)> to::<Option>(Ok(1))
-  Option::Some(1)
-  """
-  def to::<Option<$T>>(self: Self) -> Option<$T> {
-    match self {
-      Ok(value) => Option::Some(value),
-      Err(_) => Option::None,
-    }
-  }
-}

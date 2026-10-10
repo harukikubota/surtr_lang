@@ -1,157 +1,4 @@
 @doc """
-An assertion failure whose message is the supplied `note`.
-"""
-deferror TestExplicitFailure(note: String) {
-  |note: String|
-  Self(message: note, note)
-}
-
-deferror TestConditionFalse(note: String) {
-  |note: String|
-  Self(message: note, note)
-}
-
-deferror TestPredicateRejected(note: String, actual: String) {
-  |note: String, actual: String|
-  Self(message: "#{note}\nactual: #{actual}", note, actual)
-}
-
-deferror TestExpectedTrue() {
-  Self(message: "expected True, got False")
-}
-
-deferror TestExpectedFalse() {
-  Self(message: "expected False, got True")
-}
-
-deferror TestEqualityMismatch(expected: String, actual: String) {
-  |expected: String, actual: String|
-  Self(message: "expected #{expected}, got #{actual}", expected, actual)
-}
-
-deferror TestExpectedUnequal(actual: String) {
-  |actual: String|
-  Self(message: "expected unequal values, got #{actual}", actual)
-}
-
-deferror TestLessThanFailed(lhs: String, rhs: String) {
-  |lhs: String, rhs: String|
-  Self(message: "expected #{lhs} < #{rhs}", lhs, rhs)
-}
-
-deferror TestLessEqualFailed(lhs: String, rhs: String) {
-  |lhs: String, rhs: String|
-  Self(message: "expected #{lhs} <= #{rhs}", lhs, rhs)
-}
-
-deferror TestGreaterThanFailed(lhs: String, rhs: String) {
-  |lhs: String, rhs: String|
-  Self(message: "expected #{lhs} > #{rhs}", lhs, rhs)
-}
-
-deferror TestGreaterEqualFailed(lhs: String, rhs: String) {
-  |lhs: String, rhs: String|
-  Self(message: "expected #{lhs} >= #{rhs}", lhs, rhs)
-}
-
-deferror TestPrefixMissing(prefix: String, actual: String) {
-  |prefix: String, actual: String|
-  Self(message: "expected #{inspect(actual)} to start with #{inspect(prefix)}", prefix, actual)
-}
-
-deferror TestSuffixMissing(suffix: String, actual: String) {
-  |suffix: String, actual: String|
-  Self(message: "expected #{inspect(actual)} to end with #{inspect(suffix)}", suffix, actual)
-}
-
-deferror TestFragmentMissing(fragment: String, actual: String) {
-  |fragment: String, actual: String|
-  Self(message: "expected #{inspect(actual)} to contain #{inspect(fragment)}", fragment, actual)
-}
-
-deferror TestExpectedSome() {
-  Self(message: "expected Some, got None")
-}
-
-deferror TestExpectedSomeValue(expected: String) {
-  |expected: String|
-  Self(message: "expected Some(#{expected}), got None", expected)
-}
-
-deferror TestExpectedNone(actual: String) {
-  |actual: String|
-  Self(message: "expected None, got Some(#{actual})", actual)
-}
-
-deferror TestExpectedOk(error: Error) {
-  |error: Error|
-  Self(message: "expected Ok, got Err(#{inspect(error)})", error)
-}
-
-deferror TestExpectedOkValue(expected: String, error: Error) {
-  |expected: String, error: Error|
-  Self(message: "expected Ok(#{expected}), got Err(#{inspect(error)})", expected, error)
-}
-
-deferror TestExpectedErr(actual: String) {
-  |actual: String|
-  Self(message: "expected Err, got Ok(#{actual})", actual)
-}
-
-deferror TestExpectedErrMessage(expected: String, actual: String) {
-  |expected: String, actual: String|
-  Self(message: "expected Err with message #{inspect(expected)}, got Ok(#{actual})", expected, actual)
-}
-
-deferror TestExpectedErrFragment(fragment: String, actual: String) {
-  |fragment: String, actual: String|
-  Self(message: "expected Err containing #{fragment}, got Ok(#{actual})", fragment, actual)
-}
-
-deferror TestErrorFragmentMissing(fragment: String, actual: String) {
-  |fragment: String, actual: String|
-  Self(message: "expected Err containing #{fragment}, got #{actual}", fragment, actual)
-}
-
-deferror TestNegativeTolerance(tolerance: Float) {
-  |tolerance: Float|
-  Self(message: "invalid negative tolerance: #{tolerance}", tolerance)
-}
-
-deferror TestApproxMismatch(expected: Float, actual: Float, tolerance: Float) {
-  |expected: Float, actual: Float, tolerance: Float|
-  Self(message: "expected #{inspect(expected)} within tolerance #{inspect(tolerance)}, got #{inspect(actual)}", expected, actual, tolerance)
-}
-
-deferror TestErrorKindMismatch(expected: String, actual: String) {
-  |expected: String, actual: String|
-  Self(message: "expected Err kind #{expected}, got #{actual}", expected, actual)
-}
-
-deferror TestExpectedErrorKind(expected: String, actual: String) {
-  |expected: String, actual: String|
-  Self(message: "expected Err kind #{expected}, got Ok(#{actual})", expected, actual)
-}
-
-deferror TestExpectedCauseChain(expected: List<String>) {
-  |expected: List<String>|
-  Self(message: "expected Err cause chain #{inspect(expected)}, got Ok", expected)
-}
-
-deferror TestCauseChainMismatch(expected: List<String>, actual: List<String>) {
-  |expected: List<String>, actual: List<String>|
-  mismatch = List::reduce(List::zip(expected, actual), (0, "", False), {|state, pair|
-    if(state._2, state,
-      if(pair._0 == pair._1, (state._0 + 1, "", False),
-        (state._0, "cause chain mismatch at index #{state._0}: expected #{pair._0}, got #{pair._1}", True)))
-  })
-  message = if(mismatch._2, mismatch._1,
-    "cause chain length mismatch: expected #{List::len(expected)}, got #{List::len(actual)}")
-  Self(message: message, expected, actual)
-}
-
-
-@doc """
 Build named test suites and check values, errors, documents, and captured I/O.
 Available to test files executed by `surtr test`.
 assert_err_kind and assert_cause_chain are ordinary names. Their static
@@ -188,52 +35,24 @@ test("examples") {
 """
 defmod Test {
   @builtin def __test_push(kind: String, name: String) -> Unit
+
   @builtin def __test_pop() -> Unit
+
   @builtin def __test_pass(name: String) -> Unit
+
   @builtin def __test_fail(name: String, detail: String) -> Unit
+
   @builtin def __test_fail_error(name: String, err: Error) -> Unit
+
   @builtin def __test_fail_current(detail: String) -> Unit
+
   @builtin def __test_capture_stdout() -> List<String>
+
   @builtin def __test_capture_stderr() -> List<String>
+
   @builtin def __test_push_stdin(input: String) -> Unit
+
   @builtin def __test_begin_case(kind: String, name: String, reason: String) -> Boolean
-
-
-
-  defp _finish_ok() -> Result<()> {
-    __test_pop()
-    Ok(())
-  }
-
-  defp _finish_unexpected_test_error_rendered(rendered: String) -> Result<()> {
-    __test_fail_current("unexpected test error: " ++ rendered)
-    __test_pop()
-    Ok(())
-  }
-
-  defp _finish_unexpected_describe_error_rendered(rendered: String) -> Result<()> {
-    __test_fail_current("unexpected describe error: " ++ rendered)
-    __test_pop()
-    Ok(())
-  }
-
-  defp _finish_it_ok(name: String) -> Result<()> {
-    __test_pass(name)
-    Ok(())
-  }
-
-  defp _finish_it_err(name: String, err: Error) -> Result<()> {
-    __test_fail_error(name, err)
-    Ok(())
-  }
-
-  defp _assert_err_rendered_contains(fragment: String, rendered: String) -> Result<()> {
-    if(
-      String::contains(rendered, fragment),
-      Ok(()),
-      Err(TestErrorFragmentMissing(fragment, rendered)),
-    )
-  }
 
   @doc """
   Run `body` as a named test suite, grouping its case results under `name`.
@@ -269,16 +88,6 @@ defmod Test {
   """
   def it(name: String, body: (-> Result<()>)) -> Result<()> {
     _case("it", name, "", body)
-  }
-
-  defp _case(kind: String, name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
-    match __test_begin_case(kind, name, reason) {
-      True => match body() {
-        Ok(_) => _finish_it_ok(name),
-        Err(err) => _finish_it_err(name, err),
-      },
-      False => Ok(()),
-    }
   }
 
   @doc """
@@ -771,4 +580,210 @@ defmod Test {
   def assert_stderr_eq(expected: List<String>) -> Result<()> {
     assert_eq(expected, __test_capture_stderr())
   }
+
+  defp _finish_ok() -> Result<()> {
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_unexpected_test_error_rendered(rendered: String) -> Result<()> {
+    __test_fail_current("unexpected test error: " ++ rendered)
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_unexpected_describe_error_rendered(rendered: String) -> Result<()> {
+    __test_fail_current("unexpected describe error: " ++ rendered)
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_it_ok(name: String) -> Result<()> {
+    __test_pass(name)
+    Ok(())
+  }
+
+  defp _finish_it_err(name: String, err: Error) -> Result<()> {
+    __test_fail_error(name, err)
+    Ok(())
+  }
+
+  defp _assert_err_rendered_contains(fragment: String, rendered: String) -> Result<()> {
+    if(
+      String::contains(rendered, fragment),
+      Ok(()),
+      Err(TestErrorFragmentMissing(fragment, rendered)),
+    )
+  }
+
+  defp _case(kind: String, name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
+    match __test_begin_case(kind, name, reason) {
+      True => match body() {
+        Ok(_) => _finish_it_ok(name),
+        Err(err) => _finish_it_err(name, err),
+      },
+      False => Ok(()),
+    }
+  }
+}
+
+@doc """
+An assertion failure whose message is the supplied `note`.
+"""
+deferror TestExplicitFailure(note: String) {
+  |note: String|
+  Self(message: note, note)
+}
+
+deferror TestConditionFalse(note: String) {
+  |note: String|
+  Self(message: note, note)
+}
+
+deferror TestPredicateRejected(note: String, actual: String) {
+  |note: String, actual: String|
+  Self(message: "#{note}\nactual: #{actual}", note, actual)
+}
+
+deferror TestExpectedTrue() {
+  Self(message: "expected True, got False")
+}
+
+deferror TestExpectedFalse() {
+  Self(message: "expected False, got True")
+}
+
+deferror TestEqualityMismatch(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(message: "expected #{expected}, got #{actual}", expected, actual)
+}
+
+deferror TestExpectedUnequal(actual: String) {
+  |actual: String|
+  Self(message: "expected unequal values, got #{actual}", actual)
+}
+
+deferror TestLessThanFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} < #{rhs}", lhs, rhs)
+}
+
+deferror TestLessEqualFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} <= #{rhs}", lhs, rhs)
+}
+
+deferror TestGreaterThanFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} > #{rhs}", lhs, rhs)
+}
+
+deferror TestGreaterEqualFailed(lhs: String, rhs: String) {
+  |lhs: String, rhs: String|
+  Self(message: "expected #{lhs} >= #{rhs}", lhs, rhs)
+}
+
+deferror TestPrefixMissing(prefix: String, actual: String) {
+  |prefix: String, actual: String|
+  Self(message: "expected #{inspect(actual)} to start with #{inspect(prefix)}", prefix, actual)
+}
+
+deferror TestSuffixMissing(suffix: String, actual: String) {
+  |suffix: String, actual: String|
+  Self(message: "expected #{inspect(actual)} to end with #{inspect(suffix)}", suffix, actual)
+}
+
+deferror TestFragmentMissing(fragment: String, actual: String) {
+  |fragment: String, actual: String|
+  Self(message: "expected #{inspect(actual)} to contain #{inspect(fragment)}", fragment, actual)
+}
+
+deferror TestExpectedSome() {
+  Self(message: "expected Some, got None")
+}
+
+deferror TestExpectedSomeValue(expected: String) {
+  |expected: String|
+  Self(message: "expected Some(#{expected}), got None", expected)
+}
+
+deferror TestExpectedNone(actual: String) {
+  |actual: String|
+  Self(message: "expected None, got Some(#{actual})", actual)
+}
+
+deferror TestExpectedOk(error: Error) {
+  |error: Error|
+  Self(message: "expected Ok, got Err(#{inspect(error)})", error)
+}
+
+deferror TestExpectedOkValue(expected: String, error: Error) {
+  |expected: String, error: Error|
+  Self(message: "expected Ok(#{expected}), got Err(#{inspect(error)})", expected, error)
+}
+
+deferror TestExpectedErr(actual: String) {
+  |actual: String|
+  Self(message: "expected Err, got Ok(#{actual})", actual)
+}
+
+deferror TestExpectedErrMessage(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(
+    message: "expected Err with message #{inspect(expected)}, got Ok(#{actual})",
+    expected,
+    actual,
+  )
+}
+
+deferror TestExpectedErrFragment(fragment: String, actual: String) {
+  |fragment: String, actual: String|
+  Self(message: "expected Err containing #{fragment}, got Ok(#{actual})", fragment, actual)
+}
+
+deferror TestErrorFragmentMissing(fragment: String, actual: String) {
+  |fragment: String, actual: String|
+  Self(message: "expected Err containing #{fragment}, got #{actual}", fragment, actual)
+}
+
+deferror TestNegativeTolerance(tolerance: Float) {
+  |tolerance: Float|
+  Self(message: "invalid negative tolerance: #{tolerance}", tolerance)
+}
+
+deferror TestApproxMismatch(expected: Float, actual: Float, tolerance: Float) {
+  |expected: Float, actual: Float, tolerance: Float|
+  Self(
+    message: "expected #{inspect(expected)} within tolerance #{inspect(tolerance)}, got #{inspect(actual)}",
+    expected,
+    actual,
+    tolerance,
+  )
+}
+
+deferror TestErrorKindMismatch(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(message: "expected Err kind #{expected}, got #{actual}", expected, actual)
+}
+
+deferror TestExpectedErrorKind(expected: String, actual: String) {
+  |expected: String, actual: String|
+  Self(message: "expected Err kind #{expected}, got Ok(#{actual})", expected, actual)
+}
+
+deferror TestExpectedCauseChain(expected: List<String>) {
+  |expected: List<String>|
+  Self(message: "expected Err cause chain #{inspect(expected)}, got Ok", expected)
+}
+
+deferror TestCauseChainMismatch(expected: List<String>, actual: List<String>) {
+  |expected: List<String>, actual: List<String>|
+  mismatch = List::reduce(List::zip(expected, actual), (0, "", False), {|state, pair|
+    if(state._2, state,
+      if(pair._0 == pair._1, (state._0 + 1, "", False),
+        (state._0, "cause chain mismatch at index #{state._0}: expected #{pair._0}, got #{pair._1}", True)))
+  })
+  message = if(mismatch._2, mismatch._1,
+    "cause chain length mismatch: expected #{List::len(expected)}, got #{List::len(actual)}")
+  Self(message: message, expected, actual)
 }

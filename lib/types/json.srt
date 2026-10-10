@@ -1,18 +1,3 @@
-deferror JsonFieldMissing(key: String) {
-  |key: String|
-  Self(message: "json field missing at $.#{key}", key)
-}
-
-deferror JsonIndexMissing(index: Int) {
-  |index: Int|
-  Self(message: "json array index missing at $[#{index}]", index)
-}
-
-deferror JsonParseDepthLimitExceeded(line: Int, column: Int, depth: Int, limit: Int) {
-  |line: Int, column: Int, depth: Int, limit: Int|
-  Self(message: "json parse depth #{depth} reached the limit #{limit} at #{line}:#{column}", line, column, depth, limit)
-}
-
 @doc """
 JSON abstract syntax tree used by the standard library.
 `Object` stores values in `HashMap<JsonValue>`, so keys are always `String`
@@ -28,55 +13,6 @@ defenum JsonValue {
   String(String),
   Array(List<JsonValue>),
   Object(HashMap<JsonValue>),
-}
-
-@doc """
-Error returned when JSON text cannot be parsed.
-"""
-deferror JsonParseError(line: Int, column: Int, detail: String) {
-  |line: Int, column: Int, detail: String|
-  Self(message: "json parse error at #{line}:#{column}: #{detail}", line, column, detail)
-}
-
-@doc """
-Error returned when a `JsonValue` does not match the expected shape.
-"""
-deferror JsonObjectExpected(path: String, got: String) {
-  |path: String, got: String|
-  Self(message: "json decode error at #{path}: expected object, got #{got}", path, got)
-}
-
-deferror JsonArrayExpected(path: String, got: String) {
-  |path: String, got: String|
-  Self(message: "json decode error at #{path}: expected array, got #{got}", path, got)
-}
-
-deferror JsonStringExpected(path: String, got: String) {
-  |path: String, got: String|
-  Self(message: "json decode error at #{path}: expected string, got #{got}", path, got)
-}
-
-deferror JsonIntExpected(path: String, got: String) {
-  |path: String, got: String|
-  Self(message: "json decode error at #{path}: expected int, got #{got}", path, got)
-}
-
-deferror JsonFloatExpected(path: String, got: String) {
-  |path: String, got: String|
-  Self(message: "json decode error at #{path}: expected float, got #{got}", path, got)
-}
-
-deferror JsonBooleanExpected(path: String, got: String) {
-  |path: String, got: String|
-  Self(message: "json decode error at #{path}: expected boolean, got #{got}", path, got)
-}
-
-@doc """
-Error returned when a `JsonValue` cannot be serialized as JSON text.
-"""
-deferror JsonIntegerOutOfRange(value: Int) {
-  |value: Int|
-  Self(message: "JSON integer cannot be represented as a JSON number: #{value}", value)
 }
 
 defmod Json {
@@ -225,15 +161,6 @@ impl JsonValue {
   }
 }
 
-impl Decode<JsonValue> for String {
-  @doc """
-  Parse a JSON text string into `JsonValue`.
-  """
-  def decode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
-    Json::decode(self)
-  }
-}
-
 impl Decode<String> for JsonValue {
   @doc """
   Decode a `JsonValue::String` through the generic `Decode` trait.
@@ -279,38 +206,72 @@ impl Encode<JsonValue> for JsonValue {
   }
 }
 
-impl Encode<JsonValue> for String {
-  @doc """
-  Encode a string as `JsonValue::String`.
-  """
-  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
-    Ok(JsonValue::String(self))
-  }
+deferror JsonFieldMissing(key: String) {
+  |key: String|
+  Self(message: "json field missing at $.#{key}", key)
 }
 
-impl Encode<JsonValue> for Int {
-  @doc """
-  Encode an integer as `JsonValue::Int`.
-  """
-  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
-    Ok(JsonValue::Int(self))
-  }
+deferror JsonIndexMissing(index: Int) {
+  |index: Int|
+  Self(message: "json array index missing at $[#{index}]", index)
 }
 
-impl Encode<JsonValue> for Float {
-  @doc """
-  Encode a floating-point value as `JsonValue::Float`.
-  """
-  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
-    Ok(JsonValue::Float(self))
-  }
+deferror JsonParseDepthLimitExceeded(line: Int, column: Int, depth: Int, limit: Int) {
+  |line: Int, column: Int, depth: Int, limit: Int|
+  Self(
+    message: "json parse depth #{depth} reached the limit #{limit} at #{line}:#{column}",
+    line,
+    column,
+    depth,
+    limit,
+  )
 }
 
-impl Encode<JsonValue> for Boolean {
-  @doc """
-  Encode a boolean as `JsonValue::Bool`.
-  """
-  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
-    Ok(JsonValue::Bool(self))
-  }
+@doc """
+Error returned when JSON text cannot be parsed.
+"""
+deferror JsonParseError(line: Int, column: Int, detail: String) {
+  |line: Int, column: Int, detail: String|
+  Self(message: "json parse error at #{line}:#{column}: #{detail}", line, column, detail)
+}
+
+@doc """
+Error returned when a `JsonValue` does not match the expected shape.
+"""
+deferror JsonObjectExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected object, got #{got}", path, got)
+}
+
+deferror JsonArrayExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected array, got #{got}", path, got)
+}
+
+deferror JsonStringExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected string, got #{got}", path, got)
+}
+
+deferror JsonIntExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected int, got #{got}", path, got)
+}
+
+deferror JsonFloatExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected float, got #{got}", path, got)
+}
+
+deferror JsonBooleanExpected(path: String, got: String) {
+  |path: String, got: String|
+  Self(message: "json decode error at #{path}: expected boolean, got #{got}", path, got)
+}
+
+@doc """
+Error returned when a `JsonValue` cannot be serialized as JSON text.
+"""
+deferror JsonIntegerOutOfRange(value: Int) {
+  |value: Int|
+  Self(message: "JSON integer cannot be represented as a JSON number: #{value}", value)
 }

@@ -1,8 +1,3 @@
-deferror ShiftCountTooLarge(bits: Int) {
-  |bits: Int|
-  Self(message: "shift count is too large: #{bits}", bits)
-}
-
 @doc """
 Standard `Int` type declaration.
 User-visible integer values are backed by arbitrary-precision arithmetic across
@@ -12,155 +7,6 @@ contract for integers, so changing the shape here is a compile error rather
 than a local library tweak.
 """
 @builtin type Int
-
-impl Default for Int {
-  def default::<Int>() -> Int { 0 }
-}
-
-@doc """
-Concrete integer-module error for negative bit shift counts.
-`Int::shl` and `Int::shr` return this instead of trapping when `bits < 0`.
-"""
-deferror NegativeShiftCount(bits: Int) {
-  |bits: Int|
-  Self(message: "shift amount must be non-negative: #{bits}", bits)
-}
-
-@doc """
-Concrete integer-module error for negative bit indexes.
-Index-based bit helpers return this instead of trapping when `index < 0`.
-"""
-deferror NegativeBitIndex(index: Int) {
-  |index: Int|
-  Self(message: "bit index must be non-negative: #{index}", index)
-}
-
-@doc """
-Fixed-width selector for integer bit helpers.
-Named variants cover common machine widths, while `Any(bits)` accepts custom
-positive widths.
-"""
-defenum BitWidth {
-  W8,
-  W16,
-  W32,
-  W64,
-  W128,
-  Any(Int),
-}
-
-@doc """
-Type-safe radix marker for integer parsing helpers and diagnostics.
-"""
-@derive Eq, Compare, Show
-defenum IntBase {
-  Bin,
-  Oct,
-  Dec,
-  Hex,
-}
-
-@doc """
-Concrete integer-module error for invalid custom bit widths.
-`BitWidth::Any(bits)` must use a positive width.
-"""
-deferror InvalidBitWidth(width: Int) {
-  |width: Int|
-  Self(message: "bit width must be positive: #{width}", width)
-}
-
-@doc """
-Recoverable parse error for base-fixed integer parsing helpers.
-"""
-deferror IntParseEmpty(base: IntBase) {
-  |base: IntBase|
-  Self(message: "empty #{IntBase::label(base)} integer input", base)
-}
-
-deferror IntParseSignWithoutDigits(base: IntBase, input: String) {
-  |base: IntBase, input: String|
-  Self(message: "sign without digits in #{IntBase::label(base)} integer: #{inspect(input)}", base, input)
-}
-
-deferror IntParseInvalidDigit(base: IntBase, digit: String, index: Int) {
-  |base: IntBase, digit: String, index: Int|
-  Self(message: "invalid digit for #{IntBase::label(base)} integer: #{inspect(digit)} at index #{index}", base, digit, index)
-}
-
-@doc """
-Recoverable parse error for literal-syntax integer parsing helpers.
-"""
-deferror IntLiteralEmpty() {
-  Self(message: "empty integer literal input")
-}
-
-deferror IntLiteralSignWithoutDigits(input: String) {
-  |input: String|
-  Self(message: "sign without digits in integer literal: #{inspect(input)}", input)
-}
-
-deferror IntLiteralMissingDigits(base: IntBase) {
-  |base: IntBase|
-  Self(message: "missing digits after integer base prefix: #{IntBase::prefix(base)}", base)
-}
-
-deferror IntLiteralUnknownPrefix(prefix: String) {
-  |prefix: String|
-  Self(message: "unknown integer base prefix: #{prefix}", prefix)
-}
-
-deferror IntLiteralInvalidDigit(base: IntBase, digit: String, index: Int) {
-  |base: IntBase, digit: String, index: Int|
-  Self(message: "invalid digit for #{IntBase::label(base)} integer literal: #{inspect(digit)} at index #{index}", base, digit, index)
-}
-
-@doc """
-Concrete integer-module error for fixed-width bit indexes outside the available
-range.
-`index` must satisfy `0 <= index < width`.
-"""
-deferror BitIndexOutOfRange(index: Int, width: Int) {
-  |index: Int, width: Int|
-  Self(message: "bit index #{index} out of range for width #{width}", index, width)
-}
-
-impl IntBase {
-  @doc """
-  Return the numeric radix represented by `self`.
-  """
-  def radix(self: Self) -> Int {
-    match self {
-      IntBase::Bin => 2,
-      IntBase::Oct => 8,
-      IntBase::Dec => 10,
-      IntBase::Hex => 16,
-    }
-  }
-
-  @doc """
-  Return the canonical source prefix for `self`.
-  """
-  def prefix(self: Self) -> String {
-    match self {
-      IntBase::Bin => "0b",
-      IntBase::Oct => "0o",
-      IntBase::Dec => "0d",
-      IntBase::Hex => "0x",
-    }
-  }
-
-  @doc """
-  Return the human-friendly base label for diagnostics.
-  """
-  def label(self: Self) -> String {
-    match self {
-      IntBase::Bin => "binary",
-      IntBase::Oct => "octal",
-      IntBase::Dec => "decimal",
-      IntBase::Hex => "hexadecimal",
-    }
-  }
-}
 
 impl Int {
   @doc """
@@ -254,162 +100,6 @@ impl Int {
   """
   @builtin
   def toggle_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
-
-  defp _apply_parse_sign(value: Int, sign: Int) -> Int {
-    if(sign < 0, 0 - value, value)
-  }
-
-  defp _digit_value(ch: String) -> Result<Int> {
-    match String::codepoints(ch, StringEncoding::Ascii) {
-      Ok([cp]) => cond {
-        cp >= 48 && cp <= 57 => Ok(cp - 48),
-        cp >= 65 && cp <= 70 => Ok(cp - 55),
-        cp >= 97 && cp <= 102 => Ok(cp - 87),
-        True => Err(NoneError),
-      },
-      _ => Err(NoneError),
-    }
-  }
-
-  defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
-    radix = IntBase::radix(base)
-    match _digit_value(ch) {
-      Ok(value) => if(
-        value < radix,
-        Ok(value),
-        Err(IntParseInvalidDigit(base, ch, index)),
-      ),
-      Err(_) => Err(IntParseInvalidDigit(base, ch, index)),
-    }
-  }
-
-  defp _parse_literal_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
-    radix = IntBase::radix(base)
-    match _digit_value(ch) {
-      Ok(value) => if(
-        value < radix,
-        Ok(value),
-        Err(
-          IntLiteralInvalidDigit(base, ch, index),
-        ),
-      ),
-      Err(_) => Err(
-        IntLiteralInvalidDigit(base, ch, index),
-      ),
-    }
-  }
-
-  defp _parse_digits_go(
-    chars: String,
-    base: IntBase,
-    acc: Int,
-    index: Int,
-    sign: Int,
-  ) -> Result<Int> {
-    match chars {
-      "" => Ok(_apply_parse_sign(acc, sign)),
-      [head, ..tail] => _parse_digits_step(head, tail, base, acc, index, sign),
-    }
-  }
-
-  defp _parse_digits_step(
-    head: String,
-    tail: String,
-    base: IntBase,
-    acc: Int,
-    index: Int,
-    sign: Int,
-  ) -> Result<Int> {
-    digit =? _parse_digit_for_base(base, head, index)
-    _parse_digits_go(
-      tail,
-      base,
-      acc * IntBase::radix(base) + digit,
-      index + 1,
-      sign,
-    )
-  }
-
-  defp _parse_literal_digits_go(
-    chars: String,
-    base: IntBase,
-    acc: Int,
-    index: Int,
-    sign: Int,
-  ) -> Result<Int> {
-    match chars {
-      "" => Ok(_apply_parse_sign(acc, sign)),
-      [head, ..tail] => _parse_literal_digits_step(head, tail, base, acc, index, sign),
-    }
-  }
-
-  defp _parse_literal_digits_step(
-    head: String,
-    tail: String,
-    base: IntBase,
-    acc: Int,
-    index: Int,
-    sign: Int,
-  ) -> Result<Int> {
-    digit =? _parse_literal_digit_for_base(base, head, index)
-    _parse_literal_digits_go(
-      tail,
-      base,
-      acc * IntBase::radix(base) + digit,
-      index + 1,
-      sign,
-    )
-  }
-
-  defp _parse_digits_unsigned(
-    chars: String,
-    base: IntBase,
-    sign: Int,
-    start_index: Int,
-  ) -> Result<Int> {
-    match chars {
-      "" => Err(IntParseEmpty(base)),
-      _ => _parse_digits_go(chars, base, 0, start_index, sign),
-    }
-  }
-
-  defp _parse_literal_prefixed(
-    body: String,
-    base: IntBase,
-    sign: Int,
-    start_index: Int,
-  ) -> Result<Int> {
-    match body {
-      "" => Err(IntLiteralMissingDigits(base)),
-      _ => _parse_literal_digits_go(body, base, 0, start_index, sign),
-    }
-  }
-
-  defp _parse_literal_unsigned(
-    chars: String,
-    sign: Int,
-    start_index: Int,
-  ) -> Result<Int> {
-    match chars {
-      "" => Err(IntLiteralEmpty),
-      ["0", ..tail] => match tail {
-        "" => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
-        ["b", ..body] => _parse_literal_prefixed(body, IntBase::Bin, sign, start_index + 2),
-        ["o", ..body] => _parse_literal_prefixed(body, IntBase::Oct, sign, start_index + 2),
-        ["d", ..body] => _parse_literal_prefixed(body, IntBase::Dec, sign, start_index + 2),
-        ["x", ..body] => _parse_literal_prefixed(body, IntBase::Hex, sign, start_index + 2),
-        [prefix, .._] => match _digit_value(prefix) {
-          Ok(value) => if(
-            value < 10,
-            _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
-            Err(IntLiteralUnknownPrefix("0" ++ prefix)),
-          ),
-          Err(_) => Err(IntLiteralUnknownPrefix("0" ++ prefix)),
-        },
-      },
-      _ => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
-    }
-  }
 
   @doc """
   Parse base-10 text as an `Int`.
@@ -512,52 +202,6 @@ impl Int {
       },
       _ => _parse_literal_unsigned(text, 1, 0),
     }
-  }
-
-  defp _pow2_go(remaining: Int, acc: Int) -> Int {
-    if(remaining == 0, acc, _pow2_go(remaining - 1, acc + acc))
-  }
-
-  defp _pow2(count: Int) -> Int {
-    _pow2_go(count, 1)
-  }
-
-  defp _positive_mod(value: Int, modulus: Int) -> Int {
-    match Mod::safe_mod(value, modulus) {
-      Ok(rem) => if(rem < 0, rem + modulus, rem),
-      Err(_) => 0,
-    }
-  }
-
-  defp _mask_bits(width_bits: Int) -> Int {
-    _pow2(width_bits) - 1
-  }
-
-  defp _wrap_unsigned_bits(value: Int, width_bits: Int) -> Int {
-    _positive_mod(value, _pow2(width_bits))
-  }
-
-  defp _validate_shift_count(bits: Int) -> Result<Int, NegativeShiftCount> {
-    if(bits < 0, Err(NegativeShiftCount(bits)), Ok(bits))
-  }
-
-  defp _validate_fixed_bit_index(index: Int, width_bits: Int) -> Result<Int> {
-    if(
-      index < 0,
-      Err(NegativeBitIndex(index)),
-      if(index < width_bits, Ok(index), Err(BitIndexOutOfRange(index, width_bits))),
-    )
-  }
-
-  defp _shr_logical_bits(value: Int, shift: Int, width_bits: Int) -> Int {
-    if(
-      shift >= width_bits,
-      0,
-      match Div::safe_div(value, _pow2(shift)) {
-        Ok(quotient) => quotient,
-        Err(_) => 0,
-      },
-    )
   }
 
   @doc """
@@ -844,6 +488,250 @@ impl Int {
       Err(_) => False,
     }
   }
+
+  defp _apply_parse_sign(value: Int, sign: Int) -> Int {
+    if(sign < 0, 0 - value, value)
+  }
+
+  defp _digit_value(ch: String) -> Result<Int> {
+    match String::codepoints(ch, StringEncoding::Ascii) {
+      Ok([cp]) => cond {
+        cp >= 48 && cp <= 57 => Ok(cp - 48),
+        cp >= 65 && cp <= 70 => Ok(cp - 55),
+        cp >= 97 && cp <= 102 => Ok(cp - 87),
+        True => Err(NoneError),
+      },
+      _ => Err(NoneError),
+    }
+  }
+
+  defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
+    radix = IntBase::radix(base)
+    match _digit_value(ch) {
+      Ok(value) => if(
+        value < radix,
+        Ok(value),
+        Err(IntParseInvalidDigit(base, ch, index)),
+      ),
+      Err(_) => Err(IntParseInvalidDigit(base, ch, index)),
+    }
+  }
+
+  defp _parse_literal_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
+    radix = IntBase::radix(base)
+    match _digit_value(ch) {
+      Ok(value) => if(
+        value < radix,
+        Ok(value),
+        Err(
+          IntLiteralInvalidDigit(base, ch, index),
+        ),
+      ),
+      Err(_) => Err(
+        IntLiteralInvalidDigit(base, ch, index),
+      ),
+    }
+  }
+
+  defp _parse_digits_go(
+    chars: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int> {
+    match chars {
+      "" => Ok(_apply_parse_sign(acc, sign)),
+      [head, ..tail] => _parse_digits_step(head, tail, base, acc, index, sign),
+    }
+  }
+
+  defp _parse_digits_step(
+    head: String,
+    tail: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int> {
+    digit =? _parse_digit_for_base(base, head, index)
+    _parse_digits_go(
+      tail,
+      base,
+      acc * IntBase::radix(base) + digit,
+      index + 1,
+      sign,
+    )
+  }
+
+  defp _parse_literal_digits_go(
+    chars: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int> {
+    match chars {
+      "" => Ok(_apply_parse_sign(acc, sign)),
+      [head, ..tail] => _parse_literal_digits_step(head, tail, base, acc, index, sign),
+    }
+  }
+
+  defp _parse_literal_digits_step(
+    head: String,
+    tail: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int> {
+    digit =? _parse_literal_digit_for_base(base, head, index)
+    _parse_literal_digits_go(
+      tail,
+      base,
+      acc * IntBase::radix(base) + digit,
+      index + 1,
+      sign,
+    )
+  }
+
+  defp _parse_digits_unsigned(
+    chars: String,
+    base: IntBase,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int> {
+    match chars {
+      "" => Err(IntParseEmpty(base)),
+      _ => _parse_digits_go(chars, base, 0, start_index, sign),
+    }
+  }
+
+  defp _parse_literal_prefixed(
+    body: String,
+    base: IntBase,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int> {
+    match body {
+      "" => Err(IntLiteralMissingDigits(base)),
+      _ => _parse_literal_digits_go(body, base, 0, start_index, sign),
+    }
+  }
+
+  defp _parse_literal_unsigned(
+    chars: String,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int> {
+    match chars {
+      "" => Err(IntLiteralEmpty),
+      ["0", ..tail] => match tail {
+        "" => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+        ["b", ..body] => _parse_literal_prefixed(body, IntBase::Bin, sign, start_index + 2),
+        ["o", ..body] => _parse_literal_prefixed(body, IntBase::Oct, sign, start_index + 2),
+        ["d", ..body] => _parse_literal_prefixed(body, IntBase::Dec, sign, start_index + 2),
+        ["x", ..body] => _parse_literal_prefixed(body, IntBase::Hex, sign, start_index + 2),
+        [prefix, .._] => match _digit_value(prefix) {
+          Ok(value) => if(
+            value < 10,
+            _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+            Err(IntLiteralUnknownPrefix("0" ++ prefix)),
+          ),
+          Err(_) => Err(IntLiteralUnknownPrefix("0" ++ prefix)),
+        },
+      },
+      _ => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+    }
+  }
+
+  defp _pow2_go(remaining: Int, acc: Int) -> Int {
+    if(remaining == 0, acc, _pow2_go(remaining - 1, acc + acc))
+  }
+
+  defp _pow2(count: Int) -> Int {
+    _pow2_go(count, 1)
+  }
+
+  defp _positive_mod(value: Int, modulus: Int) -> Int {
+    match Mod::safe_mod(value, modulus) {
+      Ok(rem) => if(rem < 0, rem + modulus, rem),
+      Err(_) => 0,
+    }
+  }
+
+  defp _mask_bits(width_bits: Int) -> Int {
+    _pow2(width_bits) - 1
+  }
+
+  defp _wrap_unsigned_bits(value: Int, width_bits: Int) -> Int {
+    _positive_mod(value, _pow2(width_bits))
+  }
+
+  defp _validate_shift_count(bits: Int) -> Result<Int, NegativeShiftCount> {
+    if(bits < 0, Err(NegativeShiftCount(bits)), Ok(bits))
+  }
+
+  defp _validate_fixed_bit_index(index: Int, width_bits: Int) -> Result<Int> {
+    if(
+      index < 0,
+      Err(NegativeBitIndex(index)),
+      if(index < width_bits, Ok(index), Err(BitIndexOutOfRange(index, width_bits))),
+    )
+  }
+
+  defp _shr_logical_bits(value: Int, shift: Int, width_bits: Int) -> Int {
+    if(
+      shift >= width_bits,
+      0,
+      match Div::safe_div(value, _pow2(shift)) {
+        Ok(quotient) => quotient,
+        Err(_) => 0,
+      },
+    )
+  }
+}
+
+impl IntBase {
+  @doc """
+  Return the numeric radix represented by `self`.
+  """
+  def radix(self: Self) -> Int {
+    match self {
+      IntBase::Bin => 2,
+      IntBase::Oct => 8,
+      IntBase::Dec => 10,
+      IntBase::Hex => 16,
+    }
+  }
+
+  @doc """
+  Return the canonical source prefix for `self`.
+  """
+  def prefix(self: Self) -> String {
+    match self {
+      IntBase::Bin => "0b",
+      IntBase::Oct => "0o",
+      IntBase::Dec => "0d",
+      IntBase::Hex => "0x",
+    }
+  }
+
+  @doc """
+  Return the human-friendly base label for diagnostics.
+  """
+  def label(self: Self) -> String {
+    match self {
+      IntBase::Bin => "binary",
+      IntBase::Oct => "octal",
+      IntBase::Dec => "decimal",
+      IntBase::Hex => "hexadecimal",
+    }
+  }
+}
+
+impl Default for Int {
+  def default::<Int>() -> Int { 0 }
 }
 
 impl Add for Int {
@@ -971,4 +859,156 @@ impl Compare for Int {
   True
   """
   @builtin def gte(self: Self, rhs: Self) -> Boolean
+}
+
+impl TryConvert<Duration> for Int {
+  @doc """
+  Convert an `Int` millisecond value into `Duration`.
+
+  Prefer the literal form or constructor sugar in ordinary code.
+
+  ## REPL
+  xldr(1)> try_to::<Duration>(10)
+  Ok(10ms)
+  xldr(2)> Duration(10)
+  Ok(10ms)
+  """
+  def try_to::<Duration>(self: Self) -> Result<Duration, Error> {
+    Duration(self)
+  }
+}
+
+impl Encode<JsonValue> for Int {
+  @doc """
+  Encode an integer as `JsonValue::Int`.
+  """
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Int(self))
+  }
+}
+
+@doc """
+Fixed-width selector for integer bit helpers.
+Named variants cover common machine widths, while `Any(bits)` accepts custom
+positive widths.
+"""
+defenum BitWidth {
+  W8,
+  W16,
+  W32,
+  W64,
+  W128,
+  Any(Int),
+}
+
+@doc """
+Type-safe radix marker for integer parsing helpers and diagnostics.
+"""
+@derive Eq, Compare, Show
+defenum IntBase {
+  Bin,
+  Oct,
+  Dec,
+  Hex,
+}
+
+deferror ShiftCountTooLarge(bits: Int) {
+  |bits: Int|
+  Self(message: "shift count is too large: #{bits}", bits)
+}
+
+@doc """
+Concrete integer-module error for negative bit shift counts.
+`Int::shl` and `Int::shr` return this instead of trapping when `bits < 0`.
+"""
+deferror NegativeShiftCount(bits: Int) {
+  |bits: Int|
+  Self(message: "shift amount must be non-negative: #{bits}", bits)
+}
+
+@doc """
+Concrete integer-module error for negative bit indexes.
+Index-based bit helpers return this instead of trapping when `index < 0`.
+"""
+deferror NegativeBitIndex(index: Int) {
+  |index: Int|
+  Self(message: "bit index must be non-negative: #{index}", index)
+}
+
+@doc """
+Concrete integer-module error for invalid custom bit widths.
+`BitWidth::Any(bits)` must use a positive width.
+"""
+deferror InvalidBitWidth(width: Int) {
+  |width: Int|
+  Self(message: "bit width must be positive: #{width}", width)
+}
+
+@doc """
+Recoverable parse error for base-fixed integer parsing helpers.
+"""
+deferror IntParseEmpty(base: IntBase) {
+  |base: IntBase|
+  Self(message: "empty #{IntBase::label(base)} integer input", base)
+}
+
+deferror IntParseSignWithoutDigits(base: IntBase, input: String) {
+  |base: IntBase, input: String|
+  Self(
+    message: "sign without digits in #{IntBase::label(base)} integer: #{inspect(input)}",
+    base,
+    input,
+  )
+}
+
+deferror IntParseInvalidDigit(base: IntBase, digit: String, index: Int) {
+  |base: IntBase, digit: String, index: Int|
+  Self(
+    message: "invalid digit for #{IntBase::label(base)} integer: #{inspect(digit)} at index #{index}",
+    base,
+    digit,
+    index,
+  )
+}
+
+@doc """
+Recoverable parse error for literal-syntax integer parsing helpers.
+"""
+deferror IntLiteralEmpty() {
+  Self(message: "empty integer literal input")
+}
+
+deferror IntLiteralSignWithoutDigits(input: String) {
+  |input: String|
+  Self(message: "sign without digits in integer literal: #{inspect(input)}", input)
+}
+
+deferror IntLiteralMissingDigits(base: IntBase) {
+  |base: IntBase|
+  Self(message: "missing digits after integer base prefix: #{IntBase::prefix(base)}", base)
+}
+
+deferror IntLiteralUnknownPrefix(prefix: String) {
+  |prefix: String|
+  Self(message: "unknown integer base prefix: #{prefix}", prefix)
+}
+
+deferror IntLiteralInvalidDigit(base: IntBase, digit: String, index: Int) {
+  |base: IntBase, digit: String, index: Int|
+  Self(
+    message: "invalid digit for #{IntBase::label(base)} integer literal: #{inspect(digit)} at index #{index}",
+    base,
+    digit,
+    index,
+  )
+}
+
+@doc """
+Concrete integer-module error for fixed-width bit indexes outside the available
+range.
+`index` must satisfy `0 <= index < width`.
+"""
+deferror BitIndexOutOfRange(index: Int, width: Int) {
+  |index: Int, width: Int|
+  Self(message: "bit index #{index} out of range for width #{width}", index, width)
 }

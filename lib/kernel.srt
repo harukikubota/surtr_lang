@@ -1,11 +1,3 @@
-deferror UnconsEmptyList() {
-  Self(message: "cannot uncons empty list")
-}
-
-deferror UnconsEmptyString() {
-  Self(message: "cannot uncons empty string")
-}
-
 @doc """
 Kernel module.
 
@@ -225,7 +217,6 @@ defmod Kernel {
   """
   @builtin def apply_pattern(value: $Value, pattern: $Pattern) -> Result<$Return>
 
-
   @doc """
   Duplicate one value into a pair.
 
@@ -356,38 +347,6 @@ defmod Kernel {
   }
 
   @doc """
-  Decompose a non-empty sequence in MatchBlock positions.
-
-  `uncons(term)` is a builtin Extractor used by `=?` and `match`.
-  It accepts both `List` and `String`.
-
-  - `List<$A>` becomes `(head: $A, tail: List<$A>)`
-  - `String` becomes `(head: String, tail: String)`
-
-  These are two concrete static contracts selected from the matched input.
-  `uncons` does not expose a bare generic target or a Union. The declaration
-  below records the List contract; the compiler-owned String pattern route uses
-  the String contract while sharing the same runtime primitive.
-
-  In pattern position, `[head, ..tail]` expresses the same head/tail decomposition.
-  A structural List pattern has its own failure Error: empty head/tail input
-  gives `EmptyHeadTailListPattern`, whereas direct `uncons(head, tail)` gives
-  `UnconsEmptyList` or `UnconsEmptyString`.
-  Expression position keeps list construction semantics, so `["t", ..source]`
-  is still a list expression.
-
-  Empty input to `uncons` returns `MatchResult::Err` with
-  `UnconsEmptyList("cannot uncons empty list")` or
-  `UnconsEmptyString("cannot uncons empty string")`.
-  Branch consumers treat this as no match; `=?` preserves the Error.
-
-  ## REPL
-  xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
-  "1"
-  """
-  @builtin defextractor uncons(term: List<$A>) -> MatchResult<($A, List<$A>), Error>
-
-  @doc """
   Print a string to stdout.
   Use `to_string(...)` first when the value is not already `String`.
   This builtin belongs under `Kernel` because printing is part of the shared
@@ -470,100 +429,36 @@ defmod Kernel {
   []
   """
   @builtin def project_args() -> List<String>
-}
 
-# Error construction uses the main standard stage, including Show and inspect.
-deferror IntLiteralPatternMismatch(expected: Int, actual: Int) {
-  |expected: Int, actual: Int|
-  Self(message: "Int literal pattern #{expected} did not match #{actual}", expected, actual)
-}
+  @doc """
+  Decompose a non-empty sequence in MatchBlock positions.
 
-deferror StringLiteralPatternMismatch(expected: String, actual: String) {
-  |expected: String, actual: String|
-  Self(message: "String literal pattern #{inspect(expected)} did not match #{inspect(actual)}", expected, actual)
-}
+  `uncons(term)` is a builtin Extractor used by `=?` and `match`.
+  It accepts both `List` and `String`.
 
-deferror BooleanLiteralPatternMismatch(expected: Boolean, actual: Boolean) {
-  |expected: Boolean, actual: Boolean|
-  Self(message: "Boolean literal pattern #{expected} did not match #{actual}", expected, actual)
-}
+  - `List<$A>` becomes `(head: $A, tail: List<$A>)`
+  - `String` becomes `(head: String, tail: String)`
 
-deferror DurationLiteralPatternMismatch(expected: Duration, actual: Duration) {
-  |expected: Duration, actual: Duration|
-  Self(message: "Duration literal pattern #{expected} did not match #{actual}", expected, actual)
-}
+  These are two concrete static contracts selected from the matched input.
+  `uncons` does not expose a bare generic target or a Union. The declaration
+  below records the List contract; the compiler-owned String pattern route uses
+  the String contract while sharing the same runtime primitive.
 
-deferror PinnedValuePatternMismatch(value_type: String, expected_repr: String, actual_repr: String) {
-  |value_type: String, expected_repr: String, actual_repr: String|
-  Self(message: "pinned #{value_type} value #{expected_repr} did not match #{actual_repr}", value_type, expected_repr, actual_repr)
-}
+  In pattern position, `[head, ..tail]` expresses the same head/tail decomposition.
+  A structural List pattern has its own failure Error: empty head/tail input
+  gives `EmptyHeadTailListPattern`, whereas direct `uncons(head, tail)` gives
+  `UnconsEmptyList` or `UnconsEmptyString`.
+  Expression position keeps list construction semantics, so `["t", ..source]`
+  is still a list expression.
 
-deferror ResultVariantPatternMismatch(expected_variant: String, actual_variant: String) {
-  |expected_variant: String, actual_variant: String|
-  Self(message: "Result pattern expected #{expected_variant}, got #{actual_variant}", expected_variant, actual_variant)
-}
+  Empty input to `uncons` returns `MatchResult::Err` with
+  `UnconsEmptyList("cannot uncons empty list")` or
+  `UnconsEmptyString("cannot uncons empty string")`.
+  Branch consumers treat this as no match; `=?` preserves the Error.
 
-deferror EnumVariantPatternMismatch(enum_name: String, expected_variant: String, actual_variant: String) {
-  |enum_name: String, expected_variant: String, actual_variant: String|
-  Self(message: "#{enum_name} pattern expected #{expected_variant}, got #{actual_variant}", enum_name, expected_variant, actual_variant)
+  ## REPL
+  xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
+  "1"
+  """
+  @builtin defextractor uncons(term: List<$A>) -> MatchResult<($A, List<$A>), Error>
 }
-
-@doc """
-Errors for list indexes, Facet bounds, and fixed-length List patterns.
-The original indexes and lengths are stored in Payload.
-## REPL
-xldr(1)> List::at([10], 2)
-Err(ListIndexOutOfBounds("list index 2 out of bounds for length 1"))
-"""
-deferror ListIndexOutOfBounds(index: Int, length: Int) {
-  |index: Int, length: Int|
-  Self(message: "list index #{index} out of bounds for length #{length}", index, length)
-}
-
-deferror FacetListIndexOutOfBounds(index: Int, length: Int) {
-  |index: Int, length: Int|
-  Self(message: "facet list index #{index} out of bounds for length #{length}", index, length)
-}
-
-deferror FacetListRangeReversed(start: Int, end: Int, length: Int) {
-  |start: Int, end: Int, length: Int|
-  Self(message: "facet list range #{start}..#{end} is reversed for length #{length}", start, end, length)
-}
-
-deferror ListPatternTooShort(expected_length: Int, actual_length: Int) {
-  |expected_length: Int, actual_length: Int|
-  Self(message: "LHS.len(#{expected_length}) > RHS.len(#{actual_length})", expected_length, actual_length)
-}
-
-deferror ListPatternTooLong(expected_length: Int, actual_length: Int) {
-  |expected_length: Int, actual_length: Int|
-  Self(message: "LHS.len(#{expected_length}) < RHS.len(#{actual_length})", expected_length, actual_length)
-}
-
-@doc """
-Concrete bootstrap error for Facet HashMap key access when the key is missing.
-`HashMap::map_get` returns `HashMapKeyMissing`; Facet paths use this error so a
-missing path segment is visible in diagnostics.
-"""
-deferror FacetKeyNotFound(key: String) {
-  |key: String|
-  Self(message: "facet key not found: #{key}", key)
-}
-
-@doc """
-Errors for enum-variant selector mismatches in Facet reads and updates.
-Payload stores the segment and the expected and actual variant names.
-"""
-deferror FacetReadVariantMismatch(segment_index: Int, segment: String, enum_name: String, expected_variant: String, actual_variant: String) {
-  |segment_index: Int, segment: String, enum_name: String, expected_variant: String, actual_variant: String|
-  Self(message: "Facet read at segment #{segment_index} (#{segment}) expected #{enum_name}::#{expected_variant}, got #{actual_variant}", segment_index, segment, enum_name, expected_variant, actual_variant)
-}
-
-deferror FacetUpdateVariantMismatch(segment_index: Int, segment: String, enum_name: String, expected_variant: String, actual_variant: String) {
-  |segment_index: Int, segment: String, enum_name: String, expected_variant: String, actual_variant: String|
-  Self(message: "Facet update at segment #{segment_index} (#{segment}) expected #{enum_name}::#{expected_variant}, got #{actual_variant}", segment_index, segment, enum_name, expected_variant, actual_variant)
-}
-
-type Mapper<$A, $B> = ($A -> $B)
-type Predicate<$A> = ($A -> Boolean)
-type Reducer<$Acc, $A> = ($Acc, $A -> $Acc)

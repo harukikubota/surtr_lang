@@ -340,3 +340,12 @@ impl MonadFail for Either<Error, $T> {
     Either::Left(error)
   }
 }
+
+impl Convert<Result<$A>> for Either<Error, $A> {
+  def to::<Result<$A>>(self: Self) -> Result<$A> {
+    match self {
+      Either::Right(value) => Ok(value),
+      Either::Left(error) => Err(error),
+    }
+  }
+}

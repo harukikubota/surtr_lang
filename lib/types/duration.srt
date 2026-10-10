@@ -15,16 +15,6 @@ defstruct Duration {
   readonly millis: Int,
 }
 
-deferror NegativeDurationMillis(value: Int) {
-  |value: Int|
-  Self(message: "duration must be non-negative: #{value}", value)
-}
-
-deferror NegativeDurationDifference(lhs_millis: Int, rhs_millis: Int) {
-  |lhs_millis: Int, rhs_millis: Int|
-  Self(message: "duration subtraction would be negative: #{lhs_millis}ms - #{rhs_millis}ms", lhs_millis, rhs_millis)
-}
-
 impl Duration {
   @doc """
   Construct a `Duration` from a millisecond count.
@@ -100,19 +90,16 @@ impl Show for Duration {
   }
 }
 
-impl TryConvert<Duration> for Int {
-  @doc """
-  Convert an `Int` millisecond value into `Duration`.
+deferror NegativeDurationMillis(value: Int) {
+  |value: Int|
+  Self(message: "duration must be non-negative: #{value}", value)
+}
 
-  Prefer the literal form or constructor sugar in ordinary code.
-
-  ## REPL
-  xldr(1)> try_to::<Duration>(10)
-  Ok(10ms)
-  xldr(2)> Duration(10)
-  Ok(10ms)
-  """
-  def try_to::<Duration>(self: Self) -> Result<Duration, Error> {
-    Duration(self)
-  }
+deferror NegativeDurationDifference(lhs_millis: Int, rhs_millis: Int) {
+  |lhs_millis: Int, rhs_millis: Int|
+  Self(
+    message: "duration subtraction would be negative: #{lhs_millis}ms - #{rhs_millis}ms",
+    lhs_millis,
+    rhs_millis,
+  )
 }

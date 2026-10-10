@@ -1,193 +1,3 @@
-deferror FileOutHandlerOpenFailed(path: String, detail: String) {
-  |path: String, detail: String|
-  Self(message: "FileOutHandler open failed for #{path}: #{detail}", path, detail)
-}
-
-deferror FileOutHandlerWriteFailed(path: String, detail: String) {
-  |path: String, detail: String|
-  Self(message: "FileOutHandler write failed for #{path}: #{detail}", path, detail)
-}
-
-deferror SupervisorAdoptForbidden(supervisor: String) {
-  |supervisor: String|
-  Self(message: "#{supervisor} does not allow adopt", supervisor)
-}
-
-deferror SupervisorAdoptUnknownPid(pid: Int, process: String, supervisor: String) {
-  |pid: Int, process: String, supervisor: String|
-  Self(message: "supervisor #{supervisor} cannot adopt unknown pid #{pid} for #{process}", pid, process, supervisor)
-}
-
-deferror ProcessStopped(pid: Int, process: String) {
-  |pid: Int, process: String|
-  Self(message: "process #{pid} (#{process}) is stopping or stopped", pid, process)
-}
-
-deferror WorkersUnavailable(workers: Int, process: String) {
-  |workers: Int, process: String|
-  Self(message: "workers #{workers} for #{process} has no accepting worker", workers, process)
-}
-
-deferror ProcessStateUnknownPid(pid: Int, process: String) {
-  |pid: Int, process: String|
-  Self(message: "state requested for unknown pid #{pid} for #{process}", pid, process)
-}
-
-deferror ProcessStoreUnknownPid(pid: Int, process: String) {
-  |pid: Int, process: String|
-  Self(message: "store requested for unknown pid #{pid} for #{process}", pid, process)
-}
-
-deferror ProcessStatePidTypeMismatch(pid: Int, actual: String, expected: String) {
-  |pid: Int, actual: String, expected: String|
-  Self(message: "state pid #{pid} belongs to #{actual}, not #{expected}", pid, actual, expected)
-}
-
-deferror ProcessStorePidTypeMismatch(pid: Int, actual: String, expected: String) {
-  |pid: Int, actual: String, expected: String|
-  Self(message: "store pid #{pid} belongs to #{actual}, not #{expected}", pid, actual, expected)
-}
-
-deferror WorkerCreationExpectedPid(actual: String) {
-  |actual: String|
-  Self(message: "worker creation expected Ok(PID(...)), got #{actual}", actual)
-}
-
-deferror WorkerRefillExpectedPid(actual: String) {
-  |actual: String|
-  Self(message: "worker refill expected Ok(PID(...)), got #{actual}", actual)
-}
-
-deferror SupervisorAdoptNonWorker(supervisor: String, pid: Int, process: String) {
-  |supervisor: String, pid: Int, process: String|
-  Self(message: "supervisor #{supervisor} cannot adopt non-Worker pid #{pid} (#{process})", supervisor, pid, process)
-}
-
-deferror SupervisorAdoptWorkerNotLive(supervisor: String, pid: Int, process: String) {
-  |supervisor: String, pid: Int, process: String|
-  Self(message: "supervisor #{supervisor} cannot adopt non-live Worker pid #{pid} (#{process})", supervisor, pid, process)
-}
-
-deferror ProcessStateUnavailable(pid: Int, process: String) {
-  |pid: Int, process: String|
-  Self(message: "pid #{pid} (#{process}) has no materialized state", pid, process)
-}
-
-deferror WorkerStrategyFieldOutOfRange(field: String, value: Int) {
-  |field: String, value: Int|
-  Self(message: "worker strategy field #{field} exceeds runtime limit: #{value}", field, value)
-}
-
-deferror WorkerStrategyInitTargetMismatch(init: Int, target: Int) {
-  |init: Int, target: Int|
-  Self(message: "worker strategy init #{init} differs from target #{target}", init, target)
-}
-
-deferror WorkerStrategyBoundsInvalid(min: Int, target: Int, max: Int) {
-  |min: Int, target: Int, max: Int|
-  Self(message: "worker strategy bounds must satisfy 0 <= #{min} <= #{target} <= #{max}", min, target, max)
-}
-
-deferror FutureDeadlineExceeded(future: Int) {
-  |future: Int|
-  Self(message: "future #{future} timed out", future)
-}
-
-deferror ProcessReplyTargetStopped(future: Int, pid: Int) {
-  |future: Int, pid: Int|
-  Self(message: "target process #{pid} stopped before replying to future #{future}", future, pid)
-}
-
-@doc """
-Process runtime public surface and compiler-managed lowering declarations.
-"""
-defstruct SupervisorStatus {
-  supervisor: String,
-  child_count: Int,
-  strategy: String,
-  max_restarts: Int,
-  max_seconds: Int,
-  allow_adopt: Boolean,
-  shutdown_timeout: Option<Duration>,
-}
-
-impl SupervisorStatus {
-  @doc """
-  Create a supervisor status value.
-
-  Runtime supervisor helpers return this value from generated status APIs.
-
-  ## Examples
-  status =? ImageWorkerSupervisor::status()
-  """
-  def new(
-    supervisor: String,
-    child_count: Int,
-    strategy: String,
-    max_restarts: Int,
-    max_seconds: Int,
-    allow_adopt: Boolean,
-    shutdown_timeout: Option<Duration>,
-  ) -> Self {
-    SupervisorStatus {
-      supervisor: supervisor,
-      child_count: child_count,
-      strategy: strategy,
-      max_restarts: max_restarts,
-      max_seconds: max_seconds,
-      allow_adopt: allow_adopt,
-      shutdown_timeout: shutdown_timeout,
-    }
-  }
-}
-
-@doc """
-Worker-set scale mode.
-
-`Fix(size)` is the v1 executable strategy. The runtime keeps exactly `size`
-members alive under the owning supervisor.
-"""
-defenum WorkerScale {
-  Fix(Int),
-}
-
-@doc """
-Runtime worker-set strategy.
-
-This is ordinary Surtr data and can be built in any module. The runtime only
-receives it through the generated `Sup::workers(...)` owner helper, which the
-compiler restricts to Singleton GenServer `@init`.
-"""
-defstruct WorkerStrategy {
-  init: Int,
-  min: Int,
-  max: Int,
-  scale: WorkerScale,
-}
-
-impl WorkerStrategy {
-  @doc """
-  Create a worker strategy value.
-  """
-  def new(init: Int, min: Int, max: Int, scale: WorkerScale) -> Self {
-    WorkerStrategy { init: init, min: min, max: max, scale: scale }
-  }
-
-  @doc """
-  Create a fixed-size worker strategy.
-  """
-  def fixed(size: Int) -> Self {
-    WorkerStrategy::new(size, size, size, WorkerScale::Fix(size))
-  }
-
-  @doc """
-  Default worker strategy: one fixed worker.
-  """
-  def default::<Self>() -> Self {
-    WorkerStrategy::fixed(1)
-  }
-}
-
 @doc """
 Runtime-managed worker set handle for one worker process type.
 
@@ -243,63 +53,6 @@ defgenserver ImageWorkerPool {
 @builtin type Workers<$Worker>
 
 @doc """
-Runtime-managed task handle for an async task body.
-
-`TaskHandle<$T>` is returned by `Task::async(...)` and consumed by
-`Task::await(...)`.
-"""
-@builtin type TaskHandle<$T>
-
-@doc """
-Return contract for worker `@call` handlers.
-
-`Stop` closes new message acceptance. Its response does not wait for other
-started handlers or callbacks to finish. New requests to that PID return
-`ProcessStopped`, including after the process body has been reclaimed.
-
-`ReplyLater` stores the next state before starting its callback. A caller
-timeout settles only the caller's result; the callback continues through
-sleep, future, and I/O waits. Its later result does not replace the timeout.
-"""
-defenum CallResult<$Reply, $State> {
-  Reply($Reply, $State),
-  ReplyLater($State, (-> Result<$Reply>)),
-  Stop(StopReply<$Reply>),
-}
-
-@doc """
-Stop payload for worker `@call` handlers.
-
-`Normal(reply)` returns `Ok(reply)` to this call. `Error(error)` returns that
-error with its original kind, message, location, and cause. Already started
-executions continue; the first accepted Stop fixes the process exit reason.
-"""
-defenum StopReply<$Reply> {
-  Normal($Reply),
-  Error(Error),
-}
-
-@doc """
-Return contract for worker `@cast` handlers.
-"""
-defenum CastResult<$State> {
-  Next($State),
-  Stop(StopReason),
-}
-
-@doc """
-Stop payload for worker `@cast` handlers.
-
-Both `Normal` and `Error(error)` acknowledge this cast with `Ok(())`.
-`Error(error)` records the process exit reason. A handler returning `Err(error)`
-instead propagates that error to its caller.
-"""
-defenum StopReason {
-  Normal,
-  Error(Error),
-}
-
-@doc """
 Runtime-managed reservation for one worker from a `Workers<$Worker>` handle.
 
 `WorkerLease<$Worker>` is returned by `Workers::reserve(workers)`. Pass the
@@ -327,113 +80,32 @@ defgenserver ImageWorkerPool {
 """
 @builtin type WorkerLease<$Worker>
 
-impl Workers {
+@doc """
+Runtime-managed task handle for an async task body.
+
+`TaskHandle<$T>` is returned by `Task::async(...)` and consumed by
+`Task::await(...)`.
+"""
+@builtin type TaskHandle<$T>
+
+defmod Process {
   @doc """
-  Submit one message template to an accepting worker managed by `workers`.
+  Return the current process PID.
 
-  Stopping workers are excluded from selection. If no worker accepts new
-  messages, return `WorkersUnavailable` without waiting or retrying.
-
-  The worker PID is injected by the runtime; ordinary code passes the worker
-  message without a PID. This API is intended for Singleton GenServer pool
-  implementations, usually from `@call`, `@cast`, or helper functions inside
-  the `defgenserver` body.
-
-  ## Examples
-  defgenserver ImageWorkerPool {
-    meta {
-      instance: Singleton
-      init_policy: Eager
-    }
-
-    @cast
-    def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<CastResult<Workers<ImageWorker>>> {
-      _ =? Workers::submit(workers, ImageWorker::assign(job))
-      Ok(CastResult::Next(workers))
-    }
-  }
+  ## REPL
+  xldr(1)> Process::self()
+  <pid>
   """
-  @builtin def submit(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<Unit>)) -> Result<Unit>
+  @builtin def self::<$Process>() -> PID<$Process>
 
   @doc """
-  Send one message template to each worker accepting messages at the start.
+  Sleep the current execution for the given duration.
 
-  An empty target set returns `[]`. A target that stops before its message
-  starts returns `ProcessStopped` for that element. Replacement workers do
-  not join a broadcast already in progress.
-
-  The target set is runtime-managed. Ordinary code passes the worker message
-  without a PID. This API is intended for Singleton GenServer pool
-  implementations, usually from `@call`, `@cast`, or helper functions inside
-  the `defgenserver` body.
-
-  ## Examples
-  defgenserver ImageWorkerPool {
-    meta {
-      instance: Singleton
-      init_policy: Eager
-    }
-
-    @call
-    def current_states(
-      workers: Workers<ImageWorker>
-    ) -> Result<CallResult<List<Result<ImageWorkerStateView>>, Workers<ImageWorker>>> {
-      views = Workers::broadcast(workers, ImageWorker::current_state())
-      Ok(CallResult::Reply(views, workers))
-    }
-  }
+  ## REPL
+  xldr(1)> Process::sleep(10ms)
+  Ok(())
   """
-  @builtin def broadcast(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>
-
-  @doc """
-  Reserve one accepting worker from `workers` for later messaging.
-
-  If no worker accepts new messages, return `WorkersUnavailable`. A later
-  message through the lease still checks whether its worker accepts requests.
-
-  Use this when work needs an explicit worker reservation before sending the
-  next message. This API is intended for Singleton GenServer pool
-  implementations, usually from `@call`, `@cast`, or helper functions inside
-  the `defgenserver` body.
-
-  ## Examples
-  defgenserver ImageWorkerPool {
-    meta {
-      instance: Singleton
-      init_policy: Eager
-    }
-
-    defp assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
-      lease =? Workers::reserve(workers)
-      ImageWorker::assign(lease, job)
-    }
-  }
-  """
-  @builtin def reserve(workers: Workers<$Worker>) -> Result<WorkerLease<$Worker>>
-
-  @doc """
-  Return the number of workers managed by `workers`.
-
-  Stopping workers remain counted until their started executions finish.
-  Membership removal and replacement start after that completion.
-
-  This API is intended for Singleton GenServer pool implementations, usually
-  from `@call`, `@cast`, or helper functions inside the `defgenserver` body.
-
-  ## Examples
-  defgenserver ImageWorkerPool {
-    meta {
-      instance: Singleton
-      init_policy: Eager
-    }
-
-    @call
-    def size(workers: Workers<ImageWorker>) -> Result<CallResult<Int, Workers<ImageWorker>>> {
-      Ok(CallResult::Reply(Workers::size(workers), workers))
-    }
-  }
-  """
-  @builtin def size(workers: Workers<$Worker>) -> Int
+  @builtin def sleep(duration: Duration) -> Result<Unit>
 }
 
 defmod Supervisor {
@@ -671,62 +343,113 @@ defmod Agent {
   @builtin def context_handler::<$Handler>(owner: $Owner, slot: String) -> PID<$Handler>
 }
 
-defmod Process {
+impl Workers {
   @doc """
-  Return the current process PID.
+  Submit one message template to an accepting worker managed by `workers`.
 
-  ## REPL
-  xldr(1)> Process::self()
-  <pid>
-  """
-  @builtin def self::<$Process>() -> PID<$Process>
+  Stopping workers are excluded from selection. If no worker accepts new
+  messages, return `WorkersUnavailable` without waiting or retrying.
 
-  @doc """
-  Sleep the current execution for the given duration.
+  The worker PID is injected by the runtime; ordinary code passes the worker
+  message without a PID. This API is intended for Singleton GenServer pool
+  implementations, usually from `@call`, `@cast`, or helper functions inside
+  the `defgenserver` body.
 
-  ## REPL
-  xldr(1)> Process::sleep(10ms)
-  Ok(())
-  """
-  @builtin def sleep(duration: Duration) -> Result<Unit>
-}
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
 
-defmod OutHandler {
-  @doc """
-  Write text through a process-local output handler dependency.
-  """
-  @builtin def write(pid: PID<OutHandler>, text: String) -> Result<Unit>
-
-  @doc """
-  Compiler-managed lower target for writing through an output handler.
-
-  Ordinary code cannot call this function directly. Use the handler module or
-  generated process context field instead.
-
-  ## Regular Surface
-  _ =? OutHandler::write(pid, "hello")
-  _ =? ctx.out.write("hello")
-  """
-  @hidden
-  @builtin def __out_handler_write(pid: PID<OutHandler>, text: String) -> Result<Unit>
-}
-
-@doc """
-Marker module for process-local input handler dependencies.
-
-v2 standardizes `StdIn` as the builtin input handler identity. Buffered input
-test helpers remain a later surface extension.
-"""
-defmod InHandler {}
-
-defsupervisor DynamicSupervisor {
-  meta {
-    strategy: OneForOne
-    max_restarts: 10
-    max_seconds: 5
-    child_restart_default: Transient
-    allow_adopt: True
+    @cast
+    def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<CastResult<Workers<ImageWorker>>> {
+      _ =? Workers::submit(workers, ImageWorker::assign(job))
+      Ok(CastResult::Next(workers))
+    }
   }
+  """
+  @builtin def submit(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<Unit>)) -> Result<Unit>
+
+  @doc """
+  Send one message template to each worker accepting messages at the start.
+
+  An empty target set returns `[]`. A target that stops before its message
+  starts returns `ProcessStopped` for that element. Replacement workers do
+  not join a broadcast already in progress.
+
+  The target set is runtime-managed. Ordinary code passes the worker message
+  without a PID. This API is intended for Singleton GenServer pool
+  implementations, usually from `@call`, `@cast`, or helper functions inside
+  the `defgenserver` body.
+
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    @call
+    def current_states(
+      workers: Workers<ImageWorker>
+    ) -> Result<CallResult<List<Result<ImageWorkerStateView>>, Workers<ImageWorker>>> {
+      views = Workers::broadcast(workers, ImageWorker::current_state())
+      Ok(CallResult::Reply(views, workers))
+    }
+  }
+  """
+  @builtin def broadcast(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>
+
+  @doc """
+  Reserve one accepting worker from `workers` for later messaging.
+
+  If no worker accepts new messages, return `WorkersUnavailable`. A later
+  message through the lease still checks whether its worker accepts requests.
+
+  Use this when work needs an explicit worker reservation before sending the
+  next message. This API is intended for Singleton GenServer pool
+  implementations, usually from `@call`, `@cast`, or helper functions inside
+  the `defgenserver` body.
+
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    defp assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
+      lease =? Workers::reserve(workers)
+      ImageWorker::assign(lease, job)
+    }
+  }
+  """
+  @builtin def reserve(workers: Workers<$Worker>) -> Result<WorkerLease<$Worker>>
+
+  @doc """
+  Return the number of workers managed by `workers`.
+
+  Stopping workers remain counted until their started executions finish.
+  Membership removal and replacement start after that completion.
+
+  This API is intended for Singleton GenServer pool implementations, usually
+  from `@call`, `@cast`, or helper functions inside the `defgenserver` body.
+
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    @call
+    def size(workers: Workers<ImageWorker>) -> Result<CallResult<Int, Workers<ImageWorker>>> {
+      Ok(CallResult::Reply(Workers::size(workers), workers))
+    }
+  }
+  """
+  @builtin def size(workers: Workers<$Worker>) -> Int
 }
 
 defmod Task {
@@ -775,4 +498,301 @@ defmod Task {
   Ok(())
   """
   @builtin def cast(body: (-> Unit)) -> Result<Unit>
+}
+
+defmod OutHandler {
+  @doc """
+  Write text through a process-local output handler dependency.
+  """
+  @builtin def write(pid: PID<OutHandler>, text: String) -> Result<Unit>
+
+  @doc """
+  Compiler-managed lower target for writing through an output handler.
+
+  Ordinary code cannot call this function directly. Use the handler module or
+  generated process context field instead.
+
+  ## Regular Surface
+  _ =? OutHandler::write(pid, "hello")
+  _ =? ctx.out.write("hello")
+  """
+  @hidden
+  @builtin def __out_handler_write(pid: PID<OutHandler>, text: String) -> Result<Unit>
+}
+
+@doc """
+Marker module for process-local input handler dependencies.
+
+v2 standardizes `StdIn` as the builtin input handler identity. Buffered input
+test helpers remain a later surface extension.
+"""
+defmod InHandler {}
+
+defsupervisor DynamicSupervisor {
+  meta {
+    strategy: OneForOne
+    max_restarts: 10
+    max_seconds: 5
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+impl SupervisorStatus {
+  @doc """
+  Create a supervisor status value.
+
+  Runtime supervisor helpers return this value from generated status APIs.
+
+  ## Examples
+  status =? ImageWorkerSupervisor::status()
+  """
+  def new(
+    supervisor: String,
+    child_count: Int,
+    strategy: String,
+    max_restarts: Int,
+    max_seconds: Int,
+    allow_adopt: Boolean,
+    shutdown_timeout: Option<Duration>,
+  ) -> Self {
+    SupervisorStatus {
+      supervisor: supervisor,
+      child_count: child_count,
+      strategy: strategy,
+      max_restarts: max_restarts,
+      max_seconds: max_seconds,
+      allow_adopt: allow_adopt,
+      shutdown_timeout: shutdown_timeout,
+    }
+  }
+}
+
+impl WorkerStrategy {
+  @doc """
+  Create a worker strategy value.
+  """
+  def new(init: Int, min: Int, max: Int, scale: WorkerScale) -> Self {
+    WorkerStrategy { init: init, min: min, max: max, scale: scale }
+  }
+
+  @doc """
+  Create a fixed-size worker strategy.
+  """
+  def fixed(size: Int) -> Self {
+    WorkerStrategy::new(size, size, size, WorkerScale::Fix(size))
+  }
+
+  @doc """
+  Default worker strategy: one fixed worker.
+  """
+  def default::<Self>() -> Self {
+    WorkerStrategy::fixed(1)
+  }
+}
+
+@doc """
+Process runtime public surface and compiler-managed lowering declarations.
+"""
+defstruct SupervisorStatus {
+  supervisor: String,
+  child_count: Int,
+  strategy: String,
+  max_restarts: Int,
+  max_seconds: Int,
+  allow_adopt: Boolean,
+  shutdown_timeout: Option<Duration>,
+}
+
+@doc """
+Worker-set scale mode.
+
+`Fix(size)` is the v1 executable strategy. The runtime keeps exactly `size`
+members alive under the owning supervisor.
+"""
+defenum WorkerScale {
+  Fix(Int),
+}
+
+@doc """
+Runtime worker-set strategy.
+
+This is ordinary Surtr data and can be built in any module. The runtime only
+receives it through the generated `Sup::workers(...)` owner helper, which the
+compiler restricts to Singleton GenServer `@init`.
+"""
+defstruct WorkerStrategy {
+  init: Int,
+  min: Int,
+  max: Int,
+  scale: WorkerScale,
+}
+
+@doc """
+Return contract for worker `@call` handlers.
+
+`Stop` closes new message acceptance. Its response does not wait for other
+started handlers or callbacks to finish. New requests to that PID return
+`ProcessStopped`, including after the process body has been reclaimed.
+
+`ReplyLater` stores the next state before starting its callback. A caller
+timeout settles only the caller's result; the callback continues through
+sleep, future, and I/O waits. Its later result does not replace the timeout.
+"""
+defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+@doc """
+Stop payload for worker `@call` handlers.
+
+`Normal(reply)` returns `Ok(reply)` to this call. `Error(error)` returns that
+error with its original kind, message, location, and cause. Already started
+executions continue; the first accepted Stop fixes the process exit reason.
+"""
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}
+
+@doc """
+Return contract for worker `@cast` handlers.
+"""
+defenum CastResult<$State> {
+  Next($State),
+  Stop(StopReason),
+}
+
+@doc """
+Stop payload for worker `@cast` handlers.
+
+Both `Normal` and `Error(error)` acknowledge this cast with `Ok(())`.
+`Error(error)` records the process exit reason. A handler returning `Err(error)`
+instead propagates that error to its caller.
+"""
+defenum StopReason {
+  Normal,
+  Error(Error),
+}
+
+deferror FileOutHandlerOpenFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "FileOutHandler open failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileOutHandlerWriteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "FileOutHandler write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror SupervisorAdoptForbidden(supervisor: String) {
+  |supervisor: String|
+  Self(message: "#{supervisor} does not allow adopt", supervisor)
+}
+
+deferror SupervisorAdoptUnknownPid(pid: Int, process: String, supervisor: String) {
+  |pid: Int, process: String, supervisor: String|
+  Self(
+    message: "supervisor #{supervisor} cannot adopt unknown pid #{pid} for #{process}",
+    pid,
+    process,
+    supervisor,
+  )
+}
+
+deferror ProcessStopped(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "process #{pid} (#{process}) is stopping or stopped", pid, process)
+}
+
+deferror WorkersUnavailable(workers: Int, process: String) {
+  |workers: Int, process: String|
+  Self(message: "workers #{workers} for #{process} has no accepting worker", workers, process)
+}
+
+deferror ProcessStateUnknownPid(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "state requested for unknown pid #{pid} for #{process}", pid, process)
+}
+
+deferror ProcessStoreUnknownPid(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "store requested for unknown pid #{pid} for #{process}", pid, process)
+}
+
+deferror ProcessStatePidTypeMismatch(pid: Int, actual: String, expected: String) {
+  |pid: Int, actual: String, expected: String|
+  Self(message: "state pid #{pid} belongs to #{actual}, not #{expected}", pid, actual, expected)
+}
+
+deferror ProcessStorePidTypeMismatch(pid: Int, actual: String, expected: String) {
+  |pid: Int, actual: String, expected: String|
+  Self(message: "store pid #{pid} belongs to #{actual}, not #{expected}", pid, actual, expected)
+}
+
+deferror WorkerCreationExpectedPid(actual: String) {
+  |actual: String|
+  Self(message: "worker creation expected Ok(PID(...)), got #{actual}", actual)
+}
+
+deferror WorkerRefillExpectedPid(actual: String) {
+  |actual: String|
+  Self(message: "worker refill expected Ok(PID(...)), got #{actual}", actual)
+}
+
+deferror SupervisorAdoptNonWorker(supervisor: String, pid: Int, process: String) {
+  |supervisor: String, pid: Int, process: String|
+  Self(
+    message: "supervisor #{supervisor} cannot adopt non-Worker pid #{pid} (#{process})",
+    supervisor,
+    pid,
+    process,
+  )
+}
+
+deferror SupervisorAdoptWorkerNotLive(supervisor: String, pid: Int, process: String) {
+  |supervisor: String, pid: Int, process: String|
+  Self(
+    message: "supervisor #{supervisor} cannot adopt non-live Worker pid #{pid} (#{process})",
+    supervisor,
+    pid,
+    process,
+  )
+}
+
+deferror ProcessStateUnavailable(pid: Int, process: String) {
+  |pid: Int, process: String|
+  Self(message: "pid #{pid} (#{process}) has no materialized state", pid, process)
+}
+
+deferror WorkerStrategyFieldOutOfRange(field: String, value: Int) {
+  |field: String, value: Int|
+  Self(message: "worker strategy field #{field} exceeds runtime limit: #{value}", field, value)
+}
+
+deferror WorkerStrategyInitTargetMismatch(init: Int, target: Int) {
+  |init: Int, target: Int|
+  Self(message: "worker strategy init #{init} differs from target #{target}", init, target)
+}
+
+deferror WorkerStrategyBoundsInvalid(min: Int, target: Int, max: Int) {
+  |min: Int, target: Int, max: Int|
+  Self(
+    message: "worker strategy bounds must satisfy 0 <= #{min} <= #{target} <= #{max}",
+    min,
+    target,
+    max,
+  )
+}
+
+deferror FutureDeadlineExceeded(future: Int) {
+  |future: Int|
+  Self(message: "future #{future} timed out", future)
+}
+
+deferror ProcessReplyTargetStopped(future: Int, pid: Int) {
+  |future: Int, pid: Int|
+  Self(message: "target process #{pid} stopped before replying to future #{future}", future, pid)
 }

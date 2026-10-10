@@ -1,7 +1,3 @@
-deferror GeneratorExhausted() {
-  Self(message: "generator has no next item")
-}
-
 @doc """
 Standard `Generator` type declaration.
 `Generator<$Item>` models a finite lazy sequence and exposes only the item type.
@@ -20,65 +16,9 @@ Generator(<opaque>)
 """
 @builtin type Generator<$Item>
 
-@doc """
-Error for a zero step in an integer or character range.
-"""
-deferror ZeroIntegerRangeStep(step: Int) {
-  |step: Int|
-  Self(message: "integer range step must not be 0: #{step}", step)
-}
-
-deferror ZeroCharacterRangeStep(step: Int) {
-  |step: Int|
-  Self(message: "character range step must not be 0: #{step}", step)
-}
-
-@doc """
-Error for a character range endpoint that is not a single ASCII character.
-"""
-deferror CharacterRangeStartLengthInvalid(value: String) {
-  |value: String|
-  Self(message: "start must be a single character: #{inspect(value)}", value)
-}
-
-deferror CharacterRangeStartNonAscii(value: String) {
-  |value: String|
-  Self(message: "start must be a single ASCII character: #{inspect(value)}", value)
-}
-
-deferror CharacterRangeStopLengthInvalid(value: String) {
-  |value: String|
-  Self(message: "stop must be a single character: #{inspect(value)}", value)
-}
-
-deferror CharacterRangeStopNonAscii(value: String) {
-  |value: String|
-  Self(message: "stop must be a single ASCII character: #{inspect(value)}", value)
-}
-
-@doc """
-Argument error for a non-positive `take_exact` count.
-The count is checked before generating any items.
-"""
-deferror InvalidGeneratorCount(requested: Int) {
-  |requested: Int|
-  Self(message: "count must be positive: #{requested}", requested)
-}
-
-@doc """
-Error for too few items returned by `take_exact`.
-The message preserves the requested and actual counts.
-"""
-deferror GeneratorShortage(requested: Int, actual: Int) {
-  |requested: Int, actual: Int|
-  Self(message: "requested #{requested} items, got #{actual}", requested, actual)
-}
-
 impl Generator {
   # The shared runtime pull protocol uses Option for normal termination.
   # Only the public next API converts that protocol to Result.
-  @builtin defp _step(gen: Generator<$Item>) -> Option<($Item, Generator<$Item>)>
-
   @doc """
   Build a finite sequence from a state and a step returning
   `Some((item, next_state))` or `None`.
@@ -134,11 +74,6 @@ impl Generator {
     if(count <= 0,
       Err(InvalidGeneratorCount(count)),
       _take_exact_checked(take(gen, count), count))
-  }
-
-  defp _take_exact_checked(pair: (List<$Item>, Generator<$Item>), count: Int) -> Result<(List<$Item>, Generator<$Item>)> {
-    actual = List::len(pair._0)
-    if(actual == count, Ok(pair), Err(GeneratorShortage(count, actual)))
   }
 
   @doc """
@@ -201,6 +136,40 @@ impl Generator {
       })))
   }
 
+  @doc """
+  Build an inclusive ascending ASCII character range.
+  Endpoints are validated as single ASCII characters before construction.
+  The outer `Result` reports input validation; it is not the step protocol.
+  ## REPL
+  xldr(1)> gen =? Generator::range_char("a", "c")
+  xldr(2)> Generator::to_list(gen)
+  ["a", "b", "c"]
+  """
+  def range_char(start: String, stop: String) -> Result<Generator<String>, Error> {
+    range_char_step(start, stop, 1)
+  }
+
+  @doc """
+  Build an inclusive ASCII character range with an explicit step.
+  A positive step is ascending and a negative step is descending. Zero is an
+  argument error, checked before endpoint validation.
+  Validated endpoints are stored; each character is generated when requested.
+  ## REPL
+  xldr(1)> gen =? Generator::range_char_step("e", "a", -2)
+  xldr(2)> Generator::to_list(gen)
+  ["e", "c", "a"]
+  """
+  def range_char_step(start: String, stop: String, step: Int) -> Result<Generator<String>, Error> {
+    if(step == 0, Err(ZeroCharacterRangeStep(step)), _range_char_step_checked(start, stop, step))
+  }
+
+  @builtin defp _step(gen: Generator<$Item>) -> Option<($Item, Generator<$Item>)>
+
+  defp _take_exact_checked(pair: (List<$Item>, Generator<$Item>), count: Int) -> Result<(List<$Item>, Generator<$Item>)> {
+    actual = List::len(pair._0)
+    if(actual == count, Ok(pair), Err(GeneratorShortage(count, actual)))
+  }
+
   defp _single_ascii_start(value: String) -> Result<Int> {
     if(String::len(value) != 1,
       Err(CharacterRangeStartLengthInvalid(value)),
@@ -223,39 +192,69 @@ impl Generator {
     )
   }
 
-
   @builtin defp range_char_validated(start: Int, stop: Int, step: Int) -> Generator<String>
-
-  @doc """
-  Build an inclusive ascending ASCII character range.
-  Endpoints are validated as single ASCII characters before construction.
-  The outer `Result` reports input validation; it is not the step protocol.
-  ## REPL
-  xldr(1)> gen =? Generator::range_char("a", "c")
-  xldr(2)> Generator::to_list(gen)
-  ["a", "b", "c"]
-  """
-  def range_char(start: String, stop: String) -> Result<Generator<String>, Error> {
-    range_char_step(start, stop, 1)
-  }
 
   defp _range_char_step_checked(start: String, stop: String, step: Int) -> Result<Generator<String>, Error> {
     start_cp =? _single_ascii_start(start)
     stop_cp =? _single_ascii_stop(stop)
     Ok(range_char_validated(start_cp, stop_cp, step))
   }
+}
 
-  @doc """
-  Build an inclusive ASCII character range with an explicit step.
-  A positive step is ascending and a negative step is descending. Zero is an
-  argument error, checked before endpoint validation.
-  Validated endpoints are stored; each character is generated when requested.
-  ## REPL
-  xldr(1)> gen =? Generator::range_char_step("e", "a", -2)
-  xldr(2)> Generator::to_list(gen)
-  ["e", "c", "a"]
-  """
-  def range_char_step(start: String, stop: String, step: Int) -> Result<Generator<String>, Error> {
-    if(step == 0, Err(ZeroCharacterRangeStep(step)), _range_char_step_checked(start, stop, step))
-  }
+deferror GeneratorExhausted() {
+  Self(message: "generator has no next item")
+}
+
+@doc """
+Error for a zero step in an integer or character range.
+"""
+deferror ZeroIntegerRangeStep(step: Int) {
+  |step: Int|
+  Self(message: "integer range step must not be 0: #{step}", step)
+}
+
+deferror ZeroCharacterRangeStep(step: Int) {
+  |step: Int|
+  Self(message: "character range step must not be 0: #{step}", step)
+}
+
+@doc """
+Error for a character range endpoint that is not a single ASCII character.
+"""
+deferror CharacterRangeStartLengthInvalid(value: String) {
+  |value: String|
+  Self(message: "start must be a single character: #{inspect(value)}", value)
+}
+
+deferror CharacterRangeStartNonAscii(value: String) {
+  |value: String|
+  Self(message: "start must be a single ASCII character: #{inspect(value)}", value)
+}
+
+deferror CharacterRangeStopLengthInvalid(value: String) {
+  |value: String|
+  Self(message: "stop must be a single character: #{inspect(value)}", value)
+}
+
+deferror CharacterRangeStopNonAscii(value: String) {
+  |value: String|
+  Self(message: "stop must be a single ASCII character: #{inspect(value)}", value)
+}
+
+@doc """
+Argument error for a non-positive `take_exact` count.
+The count is checked before generating any items.
+"""
+deferror InvalidGeneratorCount(requested: Int) {
+  |requested: Int|
+  Self(message: "count must be positive: #{requested}", requested)
+}
+
+@doc """
+Error for too few items returned by `take_exact`.
+The message preserves the requested and actual counts.
+"""
+deferror GeneratorShortage(requested: Int, actual: Int) {
+  |requested: Int, actual: Int|
+  Self(message: "requested #{requested} items, got #{actual}", requested, actual)
 }

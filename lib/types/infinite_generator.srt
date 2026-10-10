@@ -1,8 +1,3 @@
-deferror InvalidInfiniteGeneratorCount(requested: Int) {
-  |requested: Int|
-  Self(message: "infinite generator count must be positive: #{requested}", requested)
-}
-
 @doc """
 Standard `InfiniteGenerator` type declaration.
 `InfiniteGenerator<$Item>` models a lazy sequence without normal termination
@@ -101,4 +96,9 @@ impl InfiniteGenerator {
     })
     take(gen, count)._0
   }
+}
+
+deferror InvalidInfiniteGeneratorCount(requested: Int) {
+  |requested: Int|
+  Self(message: "infinite generator count must be positive: #{requested}", requested)
 }

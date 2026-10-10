@@ -1,9 +1,4 @@
 # Structural HashMap patterns lower through map_get; keep the missing key as Payload.
-deferror HashMapKeyMissing(key: String) {
-  |key: String|
-  Self(message: "hash map key not found: #{key}", key)
-}
-
 @doc """
 Standard `HashMap` type declaration.
 `HashMap<$V>` is an immutable map with `String` keys and
@@ -45,15 +40,6 @@ Examples:
 - `Facet::over(User.score_by_kind.[kind], user, {|n| Ok(n + 1)})`
 """
 @builtin type HashMap<$V>
-
-impl Eq for HashMap<$V>
-where
-  $V: Eq
-{
-  def eq(self: Self, rhs: Self) -> Boolean {
-    Eq::eq(HashMap::entries(self), HashMap::entries(rhs))
-  }
-}
 
 impl HashMap {
   @doc """
@@ -154,4 +140,18 @@ impl HashMap {
   hash!["a" => 2, "b" => 3]
   """
   @builtin def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B>
+}
+
+impl Eq for HashMap<$V>
+where
+  $V: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(HashMap::entries(self), HashMap::entries(rhs))
+  }
+}
+
+deferror HashMapKeyMissing(key: String) {
+  |key: String|
+  Self(message: "hash map key not found: #{key}", key)
 }

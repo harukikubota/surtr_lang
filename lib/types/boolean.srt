@@ -85,3 +85,12 @@ impl Convert<String> for Boolean {
     to_string(self)
   }
 }
+
+impl Encode<JsonValue> for Boolean {
+  @doc """
+  Encode a boolean as `JsonValue::Bool`.
+  """
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Bool(self))
+  }
+}

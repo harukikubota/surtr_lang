@@ -1,3 +1,9 @@
+type Mapper<$A, $B> = ($A -> $B)
+
+type Predicate<$A> = ($A -> Boolean)
+
+type Reducer<$Acc, $A> = ($Acc, $A -> $Acc)
+
 @doc """
 Function module.
 
