@@ -2474,19 +2474,10 @@ impl Checker {
         })
     }
 
-    fn enum_has_only_payload_free_variants(&self, name: &str) -> bool {
-        self.lookup_enum_variants_of(name)
-            .is_some_and(|variants| variants.iter().all(|variant| variant.payload.is_empty()))
-    }
-
     pub(super) fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
         let ty = self.resolve_ty(ty);
         if self.is_standard_eq_trait(trait_name) {
             return match &ty {
-                Ty::Enum(name, _) => {
-                    self.trait_impl_policy_for_ty(&ty) == TraitImplPolicy::Open
-                        && self.enum_has_only_payload_free_variants(name)
-                }
                 Ty::Pid(name) => self.pid_eq_process_spec_exists(name),
                 _ => false,
             };
@@ -2503,18 +2494,6 @@ impl Checker {
         let target_ty = self.resolve_ty(target_ty);
         if self.is_standard_eq_trait(trait_name) {
             return match (method_name, &target_ty) {
-                ("eq", Ty::Enum(name, _))
-                    if self.trait_impl_policy_for_ty(&target_ty) == TraitImplPolicy::Open
-                        && self.enum_has_only_payload_free_variants(name) =>
-                {
-                    Some(TraitDispatchTarget::BinOp(BinOp::Eq))
-                }
-                ("neq", Ty::Enum(name, _))
-                    if self.trait_impl_policy_for_ty(&target_ty) == TraitImplPolicy::Open
-                        && self.enum_has_only_payload_free_variants(name) =>
-                {
-                    Some(TraitDispatchTarget::BinOp(BinOp::Neq))
-                }
                 ("eq", Ty::Pid(name)) if self.pid_eq_process_spec_exists(name) => {
                     Some(TraitDispatchTarget::BinOp(BinOp::Eq))
                 }

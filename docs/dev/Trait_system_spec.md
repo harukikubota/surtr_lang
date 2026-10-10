@@ -708,11 +708,11 @@ well-formedness診断は少なくとも次のmessage、label、helpを構築で�
 
 `@derive` による生成処理は型宣言の所有者に由来するため、private フィールドを処理できる。Scar は生成由来情報を用いてこの権限を保持し、手書きのトレイト実装へは付与しない。トレイト名による可視性の特例は設けない。
 
-標準 `Eq` の compiler-generated な enum 比較は payload のない variant に限る。payload を持つ enum の値比較には、各 payload の `Eq` を要求する明示 impl または `@derive Eq` を使う。variant tag だけの比較を payload を持つ値の Eq として公開しない。
+通常の enum の `Eq` は、payload の有無によらず明示 impl または `@derive Eq` で提供する。enum 宣言だけで compiler が証明や dispatch を補うことはない。`@derive Eq` は各 payload の `Eq` を要求し、variant tag だけの比較を payload を持つ値の Eq として公開しない。
 
 Trait impl target の権限は inherent impl の可否と独立して Sindr の型ポリシーに置く。Error・関数型・Facet・構文／プロトコル用 marker・未確定の opaque/handle 型はユーザ impl を拒否する。PID は singleton / worker に compiler-owned Eq だけを提供し、ユーザ impl と他の Trait capability を拒否する。通常型と Tuple / List / HashMap / Result は通常の coherence 規則に従う。
 
-Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が提供する Eq は信頼済みの標準 `Eq` に限り、payload のない enum と有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。
+Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が暗黙に提供する Eq は信頼済みの標準 `Eq` に限り、有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。
 
 標準 Eq の実装主体は各 `lib/types/*.srt` とする。Unit、Tuple 2〜8、List、HashMap、Result は通常の impl と要素条件を使う。Result の `Ok` 同士は成功値の Eq、`Ok` / `Err` は不一致、`Err` 同士は具象 Error の先頭 kind の一致で判定し、message・cause・場所・診断情報を含めない。Error 自体の Eq / Show / Convert は禁止し、観測は `inspect` / `eprint` と Error の公開 helper を使う。`Test::assert_eq` は Eq obligation と dispatch のみで合否を決め、表示は失敗文の生成に限る。
 

@@ -13,7 +13,7 @@
 | TC-03 | WorkerLease→PIDの暗黙適合を再現 | プロセス側で通常型比較から除去。生成helperとの受渡しを明示契約へ揃える |
 | TC-04 | 未知PID marker、genericの不正適合を再現 | プロセス側でmarkerの解決と型変数の同一性を通常規則へ揃える |
 | TC-05 | unary Hole入力の例外が残存 | 例外を除去し、標準署名・正本・成功／拒否テストを揃える |
-| TC-06・Enum | 明示implなしのEqを再現 | 暗黙proof/dispatchを除去し、明示impl / deriveに従う |
+| TC-06・Enum | 修正・検証済み | payloadの有無によらず明示impl / deriveの通常proof・dispatchを使う |
 | TC-06・PID | compiler-owned Eqが残存 | プロセス側で標準実装へ移す。`instance_of`のAPIとEqとの接続は未確定 |
 | TC-10 | 文書修正済み | Resultの補助エラー名はドキュメント用で、返却kindの静的制限・網羅検査を行わないと正本へ明記 |
 | TC-11 | 修正・検証済み | 型注釈producerの元TypeErrorをprobe rollback後も保持。候補依存失敗はcandidate情報を維持 |
@@ -47,7 +47,11 @@ mappers: List<(Int -> Int)> = [always(10)]
 
 ### Enum側
 
-**対応が必要。** `crates/scar/src/checker/predeclare.rs:2482-2525`の`compiler_trait_impl_exists` / `compiler_trait_dispatch_target`は、標準EqでpayloadのないEnumにproofとBinOp dispatchを暗黙提供する。
+**修正・検証済み（level4）。** 2026-10-10、payload-free Enumへ暗黙Eqを提供するproof・BinOp dispatch・専用判定helperを削除した。通常の明示impl / deriveへ統一し、Trait正本と利用者の比較表を追従した。標準Enumの比較利用を確認し、追加deriveが必要な利用先は見つからなかった。PID側のcompiler-owned Eqはこの修正の対象外。
+
+明示implなしのEq::eq / Eq::neq / == / != / generic Eq制約の拒否でRedを確認し、Scarのtrait_impl_policy / trait_method_instantiationは28件成功。公開fixtureでは明示implの独自の比較意味とderive比較を検証し、payloadのEq要求・禁止型拒否は既存テストを維持した。公開fixtureを含む選択検証は23件成功。最終差分の独立レビューは指摘なし。共有の最終CIは2,430件成功、標準Surtr全件は終了コード0（TC-11節のコマンド）。
+
+以下は修正前の調査記録。`crates/scar/src/checker/predeclare.rs:2482-2525`の`compiler_trait_impl_exists` / `compiler_trait_dispatch_target`は、標準EqでpayloadのないEnumにproofとBinOp dispatchを暗黙提供する。
 
 ```surtr
 defenum Choice { One, Two }

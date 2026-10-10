@@ -30,7 +30,7 @@ Surtr の trait system は V1 です。
 | `Result<T>` | `T: Eq` を要求する。`Ok` 同士は値を比較し、`Ok` と `Err` は異なる。`Err` 同士は先頭の具象 error kind だけを比較する |
 | `Option<T>` / `Either<L, R>` | variant と payload を比較する。payload に対応する `Eq` が必要 |
 | `Duration` / `Range<T>` | 通常の標準 impl。`Range<T>` は `T: Eq` を要求する |
-| 通常の struct / record / enum | 明示 impl または `@derive Eq` に従う。payload のない enum のみ compiler が Eq を提供する |
+| 通常の struct / record / enum | 明示 impl または `@derive Eq` に従う。payload のない enum にも実装が必要 |
 | singleton / worker の `PID<T>` | 同じ process 型に限る。singleton は等しく、worker は個体 ID を比較する |
 
 `Result` の失敗枝では message・cause・発生位置・診断情報を比較しません。`Error` 自体に `Eq` はなく、`inspect` の表示が同じでも `Eq` の結果は変わりません。`Test::assert_eq` は `Eq` だけで合否を決め、`inspect` は失敗時の説明に使います。表示文字列の契約を検査するときは `inspect(value)` の結果を明示的に比較します。

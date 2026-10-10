@@ -1,0 +1,2 @@
+defenum Choice { One, Two }
+print(inspect(Choice::One == Choice::One))

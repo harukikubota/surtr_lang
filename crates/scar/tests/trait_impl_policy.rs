@@ -133,6 +133,23 @@ fn standard_eq_cannot_be_redeclared_in_the_same_owner() {
 }
 
 #[test]
+fn payload_free_enum_requires_explicit_eq_capability() {
+    for expression in [
+        "Eq::eq(Choice::One, Choice::One)",
+        "Eq::neq(Choice::One, Choice::Two)",
+        "Choice::One == Choice::One",
+        "Choice::One != Choice::Two",
+        "same(Choice::One, Choice::One)",
+    ] {
+        let source = format!(
+            "defenum Choice {{ One, Two }}\ndef same(lhs: $T, rhs: $T) -> Boolean where $T: Eq {{ lhs == rhs }}\n{expression}"
+        );
+        let error = check(&source).expect_err("enum declaration alone must not provide Eq");
+        assert!(error.message.contains("Eq"), "{expression}: {error}");
+    }
+}
+
+#[test]
 fn derive_eq_reports_the_rejected_enum_payload_type() {
     let source = "@derive Eq\ndefenum Callback { Fn((Int -> Int)), Empty }";
     let error = check(source).expect_err("function payload cannot satisfy Eq");
