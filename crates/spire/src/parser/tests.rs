@@ -6602,6 +6602,74 @@ fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
     }
 }
 
+fn process_execution_statements(body: &Ast) -> &[Ast] {
+    let Ast::Block(_, outer) = body else {
+        panic!("process wrapper must be a block");
+    };
+    let Ast::App(_, callee, args) = outer.last().expect("wrapper result") else {
+        panic!("process wrapper must end at the common execution boundary");
+    };
+    assert!(matches!(callee.as_ref(), Ast::InternalVar(_, name) if name == "__process_execute"));
+    let [RecordLitArg::Positional(Ast::Var(_, pid)), RecordLitArg::Positional(Ast::Closure(_, params, callback))] =
+        args.as_slice()
+    else {
+        panic!(
+            "execution boundary must receive the target PID and a zero-argument wrapper closure"
+        );
+    };
+    assert_eq!(pid, "pid");
+    assert!(params.is_empty());
+    let Ast::Block(_, stmts) = callback.as_ref() else {
+        panic!("wrapper callback must contain state reading and all postprocessing");
+    };
+    assert!(matches!(stmts.first(), Some(Ast::SafeBind(_, _, rhs, _))
+        if matches!(rhs.as_ref(), Ast::App(_, callee, _)
+            if matches!(callee.as_ref(), Ast::InternalVar(_, name)
+                if name == "Agent::state" || name == "GenServer::state"))));
+    stmts
+}
+
+#[test]
+fn test_process_message_wrappers_use_common_execution_boundary() {
+    for (kind, instance, handlers, wrappers) in [
+        ("defagent", "Singleton", "@get def read(state: Int) -> Result<Int> { Ok(state) }", vec!["read"]),
+        ("defagent", "Singleton", "@get def read(state: Int) -> Result<Int> { Ok(state) } @set def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }", vec!["read", "write"]),
+        ("defagent", "Worker", "@get def read(state: Int) -> Result<Int> { Ok(state) } @set def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }", vec!["read", "write"]),
+        ("defgenserver", "Singleton", "@call def read(state: Int) -> Result<CallResult<Int, Int>> { Ok(Reply(state, state)) } @cast def write(_state: Int, next: Int) -> Result<CastResult<Int>> { Ok(Next(next)) }", vec!["read", "write"]),
+        ("defgenserver", "Worker", "@call def read(state: Int) -> Result<CallResult<Int, Int>> { Ok(Reply(state, state)) } @cast def write(_state: Int, next: Int) -> Result<CastResult<Int>> { Ok(Next(next)) }", vec!["read", "write"]),
+    ] {
+        let handlers = handlers
+            .replace("@get def", "\n@get\ndef")
+            .replace("@set def", "\n@set\ndef")
+            .replace("@call def", "\n@call\ndef")
+            .replace("@cast def", "\n@cast\ndef");
+        let source = format!("{kind} Counter {{\nmeta {{\ninstance: {instance}\ninit_policy: Eager\nstate: Int\n}}\n@init\ndef boot() -> Result<Int> {{ Ok(0) }}\n{handlers}\n}}");
+        let ast = parse_with_context(&source, ParserContext::module(1, None))
+            .expect("process declaration");
+        let body = match &ast[0] {
+            Ast::Defagent(_, _, body, _, _) | Ast::Defgenserver(_, _, body, _, _) => body,
+            other => panic!("expected process declaration, got {other:?}"),
+        };
+        for wrapper in wrappers {
+            let wrapper_body = body.iter().find_map(|node| match node {
+                Ast::Def(_, name, _, _, _, _, body, _) if name == wrapper => Some(body.as_ref()),
+                _ => None,
+            }).expect("generated message wrapper");
+            let stmts = process_execution_statements(wrapper_body);
+            assert!(matches!(stmts, [Ast::SafeBind(..), Ast::SafeBind(..), Ast::App(_, marker, args), _]
+                if matches!(marker.as_ref(), Ast::InternalVar(_, name) if name == "__process_postprocess")
+                    && matches!(args.as_slice(), [RecordLitArg::Positional(Ast::Var(_, name))] if name == "pid")),
+                "state read, successful handler result, postprocessing transition, and final result must occur in order");
+            if kind == "defagent" && wrapper == "read" {
+                assert!(matches!(stmts.last(), Some(Ast::ConstructorCall(_, name, args))
+                    if name == "Global::Result::Ok"
+                        && matches!(args.as_slice(), [RecordLitArg::Positional(Ast::Var(_, reply))] if reply == "reply")),
+                    "Agent success must use the canonical payload constructor call");
+            }
+        }
+    }
+}
+
 #[test]
 fn test_defagent_worker_init_route_is_public_surface() {
     let ast = parse_with_context(
@@ -6684,8 +6752,12 @@ fn test_defagent_worker_init_route_is_public_surface() {
             }
             match set_wrapper {
                 Ast::Def(_, _, _, _, _, _, body, _) => {
+                    let execution_body = Ast::Block(
+                        body.span().clone(),
+                        process_execution_statements(body).to_vec(),
+                    );
                     assert!(matches!(
-                        body.as_ref(),
+                        &execution_body,
                         Ast::Block(_, stmts)
                             if stmts.iter().any(|stmt| matches!(
                                     stmt,

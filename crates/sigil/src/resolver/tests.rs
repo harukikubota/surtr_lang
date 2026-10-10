@@ -372,6 +372,8 @@ fn boolean_owner_type_arguments_use_the_normal_enum_arity_diagnostic() {
 #[test]
 fn compiler_registered_internal_builtins_resolve_only_generated_references() {
     for name in [
+        "__process_execute",
+        "__process_postprocess",
         "__genserver_call_reply",
         "__task_call_timeout",
         "__task_await_timeout",
@@ -1195,7 +1197,12 @@ fn test_resolve_staged_program_keeps_process_specs() {
         },
         other => panic!("expected defagent, got {other:?}"),
     };
-    let module_stages = vec![vec![kernel, module]];
+    // Generated getters construct the canonical Result::Ok after postprocessing.
+    let standard_stage = canonical_test_enum_declarations()
+        .into_iter()
+        .flat_map(|declaration| staged_modules_from_source_ast(vec![declaration], None))
+        .collect();
+    let module_stages = vec![standard_stage, vec![kernel, module]];
     let declaration_index =
         precollect_declaration_index(&module_stages).expect("precollect should succeed");
     let resolved =

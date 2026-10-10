@@ -25,6 +25,8 @@ pub(super) fn is_compiler_runtime_builtin(name: &str) -> bool {
     matches!(
         name,
         "__task_call_timeout"
+            | "__process_execute"
+            | "__process_postprocess"
             | "__task_await_timeout"
             | "__workers_submit_timeout"
             | "__workers_broadcast_timeout"
