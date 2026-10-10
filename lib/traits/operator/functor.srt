@@ -1,6 +1,6 @@
 @doc """
 Standard `Functor` trait declaration.
-`Functor` models mapping a plain unary callable over a unary type constructor.
+`Functor` models mapping a unary callable over a unary type constructor.
 The `|*>` operator lowers through this trait.
 """
 @autoimport
@@ -8,6 +8,6 @@ deftrait Functor
 where
   Self: Type<$A>
 {
-  # Map a plain callable over the contextual receiver.
+  # Map a callable over the contextual receiver.
   def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
 }

@@ -36,7 +36,7 @@ defmod Bootstrap {
   @builtin def >>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)
 
   @doc """
-  Compose a contextual unary callable with a plain mapper. The result
+  Compose a contextual unary callable with a mapper. The result
   carrier must implement Functor. Fully supplied function calls may return
   the operands; composition does not inject missing arguments.
 
