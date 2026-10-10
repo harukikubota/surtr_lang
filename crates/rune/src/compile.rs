@@ -230,7 +230,7 @@ pub(crate) fn collect_default_script_compile_sources(
     include_modules: &[xldr::ModuleInput],
     stdlib_variant: xldr::StdlibVariant,
 ) -> RuneResult<xldr::CompileSources> {
-    let module_inputs = xldr::cached_additional_default_std_module_inputs().map_err(|e| {
+    let base_sources = xldr::cached_default_script_module_sources(stdlib_variant).map_err(|e| {
         module_source_collection_error_as_rune_error(
             file_path,
             source,
@@ -242,24 +242,26 @@ pub(crate) fn collect_default_script_compile_sources(
         )
     })?;
 
-    let mut module_input_stages = vec![module_inputs];
-    for module_input in include_modules {
-        module_input_stages.push(vec![module_input.clone()]);
-    }
+    let module_input_stages = include_modules
+        .iter()
+        .map(|module| vec![module.clone()])
+        .collect::<Vec<_>>();
 
-    let module_sources =
-        xldr::collect_module_sources_with_stdlib_variant(stdlib_variant, &[], &module_input_stages)
-            .map_err(|e| {
-                module_source_collection_error_as_rune_error(
-                    file_path,
-                    source,
-                    format!(
-                        "{}: failed to collect definition sources: {}",
-                        env.command_name(),
-                        e
-                    ),
-                )
-            })?;
+    let module_sources = xldr::extend_module_sources_with_module_stages(
+        (*base_sources).clone(),
+        &module_input_stages,
+    )
+    .map_err(|e| {
+        module_source_collection_error_as_rune_error(
+            file_path,
+            source,
+            format!(
+                "{}: failed to collect definition sources: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
     Ok(xldr::compose_script_compile_sources_with_stdlib_variant(
         file_path,
         source,
@@ -268,7 +270,7 @@ pub(crate) fn collect_default_script_compile_sources(
     ))
 }
 
-fn load_default_stdlib_snapshot(
+pub(crate) fn load_default_stdlib_snapshot(
     env: ExecutionEnv,
     sources: &xldr::CompileSources,
 ) -> RuneResult<std::sync::Arc<xldr::DefaultStdlibSnapshot>> {
@@ -316,12 +318,6 @@ fn build_cached_script_compile_prefix(
     module_stages: &[Vec<sigil::StagedModuleAst>],
     sources: &SourceRegistry,
 ) -> RuneResult<SharedScriptCompilePrefix> {
-    let rebuilt_declaration_index =
-        sigil::precollect_declaration_index(module_stages).map_err(|e| {
-            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
-            RuneError::diagnostic(1, sources, source_id, phase, spec)
-        })?;
-
     let cache_key = xldr::test_semantic_prefix_cache_key(env.compile_unit_kind(), compile_sources)
         .map_err(|e| {
             RuneError::message(
@@ -345,6 +341,11 @@ fn build_cached_script_compile_prefix(
             .map_err(|message| RuneError::message(1, message));
     }
 
+    let rebuilt_declaration_index =
+        sigil::precollect_declaration_index(module_stages).map_err(|e| {
+            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+            RuneError::diagnostic(1, sources, source_id, phase, spec)
+        })?;
     let mut cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
     let _semantic_cache_lock = if cached_payload.is_none() {
         xldr::acquire_semantic_cache_lock(&cache_path)

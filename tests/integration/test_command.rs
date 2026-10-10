@@ -2118,3 +2118,150 @@ fn test_command_all_reports_broken_file_links_and_continues() {
     assert_eq!(report["scripts"][2]["file"], "lib/tests/local/z_good.srt");
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn test_command_shared_include_prefix_keeps_entries_independent() {
+    let temp = unique_temp_dir("surtr_test_shared_include_prefix");
+    write_source(
+        &temp.join("lib/tests/local/support/shared.srt"),
+        "defmod Shared {\n  def value() -> Int { 42 }\n  def check() -> Result<()> {\n    Test::assert_gte(1, 2)\n  }\n}\n",
+    );
+    for (file, body) in [
+        ("a", "expected = 42; it(\"first\") { assert_eq(Shared::value(), expected) }"),
+        ("b", "expected = \"second\"; it(\"second\") { assert_eq(Shared::value(), 42); assert_eq(expected, \"second\") }\nit(\"entry failure\") { assert_eq(42, 0) }\nit(\"dependency failure\") { Shared::check() }"),
+    ] {
+        write_source(
+            &temp.join(format!("lib/tests/local/{file}.srt")),
+            &format!("include \"./support/shared.srt\"\nimport Test;\n{body}\n"),
+        );
+    }
+    let output = run_surtr(&temp, &["test", "--all", "--quiet", "--format=json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = test_json(&output);
+    assert_eq!(report["summary"]["passed"], 2);
+    assert_eq!(report["summary"]["failed"], 2);
+    let cases = report["cases"].as_array().unwrap();
+    assert!(cases[0]["file"].as_str().unwrap().ends_with("b.srt"));
+    assert!(cases[0]["diagnostic"]["file"]
+        .as_str()
+        .unwrap()
+        .ends_with("b.srt"));
+    assert!(cases[1]["diagnostic"]["file"]
+        .as_str()
+        .unwrap()
+        .ends_with("support/shared.srt"));
+    assert_eq!(cases[1]["diagnostic"]["line"], 4);
+    let prefixes = fs::read_dir(temp.join("target/surtr-test-cache/prefix"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "semantic"))
+        .count();
+    assert_eq!(prefixes, 1, "same include environment must compile once");
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[cfg(unix)]
+fn run_surtr_with_terminal_stderr(temp: &Path, args: &[&str]) -> (Output, String) {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    use std::process::Stdio;
+    let mut master = -1;
+    let mut slave = -1;
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let result = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    assert_eq!(result, 0, "terminal should open");
+    let mut master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            match master.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                Err(error) => panic!("terminal read failed: {error}"),
+            }
+        }
+        String::from_utf8(bytes).expect("terminal progress should be UTF-8")
+    });
+    let mut command = surtr_command();
+    command
+        .args(args)
+        .current_dir(temp)
+        .stderr(Stdio::from(slave));
+    let output = command.output().expect("test command should run");
+    drop(command);
+    (output, reader.join().unwrap())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_quiet_terminal_progress_preserves_json_and_clears() {
+    let temp = unique_temp_dir("surtr_test_terminal_progress");
+    write_source(
+        &temp.join("lib/tests/local/a.srt"),
+        "import Test;\nit(\"first\") { assert_eq(1, 1) }\n",
+    );
+    write_source(
+        &temp.join("lib/tests/local/b.srt"),
+        "import Test;\nit(\"second\") { assert_eq(2, 2) }\n",
+    );
+    let (output, progress) =
+        run_surtr_with_terminal_stderr(&temp, &["test", "--all", "--quiet", "--format=json"]);
+    assert!(
+        output.status.success(),
+        "{}\n{progress}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report = test_json(&output);
+    assert_eq!(report["summary"]["passed"], 2);
+    assert_eq!(
+        progress.matches("Preparing standard environment").count(),
+        1
+    );
+    for index in [1, 2] {
+        assert!(
+            progress.contains(&format!("Compiling [{index}/2]")),
+            "{progress}"
+        );
+        assert!(
+            progress.contains(&format!("Running [{index}/2]")),
+            "{progress}"
+        );
+    }
+    assert!(progress.find("Running [1/2]").unwrap() < progress.find("Compiling [2/2]").unwrap());
+    assert!(progress.ends_with("\r\x1b[2K"), "{progress:?}");
+    assert!(!progress.contains('\n'), "{progress:?}");
+    let (warm, progress) = run_surtr_with_terminal_stderr(&temp, &["test", "--all", "--quiet"]);
+    assert!(warm.status.success());
+    assert!(warm.stdout.is_empty());
+    assert!(
+        !progress.contains("Preparing"),
+        "warm bytecode should skip standard preparation"
+    );
+    assert!(progress.ends_with("\r\x1b[2K"));
+    let piped = run_surtr(&temp, &["test", "--all", "--quiet"]);
+    assert!(piped.status.success());
+    assert!(piped.stdout.is_empty() && piped.stderr.is_empty());
+    let _ = fs::remove_dir_all(temp);
+}
