@@ -3869,9 +3869,7 @@ deferror NotFound {
 fn recover_kind_payload_type_name_typechecks() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = Result::recover_kind(Err(NotFound("runtime")), NotFound, {|err| Ok(1)})
-deferror NotFound(detail: String) {
-  detail
-}"#,
+deferror NotFound(detail: String) { |detail: String| Self(message: detail, detail: detail) }"#,
     );
     let typed = typecheck(resolved).expect("recover_kind payload type name should typecheck");
     assert!(typed
@@ -3897,9 +3895,7 @@ User { name: name, age: age }
 
 defrecord Pair(first: Int, second: String)
 
-deferror NotFound(code: String) {
-  "missing #{code}"
-}"#;
+deferror NotFound(code: String) { |code: String| Self(message: "missing #{code}", code: code) }"#;
 
     let first = typecheck_with_builtin_prelude(source);
     let second = typecheck_with_builtin_prelude(source);
@@ -7701,23 +7697,13 @@ fn kernel_and_contract_rejects_eager_signature() {
 }
 
 fn special_form_builtin_decl_must_live_at_its_canonical_std_qname() {
-    let err = typecheck_std_modules_with_overrides(&[(
-        "Boolean",
-        r#"@builtin defenum Boolean { True, False }
-
-impl Boolean {
-  def not(value: Boolean) -> Boolean {
-    value
-  }
-
-  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
-}
-
-impl Eq for Boolean {
-  @builtin def eq(self: Self, rhs: Self) -> Boolean
-}"#,
-    )])
-    .expect_err("special-form declaration outside its canonical module must fail");
+    let boolean_source = include_str!("../../../lib/types/boolean.srt").replacen(
+        "impl Boolean {",
+        "impl Boolean {\n  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+        1,
+    );
+    let err = typecheck_std_modules_with_overrides(&[("Boolean", &boolean_source)])
+        .expect_err("special-form declaration outside its canonical module must fail");
     assert!(err
         .message
         .contains("Special-form declaration `if` is only allowed at `Kernel::if`."));
@@ -7767,7 +7753,7 @@ fn user_lazy_annotation_is_rejected() {
 
 fn require_accepts_lazy_error_branch() {
     let typed = typecheck_with_rules(
-        r#"deferror SomeError(detail: String) { detail }
+        r#"deferror SomeError(detail: String) { |detail: String| Self(message: detail, detail: detail) }
 guard = require(False, {|| SomeError("boom") })"#,
         RuntimeSourcePolicy::script(),
     )
@@ -7781,7 +7767,7 @@ guard = require(False, {|| SomeError("boom") })"#,
 
 fn ensure_accepts_lazy_error_branch() {
     let typed = typecheck_with_rules(
-        r#"deferror SomeError(detail: String) { detail }
+        r#"deferror SomeError(detail: String) { |detail: String| Self(message: detail, detail: detail) }
 def is_positive(value: Int) -> Boolean { value > 0 }
 guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
         RuntimeSourcePolicy::script(),
@@ -9131,15 +9117,15 @@ self
 }
 
 fn deferror_show_type_mismatch_points_to_show_expression_span() {
-    let source = r#"deferror NotFound(code: String) {
-  123
-}"#;
+    let source =
+        r#"deferror NotFound(code: String) { |code: String| Self(message: 123, code: code) }"#;
     let resolved = resolve_with_builtin_prelude(source);
     let err = typecheck(resolved).expect_err("show block must return String");
     let literal_start = source.find("123").expect("literal should exist in source");
-    assert!(err
-        .message
-        .contains("deferror show block must return String"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch)
+    );
     assert_eq!(err.span.start, literal_start);
 }
 
@@ -9316,6 +9302,9 @@ impl Compare for BoxedInt {}
 fn bounded_add_generics_specialize_without_pending_trait_calls() {
     fn has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => has_pending_trait_call(message) || payload.iter().any(has_pending_trait_call),
             TypedInner::TraitCall { dispatch, args, .. } => {
                 matches!(dispatch, scar::typed::TraitDispatch::Pending)
                     || args.iter().any(has_pending_trait_call)
@@ -9440,6 +9429,9 @@ b = double(1.5)"#,
 fn range_duration_comparisons_specialize_without_pending_trait_calls() {
     fn has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => has_pending_trait_call(message) || payload.iter().any(has_pending_trait_call),
             TypedInner::TraitCall { dispatch, args, .. } => {
                 matches!(dispatch, scar::typed::TraitDispatch::Pending)
                     || args.iter().any(has_pending_trait_call)
@@ -10146,64 +10138,11 @@ fn try_to_helper_suggests_to_when_only_infallible_impl_exists() {
 }
 
 fn to_and_try_to_impls_are_mutually_exclusive() {
-    let overrides = [
-        (
-            "String",
-            r#"@builtin type String
-
-defenum StringEncoding {
-  Utf8,
-  Ascii,
-}
-
-deferror InvalidStringEncoding(detail: String) {
-  detail
-}
-
-impl String {
-  @builtin
-  def codepoints(value: String, encoding: StringEncoding) -> Result<List<Int>, InvalidStringEncoding>
-
-  @builtin
-  def from_codepoints(values: List<Int>, encoding: StringEncoding) -> Result<String, InvalidStringEncoding>
-}
-
-impl Show for String {
-  def to_string(self: Self) -> String {
-inspect(self)
-  }
-}
-
-impl Convert<String> for String {
-  def to::<String>(self: Self) -> String {
-self
-  }
-}
-
-impl TryConvert<Int> for String {
-  def try_to::<Int>(self: Self) -> Result<Int, Error> {
-Ok(0)
-  }
-}
-
-impl Convert<Int> for String {
-  def to::<Int>(self: Self) -> Int {
-0
-  }
-}
-
-impl Eq for String {
-  def eq(self: Self, rhs: Self) -> Boolean {
-self == rhs
-  }
-
-  def neq(self: Self, rhs: Self) -> Boolean {
-self != rhs
-  }
-}"#,
-        ),
-        ("StyledDoc", "defmod StyledDoc {}"),
-    ];
+    let string_source = format!(
+        "{}\nimpl Convert<Int> for String {{\n  def to::<Int>(self: Self) -> Int {{ 0 }}\n}}",
+        include_str!("../../../lib/types/string.srt")
+    );
+    let overrides = [("String", string_source.as_str())];
 
     let err = typecheck_std_modules_with_overrides(&overrides)
         .expect_err("conflicting Convert/TryConvert impls must fail");
@@ -11638,6 +11577,7 @@ match 5 { pick(value: Int) => value, _ => 0 }
     typecheck(resolve_with_builtin_prelude(source))
         .expect("ExtractorClosure literal and local head");
     for source in [
+        r#"ext = *{|value: (Int, Int)| MatchResult::Ok(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
         r#"typed: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::Ok(value)}
 match 1 { typed(n) => n, _ => 0 }"#,
         r#"def make(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
@@ -11674,7 +11614,6 @@ match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
         r#"ext = *{|value: Int| MatchResult::Ok(value)}; ext(1)"#,
         r#"ext = *{|value: Int| MatchResult::Ok(value)}; is_match(1, ext(bound))"#,
         r#"ext = *{|value: Int| MatchResult::Ok(value)}; match 1 { ext(a) | ext(b) => 0, _ => 1 }"#,
-        r#"ext = *{|value: (Int, Int)| MatchResult::Ok(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
         r#"ext = *{|value: Int| f = {|nested: Int| MatchResult::Ok(nested)}; MatchResult::Ok(value)}"#,
         r#"ext = *{|value: Int| f = {|nested: Int| True =? nested > 0; nested}; MatchResult::Ok(value)}"#,
         r#"ext = *{|value: Int| Ok(value)}"#,

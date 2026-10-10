@@ -49,7 +49,7 @@ fn special_enum_result_capture_accepts_existing_errors() {
         ))
         .expect("ordinary callable transports Error");
     }
-    check("deferror NumberError(value: Int) { \"number\" }\nwrap: (Int -> Result<Int>) = &Result<Int>::Err(NumberError(&1))\nvalue = wrap(2)").expect("fixed concrete Error expression is allowed");
+    check("deferror NumberError(value: Int) { |value: Int| Self(message: \"number\", value: value) }\nwrap: (Int -> Result<Int>) = &Result<Int>::Err(NumberError(&1))\nvalue = wrap(2)").expect("fixed concrete Error expression is allowed");
 }
 
 #[test]

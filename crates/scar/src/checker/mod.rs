@@ -423,6 +423,7 @@ enum TypeSyntaxContext {
     General,
     StdBuiltinParameter,
     BindingAnnotation,
+    ConcreteErrorLocal,
     FunctionReturn,
     HoleClosureParam,
     FacetDeferredSlot,
@@ -786,6 +787,8 @@ pub fn typecheck_staged_program_with_context_with_warnings(
     Ok(PhaseOutput::new(
         TypedProgram {
             nodes,
+            enum_definitions: checker.env.typed_enum_definitions(),
+            nominal_definitions: checker.env.typed_nominal_definitions(),
             process_specs,
             boot_plan: program.boot_plan,
         },
@@ -1542,10 +1545,14 @@ impl ScarSession {
             }
         };
         let persisted_process_specs = checker.process_specs.clone();
+        let enum_definitions = checker.env.typed_enum_definitions();
+        let nominal_definitions = checker.env.typed_nominal_definitions();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
         Ok(TypedProgram {
             nodes,
+            enum_definitions,
+            nominal_definitions,
             process_specs,
             boot_plan: program.boot_plan,
         })
@@ -1567,11 +1574,15 @@ impl ScarSession {
         let nodes = checker.check_program(program.resolved)?;
         let persisted_process_specs = checker.process_specs.clone();
         let warnings = checker.warnings.take();
+        let enum_definitions = checker.env.typed_enum_definitions();
+        let nominal_definitions = checker.env.typed_nominal_definitions();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
         Ok(PhaseOutput::new(
             TypedProgram {
                 nodes,
+                enum_definitions,
+                nominal_definitions,
                 process_specs,
                 boot_plan: program.boot_plan,
             },
@@ -1955,6 +1966,7 @@ impl ScarSession {
                 TypedFacetSegment::Field { .. }
                 | TypedFacetSegment::Tuple { .. }
                 | TypedFacetSegment::ReadonlyBuiltin { .. }
+                | TypedFacetSegment::ErrorPayload { .. }
                 | TypedFacetSegment::Variant { .. } => {}
             }
         }
@@ -2031,6 +2043,20 @@ impl ScarSession {
             }
         }
         match &mut node.node {
+            TypedInner::ErrorConstruct {
+                message,
+                payload,
+                payload_fields,
+                ..
+            } => {
+                Self::rewrite_fun_indices_in_node(message, rewrites);
+                for value in payload {
+                    Self::rewrite_fun_indices_in_node(value, rewrites);
+                }
+                for (_, ty) in payload_fields {
+                    Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                }
+            }
             TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
             TypedInner::SupervisorSpawn { init, .. } => {
                 Self::rewrite_fun_indices_in_node(init, rewrites);
@@ -2377,7 +2403,8 @@ impl ScarSession {
             }
             TypedMatchPattern::Or(items)
             | TypedMatchPattern::Tuple(items)
-            | TypedMatchPattern::Record(items) => {
+            | TypedMatchPattern::Record(items)
+            | TypedMatchPattern::ErrorPayload { fields: items, .. } => {
                 for item in items {
                     Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
                 }
@@ -3054,6 +3081,8 @@ struct Checker {
     active_lazy_capture: Option<ActiveLazyCapture>,
     env: TypeEnv,
     function_return_ty: Option<Ty>,
+    error_definition_uid: Option<u32>,
+    is_capture_closure: bool,
     function_return_origin: Option<Span>,
     local_annotation_tyvars: HashMap<String, Ty>,
     /// Declaration-owned generic variables are rigid while their body is
@@ -3222,6 +3251,8 @@ impl Checker {
         Self {
             env: state.env,
             function_return_ty: None,
+            error_definition_uid: None,
+            is_capture_closure: false,
             function_return_origin: None,
             local_annotation_tyvars: HashMap::new(),
             rigid_tyvars: HashSet::new(),
@@ -3284,6 +3315,8 @@ impl Checker {
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
+        checker.error_definition_uid = self.error_definition_uid;
+        checker.is_capture_closure = self.is_capture_closure;
         checker.function_return_origin = self.function_return_origin.clone();
         checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
         checker.rigid_tyvars = self.rigid_tyvars.clone();
@@ -3692,6 +3725,14 @@ impl Checker {
             self.collect_unused_value_warnings_in_node(expr);
         }
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.collect_unused_value_warnings_in_node(message);
+                for value in payload {
+                    self.collect_unused_value_warnings_in_node(value);
+                }
+            }
             TypedInner::Block(stmts) => self.collect_unused_value_warnings_in_sequence(stmts),
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)

@@ -29,6 +29,7 @@ impl Resolver {
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
                             | DeclarationKind::Record
+                            | DeclarationKind::Deferror
                     )
                 ) || args
                     .iter()
@@ -71,6 +72,7 @@ impl Resolver {
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
                             | DeclarationKind::Record
+                            | DeclarationKind::Deferror
                     )
                 ) {
                     return Ok(pattern);
@@ -105,7 +107,10 @@ impl Resolver {
                     ));
                 }
                 for (index, argument) in args.iter_mut().enumerate() {
-                    if matches!(kind, Some(DeclarationKind::Record)) {
+                    if matches!(
+                        kind,
+                        Some(DeclarationKind::Record | DeclarationKind::Deferror)
+                    ) {
                         if let Some((_, named_child)) = argument.named_pattern.as_mut() {
                             **named_child =
                                 self.select_pattern_argument_roles(*named_child.clone())?;
@@ -363,6 +368,7 @@ impl Resolver {
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
                             | DeclarationKind::Record
+                            | DeclarationKind::Deferror
                     )
                 ) {
                     let head = self.pattern_id(head_name, head_uid, span);
@@ -429,7 +435,10 @@ impl Resolver {
                     symbol_info: self.symbol_info_for_uid(&head_name, head_uid),
                     span: span.clone(),
                 };
-                if matches!(head_kind, DeclarationKind::Record) {
+                if matches!(
+                    head_kind,
+                    DeclarationKind::Record | DeclarationKind::Deferror
+                ) {
                     let mut fields = Vec::with_capacity(inners.len());
                     for argument in inners {
                         let (name, pattern) = if let Some((name, pattern)) = argument.named_pattern
@@ -852,12 +861,18 @@ fn collect_pattern_bindings_preorder(
                     return Err(error);
                 }
                 if let Some(expected) = &common {
-                    let expected_names = expected.iter().map(|(name, _)| name).collect::<Vec<_>>();
-                    let actual_names = bindings.iter().map(|(name, _)| name).collect::<Vec<_>>();
+                    let expected_names = expected
+                        .iter()
+                        .map(|(name, _)| name)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    let actual_names = bindings
+                        .iter()
+                        .map(|(name, _)| name)
+                        .collect::<std::collections::BTreeSet<_>>();
                     if expected_names != actual_names {
                         return Err(ResolveError {
                             message: format!(
-                                "OR pattern alternatives must bind the same binding names in the same order: expected {:?}, got {:?}",
+                                "OR pattern alternatives must bind the same binding names: expected {:?}, got {:?}",
                                 expected_names, actual_names
                             ),
                             span: span.clone(),

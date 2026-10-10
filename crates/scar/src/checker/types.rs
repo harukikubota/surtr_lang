@@ -934,7 +934,12 @@ impl Checker {
                                         NominalType::monomorphic(def.fields.clone()),
                                     ));
                                 }
-                                crate::env::TypeKind::ConcreteError => return Ok(Ty::Error),
+                                crate::env::TypeKind::ConcreteError => {
+                                    if context == TypeSyntaxContext::ConcreteErrorLocal {
+                                        return Ok(Ty::Error);
+                                    }
+                                    return Err(TypeError::new("Concrete Error types are only valid for an already narrowed local binding", span.clone()));
+                                },
                                 crate::env::TypeKind::Enum => {
                                     if let Some(ty) =
                                         Self::builtin_special_enum_ty(&def.name, &[])
@@ -4472,6 +4477,12 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::ErrorConstruct {
+                kind,
+                message,
+                payload,
+                payload_fields,
+            } => *self.resolve_error_construct(kind, message, payload, payload_fields),
             TypedInner::TupleLiteral(elems) => TypedInner::TupleLiteral(
                 elems
                     .into_iter()
@@ -4763,6 +4774,29 @@ impl Checker {
         Box::new(TypedNode { ty, span, node })
     }
 
+    // Keep the new construction arm's recursive collection temporaries out of
+    // the common visitor frame, which also visits deeply nested do chains.
+    fn resolve_error_construct(
+        &self,
+        kind: String,
+        message: Box<TypedNode>,
+        payload: Vec<TypedNode>,
+        payload_fields: Vec<(String, Ty)>,
+    ) -> Box<TypedInner> {
+        Box::new(TypedInner::ErrorConstruct {
+            kind,
+            message: self.resolve_typed_node(*message),
+            payload: payload
+                .into_iter()
+                .map(|value| *self.resolve_typed_node(value))
+                .collect(),
+            payload_fields: payload_fields
+                .into_iter()
+                .map(|(name, ty)| (name, self.resolve_ty(&ty)))
+                .collect(),
+        })
+    }
+
     pub(super) fn resolve_typed_pattern(&self, pattern: TypedPattern) -> TypedPattern {
         match pattern {
             TypedPattern::Located(source, inner) => {
@@ -4868,6 +4902,16 @@ impl Checker {
                     .map(|item| self.resolve_typed_match_pattern(item))
                     .collect(),
             ),
+            TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items,
+            } => TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_match_pattern(item))
+                    .collect(),
+            },
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()

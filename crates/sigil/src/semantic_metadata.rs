@@ -133,8 +133,8 @@ fn format_builtin_type_signature(head: &BuiltinTypeHead) -> String {
     }
 }
 
-fn format_deferror_signature(name: &str, fields: &[RecordField]) -> String {
-    if fields.is_empty() {
+fn format_deferror_signature(name: &str, fields: &[RecordField], body: &Ast) -> String {
+    let header = if fields.is_empty() {
         format!("deferror {}", surface_path_name(name))
     } else {
         let fields = fields
@@ -143,7 +143,22 @@ fn format_deferror_signature(name: &str, fields: &[RecordField]) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         format!("deferror {}({fields})", surface_path_name(name))
+    };
+    let Ast::Closure(_, parameters, _) = body else {
+        unreachable!("deferror body is a block");
+    };
+    if parameters.is_empty() {
+        return header;
     }
+    let inputs = parameters
+        .iter()
+        .map(|parameter| match &parameter.ty {
+            Some(ty) => format!("{}: {}", parameter.name, format_ast_ty(ty)),
+            None => parameter.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{header} {{ |{inputs}| ... }}")
 }
 
 fn format_defenum_signature(name: &str, variants: &[EnumVariant]) -> String {
@@ -703,13 +718,13 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     });
                 }
             }
-            Ast::DeferrorDef(_, name, fields, _, attrs) => {
+            Ast::DeferrorDef(_, name, fields, body, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
                         module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_deferror_signature(name, fields)),
+                        signature: Some(format_deferror_signature(name, fields, body)),
                         doc: doc.clone(),
                     });
                 }
@@ -991,13 +1006,13 @@ fn collect_signature_entries_for_ast(
                     format_builtin_type_signature(head),
                 );
             }
-            Ast::DeferrorDef(_, name, fields, _, _) => {
+            Ast::DeferrorDef(_, name, fields, body, _) => {
                 push_signature_entry(
                     out,
                     module_path,
                     qualified_name(module_path, name),
                     DocKind::Type,
-                    format_deferror_signature(name, fields),
+                    format_deferror_signature(name, fields, body),
                 );
             }
             Ast::EnumDef(_, name, type_params, variants, attrs) => {
@@ -1122,6 +1137,24 @@ pub fn collect_signature_entries_with_base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_signature_distinguishes_payload_and_constructor_input() {
+        let ast = spire::parse_with_context(
+            "deferror Negative(num: Int) { |value: Int| Self(message: \"negative\", num: value) }",
+            spire::ParserContext::project(0),
+        )
+        .unwrap();
+        let signatures = collect_signature_entries(&[], &ast, None);
+        let error = signatures
+            .iter()
+            .find(|entry| entry.qualified_name.ends_with("Negative"))
+            .unwrap();
+        assert_eq!(
+            error.signature,
+            "deferror Negative(num: Int) { |value: Int| ... }"
+        );
+    }
 
     #[test]
     fn malformed_special_variant_does_not_invent_a_signature_payload() {

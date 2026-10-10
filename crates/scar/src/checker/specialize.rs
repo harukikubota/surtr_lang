@@ -546,6 +546,9 @@ impl Checker {
             )
         };
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => visit(message).or_else(|| payload.iter().find_map(visit)),
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)
             | TypedInner::Capture(func, args) => {
@@ -975,6 +978,7 @@ impl Checker {
             | TypedInner::StructLit(..)
             | TypedInner::ConstructorCall(..)
             | TypedInner::DeferrorDef(..)
+            | TypedInner::ErrorConstruct { .. }
             | TypedInner::Def(..)
             | TypedInner::ExtractorDef(..)
             | TypedInner::BuiltinExtractorDecl(..)
@@ -1800,6 +1804,37 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
+            TypedInner::ErrorConstruct {
+                kind,
+                message,
+                payload,
+                payload_fields,
+            } => TypedInner::ErrorConstruct {
+                kind,
+                message: self.rewrite_specializations_in_node(
+                    *message,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+                payload: payload
+                    .into_iter()
+                    .map(|value| {
+                        self.rewrite_specializations_in_node(
+                            value,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )
+                        .map(|node| *node)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                payload_fields,
+            },
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
                     .into_iter()
@@ -3139,6 +3174,14 @@ impl Checker {
                     self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
                 }
             }
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(message, ordered, seen);
+                for value in payload {
+                    self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                }
+            }
             TypedInner::ListLiteral(args) | TypedInner::TupleLiteral(args) => {
                 for arg in args {
                     self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
@@ -3367,6 +3410,14 @@ impl Checker {
             TypedInner::ListCons(head, tail) => {
                 self.collect_bound_tyvars_in_node(head, ordered, seen);
                 self.collect_bound_tyvars_in_node(tail, ordered, seen);
+            }
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.collect_bound_tyvars_in_node(message, ordered, seen);
+                for value in payload {
+                    self.collect_bound_tyvars_in_node(value, ordered, seen);
+                }
             }
             TypedInner::ListLiteral(items) | TypedInner::TupleLiteral(items) => {
                 for item in items {
@@ -3845,6 +3896,23 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::ErrorConstruct {
+                kind,
+                message,
+                payload,
+                payload_fields,
+            } => TypedInner::ErrorConstruct {
+                kind,
+                message: Box::new(self.substitute_typed_node_with_mapping(*message, mapping)),
+                payload: payload
+                    .into_iter()
+                    .map(|value| self.substitute_typed_node_with_mapping(value, mapping))
+                    .collect(),
+                payload_fields: payload_fields
+                    .into_iter()
+                    .map(|(name, ty)| (name, self.substitute_ty_with_mapping(&ty, mapping)))
+                    .collect(),
+            },
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
                     .into_iter()
@@ -4400,6 +4468,16 @@ impl Checker {
                     .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
                     .collect(),
             ),
+            TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items,
+            } => TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items
+                    .into_iter()
+                    .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
+                    .collect(),
+            },
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()
@@ -5035,6 +5113,16 @@ impl Checker {
                     .map(|item| self.concretize_specialized_match_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items,
+            } => TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()
@@ -5102,7 +5190,9 @@ impl Checker {
             TypedMatchPattern::As(inner, _) => {
                 Self::typed_match_pattern_has_pending_dispatch(inner)
             }
-            TypedMatchPattern::Or(items) | TypedMatchPattern::Tuple(items) => items
+            TypedMatchPattern::Or(items)
+            | TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::ErrorPayload { fields: items, .. } => items
                 .iter()
                 .any(Self::typed_match_pattern_has_pending_dispatch),
             TypedMatchPattern::Constructor { fields, .. } => fields
@@ -5156,6 +5246,7 @@ impl Checker {
             TypedFacetSegment::Field { .. }
             | TypedFacetSegment::Tuple { .. }
             | TypedFacetSegment::ReadonlyBuiltin { .. }
+            | TypedFacetSegment::ErrorPayload { .. }
             | TypedFacetSegment::Variant { .. } => false,
         }
     }
@@ -5245,6 +5336,12 @@ impl Checker {
             TypedInner::ListCons(head, tail) => {
                 Self::typed_node_has_pending_trait_call(head)
                     || Self::typed_node_has_pending_trait_call(tail)
+            }
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                Self::typed_node_has_pending_trait_call(message)
+                    || payload.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::ListLiteral(items) | TypedInner::TupleLiteral(items) => {
                 items.iter().any(Self::typed_node_has_pending_trait_call)

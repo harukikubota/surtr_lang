@@ -1794,7 +1794,7 @@ fn test_constructor_application_parser_preserves_type_identity_boundaries() {
         "value: Applicative<$A> = value",
         "defstruct Holder { value: Applicative<$A> }",
         "defrecord Holder(value: Applicative<$A>)",
-        "deferror Holder(value: Applicative<$A>) { \"holder\" }",
+        "deferror Holder(value: Applicative<$A>) { |value: Applicative<$A>| Self(message: \"holder\", value: value) }",
         "callback = {|value: Applicative<$A>| value}",
         "def nested(value: List<Applicative<$A>>) -> Int { 0 }",
         "def paired(value: (Applicative<$A>, Int)) -> Int { 0 }",
@@ -5944,7 +5944,7 @@ namespace Auth {
   }
 }
 
-deferror Oops(reason: String) { reason }
+deferror Oops(reason: String) { |reason: String| Self(message: reason, reason: reason) }
 
 defenum Role { Admin }
 
@@ -8661,4 +8661,30 @@ fn safe_bind_operator_and_do_keyword_spans_survive_rebasing() {
             end: 102
         }
     );
+}
+
+#[test]
+fn test_deferror_payload_header_and_constructor_block_arguments_are_distinct() {
+    let parsed = parse_with_context(
+        r#"deferror Trouble(code: Int) { |input: String| Self(message: input, code: 1) }
+        deferror Empty() { Self(message: "empty") }
+        deferror Text { "text" }"#,
+        ParserContext::script(1),
+    )
+    .unwrap();
+    let Ast::DeferrorDef(_, _, fields, body, _) = &parsed[0] else {
+        panic!("expected Error declaration")
+    };
+    assert_eq!(fields[0].name, "code");
+    let Ast::Closure(_, inputs, _) = body.as_ref() else {
+        panic!("expected constructor block")
+    };
+    assert_eq!(inputs[0].name, "input");
+    for declaration in &parsed[1..] {
+        let Ast::DeferrorDef(_, _, fields, body, _) = declaration else {
+            panic!("expected Error declaration")
+        };
+        assert!(fields.is_empty());
+        assert!(matches!(body.as_ref(), Ast::Closure(_, params, _) if params.is_empty()));
+    }
 }

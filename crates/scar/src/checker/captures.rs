@@ -15,6 +15,7 @@ impl Checker {
                     TypedFacetSegment::Field { .. }
                     | TypedFacetSegment::Tuple { .. }
                     | TypedFacetSegment::ReadonlyBuiltin { .. }
+                    | TypedFacetSegment::ErrorPayload { .. }
                     | TypedFacetSegment::Variant { .. } => {}
                 }
             }
@@ -22,6 +23,12 @@ impl Checker {
         let mut children = Self::pattern_expression_nodes(node);
         children.extend(node.monad_fail_call());
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                children.push(message);
+                children.extend(payload);
+            }
             TypedInner::TraitCall { args, .. } => children.extend(args),
             TypedInner::App(function, args)
             | TypedInner::InjectCall(function, args)
@@ -227,6 +234,8 @@ impl Checker {
                 }
                 TypedMatchPattern::Tuple(items)
                 | TypedMatchPattern::Or(items)
+                | TypedMatchPattern::Record(items)
+                | TypedMatchPattern::ErrorPayload { fields: items, .. }
                 | TypedMatchPattern::Constructor { fields: items, .. } => {
                     for item in items {
                         matching(item, outer, out);

@@ -705,6 +705,7 @@ impl Checker {
                 Self::insert_pattern_binding(out, id)?;
             }
             TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::ErrorPayload { fields: items, .. }
             | TypedMatchPattern::Constructor { fields: items, .. }
             | TypedMatchPattern::Extractor { items, .. } => {
                 for item in items {
@@ -770,6 +771,7 @@ impl Checker {
                 }
                 TypedMatchPattern::Tuple(items)
                 | TypedMatchPattern::Or(items)
+                | TypedMatchPattern::ErrorPayload { fields: items, .. }
                 | TypedMatchPattern::Constructor { fields: items, .. } => {
                     for item in items {
                         matching(item, out);
@@ -838,6 +840,7 @@ impl Checker {
                 }
                 TypedMatchPattern::Tuple(items)
                 | TypedMatchPattern::Or(items)
+                | TypedMatchPattern::ErrorPayload { fields: items, .. }
                 | TypedMatchPattern::Constructor { fields: items, .. } => {
                     for item in items {
                         matching(item, out);
@@ -1044,8 +1047,14 @@ impl Checker {
                 Ok((TypedPattern::Wildcard(expected.clone()), expected))
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
-                let expected =
-                    self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
+                let expected = self.resolve_ast_ty_in_context(
+                    ast_ty,
+                    if self.env.concrete_error_bindings.contains_key(&id.unique_id) {
+                        TypeSyntaxContext::ConcreteErrorLocal
+                    } else {
+                        self.local_type_syntax_context()
+                    },
+                )?;
                 self.assert_value_type_relation(
                     &expected,
                     rhs_ty,

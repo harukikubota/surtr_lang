@@ -4835,14 +4835,33 @@ impl Checker {
                     );
                     fun_idx += 1;
                 }
-                Resolved::DeferrorDef(_, id, fields, _) => {
+                Resolved::DeferrorDef(span, id, _, body) => {
                     self.register_function_id(id);
-                    let param_tys = fields
+                    let Resolved::Closure(_, params, _, _) = body.as_ref() else {
+                        return Err(TypeError::new(
+                            "deferror body must be a constructor block",
+                            span.clone(),
+                        ));
+                    };
+                    let inputs = params
                         .iter()
-                        .map(|field| {
-                            self.resolve_ast_ty_in_context(&field.ty, TypeSyntaxContext::General)
+                        .map(|param| {
+                            let ty = param.ty.as_ref().ok_or_else(|| {
+                                TypeError::new(
+                                    "deferror constructor inputs require type annotations",
+                                    param.id.span.clone(),
+                                )
+                            })?;
+                            Ok((
+                                param.id.name.clone(),
+                                self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::General)?,
+                            ))
                         })
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .collect::<Result<Vec<_>, TypeError>>()?;
+                    let param_tys = inputs.iter().map(|(_, ty)| ty.clone()).collect();
+                    self.env
+                        .error_constructor_inputs
+                        .insert(id.unique_id, inputs);
 
                     self.env.bind_var(
                         id.unique_id,

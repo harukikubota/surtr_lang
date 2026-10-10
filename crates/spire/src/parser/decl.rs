@@ -3469,13 +3469,37 @@ impl Parser<'_> {
             self.expect(&Token::RParen)?;
         }
 
-        // Show block: { expr }
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        }
+        // The header declares stored payload; block arguments are constructor inputs.
         self.skip_newlines();
-        self.expect(&Token::LBrace)?;
+        let body_start = self.expect(&Token::LBrace)?;
         self.skip_newlines();
-        let show_expr = self.parse_expr()?;
-        self.skip_newlines();
-        let end = self.expect(&Token::RBrace)?;
+        let show_expr = if matches!(self.peek(), Token::Pipe) {
+            self.parse_closure_literal(body_start)?
+        } else {
+            let stmts = self.parse_block_stmts()?;
+            let end = self.expect(&Token::RBrace)?;
+            Ast::Closure(
+                Span {
+                    start: body_start.start,
+                    end: end.end,
+                },
+                Vec::new(),
+                Box::new(Ast::Block(
+                    Span {
+                        start: body_start.start,
+                        end: end.end,
+                    },
+                    stmts,
+                )),
+            )
+        };
+        let Ast::Closure(end, _, _) = &show_expr else {
+            unreachable!("deferror body is a block")
+        };
+        let end = end.clone();
 
         Ok(Ast::DeferrorDef(
             Span {

@@ -106,6 +106,7 @@ pub struct EnumVariantInfo {
 struct VarScopeFrame {
     touched: HashSet<u32>,
     undo: Vec<(u32, Option<Ty>)>,
+    concrete_errors_before: HashMap<u32, String>,
 }
 
 /// Type environment — tracks variable types and type definitions.
@@ -125,6 +126,8 @@ pub struct TypeEnv {
     pub error_type_names: HashSet<Symbol>,
     /// `deferror` constructor bindings by unique_id
     pub error_constructor_ids: HashSet<u32>,
+    pub error_constructor_inputs: HashMap<u32, Vec<(String, Ty)>>,
+    pub concrete_error_bindings: HashMap<u32, String>,
     /// enum constructor unique_id -> variant metadata
     pub enum_constructor_ids: HashMap<u32, Arc<EnumVariantInfo>>,
     /// enum tag -> variant metadata
@@ -152,6 +155,8 @@ impl TypeEnv {
             next_tyvar: 0,
             error_type_names: HashSet::new(),
             error_constructor_ids: HashSet::new(),
+            error_constructor_inputs: HashMap::new(),
+            concrete_error_bindings: HashMap::new(),
             enum_constructor_ids: HashMap::new(),
             enum_variant_tags: HashMap::new(),
             enum_variants_by_enum: HashMap::new(),
@@ -180,6 +185,7 @@ impl TypeEnv {
         self.var_scope_frames.push(VarScopeFrame {
             touched: HashSet::new(),
             undo: Vec::new(),
+            concrete_errors_before: self.concrete_error_bindings.clone(),
         });
     }
 
@@ -188,6 +194,7 @@ impl TypeEnv {
         let Some(frame) = self.var_scope_frames.pop() else {
             return;
         };
+        self.concrete_error_bindings = frame.concrete_errors_before;
         for (unique_id, old) in frame.undo.into_iter().rev() {
             if let Some(old_ty) = old {
                 self.vars.insert(unique_id, old_ty);
@@ -392,6 +399,40 @@ impl TypeEnv {
         type_lookup_candidates(enum_name)
             .into_iter()
             .find_map(|candidate| self.enum_variants_by_enum.get(&candidate).map(Arc::as_ref))
+    }
+
+    pub fn typed_enum_definitions(
+        &self,
+    ) -> HashMap<String, Vec<crate::typed::TypedEnumVariantDef>> {
+        self.enum_variants_by_enum
+            .iter()
+            .map(|(name, variants)| (name.clone(), variants.iter().map(Into::into).collect()))
+            .collect()
+    }
+
+    pub fn typed_nominal_definitions(
+        &self,
+    ) -> HashMap<String, crate::typed::TypedNominalDefinition> {
+        self.type_defs
+            .iter()
+            .filter(|(_, definition)| {
+                matches!(definition.kind, TypeKind::Struct | TypeKind::Record)
+            })
+            .map(|(name, definition)| {
+                assert_eq!(
+                    definition.state,
+                    TypeDefState::SignatureResolved,
+                    "checked nominal definition must have a resolved signature: {name}"
+                );
+                (
+                    name.clone(),
+                    crate::typed::TypedNominalDefinition {
+                        type_param_vars: definition.type_param_vars.clone(),
+                        fields: definition.fields.clone(),
+                    },
+                )
+            })
+            .collect()
     }
 
     pub fn register_type_constructor_id(&mut self, unique_id: u32) {

@@ -2948,20 +2948,7 @@ impl Checker {
             });
         }
 
-        let typed_variants = enum_variants
-            .iter()
-            .map(|variant| TypedEnumVariantDef {
-                tag: variant.tag,
-                lowering: variant.special_variant,
-                constructor_name: variant.constructor_name.clone(),
-                field_names: variant
-                    .payload
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, _)| format!("_{}", idx))
-                    .collect(),
-            })
-            .collect::<Vec<_>>();
+        let typed_variants = enum_variants.iter().map(Into::into).collect::<Vec<_>>();
 
         Ok(TypedNode {
             ty: Ty::Unit,
@@ -3447,6 +3434,35 @@ impl Checker {
             });
         }
 
+        if self.error_definition_uid == Some(id.unique_id) {
+            return Err(TypeError::new("Error internal construction is only allowed as the direct terminal expression of its declaration", span.clone()));
+        }
+        if self.env.is_error_constructor(id.unique_id) {
+            let schema = self
+                .env
+                .error_constructor_inputs
+                .get(&id.unique_id)
+                .cloned()
+                .ok_or_else(|| {
+                    TypeError::new("Error constructor input signature is missing", span.clone())
+                })?;
+            let typed_args = self.check_error_arguments(span, &id.name, &schema, args)?;
+            let ty = self.env.lookup_var(id.unique_id).cloned().ok_or_else(|| {
+                TypeError::new("Error constructor function is missing", span.clone())
+            })?;
+            return Ok(TypedNode {
+                ty: Ty::Error,
+                span: span.clone(),
+                node: TypedInner::App(
+                    Box::new(TypedNode {
+                        ty,
+                        span: id.span.clone(),
+                        node: TypedInner::Var(id.clone()),
+                    }),
+                    typed_args,
+                ),
+            });
+        }
         if let Some(ty) = self.env.lookup_var(id.unique_id).cloned() {
             match &ty {
                 Ty::BuiltinFunc { params, ret, .. } => {
@@ -3602,10 +3618,7 @@ impl Checker {
             return Ok(typed_call);
         }
 
-        if !matches!(
-            def.kind,
-            crate::env::TypeKind::Record | crate::env::TypeKind::ConcreteError
-        ) {
+        if !matches!(def.kind, crate::env::TypeKind::Record) {
             return Err(TypeError {
                 structured: None,
                 message: format!("{} is not a constructor-call type", id.name),
@@ -3759,8 +3772,9 @@ impl Checker {
                 id.name.clone(),
                 NominalType::monomorphic(def.fields.clone()),
             ),
-            crate::env::TypeKind::ConcreteError => Ty::Error,
-            crate::env::TypeKind::Struct | crate::env::TypeKind::Enum => {
+            crate::env::TypeKind::Struct
+            | crate::env::TypeKind::Enum
+            | crate::env::TypeKind::ConcreteError => {
                 unreachable!("validated above")
             }
         };
@@ -3942,108 +3956,142 @@ impl Checker {
         fields: &[ResolvedField],
         show_expr: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let ty_fields: Vec<(Ty, ResolvedId)> = fields
+        let kind = id.qualified_name.clone().ok_or_else(|| {
+            TypeError::new(
+                "Error declaration is missing canonical identity",
+                span.clone(),
+            )
+        })?;
+        let mut seen = HashSet::new();
+        let payload_fields = fields
             .iter()
-            .map(|f| {
-                let ty = self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
-                let id = f.id.clone().ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!("Missing resolved field id for {}", f.name),
-                    span: f.span.clone(),
-                    hint: None,
-                })?;
-                Ok((ty, id))
+            .map(|field| {
+                if matches!(field.name.as_str(), "kind" | "message")
+                    || !seen.insert(field.name.clone())
+                {
+                    return Err(TypeError::new(
+                        format!("Invalid or duplicate Error Payload field: {}", field.name),
+                        field.span.clone(),
+                    ));
+                }
+                let ty = self.resolve_ast_ty_in_context(&field.ty, TypeSyntaxContext::General)?;
+                self.ensure_no_match_result_value(&ty, &field.span)?;
+                if self.ty_contains_facet(&ty) {
+                    return Err(TypeError::new(
+                    "Facet is compile-time only in Stage1 and cannot appear in Error Payload types",
+                    field.span.clone(),
+                ));
+                }
+                Ok((field.name.clone(), ty))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
-
         let tag = self
             .env
-            .resolve_type_def_signature(
-                &id.name,
-                ty_fields
-                    .iter()
-                    .map(|(ty, rid)| (rid.name.clone(), ty.clone()))
-                    .collect(),
-                Vec::new(),
-                fields
-                    .iter()
-                    .filter(|field| field.visibility == spire::ast::Visibility::Private)
-                    .map(|field| field.name.clone())
-                    .collect(),
-                HashSet::new(),
-                false,
-            )
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Unknown error type declaration: {}", id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
-
-        let mut show_env = self.env.clone();
-        let typed_params: Vec<TypedValueParameter> = ty_fields
-            .iter()
-            .map(|(ty, resolved_id)| {
-                show_env.bind_var(resolved_id.unique_id, ty.clone());
-                TypedValueParameter {
-                    id: resolved_id.clone(),
-                    mode: spire::ast::ValueParameterMode::PositionalOrNamed,
-                    ty: ty.clone(),
-                    span: resolved_id.span.clone(),
-                }
-            })
-            .collect();
-
+            .lookup_type_def(&id.name)
+            .ok_or_else(|| {
+                TypeError::new(
+                    format!("Unknown Error declaration: {}", id.name),
+                    span.clone(),
+                )
+            })?
+            .tag;
+        let Resolved::Closure(_, params, _, body) = show_expr else {
+            return Err(TypeError::new(
+                "deferror body must be a constructor block",
+                span.clone(),
+            ));
+        };
+        let mut body_env = self.env.clone();
+        let typed_params = params.iter().map(|param| {
+            let ast_ty = param.ty.as_ref().ok_or_else(|| TypeError::new(
+                "deferror constructor inputs require type annotations", param.id.span.clone()))?;
+            let ty = self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+            self.ensure_no_match_result_value(&ty, &param.id.span)?;
+            if self.ty_contains_facet(&ty) {
+                return Err(TypeError::new(
+                    "Facet is compile-time only in Stage1 and cannot appear in Error constructor input types",
+                    param.id.span.clone(),
+                ));
+            }
+            body_env.bind_var(param.id.unique_id, ty.clone());
+            Ok(TypedValueParameter { id: param.id.clone(), mode: spire::ast::ValueParameterMode::PositionalOrNamed,
+                ty, span: param.id.span.clone() })
+        }).collect::<Result<Vec<_>, TypeError>>()?;
         let fun_idx = match self.env.lookup_var(id.unique_id) {
             Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
             _ => {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!("Undefined function: {}", id.name),
-                    span: span.clone(),
-                    hint: None,
-                });
+                return Err(TypeError::new(
+                    format!("Undefined Error constructor: {}", id.name),
+                    span.clone(),
+                ))
             }
         };
-        self.env.bind_var(
-            id.unique_id,
-            Ty::UserFunc {
-                fun_idx,
-                type_params: Vec::new(),
-                call_substitution: Vec::new(),
-                params: typed_params.iter().map(|p| p.ty.clone()).collect(),
-                ret: Box::new(Ty::Error),
-            },
-        );
-        self.env.register_error_constructor(id.unique_id);
-
-        for (ty, resolved_id) in &ty_fields {
-            show_env.bind_var(resolved_id.unique_id, ty.clone());
+        let mut child = self.spawn_child_checker(body_env);
+        child.error_definition_uid = Some(id.unique_id);
+        child.function_return_ty = Some(Ty::Error);
+        let statements: Vec<&Resolved> = match body.as_ref() {
+            Resolved::Block(_, items) => items.iter().collect(),
+            other => vec![other],
+        };
+        let Some((last, initial)) = statements.split_last() else {
+            return Err(TypeError::new(
+                "deferror constructor body cannot be empty",
+                span.clone(),
+            ));
+        };
+        let mut typed_body = Vec::new();
+        for statement in initial {
+            typed_body.push(child.check_node(statement)?);
         }
-        let mut show_checker = self.spawn_child_checker(show_env);
-        show_checker.function_return_ty = Some(Ty::Str);
-        let typed_show = show_checker
-            .check_node(show_expr)
-            .map_err(|err| TypeError {
-                structured: None,
-                message: err.message,
-                span: err.span,
-                hint: err.hint,
-            })?;
-        let typed_show = *show_checker.resolve_typed_node(typed_show);
-        self.absorb_child_progress(&show_checker);
-        if !self.types_compatible(&Ty::Str, &typed_show.ty)? {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "deferror show block must return String, got {}",
-                    self.ty_name(&typed_show.ty)
-                ),
-                span: typed_show.span.clone(),
-                hint: None,
-            });
-        }
-
+        let final_node = match last {
+            Resolved::ConstructorCall(call_span, target, args)
+                if target.unique_id == id.unique_id =>
+            {
+                let mut schema = vec![("message".to_string(), Ty::Str)];
+                schema.extend(payload_fields.clone());
+                let mut values = child.check_error_arguments(call_span, &id.name, &schema, args)?;
+                let message = Box::new(values.remove(0));
+                TypedNode {
+                    ty: Ty::Error,
+                    span: call_span.clone(),
+                    node: TypedInner::ErrorConstruct {
+                        kind,
+                        message,
+                        payload: values,
+                        payload_fields,
+                    },
+                }
+            }
+            other => {
+                if !payload_fields.is_empty() {
+                    return Err(TypeError::new(
+                        "deferror with Payload requires a direct terminal internal construction",
+                        span.clone(),
+                    ));
+                }
+                let message = child.check_node(other)?;
+                if !child.types_compatible(&Ty::Str, &message.ty)? {
+                    return Err(TypeError::new("empty Payload deferror body must return String or a direct internal construction", message.span.clone()));
+                }
+                TypedNode {
+                    ty: Ty::Error,
+                    span: message.span.clone(),
+                    node: TypedInner::ErrorConstruct {
+                        kind,
+                        message: Box::new(message),
+                        payload: Vec::new(),
+                        payload_fields,
+                    },
+                }
+            }
+        };
+        typed_body.push(final_node);
+        self.absorb_child_progress(&child);
+        let body_node = TypedNode {
+            ty: Ty::Error,
+            span: span.clone(),
+            node: TypedInner::Block(typed_body),
+        };
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
@@ -4052,9 +4100,96 @@ impl Checker {
                 fun_idx,
                 id.clone(),
                 typed_params,
-                Box::new(typed_show),
+                Box::new(body_node),
             ),
         })
+    }
+
+    pub(super) fn check_error_arguments(
+        &mut self,
+        span: &Span,
+        name: &str,
+        schema: &[(String, Ty)],
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let named = args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(..)));
+        let mut values = vec![None; schema.len()];
+        if args.len() != schema.len() {
+            return Err(TypeError::new(
+                format!(
+                    "{} expects {} arguments, got {}",
+                    name,
+                    schema.len(),
+                    args.len()
+                ),
+                span.clone(),
+            ));
+        }
+        for (position, argument) in args.iter().enumerate() {
+            let (index, expression) = if named {
+                let (field, expression) = match argument {
+                    ResolvedRecordLitArg::Named(field, expression) => (field.as_str(), expression),
+                    ResolvedRecordLitArg::Positional(expression) => {
+                        match expression {
+                            Resolved::Var(_, variable) => (variable.name.as_str(), expression),
+                            _ => return Err(TypeError::new(
+                                "Error named arguments require an explicit name or a bare variable",
+                                span.clone(),
+                            )),
+                        }
+                    }
+                };
+                let index = schema
+                    .iter()
+                    .position(|(name, _)| name == field)
+                    .ok_or_else(|| {
+                        TypeError::new(
+                            format!("Unknown Error field or input: {}", field),
+                            span.clone(),
+                        )
+                    })?;
+                (index, expression)
+            } else {
+                let ResolvedRecordLitArg::Positional(expression) = argument else {
+                    unreachable!()
+                };
+                (position, expression)
+            };
+            if values[index].is_some() {
+                return Err(TypeError::new(
+                    format!("Duplicate Error field or input: {}", schema[index].0),
+                    span.clone(),
+                ));
+            }
+            let value = self.check_node_with_expected(expression, Some(&schema[index].1))?;
+            self.assert_type_relation(
+                &schema[index].1,
+                &value.ty,
+                self.type_fact(SourceRole::Expected, span, &schema[index].1),
+                self.type_fact(SourceRole::Value, &value.span, &value.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                name,
+                index as u32,
+            )?;
+            values[index] = Some(value);
+        }
+        let values = values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value.ok_or_else(|| {
+                    TypeError::new(
+                        format!("Missing Error field or input: {}", schema[index].0),
+                        span.clone(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.ensure_no_runtime_facet_args(&values, span, "Error constructor arguments")?;
+        Ok(values)
     }
 
     pub(super) fn is_concrete_error_value(&self, node: &TypedNode) -> bool {

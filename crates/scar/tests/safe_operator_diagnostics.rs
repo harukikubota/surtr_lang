@@ -15,7 +15,7 @@ fn result_operator_diagnostics_preserve_outer_contract_and_token_origin() {
             "value: Int = 7 % 3",
             "%",
             TypeDiagnosticReason::AnnotationTypeMismatch,
-            "(Int, Int) -> Result<Int, ZeroDivisionError>",
+            "(Int, Int) -> Result<Int, ZeroModuloError>",
         ),
         (
             "def divide() -> Float { 8.0 / 2.0 }",
@@ -80,7 +80,12 @@ fn result_operator_diagnostics_preserve_outer_contract_and_token_origin() {
             .iter()
             .any(|label| label.message == format!("`{symbol}`: {signature}")));
         let human = diagnostics::render_error("example.srt", source, &rendered);
-        assert!(human.contains("ZeroDivisionError"), "{human}");
+        let expected_error = if symbol == "%" {
+            "ZeroModuloError"
+        } else {
+            "ZeroDivisionError"
+        };
+        assert!(human.contains(expected_error), "{human}");
         let mut sources = diagnostics::SourceRegistry::new();
         let id = sources.register("example.srt", source);
         let json = diagnostics::serializable_diagnostic_by_id(&sources, id, "Scar", &rendered);

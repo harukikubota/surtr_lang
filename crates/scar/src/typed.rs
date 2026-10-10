@@ -21,8 +21,18 @@ pub struct TypedNode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
+    /// Checked enum templates visible in this program, including an incremental prefix.
+    pub enum_definitions: std::collections::HashMap<String, Vec<TypedEnumVariantDef>>,
+    /// Checked struct and record templates, preserving formal and phantom type parameters.
+    pub nominal_definitions: std::collections::HashMap<String, TypedNominalDefinition>,
     pub process_specs: Vec<TypedProcessSpec>,
     pub boot_plan: SupervisorInitSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedNominalDefinition {
+    pub type_param_vars: Vec<u32>,
+    pub fields: Vec<(String, Ty)>,
 }
 
 /// A declaration-level constraint clause preserved by Scar. Constructor
@@ -229,6 +239,12 @@ pub enum ComparisonOperator {
 pub enum TypedFacetSegment {
     /// A public observation API, never a runtime representation field.
     ReadonlyBuiltin { field_name: String, builtin_id: u16 },
+    ErrorPayload {
+        kind: String,
+        field_name: String,
+        field_index: u32,
+        payload_len: u32,
+    },
     Field {
         field_name: String,
         /// Authored positional Record selector. Access still uses field_index.
@@ -542,7 +558,13 @@ pub enum TypedInner {
     /// Constructor call — tag + field values (in definition order)
     ConstructorCall(u32, Vec<TypedNode>),
 
-    /// Error type definition — tag + binding id + params + show expression
+    ErrorConstruct {
+        kind: String,
+        message: Box<TypedNode>,
+        payload: Vec<TypedNode>,
+        payload_fields: Vec<(String, Ty)>,
+    },
+    /// Error type definition — tag + binding id + constructor inputs + body
     DeferrorDef(
         u32,
         u32,
@@ -749,6 +771,10 @@ pub enum TypedMatchPattern {
     DurationLit(SurtrInt),
     /// Concrete `deferror` kind pattern for abstract Error values.
     ErrorKind(String),
+    ErrorPayload {
+        kind: String,
+        fields: Vec<TypedMatchPattern>,
+    },
     /// Pattern alternative. Alternatives are tests only and do not bind names.
     Or(Vec<TypedMatchPattern>),
     Tuple(Vec<TypedMatchPattern>),
@@ -813,10 +839,29 @@ pub struct TypedClosureParam {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedEnumVariantDef {
+    pub enum_ty: Ty,
+    pub payload_types: Vec<Ty>,
+    pub discriminant: SurtrInt,
     pub lowering: Option<sindr::names::SpecialEnumVariantLowering>,
     pub tag: u32,
     pub constructor_name: String,
     pub field_names: Vec<String>,
+}
+
+impl From<&crate::env::EnumVariantInfo> for TypedEnumVariantDef {
+    fn from(variant: &crate::env::EnumVariantInfo) -> Self {
+        Self {
+            enum_ty: variant.enum_ty.clone(),
+            payload_types: variant.payload.clone(),
+            discriminant: variant.discriminant.clone(),
+            lowering: variant.special_variant,
+            tag: variant.tag,
+            constructor_name: variant.constructor_name.clone(),
+            field_names: (0..variant.payload.len())
+                .map(|idx| format!("_{idx}"))
+                .collect(),
+        }
+    }
 }
 
 pub use diagnostics::TypeListRole;
