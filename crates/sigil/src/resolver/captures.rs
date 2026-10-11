@@ -227,7 +227,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(pred, bound, free);
             collect_captures_inner(err, bound, free);
         }
-        Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
+        Resolved::MapErr(_, value, err)
+        | Resolved::Cause(_, value, err)
+        | Resolved::OrElse(_, value, err) => {
             collect_captures_inner(value, bound, free);
             collect_captures_inner(err, bound, free);
         }

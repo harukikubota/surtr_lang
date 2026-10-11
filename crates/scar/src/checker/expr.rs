@@ -426,7 +426,8 @@ impl Checker {
             | TypedInner::ListCons(left, right)
             | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
-            | TypedInner::Cause(left, right) => recurse(left).or_else(|| recurse(right)),
+            | TypedInner::Cause(left, right)
+            | TypedInner::OrElse(left, right) => recurse(left).or_else(|| recurse(right)),
             TypedInner::If(condition, then_branch, else_branch) => recurse(condition)
                 .or_else(|| recurse(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(recurse)),
@@ -936,7 +937,9 @@ impl Checker {
                 .find_typed_node(value, inspect)
                 .or_else(|| self.find_typed_node(pred, inspect))
                 .or_else(|| self.find_typed_node(err, inspect)),
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => self
+            TypedInner::MapErr(value, err)
+            | TypedInner::Cause(value, err)
+            | TypedInner::OrElse(value, err) => self
                 .find_typed_node(value, inspect)
                 .or_else(|| self.find_typed_node(err, inspect)),
             TypedInner::Match(scrutinee, arms) => {
@@ -1090,7 +1093,8 @@ impl Checker {
                 | TypedInner::ListCons(left, right)
                 | TypedInner::Require(left, right)
                 | TypedInner::MapErr(left, right)
-                | TypedInner::Cause(left, right) => {
+                | TypedInner::Cause(left, right)
+                | TypedInner::OrElse(left, right) => {
                     collect(left, obligations);
                     collect(right, obligations);
                 }
@@ -1316,6 +1320,7 @@ impl Checker {
             | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right)
+            | TypedInner::OrElse(left, right)
             | TypedInner::SupervisorWorkers {
                 init: left,
                 strategy: right,
@@ -1842,6 +1847,7 @@ impl Checker {
             Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
             Resolved::MapErr(span, value, err) => self.check_map_err(span, value, err),
             Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
+            Resolved::OrElse(span, value, next) => self.check_or_else(span, value, next),
 
             Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, None, *then_only)
@@ -4412,6 +4418,7 @@ impl Checker {
             | Resolved::Ensure(span, _, _, _)
             | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
+            | Resolved::OrElse(span, _, _)
             | Resolved::IfLet(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::IsMatch(span, _, _)
@@ -14392,6 +14399,7 @@ impl Checker {
                     | Resolved::Ensure(..)
                     | Resolved::MapErr(..)
                     | Resolved::Cause(..)
+                    | Resolved::OrElse(..)
                     | Resolved::ApplyPattern(..)
                     | Resolved::IsMatch(..)
                     | Resolved::Dbg(..)
@@ -14915,6 +14923,32 @@ impl Checker {
             ty: typed_value.ty.clone(),
             span: span.clone(),
             node: TypedInner::Cause(Box::new(typed_value), Box::new(typed_err)),
+        })
+    }
+
+    pub(super) fn check_or_else(
+        &mut self,
+        span: &Span,
+        value: &Resolved,
+        next: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_value = self.check_result_value(value, "or_else", None)?;
+        let result_ty = self.resolve_ty(&typed_value.ty);
+        let typed_next = self.check_lazy_argument_with_expected(next, &result_ty, span)?;
+        self.assert_type_relation(
+            &result_ty,
+            &typed_next.ty,
+            self.type_fact(SourceRole::Expected, &typed_value.span, &result_ty),
+            self.type_fact(SourceRole::Value, &typed_next.span, &typed_next.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Call,
+            "Result::or_else",
+            1,
+        )?;
+        Ok(TypedNode {
+            ty: self.resolve_ty(&result_ty),
+            span: span.clone(),
+            node: TypedInner::OrElse(Box::new(typed_value), Box::new(typed_next)),
         })
     }
 

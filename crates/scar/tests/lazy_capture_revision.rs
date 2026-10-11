@@ -262,6 +262,46 @@ fn result_error_lazy_capture_uses_fixed_error_requirement() {
 }
 
 #[test]
+fn result_or_else_capture_requires_matching_result_thunk() {
+    let result = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
+    assert_eq!(
+        ty("choose = &Result::or_else(Ok(1), &1)", "choose"),
+        Ty::Func(vec![thunk(result.clone())], Box::new(result.clone()))
+    );
+    assert_eq!(
+        ty("def choose(value: Result<$A>, next: (-> Result<$A>)) -> Result<$A> { Result::or_else(value, next) }\nselected = choose(Err(NoneError()), {|| Ok(1)})", "selected"),
+        result
+    );
+    for source in [
+        "Result::or_else(1, Ok(2))",
+        "Result::or_else(Ok(1), 2)",
+        "Result::or_else(Ok(1), Ok(\"wrong\"))",
+        "Result::or_else(Ok(1), {|| {|| Ok(2)}})",
+        "choose: (Result<Int>, Result<Int> -> Result<Int>) = &Result::or_else(&1, &2)",
+    ] {
+        support::typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+    }
+}
+
+#[test]
+fn result_or_else_preserves_lazy_capture_boundaries_and_declaration_identity() {
+    for source in [
+        "choose = &Result::or_else",
+        "choose = &Result::or_else(Ok(1), (id(&1)))",
+    ] {
+        let error = support::resolve_with_builtin_prelude_result(source).expect_err(source);
+        assert!(error.message.contains("Lazy"), "{error:?}");
+    }
+    assert_eq!(
+        ty(
+            "def or_else(left: Int, right: Int) -> Int { left + right }\nselected = or_else(1, 2)",
+            "selected"
+        ),
+        Ty::Int
+    );
+}
+
+#[test]
 fn direct_expression_requirement_survives_generic_forwarding_and_capture() {
     let header = "def build(value: $A) -> (Int, $A -> $A) { &if_let(&1, x, &2, value) }";
     for consumer in [

@@ -448,6 +448,10 @@ impl Checker {
                     self.cached_source_provenance(then_branch, bindings, cache),
                     self.cached_source_provenance(else_branch, bindings, cache),
                 ]),
+            TypedInner::OrElse(value, next) => self.common_constructor_provenance(&[
+                self.cached_source_provenance(value, bindings, cache),
+                self.cached_source_provenance(next, bindings, cache),
+            ]),
             TypedInner::ApplyPattern {
                 value,
                 pattern,

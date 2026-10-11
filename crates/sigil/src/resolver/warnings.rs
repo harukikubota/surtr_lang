@@ -215,7 +215,9 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
             collect_node_usage(pred, usage);
             collect_node_usage(err, usage);
         }
-        Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
+        Resolved::MapErr(_, value, err)
+        | Resolved::Cause(_, value, err)
+        | Resolved::OrElse(_, value, err) => {
             collect_node_usage(value, usage);
             collect_node_usage(err, usage);
         }

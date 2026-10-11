@@ -2228,7 +2228,9 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(middle, rewrites);
                 Self::rewrite_fun_indices_in_node(right, rewrites);
             }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::MapErr(value, err)
+            | TypedInner::Cause(value, err)
+            | TypedInner::OrElse(value, err) => {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
                 Self::rewrite_fun_indices_in_node(err, rewrites);
             }
@@ -3828,7 +3830,8 @@ impl Checker {
             }
             TypedInner::Require(cond, err)
             | TypedInner::MapErr(cond, err)
-            | TypedInner::Cause(cond, err) => {
+            | TypedInner::Cause(cond, err)
+            | TypedInner::OrElse(cond, err) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(err);
             }
@@ -4907,7 +4910,8 @@ impl Checker {
             | Resolved::RangeLiteral(_, left, right)
             | Resolved::Require(_, left, right)
             | Resolved::MapErr(_, left, right)
-            | Resolved::Cause(_, left, right) => {
+            | Resolved::Cause(_, left, right)
+            | Resolved::OrElse(_, left, right) => {
                 self.validate_constructor_body_positions(left, constructor_traits)?;
                 self.validate_constructor_body_positions(right, constructor_traits)?;
             }
@@ -5398,6 +5402,7 @@ impl Checker {
             Resolved::Require(..) => "Require".to_string(),
             Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
+            Resolved::OrElse(..) => "OrElse".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -5430,6 +5435,7 @@ impl Checker {
             Resolved::Require(..) => "Require",
             Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
+            Resolved::OrElse(..) => "OrElse",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

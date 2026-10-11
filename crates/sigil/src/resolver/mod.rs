@@ -834,7 +834,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_resolved_node(pred, base, offset);
             rebase_resolved_node(err, base, offset);
         }
-        Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
+        Resolved::MapErr(_, value, err)
+        | Resolved::Cause(_, value, err)
+        | Resolved::OrElse(_, value, err) => {
             rebase_resolved_node(value, base, offset);
             rebase_resolved_node(err, base, offset);
         }

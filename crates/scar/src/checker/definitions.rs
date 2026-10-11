@@ -159,6 +159,17 @@ fn special_form_shape_map_err_or_cause(
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
 }
 
+fn special_form_shape_or_else(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_result_of_named(&params[0].ty, "$T")
+        && matches!(params[1].ty.syntax(), AstTy::Generic(_, name, args)
+            if name == "Lazy" && args.len() == 1
+                && Checker::is_result_of_named(&args[0], "$T"))
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
+}
+
 fn special_form_shape_and_or(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -680,6 +691,7 @@ impl Checker {
                 | "ensure"
                 | "map_err"
                 | "cause"
+                | "or_else"
                 | "and"
                 | "or"
                 | "eq"
@@ -746,6 +758,11 @@ impl Checker {
                 expected_qname: "Result::cause",
                 expected_signature: "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "or_else" => SpecialFormContract {
+                expected_qname: "Result::or_else",
+                expected_signature: "@builtin def or_else(value: Result<$T>, next: Lazy<Result<$T>>) -> Result<$T>",
+                shape_ok: special_form_shape_or_else,
             },
             "and" => SpecialFormContract {
                 expected_qname: "Kernel::and",

@@ -298,6 +298,10 @@ add_cause(Ok(1)) # Ok(1)
 errorを受け取る各関数でも、通常の呼び出しでerror式を括弧で囲むと、判定前に一度評価します。
 Error は通常の値として保持・受け渡しできます。遅延引数であることによって Error の情報は変わりません。
 
+### `Result::or_else`
+
+`Result::or_else(value, next)` は `Ok` をそのまま返し、`Err` の場合に右辺の `Result` を返します。右辺は通常の Lazy 規則に従い、`(EXPR)` は選択前に評価してその値を再利用します。連結した場合は最初の `Ok`、すべて失敗なら最後の `Err` を返し、以前の Error を cause に追加しません。`Alternative` は不要です。キャプチャ `&Result::or_else(&1, &2)` の右辺は `(-> Result<T>)` を受け取ります。
+
 ## `recover_kind` の ErrorKind
 
 `Result::recover_kind` と Test の種類検査は通常の `ErrorKind` 値を受け取ります。裸の `deferror` 名は種類を表し、明示的な呼出しは Error を作ります。
