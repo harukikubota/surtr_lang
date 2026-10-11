@@ -52,7 +52,7 @@ where $T: Alternative.$A
 {
   def empty::<FailureChoice<$T>>() -> FailureChoice<$T> {
     print("empty")
-    FailureChoice::new(Err(ChoiceEmpty))
+    FailureChoice::new(Err(ChoiceEmpty()))
   }
   def choose(left: FailureChoice<$A>, right: FailureChoice<$A>) -> FailureChoice<$A> {
     match left.inner {
@@ -62,7 +62,7 @@ where $T: Alternative.$A
   }
 }
 
-def source() -> Result<Int> { Err(SourceFailure) }
+def source() -> Result<Int> { Err(SourceFailure()) }
 
 def report(value: FailureChoice<$A>) -> Unit {
   match FailureChoice::run(value) {
@@ -92,7 +92,7 @@ blocked: FailureChoice<Int> = do::<FailureChoice> {
 }
 report(blocked)
 
-inner_error = ResultT::err::<Identity, Int>(SourceFailure)
+inner_error = ResultT::err::<Identity, Int>(SourceFailure())
 bound = Monad::bind(inner_error, {|value|
   print("unexpected ResultT continuation")
   ResultT::ok::<Identity>(value + 1)

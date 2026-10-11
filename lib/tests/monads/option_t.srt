@@ -155,7 +155,7 @@ test("OptionT") {
   describe("Monad::bind base failure") {
     it("keeps inner None separate from base failure") {
       do {
-        base_failure: Result<Option<Int>> = Err(NoneError)
+        base_failure: Result<Option<Int>> = Err(NoneError())
         failed: OptionT<Result, Int> = OptionT::new(base_failure)
         failed_bound: OptionT<Result, Int> = failed |>= {|item| OptionT::some::<Result>(item + 1)}
 
@@ -209,7 +209,7 @@ test("OptionT") {
     it("sequences ap in base order while None short-circuits the value") {
       do {
         absent_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(Ok(Option::None))
-        failed_value: OptionT<Result, Int> = OptionT::new(Err(NoneError))
+        failed_value: OptionT<Result, Int> = OptionT::new(Err(NoneError()))
         absent_ap: OptionT<Result, Int> = Applicative::ap(absent_mapper, failed_value)
 
         assert_ok_eq(Option<Int>::None, OptionT::run(absent_ap))
@@ -221,7 +221,7 @@ test("OptionT") {
   describe("Applicative::ap mapper failure") {
     it("sequences ap in base order while None short-circuits the value") {
       do {
-        failed_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(Err(NoneError))
+        failed_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(Err(NoneError()))
         present_value: OptionT<Result, Int> = OptionT::new(Ok(Option::Some(1)))
         failed_mapper_ap: OptionT<Result, Int> = Applicative::ap(failed_mapper, present_value)
 
@@ -234,7 +234,7 @@ test("OptionT") {
   describe("Applicative::ap value failure") {
     it("sequences ap in base order while None short-circuits the value") {
       do {
-        failed_value: OptionT<Result, Int> = OptionT::new(Err(NoneError))
+        failed_value: OptionT<Result, Int> = OptionT::new(Err(NoneError()))
         present_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(
           Ok(Option::Some({|value| value + 1})),
         )

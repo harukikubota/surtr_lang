@@ -39,7 +39,7 @@ match result {
   Err(e)   => print("error"),
 }
 
-err_result: Result<Int> = Err(MyError)
+err_result: Result<Int> = Err(MyError())
 match err_result {
   Ok(val)  => print(to_string(val)),
   Err(e)   => print("got error"),

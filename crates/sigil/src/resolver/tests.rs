@@ -4313,42 +4313,6 @@ x = ensure(1, &is_even, SomeError)"#,
 }
 
 #[test]
-fn test_recover_kind_accepts_payload_error_type_name() {
-    let resolved = parse_and_resolve(
-        r#"deferror Timeout(detail: String) { |detail: String| Self(message: detail, detail: detail) }
-x = Result::recover_kind(Err(Timeout("runtime")), Timeout, {|err| Ok(1)})"#,
-    )
-    .expect("payload error kind name should resolve");
-    assert!(
-        matches!(&resolved[1], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::RecoverKind(..)))
-    );
-}
-
-#[test]
-fn test_recover_kind_rejects_runtime_marker_expressions() {
-    for marker in [
-        "Timeout()",
-        "Timeout(\"marker\")",
-        "\"Timeout\"",
-        "Error",
-        "Int",
-        "&1",
-    ] {
-        let source = format!("deferror Timeout(detail: String) {{ |detail: String| Self(message: detail, detail) }}\nx = Result::recover_kind(Err(Timeout(\"runtime\")), {marker}, {{|err| Ok(1)}})");
-        let error =
-            parse_and_resolve(&source).expect_err("ErrorKind requires a concrete type name");
-        assert!(
-            error
-                .message
-                .contains("recover_kind marker must be a concrete deferror type name")
-                || ((marker == "Error" || marker == "Int")
-                    && error.message.contains("Undefined variable")),
-            "{marker}: {error:?}"
-        );
-    }
-}
-
-#[test]
 fn test_and_conversion() {
     let resolved = parse_and_resolve(
         r#"def rhs() -> Boolean { True }
@@ -8451,11 +8415,11 @@ def pred(n: Int) -> Boolean {
   n > 0
 }
 
-checked = Ok(3) |>= ensure(&pred, GuardError)
+checked = Ok(3) |>= ensure(&pred, GuardError())
 flagged = True |> and(False)
-verified = Ok(True) |>= require(GuardError)
-replaced = Err(GuardError) |> map_err(GuardError)
-wrapped = Err(GuardError) |> cause(GuardError)"#,
+verified = Ok(True) |>= require(GuardError())
+replaced = Err(GuardError()) |> map_err(GuardError())
+wrapped = Err(GuardError()) |> cause(GuardError())"#,
         &[vec![
             staged_auto_import_module("Kernel", parse_module_ast(
                 "@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>\n@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>", "Kernel")),
@@ -10351,4 +10315,48 @@ fn source_reflections_require_canonical_and_unique_builtin_declarations() {
     let error =
         resolve(spire::parse("__LINE__").unwrap()).expect_err("source context must be supplied");
     assert!(error.message.contains("not materialized"));
+}
+
+#[test]
+fn bare_deferror_is_a_kind_and_capture_stays_a_constructor_reference() {
+    let resolved = parse_and_resolve(
+        "deferror Trouble(code: Int) { |code: Int| Self(message: \"trouble\", code: code) }\nkind = Trouble\nerror = Trouble(1)\nfactory = &Trouble\npath = Trouble.code",
+    ).expect("canonical deferror roles should resolve");
+    assert!(
+        matches!(&resolved[1], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::ErrorKind(_, id) if id.qualified_name.as_deref() == Some("Global::Trouble")))
+    );
+    assert!(
+        matches!(&resolved[2], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::ConstructorCall(..)))
+    );
+    assert!(
+        matches!(&resolved[3], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::Capture(_, target, _) if matches!(target.as_ref(), Resolved::Var(..))))
+    );
+    assert!(
+        matches!(&resolved[4], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::FieldAccess(_, target, _) if matches!(target.as_ref(), Resolved::Var(..))))
+    );
+}
+
+#[test]
+fn qualified_bare_deferror_is_a_kind_without_nullary_constructor_lowering() {
+    let modules = vec![vec![staged_module(
+        "Failures",
+        parse_module_ast(
+            "deferror Trouble(code: Int) { |code: Int| Self(message: \"trouble\", code: code) }",
+            "Failures",
+        ),
+    )]];
+    let resolved = resolve_user_with_modules(
+        "kind = Global::Trouble\nfactory = &Global::Trouble\npath = Global::Trouble.code",
+        &modules,
+    )
+    .expect("qualified deferror roles should resolve");
+    for node in &resolved {
+        if let Resolved::Bind(_, ResolvedPattern::Var(id), rhs) = node {
+            if id.name == "kind" {
+                assert!(
+                    matches!(rhs.as_ref(), Resolved::ErrorKind(_, id) if id.qualified_name.as_deref() == Some("Global::Trouble"))
+                );
+            }
+        }
+    }
 }

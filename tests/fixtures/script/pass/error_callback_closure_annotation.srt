@@ -1,2 +1,2 @@
 handler = {|err: Error| print(Error::message(err))}
-value = Result::tap_err(Err(NoneError), handler)
+value = Result::tap_err(Err(NoneError()), handler)

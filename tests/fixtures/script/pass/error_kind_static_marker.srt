@@ -19,5 +19,5 @@ print(inspect(call2(&Result::recover_kind(&1, Left::Retry, &2), Err(Left::Retry(
 print(inspect(Result::recover_kind(Ok(5), Left::Retry, {|_| Ok(0)})))
 re =? Regex::compile("a")
 print(inspect(Result::recover_kind(Functor::fmap(Regex::captures(re, "b"), {|_| 0}), RegexCapturesNoMatch, {|_| Ok(9)})))
-print(match Err(NoneError) { Err(NoneError) => "root", Err(_) => "wrong", Ok(_) => "ok" })
+print(match Err(NoneError()) { Err(NoneError) => "root", Err(_) => "wrong", Ok(_) => "ok" })
 print(match Err(Left::Retry("runtime")) { Err(Right::Retry) => "wrong", Err(Left::Retry) => "left", Err(_) => "other", Ok(_) => "ok" })

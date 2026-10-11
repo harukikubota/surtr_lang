@@ -37,7 +37,7 @@ test("Process") {
       do {
         result = Task::launch({||
           print("launch:worker")
-          Err(NoneError)
+          Err(NoneError())
         })
 
         assert_ok_eq((), result)

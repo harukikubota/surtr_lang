@@ -883,61 +883,26 @@ mod tests {
             .expect("Test-enabled standard sources must load");
         for (source, expected, expected_phase) in [
             (
-                "assert_cause_chain([\"NoneError\"], Err(NoneError))",
-                "concrete deferror",
-                "resolve",
+                "assert_cause_chain([\"NoneError\"], Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
             ),
             (
-                "assert_cause_chain([PayloadFailure(\"x\")], Err(NoneError))",
-                "concrete deferror",
-                "resolve",
+                "assert_cause_chain([PayloadFailure(\"x\")], Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
             ),
             (
-                "assert_cause_chain([Error], Err(NoneError))",
-                "concrete deferror",
-                "resolve",
+                "assert_cause_chain([Error], Err(NoneError()))",
+                "Undefined variable: Error",
+                "typecheck",
             ),
             (
-                "assert_cause_chain([Int], Err(NoneError))",
+                "assert_cause_chain([Int], Err(NoneError()))",
                 "Undefined variable: Int",
                 "resolve",
             ),
-            (
-                "marker = NoneError\nassert_cause_chain([marker], Err(NoneError))",
-                "concrete deferror",
-                "resolve",
-            ),
-            (
-                "markers = [NoneError]\nassert_cause_chain(markers, Err(NoneError))",
-                "direct List literal",
-                "resolve",
-            ),
-            (
-                "assert_cause_chain([NoneError, ..[]], Err(NoneError))",
-                "direct List literal",
-                "resolve",
-            ),
-            (
-                "&Test::assert_cause_chain(&1, Err(NoneError))",
-                "direct List literal",
-                "resolve",
-            ),
-            (
-                "&Test::assert_cause_chain([&1], Err(NoneError))",
-                "concrete deferror",
-                "resolve",
-            ),
             ("assert_cause_chain([NoneError], 3)", "Result", "typecheck"),
-            (
-                "def forward(kinds: List<ErrorKind>) -> Result<()> { Ok(()) }\nOk(())",
-                "ErrorKind is reserved",
-                "typecheck",
-            ),
-            (
-                "kinds: List<ErrorKind> = []\nOk(())",
-                "ErrorKind is reserved",
-                "typecheck",
-            ),
             ("assert_ne({|x: Int| x}, {|x: Int| x})", "Eq", "typecheck"),
             (
                 "assert_some_eq({|x: Int| x}, Option::Some({|x: Int| x}))",
@@ -959,38 +924,23 @@ mod tests {
             ),
             ("assert_some(Ok(1))", "Option", "typecheck"),
             (
-                "assert_err_kind(\"NoneError\", Err(NoneError))",
-                "concrete deferror",
-                "resolve",
+                "assert_err_kind(\"NoneError\", Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
             ),
             (
-                "assert_err_kind(PayloadFailure(\"x\"), Err(NoneError))",
-                "concrete deferror",
-                "resolve",
+                "assert_err_kind(PayloadFailure(\"x\"), Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
             ),
             (
-                "assert_err_kind(Int, Err(NoneError))",
+                "assert_err_kind(Int, Err(NoneError()))",
                 "Undefined variable: Int",
                 "resolve",
             ),
             (
-                "&Test::assert_err_kind(&1, Err(NoneError))",
-                "concrete deferror",
-                "resolve",
-            ),
-            (
-                "assert_err_kind(Error, Err(NoneError))",
-                "concrete deferror",
-                "resolve",
-            ),
-            (
-                "marker = NoneError\nassert_err_kind(marker, Err(NoneError))",
-                "concrete deferror",
-                "resolve",
-            ),
-            (
-                "def forward(marker: ErrorKind) -> Result<()> { Ok(()) }\nOk(())",
-                "ErrorKind is reserved",
+                "assert_err_kind(Error, Err(NoneError()))",
+                "Undefined variable: Error",
                 "typecheck",
             ),
         ] {
@@ -1037,6 +987,27 @@ mod tests {
                 report.errors[0].message.contains(expected),
                 "{source}: {report:?}"
             );
+        }
+    }
+
+    #[test]
+    fn compile_source_accepts_dynamic_error_kind_test_arguments() {
+        const FILE: &str = "lib/tests/local/math.srt";
+        let module_sources = xldr::collect_test_module_sources_with_module_stages(&[]).unwrap();
+        for body in [
+            "kind = PayloadFailure\nassert_err_kind(kind, Err(PayloadFailure(\"dynamic\")))",
+            "kinds = [PayloadFailure, NoneError]\nassert_cause_chain(kinds, Result::cause(Err(NoneError()), PayloadFailure(\"outer\")))",
+            "tail = [NoneError]\nassert_cause_chain([PayloadFailure, ..tail], Result::cause(Err(NoneError()), PayloadFailure(\"outer\")))",
+            "captured: (ErrorKind, Result<Int> -> Result<()>) = &Test::assert_err_kind(&1, &2)\ncaptured(PayloadFailure, Err(PayloadFailure(\"capture\")))",
+            "captured: (List<ErrorKind>, Result<Int> -> Result<()>) = &Test::assert_cause_chain(&1, &2)\ncaptured([NoneError], Err(NoneError()))",
+        ] {
+            let source = format!("import Test;\ndeferror PayloadFailure(detail: String) {{ |detail: String| Self(message: detail, detail) }}\n{body}\n");
+            let plan = prepare_script_compile_plan(FILE, &source, None).unwrap();
+            let compile_sources = xldr::compose_script_compile_sources_with_stdlib_variant(
+                FILE, &plan.source_for_parse, module_sources.clone(), xldr::StdlibVariant::TestEnabled,
+            );
+            compile_source(ExecutionEnv::Test, &compile_sources, &plan)
+                .unwrap_or_else(|error| panic!("dynamic ErrorKind input must compile: {source}: {error:?}"));
         }
     }
 

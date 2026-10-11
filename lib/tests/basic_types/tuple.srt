@@ -69,7 +69,7 @@ test("Tuple") {
         left,
         right,
         {|a, b| Ok(a ++ "/" ++ b)},
-        {|a, b| if(a > b, Ok(a - b), Err(NoneError))},
+        {|a, b| if(a > b, Ok(a - b), Err(NoneError()))},
         )
         result = zipped
 

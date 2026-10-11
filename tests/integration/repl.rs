@@ -730,7 +730,7 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
 }
 
 fn repl_rejects_persisting_unresolved_result_callable_binding() {
-    let output = run_repl_session("todo = {|| Err(NoneError)}\n:quit\n");
+    let output = run_repl_session("todo = {|| Err(NoneError())}\n:quit\n");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     let combined = format!("{stdout}\n{stderr}");
@@ -747,7 +747,7 @@ fn repl_rejects_persisting_unresolved_result_callable_binding() {
 }
 
 fn repl_rejects_persisting_unresolved_result_value_binding() {
-    let output = run_repl_session("todo = {|| Err(NoneError)}\nret = todo()\n:quit\n");
+    let output = run_repl_session("todo = {|| Err(NoneError())}\nret = todo()\n:quit\n");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     let combined = format!("{stdout}\n{stderr}");
@@ -761,7 +761,7 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
 }
 
 fn repl_accepts_explicitly_constrained_result_binding() {
-    let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError)}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
+    let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError())}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -779,7 +779,7 @@ fn repl_accepts_explicitly_constrained_result_binding() {
 
 fn repl_accepts_result_mapping_when_chunk_constrains_type() {
     let output = run_repl_session(
-        "todo: (-> Result<Int>) = {|| Err(NoneError)}\nmapped = todo() |*> inspect()\n:type mapped\n:quit\n",
+        "todo: (-> Result<Int>) = {|| Err(NoneError())}\nmapped = todo() |*> inspect()\n:type mapped\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1674,7 +1674,7 @@ fn repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evide
 
 fn repl_eprint_reports_generation_site_line() {
     let output = run_repl_session(
-        "err_result: Result<Int> = Err(NoneError)\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
+        "err_result: Result<Int> = Err(NoneError())\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1689,7 +1689,7 @@ fn repl_eprint_reports_generation_site_line() {
 
 fn repl_error_generation_site_survives_function_and_extractor_calls() {
     let output = run_repl_session(
-        "Err(NoneError)\ndef source_error(_value: Int) -> Result<Int> {\n  Err(NoneError)\n}\ndef relay_error() -> Result<Int> {\n  found =? source_error(2)\n  Ok(found)\n}\nrelay_error()\ninner = Extractor::from_result(&source_error)\nouter = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}\nouter(found) =? Ok(2)\n2 + 3\n:quit\n",
+        "Err(NoneError())\ndef source_error(_value: Int) -> Result<Int> {\n  Err(NoneError())\n}\ndef relay_error() -> Result<Int> {\n  found =? source_error(2)\n  Ok(found)\n}\nrelay_error()\ninner = Extractor::from_result(&source_error)\nouter = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}\nouter(found) =? Ok(2)\n2 + 3\n:quit\n",
     );
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
@@ -1714,7 +1714,7 @@ fn repl_error_generation_site_survives_function_and_extractor_calls() {
         3,
         "{stderr}"
     );
-    assert!(stderr.contains("Err(NoneError)"), "{stderr}");
+    assert!(stderr.contains("Err(NoneError())"), "{stderr}");
     assert!(!stdout.contains("Error:"), "{stdout}");
     assert!(
         stdout.contains("5"),

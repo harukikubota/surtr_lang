@@ -213,7 +213,7 @@ fn later_call_argument_inference_keeps_direct_expression_constraint() {
 #[test]
 fn ensure_capture_infers_unknown_predicate_from_value_contract() {
     let result = ty(
-        "guard: (Int, (Int -> Boolean) -> Result<Int>) = &ensure(&1, &2, NoneError)",
+        "guard: (Int, (Int -> Boolean) -> Result<Int>) = &ensure(&1, &2, NoneError())",
         "guard",
     );
     let Ty::Func(params, _) = result else {

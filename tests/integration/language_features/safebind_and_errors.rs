@@ -209,7 +209,7 @@ fn safebind_nested_result_err_is_a_normal_pattern_mismatch() {
   "oops"
 }
 
-value: Result<Result<Int>> = Ok(Err(Oops))
+value: Result<Result<Int>> = Ok(Err(Oops()))
 Ok(num) =? value
 print("after")"#,
     )
@@ -249,7 +249,7 @@ fn safebind_function_early_return_on_err() {
 }
 
 def gen(flag: Boolean) -> Result<Int> {
-  if(flag, Ok(10), Err(Oops))
+  if(flag, Ok(10), Err(Oops()))
 }
 
 def fun(flag: Boolean) -> Result<Int> {
@@ -281,7 +281,7 @@ fn safebind_closure_returns_ok_and_propagates_err() {
 }
 
 def gen(flag: Boolean) -> Result<Int, Oops> {
-  if(flag, Ok(10), Err(Oops))
+  if(flag, Ok(10), Err(Oops()))
 }
 
 handler: (Boolean -> Result<Int>) = {|flag|
@@ -313,7 +313,7 @@ fn safebind_nested_closure_stops_at_nearest_callable() {
 
 def outer() -> Result<String, Inner> {
   handler: (Int -> Result<Int>) = {|x|
-    value =? Err(Inner)
+    value =? Err(Inner())
     Ok(value + x)
   }
 
@@ -340,7 +340,7 @@ ok_handler: (Int -> Result<Int>) = {|x|
 }
 
 checked: (Int -> Result<Int>) = {|x|
-  value =? if(x > 0, Ok(x), Err(BadInput))
+  value =? if(x > 0, Ok(x), Err(BadInput()))
   Ok(value + 10)
 }
 
@@ -363,7 +363,7 @@ fn safebind_nested_closure_propagates_to_nearest_callable() {
 
 def outer() -> Result<String> {
   inner: (Int -> Result<Int>) = {|x|
-    value =? if(x > 0, Ok(x), Err(InnerStop))
+    value =? if(x > 0, Ok(x), Err(InnerStop()))
     Ok(value + 1)
   }
 
@@ -391,7 +391,7 @@ fn safebind_script_error_eprints() {
   "oops"
 }
 
-value: Result<Int> = Err(Oops)
+value: Result<Int> = Err(Oops())
 num =? value
 print("after")"#,
     )
@@ -408,7 +408,7 @@ fn do_safebind_result_preserves_err_and_skips_continuation() {
 
 def source() -> Result<Int, Oops> {
   print("rhs")
-  Err(Oops)
+  Err(Oops())
 }
 
 result: Result<Int> = do::<Result> {
@@ -430,7 +430,7 @@ fn do_safebind_option_overrides_result_err_with_none() {
 
 def source() -> Result<Int, Oops> {
   print("rhs")
-  Err(Oops)
+  Err(Oops())
 }
 
 result: Option<Int> = do::<Option> {
@@ -482,7 +482,7 @@ fn safebind_result_t_preserves_existing_error() {
 }
 
 def source() -> Result<Int, Oops> {
-  Err(Oops)
+  Err(Oops())
 }
 
 def wrapped() -> ResultT<Identity, Int> {
@@ -502,7 +502,7 @@ fn do_safebind_option_t_result_uses_alternative() {
 }
 
 def source() -> Result<Int, Oops> {
-  Err(Oops)
+  Err(Oops())
 }
 
 result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
@@ -661,7 +661,7 @@ fn safebind_nested_err_constructor_binds_instead_of_propagating() {
   "oops"
 }
 
-value: Result<Result<Int>> = Ok(Err(Oops))
+value: Result<Result<Int>> = Ok(Err(Oops()))
 Err(error) =? value
 print(Error::kind(error))"#,
         &["Oops"],
@@ -681,7 +681,7 @@ fn safebind_requires_result_return_function() {
 fn safebind_reader_t_uses_base_monad_fail() {
     assert_output(
         r#"deferror Stop { "stop" }
-def source() -> Result<Int> { Err(Stop) }
+def source() -> Result<Int> { Err(Stop()) }
 def wrapped() -> ReaderT<Int, Result, Int> {
   value =? source()
   ReaderT::new({|_| Ok(value)})
@@ -718,7 +718,7 @@ fn deferror_no_args_basic() {
   "Validation failed"
 }
 
-err1: Result<Int> = Err(ValidationError)
+err1: Result<Int> = Err(ValidationError())
 match err1 {
   Ok(val)  => print("ok"),
   Err(e)   => print("got error"),
@@ -747,7 +747,7 @@ deferror NotFound(path: String) {
 
 fn builtin_prelude_provides_none_error() {
     let (stdout, stderr) = run_surtr_with_stderr(
-        r#"ret: Result<Int> = Err(NoneError)
+        r#"ret: Result<Int> = Err(NoneError())
 match ret {
   Ok(val) => print(to_string(val)),
   Err(e)  => eprint(e),
@@ -804,7 +804,7 @@ fn match_err_eprint_with_wildcard_arm() {
   "hoge"
 }
 
-ret: Result<Int> = Err(MyE)
+ret: Result<Int> = Err(MyE())
 match ret {
   Err(e) => eprint(e),
   _ => print("")
@@ -851,8 +851,8 @@ deferror Tail {
   "tail"
 }
 
-print(inspect(Result::cause(Err(Lower), Higher)))
-print(inspect(Result::chain(Err(Lower), Result::cause(Err(Tail), Higher))))"#,
+print(inspect(Result::cause(Err(Lower()), Higher())))
+print(inspect(Result::chain(Err(Lower()), Result::cause(Err(Tail()), Higher()))))"#,
         &[
             "Err(Higher(\"higher\"))\n|_ Lower(\"lower\")",
             "Err(Higher(\"higher\"))\n|_ Tail(\"tail\")\n   |_ Lower(\"lower\")",
@@ -874,12 +874,12 @@ deferror Tail {
   "tail"
 }
 
-match Result::cause(Err(Lower), Higher) {
+match Result::cause(Err(Lower()), Higher()) {
   Ok(_) => (),
   Err(e) => eprint(e),
 }
 
-match Result::chain(Err(Lower), Result::cause(Err(Tail), Higher)) {
+match Result::chain(Err(Lower()), Result::cause(Err(Tail()), Higher())) {
   Ok(_) => (),
   Err(e) => eprint(e),
 }"#,
@@ -914,7 +914,7 @@ fn apply_pattern_inside_non_result_do_keeps_its_result_value() {
 
 fn partial_bind_matches_result_payload_without_unwrapping() {
     let source = r#"print(inspect(do::<List> {
-  Ok(x) <- [Ok(1), Err(NoneError)]
+  Ok(x) <- [Ok(1), Err(NoneError())]
   [x]
 }))
 print(inspect(do::<Option> {
@@ -933,7 +933,7 @@ print(inspect(do::<Result> {
 
 fn partial_bind_uses_alternative_for_non_result_extractor_failures() {
     let source = r#"deferror Rejected { "discarded extractor error" }
-ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected)}
+ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected())}
 print(inspect(do::<Option> {
   ext(found) <- Option::Some(2)
   Option::Some(found)

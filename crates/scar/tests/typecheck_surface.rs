@@ -87,7 +87,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         match_bool_qualified_constructor_patterns_require_exhaustive_arms as fn(),
     ),
     surface_case!(facet_capture_call_inference_preserves_argument_diagnostics),
-    surface_case!(error_kind_rejects_user_type_positions),
+    surface_case!(error_kind_accepts_user_type_positions),
     surface_case!(recover_kind_rejects_invalid_handlers),
     surface_case!(facet_capture_call_inference_resolves_later_arguments),
     surface_case!(facet_capture_call_inference_resolves_dependencies_and_return),
@@ -2950,7 +2950,7 @@ boxed = Boxed(Ok(1))"#,
 fn facet_set_rejects_plain_value_for_result_focus() {
     let resolved = resolve_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
-user = User(Err(NoneError))
+user = User(Err(NoneError()))
 Facet::set(User.score, user, 3)"#,
     );
     let err = typecheck(resolved).expect_err("set must not implicitly wrap a Result focus");
@@ -3067,7 +3067,7 @@ Facet::over_result(User.score, user, {|score| Ok(1)})"#,
 fn nested_result_err_expression_has_dedicated_diagnostic() {
     let err = typecheck_with_rules(
         r#"deferror Oops { "oops" }
-value: Result<Result<Int>> = Err(Err(Oops))"#,
+value: Result<Result<Int>> = Err(Err(Oops()))"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested Err expressions must be rejected");
@@ -3080,7 +3080,7 @@ value: Result<Result<Int>> = Err(Err(Oops))"#,
 fn nested_result_err_pattern_has_dedicated_diagnostic() {
     let err = typecheck_with_rules(
         r#"deferror Oops { "oops" }
-value: Result<Result<Int>> = Err(Oops)
+value: Result<Result<Int>> = Err(Oops())
 match value {
   Err(Err(error)) => Error::message(error)
   Ok(_) => "ok"
@@ -3723,7 +3723,7 @@ impl User {
 User { name: name, age: age }
   }
   defextractor deconstruct(self: Self) -> MatchResult<(String, Int)> {
-MatchResult::Err(NoneError)
+MatchResult::Err(NoneError())
   }
 }
 user = User("alice", 30)
@@ -3768,7 +3768,7 @@ impl Light {
   defextractor stop_code(self: Self) -> MatchResult<Int> {
 match self {
   Light::Red => MatchResult::Ok(1),
-  _ => MatchResult::Err(NoneError),
+  _ => MatchResult::Err(NoneError()),
 }
   }
 }
@@ -3872,7 +3872,7 @@ text: String = pair.right"#,
 
 fn forward_deferror_value_can_flow_into_err() {
     let resolved = resolve_with_builtin_prelude(
-        r#"ret: Result<Int> = Err(NotFound)
+        r#"ret: Result<Int> = Err(NotFound())
 deferror NotFound {
   "not found"
 }"#,
@@ -3885,7 +3885,7 @@ deferror NotFound {
 
 fn zero_arg_deferror_value_can_flow_into_error_parameter() {
     let resolved = resolve_with_builtin_prelude(
-        r#"wrapped = Result::cause(Err(NoneError), NotFound)
+        r#"wrapped = Result::cause(Err(NoneError()), NotFound())
 deferror NotFound {
   "not found"
 }"#,
@@ -7696,7 +7696,7 @@ fn to_string_helper_typechecks_as_trait_call() {
 fn ensure_rejects_call_expression_predicate() {
     let err = typecheck_with_rules(
         r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
-guard = ensure(4, is_even(), NoneError)"#,
+guard = ensure(4, is_even(), NoneError())"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("call expression predicate must fail");
@@ -7819,8 +7819,8 @@ guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
 
 fn require_accepts_existing_error_value() {
     let typed = typecheck_with_rules(
-        r#"guard = match Err(NoneError) {
-  Ok(_) => require(False, NoneError),
+        r#"guard = match Err(NoneError()) {
+  Ok(_) => require(False, NoneError()),
   Err(e) => require(False, e),
 }"#,
         RuntimeSourcePolicy::script(),
@@ -7836,8 +7836,8 @@ fn require_accepts_existing_error_value() {
 fn ensure_accepts_existing_error_value() {
     let typed = typecheck_with_rules(
         r#"def is_positive(value: Int) -> Boolean { value > 0 }
-guard = match Err(NoneError) {
-  Ok(_) => ensure(-1, &is_positive, NoneError),
+guard = match Err(NoneError()) {
+  Ok(_) => ensure(-1, &is_positive, NoneError()),
   Err(e) => ensure(-1, &is_positive, e),
 }"#,
         RuntimeSourcePolicy::script(),
@@ -8248,7 +8248,7 @@ fn lifted_compose_rhs_closure_allows_explicit_nested_result_expectation() {
 }
 
 def gen(x: Int) -> Result<Int, Oops> {
-  if(x > 0, Ok(x), Err(Oops))
+  if(x > 0, Ok(x), Err(Oops()))
 }
 
 pipeline: (Int -> Result<Result<Int>>) = {|x|
@@ -9363,9 +9363,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                         if has_pending_trait_call(empty))
                     || has_pending_trait_call(&control.continuation)
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                has_pending_trait_call(inner)
-            }
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -9410,9 +9408,6 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, _, handler) => {
-                has_pending_trait_call(value) || has_pending_trait_call(handler)
-            }
             TypedInner::Match(scrutinee, arms) => {
                 has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
@@ -9432,6 +9427,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureClosure(_, _, body)
             | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
@@ -9490,9 +9486,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
                         if has_pending_trait_call(empty))
                     || has_pending_trait_call(&control.continuation)
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                has_pending_trait_call(inner)
-            }
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -9537,9 +9531,6 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, _, handler) => {
-                has_pending_trait_call(value) || has_pending_trait_call(handler)
-            }
             TypedInner::Match(scrutinee, arms) => {
                 has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
@@ -9559,6 +9550,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureClosure(_, _, body)
             | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
@@ -10996,15 +10988,15 @@ fn workers_reserve_can_flow_into_worker_call() {
 fn tap_err_accepts_local_error_observer_binding() {
     let typed = typecheck_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
-value = Result::tap_err(Err(NoneError), handler)"#,
+value = Result::tap_err(Err(NoneError()), handler)"#,
     );
     assert!(!typed.is_empty());
 }
 
 fn tap_err_accepts_error_observer_captures_and_composition() {
     let typed = typecheck_with_builtin_prelude(
-        r#"logged = Result::tap_err(Err(NoneError), &eprint)
-named = Result::tap_err(Err(NoneError), &Error::kind >> &print)"#,
+        r#"logged = Result::tap_err(Err(NoneError()), &eprint)
+named = Result::tap_err(Err(NoneError()), &Error::kind >> &print)"#,
     );
     assert!(!typed.is_empty());
 }
@@ -11020,7 +11012,7 @@ escaped = handler"#,
 fn error_observer_binding_can_be_called_directly() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
-value = match Err(NoneError) {
+value = match Err(NoneError()) {
   Ok(_) => (),
   Err(err) => handler(err),
 }"#,
@@ -11031,7 +11023,7 @@ value = match Err(NoneError) {
 fn error_observer_binding_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler: (Error -> Unit) = {|err| eprint(err)}
-value = Result::tap_err(Err(NoneError), handler)"#,
+value = Result::tap_err(Err(NoneError()), handler)"#,
     );
     typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
@@ -11039,7 +11031,7 @@ value = Result::tap_err(Err(NoneError), handler)"#,
 fn error_observer_closure_param_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err: Error| eprint(err)}
-value = Result::tap_err(Err(NoneError), handler)"#,
+value = Result::tap_err(Err(NoneError()), handler)"#,
     );
     typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
@@ -11048,7 +11040,7 @@ fn error_observer_binding_can_flow_through_generic_identity() {
     let resolved = resolve_with_builtin_prelude(
         r#"def id(value: $A) -> $A { value }
 handler = {|err| eprint(err)}
-value = Result::tap_err(Err(NoneError), id(handler))"#,
+value = Result::tap_err(Err(NoneError()), id(handler))"#,
     );
     typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
@@ -11120,7 +11112,7 @@ bad: FixtureEither<_, Int> = FixtureEither::Left("term")"#,
 
     let result_nodes = typecheck_with_rules(
         r#"ok: Result<Int> = Result<Int>::Ok(1)
-err: Result<Int> = Result<Int>::Err(NoneError)"#,
+err: Result<Int> = Result<Int>::Err(NoneError())"#,
         RuntimeSourcePolicy::script(),
     )
     .expect(
@@ -11140,7 +11132,7 @@ err: Result<Int> = Result<Int>::Err(NoneError)"#,
         );
     }
 
-    let bare_err = typecheck_with_rules("err = Err(NoneError)", RuntimeSourcePolicy::script())
+    let bare_err = typecheck_with_rules("err = Err(NoneError())", RuntimeSourcePolicy::script())
         .expect("a bare Err constructor may leave its success type to surrounding inference");
     assert!(!bare_err.is_empty());
 
@@ -11535,7 +11527,7 @@ fn match_result_unitonly_rejects_wrong_child_shapes() {
 }
 
 fn match_result_payload_shape_must_be_resolved_before_execution() {
-    let prefix = "impl Int { defextractor trial(v: Int) -> MatchResult<$T> { MatchResult::Err(NoneError) } }\n";
+    let prefix = "impl Int { defextractor trial(v: Int) -> MatchResult<$T> { MatchResult::Err(NoneError()) } }\n";
     let source = format!("{prefix}is_match(1, Int::trial(_))");
     let error = typecheck(resolve_with_builtin_prelude(&source))
         .expect_err("unresolved payload shape must be rejected");
@@ -11545,7 +11537,7 @@ fn match_result_payload_shape_must_be_resolved_before_execution() {
         .expect("payload annotation connects normal inference");
     for source in [
         "def wrapping(v: List<$A>) -> Boolean { is_match(v, uncons(_, _)) }",
-        "impl Int { defextractor pair(v: List<$A>) -> MatchResult<($A, Int)> { MatchResult::Err(NoneError) } }\ndef wrapping_pair(v: List<$A>) -> Boolean { is_match(v, Int::pair(_, _)) }",
+        "impl Int { defextractor pair(v: List<$A>) -> MatchResult<($A, Int)> { MatchResult::Err(NoneError()) } }\ndef wrapping_pair(v: List<$A>) -> Boolean { is_match(v, Int::pair(_, _)) }",
         "impl Int { defextractor list(v: List<$A>) -> MatchResult<List<$A>> { MatchResult::Ok(v) } }\ndef wrapping_list(v: List<$A>) -> Boolean { is_match(v, Int::list(_)) }",
     ] {
         typecheck(resolve_with_builtin_prelude(source)).expect("fixed payload shape permits generic children");
@@ -11605,8 +11597,8 @@ fn extractor_target_requires_concrete_type_head() {
 fn extractor_target_accepts_generic_arguments_under_concrete_head() {
     typecheck(resolve_with_builtin_prelude(
         r#"impl Int {
-  defextractor list(value: List<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError) }
-  defextractor result(value: Result<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError) }
+  defextractor list(value: List<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError()) }
+  defextractor result(value: Result<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError()) }
 }"#,
     ))
     .expect("generic arguments under a concrete Extractor target head must remain valid");
@@ -11718,11 +11710,11 @@ fn apply_pattern_projection_types_and_boundaries() {
         r#"result: Result<(Int, List<Int>)> = apply_pattern([1, 2, 3], [_1: Int, .._2: List<Int>])"#,
         r#"whole: Result<Result<Int>> = apply_pattern(Ok(1), _1)
 payload: Result<Int> = apply_pattern(Ok(1), Ok(_1))
-failed: Result<Result<Int>> = apply_pattern(Err(NoneError), _1)
-constrained: Result<Int> = apply_pattern(Err(NoneError), Ok(_1: Int))"#,
+failed: Result<Result<Int>> = apply_pattern(Err(NoneError()), _1)
+constrained: Result<Int> = apply_pattern(Err(NoneError()), Ok(_1: Int))"#,
         r#"ext: ExtractorClosure<((Int, String) -> MatchResult<(Int, String)>)> = *{|value| MatchResult::Ok(value)}
 result: Result<(String, Int)> = apply_pattern((3, "text"), ext(_2, _1))"#,
-        r#"unknown: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(NoneError)}
+        r#"unknown: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(NoneError())}
 result: Result<Int> = apply_pattern(1, unknown(_1))"#,
         r#"def ordinary() -> Int { result = apply_pattern(3, _1); 7 }
 ordinary()"#,
@@ -11928,28 +11920,23 @@ fn facet_capture_call_inference_preserves_argument_diagnostics() {
     );
 }
 
-fn error_kind_rejects_user_type_positions() {
+fn error_kind_accepts_user_type_positions() {
     for source in [
         "def expose(kind: ErrorKind) -> Int { 1 }",
         "def expose() -> ErrorKind { NoneError }",
         "value: ErrorKind = NoneError",
-        "defstruct Exposed { kind: ErrorKind }",
+        "defstruct Exposed { kind: ErrorKind }\nimpl Exposed { def new(kind: ErrorKind) -> Exposed { Exposed { kind: kind } } }",
         "def expose(values: List<ErrorKind>) -> Int { 1 }",
     ] {
         let resolved = resolve_with_builtin_prelude(source);
-        let error = typecheck(resolved).expect_err("ErrorKind must stay in direct std parameters");
-        assert!(
-            error
-                .message
-                .contains("ErrorKind is reserved for direct std builtin parameters"),
-            "{source}: {error:?}"
-        );
+        typecheck(resolved).expect("ErrorKind is an ordinary opaque value type");
     }
 }
 
 fn recover_kind_rejects_invalid_handlers() {
     for handler in ["{|| Ok(1)}", "{|left, right| Ok(1)}", "{|_| 1}"] {
-        let source = format!("value = Result::recover_kind(Err(NoneError), NoneError, {handler})");
+        let source =
+            format!("value = Result::recover_kind(Err(NoneError()), NoneError, {handler})");
         let resolved = resolve_with_builtin_prelude(&source);
         typecheck(resolved).expect_err("recover_kind requires one Error input and a Result output");
     }

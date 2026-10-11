@@ -38,7 +38,7 @@ print(inspect(Option::Some(1) |>= (make_option("option"))))
 absent: Option<Int> = Option::None
 print(inspect(absent |>= (make_option("absent option"))))
 print(inspect(Ok(1) |>= (make_result("result"))))
-failure: Result<Int> = Err(NoneError)
+failure: Result<Int> = Err(NoneError())
 print(inspect(is_match(failure |>= (make_result("failed result")), Err(_))))
 
 print(inspect(consume(({|input: Int| 50}))))

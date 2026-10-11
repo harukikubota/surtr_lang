@@ -256,7 +256,7 @@ test("EitherT") {
   describe("base mapping") {
     it("preserves base failure while mapping either slot") {
       do {
-        failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+        failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError()))
         mapped_left: EitherT<Int, Result, Int> = EitherT::map_left(failed, &String::len)
 
         assert_err_kind(NoneError, EitherT::run(mapped_left))
@@ -265,7 +265,7 @@ test("EitherT") {
 
     it("preserves base failure while mapping either slot") {
       do {
-        failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+        failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError()))
         mapped_right: EitherT<String, Result, String> = EitherT::map_right(failed, &to_string)
 
         assert_err_kind(NoneError, EitherT::run(mapped_right))
@@ -274,7 +274,7 @@ test("EitherT") {
 
     it("preserves base failure while mapping either slot") {
       do {
-        failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+        failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError()))
         mapped_both: EitherT<Int, Result, String> = EitherT::bimap(failed, &String::len, &to_string)
 
         assert_err_kind(NoneError, EitherT::run(mapped_both))
@@ -348,7 +348,7 @@ test("EitherT") {
   describe("Monad::bind base failure") {
     it("keeps inner Left separate from base failure") {
       do {
-        base_failure: Result<Either<String, Int>> = Err(NoneError)
+        base_failure: Result<Either<String, Int>> = Err(NoneError())
         failed: EitherT<String, Result, Int> = EitherT::new(base_failure)
         failed_bound: EitherT<String, Result, Int> = failed |>= {|item| EitherT::right::<String, Result>(item + 1)}
 
@@ -364,7 +364,7 @@ test("EitherT") {
         left_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(
           Ok(Either::Left("stop")),
         )
-        failed_value: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+        failed_value: EitherT<String, Result, Int> = EitherT::new(Err(NoneError()))
         left_ap: EitherT<String, Result, Int> = Applicative::ap(left_mapper, failed_value)
 
         assert_ok_eq(Either<String, Int>::Left("stop"), EitherT::run(left_ap))
@@ -376,7 +376,7 @@ test("EitherT") {
   describe("Applicative::ap mapper failure") {
     it("sequences ap in base order while Left short-circuits the value") {
       do {
-        failed_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(Err(NoneError))
+        failed_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(Err(NoneError()))
         right_value: EitherT<String, Result, Int> = EitherT::new(Ok(Either::Right(1)))
         failed_mapper_ap: EitherT<String, Result, Int> = Applicative::ap(failed_mapper, right_value)
 
@@ -389,7 +389,7 @@ test("EitherT") {
   describe("Applicative::ap value failure") {
     it("sequences ap in base order while Left short-circuits the value") {
       do {
-        failed_value: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+        failed_value: EitherT<String, Result, Int> = EitherT::new(Err(NoneError()))
         right_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(
           Ok(Either::Right({|value| value + 1})),
         )

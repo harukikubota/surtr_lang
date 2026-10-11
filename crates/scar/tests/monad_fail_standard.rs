@@ -15,7 +15,7 @@ fn standard_carriers_without_error_retention_do_not_implement_monad_fail() {
         "Either<String, Int>",
         "EitherT<String, Identity, Int>",
     ] {
-        let source = format!("value: {carrier} = MonadFail::fail(NoneError)");
+        let source = format!("value: {carrier} = MonadFail::fail(NoneError())");
         let error = typecheck(resolve_with_builtin_prelude(&source))
             .expect_err("absence carriers must not acquire a standard MonadFail implementation");
         assert!(error.message.contains("MonadFail"), "{carrier}: {error:?}");
@@ -72,8 +72,8 @@ where
     EitherT::left(Error::message(error))
   }
 }
-value: Either<String, Int> = MonadFail::fail(NoneError)
-transformed: EitherT<String, Identity, Int> = MonadFail::fail(NoneError)
+value: Either<String, Int> = MonadFail::fail(NoneError())
+transformed: EitherT<String, Identity, Int> = MonadFail::fail(NoneError())
 "#,
     );
 }

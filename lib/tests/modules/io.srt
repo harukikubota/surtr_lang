@@ -78,7 +78,7 @@ test("IO") {
   describe("eprint") {
     it("writes the formatted error to stderr") {
       do {
-        eprint(NoneError)
+        eprint(NoneError())
 
         assert_stderr_eq(["Error: NoneError: None Value."])
       }

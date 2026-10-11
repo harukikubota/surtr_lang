@@ -368,7 +368,42 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl),
     repl_core_case!(core_do_monad_fail_pattern_error_is_preserved_across_chunks),
     repl_core_case!(core_do_monad_fail_safebind_and_alternative_boundaries),
+    repl_core_case!(core_error_kinds_survive_chunks_and_rollback),
 ];
+
+fn core_error_kinds_survive_chunks_and_rollback() {
+    let mut engine = ReplEngine::from_module_source(
+        "error_kind_preload.srt",
+        "deferror SavedKind { \"saved\" }",
+    )
+    .expect("ErrorKind declaration must preload");
+    let stored = engine.handle_line("saved_kind = SavedKind");
+    assert!(
+        matches!(stored.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&stored)
+    );
+    let checked = engine.handle_line("Error::is_kind(SavedKind(), saved_kind)");
+    assert_eq!(rendered_text(&checked), "True");
+    let rejected = engine.handle_line("error: Error = saved_kind");
+    assert!(
+        matches!(rejected.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&rejected)
+    );
+    assert!(rendered_text(&rejected).contains("ErrorKind"));
+    let recovered =
+        engine.handle_line("Result::recover_kind(Err(SavedKind()), saved_kind, {|_| Ok(6)})");
+    assert_eq!(rendered_text(&recovered), "Ok(6)");
+    let captured = engine.handle_line("maker: (-> Error) = &SavedKind");
+    assert!(
+        matches!(captured.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&captured)
+    );
+    let kept = engine.handle_line("Error::is_kind(maker(), saved_kind)");
+    assert_eq!(rendered_text(&kept), "True");
+}
 
 fn assert_repl_error_origin(result: &ReplResult, line: usize, column: usize, origin: &str) {
     assert!(
@@ -390,8 +425,8 @@ fn assert_repl_error_origin(result: &ReplResult, line: usize, column: usize, ori
 
 fn core_error_generation_site_uses_direct_input_and_unicode_pattern_spans() {
     let mut engine = engine();
-    let direct = engine.handle_line("Err(NoneError)");
-    assert_repl_error_origin(&direct, 1, 5, "Err(NoneError)");
+    let direct = engine.handle_line("Err(NoneError())");
+    assert_repl_error_origin(&direct, 1, 5, "Err(NoneError())");
 
     let multiline = engine.handle_line("def fail_unicode() -> Result<Int> {\n  (\"あ\", 11) =? (\"あ\", 2)\n  Ok(0)\n}\nfail_unicode()");
     assert_repl_error_origin(&multiline, 2, 9, "(\"あ\", 11) =? (\"あ\", 2)");
@@ -425,7 +460,7 @@ fn core_do_monad_fail_pattern_error_is_preserved_across_chunks() {
         "def unrelated(value: Int) -> Int { value + 41 }",
         "saved_closure = {|value: Int| unrelated(value)}",
         "saved_text = \"relocation must preserve Error kind and message\"",
-        "saved_error: Result<Int> = Err(NoneError)",
+        "saved_error: Result<Int> = Err(NoneError())",
         "mismatch: Result<Int> = do::<Result> { 2 <- Ok(1); Ok(3) }",
         "mismatch_t: ResultT<Identity, Int> = do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) }",
     ] {
@@ -495,7 +530,7 @@ fn core_do_monad_fail_safebind_and_alternative_boundaries() {
 fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
     let mut engine = engine();
     for source in [
-        "def source_error() -> Result<Int> {\n  Err(NoneError)\n}",
+        "def source_error() -> Result<Int> {\n  Err(NoneError())\n}",
         "def relay_error() -> Result<Int> {\n  value =? source_error()\n  Ok(value)\n}",
         "def outer_error() -> Result<Int> { relay_error() }",
         "unrelated = \"あいう\"",
@@ -509,7 +544,7 @@ fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
     }
     let _ = engine.handle_line(":stacktrace verbose");
     let result = engine.handle_line("outer_error()");
-    assert_repl_error_origin(&result, 2, 7, "Err(NoneError)");
+    assert_repl_error_origin(&result, 2, 7, "Err(NoneError())");
     let text = rendered_text(&result);
     assert!(
         text.contains("NoneError") && text.contains("None Value."),
@@ -524,7 +559,7 @@ fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
 fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
     let mut engine = ReplEngine::from_module_source(
         "extractor_origins.srt",
-        "deferror Inner { \"inner cause\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped origin\"))\n  }\n  defextractor inner(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    inner(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}",
+        "deferror Inner { \"inner cause\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner()), Outer(\"wrapped origin\"))\n  }\n  defextractor inner(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    inner(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}",
     ).expect("nested Extractor definitions must preload");
     let _ = engine.handle_line("unrelated = \"あ\"");
     for source in [
@@ -532,9 +567,9 @@ fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
         "do::<Result> {\n  E::outer(found) <- Ok(2)\n  Ok(found)\n}",
     ] {
         let result = engine.handle_line(source);
-        assert_repl_error_origin(&result, 5, 31, "Outer(\"wrapped origin\")");
+        assert_repl_error_origin(&result, 5, 33, "Outer(\"wrapped origin\")");
         let text = rendered_text(&result);
-        assert!(text.contains("extractor_origins.srt:5:31"), "{text}");
+        assert!(text.contains("extractor_origins.srt:5:33"), "{text}");
         assert!(
             text.contains("wrapped origin") && text.contains("inner cause"),
             "{text}"
@@ -545,7 +580,7 @@ fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
 fn core_error_generation_site_survives_live_extractor_calls_across_chunks() {
     let mut engine = engine();
     for source in [
-        "def source_error(_value: Int) -> Result<Int> {\n  Err(NoneError)\n}",
+        "def source_error(_value: Int) -> Result<Int> {\n  Err(NoneError())\n}",
         "inner = Extractor::from_result(&source_error)",
         "outer = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}",
         "unrelated = \"あいう\"",
@@ -562,7 +597,7 @@ fn core_error_generation_site_survives_live_extractor_calls_across_chunks() {
         "do::<Result> {\n  outer(found) <- Ok(2)\n  Ok(found)\n}",
     ] {
         let result = engine.handle_line(source);
-        assert_repl_error_origin(&result, 2, 7, "Err(NoneError)");
+        assert_repl_error_origin(&result, 2, 7, "Err(NoneError())");
         assert!(rendered_text(&result).contains("None Value."));
     }
 }
@@ -611,14 +646,14 @@ fn core_error_generation_site_survives_static_diagnostic_rollback() {
             caption.contains(&format!("REPL:{chunk}:1:{column} ")),
             "{text}"
         );
-        let next = engine.handle_line("Err(NoneError)");
-        assert_repl_error_origin(&next, 1, 5, "Err(NoneError)");
+        let next = engine.handle_line("Err(NoneError())");
+        assert_repl_error_origin(&next, 1, 5, "Err(NoneError())");
     }
 }
 
 fn core_script_preload_rejects_source_spans_outside_the_runtime_range() {
     let source = format!(
-        "{}\ndef source_error() -> Result<Int> {{ Err(NoneError) }}\n",
+        "{}\ndef source_error() -> Result<Int> {{ Err(NoneError()) }}\n",
         "#".repeat(sindr::ir::MODULE_SPAN_STRIDE)
     );
     let Err(xldr::repl::logic::core::ReplLoadError::Diagnostic {
@@ -646,10 +681,11 @@ fn core_script_preload_rejects_source_spans_outside_the_runtime_range() {
 
 fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
     let mut engine = engine();
-    let definition = engine.handle_line("def saved_error() -> Result<Int> {\n  Err(NoneError)\n}");
+    let definition =
+        engine.handle_line("def saved_error() -> Result<Int> {\n  Err(NoneError())\n}");
     assert!(matches!(definition.output, ReplOutput::EvalSuccess { .. }));
     let original_error = engine.handle_line("saved_error()");
-    assert_repl_error_origin(&original_error, 2, 7, "Err(NoneError)");
+    assert_repl_error_origin(&original_error, 2, 7, "Err(NoneError())");
     let dir = tempfile_dir("xldr-repl-error-source-restore");
     let first_path = dir.join("before.eldr");
     let second_path = dir.join("after.eldr");
@@ -669,8 +705,8 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
         .expect("saved definition source must exist")
         .clone();
     let mut restored = ReplEngine::from_eldr(&bytes).expect("snapshot must restore");
-    let fresh = restored.handle_line("Err(EmptyHeadTailListPattern)");
-    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyHeadTailListPattern)");
+    let fresh = restored.handle_line("Err(EmptyHeadTailListPattern())");
+    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyHeadTailListPattern())");
     let saved = restored.handle_line(&format!(":save {}", second_path.display()));
     assert!(rendered_text(&saved).contains("saved to"));
     let updated =
@@ -683,7 +719,7 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
     let fresh_source = updated
         .sources
         .iter()
-        .find(|source| source.text.as_deref() == Some("Err(EmptyHeadTailListPattern)\n"))
+        .find(|source| source.text.as_deref() == Some("Err(EmptyHeadTailListPattern())\n"))
         .expect("new input source must exist");
     assert_ne!(fresh_source.source_id, saved_source.source_id);
     assert_ne!(fresh_source.path, saved_source.path);
@@ -752,7 +788,7 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
         &fields[0],
     ));
     assert!(
-        text.contains("Err(NoneError)") && text.contains(":2:7 "),
+        text.contains("Err(NoneError())") && text.contains(":2:7 "),
         "{text}"
     );
     let mut source_ids = HashSet::new();
@@ -3750,7 +3786,7 @@ fn core_routes_print_side_effects_into_repl_result_lines() {
 fn core_routes_eprint_side_effects_into_repl_stderr_lines() {
     let mut engine = engine();
 
-    let result = engine.handle_line("eprint(NoneError)");
+    let result = engine.handle_line("eprint(NoneError())");
 
     assert!(!result.should_exit);
     assert_eq!(rendered_text(&result), "");
@@ -4893,7 +4929,7 @@ fn core_reload_defs_command_discards_live_defs() {
 fn core_result_error_reports_diagnostic_without_exiting() {
     let mut engine = engine();
 
-    let result_err = engine.handle_line("Err(NoneError)");
+    let result_err = engine.handle_line("Err(NoneError())");
     assert!(!result_err.should_exit);
     assert!(matches!(result_err.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&result_err).contains("None Value."));
@@ -4910,7 +4946,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
     let default_mode = engine.handle_line(":stacktrace");
     assert_eq!(rendered_text(&default_mode), "stacktrace display mode: off");
 
-    let hidden = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    let hidden = engine.handle_line("def fail() -> Result<Int> { Err(NoneError()) }\nfail()");
     assert!(matches!(hidden.output, ReplOutput::EvalError { .. }));
     let hidden_text = rendered_text(&hidden);
     assert!(hidden_text.contains("None Value."));
@@ -4981,7 +5017,7 @@ fn core_stacktrace_display_is_independent_from_error_display_mode() {
         "stacktrace display mode: verbose"
     );
 
-    let result = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    let result = engine.handle_line("def fail() -> Result<Int> { Err(NoneError()) }\nfail()");
     assert!(matches!(result.output, ReplOutput::EvalError { .. }));
     let text = rendered_text(&result);
     let message_idx = text
@@ -6423,7 +6459,7 @@ fn core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive() {
     assert!(matches!(duplicate.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&duplicate).contains("Duplicate top-level definition: f"));
 
-    let err_value = engine.handle_line("Err(NoneError)");
+    let err_value = engine.handle_line("Err(NoneError())");
     assert!(!err_value.should_exit);
     assert!(matches!(err_value.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&err_value).contains("None Value."));

@@ -8272,7 +8272,7 @@ fn statement_question_retains_optional_type_and_plain_facet() {
 fn special_enum_aliases_normalize_to_canonical_constructor_calls() {
     for (input, canonical) in [
         ("Ok(1)", "Result::Ok"),
-        ("Err(NoneError)", "Result::Err"),
+        ("Err(NoneError())", "Result::Err"),
         ("True", "Boolean::True"),
         ("False", "Boolean::False"),
         ("Boolean::True", "Boolean::True"),

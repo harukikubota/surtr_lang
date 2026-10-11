@@ -1,1 +1,2 @@
 marker: ErrorKind = NoneError
+print(inspect(marker))

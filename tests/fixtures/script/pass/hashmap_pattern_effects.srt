@@ -20,7 +20,7 @@ print(inspect(match input() {
 }))
 print(inspect(is_match(hash!["a" => 2], hash![key("first", "a") => 3, key("skipped", "b") => _])))
 print(inspect(is_match(hash!["a" => 2], hash![key("missing", "b") => probe(_), key("skipped", "a") => _])))
-print(inspect(select(Err(NoneError))))
+print(inspect(select(Err(NoneError()))))
 print(inspect(select(Ok(hash!["a" => 2]))))
 print(inspect(direct(hash!["a" => 4])))
 print(inspect(empty(Ok(hash!["a" => 4]))))

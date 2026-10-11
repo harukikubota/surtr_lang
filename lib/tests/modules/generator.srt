@@ -51,10 +51,10 @@ test("Generator") {
     it("treats Result items as data") {
       do {
         gen = Generator::unfold(0, {|n|
-          if(n < 2, Option::Some((if(n == 0, Err(NoneError), Ok(7)), n + 1)), Option::None)
+          if(n < 2, Option::Some((if(n == 0, Err(NoneError()), Ok(7)), n + 1)), Option::None)
         })
 
-        assert_eq([Err(NoneError), Ok(7)], Generator::to_list(gen))
+        assert_eq([Err(NoneError()), Ok(7)], Generator::to_list(gen))
       }
     }
 

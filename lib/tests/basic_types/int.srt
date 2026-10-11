@@ -87,7 +87,7 @@ test("Int") {
 
     it("returns ZeroDivisionError for zero divisors") {
       do {
-        expected: Result<(Int, Int)> = Err(ZeroDivisionError)
+        expected: Result<(Int, Int)> = Err(ZeroDivisionError())
 
         assert_eq(expected, Int::div_mod(7, 0))
         assert_eq(expected, Int::div_mod(-7, 0))

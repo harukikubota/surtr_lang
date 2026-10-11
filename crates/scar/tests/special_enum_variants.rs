@@ -34,7 +34,7 @@ fn special_enum_result_owner_arguments_constrain_payload_and_failure() {
     }
     for constructor in ["Err", "Result::Err", "Result<_>::Err"] {
         check(&format!(
-            "err = {constructor}(NoneError)\nvalue: Result<Result<Int>> = {constructor}(NoneError)"
+            "err = {constructor}(NoneError())\nvalue: Result<Result<Int>> = {constructor}(NoneError())"
         ))
         .expect("failure success slot is polymorphic");
         check(&format!("value = {constructor}(1)")).expect_err("concrete Error required");
@@ -45,7 +45,7 @@ fn special_enum_result_owner_arguments_constrain_payload_and_failure() {
 fn special_enum_result_capture_accepts_existing_errors() {
     for capture in ["&Err", "&Result<Int>::Err", "&Result<Int>::Err(&1)"] {
         check(&format!(
-            "wrap: (Error -> Result<Int>) = {capture}\nvalue = wrap(NoneError)"
+            "wrap: (Error -> Result<Int>) = {capture}\nvalue = wrap(NoneError())"
         ))
         .expect("ordinary callable transports Error");
     }
@@ -55,7 +55,7 @@ fn special_enum_result_capture_accepts_existing_errors() {
 #[test]
 fn special_enum_explicit_owner_conflicts_are_checked_without_annotation() {
     check("value = Result<Int>::Ok(\"text\")").expect_err("explicit owner constrains payload");
-    check("value: Result<String> = Result<Int>::Err(NoneError)")
+    check("value: Result<String> = Result<Int>::Err(NoneError())")
         .expect_err("explicit owner conflicts with expected result");
     check("def wrap(value: $T) -> Result<$T> { make: ($T -> Result<$T>) = &Result<$T>::Ok\nmake(value) }").expect("introduced type variable remains rigid");
 }
@@ -67,7 +67,7 @@ fn special_enum_pattern_requires_resolved_canonical_identity() {
         check(&format!("defenum Other {{ Ok(Int), Err(Int) }}\nvalue = match Ok(1) {{ {pattern} => 1, _ => 0 }}")).expect_err("same short name cannot match Result");
     }
     for (ok, err) in [("Ok", "Err"), ("Result::Ok", "Result::Err")] {
-        check(&format!("value: Result<Result<Int>> = Ok(Err(NoneError))\nanswer: Int = match value {{ {ok}({err}(_)) => 1, _ => 0 }}")).expect("nested failure pattern");
+        check(&format!("value: Result<Result<Int>> = Ok(Err(NoneError()))\nanswer: Int = match value {{ {ok}({err}(_)) => 1, _ => 0 }}")).expect("nested failure pattern");
     }
 }
 

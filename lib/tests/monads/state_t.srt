@@ -184,7 +184,7 @@ test("StateT") {
     it("preserves base failure without producing a next state") {
       do {
         failed: StateT<Int, Result, Int> = StateT::new({|state|
-            Err(NoneError)
+            Err(NoneError())
         })
         bound: StateT<Int, Result, Int> = failed |>= {|value|
           StateT::new({|state| Ok((value + 1, state + 1))})
