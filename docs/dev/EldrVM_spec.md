@@ -184,6 +184,7 @@ VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk
 - `run_quantum(ctx, budget)` は reduction budget が切れた時点で scheduler 境界へ戻る。
 - opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。builtin の再開は有界の状態遷移単位で課金し、callback の opcode と同じ予算を使う。予算 0 では進めず、新しい予算は scheduler が実行対象を選び直したときに与える。
 - `StepOutcome::Pending` は future id と resume 用 `ExecutionContext` を保持する。
+- operand stackのFuture解決では、Future表が空ならstackの走査を行わない。表が非空ならcleanup完了条件を含むready判定で解決値を収集し、解決値がある場合だけ該当する全slotを置換する。同じFutureを持つ複数slotも置換する。解決値がない場合は書込み側の走査を行わない。追加のstack追跡状態は持たず、context切替えやrollback後も現在のFuture表を参照する。
 
 ### 3.9 Builtin / callback の継続実行
 

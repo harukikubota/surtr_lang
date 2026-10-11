@@ -5,6 +5,10 @@
 以下には追加の性能改善を残す。
 最適化の採用方式や実時間の目標値は、各項目の調査後に決める。
 
+RT-3のValue測定・方式選定・Future表が空の場合の製品最適化は
+[最適化レポート](list_runtime_rt3_optimization_2026_10_11.md) に記録した。
+Future表が非空の場合の読取り走査は [OI-036](open-issues.md#oi-036-future表が非空のoperand-stack走査) に残る。
+
 ## 現行の契約と参照先
 
 - List の表現・仮想計算量・継続の所有権: [Eldr VM 仕様](../docs/dev/EldrVM_spec.md)。
@@ -27,13 +31,6 @@
 - 測定済み: [保持方式比較](list_tail_retention_comparison_2026_10_11.md)で、共有継続・chunk・明示的 compaction を同じ入力で比較した。短い suffix の保持量は減るが、元 List を checkpoint が保持している間は全体を解放できない。製品の最適化は未着手。
 - 次の作業: 比較で確認した所有条件を基に採用方式と製品への移行仕様を決める。chunk は Builder / `from_items` からの所有権移動、compaction は入口と対象 suffix、予算・取消・rollback を具体化する。
 - 受け入れ条件: `cons` / `head` / `tail` / `uncons` / `len` の仮想的な O(1)、永続性、論理順を保つ。tail のたびに全要素をコピーする経路を導入しない。改善対象と、保持量が改善しないケースを記録する。
-
-### RT-3 Value の clone / drop、allocator、実時間の測定
-
-- 現状: 2E 個の Cons から E 回の Builder 追加への削減は仮想操作数の結果。Value の物理コピー、入れ子の解放、Vec の再確保、実時間・RSS は別に評価する必要がある。
-- 未確定点: 何が支配的なコストか、どの workload を改善対象にするか、許容するメモリ増加量。
-- 次の作業: singleton、空結果、巨大な mapper 結果、三段直積、多段 singleton について、小さい値と大きい payload を分けて測る。
-- 受け入れ条件: 同じ入力・ビルド条件で比較し、入力訪問数、出力数、callback 回数と物理的なコストを分けて報告する。実時間や RSS の閾値を既存 correctness test の合否条件へ混ぜない。
 
 ### RT-4 未分割 builtin と外部呼出し
 

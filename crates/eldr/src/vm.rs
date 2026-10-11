@@ -30,6 +30,8 @@ use std::rc::{Rc, Weak};
 use crate::builtin::{call_builtin, BuiltinContinuation, BuiltinOutcome};
 mod continuation;
 #[cfg(test)]
+mod future_stack_tests;
+#[cfg(test)]
 mod generator_tests;
 #[cfg(test)]
 mod list_flat_map_tests;
@@ -4204,6 +4206,13 @@ impl VM {
     }
 
     fn resolve_ready_pending_stack_values(&mut self) {
+        // Every ready value comes from this table; an empty table cannot
+        // resolve any stack slot, including an unknown PendingFuture ID.
+        if self.process_runtime.futures.is_empty() {
+            return;
+        }
+        #[cfg(test)]
+        future_stack_tests::record_read_scan(self.stack.len());
         let ready = self
             .stack
             .iter()
@@ -4212,6 +4221,11 @@ impl VM {
                 _ => None,
             })
             .collect::<HashMap<_, _>>();
+        if ready.is_empty() {
+            return;
+        }
+        #[cfg(test)]
+        future_stack_tests::record_write_scan(self.stack.len());
         for value in &mut self.stack {
             if let Value::PendingFuture(id) = value {
                 if let Some(resolved) = ready.get(id) {

@@ -3,7 +3,7 @@
 > 目的: 現行実装と対象領域の正本文書でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項はソースコード、実行可能テスト、`docs/dev/`、`docs/site/`、標準定義 source の `@doc` へ置く。`doc/` は draft / input / tmp 置き場として扱い、cleanup で解消済みの項目は残さない。
 
-最終更新日: 2026-09-29
+最終更新日: 2026-10-11
 
 ---
 
@@ -296,6 +296,39 @@
 - テスト方針:
   - 仕様確定後、Spireでrecord grammar、Sigilでowner / parameter scope、Scarでwell-formednessとFacet destination、Forge / Eldrで値表現を責務ごとに固定する。
   - parserだけを先行して`defstruct`のgeneric surfaceへ合わせるテストは追加しない。
+
+### OI-036 Future表が非空のoperand stack走査
+
+- 背景:
+  - [RT-3の基準値測定](list_value_cost_measurement_2026_10_11.md)で、手組みVMの巨大mapper結果のrun時間がnの増加に対して大きく増えた。Astraとコードを確認し、opcodeごとのstack読取り・書込みの全走査を特定した。
+  - [RT-3の最適化](list_runtime_rt3_optimization_2026_10_11.md)では、Future表が空なら両方の走査を省き、解決値がなければ書込み側を省く。追加の追跡状態を持たず、既存のready / cleanup判定を維持する。
+  - Future表が非空なら、stackにPendingFutureがなくても読取りの全走査が残る。無関係なFutureが残る状態で、n個の `LoadLocal` の後に `ListFromItems` を実行すると、読取りの走査要素数がΘ(n²)になる。この残る条件の実時間寄与率は未測定。
+- 未確定点:
+  - Future の配送契約と execution context の切替えを保ちながら、不要な stack 全走査を減らす方式。
+  - 無関係なFutureが残る深いstack、literal Listなど通常のcompiler出力、Futureを含む実入力での寄与率。
+- 受け入れ条件:
+  - Future表が非空でも、PendingFutureがない深いstackでopcodeごとの不要な読取り全走査を減らす。
+  - ready 値への置換、同一 Future を持つ複数 slot、context 切替え後の配送、待機・取消・checkpoint / rollback の契約を保つ。
+  - 速度の閾値を correctness test に加えず、決定的な操作数と同じ入力の手動測定で確認する。
+- テスト方針:
+  - 方式確定後、Eldr の crate-local テストで PendingFuture なし・未解決・ready・複数 slot・context 切替えの境界を固定する。
+  - 通常の List literal と今回の手組み入力を別条件で測り、input 構築・callback・flatten の費用を混同しない。
+
+### OI-037 RT-3のHashMap測定におけるprocess RSS差
+
+- 背景:
+  - [RT-3の前後測定](list_runtime_rt3_optimization_2026_10_11.md)で、counter無効のHashMap / chain・nestedのprocess peak RSSが、n=1,000では約2.2 MiB、n=10,000では約22.4 MiB増えた。VMの全区間でrequested / freed / live / peakは前後で一致し、counter有効系列のRSSにも同じ増加はなかった。
+  - 既存binaryの交互再測定でも差を確認した。ただし基準binaryのnestedも1回98.625 MiBになった。構成診断では両binaryともmacOSのxzone allocatorが有効だった。原因は未確定である。
+  - 採用した最適化は新しい保持状態を持たず、計画の受入を満たす。RSS非増加まで保証したものではない。
+- 未確定点:
+  - binary配置、allocatorの割当分類・断片化、page保持が、同じrequested layoutからRSS差を生む条件。
+  - 今回の手組み入力以外の製品入口での再現範囲。
+- 受け入れ条件:
+  - requested / live / peakが同じでもRSS差が生じる原因を、allocator構成と所有条件を含む再現で特定する。
+  - 同一binary内の変動とbinary間の差を区別し、手組み入力と製品入口の再現範囲を確認する。意味論とFuture配送の契約を維持する。
+- テスト方針:
+  - 同じ入力と所有条件、baseline / optimized binaryのSHAを保持し、counter有効・無効とOS allocatorの構成を分ける。元の前後測定原本を上書きしない。
+  - baseline / optimizedを交互に実行して同一binary内とbinary間の分布を比較する。requested量だけでRSS差の原因を断定しない。
 
 ## 更新ルール
 
