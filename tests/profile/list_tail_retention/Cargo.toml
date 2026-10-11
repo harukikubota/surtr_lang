@@ -1,0 +1,16 @@
+[package]
+name = "list-tail-retention-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Local representation models are excluded from the product and workspace gate.
+[workspace]
+
+[features]
+default = ["count-alloc"]
+count-alloc = []
+
+[dependencies]
+sindr = { path = "../../../crates/sindr" }
+serde_json = "1"
