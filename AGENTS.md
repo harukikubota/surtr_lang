@@ -50,8 +50,9 @@ Surtr は Rust で実装する静的型付き関数型の Hobby 言語。
 - 未確定仕様を ignored テストで蓄積しない。文書のみの変更にコンパイラ全体のテストは不要。実行コマンド・結果・未検証範囲を簡潔に報告する。
 
 ## 作業運用
-- 開発プロセスは `surtr-development`（`/Users/haruca/.codex/skills/surtr-development/SKILL.md`）を使う。仕様入力の有無と level1〜4 に応じて、同スキルに記載された手順で進める。
-- 日本語のチャット応答、および `docs/site/`・`docs/dev/`・`doc/`・`lib/**/*.srt` の `@doc` など日本語ドキュメントの作成・編集では、`/Users/haruca/.codex/skills/yomiyasu/SKILL.md` を適用する。文体の推敲は既存の仕様・コード・テスト・文書構造を変えない範囲で行う。
+- 開発プロセスは `surtr-development`（`~/.codex/skills/surtr-development/SKILL.md`）を使う。仕様入力の有無と level1〜4 に応じて、同スキルに記載された手順で進める。
+- `.srt` ソース・標準 API・Surtr テスト・`@doc` の追加、更新、移動は `surtr-source-update`（`~/.codex/skills/surtr-source-update/SKILL.md`）を使う。配置・定義順・説明内容・標準ソース登録・関連文書とテストの整合は同スキルに従う。
+- 日本語のチャット応答、および `docs/site/`・`docs/dev/`・`doc/`・`lib/**/*.srt` の `@doc` など日本語ドキュメントの作成・編集では、`~/.codex/skills/yomiyasu/SKILL.md` を適用する。文体の推敲は既存の仕様・コード・テスト・文書構造を変えない範囲で行う。
 - ユーザが仕様書を入力・指定していないターンでは調査と仕様書作成までとし、実装しない。検証範囲は同スキルの level 別条件を適用する。
 - ユーザが明示的にファイルなしで指示すればそのまま進める。但し作業方針を詰めてから実施する。
 - 中断時は残作業と次の一手を残す。
