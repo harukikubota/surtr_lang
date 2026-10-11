@@ -190,6 +190,8 @@ VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk
 
 `HashMap::map_values` は builtin として元 map の全キーを保ち、決定的なキー順で各値へ callback を一度ずつ適用する。空 map では callback を呼ばない。map の内部異常と callback の RuntimeError は伝播し、部分 map を成功として返さない。callback が返す言語の Result 値（`Err` を含む）はそのまま新しい値として格納する。
 
+`HashMapHandle::from_entries` / `HashMap::map_from_entries`の構築とmap_valuesの途中出力は、内部で所有する空mapへ直接追加し、追加ごとの既存entry全cloneを行わない。公開insert / removeの永続性は維持する。途中出力は通常の実行切替えで移動し、checkpointのCloneでは独立したstorageを持つ。入力件数を基に容量を先取りせず、重複キーが多い場合もdistinct数に応じて成長させる。map_valuesの開始時の全entry clone・sortと、一括構築のRust loopは未分割のままであり、VM全体の実時間上限は保証しない。
+
 builtin の内部結果は、完了、継続可能、callback 要求、Future 待機、RuntimeError を区別する。
 継続状態は VM の実行コンテキストが所有し、利用者の `Value` や bytecode に格納しない。
 即時完了する builtin も同じ dispatch へ接続する。

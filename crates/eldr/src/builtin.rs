@@ -2557,7 +2557,7 @@ fn builtin_map_from_entries(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
                 index, key
             )));
         };
-        map = map.insert(key.clone(), value.clone());
+        map.entries.insert(key.clone(), value.clone());
     }
 
     Ok(Value::HashMap(map))
@@ -7640,6 +7640,33 @@ mod tests {
             }
             other => panic!("expected List result, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn map_from_entries_rejects_malformed_entries_at_their_input_index() {
+        let mut vm = test_vm();
+        for (invalid, message) in [
+            (Value::Unit, "expects tuple entries at index 1"),
+            (
+                Value::Tuple(vec![Value::Str("key".into())]),
+                "expects (String, V) tuples at index 1, got arity 1",
+            ),
+            (
+                Value::Tuple(vec![Value::Unit, Value::Unit]),
+                "expects String key at index 1",
+            ),
+        ] {
+            let valid = Value::Tuple(vec![Value::Str("first".into()), Value::Unit]);
+            let input = Value::List(ListHandle::from_items(vec![valid, invalid]));
+            let error = call_builtin(&mut vm, builtin_id("map_from_entries"), vec![input])
+                .expect_err("invalid entry must not return a partial map");
+            assert!(error.message.contains(message), "{}", error.message);
+        }
+        let error = call_builtin(&mut vm, builtin_id("map_from_entries"), vec![Value::Unit])
+            .expect_err("non-list input must be rejected");
+        assert!(error
+            .message
+            .contains("map_from_entries expects List<(String, V)>"));
     }
 
     #[test]

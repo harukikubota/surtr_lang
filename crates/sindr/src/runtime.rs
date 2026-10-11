@@ -735,7 +735,7 @@ impl HashMapHandle {
     pub fn from_entries(entries: Vec<(String, Value)>) -> Self {
         let mut map = Self::empty();
         for (key, value) in entries {
-            map = map.insert(key, value);
+            map.entries.insert(key, value);
         }
         map
     }
@@ -1470,6 +1470,47 @@ mod tests {
     }
 
     #[test]
+    fn hash_map_from_owned_entries_moves_existing_key_and_value_buffers() {
+        let key = "first".repeat(8);
+        let value = "payload".repeat(32);
+        let key_buffer = key.as_ptr();
+        let value_buffer = value.as_ptr();
+        let map = HashMapHandle::from_entries(vec![
+            (key, Value::Str(value)),
+            ("second".into(), Value::Unit),
+        ]);
+        let (key, Value::Str(value)) = map
+            .entries
+            .get_key_value(&"first".repeat(8))
+            .expect("first entry survives")
+        else {
+            panic!("expected string payload")
+        };
+        // At the second insertion the original buffers are still alive. A
+        // persistent insert would clone them into distinct allocations.
+        assert_eq!(key.as_ptr(), key_buffer, "owned key must move into output");
+        assert_eq!(
+            value.as_ptr(),
+            value_buffer,
+            "owned value must stay in output"
+        );
+    }
+
+    #[test]
+    fn hash_map_owned_construction_preserves_overwrite_and_small_duplicate_capacity() {
+        assert_eq!(HashMapHandle::from_entries(vec![]), HashMapHandle::empty());
+        let map = HashMapHandle::from_entries(
+            (0..128)
+                .map(|n| ("same".into(), Value::Int(int(n))))
+                .collect(),
+        );
+        assert_eq!(map.get("same"), Some(Value::Int(int(127))));
+        assert_eq!(map.len(), 1);
+        let singleton = HashMapHandle::empty().insert("same".into(), Value::Unit);
+        assert_eq!(map.entries.capacity(), singleton.entries.capacity());
+    }
+
+    #[test]
     fn hash_map_handle_insert_overwrite_and_remove_use_sorted_key_order() {
         let empty = HashMapHandle::empty();
         let with_b = empty.insert("b".into(), Value::Int(int(2)));
@@ -1491,6 +1532,10 @@ mod tests {
         assert_eq!(removed.keys(), vec!["a".to_string()]);
         let no_op = removed.remove("missing");
         assert_eq!(no_op, removed);
+        assert_eq!(empty.len(), 0);
+        assert_eq!(with_b.keys(), vec!["b".to_string()]);
+        assert_eq!(with_ba.get("a"), Some(Value::Int(int(1))));
+        assert_eq!(with_overwrite.get("b"), Some(Value::Int(int(2))));
     }
 
     #[test]

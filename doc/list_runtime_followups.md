@@ -37,6 +37,7 @@ Future表が非空の場合の読取り走査は [OI-036](open-issues.md#oi-036-
 - 現状: callback と flat_map の入力・出力処理は共通予算に従う。既存の純粋な Rust loop、regex / JSON、OS I/O の一回の処理には長い停止が残り得る。
 - 未確定点: 各処理を既存 continuation へ分割するか、ライブラリの分割 API、非同期 I/O、worker への移管を使うか。
 - 次の作業: 入力サイズに比例する builtin と外部呼出しを棚卸しし、一回の処理量、取消、資源の後処理を個別に定義する。
+- 改善済み: [HashMapのコピー削減](hashmap_runtime_optimization_2026_10_11.md)で、所有入力の構築、VM map_from_entries、map_valuesの途中出力から反復追加時の既存entry全cloneを除いた。[基準値](hashmap_runtime_measurement_2026_10_11.md)と同じ条件で再測定し、途中outputの独立性、待機・取消・checkpoint復帰を検証した。開始時のclone / sortとRust loopは未分割で、次はその分割単位と通常入口のfairnessを仕様化する。
 - 受け入れ条件: 移行した処理が完了前に他の runnable task へ切り替わり、副作用・結果配送を重複させない。CPU yield と Future 待機を区別し、batch / REPL / Task / process の通常入口から確認する。
 - 制限: 処理を分割した範囲を明示する。未移行の処理、Value の物理操作、allocator を含む VM 全体の実時間上限は、別途根拠が必要。
 
