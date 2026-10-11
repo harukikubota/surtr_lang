@@ -1,0 +1,439 @@
+{
+  "metadata": {
+    "source_commit": "1dc1aa3a00a239320aad439ba0217af5437ab7af",
+    "source_snapshot_at": "2026-10-11T22:28:41.181964+00:00",
+    "root": "/Users/haruca/.codex/worktrees/a427/surtr",
+    "git_status_porcelain": " M crates/eldr/src/vm.rs\n M crates/eldr/src/vm/process_continuation.rs\n M doc/list_runtime_followups.md\n M docs/dev/EldrVM_spec.md\n M docs/dev/ProcessRuntime_spec.md\n?? crates/eldr/src/vm/checkpoint_boot_plan_tests.rs\n?? crates/eldr/src/vm/checkpoint_collections_tests.rs\n?? crates/eldr/src/vm/checkpoint_metadata_tests.rs\n?? crates/eldr/src/vm/checkpoint_value.rs\n?? doc/list_runtime_rt5_metadata_optimization_2026_10_12.md\n?? doc/list_runtime_rt5_remaining_optimization_2026_10_12.md\n?? doc/rt5_collections_2026_10_12_before.jsonl\n?? doc/rt5_collections_2026_10_12_before.summary.json\n?? doc/rt5_metadata_2026_10_12_after.jsonl\n?? doc/rt5_metadata_2026_10_12_after.summary.json\n?? doc/rt5_metadata_2026_10_12_after_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_after_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_before.jsonl\n?? doc/rt5_metadata_2026_10_12_before.summary.json\n?? doc/rt5_metadata_2026_10_12_before_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_before_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_recheck.jsonl\n?? doc/rt5_metadata_2026_10_12_recheck.summary.json\n?? tests/profile/checkpoint_collections/\n?? tests/profile/checkpoint_metadata/\n",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "build_profile": "release unit-test binary",
+    "test_name": "vm::checkpoint_collections_tests::checkpoint_collections_profile",
+    "binary": "/private/tmp/surtr-a427-rt5-rest/after-eldr",
+    "binary_sha256": "8fedada0e669f9e2fc20093b0a1ac5dfa596adf5c4f577fadb14202f466088db",
+    "runner_sha256": "487ff33f164e4a5d12dad3b562d33f67219f43a128b75cb40756f30ceb66b8c9",
+    "sizes": [
+      16,
+      128,
+      1024
+    ],
+    "samples": 5,
+    "repeats": 32,
+    "allocator_counting": false,
+    "rss_measured": true,
+    "rss_scope": "whole fresh test process high-water mark; not a per-phase peak or live bytes",
+    "rss_command": "/usr/bin/time -l",
+    "rss_unit": "bytes (macOS)",
+    "probe_source_sha256": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+    "production_sources_sha256": {
+      "crates/eldr/src/builtin/generator.rs": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f",
+      "crates/eldr/src/builtin/list_builder.rs": "4b422d3c9c5302f2aedb9bc704df4dc1f3dd9edd3e6acbbda7122c398354c926",
+      "crates/eldr/src/builtin/list_flat_map.rs": "a010fc7d9151b3bc39cc2213868e7528c97d495e6161ceee486fd4d7ba2ab97e",
+      "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+      "crates/eldr/src/builtin.rs": "12fb42e9d7edb18fda3fedcac8e1a656751e01a824db2d5eef5672cfd2da893f",
+      "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+      "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+      "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+      "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+      "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+      "crates/eldr/src/vm/checkpoint_value.rs": "a8c4c0b881805d85fa9265f24c8c7d13a23a31e8d2487bcc010d6433a38000d2",
+      "crates/eldr/src/vm/continuation.rs": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc",
+      "crates/eldr/src/vm/process_continuation.rs": "352d25c26ad31b7afc8975501f1e68d0dac4aca9fa097c7762f517dc8786064e",
+      "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+      "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+      "crates/eldr/src/vm.rs": "9e80708145e52ff5654e8135eed2203ce3dc9c085183dad6d2b53f135545e52d"
+    },
+    "lock_sha256": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+    "manifest_sha256": {
+      "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+      "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407"
+    },
+    "git_diff_head_sha256": "faf30fb17f1467848b02fc89c6a0bf6c8a781c0b3da0dd83d6e07ec8ae480576"
+  },
+  "summaries": [
+    {
+      "n": 16,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 55207,
+        "min": 44832,
+        "max": 228086
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 16,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 46000,
+        "min": 38497,
+        "max": 68207
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 16,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4962,
+        "min": 4415,
+        "max": 6958
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 16,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 293418,
+        "min": 254378,
+        "max": 440042
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 16,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1049872,
+        "min": 892335,
+        "max": 1434371
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 16,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 183792,
+        "min": 157204,
+        "max": 314749
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 16,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 12955,
+        "min": 11500,
+        "max": 51000
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 16,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 9793,
+        "min": 8876,
+        "max": 16123
+      },
+      "process_peak_rss_bytes": {
+        "median": 5275648,
+        "min": 5226496,
+        "max": 5308416
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 60412,
+        "min": 57081,
+        "max": 78833
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 51704,
+        "min": 49417,
+        "max": 60622
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 128,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4627,
+        "min": 4084,
+        "max": 5750
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 128,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1430833,
+        "min": 1410581,
+        "max": 1680250
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 128,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4017042,
+        "min": 3955165,
+        "max": 4276703
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 128,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 900002,
+        "min": 887539,
+        "max": 976668
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 128,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 14544,
+        "min": 12873,
+        "max": 20667
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 128,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 12461,
+        "min": 11040,
+        "max": 13502
+      },
+      "process_peak_rss_bytes": {
+        "median": 7831552,
+        "min": 7798784,
+        "max": 7880704
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 195205,
+        "min": 176544,
+        "max": 205205
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 178749,
+        "min": 163583,
+        "max": 194081
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 6751,
+        "min": 5044,
+        "max": 6962
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 12221207,
+        "min": 11184087,
+        "max": 13537709
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 28877873,
+        "min": 28035042,
+        "max": 29999959
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 7129165,
+        "min": 6969626,
+        "max": 7457668
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 21330,
+        "min": 19791,
+        "max": 27416
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 22254,
+        "min": 18460,
+        "max": 23792
+      },
+      "process_peak_rss_bytes": {
+        "median": 26804224,
+        "min": 26787840,
+        "max": 27459584
+      }
+    }
+  ]
+}

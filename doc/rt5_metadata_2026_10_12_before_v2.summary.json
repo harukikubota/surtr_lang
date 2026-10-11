@@ -1,0 +1,222 @@
+{
+  "metadata": {
+    "source_commit": "1dc1aa3a00a239320aad439ba0217af5437ab7af",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "build_profile": "release unit-test binary",
+    "binary": "/private/tmp/surtr-a427-rt5/before-v2-eldr",
+    "binary_sha256": "c218ab0e1d555ccc2cf8cbebc01a061545c7eaa493306a046384f958e0e7f979",
+    "probe_source_sha256": "8863b20bce2f6f7ce5756699a62d9029ad5a5b93ea05d578a72f6e8219775daf",
+    "production_sources_sha256": {
+      "crates/eldr/src/vm.rs": "10cf78248942df1cf4dbbc256cb78693c1917f6169590672cc79c6ea50f91e7c",
+      "crates/eldr/src/vm/process_continuation.rs": "b55ecbee2fc40d07ba5d290c6b940eddef8dbba4e18f9e712ffc63d109b2e794"
+    },
+    "lock_sha256": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+    "runner_sha256": "2b18bcf49ee8a1a534f928ca2127328a2efdf2b0b5645a459e0752d27b26868b",
+    "samples": 5,
+    "repeats": 32,
+    "allocator_counting": false,
+    "rss_measured": false
+  },
+  "summaries": [
+    {
+      "n": 16,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 2999249,
+        "min": 2409459,
+        "max": 5734835
+      }
+    },
+    {
+      "n": 16,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 2973041,
+        "min": 2398334,
+        "max": 5719211
+      }
+    },
+    {
+      "n": 16,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 269792,
+        "min": 225166,
+        "max": 554500
+      }
+    },
+    {
+      "n": 16,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 829376,
+        "min": 685749,
+        "max": 1639710
+      }
+    },
+    {
+      "n": 16,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 290706,
+        "min": 240001,
+        "max": 623626
+      }
+    },
+    {
+      "n": 16,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 460503,
+        "min": 374331,
+        "max": 961754
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 17891338,
+        "min": 17449456,
+        "max": 17947042
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 17607254,
+        "min": 17327874,
+        "max": 17762962
+      }
+    },
+    {
+      "n": 128,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1625085,
+        "min": 1604710,
+        "max": 1636083
+      }
+    },
+    {
+      "n": 128,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4768751,
+        "min": 4713751,
+        "max": 4902703
+      }
+    },
+    {
+      "n": 128,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1640043,
+        "min": 1612998,
+        "max": 1702455
+      }
+    },
+    {
+      "n": 128,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 2696210,
+        "min": 2684163,
+        "max": 2771998
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 145558709,
+        "min": 143963750,
+        "max": 145967414
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 142343667,
+        "min": 141473623,
+        "max": 143543961
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 13046002,
+        "min": 13009415,
+        "max": 13112375
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 38652746,
+        "min": 38242081,
+        "max": 38725205
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 13092289,
+        "min": 13017084,
+        "max": 13191125
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 23741914,
+        "min": 23616752,
+        "max": 24149503
+      }
+    }
+  ]
+}

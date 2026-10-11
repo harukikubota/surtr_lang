@@ -1,0 +1,189 @@
+{
+  "metadata": {
+    "source_commit": "1dc1aa3a00a239320aad439ba0217af5437ab7af",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "build_profile": "release unit-test binary",
+    "binary": "/private/tmp/surtr-a427-rt5/after-eldr",
+    "binary_sha256": "40d48a6ae43a2ac9a26eb93549a7fba89c4fad5c03300bd031e6d04a80d4a68a",
+    "probe_source_sha256": "fc9ec02557765d7d75bb4450e49e6d476f8a466899d6f24a0bdd461e6ca83698",
+    "production_sources_sha256": {
+      "crates/eldr/src/vm.rs": "412207031505ab1406c075c90f033adc58a78b013f4c447728a18c2e064954d3",
+      "crates/eldr/src/vm/process_continuation.rs": "d4a3cf3c0516ee34c63e1970708b959441f5e1933792cbfecd0efcb1296889b9"
+    },
+    "lock_sha256": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+    "runner_sha256": "48fa9220d58aee0e8b9c5dea0ad454e86ba26cd9603b39a9148f0a3cab441b8d",
+    "samples": 5,
+    "repeats": 32,
+    "allocator_counting": false,
+    "rss_measured": false
+  },
+  "summaries": [
+    {
+      "n": 16,
+      "phase": "chunk",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1518166,
+        "min": 1187122,
+        "max": 2742629
+      }
+    },
+    {
+      "n": 16,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 91751,
+        "min": 72455,
+        "max": 160207
+      }
+    },
+    {
+      "n": 16,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 886336,
+        "min": 682331,
+        "max": 1396502
+      }
+    },
+    {
+      "n": 16,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 403666,
+        "min": 317461,
+        "max": 734290
+      }
+    },
+    {
+      "n": 16,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 149415,
+        "min": 119750,
+        "max": 287710
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 6325750,
+        "min": 5920330,
+        "max": 7329211
+      }
+    },
+    {
+      "n": 128,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 375669,
+        "min": 355667,
+        "max": 435705
+      }
+    },
+    {
+      "n": 128,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 3595293,
+        "min": 3363791,
+        "max": 4195294
+      }
+    },
+    {
+      "n": 128,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1656668,
+        "min": 1555997,
+        "max": 1953500
+      }
+    },
+    {
+      "n": 128,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 573211,
+        "min": 536707,
+        "max": 669875
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 48314918,
+        "min": 47938084,
+        "max": 53964083
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 2860168,
+        "min": 2830500,
+        "max": 3045666
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 27431417,
+        "min": 27250288,
+        "max": 28419206
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 12768248,
+        "min": 12644878,
+        "max": 13492791
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4253956,
+        "min": 4156331,
+        "max": 4865749
+      }
+    }
+  ]
+}

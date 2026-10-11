@@ -1,0 +1,189 @@
+{
+  "metadata": {
+    "source_commit": "1dc1aa3a00a239320aad439ba0217af5437ab7af",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "build_profile": "release unit-test binary",
+    "binary": "/private/tmp/surtr-a427-rt5/baseline-eldr",
+    "binary_sha256": "13f6a7a15d26734fe7ea1808aa8e188f111cdfd885d12451fc210a926179d6b1",
+    "probe_source_sha256": "e452db9379619656c450ed0516908fb9aae3df5b8e0b1ef07acbc9e826b6cd1c",
+    "production_sources_sha256": {
+      "crates/eldr/src/vm.rs": "4d75a4aefc5890db57596e34789ff5c1484cf03a00658c2509d5cf99df15303e",
+      "crates/eldr/src/vm/process_continuation.rs": "b55ecbee2fc40d07ba5d290c6b940eddef8dbba4e18f9e712ffc63d109b2e794"
+    },
+    "lock_sha256": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+    "runner_sha256": "48fa9220d58aee0e8b9c5dea0ad454e86ba26cd9603b39a9148f0a3cab441b8d",
+    "samples": 5,
+    "repeats": 32,
+    "allocator_counting": false,
+    "rss_measured": false
+  },
+  "summaries": [
+    {
+      "n": 16,
+      "phase": "chunk",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 2287916,
+        "min": 2244622,
+        "max": 2313961
+      }
+    },
+    {
+      "n": 16,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 209039,
+        "min": 206500,
+        "max": 211960
+      }
+    },
+    {
+      "n": 16,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 646540,
+        "min": 630916,
+        "max": 745998
+      }
+    },
+    {
+      "n": 16,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 228080,
+        "min": 221124,
+        "max": 237499
+      }
+    },
+    {
+      "n": 16,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 349163,
+        "min": 343044,
+        "max": 360748
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 17412083,
+        "min": 17168582,
+        "max": 21816293
+      }
+    },
+    {
+      "n": 128,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1603377,
+        "min": 1573417,
+        "max": 1972451
+      }
+    },
+    {
+      "n": 128,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4692958,
+        "min": 4640457,
+        "max": 6187625
+      }
+    },
+    {
+      "n": 128,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1622248,
+        "min": 1587502,
+        "max": 2083458
+      }
+    },
+    {
+      "n": 128,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 2698623,
+        "min": 2663081,
+        "max": 3216333
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 146210626,
+        "min": 142504005,
+        "max": 147364332
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 13601292,
+        "min": 12917586,
+        "max": 14137252
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "register",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 38636876,
+        "min": 38169919,
+        "max": 38930164
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 13218753,
+        "min": 12844629,
+        "max": 14162415
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 22350832,
+        "min": 21598002,
+        "max": 23016959
+      }
+    }
+  ]
+}
