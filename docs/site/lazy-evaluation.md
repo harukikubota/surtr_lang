@@ -23,7 +23,9 @@ Lazy 位置へ直接書いた call は、戻り値型にかかわらず一段包
 call が0引数関数を返しても、その戻り値の関数を追加で呼び出しません。
 
 Lazy 位置の `(EXPR)` は eager 境界です。内側を先に一度評価し、得られた値を正規化へ渡します。
-評価順序は各 special form の既存の順序に従います。
+`if` / `if_then` / `require` は eager 境界を条件式より先に評価します。
+`ensure` は値、eager な error、predicate の順に評価します。
+`Result::or_else` / `Result::map_err` / `Result::cause` は左辺 Result を先に評価し、その後 eager 境界を評価します。
 
 ```surtr
 def selected() -> Unit { print("selected") }
