@@ -264,6 +264,17 @@ Facet API capture は module を `Facet`、name を対象 API 名、sig を型�
 `FnCapture(module: Facet, name: view, sig: (Duration -> Int))` と表示する。
 通常の closure literal は既存どおり `Closure(sig)` とする。capture できない `compose` や演算子を
 表示のために許可しない。
+
+Facet capture の検証は次の対応表で管理する。optional field は `Option<T>` と required selector を組み合わせる現行仕様に従う。
+
+| 契約・経路 | 検証先 | 観測する境界 |
+|---|---|---|
+| 各 Facet API の capture | `crates/forge/src/lib.rs` の `facet_api_capture_preserves_resolved_callable_metadata` | 8 API の名前と確定 signature、closure literal の区別 |
+| `&Facet::view`・`&Type.path`・`&p`・`_.path` | `tests/fixtures/script/pass/functions/facet_view_capture_scope.srt` / `.expected` | `Facet` / `view` identity と実行結果 |
+| optional field と複数の fallible segment | 同 fixture の `CaptureTree.rows.Some.[0].[1]` | 4 capture 形式の metadata、成功、variant mismatch、外側・内側 List の範囲外 |
+| Facet 由来の部分適用と変数経由の再capture | 同 fixture、`crates/xldr/tests/repl_core.rs` の `core_facet_capture_identity_survives_bindings_and_nested_fields` | 残りの signature、`view` / `put` の由来、実行結果、closure literal との区別 |
+| REPL の直接bindingとnested value | 同 REPL case | 単独評価・List・tuple・HashMap・Result・record field の表示、fieldからの取得と呼出し |
+
 `to_string` は文字列値を引用せず、`inspect` は文字列literalとして引用する。
 Sindrの `quote_surtr_string_literal` を共通引用処理とし、`\\`・`\"`・`\n`・`\t`、
 その他のC0・DEL・C1制御文字の `\u{...}`、文字としての `#{` の `\#{` を使う。

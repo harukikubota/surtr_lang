@@ -338,6 +338,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
         core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears
     ),
     repl_core_case!(core_generic_callable_capture_uses_site_signature_inside_nested_values),
+    repl_core_case!(core_facet_capture_identity_survives_bindings_and_nested_fields),
     repl_core_case!(core_generic_trait_forwarding_retains_substitutions_across_submissions),
     repl_core_case!(core_repl_displays_curry_callable_inside_result_without_internal_id),
     repl_core_case!(core_callable_declaration_identity_survives_chunks),
@@ -6359,6 +6360,86 @@ fn core_generic_callable_capture_uses_site_signature_inside_nested_values() {
             .contains("Ok(FnCapture(module: Function, name: id, sig: (Int -> Int)))"),
         "{identity_result_text}"
     );
+}
+
+fn core_facet_capture_identity_survives_bindings_and_nested_fields() {
+    let mut engine = ReplEngine::from_script_source(
+        "facet_capture.srt",
+        "defrecord FacetReaderBox(read: (Duration -> Int))",
+    )
+    .expect("callable field declaration must preload");
+
+    let view = "FnCapture(module: Facet, name: view, sig: (Duration -> Int))";
+    for source in [
+        "api = &Facet::view(Duration.millis, &1)",
+        "direct = &Duration.millis",
+        "path = Duration.millis",
+        "bound = &path",
+        "inferred: (Duration -> Int) = _.millis",
+        "alias = api",
+        "recaptured = &alias(&1)",
+    ] {
+        let text = rendered_text(&engine.handle_line(source));
+        if source.starts_with("path =") {
+            assert!(text.contains("Duration.millis"), "{text}");
+        } else {
+            assert!(text.ends_with(view), "{source}: {text}");
+        }
+    }
+    for (source, expected) in [
+        ("api", view.to_string()),
+        (
+            "readers = [api, direct, bound, inferred, recaptured]",
+            format!("readers: List<(Duration -> Int)> = [{view}, {view}, {view}, {view}, {view}]"),
+        ),
+        (
+            "pair = (api, recaptured)",
+            format!("pair: ((Duration -> Int), (Duration -> Int)) = ({view}, {view})"),
+        ),
+        (
+            "by_name = HashMap::map_from_entries([(\"read\", api)])",
+            format!("by_name: HashMap<(Duration -> Int)> = hash![\"read\" => {view}]"),
+        ),
+        (
+            "boxed = FacetReaderBox(recaptured)",
+            format!("boxed: FacetReaderBox = FacetReaderBox(read: {view})"),
+        ),
+        ("boxed.read", view.to_string()),
+        (
+            "extracted = boxed.read",
+            format!("extracted: (Duration -> Int) = {view}"),
+        ),
+        ("extracted(12ms)", "12".to_string()),
+        (
+            "wrapped: (Duration -> Int) = {|value| recaptured(value)}",
+            "wrapped: (Duration -> Int) = Closure(Duration -> Int)".to_string(),
+        ),
+        (
+            "wrapped_box = FacetReaderBox(wrapped)",
+            "wrapped_box: FacetReaderBox = FacetReaderBox(read: Closure(Duration -> Int))"
+                .to_string(),
+        ),
+    ] {
+        assert_eq!(
+            rendered_text(&engine.handle_line(source)),
+            expected,
+            "{source}"
+        );
+    }
+
+    for (source, expected) in [
+        ("read_at: (Int, List<Int> -> Result<Int>) = &Facet::view(List.[&1], &2)", "read_at: (Int, List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (Int, List<Int> -> Result<Int>))"),
+        ("partial = &read_at(1, &1)", "partial: (List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))"),
+        ("again = &partial(&1)", "again: (List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))"),
+        ("nested = Ok(again)", "nested: Result<(List<Int> -> Result<Int>)> = Ok(FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>)))"),
+        ("again([10, 20])", "Ok(20)"),
+        ("put: ((Int, String), Int -> (Int, String)) = &Facet::put(Tuple._0, &1, &2)", "put: ((Int, String), Int -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String), Int -> (Int, String)))"),
+        ("put_partial = &put(&1, 3)", "put_partial: ((Int, String) -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))"),
+        ("put_again = &put_partial(&1)", "put_again: ((Int, String) -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))"),
+        ("put_again((1, \"a\"))", "(3, \"a\")"),
+    ] {
+        assert_eq!(rendered_text(&engine.handle_line(source)), expected, "{source}");
+    }
 }
 
 fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears() {

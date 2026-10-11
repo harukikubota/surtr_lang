@@ -1,4 +1,8 @@
 def bracket_index() -> Int { print("index"); 0 }
+defrecord CaptureTree(rows: List<List<Int>>?)
+def capture_outcome(value: Result<Int>) -> String {
+  match value { Ok(n) => to_string(n), Err(error) => Error::kind(error), }
+}
 
 read1 = &Facet::view(Duration.millis, &1)
 read2: (Duration -> Int) = &Facet::view(Duration.millis, &1)
@@ -51,3 +55,26 @@ print(inspect(read_offset(0, [10, 20])))
 print(inspect(read_key("a", HashMap::map_from_entries([("a", 7)]))))
 print(inspect(read_slice(0, 1, [10, 20, 30])))
 print(inspect(read_nested(1, ([10, 20], "a"))))
+
+tree_path = CaptureTree.rows.Some.[0].[1]
+tree_api = &Facet::view(CaptureTree.rows.Some.[0].[1], &1)
+tree_direct = &CaptureTree.rows.Some.[0].[1]
+tree_bound = &tree_path
+tree_inferred: (CaptureTree -> Result<Int>) = _.rows.Some.[0].[1]
+print(inspect([tree_api, tree_direct, tree_bound, tree_inferred]))
+List::each([tree_api, tree_direct, tree_bound, tree_inferred], {|reader|
+  print(capture_outcome(reader(CaptureTree(Option::Some([[10, 20]])))))
+  print(capture_outcome(reader(CaptureTree(Option::None))))
+  print(capture_outcome(reader(CaptureTree(Option::Some([])))))
+  print(capture_outcome(reader(CaptureTree(Option::Some([[]])))))
+})
+
+print(inspect(read_at))
+partial = &read_at(1, &1)
+print(inspect(partial))
+alias = partial
+recaptured = &alias(&1)
+print(inspect(recaptured))
+print(inspect(recaptured([10, 20])))
+literal: (List<Int> -> Result<Int>) = {|values| recaptured(values)}
+print(inspect(literal))

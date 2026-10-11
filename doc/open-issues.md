@@ -297,18 +297,6 @@
   - 仕様確定後、Spireでrecord grammar、Sigilでowner / parameter scope、Scarでwell-formednessとFacet destination、Forge / Eldrで値表現を責務ごとに固定する。
   - parserだけを先行して`defstruct`のgeneric surfaceへ合わせるテストは追加しない。
 
-### OI-036 Facet capture の残る検証範囲
-
-- 確定済みの契約:
-  - [Eldr VM 仕様](../docs/dev/EldrVM_spec.md)はFacet API captureを `Facet` / API名で表示し、`&Type.path`・`&p`・`_.path` の読み取りを `Facet` / `view` とする。path ownerを表示identityにする案は未確定事項として残さない。
-  - 通常のclosure literalとの区別、capture位置で確定したsignature、partial applicationと変数経由の再captureによる由来の保持も同仕様に従う。
-- 未確認点:
-  - optional / fallibleな複数segment、Facet由来のpartial application・変数経由の再capture、REPLの直接bindingとnested field表示について、契約を覆うテストの対応表がまだ揃っていない。
-  - 既存fixtureの実行成功だけでは、すべての経路で表示metadataまで検証したことにはならない。
-- 受け入れ条件と次の作業:
-  - 上記の残る経路を既存テストと照合し、不足する境界だけを追加する。type acceptance、Facet dispatch、privacy checksは変えない。
-  - 確定済みのidentity契約に沿った検証が揃った時点で、この項目を削除する。
-
 ## 更新ルール
 
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。

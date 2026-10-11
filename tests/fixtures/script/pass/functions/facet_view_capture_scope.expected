@@ -24,3 +24,25 @@ Ok(20)
 Ok(7)
 Ok([10, 20])
 Ok(20)
+[FnCapture(module: Facet, name: view, sig: (CaptureTree -> Result<Int>)), FnCapture(module: Facet, name: view, sig: (CaptureTree -> Result<Int>)), FnCapture(module: Facet, name: view, sig: (CaptureTree -> Result<Int>)), FnCapture(module: Facet, name: view, sig: (CaptureTree -> Result<Int>))]
+20
+FacetReadVariantMismatch
+FacetListIndexOutOfBounds
+FacetListIndexOutOfBounds
+20
+FacetReadVariantMismatch
+FacetListIndexOutOfBounds
+FacetListIndexOutOfBounds
+20
+FacetReadVariantMismatch
+FacetListIndexOutOfBounds
+FacetListIndexOutOfBounds
+20
+FacetReadVariantMismatch
+FacetListIndexOutOfBounds
+FacetListIndexOutOfBounds
+FnCapture(module: Facet, name: view, sig: (Int, List<Int> -> Result<Int>))
+FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))
+FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))
+Ok(20)
+Closure(List<Int> -> Result<Int>)

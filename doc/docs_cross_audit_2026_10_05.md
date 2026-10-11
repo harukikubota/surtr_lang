@@ -5,7 +5,7 @@
 | ID | 優先度 | 分類 | 対応対象 |
 |---|---|---|---|
 | DA-03 | 中 | 未確定 | LSP file URIのquery / fragmentの扱い |
-| DA-16 | 低 | 検証範囲が未確認 | OI-036の不足テスト対応表 |
+| DA-16 | 低 | 検証済み | Facet captureのテスト対応表と不足境界の補完 |
 | DA-20 | 中 | 曖昧性 | Shellのsignal終了時のexit_code |
 
 ## 実装の対応項目
@@ -20,8 +20,10 @@
 
 ### DA-16 OI-036の残る検証範囲
 
-- 未確認点: optional / fallibleな複数segment、Facet由来のpartial application・変数経由の再capture、REPLの直接bindingとnested field表示について、契約を覆うテストの対応表が揃っていない。
-- 受入条件: [OI-036](open-issues.md#oi-036-facet-capture-の残る検証範囲)の残る経路を既存テストと照合し、不足する境界だけを追加する。表示identityは[Eldr VM仕様](../docs/dev/EldrVM_spec.md)に従い、type acceptance、Facet dispatch、privacy checksを変えない。
+- 対応済み（2026-10-11）: [Eldr VM仕様](../docs/dev/EldrVM_spec.md)のCallable表示節に、既存の8 API生成テストと追加した実行・REPLテストの対応表を記載した。optional fieldは現行の`Option<T>`とrequired selectorで検証し、廃止済みselectorの拒否テストは今回追加しない。
+- 追加した境界: `CaptureTree.rows.Some.[0].[1]`を4 capture形式で読み、metadata、成功、variant mismatch、外側・内側Listの範囲外を確認する。部分適用と変数経由の再captureは残りのsignatureと`view` / `put`の由来を保持し、closure literalと区別する。REPLは直接binding、単独評価、List・tuple・HashMap・Result・record fieldの表示とfieldから取得した関数の実行を確認する。
+- 処理系と標準定義の変更はなく、type acceptance、Facet dispatch、privacy checksは維持する。OI-036は不足境界と対応表を補完したため削除した。
+- 検証: `rtk cargo nextest run -p xldr --test repl_core repl_core_bucket_0`は1件成功、`rtk cargo nextest run -p rune --test integration run_srt`は9件成功。最終差分に対する`rtk cargo nextest run --profile ci --workspace`はcoldを含む2,495件がすべて成功し、`rtk proxy cargo run -- test --quiet --all`も終了コード0で完了した。
 
 ## 公開契約の追加整理
 
