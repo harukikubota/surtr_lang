@@ -6,6 +6,6 @@ namespace Shapes {
 
 print(inspect(Shapes::Point(2)))
 print(inspect(Shapes::Direction::Up))
-print(inspect(Err(Shapes::Trouble)))
+print(inspect(Err(Shapes::Trouble())))
 record: (Int -> Shapes::Point) = &Shapes::Point
 print(inspect(record(3)))

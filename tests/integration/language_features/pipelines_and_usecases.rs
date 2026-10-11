@@ -169,8 +169,8 @@ fn flow_and_compose_operators_ignore_local_helper_names() {
     assert_output(
         r#"def pipe_apply(value: Int, f: (Int -> Int)) -> Int { 999 }
 def compose(left: (Int -> Int), right: (Int -> Int)) -> String { "wrong compose" }
-def map(value: Result<Int>, f: (Int -> Int)) -> Result<Int> { Err(NoneError) }
-def chain(value: Result<Int>, f: (Int -> Result<Int>)) -> Result<Int> { Err(NoneError) }
+def map(value: Result<Int>, f: (Int -> Int)) -> Result<Int> { Err(NoneError()) }
+def chain(value: Result<Int>, f: (Int -> Result<Int>)) -> Result<Int> { Err(NoneError()) }
 def lift_compose(left: (Int -> Result<Int>), right: (Int -> String)) -> String { "wrong lift" }
 def kleisli_compose(left: (Int -> Result<Int>), right: (Int -> Result<String>)) -> String { "wrong kleisli" }
 
@@ -227,7 +227,7 @@ fn flow_bind_closure_safebind_receives_result_context() {
 }
 
 def gen(x: Int) -> Result<Int, Oops> {
-  if(x > 0, Ok(x), Err(Oops))
+  if(x > 0, Ok(x), Err(Oops()))
 }
 
 bound: Result<Int> = Ok(2) |>= {|x|
@@ -253,7 +253,7 @@ fn flow_kleisli_closures_safebind_use_nearest_callable() {
 }
 
 def gen(x: Int) -> Result<Int, Oops> {
-  if(x > 0, Ok(x), Err(Oops))
+  if(x > 0, Ok(x), Err(Oops()))
 }
 
 pipeline: (Int -> Result<String>) = {|x|
@@ -281,7 +281,7 @@ def add(x: Int, y: Int) -> Int {
 }
 
 def require_at_least(x: Int, floor: Int) -> Result<Int, TooSmall> {
-  if(x >= floor, Ok(x), Err(TooSmall))
+  if(x >= floor, Ok(x), Err(TooSmall()))
 }
 
 mapped: Result<Int> = Ok(1) |*> add(2)
@@ -601,7 +601,7 @@ def allow(user: User) -> Result<User, HiddenUser> {
     ),
   )
 
-  if(visible, Ok(user), Err(HiddenUser))
+  if(visible, Ok(user), Err(HiddenUser()))
 }
 
 def age_band(user: User) -> String {
@@ -695,7 +695,7 @@ fn lens_result_helpers_support_set_over_and_over_result() {
     assert_output(
         r#"defrecord User(score: Result<Int>)
 
-user1 = User(Err(NoneError))
+user1 = User(Err(NoneError()))
 user2 =? Facet::set(User.score, user1, Ok(3))
 print("set:" ++ inspect(user2.score))
 
@@ -750,7 +750,7 @@ print("score:" ++ inspect(account2.score))
 print("pair:" ++ inspect(account2.pair))
 print("zip:" ++ to_string(account2.user.address.zip))
 
-account_err = Account(user, Err(NoneError), ("hold", 9))
+account_err = Account(user, Err(NoneError()), ("hold", 9))
 account_err2 =? Facet::bulk_update(account_err) {
   score <- over({|value| Ok(value + 1)})
 }

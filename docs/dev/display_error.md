@@ -189,7 +189,7 @@ REPL は診断の表示量と stack trace の表示を別々に設定する。
 ```text
 :error summary
 :stacktrace verbose
-def fail() -> Result<Int> { Err(NoneError) }
+def fail() -> Result<Int> { Err(NoneError()) }
 fail()
 ```
 

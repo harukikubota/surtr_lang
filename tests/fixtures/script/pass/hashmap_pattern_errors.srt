@@ -11,11 +11,11 @@ print(report(apply_pattern(hash!["a" => 2], hash!["a" => 3, "b" => _])))
 print(report(apply_pattern(hash!["a" => map], hash!["a" => hash!["z" => _]])))
 pinned = "actual-key"
 print(report(apply_pattern(map, hash![^pinned => _])))
-values: HashMap<Result<Int>> = hash!["a" => Ok(2), "extra" => Err(NoneError)]
+values: HashMap<Result<Int>> = hash!["a" => Ok(2), "extra" => Err(NoneError())]
 print(inspect(apply_pattern(values, hash!["a" => _1])))
 print(inspect(apply_pattern(values, hash!["a" => Ok(_1)])))
-print(report(apply_pattern(hash!["a" => Err(NoneError)], hash!["a" => Ok(_: Int)])))
-print(inspect(match hash!["a" => Err(NoneError)] { hash!["a" => entire: Result<Int>] => is_match(entire, Err(_)), _ => False, }))
+print(report(apply_pattern(hash!["a" => Err(NoneError())], hash!["a" => Ok(_: Int)])))
+print(inspect(match hash!["a" => Err(NoneError())] { hash!["a" => entire: Result<Int>] => is_match(entire, Err(_)), _ => False, }))
 original: Error = HashMapKeyMissing("original")
 failed: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|n: Int| MatchResult::Err(original)}
 print(report(apply_pattern(hash!["a" => 1], hash!["a" => failed(_), "b" => _])))

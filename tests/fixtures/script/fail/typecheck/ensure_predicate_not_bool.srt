@@ -1,1 +1,1 @@
-guard = ensure(4, {|n| n + 1 }, NoneError)
+guard = ensure(4, {|n| n + 1 }, NoneError())

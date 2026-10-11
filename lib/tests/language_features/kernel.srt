@@ -26,29 +26,29 @@ test("Kernel") {
   describe("require") {
     it("accepts true") {
       do {
-        assert_ok(require(True, NoneError))
+        assert_ok(require(True, NoneError()))
       }
     }
     it("rejects false with the provided kind") {
       do {
-        assert_err_kind(NoneError, require(False, NoneError))
+        assert_err_kind(NoneError, require(False, NoneError()))
       }
     }
   }
   describe("ensure") {
     it("returns an accepted value unchanged") {
       do {
-        assert_ok_eq(3, ensure(3, {|n| n > 0}, NoneError))
+        assert_ok_eq(3, ensure(3, {|n| n > 0}, NoneError()))
       }
     }
     it("rejects a failed predicate") {
       do {
-        assert_err_kind(NoneError, ensure(0, {|n| n > 0}, NoneError))
+        assert_err_kind(NoneError, ensure(0, {|n| n > 0}, NoneError()))
       }
     }
     it("calls the predicate once") {
       do {
-        actual = ensure(3, {|n| print("predicate"); n > 0}, NoneError)
+        actual = ensure(3, {|n| print("predicate"); n > 0}, NoneError())
 
         assert_ok_eq(3, actual)
         assert_stdout_eq(["predicate"])

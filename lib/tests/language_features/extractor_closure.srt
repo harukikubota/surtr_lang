@@ -180,7 +180,7 @@ test("ExtractorClosure contract") {
   it("supports omitted wildcard and annotated Unit children") {
     do {
       ext = *{|value: Int|
-        if(value > 0, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError))
+        if(value > 0, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError()))
       }
 
       assert_true(is_match(1, ext()))

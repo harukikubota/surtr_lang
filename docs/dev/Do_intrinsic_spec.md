@@ -97,7 +97,7 @@ MonadFail route は RHS Err と Pattern failure の元 Error を保持し、Alte
 標準 MonadFail は Result、Either<Error, A>、ResultT、EitherT<Error, M, A>、および base が MonadFail の ReaderT / StateT に提供する。
 MonadFail を持たない Option / List / OptionT 等は現行の Alternative route を維持し、Extractor Error を破棄する。
 partial `<-` は `Monad::bind` が渡した payload 全体を照合し、その payload が `Result` でも
-SafeBind の外側一段の自動分解を追加しない。`Ok(x) <- [Ok(1), Err(NoneError)]` は成功要素だけを残す。
+SafeBind の外側一段の自動分解を追加しない。`Ok(x) <- [Ok(1), Err(NoneError())]` は成功要素だけを残す。
 do 本文内の `apply_pattern` は自身の `Result` を返す式であり、外側 carrier の failure target を使わない。
 各binding/continuationの実行ごとにRHSを一度評価し、failureとなった経路の後続continuationを実行しない。
 List等の分岐carrierでは、後続continuationを各payloadについて実行する。

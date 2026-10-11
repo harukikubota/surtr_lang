@@ -82,7 +82,7 @@ fn standard_handler_pid_still_has_no_eq_capability() {
 fn pid_marker_generic_cannot_be_specialized_to_an_ordinary_value_type() {
     let error = check(
         "defmod Probe {
- def make::<$P>() -> Result<PID<$P>> { Err(NoneError) }
+ def make::<$P>() -> Result<PID<$P>> { Err(NoneError()) }
  def invalid() -> Unit { make::<Int>(); () }
 }",
     )
@@ -103,7 +103,7 @@ fn pid_marker_generic_is_distinct_from_the_pid_value_type() {
 #[test]
 fn pid_marker_return_type_argument_preserves_a_declared_process() {
     let source = format!(
-        "{}\ndefmod Probe {{\n def make::<$P>() -> Result<PID<$P>> {{ Err(NoneError) }}\n def valid() -> Result<PID<Counter>> {{ make::<Counter>() }}\n}}",
+        "{}\ndefmod Probe {{\n def make::<$P>() -> Result<PID<$P>> {{ Err(NoneError()) }}\n def valid() -> Result<PID<Counter>> {{ make::<Counter>() }}\n}}",
         worker("Counter")
     );
     check(&source).expect("marker return type arguments must resolve the declared process");
@@ -116,7 +116,7 @@ fn trait_candidate_cannot_specialize_a_pid_marker_to_a_value_type() {
 }
 
 impl Fixture for Int {
- def marker(self: Self, value: $P) -> Result<PID<$P>> { Err(NoneError) }
+ def marker(self: Self, value: $P) -> Result<PID<$P>> { Err(NoneError()) }
 }
 defmod Probe {
  def invalid() -> Unit { Fixture::marker(0, 1); () }
@@ -132,7 +132,7 @@ defmod Probe {
 fn local_pid_annotation_cannot_strengthen_an_ordinary_rigid_generic() {
     let source = "defmod Probe {
  def ignore(value: $A) -> Unit {
-  pending: Result<PID<$A>> = Err(NoneError)
+  pending: Result<PID<$A>> = Err(NoneError())
   ()
  }
 }";

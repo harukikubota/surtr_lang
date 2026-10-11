@@ -20,7 +20,7 @@
 optional enum selector は廃止され、`Option.Some` のような required selector を
 `Facet::case_set` / `Facet::case_over` で使います。selector mismatch は常に `Err` です。
 `Result` を返す helper と直接つなぎたい field では、
-`Result<T>` を使い、値がない場合は `Err(NoneError)` を返します。
+`Result<T>` を使い、値がない場合は `Err(NoneError())` を返します。
 
 また、source を伴う API では `~source.path` shorthand が使えます。
 これは source 実体と structural path の組を compiler-managed に expand する sugar で、

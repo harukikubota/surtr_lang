@@ -11,7 +11,7 @@ deferror ZeroModuloError() {
 Shared concrete error for "no value" situations.
 `NoneError` is the standard failure used by optional-style sugar such as `T?`.
 `T?` now lowers to `Option<T>`.
-Use `Result<T>` with `Err(NoneError)` when "missing value" should participate in
+Use `Result<T>` with `Err(NoneError())` when "missing value" should participate in
 Result-style failure propagation. A function definition may document this contract
 with `Result<T, NoneError>` in its direct return position.
 """

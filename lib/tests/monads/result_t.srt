@@ -33,21 +33,21 @@ test("ResultT") {
   }
   it("preserves an inner Error without calling the continuation") {
     do {
-      value = ResultT::err::<Identity, Int>(ResultTFailure)
+      value = ResultT::err::<Identity, Int>(ResultTFailure())
       bound = Monad::bind(value, {|item| ResultT::ok::<Identity>(item + 1)})
       assert_eq("preserved", observed(Identity::run(ResultT::run(bound))))
     }
   }
   it("keeps MonadFail in the inner failure layer") {
     do {
-      value: ResultT<Result, Int> = MonadFail::fail(ResultTFailure)
+      value: ResultT<Result, Int> = MonadFail::fail(ResultTFailure())
       inner =? ResultT::run(value)
       assert_eq("preserved", observed(inner))
     }
   }
   it("converts both value and transformer representations") {
     do {
-      either: Either<Error, Int> = to(Err(ResultTFailure))
+      either: Either<Error, Int> = to(Err(ResultTFailure()))
       result: Result<Int> = to(either)
       original = ResultT::from_result::<Identity>(result)
       transformed: EitherT<Error, Identity, Int> = to(original)
@@ -57,7 +57,7 @@ test("ResultT") {
   }
   it("preserves the base Error independently of the inner Result") {
     do {
-      base: Result<Result<Int>> = Err(ResultTFailure)
+      base: Result<Result<Int>> = Err(ResultTFailure())
       value = ResultT::new(base)
       mapped = Functor::fmap(value, {|item| item + 1})
       match ResultT::run(mapped) {
@@ -68,7 +68,7 @@ test("ResultT") {
   }
   it("sequences the mapper before the value and skips it after an inner Err") {
     do {
-      base_mapper: State<Int, Result<(Int -> Int)>> = State::new({|state| (Err(ResultTFailure), state + 1)})
+      base_mapper: State<Int, Result<(Int -> Int)>> = State::new({|state| (Err(ResultTFailure()), state + 1)})
       mapper = ResultT::new(base_mapper)
       base_value: State<Int, Result<Int>> = State::new({|state| (Ok(4), state + 100)})
       value = ResultT::new(base_value)

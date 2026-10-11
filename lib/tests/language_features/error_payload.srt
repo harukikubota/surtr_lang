@@ -135,7 +135,7 @@ test("Error payload") {
         },
         _ => fail("expected assertion Error payload"),
       }
-      wrapped = Result::cause(Err(inner), NoneError)
+      wrapped = Result::cause(Err(inner), NoneError())
       assert_cause_chain([NoneError, SavedPayload], wrapped)
       same_kind: Result<Int> = Err(SavedPayload(1))
       different_payload: Result<Int> = Err(SavedPayload(7))

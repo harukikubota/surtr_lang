@@ -447,7 +447,6 @@ pub enum BuiltinTypeUsage {
     IntrinsicSignatureOnly(IntrinsicId),
     /// MatchResult is confined to an Extractor's result and return paths.
     ExtractorResultOnly,
-    StdParameterOnly,
 }
 
 /// Compile-space usage policy for builtin type heads.
@@ -719,16 +718,6 @@ impl TypeName {
                 BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false)
             }
             Self::Lazy => BuiltinTypeUsagePolicy::lazy_signature_surface_only(),
-            Self::ErrorKind => BuiltinTypeUsagePolicy::new_with_usage(
-                BuiltinTypeUsage::StdParameterOnly,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-            ),
             Self::Hole | Self::Closure => BuiltinTypeUsagePolicy::compiler_surface_only(),
             Self::MatchArms | Self::CondClauses | Self::BulkUpdateEntries => {
                 BuiltinTypeUsagePolicy::clause_block_surface_only()

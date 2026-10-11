@@ -1,5 +1,5 @@
 def lookup(n: Int) -> Result<Int> {
-  if(n == 1, Err(ZeroDivisionError), Ok(n))
+  if(n == 1, Err(ZeroDivisionError()), Ok(n))
 }
 
 List::find_map([1, 2], &lookup)

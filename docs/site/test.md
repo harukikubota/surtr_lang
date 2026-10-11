@@ -180,7 +180,7 @@ import Test;
 
 test("cause chain") {
   it("keeps the original cause") {
-    result = Result::cause(Err(NoneError), ZeroDivisionError)
+    result = Result::cause(Err(NoneError()), ZeroDivisionError())
     assert_cause_chain([ZeroDivisionError, NoneError], result)
   }
 }
@@ -200,7 +200,7 @@ test("cause chain") {
 
 `push_stdin(text)` はテスト用の入力を追加します。
 入力と出力はケースごとに分かれており、読み残しは次の `it` に持ち越されません。
-ケースの入力は空の状態から始まります。入力を追加する前と、すべて読み終えた後は、`IO::get` は `Err(InputCharacterEnd)`、`IO::get_line` は `Err(InputLineEnd)` を返します。端末の入力は待ちません。
+ケースの入力は空の状態から始まります。入力を追加する前と、すべて読み終えた後は、`IO::get` は `Err(InputCharacterEnd())`、`IO::get_line` は `Err(InputLineEnd())` を返します。端末の入力は待ちません。
 
 ```surtr
 import Test;

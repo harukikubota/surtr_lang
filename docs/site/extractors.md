@@ -24,7 +24,7 @@ deferror Rejected { "input rejected" }
 
 defmod Matchers {
   defextractor never(value: Int) -> MatchResult<Int, Error> {
-    MatchResult::Err(Rejected)
+    MatchResult::Err(Rejected())
   }
 }
 ```
@@ -42,7 +42,7 @@ print(match 1 {
 })
 ```
 
-この例では `never(...)` が常に `MatchResult::Err(Rejected)` を返すため、fallback 側に流れます。
+この例では `never(...)` が常に `MatchResult::Err(Rejected())` を返すため、fallback 側に流れます。
 
 named `defextractor` の戻り値は `MatchResult<$A>` が正規表記です。戻り値位置では `MatchResult<$A, Error>` と Error を明記することもできます。ExtractorClosure の型注釈には第二型引数を書きません。
 `MatchResult::Ok(payload)` は子 pattern の照合へ進み、`MatchResult::Err(error)` は
@@ -68,7 +68,7 @@ Extractor 本文の計算量や Effect は制限しません。Process messaging
 deferror Outside { "outside range" }
 defmod Bounds {
   defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
-    if(and(min <= value, value <= max), MatchResult::Ok(value), MatchResult::Err(Outside))
+    if(and(min <= value, value <= max), MatchResult::Ok(value), MatchResult::Err(Outside()))
   }
 }
 # 利用側

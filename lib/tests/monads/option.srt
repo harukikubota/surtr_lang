@@ -70,7 +70,7 @@ test("Option") {
 
     it("converts Err to None") {
       do {
-        source: Result<Int> = Err(ZeroDivisionError)
+        source: Result<Int> = Err(ZeroDivisionError())
         converted: Option<Int> = to::<Option>(source)
 
         assert_none(converted)
@@ -100,7 +100,7 @@ test("Option") {
 
     it("propagates a mapper error") {
       do {
-        mapped: Result<Option<Int>> = Option::traverse_result(Option::Some(7), {|_| Err(NoneError)})
+        mapped: Result<Option<Int>> = Option::traverse_result(Option::Some(7), {|_| Err(NoneError())})
 
         assert_err_kind(NoneError, mapped)
       }

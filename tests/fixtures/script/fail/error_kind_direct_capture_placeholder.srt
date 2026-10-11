@@ -1,1 +1,0 @@
-capture = &Result::recover_kind(&1, &2, &3)

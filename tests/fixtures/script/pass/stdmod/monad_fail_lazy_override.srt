@@ -15,7 +15,7 @@ where
 
 def make_error() -> Error {
   print("error")
-  Stopped
+  Stopped()
 }
 
 def make_success() -> Either<String, Int> {

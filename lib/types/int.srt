@@ -12,7 +12,7 @@ impl Int {
   @doc """
   Return the integer quotient and remainder of `a` divided by `b`.
   The quotient truncates toward zero; a nonzero remainder has the sign of `a`.
-  A zero divisor returns `Err(ZeroDivisionError)`.
+  A zero divisor returns `Err(ZeroDivisionError())`.
   ## REPL
   xldr(1)> Int::div_mod(7, 3)
   Ok((2, 1))
@@ -191,7 +191,7 @@ impl Int {
   """
   def parse_literal(text: String) -> Result<Int> {
     match text {
-      "" => Err(IntLiteralEmpty),
+      "" => Err(IntLiteralEmpty()),
       ["-", ..tail] => match tail {
         "" => Err(IntLiteralSignWithoutDigits(text)),
         _ => _parse_literal_unsigned(tail, -1, 1),
@@ -499,9 +499,9 @@ impl Int {
         cp >= 48 && cp <= 57 => Ok(cp - 48),
         cp >= 65 && cp <= 70 => Ok(cp - 55),
         cp >= 97 && cp <= 102 => Ok(cp - 87),
-        True => Err(NoneError),
+        True => Err(NoneError()),
       },
-      _ => Err(NoneError),
+      _ => Err(NoneError()),
     }
   }
 
@@ -625,7 +625,7 @@ impl Int {
     start_index: Int,
   ) -> Result<Int> {
     match chars {
-      "" => Err(IntLiteralEmpty),
+      "" => Err(IntLiteralEmpty()),
       ["0", ..tail] => match tail {
         "" => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
         ["b", ..body] => _parse_literal_prefixed(body, IntBase::Bin, sign, start_index + 2),
@@ -766,7 +766,7 @@ impl Mul for Int {
 
 impl Div for Int {
   @doc """
-  Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
+  Divide two values and return `Err(ZeroDivisionError())` instead of trapping.
   The success case keeps the same value type as the inputs.
   This follows the `Result`/`Either` style of representing failure as a value.
   ## REPL
@@ -778,7 +778,7 @@ impl Div for Int {
 
 impl Mod for Int {
   @doc """
-  Compute `a mod b` for integers and return `Err(ZeroModuloError)` on zero.
+  Compute `a mod b` for integers and return `Err(ZeroModuloError())` on zero.
   Failure stays on the value side rather than becoming an implicit exception.
   ## REPL
   xldr(1)> Mod::safe_mod(7, 3)

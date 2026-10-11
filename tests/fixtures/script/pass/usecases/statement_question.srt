@@ -23,7 +23,7 @@ def outer_only(value: Result<Result<()>>) -> Result<()> {
 
 def nested_target() -> Result<Int> {
   inner: (-> Result<()>) = {||
-    value: Result<()> = Err(NoneError)
+    value: Result<()> = Err(NoneError())
     value?
     print("unreachable-inner")
     Ok(())
@@ -35,7 +35,7 @@ def nested_target() -> Result<Int> {
 
 def do_target() -> Int {
   saved = do::<Result> {
-    value: Result<()> = Err(NoneError)
+    value: Result<()> = Err(NoneError())
     value?
     print("unreachable-do")
     Ok(())
@@ -45,8 +45,8 @@ def do_target() -> Int {
 }
 
 print(inspect(sequence()))
-print(inspect(stop(Err(NoneError))))
-print(inspect(outer_only(Ok(Err(NoneError)))))
-print(inspect(outer_only(Err(NoneError))))
+print(inspect(stop(Err(NoneError()))))
+print(inspect(outer_only(Ok(Err(NoneError())))))
+print(inspect(outer_only(Err(NoneError()))))
 print(inspect(nested_target()))
 print(to_string(do_target()))

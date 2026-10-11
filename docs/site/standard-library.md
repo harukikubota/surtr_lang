@@ -140,7 +140,7 @@ compiler-special type の詳しい説明は `./special-types.md` を参照して
 `Error` は具体 error の列挙ではなく、recoverable failure を受ける抽象型です。
 
 - `deferror Boom { ... }` のような宣言が具体 error を作る
-- `Err(Boom)` のように `Result` の失敗側へ乗る
+- `Err(Boom())` のように `Result` の失敗側へ乗る
 - `Error` 自体を new するのではなく、具体 error を経由して使う
 
 `Result` は例外の代用品ではなく、`Either` 指向の値表現として読むと分かりやすくなります。

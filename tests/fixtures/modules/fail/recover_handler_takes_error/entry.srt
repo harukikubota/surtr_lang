@@ -1,1 +1,0 @@
-value = Result::recover(Err(Timeout), {|err| Ok(1)})

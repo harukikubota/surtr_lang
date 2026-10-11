@@ -153,7 +153,7 @@ defmod Parsing {
   def parse_bool(text: String) -> Result<Boolean> = match text {
     "true" => Ok(True),
     "false" => Ok(False),
-    _ => Err(NoneError)
+    _ => Err(NoneError())
   }
 }
 ```

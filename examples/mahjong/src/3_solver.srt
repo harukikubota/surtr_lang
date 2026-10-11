@@ -41,7 +41,7 @@ defmod MahjongSolver {
 
   defp _remove_first(ids: List<Int>, target: Int) -> Result<List<Int>> {
     match ids {
-      [] => Err(NoneError),
+      [] => Err(NoneError()),
       [head, ..tail] => if(
         head == target,
         Ok(tail),

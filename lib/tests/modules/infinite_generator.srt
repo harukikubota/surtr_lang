@@ -38,9 +38,9 @@ test("InfiniteGenerator") {
 
     it("treats Result items as data") {
       do {
-        gen = InfiniteGenerator::unfold(0, {|n| (if(n == 0, Err(NoneError), Ok(n)), n + 1)})
+        gen = InfiniteGenerator::unfold(0, {|n| (if(n == 0, Err(NoneError()), Ok(n)), n + 1)})
 
-        assert_eq([Err(NoneError), Ok(1), Ok(2)], InfiniteGenerator::take(gen, 3)._0)
+        assert_eq([Err(NoneError()), Ok(1), Ok(2)], InfiniteGenerator::take(gen, 3)._0)
       }
     }
 

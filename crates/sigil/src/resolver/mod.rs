@@ -737,7 +737,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_pattern(pattern, base, offset);
         }
         Resolved::Lit(..) | Resolved::ListNil(_) => {}
-        Resolved::Var(_, id) => rebase_resolved_id(id, base, offset),
+        Resolved::Var(_, id) | Resolved::ErrorKind(_, id) => rebase_resolved_id(id, base, offset),
         Resolved::App(_, func, args) => {
             rebase_resolved_node(func, base, offset);
             for arg in args {
@@ -837,17 +837,6 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
             rebase_resolved_node(value, base, offset);
             rebase_resolved_node(err, base, offset);
-        }
-        Resolved::AssertErrorKinds(_, markers, value) => {
-            for marker in markers.markers_mut() {
-                rebase_resolved_id(marker, base, offset);
-            }
-            rebase_resolved_node(value, base, offset);
-        }
-        Resolved::RecoverKind(_, value, marker, handler) => {
-            rebase_resolved_node(value, base, offset);
-            rebase_resolved_id(marker, base, offset);
-            rebase_resolved_node(handler, base, offset);
         }
         Resolved::Match(_, scrutinee, arms)
         | Resolved::IsMatch(_, scrutinee, arms)

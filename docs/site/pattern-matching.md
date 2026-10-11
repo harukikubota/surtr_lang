@@ -133,14 +133,14 @@ match Ok(42) {
 Error の子 Pattern では、具象 Error 名だけなら kind を照合し、子 Pattern を書くと保存フィールドを宣言順で分解します。名前指定ではフィールド名で対応付けます。Error 全体も使うときは alias を付けます。
 
 ```surtr
-match Err(ZeroDivisionError) {
+match Err(ZeroDivisionError()) {
   Ok(value) => value,
   Err(NoneError | ZeroDivisionError @ err: Error) => Error::kind(err),
   Err(err) => Error::format(err),
 }
 ```
 
-`Err(Err(...))` は外側の Error を Result として再分解する形なので拒否されます。内側の Result の失敗を照合する形は `Ok(Err(...))` です。`Result::recover_kind` の `ErrorKind` 引数は専用の型名マーカーであり、Pattern を値として渡す機能ではありません。Error の観測・保持の制約は [Error Handling](./error-handling.md) を参照してください。
+`Err(Err(...))` は外側の Error を Result として再分解する形なので拒否されます。内側の Result の失敗を照合する形は `Ok(Err(...))` です。`Result::recover_kind` の `ErrorKind` 引数には、裸の `deferror` 名や、変数に保持した種類の値を渡します。Pattern 自体を値として渡すことはできません。Error の観測・保持の制約は [Error Handling](./error-handling.md) を参照してください。
 
 ### Error の照合とダウンキャスト
 

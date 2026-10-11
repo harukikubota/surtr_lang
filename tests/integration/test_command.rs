@@ -372,9 +372,9 @@ fn test_command_assertion_captions_use_the_executed_call_site() {
         ("assert_false(True)", "assert_false"),
         ("assert_eq(1, 2)", "assert_eq"),
         ("assert_ok_eq(1, Ok(2))", "assert_ok_eq"),
-        ("assert_ok_eq(1, Err(NoneError))", "assert_ok_eq"),
+        ("assert_ok_eq(1, Err(NoneError()))", "assert_ok_eq"),
         (
-            "assert_err_contains(\"missing\", Err(NoneError))",
+            "assert_err_contains(\"missing\", Err(NoneError()))",
             "assert_err_contains",
         ),
         (
@@ -408,7 +408,7 @@ fn test_command_validation_assertions_report_public_call_sites() {
         ("assert_gt(1, 2)", "assert_gt"),
         ("assert_gte(1, 2)", "assert_gte"),
         (
-            "assert_err_message_eq(\"other\", Err(NoneError))",
+            "assert_err_message_eq(\"other\", Err(NoneError()))",
             "assert_err_message_eq",
         ),
         ("assert_starts_with(\"a\", \"b\")", "assert_starts_with"),
@@ -833,7 +833,7 @@ test("Stdin") {
 
 test("Capture stderr") {
   it("asserts captured eprint fallback lines") {
-    value: Result<Int> = Err(NoneError)
+    value: Result<Int> = Err(NoneError())
     match value {
       Ok(_) => (),
       Err(err) => eprint(err),
@@ -851,7 +851,7 @@ import Test;
 test("IO isolation") {
   it("leaves unread io behind") {
     print("stdout-leak")
-    value: Result<Int> = Err(NoneError)
+    value: Result<Int> = Err(NoneError())
     match value {
       Ok(_) => (),
       Err(err) => eprint(err),
@@ -1255,7 +1255,7 @@ it("not reached") { assert_true(True) }
 
     write_math_test(
         &temp,
-        "import Test;\ntest(\"broken scope\") { Err(NoneError) }\n",
+        "import Test;\ntest(\"broken scope\") { Err(NoneError()) }\n",
     );
     let output = run_surtr(
         &temp,
@@ -1361,7 +1361,7 @@ fn test_command_extension_scan_and_declaration_failures_are_not_filtered() {
 #[test]
 fn test_command_extension_assertion_type_boundaries() {
     let temp = unique_temp_dir("surtr_test_extension_assertion_types");
-    let source = "import Test;\ndeferror PayloadFailure(detail: String) { |detail: String| Self(message: detail, detail) }\nassert_cause_chain([\"NoneError\"], Err(NoneError))\n";
+    let source = "import Test;\ndeferror PayloadFailure(detail: String) { |detail: String| Self(message: detail, detail) }\nassert_cause_chain([\"NoneError\"], Err(NoneError()))\n";
     write_math_test(&temp, source);
     let output = run_surtr(
         &temp,
@@ -1374,7 +1374,7 @@ fn test_command_extension_assertion_type_boundaries() {
         report["errors"][0]["message"]
             .as_str()
             .unwrap()
-            .contains("concrete deferror"),
+            .contains("ErrorKind"),
         "{source}: {report}"
     );
     let _ = fs::remove_dir_all(temp);
@@ -1460,10 +1460,10 @@ fn test_command_extended_assertions_return_expected_results() {
             ("ne passes", "assert_ne(1, 2)", None),
             ("ne fails", "assert_ne(1, 1)", Some("expected unequal")),
             ("ok needs no Eq", "assert_ok(Ok({|x: Int| x}))", None),
-            ("err passes", "assert_err(Err(NoneError))", None),
+            ("err passes", "assert_err(Err(NoneError()))", None),
             (
                 "ok rejects Err",
-                "assert_ok(Err(NoneError))",
+                "assert_ok(Err(NoneError()))",
                 Some("expected Ok"),
             ),
             ("err rejects Ok", "assert_err(Ok(1))", Some("expected Err")),
@@ -1686,15 +1686,23 @@ namespace First { deferror Same(detail: String) { |detail: String| Self(message:
 namespace Second { deferror Same(detail: String) { |detail: String| Self(message: detail, detail) } }
 def check_payload(result: Result<$A>) -> Result<()> { Test::assert_err_kind(PayloadFailure, result) }
 def check_chain(result: Result<$A>) -> Result<()> { Test::assert_cause_chain([PayloadFailure, NoneError], result) }
+def choose_kind() -> ErrorKind {
+  print("kind evaluated")
+  PayloadFailure
+}
+def choose_chain() -> List<ErrorKind> {
+  print("kinds evaluated")
+  [PayloadFailure, NoneError]
+}
 def make_failure() -> Result<Int> {
   print("evaluated")
-  Err(NoneError)
+  Err(NoneError())
 }
 "#;
 
 #[test]
 fn test_command_error_kind_assertion_uses_declaration_identity() {
-    check_assertion_cases(
+    let report = check_assertion_cases(
         "surtr_test_error_kind",
         ERROR_KIND_DECLARATIONS,
         &[
@@ -1705,7 +1713,7 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
             ),
             (
                 "nullary",
-                "assert_err_kind(NoneError, Err(NoneError))",
+                "assert_err_kind(NoneError, Err(NoneError()))",
                 None,
             ),
             (
@@ -1717,6 +1725,24 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
                 "capture",
                 r#"captured: (Result<Int> -> Result<()>) = &Test::assert_err_kind(PayloadFailure, &1)
  captured(Err(PayloadFailure("captured")))"#,
+                None,
+            ),
+            (
+                "dynamic kind",
+                r#"kind = choose_kind()
+ assert_err_kind(kind, Err(PayloadFailure("dynamic")))"#,
+                None,
+            ),
+            (
+                "dynamic kind mismatch",
+                r#"kind = First::Same
+ assert_err_kind(kind, Err(Second::Same("same")))"#,
+                Some("expected Err kind First::Same, got Second::Same"),
+            ),
+            (
+                "capture kind placeholder",
+                r#"captured: (ErrorKind, Result<Int> -> Result<()>) = &Test::assert_err_kind(&1, &2)
+ captured(PayloadFailure, Err(PayloadFailure("placeholder")))"#,
                 None,
             ),
             (
@@ -1741,15 +1767,26 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
             ),
             (
                 "different kind",
-                "assert_err_kind(PayloadFailure, Err(OtherFailure))",
+                "assert_err_kind(PayloadFailure, Err(OtherFailure()))",
                 Some("expected Err kind Global::PayloadFailure, got Global::OtherFailure"),
             ),
             (
                 "root ignores cause",
-                r#"assert_err_kind(PayloadFailure, Result::cause(Err(NoneError), PayloadFailure("outer")))"#,
+                r#"assert_err_kind(PayloadFailure, Result::cause(Err(NoneError()), PayloadFailure("outer")))"#,
                 None,
             ),
         ],
+    );
+    let dynamic = report["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "dynamic kind")
+        .unwrap();
+    assert_eq!(
+        dynamic["io"]["stdout"],
+        serde_json::json!(["kind evaluated"]),
+        "{dynamic}"
     );
 }
 
@@ -1761,18 +1798,42 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
         &[
             (
                 "outer first",
-                r#"assert_cause_chain([PayloadFailure, NoneError], Result::cause(Err(NoneError), PayloadFailure("outer")))"#,
+                r#"assert_cause_chain([PayloadFailure, NoneError], Result::cause(Err(NoneError()), PayloadFailure("outer")))"#,
                 None,
             ),
             (
                 "singleton",
-                "assert_cause_chain([NoneError], Err(NoneError))",
+                "assert_cause_chain([NoneError], Err(NoneError()))",
                 None,
             ),
             (
                 "repeated kind",
-                "assert_cause_chain([NoneError, NoneError], Result::cause(Err(NoneError), NoneError))",
+                "assert_cause_chain([NoneError, NoneError], Result::cause(Err(NoneError()), NoneError()))",
                 None,
+            ),
+            (
+                "dynamic chain",
+                r#"kinds = choose_chain()
+ assert_cause_chain(kinds, Result::cause(Err(NoneError()), PayloadFailure("dynamic")))"#,
+                None,
+            ),
+            (
+                "spread tail",
+                r#"tail = [NoneError]
+ assert_cause_chain([PayloadFailure, ..tail], Result::cause(Err(NoneError()), PayloadFailure("spread")))"#,
+                None,
+            ),
+            (
+                "capture list placeholder",
+                r#"captured: (List<ErrorKind>, Result<Int> -> Result<()>) = &Test::assert_cause_chain(&1, &2)
+ kinds = [PayloadFailure, NoneError]
+ captured(kinds, Result::cause(Err(NoneError()), PayloadFailure("placeholder")))"#,
+                None,
+            ),
+            (
+                "dynamic empty Err",
+                "kinds: List<ErrorKind> = []\nassert_cause_chain(kinds, Err(NoneError()))",
+                Some("cause chain length mismatch: expected 0, got 1"),
             ),
             (
                 "qualified",
@@ -1791,17 +1852,17 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             ),
             (
                 "missing cause",
-                "assert_cause_chain([NoneError], Result::cause(Err(NoneError), NoneError))",
+                "assert_cause_chain([NoneError], Result::cause(Err(NoneError()), NoneError()))",
                 Some("length mismatch: expected 1, got 2"),
             ),
             (
                 "extra cause",
-                "assert_cause_chain([NoneError, NoneError], Err(NoneError))",
+                "assert_cause_chain([NoneError, NoneError], Err(NoneError()))",
                 Some("length mismatch: expected 2, got 1"),
             ),
             (
                 "empty Err",
-                "assert_cause_chain([], Err(NoneError))",
+                "assert_cause_chain([], Err(NoneError()))",
                 Some("cause chain length mismatch: expected 0, got 1"),
             ),
             ("empty Ok", "assert_cause_chain([], Ok(1))", Some("got Ok")),
@@ -1818,18 +1879,18 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             (
                 "capture",
                 r#"captured: (Result<Int> -> Result<()>) = &Test::assert_cause_chain([PayloadFailure, NoneError], &1)
- captured(Result::cause(Err(NoneError), PayloadFailure("capture")))"#,
+ captured(Result::cause(Err(NoneError()), PayloadFailure("capture")))"#,
                 None,
             ),
             (
                 "generic Int",
-                r#"value: Result<Int> = Result::cause(Err(NoneError), PayloadFailure("int"))
+                r#"value: Result<Int> = Result::cause(Err(NoneError()), PayloadFailure("int"))
  check_chain(value)"#,
                 None,
             ),
             (
                 "generic String",
-                r#"value: Result<String> = Result::cause(Err(NoneError), PayloadFailure("string"))
+                r#"value: Result<String> = Result::cause(Err(NoneError()), PayloadFailure("string"))
  check_chain(value)"#,
                 None,
             ),
@@ -1845,10 +1906,21 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             ),
             (
                 "three entries",
-                r#"assert_cause_chain([PayloadFailure, PayloadFailure, NoneError], Result::cause(Result::cause(Err(NoneError), PayloadFailure("inner")), PayloadFailure("outer")))"#,
+                r#"assert_cause_chain([PayloadFailure, PayloadFailure, NoneError], Result::cause(Result::cause(Err(NoneError()), PayloadFailure("inner")), PayloadFailure("outer")))"#,
                 None,
             ),
         ],
+    );
+    let dynamic = report["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "dynamic chain")
+        .unwrap();
+    assert_eq!(
+        dynamic["io"]["stdout"],
+        serde_json::json!(["kinds evaluated"]),
+        "{dynamic}"
     );
     let evaluated = report["cases"]
         .as_array()

@@ -413,7 +413,6 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs) => recurse(rhs),
             TypedInner::DoSafeBind(control) => recurse(&control.rhs)
                 .or_else(|| match &control.failure_target {
@@ -434,9 +433,6 @@ impl Checker {
             TypedInner::Ensure(value, predicate, error) => recurse(value)
                 .or_else(|| recurse(predicate))
                 .or_else(|| recurse(error)),
-            TypedInner::RecoverKind(value, _, handler) => {
-                recurse(value).or_else(|| recurse(handler))
-            }
             TypedInner::Match(scrutinee, arms) => recurse(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
@@ -472,6 +468,7 @@ impl Checker {
                 source, update_fun, ..
             } => recurse(source).or_else(|| recurse(update_fun)),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
@@ -903,9 +900,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => self
                 .find_typed_node(value, inspect)
                 .or_else(|| self.find_typed_node(err, inspect)),
-            TypedInner::RecoverKind(value, _, handler) => self
-                .find_typed_node(value, inspect)
-                .or_else(|| self.find_typed_node(handler, inspect)),
             TypedInner::Match(scrutinee, arms) => {
                 self.find_typed_node(scrutinee, inspect).or_else(|| {
                     arms.iter().find_map(|arm| {
@@ -925,9 +919,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .find_map(|arg| self.find_typed_node(&arg.expr, inspect)),
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                self.find_typed_node(inner, inspect)
-            }
+            TypedInner::EagerBoundary(inner) => self.find_typed_node(inner, inspect),
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
@@ -951,6 +943,7 @@ impl Checker {
                 .find_typed_node(source, inspect)
                 .or_else(|| self.find_typed_node(update_fun, inspect)),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
@@ -1028,7 +1021,6 @@ impl Checker {
                 | TypedInner::SafeBind(_, rhs, _, _)
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _)
-                | TypedInner::AssertErrorKinds(_, rhs)
                 | TypedInner::EagerBoundary(rhs) => collect(rhs, obligations),
                 TypedInner::BinOp(_, left, right)
                 | TypedInner::Pipe(left, right)
@@ -1051,10 +1043,6 @@ impl Checker {
                     collect(value, obligations);
                     collect(pred, obligations);
                     collect(err, obligations);
-                }
-                TypedInner::RecoverKind(value, _, handler) => {
-                    collect(value, obligations);
-                    collect(handler, obligations);
                 }
                 TypedInner::Match(scrutinee, arms) => {
                     collect(scrutinee, obligations);
@@ -1198,7 +1186,6 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::Semi(rhs)
@@ -1238,7 +1225,6 @@ impl Checker {
             | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right)
-            | TypedInner::RecoverKind(left, _, right)
             | TypedInner::SupervisorWorkers {
                 init: left,
                 strategy: right,
@@ -1401,6 +1387,20 @@ impl Checker {
                     ty,
                     span: span.clone(),
                     node: TypedInner::Lit(lit.clone()),
+                })
+            }
+
+            Resolved::ErrorKind(span, id) => {
+                if !self.env.is_error_constructor(id.unique_id) {
+                    return Err(TypeError::new("ErrorKind requires a canonical deferror declaration", span.clone()));
+                }
+                let kind = id.qualified_name.clone().ok_or_else(|| {
+                    TypeError::new("ErrorKind identity has no canonical declaration name", span.clone())
+                })?;
+                Ok(TypedNode {
+                    ty: Ty::Enum("ErrorKind".into(), Vec::new()),
+                    span: span.clone(),
+                    node: TypedInner::ErrorKind(kind),
                 })
             }
 
@@ -1751,10 +1751,6 @@ impl Checker {
             Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
             Resolved::MapErr(span, value, err) => self.check_map_err(span, value, err),
             Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
-            Resolved::AssertErrorKinds(span, marker, value) => self.check_assert_error_kinds(span, marker, value),
-            Resolved::RecoverKind(span, value, marker, handler) => {
-                self.check_recover_kind(span, value, marker, handler)
-            }
 
             Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, None, *then_only)
@@ -3229,10 +3225,6 @@ impl Checker {
                 .check_explicit_enum_constructor_call(span, id, type_args, args, Some(expected_ty)),
             _ => {
                 let typed = self.check_node(node)?;
-                if matches!(expected_ty, Ty::Error) && self.is_concrete_error_value(&typed) {
-                    let call_span = typed.span.clone();
-                    return Ok(self.maybe_call_zero_arg_function(typed, call_span));
-                }
                 Ok(typed)
             }
         }
@@ -4297,6 +4289,7 @@ impl Checker {
         match node {
             Resolved::Lit(span, _)
             | Resolved::Var(span, _)
+            | Resolved::ErrorKind(span, _)
             | Resolved::App(span, _, _)
             | Resolved::ReturnTypeArgumentApply(span, _, _)
             | Resolved::Block(span, _)
@@ -4328,8 +4321,6 @@ impl Checker {
             | Resolved::Ensure(span, _, _, _)
             | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
-            | Resolved::RecoverKind(span, _, _, _)
-            | Resolved::AssertErrorKinds(span, _, _)
             | Resolved::IfLet(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::IsMatch(span, _, _)
@@ -14271,8 +14262,6 @@ impl Checker {
                     | Resolved::Ensure(..)
                     | Resolved::MapErr(..)
                     | Resolved::Cause(..)
-                    | Resolved::RecoverKind(..)
-                    | Resolved::AssertErrorKinds(..)
                     | Resolved::ApplyPattern(..)
                     | Resolved::IsMatch(..)
                     | Resolved::Dbg(..)
@@ -14796,127 +14785,6 @@ impl Checker {
             ty: typed_value.ty.clone(),
             span: span.clone(),
             node: TypedInner::Cause(Box::new(typed_value), Box::new(typed_err)),
-        })
-    }
-
-    fn checked_error_kind(&self, marker: &ResolvedId, api: &str) -> Result<String, TypeError> {
-        if !self.env.is_error_constructor(marker.unique_id) {
-            return Err(TypeError::new(
-                format!("{api} marker must be a concrete deferror type name"),
-                marker.span.clone(),
-            ));
-        }
-        let kind = marker.qualified_name.clone().ok_or_else(|| {
-            TypeError::new(
-                format!("{api} ErrorKind identity has no canonical declaration name"),
-                marker.span.clone(),
-            )
-        })?;
-        Ok(kind)
-    }
-
-    fn check_assert_error_kinds(
-        &mut self,
-        span: &Span,
-        markers: &sigil::resolved::ErrorKindAssertion<ResolvedId>,
-        value: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
-        use sigil::resolved::ErrorKindAssertion;
-        let api = markers.api();
-        let kinds = match markers {
-            ErrorKindAssertion::Root(marker) => {
-                ErrorKindAssertion::Root(self.checked_error_kind(marker, api)?)
-            }
-            ErrorKindAssertion::Chain(markers) => ErrorKindAssertion::Chain(
-                markers
-                    .iter()
-                    .map(|marker| self.checked_error_kind(marker, api))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-        };
-        let value = self.check_result_value(value, api, None)?;
-        Ok(TypedNode {
-            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
-            span: span.clone(),
-            node: TypedInner::AssertErrorKinds(kinds, Box::new(value)),
-        })
-    }
-
-    pub(super) fn check_recover_kind(
-        &mut self,
-        span: &Span,
-        value: &Resolved,
-        marker: &ResolvedId,
-        handler: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
-        let kind = self.checked_error_kind(marker, "recover_kind")?;
-        // Infer the success type from the handler before checking a
-        // polymorphic `Err(...)` value.  Otherwise `Err(NoneError)` is
-        // checked without context and its success slot defaults to `Unit`,
-        // rejecting valid handlers such as `Error -> Result<Int>`.
-        let ok_ty = self.env.fresh_tyvar();
-        let expected_handler = Ty::Func(
-            vec![Ty::Error],
-            Box::new(Ty::Result(Box::new(ok_ty.clone()), Box::new(Ty::Error))),
-        );
-        let mut typed_handler = self.check_node_with_expected(handler, Some(&expected_handler))?;
-        if matches!(self.resolve_ty(&typed_handler.ty), Ty::Var(_)) {
-            self.assert_type_relation(
-                &expected_handler,
-                &typed_handler.ty,
-                self.type_fact(SourceRole::Expected, span, &expected_handler),
-                self.type_fact(SourceRole::Value, &typed_handler.span, &typed_handler.ty),
-                TypeDiagnosticReason::ArgumentTypeMismatch,
-                DiagnosticOrigin::Call,
-                "recover_kind",
-                2,
-            )?;
-            typed_handler.ty = self.resolve_ty(&typed_handler.ty);
-        }
-        let (handler_in, handler_out) =
-            self.unary_function_parts(&typed_handler.ty, "recover_kind", &typed_handler.span)?;
-        if !self.types_compatible(&Ty::Error, &handler_in)? {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "recover_kind handler must accept Error, got {}",
-                    self.ty_name(&handler_in)
-                ),
-                span: typed_handler.span.clone(),
-                hint: None,
-            });
-        }
-        if !self.types_compatible(&expected_handler, &typed_handler.ty)? {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "recover_kind handler must return Result<{}>, got {}",
-                    self.ty_name(&ok_ty),
-                    self.ty_name(&handler_out)
-                ),
-                span: typed_handler.span.clone(),
-                hint: None,
-            });
-        }
-        let typed_value = self.check_result_value(value, "recover_kind", Some(&ok_ty))?;
-        let value_ty = self.resolve_ty(&typed_value.ty);
-        let Ty::Result(ok_ty, _) = &value_ty else {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "recover_kind value must resolve to Result<...>, got {}",
-                    self.ty_name(&value_ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        };
-        let ok_ty = ok_ty.as_ref().clone();
-
-        Ok(TypedNode {
-            ty: Ty::Result(Box::new(ok_ty), Box::new(Ty::Error)),
-            span: span.clone(),
-            node: TypedInner::RecoverKind(Box::new(typed_value), kind, Box::new(typed_handler)),
         })
     }
 

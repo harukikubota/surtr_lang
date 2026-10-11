@@ -1,0 +1,108 @@
+import Test;
+
+deferror RecoverFailure(code: Int) {
+  |code: Int|
+  Self(message: "recover failure", code)
+}
+defrecord KindEnvelope(kind: ErrorKind)
+deferror KindPayload(selected: ErrorKind) {
+  |selected: ErrorKind|
+  Self(message: "kind payload", selected)
+}
+namespace FirstKind { deferror Failure { "first" } }
+namespace SecondKind { deferror Failure { "second" } }
+deferror KindWithoutCall {
+  |required: String|
+  print("constructor-called")
+  required
+}
+def forward_kind(kind: $A) -> $A { kind }
+def forward_shadow(NoneError: Int) -> Int { NoneError }
+def choose_kind() -> ErrorKind { print("kind-created"); RecoverFailure }
+def choose_handler() -> (Error -> Result<Int>) {
+  print("handler-created")
+  {|error| print("handler-called"); Ok(String::len(error.message))}
+}
+def check_kind(error: Error, kind: ErrorKind) -> Result<Int> {
+  True =? Error::is_kind(error, kind)
+  Ok(1)
+}
+
+test("MonadRecover") {
+  it("transports opaque kinds without evaluating constructors") {
+    do {
+      kind = RecoverFailure
+      copy = forward_kind(kind)
+      kinds = [copy, NoneError]
+      first =? List::at((kinds, 1)._0, 0)
+      envelope = KindEnvelope(first)
+      assert_eq("ErrorKind(Global::RecoverFailure)", inspect(envelope.kind))
+      assert_true(Error::is_kind(RecoverFailure(4), envelope.kind))
+      assert_false(Error::is_kind(NoneError(), envelope.kind))
+      assert_eq("ErrorKind(Global::NoneError)", inspect((NoneError)))
+      constructor: (-> Error) = &NoneError
+      assert_true(Error::is_kind(constructor(), NoneError))
+      unused = KindWithoutCall
+      assert_eq("ErrorKind(Global::KindWithoutCall)", inspect(unused))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("passes the original error and does not recover a handler failure again") {
+    do {
+      original = RecoverFailure(7)
+      handled = MonadRecover::recover(Err(original), {|error| Ok(error.message)})
+      assert_ok_eq("recover failure", handled)
+      failed: Result<Int> = MonadRecover::recover(Err(original), {|error| MonadFail::fail(error)})
+      assert_err_kind(RecoverFailure, failed)
+      assert_err_message_eq("recover failure", failed)
+      assert_ok_eq(3, MonadRecover::recover(Ok(3), {|_| print("unexpected"); Ok(0)}))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("preserves unmatched errors and constructor payloads") {
+    do {
+      failed = Result::cause(Err(RecoverFailure(9)), NoneError())
+      kept: Result<Int> = MonadRecover::recover_kind(failed, RecoverFailure, {|_| Ok(0)})
+      assert_cause_chain([NoneError, RecoverFailure], kept)
+      restored = Result::recover_kind(Err(RecoverFailure(9)), RecoverFailure, {|error|
+        match error { RecoverFailure(code) => Ok(code), _ => Ok(0) }
+      })
+      assert_ok_eq(9, restored)
+    }
+  }
+
+  it("evaluates ordinary kind and handler arguments eagerly") {
+    do {
+      assert_ok_eq(1, Result::recover_kind(Ok(1), choose_kind(), choose_handler()))
+      assert_stdout_eq(["kind-created", "handler-created"])
+    }
+  }
+
+  it("captures and forwards the kind argument as an ordinary value") {
+    do {
+      recover: (Result<Int>, ErrorKind -> Result<Int>) = &Result::recover_kind(&1, &2, {|_| Ok(8)})
+      assert_ok_eq(8, recover(Err(NoneError()), NoneError))
+      assert_err_kind(NoneError, recover(Err(NoneError()), RecoverFailure))
+    }
+  }
+
+  it("produces a pattern failure when a kind predicate fails in SafeBind") {
+    do {
+      assert_ok_eq(1, check_kind(NoneError(), NoneError))
+      assert_err_kind(BooleanLiteralPatternMismatch, check_kind(NoneError(), RecoverFailure))
+    }
+  }
+
+  it("preserves canonical identity across namespaces and Error payloads") {
+    do {
+      assert_true(Error::is_kind(FirstKind::Failure(), FirstKind::Failure))
+      assert_false(Error::is_kind(FirstKind::Failure(), SecondKind::Failure))
+      saved = KindPayload(SecondKind::Failure)
+      matched = match saved { KindPayload(selected) => Error::is_kind(SecondKind::Failure(), selected), _ => False }
+      assert_true(matched)
+      assert_eq(4, forward_shadow(4))
+    }
+  }
+}

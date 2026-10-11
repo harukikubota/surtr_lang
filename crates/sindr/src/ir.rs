@@ -411,6 +411,7 @@ pub enum LiteralKind {
     Str,
     Bool,
     Unit,
+    ErrorKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1152,6 +1153,7 @@ pub enum Constant {
     Str(String),
     Bool(bool),
     Unit,
+    ErrorKind(String),
 }
 
 /// Checked runtime shape of an Error constructor input or payload field.
@@ -1193,6 +1195,7 @@ pub enum ErrorValueSchema {
         name: String,
         arguments: Vec<ErrorValueSchema>,
     },
+    ErrorKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1273,6 +1276,7 @@ impl ErrorValueSchema {
             | (Self::Boolean, Value::Bool(_))
             | (Self::Unit, Value::Unit)
             | (Self::Error, Value::Error(_))
+            | (Self::ErrorKind, Value::ErrorKind(_))
             | (Self::Callable { .. }, Value::Callable(_)) => true,
             (Self::TypeParameter(index), _) => bindings
                 .last()
@@ -2122,6 +2126,7 @@ fn derive_literals(constants: &[Constant]) -> Vec<LiteralEntry> {
                 Constant::Str(value) => (LiteralKind::Str, value.clone()),
                 Constant::Bool(value) => (LiteralKind::Bool, value.to_string()),
                 Constant::Unit => (LiteralKind::Unit, "Unit".to_string()),
+                Constant::ErrorKind(value) => (LiteralKind::ErrorKind, value.clone()),
             };
             LiteralEntry {
                 const_idx: idx as u32,
@@ -3175,6 +3180,32 @@ mod tests {
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
 
         assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_error_kind_constant_and_payload_schema() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.constants = vec![Constant::ErrorKind("ValidationError".into())];
+        bytecode.error_templates[0].input_types = vec![super::ErrorValueSchema::ErrorKind];
+        bytecode.error_templates[0].payload_fields =
+            vec![("kind".into(), super::ErrorValueSchema::ErrorKind)];
+        bytecode.refresh_viewer_metadata();
+        let decoded = Bytecode::decode(&bytecode.encode().unwrap()).unwrap();
+        assert_eq!(decoded, bytecode);
+        assert_eq!(decoded.literals[0].kind, super::LiteralKind::ErrorKind);
+        let schema = super::ErrorValueSchema::List(Box::new(super::ErrorValueSchema::ErrorKind));
+        assert!(schema.accepts(
+            &crate::runtime::Value::List(crate::runtime::ListHandle::from_items(vec![
+                crate::runtime::Value::ErrorKind("ValidationError".into()),
+            ])),
+            &sample_registry()
+        ));
+        assert!(!schema.accepts(
+            &crate::runtime::Value::List(crate::runtime::ListHandle::from_items(vec![
+                crate::runtime::Value::Str("ValidationError".into()),
+            ])),
+            &sample_registry()
+        ));
     }
 
     #[test]

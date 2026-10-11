@@ -59,7 +59,6 @@ pub(crate) enum BuiltinContinuation {
     Generator(generator::GeneratorContinuation),
     Runtime(crate::vm::RuntimeContinuation),
     Identity,
-    RecoverKind,
     FileWithOpen {
         path: String,
         mode: VmFileMode,
@@ -82,12 +81,6 @@ impl BuiltinContinuation {
             Self::Generator(continuation) => return continuation.resume(vm, result),
             Self::Runtime(continuation) => return continuation.resume(vm, result),
             Self::Identity => result?,
-            Self::RecoverKind => {
-                match decode_result_arg(&result?, "__recover_kind", "handler result")? {
-                    Ok(value) => ok_result(value),
-                    Err(err) => err_result_from_rich_error(err),
-                }
-            }
             Self::FileWithOpen { path, mode, handle } => {
                 let flush = vm.flush_file_resource(handle.id);
                 let close = vm.close_file_resource(handle.id);
@@ -221,10 +214,6 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "chain",
         func: |vm, args| builtin_result_chain(vm, args).map(BuiltinOutcome::Complete),
-    },
-    BuiltinImpl {
-        name: "__recover_kind",
-        func: builtin_result_recover_kind,
     },
     BuiltinImpl {
         name: "__test_push",
@@ -577,6 +566,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "kind",
         func: |vm, args| builtin_error_kind(vm, args).map(BuiltinOutcome::Complete),
+    },
+    BuiltinImpl {
+        name: "is_kind",
+        func: |vm, args| builtin_error_is_kind(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
         name: "same_kind",
@@ -1113,6 +1106,12 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "kind", "err")?;
     Ok(Value::Str(surface_path_name(&rich.kind).to_string()))
+}
+
+fn builtin_error_is_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let error = decode_error_arg(&args[0], "is_kind", "err")?;
+    let kind = decode_error_kind_arg(&args[1], "is_kind", "kind")?;
+    Ok(Value::Bool(error.kind == kind))
 }
 
 fn builtin_error_same_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2336,33 +2335,11 @@ fn builtin_result_chain(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     })
 }
 
-fn builtin_result_recover_kind(
-    _vm: &mut VM,
-    args: Vec<Value>,
-) -> Result<BuiltinOutcome, RuntimeError> {
-    let result = decode_result_arg(&args[0], "__recover_kind", "value")?;
-    let Value::Str(expected_kind) = &args[1] else {
-        return Err(RuntimeError::new(
-            "__recover_kind expects a static kind String",
-        ));
-    };
-    let handler = decode_callable_arg(&args[2], "__recover_kind", "handler")?;
-    Ok(match result {
-        Ok(value) => BuiltinOutcome::Complete(ok_result(value)),
-        Err(err) if err.kind == expected_kind.as_ref() => BuiltinOutcome::Call {
-            callable: handler,
-            args: vec![err_value(err)],
-            continuation: BuiltinContinuation::RecoverKind,
-        },
-        Err(err) => BuiltinOutcome::Complete(err_result_from_rich_error(err)),
-    })
-}
-
 fn builtin_test_assert_err_kind(
     vm: &mut VM,
     args: Vec<Value>,
 ) -> Result<BuiltinOutcome, RuntimeError> {
-    let expected = decode_string_arg(&args[0], "__test_assert_err_kind", "kind")?;
+    let expected = decode_error_kind_arg(&args[0], "__test_assert_err_kind", "kind")?;
     match decode_result_arg(&args[1], "__test_assert_err_kind", "result")? {
         Err(error) if error.kind == expected => complete(ok_result(Value::Unit)),
         Err(error) => language_error_result(
@@ -2385,7 +2362,7 @@ fn builtin_test_assert_cause_chain(
     vm: &mut VM,
     args: Vec<Value>,
 ) -> Result<BuiltinOutcome, RuntimeError> {
-    let expected = decode_string_list_arg(&args[0], "__test_assert_cause_chain", "expected")?;
+    let expected = decode_error_kind_list_arg(&args[0], "__test_assert_cause_chain", "expected")?;
     match decode_result_arg(&args[1], "__test_assert_cause_chain", "result")? {
         Ok(_) => language_error_result(
             vm,
@@ -4115,6 +4092,38 @@ fn mix64(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     value ^ (value >> 31)
+}
+
+fn decode_error_kind_arg<'a>(
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a str, RuntimeError> {
+    match value {
+        Value::ErrorKind(kind) => Ok(kind),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects ErrorKind as {arg_name}, got {other:?}"
+        ))),
+    }
+}
+
+fn decode_error_kind_list_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    let Value::List(list) = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects List<ErrorKind> as {arg_name}, got {value:?}"
+        )));
+    };
+    list.iter()
+        .enumerate()
+        .map(|(index, value)| {
+            decode_error_kind_arg(&value, builtin_name, &format!("{arg_name}[{index}]"))
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 fn decode_string_arg<'a>(
@@ -6131,6 +6140,139 @@ mod tests {
 
     fn sample_error_value(kind: &str, message: &str) -> Value {
         Value::Error(Box::new(sample_error(kind, message)))
+    }
+
+    #[test]
+    fn error_kind_comparison_uses_canonical_identity_and_rejects_other_values() {
+        let mut vm = test_vm();
+        for (kind, expected) in [("One::Failure", true), ("Two::Failure", false)] {
+            assert_eq!(
+                call_builtin(
+                    &mut vm,
+                    builtin_id("is_kind"),
+                    vec![
+                        sample_error_value("One::Failure", "message"),
+                        Value::ErrorKind(kind.into()),
+                    ]
+                )
+                .unwrap(),
+                Value::Bool(expected)
+            );
+        }
+        for kind in [
+            Value::Str("One::Failure".into()),
+            sample_error_value("One::Failure", "message"),
+            Value::Unit,
+        ] {
+            assert!(call_builtin(
+                &mut vm,
+                builtin_id("is_kind"),
+                vec![sample_error_value("One::Failure", "message"), kind,]
+            )
+            .unwrap_err()
+            .message
+            .contains("expects ErrorKind"));
+        }
+        assert!(call_builtin(
+            &mut vm,
+            builtin_id("is_kind"),
+            vec![Value::Unit, Value::ErrorKind("One::Failure".into()),]
+        )
+        .is_err());
+        assert_eq!(
+            inspect_value(
+                &vm,
+                &Value::Tuple(vec![Value::ErrorKind("One::Failure".into())])
+            )
+            .unwrap(),
+            "(ErrorKind(One::Failure))"
+        );
+    }
+
+    #[test]
+    fn test_error_kind_builtins_accept_dynamic_kind_values_and_validate_lists() {
+        let mut vm = test_vm();
+        use sindr::ir::ErrorValueSchema;
+        for name in ["TestExpectedCauseChain", "TestCauseChainMismatch"] {
+            vm.install_test_error_constructor(
+                name,
+                if name == "TestExpectedCauseChain" {
+                    vec![ErrorValueSchema::List(Box::new(ErrorValueSchema::String))]
+                } else {
+                    vec![ErrorValueSchema::List(Box::new(ErrorValueSchema::String)); 2]
+                },
+                "cause chain assertion failed",
+            );
+        }
+        let mut error = sample_error("One::Failure", "outer");
+        error.cause = Some(Box::new(sample_error("Two::Failure", "inner")));
+        let result = err_result_from_rich_error(error);
+        assert_eq!(
+            call_builtin(
+                &mut vm,
+                builtin_id("__test_assert_err_kind"),
+                vec![Value::ErrorKind("One::Failure".into()), result.clone(),]
+            )
+            .unwrap(),
+            ok_result(Value::Unit)
+        );
+        assert!(call_builtin(
+            &mut vm,
+            builtin_id("__test_assert_err_kind"),
+            vec![Value::Str("One::Failure".into()), result.clone(),]
+        )
+        .is_err());
+        let kinds = |names: &[&str]| {
+            Value::List(ListHandle::from_items(
+                names
+                    .iter()
+                    .map(|name| Value::ErrorKind((*name).into()))
+                    .collect(),
+            ))
+        };
+        assert_eq!(
+            call_builtin(
+                &mut vm,
+                builtin_id("__test_assert_cause_chain"),
+                vec![kinds(&["One::Failure", "Two::Failure"]), result.clone(),]
+            )
+            .unwrap(),
+            ok_result(Value::Unit)
+        );
+        for names in [
+            &[][..],
+            &["Two::Failure", "One::Failure"][..],
+            &["One::Failure"][..],
+        ] {
+            let value = call_builtin(
+                &mut vm,
+                builtin_id("__test_assert_cause_chain"),
+                vec![kinds(names), result.clone()],
+            )
+            .unwrap();
+            assert!(matches!(value, Value::Tagged { tag: 1, fields }
+                if matches!(fields.as_slice(), [Value::Error(err)] if err.kind == "Global::TestCauseChainMismatch")));
+        }
+        let value = call_builtin(
+            &mut vm,
+            builtin_id("__test_assert_cause_chain"),
+            vec![kinds(&[]), ok_result(Value::Unit)],
+        )
+        .unwrap();
+        assert!(matches!(value, Value::Tagged { tag: 1, fields }
+            if matches!(fields.as_slice(), [Value::Error(err)] if err.kind == "Global::TestExpectedCauseChain")));
+        let invalid = Value::List(ListHandle::from_items(vec![
+            Value::ErrorKind("One::Failure".into()),
+            Value::Str("Two::Failure".into()),
+        ]));
+        assert!(call_builtin(
+            &mut vm,
+            builtin_id("__test_assert_cause_chain"),
+            vec![invalid, result]
+        )
+        .unwrap_err()
+        .message
+        .contains("expected[1]"));
     }
 
     #[test]

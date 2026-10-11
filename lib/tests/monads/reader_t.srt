@@ -105,7 +105,7 @@ test("ReaderT") {
 
     it("preserves base failure while binding") {
       do {
-        failed: ReaderT<Int, Result, Int> = ReaderT::new({|_environment| Err(NoneError)})
+        failed: ReaderT<Int, Result, Int> = ReaderT::new({|_environment| Err(NoneError())})
         bound: ReaderT<Int, Result, Int> = failed |>= {|value|
           ReaderT::new({|environment| Ok(value + environment)})
         }

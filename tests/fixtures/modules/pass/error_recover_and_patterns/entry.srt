@@ -1,25 +1,25 @@
-def fallback() -> Result<String> {
+def fallback(error: Error) -> Result<String> {
   print("fallback")
   Ok("fallback")
 }
 
-print(Error::kind(Timeout))
-print(Error::message(Timeout))
-print(Error::format(Timeout))
+print(Error::kind(Timeout()))
+print(Error::message(Timeout()))
+print(Error::format(Timeout()))
 
 print(inspect(Result::recover(Ok("ok"), &fallback)))
-print(inspect(Result::recover(Err(DnsFailure), &fallback)))
+print(inspect(Result::recover(Err(DnsFailure()), &fallback)))
 print(inspect(Result::recover_kind(Ok("ok"), Timeout, {|err|
   print("retry:" ++ Error::kind(err))
   print(Error::format(err))
   Ok("retry")
 })))
-print(inspect(Result::recover_kind(Err(Timeout), Timeout, {|err|
+print(inspect(Result::recover_kind(Err(Timeout()), Timeout, {|err|
   print("retry:" ++ Error::kind(err))
   print(Error::format(err))
   Ok("retry")
 })))
-print(inspect(Result::recover_kind(Err(DnsFailure), Timeout, {|err|
+print(inspect(Result::recover_kind(Err(DnsFailure()), Timeout, {|err|
   print("retry:" ++ Error::kind(err))
   print(Error::format(err))
   Ok("retry")
@@ -34,7 +34,7 @@ print(inspect(Result::recover_kind(Err(TimeoutWithDetail("runtime")), TimeoutWit
   Ok("retry")
 })))
 
-match Err(ConnectionReset) {
+match Err(ConnectionReset()) {
   Ok(value) => print(value),
   Err(Timeout | ConnectionReset @ e: Error) => print("matched:" ++ Error::kind(e) ++ "\n" ++ Error::format(e)),
   Err(DnsFailure) => print("dns"),

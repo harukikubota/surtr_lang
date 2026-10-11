@@ -130,18 +130,23 @@ False
 @builtin type Lazy<$T>
 
 @doc """
-Compiler-reserved error kind marker for direct std builtin parameters.
-`ErrorKind` accepts a concrete `deferror` type name in `Result::recover_kind`.
-Qualified type names are accepted; constructor calls, runtime Error values,
-strings, abstract `Error`, and non-error names are rejected. The marker is
-independent of constructor payload arity and never constructs an Error.
-It has no runtime constructor and cannot be stored in bindings, fields, or
-containers, or exposed through user parameters, return types, or annotations.
-The kind must also be fixed as a type name inside a capture; a direct capture
-placeholder cannot replace it.
+Opaque ordinary value identifying a concrete deferror declaration.
+A bare declaration name produces ErrorKind without evaluating its constructor;
+an explicit call such as NoneError() produces Error. Grouping a bare name
+keeps it an ErrorKind. Variables, parameters, returns, fields and containers
+can carry kinds, including through generic functions and captures.
+
+ErrorKind has no public constructor, fields, Eq/Show, or user trait impl.
+Strings and Error instances cannot be converted into kinds. A kind cannot
+construct an Error dynamically. Error::is_kind compares canonical identities
+and returns Boolean without revealing concrete Payload fields.
+inspect displays ErrorKind(canonical qualified name).
 
 ## REPL
-xldr(1)> Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)})
+xldr(1)> kind = NoneError
+xldr(2)> Error::is_kind(NoneError(), kind)
+True
+xldr(3)> Result::recover_kind(Err(NoneError()), kind, {|_| Ok(1)})
 Ok(1)
 """
 @builtin type ErrorKind

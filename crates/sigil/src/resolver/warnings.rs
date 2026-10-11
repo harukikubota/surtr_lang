@@ -124,7 +124,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         | Resolved::ProcessContextHandler(_, _)
         | Resolved::BuiltinTypeDecl(..)
         | Resolved::TypeAlias(..) => {}
-        Resolved::Var(_, id) => usage.use_id(id),
+        Resolved::Var(_, id) | Resolved::ErrorKind(_, id) => usage.use_id(id),
         Resolved::App(_, func, args) => {
             collect_node_usage(func, usage);
             for arg in args {
@@ -218,17 +218,6 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
             collect_node_usage(value, usage);
             collect_node_usage(err, usage);
-        }
-        Resolved::AssertErrorKinds(_, markers, value) => {
-            for marker in markers.markers() {
-                usage.use_id(marker);
-            }
-            collect_node_usage(value, usage);
-        }
-        Resolved::RecoverKind(_, value, marker, handler) => {
-            collect_node_usage(value, usage);
-            usage.use_id(marker);
-            collect_node_usage(handler, usage);
         }
         Resolved::Match(_, scrutinee, arms)
         | Resolved::IsMatch(_, scrutinee, arms)

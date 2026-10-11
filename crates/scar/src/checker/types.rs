@@ -455,11 +455,6 @@ impl Checker {
         }
     }
 
-    fn builtin_type_is_std_parameter_only(name: &str) -> bool {
-        builtin_type_usage_policy(Self::surface_name(name))
-            .is_some_and(|policy| policy.usage == BuiltinTypeUsage::StdParameterOnly)
-    }
-
     fn builtin_type_is_lazy_signature_surface_only(name: &str) -> bool {
         builtin_type_usage_policy(Self::surface_name(name))
             .is_some_and(|policy| policy.lazy_signature_surface_only)
@@ -960,14 +955,6 @@ impl Checker {
         ast_ty: &AstTy,
         context: TypeSyntaxContext,
     ) -> Result<Ty, TypeError> {
-        if matches!(ast_ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if Self::builtin_type_is_std_parameter_only(name))
-        {
-            return Err(TypeError::new(
-                "ErrorKind is reserved for direct std builtin parameters",
-                Self::ast_ty_span(ast_ty).clone(),
-            ));
-        }
-
         if context == TypeSyntaxContext::ErrorMarker {
             return self.resolve_error_marker_type(ast_ty);
         }
@@ -1069,6 +1056,7 @@ impl Checker {
                             Some(TypeName::Boolean) => Ok(Ty::Bool),
                             Some(TypeName::Unit) => Ok(Ty::Unit),
                             Some(TypeName::Error) => Ok(Ty::Error),
+                            Some(TypeName::ErrorKind) => Ok(Ty::Enum("ErrorKind".into(), Vec::new())),
                             Some(TypeName::Regex) => {
                                 Ok(Ty::Enum(TypeName::Regex.as_str().into(), Vec::new()))
                             }
@@ -1097,7 +1085,6 @@ impl Checker {
                                 | TypeName::Duration
                                 | TypeName::StandbyInit
                                 | TypeName::Lazy
-                                | TypeName::ErrorKind
                                 | TypeName::Hole
                                 | TypeName::Closure
                                 | TypeName::MatchArms
@@ -1935,7 +1922,7 @@ impl Checker {
         tyvars: &mut HashMap<String, Ty>,
         mode: SignatureTyMode<'_>,
     ) -> Result<Ty, TypeError> {
-        let context = Self::std_parameter_type_context(signature_ty.syntax(), context);
+        let context = Self::std_parameter_type_context(context);
         let Some(trait_id) = signature_ty.direct_constructor_trait.as_ref() else {
             return self.resolve_signature_like_ast_ty_in_context(
                 signature_ty.syntax(),
@@ -2045,10 +2032,8 @@ impl Checker {
         }
     }
 
-    fn std_parameter_type_context(ast_ty: &AstTy, context: TypeSyntaxContext) -> TypeSyntaxContext {
-        if context == TypeSyntaxContext::StdBuiltinParameter
-            && !matches!(ast_ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if Self::builtin_type_is_std_parameter_only(name))
-        {
+    fn std_parameter_type_context(context: TypeSyntaxContext) -> TypeSyntaxContext {
+        if context == TypeSyntaxContext::StdBuiltinParameter {
             TypeSyntaxContext::General
         } else {
             context
@@ -2083,7 +2068,7 @@ impl Checker {
         tyvars: &mut HashMap<String, Ty>,
         mode: SignatureTyMode<'_>,
     ) -> Result<Ty, TypeError> {
-        let context = Self::std_parameter_type_context(ast_ty, context);
+        let context = Self::std_parameter_type_context(context);
         match ast_ty {
             AstTy::Named(span, name) => {
                 if let Some(alias) =
@@ -2185,21 +2170,6 @@ impl Checker {
         tyvars: &mut HashMap<String, Ty>,
         mode: SignatureTyMode<'_>,
     ) -> Result<Ty, TypeError> {
-        if matches!(ast_ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if Self::builtin_type_is_std_parameter_only(name))
-        {
-            return match ast_ty {
-                AstTy::Named(_, _)
-                    if mode.allows_lazy() && context == TypeSyntaxContext::StdBuiltinParameter =>
-                {
-                    Ok(Ty::Enum("ErrorKind".into(), Vec::new()))
-                }
-                _ => Err(TypeError::new(
-                    "ErrorKind is reserved for direct std builtin parameters",
-                    Self::ast_ty_span(ast_ty).clone(),
-                )),
-            };
-        }
-
         match ast_ty {
             AstTy::Named(_, name) if name == "Self" => {
                 if let Some(self_ty) = mode.self_ty() {
@@ -4359,6 +4329,7 @@ impl Checker {
         let ty = self.resolve_ty(&node.ty);
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
+            TypedInner::ErrorKind(kind) => TypedInner::ErrorKind(kind),
             TypedInner::Var(id) => TypedInner::Var(id),
             TypedInner::SupervisorSpawn {
                 supervisor_process,
@@ -4622,9 +4593,6 @@ impl Checker {
                     })
                     .collect(),
             ),
-            TypedInner::AssertErrorKinds(marker, inner) => {
-                TypedInner::AssertErrorKinds(marker, self.resolve_typed_node(*inner))
-            }
             TypedInner::EagerBoundary(inner) => {
                 TypedInner::EagerBoundary(self.resolve_typed_node(*inner))
             }
@@ -4649,11 +4617,6 @@ impl Checker {
             TypedInner::Cause(value, err) => TypedInner::Cause(
                 self.resolve_typed_node(*value),
                 self.resolve_typed_node(*err),
-            ),
-            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                self.resolve_typed_node(*value),
-                marker,
-                self.resolve_typed_node(*handler),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 self.resolve_typed_node(*scrutinee),
@@ -5382,7 +5345,7 @@ mod tests {
     }
 
     #[test]
-    fn error_kind_is_only_a_direct_std_builtin_parameter() {
+    fn error_kind_is_a_runtime_value_type() {
         let mut checker = Checker::new(TypecheckContext::default());
         let span = Span { start: 0, end: 9 };
         let marker = AstTy::Named(span.clone(), "ErrorKind".into());
@@ -5395,15 +5358,9 @@ mod tests {
             AstTy::Func(span.clone(), vec![int.clone()], Box::new(marker.clone())),
             AstTy::Tuple(span.clone(), vec![marker.clone(), int]),
         ] {
-            let error = checker
+            checker
                 .resolve_builtin_ast_ty(&nested, &mut tyvars)
-                .expect_err("nested ErrorKind must not expose a kind capability");
-            assert!(
-                error
-                    .message
-                    .contains("ErrorKind is reserved for direct std builtin parameters"),
-                "{nested:?}: {error:?}"
-            );
+                .expect("nested ErrorKind is an ordinary value type");
         }
         assert!(checker
             .resolve_builtin_ast_ty_in_context(
@@ -5411,7 +5368,7 @@ mod tests {
                 TypeSyntaxContext::FunctionReturn,
                 &mut tyvars
             )
-            .is_err());
+            .is_ok());
     }
 
     #[test]

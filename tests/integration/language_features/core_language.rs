@@ -73,7 +73,7 @@ print(inspect(Ok("value")))
 deferror MyError {
   "error message."
 }
-print(inspect(Err(MyError)))"#,
+print(inspect(Err(MyError())))"#,
         &[
             "\"hello\"",
             "(1, \"two\", 3)",

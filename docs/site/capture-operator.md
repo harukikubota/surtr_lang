@@ -165,7 +165,7 @@ yes: (-> Boolean) = &True
 no: (-> Boolean) = &False
 ```
 
-成功型は payload や期待型から推論されます。`err = Err(NoneError)` の成功型は
+成功型は payload や期待型から推論されます。`err = Err(NoneError())` の成功型は
 多相のまま保持できますが、capture の callable binding には具体的な signature が必要です。
 
 `Err` は既存の Error を包みます。具象 `deferror` constructor も、外部入力を受けて共通 `Error` を返す constructor callable として capture できます。

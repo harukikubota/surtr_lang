@@ -38,7 +38,7 @@ where
     if(condition, Either::Left(Error::message(err())), then())
   }
 }
-value: Either<String, Int> = MonadFail::fail_if(False, NoneError, Either::Right(3))
+value: Either<String, Int> = MonadFail::fail_if(False, NoneError(), Either::Right(3))
 captured: (Boolean, (-> Error), (-> Either<String, Int>) -> Either<String, Int>) = &MonadFail::fail_if(&1, &2, &3)
 "#,
         RuntimeSourcePolicy::script(),

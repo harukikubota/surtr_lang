@@ -16,6 +16,22 @@ process surface の `init` / `get` / `set` / `call` でも同じ流儀を使い�
 - 失敗値は `Err(error)`
 - `Err(...)` を見つけたら、そのまま呼び出し元へ早期リターンできる
 
+## Error の構築と種類による回復
+
+裸の `deferror` 名は、種類を表す `ErrorKind` 値です。Error を作るには明示的に呼び出します。入力がない Error も `NoneError()` と書きます。
+
+```surtr
+kind = NoneError
+error = NoneError()
+Result::recover_kind(Err(error), kind, {|original| Ok(original.message)})
+```
+
+ErrorKind は変数、引数、戻り値、List、Tuple、field に保持できます。`Error::is_kind(error, kind)` は種類の一致を Boolean で返します。文字列や Error instance から ErrorKind を作る API はありません。
+
+`Result::recover(value, {|error| ...})` は失敗時に元の Error をハンドラへ渡します。Error が不要なら `{|_| ...}` を使います。成功値はそのまま返り、ハンドラの再失敗もそのまま返ります。`recover_kind` は種類が一致した失敗だけを回復し、不一致なら元の Error とその情報を保持します。両関数とも引数式は呼出し前に評価し、ハンドラ本体だけを条件付きで実行します。Result はこの能力を `MonadRecover` としても提供します。
+
+SafeBind で種類の判定を失敗条件にすると、元の Error が失われることがあります。たとえば `True =? Error::is_kind(error, kind)` は False のとき `BooleanLiteralPatternMismatch` を返し、元の Error を再伝播しません。種類による回復には `recover_kind`、元の Error を保持する分岐には `match` を使います。Error の Pattern を SafeBind へ移しても、通常の型・Pattern 規則に従うため、種類による回復の代わりにはなりません。
+
 ## `Error` は抽象、実体は常に具象 error
 
 Surtr でコード中に `Error` と書かれていても、それは「失敗値の共通な見え方」を指す抽象名です。  
@@ -235,18 +251,18 @@ is_match(InvalidPort(0), InvalidPort @ e)  # NG: is_match は alias を作らな
 
 ```surtr
 value: Result<Int> = Ok(1)
-failed: Result<Int> = Err(NoneError)
+failed: Result<Int> = Err(NoneError())
 wrap: (Int -> Result<Int>) = &Ok
 ```
 
 成功型は payload と期待型から推論できます。`value: Result<Int> = Ok("text")` は型不一致で拒否されます。
-`err = Err(NoneError)` のような失敗値は成功型の多相性を保持します。
+`err = Err(NoneError())` のような失敗値は成功型の多相性を保持します。
 具象 error constructor と `Err` は通常の capture を使えます。詳細は [constructor capture](./capture-operator.md#result-と-boolean) を参照してください。
 
 ## `Result` が標準、`Option` は別コンテナ
 
 Surtr では optional value も、まず `Result` で扱うのが基本です。  
-特に「値がない」を recoverable failure として扱うときは `Err(NoneError)` を使います。
+特に「値がない」を recoverable failure として扱うときは `Err(NoneError())` を使います。
 
 ```surtr
 def first_or_error(xs: List<Int>) -> Result<Int> {
@@ -276,7 +292,7 @@ def parse_bool(text: String) -> Result<Boolean> {
   match text {
     "true" => Ok(True),
     "false" => Ok(False),
-    _ => Err(NoneError),
+    _ => Err(NoneError()),
   }
 }
 

@@ -3,7 +3,7 @@ Standard `Generator` type declaration.
 `Generator<$Item>` models a finite lazy sequence and exposes only the item type.
 `unfold` stores the state and callable; `next` evaluates the step on demand.
 The finite step reports normal termination with `Option::None`.
-The public `next` returns `Ok((item, rest))` or `Err(GeneratorExhausted)` at the end.
+The public `next` returns `Ok((item, rest))` or `Err(GeneratorExhausted())` at the end.
 `Result` and `Option` items remain ordinary data.
 The original value is immutable. Pass the returned rest to the next call to
 advance the sequence.
@@ -33,7 +33,7 @@ impl Generator {
 
   @doc """
   Generate one item and return `Ok((item, rest))`.
-  Return `Err(GeneratorExhausted)` on normal termination.
+  Return `Err(GeneratorExhausted())` on normal termination.
   The original generator is unchanged. A separate call on the same value
   reevaluates the step from its saved state.
   ## REPL
@@ -43,7 +43,7 @@ impl Generator {
   def next(gen: Generator<$Item>) -> Result<($Item, Generator<$Item>), GeneratorExhausted> {
     match _step(gen) {
       Option::Some(pair) => Ok(pair),
-      Option::None => Err(GeneratorExhausted),
+      Option::None => Err(GeneratorExhausted()),
     }
   }
 
@@ -53,7 +53,7 @@ impl Generator {
   `count <= 0` returns `([], gen)` without evaluation. Reaching the requested
   count does not evaluate another step.
   After normal termination has been observed, the rest is terminal: its `next`
-  returns `Err(GeneratorExhausted)` without calling the step.
+  returns `Err(GeneratorExhausted())` without calling the step.
   ## REPL
   xldr(1)> Generator::take(Generator::range(1, 5), 3)
   ([1, 2, 3], Generator(<opaque>))

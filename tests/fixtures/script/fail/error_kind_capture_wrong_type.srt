@@ -1,0 +1,1 @@
+capture: (Result<Int>, String, (Error -> Result<Int>) -> Result<Int>) = &Result::recover_kind(&1, &2, &3)

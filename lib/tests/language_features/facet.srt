@@ -36,7 +36,7 @@ defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
 
   def pending_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
     (
-      (Config::new("Guest"), Err(NoneError)),
+      (Config::new("Guest"), Err(NoneError())),
       ("score", 1),
       BitWidth::Any(2),
     )
@@ -90,7 +90,7 @@ test("Facet") {
 
     it("preserves the failed source cause chain and skips the continuation") {
       do {
-        source: Result<(Config, Int)> = Result::cause(Err(NoneError), ZeroDivisionError)
+        source: Result<(Config, Int)> = Result::cause(Err(NoneError()), ZeroDivisionError())
         result = bind_nominal_facet_source(source)
 
         assert_err_kind(ZeroDivisionError, result)
@@ -219,12 +219,12 @@ test("Facet") {
       do {
         assert_err_contains(
         "ZeroDivisionError",
-        Facet::over(Tuple._0 -> Tuple._0 -> Config.entrypoint, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+        Facet::over(Tuple._0 -> Tuple._0 -> Config.entrypoint, demo_fixture(), {|_| Err(ZeroDivisionError())}),
         )
 
         assert_err_contains(
         "ZeroDivisionError",
-        Facet::over_result(Tuple._0 -> Tuple._1, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+        Facet::over_result(Tuple._0 -> Tuple._1, demo_fixture(), {|_| Err(ZeroDivisionError())}),
         )
       }
     }
@@ -301,7 +301,7 @@ test("Facet") {
     it("views matching variants") {
       do {
         assert_ok_eq(5, Facet::view(BitWidth.Any, demo_fixture()._2))
-        nested: Option<Result<String>> = Option::Some(Err(NoneError))
+        nested: Option<Result<String>> = Option::Some(Err(NoneError()))
         value <- Facet::view(Option.Some, nested)
 
         assert_err_kind(NoneError, value)

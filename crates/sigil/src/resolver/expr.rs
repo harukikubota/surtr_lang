@@ -200,9 +200,6 @@ pub(super) enum CanonicalSpecialForm {
     Ensure,
     MapErr,
     Cause,
-    RecoverKind,
-    AssertErrKind,
-    AssertCauseChain,
     Logic(LogicKind),
 }
 
@@ -217,9 +214,6 @@ impl Resolver {
             "Kernel::or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
             "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
             "Result::cause" => Some(CanonicalSpecialForm::Cause),
-            "Result::recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
-            "Test::assert_err_kind" => Some(CanonicalSpecialForm::AssertErrKind),
-            "Test::assert_cause_chain" => Some(CanonicalSpecialForm::AssertCauseChain),
             _ => None,
         }
     }
@@ -248,9 +242,6 @@ impl Resolver {
             CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
-            CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
-            CanonicalSpecialForm::AssertErrKind => self.resolve_assert_err_kind(span, args),
-            CanonicalSpecialForm::AssertCauseChain => self.resolve_assert_cause_chain(span, args),
             CanonicalSpecialForm::Logic(logic_kind) => {
                 self.resolve_logic_call(span, args, logic_kind)
             }
@@ -2450,6 +2441,52 @@ impl Resolver {
         name: String,
         compiler_generated: bool,
     ) -> Result<Resolved, ResolveError> {
+        let resolved = self.resolve_declaration_var_like(span.clone(), name, compiler_generated)?;
+        if let Resolved::Var(_, id) = &resolved {
+            if self.declaration_uid_kinds.get(&id.unique_id) == Some(&DeclarationKind::Deferror) {
+                if id.qualified_name.is_none() {
+                    return Err(ResolveError {
+                        message: "ErrorKind identity has no canonical declaration name".into(),
+                        span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                            subject: Some(id.name.clone()),
+                        },
+                        related_labels: Vec::new(),
+                    });
+                }
+                return Ok(Resolved::ErrorKind(span, id.clone()));
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_facet_root_node(&mut self, expr: Ast) -> Result<Resolved, ResolveError> {
+        let reference = match &expr {
+            Ast::Var(span, name) => {
+                Some(self.resolve_declaration_var_like(span.clone(), name.clone(), false)?)
+            }
+            Ast::Path(span, path) => Some(self.resolve_declaration_var_like(
+                span.clone(),
+                path.segments.join("::"),
+                false,
+            )?),
+            _ => None,
+        };
+        if let Some(Resolved::Var(_, id)) = &reference {
+            if self.declaration_uid_kinds.get(&id.unique_id) == Some(&DeclarationKind::Deferror) {
+                return Ok(reference.expect("checked declaration reference"));
+            }
+        }
+        self.resolve_node(expr)
+    }
+
+    fn resolve_declaration_var_like(
+        &self,
+        span: Span,
+        name: String,
+        compiler_generated: bool,
+    ) -> Result<Resolved, ResolveError> {
         let resolved = self.resolve_var_like(span.clone(), name, compiler_generated)?;
         if let Resolved::Var(_, id) = &resolved {
             let qualified = id.qualified_name.as_deref().or_else(|| {
@@ -3121,11 +3158,15 @@ impl Resolver {
             Ast::InternalVar(span, name) => self.resolve_value_var_like(span, name, true),
             Ast::Path(span, path) => {
                 let name = path.segments.join("::");
+                let resolved = self.resolve_value_var_like(span.clone(), name.clone(), false)?;
+                if matches!(resolved, Resolved::ErrorKind(..)) {
+                    return Ok(resolved);
+                }
                 if path.segments.last().and_then(|segment| segment.chars().next())
                     .is_some_and(char::is_uppercase) {
                     return self.resolve_node(Ast::ConstructorCall(span, name, Vec::new()));
                 }
-                self.resolve_value_var_like(span, name, false)
+                Ok(resolved)
             }
             Ast::FuncLiteralRef(span, func) => Err(ResolveError {
                 message: format!(
@@ -3456,7 +3497,7 @@ impl Resolver {
                         return Ok(Resolved::FieldAccess(span, Box::new(root), field));
                     }
                 }
-                let resolved_expr = self.resolve_node(*expr)?;
+                let resolved_expr = self.resolve_facet_root_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
             }
             Ast::FacetSegmentAccess(span, expr, segment) => {
@@ -4579,7 +4620,10 @@ impl Resolver {
                 match self.lower_capture_expr(span.clone(), *target, args)? {
                     Ast::Capture(_, target, args) => {
                         let resolved_target = match *target {
-                            Ast::Path(path_span, path) => self.resolve_value_var_like(
+                            Ast::Var(target_span, name) => {
+                                self.resolve_declaration_var_like(target_span, name, false)?
+                            }
+                            Ast::Path(path_span, path) => self.resolve_declaration_var_like(
                                 path_span,
                                 path.segments.join("::"),
                                 false,

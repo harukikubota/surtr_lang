@@ -218,7 +218,7 @@ impl Convert<Result<$T>> for Option<$T> {
   def to::<Result<$T>>(self: Self) -> Result<$T> {
     match self {
       Option::Some(value) => Ok(value),
-      Option::None => Err(NoneError),
+      Option::None => Err(NoneError()),
     }
   }
 }

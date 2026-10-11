@@ -876,13 +876,6 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
-        name: "__recover_kind",
-        arity: 3,
-        sig_str: "(Result<$T>, String, (Error -> Result<$T>)) -> Result<$T>",
-        compiler_generated_surfaces: &[],
-        surfaces: &[],
-    },
-    BuiltinMeta {
         name: "__test_push",
         arity: 2,
         sig_str: "(String, String) -> Unit",
@@ -2435,6 +2428,17 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
+        name: "is_kind",
+        arity: 2,
+        sig_str: "(Error, ErrorKind) -> Boolean",
+        compiler_generated_surfaces: &[],
+        surfaces: &[builtin_surface_spec(
+            Some("Error"), "is_kind", &[], &[
+                builtin_surface_parameter("err", "Error"),
+                builtin_surface_parameter("kind", "ErrorKind"),
+            ], "Boolean", &[])],
+    },
+    BuiltinMeta {
         name: "same_kind",
         arity: 2,
         sig_str: "(Error, Error) -> Boolean",
@@ -3848,12 +3852,20 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ], "Boolean", &[])],
     },
     BuiltinMeta {
-        name: "__test_assert_err_kind", arity: 2, sig_str: "(String, Result<$A>) -> Result<Unit>",
-        compiler_generated_surfaces: &[], surfaces: &[],
+        name: "__test_assert_err_kind", arity: 2, sig_str: "(ErrorKind, Result<$A>) -> Result<Unit>",
+        compiler_generated_surfaces: &[], surfaces: &[builtin_surface_spec(
+            Some("Test"), "assert_err_kind", &[], &[
+                builtin_surface_parameter("marker", "ErrorKind"),
+                builtin_surface_parameter("result", "Result<$A>"),
+            ], "Result<()>", &[])],
     },
     BuiltinMeta {
-        name: "__test_assert_cause_chain", arity: 2, sig_str: "(List<String>, Result<$A>) -> Result<Unit>",
-        compiler_generated_surfaces: &[], surfaces: &[],
+        name: "__test_assert_cause_chain", arity: 2, sig_str: "(List<ErrorKind>, Result<$A>) -> Result<Unit>",
+        compiler_generated_surfaces: &[], surfaces: &[builtin_surface_spec(
+            Some("Test"), "assert_cause_chain", &[], &[
+                builtin_surface_parameter("expected", "List<ErrorKind>"),
+                builtin_surface_parameter("result", "Result<$A>"),
+            ], "Result<()>", &[])],
     },
     BuiltinMeta {
         name: "map_values",
@@ -4499,6 +4511,43 @@ mod tests {
     }
 
     #[test]
+    fn error_kind_is_an_opaque_ordinary_runtime_value() {
+        let policy = TypeName::ErrorKind.usage_policy();
+        assert!(policy.type_annotation_allowed);
+        assert!(policy.signature_allowed);
+        assert!(policy.runtime_value_allowed);
+        assert!(!TypeName::ErrorKind.supports_inherent_impl());
+        assert_eq!(
+            TypeName::ErrorKind.trait_impl_policy(),
+            crate::names::TraitImplPolicy::Forbidden
+        );
+    }
+
+    #[test]
+    fn error_kind_consumers_use_dynamic_runtime_values() {
+        let is_kind = builtin_meta_by_name("is_kind").expect("Error::is_kind metadata");
+        assert_eq!(is_kind.sig_str, "(Error, ErrorKind) -> Boolean");
+        assert!(is_kind.surface_variant("Error", "is_kind").is_some());
+        let assert_kind = builtin_meta_by_name("__test_assert_err_kind").unwrap();
+        assert_eq!(
+            assert_kind.sig_str,
+            "(ErrorKind, Result<$A>) -> Result<Unit>"
+        );
+        assert!(assert_kind
+            .surface_variant("Test", "assert_err_kind")
+            .is_some());
+        let assert_chain = builtin_meta_by_name("__test_assert_cause_chain").unwrap();
+        assert_eq!(
+            assert_chain.sig_str,
+            "(List<ErrorKind>, Result<$A>) -> Result<Unit>"
+        );
+        assert!(assert_chain
+            .surface_variant("Test", "assert_cause_chain")
+            .is_some());
+        assert!(builtin_meta_by_name("__recover_kind").is_none());
+    }
+
+    #[test]
     fn surface_variant_preserves_parameter_and_where_metadata() {
         let meta = builtin_meta_by_runtime_name("group_count").expect("group_count metadata");
         let variant = meta
@@ -4528,11 +4577,7 @@ mod tests {
                 && surface.identity.name == "__out_handler_write"
         }));
 
-        for runtime_only in [
-            "__recover_kind",
-            "__facet_list_get",
-            "__dynamic_supervisor_spawn",
-        ] {
+        for runtime_only in ["__facet_list_get", "__dynamic_supervisor_spawn"] {
             assert!(
                 builtin_meta_by_name(runtime_only)
                     .expect("runtime-only builtin metadata")

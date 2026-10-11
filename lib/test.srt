@@ -1,10 +1,8 @@
 @doc """
 Build named test suites and check values, errors, documents, and captured I/O.
 Available to test files executed by `surtr test`.
-assert_err_kind and assert_cause_chain are ordinary names. Their static
-ErrorKind argument rules belong only to the standard Test declarations.
-User functions with these names follow their own signatures and cannot expose
-ErrorKind as an ordinary value.
+assert_err_kind and assert_cause_chain accept ordinary opaque ErrorKind values.
+Kinds and lists of kinds can be stored, computed, forwarded and captured.
 
 `test` and `describe` group cases; `it` records each selected case's result.
 `xit(name, reason, body)` pauses a case; `pend(name, reason)` declares an unimplemented case.
@@ -27,7 +25,7 @@ test("examples") {
     assert_eq(3, 1 + 2)
   }
   it("checks an expected error") {
-    result: Result<Int> = Err(NoneError)
+    result: Result<Int> = Err(NoneError())
     assert_err_contains("NoneError", result)
   }
 }
@@ -260,13 +258,13 @@ defmod Test {
   def assert_some(option: Option<$A>) -> Result<()> {
     match option {
       Option::Some(_) => Ok(()),
-      Option::None => Err(TestExpectedSome),
+      Option::None => Err(TestExpectedSome()),
     }
   }
 
   @doc """
   Check that `flag` is `True`.
-  Returns `Ok(())` for `True`, or `Err(TestExpectedTrue)` for `False`.
+  Returns `Ok(())` for `True`, or `Err(TestExpectedTrue())` for `False`.
 
   ```surtr
   import Test;
@@ -279,12 +277,12 @@ defmod Test {
   ```
   """
   def assert_true(flag: Boolean) -> Result<()> {
-    if(flag, Ok(()), Err(TestExpectedTrue))
+    if(flag, Ok(()), Err(TestExpectedTrue()))
   }
 
   @doc """
   Check that `flag` is `False`.
-  Returns `Ok(())` for `False`, or `Err(TestExpectedFalse)` for `True`.
+  Returns `Ok(())` for `False`, or `Err(TestExpectedFalse())` for `True`.
 
   ```surtr
   import Test;
@@ -297,7 +295,7 @@ defmod Test {
   ```
   """
   def assert_false(flag: Boolean) -> Result<()> {
-    if(flag, Err(TestExpectedFalse), Ok(()))
+    if(flag, Err(TestExpectedFalse()), Ok(()))
   }
 
   @doc """
@@ -349,7 +347,7 @@ defmod Test {
 
   @doc """
   Check only the Err branch, without comparing the error kind or payload.
-  Example: `assert_err(Err(NoneError))` returns `Ok(())`.
+  Example: `assert_err(Err(NoneError()))` returns `Ok(())`.
   """
   def assert_err(result: Result<$A>) -> Result<()> {
     match result {
@@ -361,16 +359,16 @@ defmod Test {
   @doc """
   Check Err against a concrete deferror declaration's canonical identity.
   Payloads, messages, causes, and locations do not participate in the comparison.
-  The marker must be a declaration name, never a string, variable, or error instance.
-  Example: `assert_err_kind(NoneError, Err(NoneError))` returns `Ok(())`.
+  The marker is an ordinary ErrorKind value. Strings and Error instances are rejected.
+  Example: `assert_err_kind(NoneError, Err(NoneError()))` returns `Ok(())`.
   """
   @builtin def assert_err_kind(marker: ErrorKind, result: Result<$A>) -> Result<()>
 
   @doc """
   Compares the complete error cause chain, outermost error first.
-  Pass a direct list of concrete deferror names. Order and length must match;
+  Pass a List<ErrorKind>, including stored or computed lists. Order and length must match;
   payloads and display strings are ignored. Ok and an empty expected list fail.
-  Example: `assert_cause_chain([ZeroDivisionError, NoneError], Result::cause(Err(NoneError), ZeroDivisionError))`.
+  Example: `assert_cause_chain([ZeroDivisionError, NoneError], Result::cause(Err(NoneError()), ZeroDivisionError()))`.
   """
   @builtin def assert_cause_chain(expected: List<ErrorKind>, result: Result<$A>) -> Result<()>
 
@@ -461,7 +459,7 @@ defmod Test {
 
   test("assert_err_contains") {
     it("checks the expected error text") {
-      result: Result<Int> = Err(NoneError)
+      result: Result<Int> = Err(NoneError())
       assert_err_contains("NoneError", result)
     }
   }
@@ -534,7 +532,7 @@ defmod Test {
   Supply text for `IO::get` and `IO::get_line` in the current test case.
   Append `input` without adding a newline and return `Ok(())`.
   Each case starts with an empty input buffer. Reads use only this buffer and return
-  `Err(InputCharacterEnd) or Err(InputLineEnd)` before input is supplied or when it is exhausted.
+  `Err(InputCharacterEnd()) or Err(InputLineEnd())` before input is supplied or when it is exhausted.
   """
   def push_stdin(input: String) -> Result<()> {
     __test_push_stdin(input)
@@ -571,7 +569,7 @@ defmod Test {
 
   test("assert_stderr_eq") {
     it("compares captured stderr") {
-      eprint(NoneError)
+      eprint(NoneError())
       assert_stderr_eq(["Error: NoneError: None Value."])
     }
   }

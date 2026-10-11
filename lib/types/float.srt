@@ -123,7 +123,7 @@ impl Mul for Float {
 
 impl Div for Float {
   @doc """
-  Divide two float values and return `Err(ZeroDivisionError)` instead of trapping.
+  Divide two float values and return `Err(ZeroDivisionError())` instead of trapping.
   ## REPL
   xldr(1)> Div::safe_div(3.0, 2.0)
   Ok(1.5)

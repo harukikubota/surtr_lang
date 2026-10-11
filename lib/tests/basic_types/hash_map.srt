@@ -23,7 +23,7 @@ deferror HashMapPatternSource { "map child rejected" }
 deferror HashMapPatternContext { "map child context" }
 
 def hashmap_pattern_source(value: Int) -> Result<Int> {
-  Result::cause(Err(HashMapPatternSource), HashMapPatternContext)
+  Result::cause(Err(HashMapPatternSource()), HashMapPatternContext())
 }
 
 def hashmap_pattern_select(source: Result<HashMap<Int>>) -> Result<Int> {
@@ -117,7 +117,7 @@ test("HashMap") {
       do {
         mapped: HashMap<Result<Int>> = HashMap::map_values(
           hash!["b" => 2, "a" => 1],
-          {|n| if(n == 1, Err(NoneError), Ok(n))},
+          {|n| if(n == 1, Err(NoneError()), Ok(n))},
         )
         assert_eq(["a", "b"], HashMap::map_keys(mapped))
         a <- HashMap::map_get(mapped, "a")
@@ -186,11 +186,11 @@ test("HashMap structural patterns") {
 
   it("does not unwrap Result values or inspect extra keys") {
     do {
-      map: HashMap<Result<Int>> = hash!["a" => Ok(2), "extra" => Err(NoneError)]
+      map: HashMap<Result<Int>> = hash!["a" => Ok(2), "extra" => Err(NoneError())]
       assert_ok_eq(Ok(2), apply_pattern(map, hash!["a" => _1]))
       assert_ok_eq(2, apply_pattern(map, hash!["a" => Ok(_1)]))
-      assert_true(is_match(apply_pattern(hash!["a" => Err(NoneError)], hash!["a" => _1: Result<Int>]), Ok(Err(NoneError))))
-      assert_false(is_match(hash!["a" => Err(NoneError)], hash!["a" => Ok(_: Int)]))
+      assert_true(is_match(apply_pattern(hash!["a" => Err(NoneError())], hash!["a" => _1: Result<Int>]), Ok(Err(NoneError()))))
+      assert_false(is_match(hash!["a" => Err(NoneError())], hash!["a" => Ok(_: Int)]))
     }
   }
 
@@ -205,7 +205,7 @@ test("HashMap structural patterns") {
         Ok(value)
       }
       assert_cause_chain([HashMapPatternContext, HashMapPatternSource], do_child)
-      original: Result<HashMap<Int>> = Result::cause(Err(HashMapPatternSource), HashMapPatternContext)
+      original: Result<HashMap<Int>> = Result::cause(Err(HashMapPatternSource()), HashMapPatternContext())
       transported = hashmap_pattern_select(original)
       assert_cause_chain([HashMapPatternContext, HashMapPatternSource], transported)
       original_text = match original { Err(err) => Error::format(err), _ => "wrong", }

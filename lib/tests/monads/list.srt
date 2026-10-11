@@ -286,7 +286,7 @@ test("List") {
           outer <- List::map([1, 2, 3], {|value| print("map=#{value}"); value})
           inner = do::<List> {
             2 <- List::filter([1, 2, 3], {|value| print("filter=#{outer}:#{value}"); value > 0})
-            accepted =? if(outer == 2, Ok(outer), Err(NoneError))
+            accepted =? if(outer == 2, Ok(outer), Err(NoneError()))
             traced = print("accepted=#{accepted}")
             [accepted * 10]
           }

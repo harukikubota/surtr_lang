@@ -296,7 +296,7 @@ defmod Kernel {
   `require(user.age >= 0, InvalidUserAge(user.age))`
 
   ## REPL
-  xldr(1)> require(True, NoneError)
+  xldr(1)> require(True, NoneError())
   Ok(())
   xldr(2)> check = &require(&1, NoneError())
   xldr(3)> check(True)
@@ -324,7 +324,7 @@ defmod Kernel {
   Call expressions such as `ensure(num, is_even(), SomeError)` are rejected.
 
   ## REPL
-  xldr(1)> ensure(3, {|n| n > 0}, NoneError)
+  xldr(1)> ensure(3, {|n| n > 0}, NoneError())
   Ok(3)
   xldr(2)> positive: (Int -> Result<Int>) = &ensure(&1, {|n| n > 0}, NoneError())
   xldr(3)> positive(3)
@@ -380,7 +380,7 @@ defmod Kernel {
   @builtin def inspect(a: $A) -> String
 
   @doc """
-  Mark an unimplemented function that returns `Result` by returning `Err(NotImplemented)`.
+  Mark an unimplemented function that returns `Result` by returning `Err(NotImplemented())`.
 
   ## Examples
   def load_config() -> Result<String> {
@@ -392,7 +392,7 @@ defmod Kernel {
   "Err(NotImplemented(\"not implemented\"))"
   """
   def todo::<$T>() -> Result<$T> {
-    Err(NotImplemented)
+    Err(NotImplemented())
   }
 
   @doc """
@@ -401,7 +401,7 @@ defmod Kernel {
   surface, not an `Error`-specific helper family.
 
   ## REPL
-  xldr(1)> eprint(NoneError)
+  xldr(1)> eprint(NoneError())
   Error: NoneError
   """
   @builtin def eprint(err: Error) -> Unit

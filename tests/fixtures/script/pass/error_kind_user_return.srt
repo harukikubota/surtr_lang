@@ -1,1 +1,2 @@
 def exposed() -> ErrorKind { NoneError }
+print(inspect(exposed()))

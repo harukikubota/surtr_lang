@@ -62,7 +62,7 @@ fn question_rejects_non_result_values() {
 #[test]
 fn question_does_not_infer_unknown_success_as_unit() {
     for source in [
-        "Err(NoneError)?",
+        "Err(NoneError())?",
         "def reject(value: Result<$T>) -> Result<()> { value?\n Ok(()) }",
         "def reject(value: Result<Result<$T>>) -> Result<()> { value?\n Ok(()) }",
     ] {
@@ -139,7 +139,7 @@ fn question_inside_do_uses_do_local_failure_target() {
 fn question_inside_do_enforces_terminal_success_constraint() {
     for source in [
         "result = do::<Result> { Ok(1)?\n Ok(()) }",
-        "result = do::<Result> { Err(NoneError)?\n Ok(()) }",
+        "result = do::<Result> { Err(NoneError())?\n Ok(()) }",
     ] {
         let error = typecheck(resolve_with_builtin_prelude(source))
             .expect_err("do must preserve question-specific type constraints");

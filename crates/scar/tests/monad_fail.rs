@@ -84,7 +84,7 @@ fn unresolved_failure_dispatch_is_rejected_before_codegen() {
   item =? value
   Ok(item)
 }
-inspect(relay(Err(NoneError)))"#;
+inspect(relay(Err(NoneError())))"#;
     let error = typecheck(resolve_with_builtin_prelude(source))
         .expect_err("an unresolved failure dispatch must not leak a generic function index");
     assert!(
@@ -92,8 +92,8 @@ inspect(relay(Err(NoneError)))"#;
         "{error:?}"
     );
     typecheck_with_builtin_prelude(&source.replace(
-        "inspect(relay(Err(NoneError)))",
-        "value: Result<Int> = relay(Err(NoneError))",
+        "inspect(relay(Err(NoneError())))",
+        "value: Result<Int> = relay(Err(NoneError()))",
     ));
 }
 
@@ -120,8 +120,9 @@ fn missing_canonical_monad_fail_declaration_is_a_contract_error() {
         let mut resolved = support::resolve_program_with_builtin_prelude(source);
         resolved.retain(|node| !matches!(node,
             Resolved::TraitDef(_, id, ..) | Resolved::TraitImplDef(_, _, id, ..)
-                if id.qualified_name.as_deref() == Some("MonadFail")
+                if matches!(id.qualified_name.as_deref(), Some("MonadFail" | "MonadRecover"))
         ));
+        resolved.retain(|node| !matches!(node, Resolved::Def(_, id, ..) if id.qualified_name.as_deref() == Some("Result::recover_kind")));
         let error = check_full_program(resolved).expect_err("missing declaration cannot switch to Alternative");
         assert_eq!(error.reason(), Some(diagnostics::TypeDiagnosticReason::TypecheckInvariantViolation), "{error:?}");
     }
@@ -150,9 +151,10 @@ fn nonstandard_same_name_declaration_cannot_supply_canonical_failure_capability(
     resolved.retain(|node| {
         !matches!(node,
             Resolved::TraitDef(_, id, ..) | Resolved::TraitImplDef(_, _, id, ..)
-                if id.qualified_name.as_deref() == Some("MonadFail")
+                if matches!(id.qualified_name.as_deref(), Some("MonadFail" | "MonadRecover"))
         )
     });
+    resolved.retain(|node| !matches!(node, Resolved::Def(_, id, ..) if id.qualified_name.as_deref() == Some("Result::recover_kind")));
     resolved.insert(0, impostor);
     let error = check_full_program(resolved)
         .expect_err("a same-name Trait cannot replace canonical MonadFail");
@@ -174,6 +176,9 @@ fn result_failure_requires_its_monad_fail_impl() {
         Resolved::TraitImplDef(_, _, id, _, AstTy::Generic(_, target, _), ..)
             if id.qualified_name.as_deref() == Some("MonadFail") && target.rsplit("::").next() == Some("Result")
     ));
+    // Remove recovery dependents so this probe reaches SafeBind's failure capability.
+    resolved.retain(|node| !matches!(node, Resolved::TraitImplDef(_, _, id, ..) if id.qualified_name.as_deref() == Some("MonadRecover")));
+    resolved.retain(|node| !matches!(node, Resolved::Def(_, id, ..) if id.qualified_name.as_deref() == Some("Result::recover_kind")));
     let error = check_full_program(resolved)
         .err()
         .expect("Result spelling must not bypass its impl requirement");

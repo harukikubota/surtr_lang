@@ -362,7 +362,7 @@ fn error_source_location_safebind_selects_the_failing_pattern_node() {
 #[test]
 fn error_source_location_keeps_generation_site_across_result_and_extractor_propagation() {
     let cases = [
-        ("def main() -> Result<Int> {\n  1 =? Err(NoneError)\n  Ok(0)\n}\nmain()\n", "NoneError", "NoneError"),
+        ("def main() -> Result<Int> {\n  1 =? Err(NoneError())\n  Ok(0)\n}\nmain()\n", "NoneError()", "NoneError"),
         ("def main() -> Result<Int> {\n  value =? Int::parse(\"a\")\n  Ok(value)\n}\nmain()\n", "stdlib_parse_error", "IntParseInvalidDigit"),
         ("deferror Rejected { |message: String| message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  value =? source()\n  Ok(value)\n}\nmain()\n", "Rejected(\"generated\")" , "Rejected"),
         ("deferror Rejected { |message: String| message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  source()\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
@@ -391,7 +391,7 @@ fn error_source_location_partial_bind_selects_the_failing_child_in_result_contex
 
 #[test]
 fn error_source_location_statement_question_preserves_error_and_cause() {
-    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n}\n";
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner()), Outer(\"wrapped\"))\n  }\n}\n";
     for body in [
         "E::source()?\n  Ok(0)",
         "match True { True => { E::source()?\n    () }, False => () }\n  Ok(0)",
@@ -410,7 +410,7 @@ fn error_source_location_statement_question_preserves_error_and_cause() {
 
 #[test]
 fn error_source_location_partial_bind_preserves_monad_fail_errors_and_causes() {
-    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner()), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
     for body in [
         "do::<Result> {\n    E::checked(found) <- Ok(2)\n    Ok(found)\n  }",
         "found =? Identity::run(ResultT::run(do::<ResultT<Identity, _>> {\n    E::checked(found) <- ResultT::ok::<Identity>(2)\n    ResultT::ok::<Identity>(found)\n  }))\n  Ok(found)",
@@ -463,7 +463,7 @@ fn error_source_location_rejects_main_source_exceeding_the_span_encoding_range()
     let main_path = temp.join("large_main.srt");
     write_source(
         &main_path,
-        &format!("{padding}def main() -> Result<Int> {{ Err(NoneError) }}\nmain()\n"),
+        &format!("{padding}def main() -> Result<Int> {{ Err(NoneError()) }}\nmain()\n"),
     );
     assert_oversized_source_rejected(&main_path, &main_path);
     fs::remove_dir_all(temp).unwrap();
@@ -477,7 +477,7 @@ fn error_source_location_rejects_included_source_exceeding_the_span_encoding_ran
     write_source(
         &module_path,
         &format!(
-            "{padding}defmod Oversized {{\n  def fail() -> Result<Int> {{ Err(NoneError) }}\n}}\n"
+            "{padding}defmod Oversized {{\n  def fail() -> Result<Int> {{ Err(NoneError()) }}\n}}\n"
         ),
     );
     let include_path = temp.join("include_main.srt");

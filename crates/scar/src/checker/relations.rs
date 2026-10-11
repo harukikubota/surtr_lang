@@ -244,14 +244,21 @@ impl Checker {
                 }
             }
         }
-        TypeError::from_structured(StructuredDiagnostic {
+        let error = TypeError::from_structured(StructuredDiagnostic {
             reason: reason.into(),
             origin,
             data,
             primary: actual_fact,
             related,
             remediation: None,
-        })
+        });
+        if matches!(self.resolve_ty(expected), Ty::Error)
+            && matches!(self.resolve_ty(actual), Ty::Enum(name, args) if name == "ErrorKind" && args.is_empty())
+        {
+            error.with_hint("ErrorKind identifies a deferror declaration. Pass an Error value or call a concrete deferror constructor explicitly.")
+        } else {
+            error
+        }
     }
 
     pub(super) fn pattern_error(
