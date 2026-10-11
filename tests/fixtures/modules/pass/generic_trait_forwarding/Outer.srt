@@ -1,0 +1,6 @@
+import Inner::lift
+
+defmod Outer {
+  def qualified(value: $A) -> Result<$A> { Inner::lift(value) }
+  def imported(value: $A) -> Result<$A> { lift(value) }
+}

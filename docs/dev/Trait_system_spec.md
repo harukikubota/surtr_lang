@@ -777,6 +777,19 @@ tuple/list/map、call/capture/inject、bind/block、pipe/compose/unary/binary、
 callable instantiation後、Forge前に全`TypedNode`を監査し、`TraitDispatch::Pending`があればScarの
 `UnresolvedTraitObligation` として source span 付きで失敗させる。
 
+通常 callable を経由する具体化依存も、解決済みの function identity と保存済みの call substitution で
+伝播する。呼び先が必要とする宣言 slot の置換型から、呼び出し元の signature に属する型変数を
+再帰的に収集する。多段・自己再帰・相互再帰は有限集合の固定点として解析し、定義順に依存させない。
+具体化が必須かの分類と、未確定型を実行時に消去してよいかの判定には、同じ伝播結果を使う。
+必要 slot の具体性は複合型の内部まで検査する。型名による特例や、signature から失われた
+call substitution を逆推論する経路を設けない。
+
+Facet の typed / pending path に含まれる index、key、range の両端と合成の子は、pending dispatch、
+必要型変数、body obligation、実行対象参照の走査に含める。Pattern の pre-arg と key は
+Record などの子 Pattern まで走査し、named Extractor head の callable metadata も依存伝播・
+具体化・実行対象監査の対象にする。Extractor の宣言型変数 identity は事前宣言と本文検査で共有し、
+利用時の freshening で得た substitution を head に保存する。
+
 ## 6. Qualified method identity と診断
 
 Trait method の identity は `(trait_id, method_name)` であり、target inherent namespace の member ではない。

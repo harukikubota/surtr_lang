@@ -1,0 +1,94 @@
+defrecord Box(values: List<Int>)
+
+def facet_inner(source: Result<$A>, next: ($A -> Result<Int>)) -> Result<Int> {
+  Monad::bind(source, next)
+}
+
+def facet_view_index(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<Int> {
+  Facet::view(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values)
+}
+
+def facet_bracket_sugar(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<Int> {
+  values.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }]
+}
+
+def facet_range_start(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<List<Int>> {
+  Facet::view(List.[(match Monad::bind(source, next) { Ok(x) => x, _ => 0 })..1], values)
+}
+
+def facet_range_end(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<List<Int>> {
+  Facet::view(List.[0..(match Monad::bind(source, next) { Ok(x) => x, _ => 0 })], values)
+}
+
+def facet_map_key(source: Result<$A>, next: ($A -> Result<Int>), values: HashMap<Int>) -> Result<Int> {
+  Facet::view(HashMap.[match Monad::bind(source, next) { Ok(x) => "one", _ => "none" }], values)
+}
+
+def facet_set_path(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<List<Int>> {
+  Facet::set(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values, 99)
+}
+
+def facet_over_path(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<List<Int>> {
+  Facet::over(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values, {|value| Ok(value + 1)})
+}
+
+def facet_local_path(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<Int> {
+  path = List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }]
+  Facet::view(path, values)
+}
+
+def facet_composed_path(source: Result<$A>, next: ($A -> Result<Int>), values: List<List<Int>>) -> Result<Int> {
+  Facet::view(List.[0] -> List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values)
+}
+
+def facet_bulk_update_path(source: Result<$A>, next: ($A -> Result<Int>), values: Box) -> Result<Box> {
+  bulk_update(values, { values.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }] <- set(99) })
+}
+
+def facet_forwarded_index(source: Result<$A>, next: ($A -> Result<Int>), values: List<Int>) -> Result<Int> {
+  Facet::view(List.[match facet_inner(source, next) { Ok(x) => x, _ => 0 }], values)
+}
+
+print(inspect(facet_view_index(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_view_index(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_view_index(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+
+print(inspect(facet_bracket_sugar(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_bracket_sugar(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_bracket_sugar(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+
+print(inspect(facet_range_start(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_range_start(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_range_start(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+
+print(inspect(facet_range_end(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_range_end(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_range_end(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+
+print(inspect(facet_map_key(Ok(1), {|x: Int| Ok(x)}, HashMap::map_from_entries([("one", 10)]))))
+print(inspect(facet_map_key(Ok("hello"), {|x: String| Ok(0)}, HashMap::map_from_entries([("one", 10)]))))
+print(inspect(facet_map_key(Ok(1), {|x: Int| Ok(x)}, HashMap::map_from_entries([("one", 10)]))))
+
+print(inspect(facet_set_path(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_set_path(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_set_path(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+
+print(inspect(facet_over_path(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_over_path(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_over_path(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+
+print(inspect(facet_local_path(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_local_path(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_local_path(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+
+print(inspect(facet_composed_path(Ok(1), {|x: Int| Ok(x)}, [[10, 20]])))
+print(inspect(facet_composed_path(Ok("hello"), {|x: String| Ok(0)}, [[10, 20]])))
+print(inspect(facet_composed_path(Ok(1), {|x: Int| Ok(x)}, [[10, 20]])))
+
+print(inspect(facet_bulk_update_path(Ok(1), {|x: Int| Ok(x)}, Box([10, 20]))))
+print(inspect(facet_bulk_update_path(Ok("hello"), {|x: String| Ok(0)}, Box([10, 20]))))
+print(inspect(facet_bulk_update_path(Ok(1), {|x: Int| Ok(x)}, Box([10, 20]))))
+
+print(inspect(facet_forwarded_index(Ok(1), {|x: Int| Ok(x)}, [10, 20])))
+print(inspect(facet_forwarded_index(Ok("hello"), {|x: String| Ok(0)}, [10, 20])))
+print(inspect(facet_forwarded_index(Ok(1), {|x: Int| Ok(x)}, [10, 20])))

@@ -811,6 +811,45 @@ impl Checker {
         })
     }
 
+    pub(super) fn typed_facet_path_expression_nodes(
+        path: &TypedFacetPath,
+    ) -> impl Iterator<Item = &TypedNode> {
+        path.segments.iter().flat_map(|segment| {
+            let nodes: [Option<&TypedNode>; 2] = match segment {
+                TypedFacetSegment::ListIndex { index, .. }
+                | TypedFacetSegment::MapKey { key: index, .. } => [Some(index), None],
+                TypedFacetSegment::ListRange { start, end, .. } => [Some(start), Some(end)],
+                TypedFacetSegment::Field { .. }
+                | TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::ReadonlyBuiltin { .. }
+                | TypedFacetSegment::ErrorPayload { .. }
+                | TypedFacetSegment::Variant { .. } => [None, None],
+            };
+            nodes.into_iter().flatten()
+        })
+    }
+
+    pub(super) fn pending_facet_path_expression_nodes(
+        path: &PendingFacetPath,
+    ) -> impl Iterator<Item = &TypedNode> {
+        fn typed_expr(expr: &PendingFacetExpr) -> Option<&TypedNode> {
+            match expr {
+                PendingFacetExpr::Typed(node) => Some(node),
+                PendingFacetExpr::Resolved(_) => None,
+            }
+        }
+        path.segments.iter().flat_map(|segment| {
+            let nodes = match segment {
+                PendingFacetSegment::Field { .. } => [None, None],
+                PendingFacetSegment::Bracket { expr, .. } => [typed_expr(expr), None],
+                PendingFacetSegment::RangeBracket { start, end, .. } => {
+                    [typed_expr(start), typed_expr(end)]
+                }
+            };
+            nodes.into_iter().flatten()
+        })
+    }
+
     pub(super) fn find_typed_node<'a, T>(
         &self,
         node: &'a TypedNode,
@@ -936,14 +975,39 @@ impl Checker {
             TypedInner::SupervisorWorkers { init, strategy, .. } => self
                 .find_typed_node(init, inspect)
                 .or_else(|| self.find_typed_node(strategy, inspect)),
-            TypedInner::FacetView { source, .. } => self.find_typed_node(source, inspect),
-            TypedInner::FacetSet { source, value, .. } => self
-                .find_typed_node(source, inspect)
-                .or_else(|| self.find_typed_node(value, inspect)),
-            TypedInner::FacetOver {
-                source, update_fun, ..
+            TypedInner::FacetPath(path) => Self::typed_facet_path_expression_nodes(path)
+                .find_map(|expr| self.find_typed_node(expr, inspect)),
+            TypedInner::PendingFacetPath(path) => Self::pending_facet_path_expression_nodes(path)
+                .find_map(|expr| self.find_typed_node(expr, inspect)),
+            TypedInner::FacetView { source, path, .. } => {
+                self.find_typed_node(source, inspect).or_else(|| {
+                    Self::typed_facet_path_expression_nodes(path)
+                        .find_map(|expr| self.find_typed_node(expr, inspect))
+                })
+            }
+            TypedInner::FacetSet {
+                source,
+                path,
+                value,
+                ..
             } => self
                 .find_typed_node(source, inspect)
+                .or_else(|| {
+                    Self::typed_facet_path_expression_nodes(path)
+                        .find_map(|expr| self.find_typed_node(expr, inspect))
+                })
+                .or_else(|| self.find_typed_node(value, inspect)),
+            TypedInner::FacetOver {
+                source,
+                path,
+                update_fun,
+                ..
+            } => self
+                .find_typed_node(source, inspect)
+                .or_else(|| {
+                    Self::typed_facet_path_expression_nodes(path)
+                        .find_map(|expr| self.find_typed_node(expr, inspect))
+                })
                 .or_else(|| self.find_typed_node(update_fun, inspect)),
             TypedInner::Lit(_)
             | TypedInner::ErrorKind(_)
@@ -951,8 +1015,6 @@ impl Checker {
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
-            | TypedInner::FacetPath(_)
-            | TypedInner::PendingFacetPath(_)
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)
             | TypedInner::TraitDef(..)
@@ -1081,15 +1143,44 @@ impl Checker {
                     collect(init, obligations);
                     collect(strategy, obligations);
                 }
-                TypedInner::FacetView { source, .. } => collect(source, obligations),
-                TypedInner::FacetSet { source, value, .. } => {
+                TypedInner::FacetPath(path) => {
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
+                }
+                TypedInner::PendingFacetPath(path) => {
+                    for expr in Checker::pending_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
+                }
+                TypedInner::FacetView { source, path, .. } => {
                     collect(source, obligations);
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
+                }
+                TypedInner::FacetSet {
+                    source,
+                    path,
+                    value,
+                    ..
+                } => {
+                    collect(source, obligations);
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
                     collect(value, obligations);
                 }
                 TypedInner::FacetOver {
-                    source, update_fun, ..
+                    source,
+                    path,
+                    update_fun,
+                    ..
                 } => {
                     collect(source, obligations);
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
                     collect(update_fun, obligations);
                 }
                 _ => {}
@@ -7916,7 +8007,46 @@ impl Checker {
         if matches!(extractor_ty, Ty::ExtractorClosure(_)) {
             Ok(self.resolve_ty(&extractor_ty))
         } else {
-            Ok(self.instantiate_callable_ty(&extractor_ty))
+            // Named Pattern heads are call sites. Preserve the fresh solver
+            // substitution created with their signature for specialization.
+            let mut fresh = HashMap::new();
+            if let Ty::UserFunc {
+                type_params,
+                call_substitution,
+                ..
+            } = &extractor_ty
+            {
+                if !call_substitution.is_empty() {
+                    return Err(self.typecheck_invariant_error(
+                        "named Extractor binding must retain its declaration signature",
+                        span,
+                    ));
+                }
+                for variable in type_params {
+                    self.instantiate_ty_with_fresh(&Ty::Var(*variable), &mut fresh);
+                }
+            }
+            let mut instantiated = self.instantiate_ty_with_fresh(&extractor_ty, &mut fresh);
+            if let Ty::UserFunc {
+                type_params,
+                call_substitution,
+                ..
+            } = &mut instantiated
+            {
+                *call_substitution = type_params
+                    .iter()
+                    .map(|variable| {
+                        fresh.get(variable).cloned().map(|ty| (*variable, ty)).ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                "named Extractor instantiation must preserve every declaration slot",
+                                span,
+                            )
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
+                call_substitution.sort_unstable_by_key(|(variable, _)| *variable);
+            }
+            Ok(instantiated)
         }
     }
 

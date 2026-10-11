@@ -338,6 +338,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
         core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears
     ),
     repl_core_case!(core_generic_callable_capture_uses_site_signature_inside_nested_values),
+    repl_core_case!(core_generic_trait_forwarding_retains_substitutions_across_submissions),
     repl_core_case!(core_repl_displays_curry_callable_inside_result_without_internal_id),
     repl_core_case!(core_callable_declaration_identity_survives_chunks),
     repl_core_case!(core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive),
@@ -7176,4 +7177,58 @@ fn core_callable_declaration_identity_survives_chunks() {
         visible_text(&rejected)
     );
     assert_eq!(rendered_text(&engine.handle_line("combine(2, 3)")), "6");
+}
+
+fn core_generic_trait_forwarding_retains_substitutions_across_submissions() {
+    for reversed in [false, true] {
+        let mut engine = ReplEngine::from_script_source(
+            "generic_extractor_preload.srt",
+            "impl Int { defextractor relay(source: Result<$A>) -> MatchResult<$A> { value =? Monad::bind(source, {|x| Ok(x)}); MatchResult::Ok(value) } }",
+        ).expect("named Extractor preload should typecheck");
+        for declaration in [
+            "def inner(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { Monad::bind(source, next) }",
+            "def outer(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { inner(source, next) }",
+            "def partial::<$B>(source: Result<$A>) -> (($A -> Result<$B>) -> Result<$B>) { &inner(source, &1) }",
+        ] {
+            let result = engine.handle_line(declaration);
+            assert!(!matches!(result.output, ReplOutput::Diagnostic { .. } | ReplOutput::EvalError { .. }), "{}", rendered_text(&result));
+        }
+        let mut calls = [
+            ("outer(Ok(7), {|x: Int| Ok(x + 1)})", "Ok(8)"),
+            ("outer(Ok(7), {|x: Int| Ok(inspect(x))})", "Ok(\"7\")"),
+            (
+                "outer(Ok([1,2]), {|x: List<Int>| Ok((x, True))})",
+                "Ok(([1, 2], True))",
+            ),
+            ("apply_pattern(Ok(7), Int::relay(_1))", "Ok(7)"),
+            ("apply_pattern(Ok(\"x\"), Int::relay(_1))", "Ok(\"x\")"),
+        ];
+        if reversed {
+            calls.reverse();
+        }
+        for (source, expected) in calls.into_iter().chain(calls) {
+            let result = engine.handle_line(source);
+            assert!(
+                matches!(result.output, ReplOutput::EvalSuccess { .. }),
+                "{}",
+                rendered_text(&result)
+            );
+            assert_eq!(rendered_text(&result), expected);
+        }
+        let captured = engine.handle_line(
+            "f: ((Int -> Result<String>) -> Result<String>) = partial::<String>(Ok(3))",
+        );
+        assert!(
+            !matches!(
+                captured.output,
+                ReplOutput::Diagnostic { .. } | ReplOutput::EvalError { .. }
+            ),
+            "{}",
+            rendered_text(&captured)
+        );
+        assert_eq!(
+            rendered_text(&engine.handle_line("f({|x| Ok(inspect(x))})")),
+            "Ok(\"3\")"
+        );
+    }
 }

@@ -1,0 +1,4 @@
+print(inspect(Outer::qualified(7)))
+print(inspect(Outer::imported("x")))
+print(inspect(Outer::qualified("y")))
+print(inspect(Outer::imported(8)))

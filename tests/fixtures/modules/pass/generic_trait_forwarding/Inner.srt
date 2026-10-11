@@ -1,0 +1,3 @@
+defmod Inner {
+  def lift(value: $A) -> Result<$A> { Applicative::pure(value) }
+}

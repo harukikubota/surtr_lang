@@ -1306,6 +1306,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(extractor_closure_direct_argument_uses_expected_type),
     surface_case!(apply_pattern_projection_types_and_boundaries),
     surface_case!(error_contract_surface_is_restricted_to_direct_definition_returns),
+    surface_case!(facet_pending_dispatch_collects_path_type_inputs),
     surface_case!(nested_ordinary_match_blocks_typecheck),
     surface_case!(nested_user_closures_typecheck_do_binds_and_captures),
     surface_case!(nested_do_closure_mismatch_keeps_original_source_facts),
@@ -12230,5 +12231,62 @@ answer = match map { hash!["a" => _] => True }"#,
             "expected {message}, got {}",
             error.message
         );
+    }
+}
+
+fn check_facet_specializations(body: &str, values_ty: &str, values: &str, result_ty: &str) {
+    let source = format!(
+        r#"
+defrecord Box(values: List<Int>)
+def outer(source: Result<$A>, next: ($A -> Result<Int>), values: {values_ty}) -> {result_ty} {{
+  {body}
+}}
+outer(Ok(1), {{|x: Int| Ok(x)}}, {values})
+outer(Ok("hello"), {{|x: String| Ok(0)}}, {values})
+outer(Ok(1), {{|x: Int| Ok(x)}}, {values})
+"#
+    );
+    let nodes = support::typecheck_with_builtin_prelude(&source);
+    let source_types: Vec<_> = nodes
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(_, name, _, params, _, _, _, _) if name.name == "outer" => {
+                match &params[0].ty {
+                    Ty::Result(source, _) => Some(source.as_ref().clone()),
+                    _ => panic!("outer source must retain its Result signature"),
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        source_types.len(),
+        2,
+        "same-type calls should share their specialization"
+    );
+    assert!(
+        source_types.contains(&Ty::Int),
+        "Int source specialization missing: {source_types:?}"
+    );
+    assert!(
+        source_types.contains(&Ty::Str),
+        "String source specialization missing: {source_types:?}"
+    );
+}
+
+fn facet_pending_dispatch_collects_path_type_inputs() {
+    for (body, values_ty, values, result_ty) in [
+        ("Facet::view(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values)", "List<Int>", "[10, 20]", "Result<Int>"),
+        ("values.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }]", "List<Int>", "[10, 20]", "Result<Int>"),
+        ("Facet::view(List.[(match Monad::bind(source, next) { Ok(x) => x, _ => 0 })..1], values)", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("Facet::view(List.[0..(match Monad::bind(source, next) { Ok(x) => x, _ => 0 })], values)", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("Facet::view(HashMap.[match Monad::bind(source, next) { Ok(x) => \"one\", _ => \"none\" }], values)", "HashMap<Int>", "HashMap::map_from_entries([(\"one\", 10)])", "Result<Int>"),
+        ("Facet::set(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values, 99)", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("Facet::over(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values, {|value| Ok(value + 1)})", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("path = List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }]\nFacet::view(path, values)", "List<Int>", "[10, 20]", "Result<Int>"),
+        ("Facet::view(List.[0] -> List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values)", "List<List<Int>>", "[[10, 20]]", "Result<Int>"),
+        ("Facet::bulk_update(values) { values.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }] <- set(99) }", "Box", "Box([10, 20])", "Result<Box>"),
+    ] {
+        check_facet_specializations(body, values_ty, values, result_ty);
     }
 }
