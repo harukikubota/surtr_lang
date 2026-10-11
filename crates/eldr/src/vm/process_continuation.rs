@@ -33,6 +33,13 @@ pub(super) struct SingletonFlight {
     waiters: usize,
 }
 
+#[cfg(test)]
+pub(super) fn test_singleton_flight(future_id: FutureId) -> SingletonFlight {
+    SingletonFlight {
+        future_id,
+        waiters: 1,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeContinuation {

@@ -1,8 +1,10 @@
 mod test_runner;
 use test_runner::VmTestRunner;
 pub use test_runner::{VmTestCase, VmTestDeclaration, VmTestPolicy, VmTestScope, VmTestScopeKind};
+mod checkpoint_value;
 mod process_continuation;
 mod runtime_table;
+use checkpoint_value::CheckpointValue;
 pub(crate) use process_continuation::RuntimeContinuation;
 use process_continuation::{DetachedTask, SingletonFlight};
 use runtime_table::RuntimeTable;
@@ -28,6 +30,8 @@ use std::fs::{File, OpenOptions};
 use std::rc::{Rc, Weak};
 
 use crate::builtin::{call_builtin, BuiltinContinuation, BuiltinOutcome};
+#[cfg(test)]
+mod checkpoint_collections_tests;
 #[cfg(test)]
 mod checkpoint_metadata_tests;
 mod continuation;
@@ -562,23 +566,23 @@ struct ProcessRuntime {
     next_correlation_id: CorrelationId,
     next_detached_task_id: u64,
     spec_registry: Rc<ProcessSpecRegistry>,
-    handler_contexts: BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>,
-    singleton_by_name: BTreeMap<String, u64>,
-    singleton_inits: BTreeMap<String, SingletonFlight>,
-    refilling_worker_sets: BTreeSet<u64>,
+    handler_contexts: CheckpointValue<BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>>,
+    singleton_by_name: CheckpointValue<BTreeMap<String, u64>>,
+    singleton_inits: CheckpointValue<BTreeMap<String, SingletonFlight>>,
+    refilling_worker_sets: CheckpointValue<BTreeSet<u64>>,
     processes: RuntimeTable<ProcessInstance>,
     stopped_identities: RuntimeTable<Weak<PidIdentity>>,
     executions: RuntimeTable<ProcessExecutionRecord>,
     next_execution_id: u64,
     futures: RuntimeTable<FutureRecord>,
-    reply_table: BTreeMap<CorrelationId, FutureId>,
-    waiting_table: BTreeMap<u64, ProcessWaitReason>,
-    deadline_queue: VecDeque<DeadlineEntry>,
-    run_queue: VecDeque<u64>,
-    output_events: VecDeque<RuntimeOutputEvent>,
+    reply_table: CheckpointValue<BTreeMap<CorrelationId, FutureId>>,
+    waiting_table: CheckpointValue<BTreeMap<u64, ProcessWaitReason>>,
+    deadline_queue: CheckpointValue<VecDeque<DeadlineEntry>>,
+    run_queue: CheckpointValue<VecDeque<u64>>,
+    output_events: CheckpointValue<VecDeque<RuntimeOutputEvent>>,
     detached_tasks: RuntimeTable<DetachedTask>,
     root_supervisor: RootSupervisorState,
-    worker_sets: BTreeMap<u64, WorkerSetState>,
+    worker_sets: RuntimeTable<WorkerSetState>,
 }
 
 /// Registered definitions stay immutable across checkpoints and VM clones.
@@ -588,6 +592,8 @@ struct ProcessSpecRegistry {
     specs_by_id: Vec<RuntimeProcessSpec>,
     spec_id_by_name: BTreeMap<String, u32>,
     specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
+    handler_defaults: CheckpointValue<BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>>,
+    supervisor_defaults: CheckpointValue<BTreeMap<String, RuntimeSupervisorPolicy>>,
 }
 
 #[derive(Debug, Clone)]
@@ -890,9 +896,9 @@ struct DeadlineEntry {
 #[derive(Debug, Clone, Default)]
 struct RootSupervisorState {
     boot_completed: bool,
-    boot_failures: BTreeMap<String, String>,
-    effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy>,
-    child_table: BTreeMap<String, Vec<u64>>,
+    boot_failures: CheckpointValue<BTreeMap<String, String>>,
+    effective_supervisors: CheckpointValue<BTreeMap<String, RuntimeSupervisorPolicy>>,
+    child_table: CheckpointValue<BTreeMap<String, Vec<u64>>>,
 }
 
 impl ProcessRuntime {
@@ -2774,15 +2780,30 @@ impl VM {
     }
 
     fn remove_worker_from_sets(&mut self, pid: u64) {
+        let changed_ids = self
+            .process_runtime
+            .worker_sets
+            .iter()
+            .filter_map(|(id, state)| {
+                (state.members.contains(&pid)
+                    || (state.next_index != 0 && state.next_index >= state.members.len()))
+                .then_some(*id)
+            })
+            .collect::<Vec<_>>();
         let mut refill_ids = Vec::new();
-        for (workers_id, state) in &mut self.process_runtime.worker_sets {
+        for workers_id in changed_ids {
+            let state = self
+                .process_runtime
+                .worker_sets
+                .get_mut(&workers_id)
+                .expect("selected worker set must remain present");
             let before = state.members.len();
             state.members.retain(|member| *member != pid);
             if state.next_index >= state.members.len() {
                 state.next_index = 0;
             }
             if state.members.len() != before && state.members.len() < state.target as usize {
-                refill_ids.push(*workers_id);
+                refill_ids.push(workers_id);
             }
         }
         for workers_id in refill_ids {
@@ -3720,7 +3741,7 @@ impl VM {
         Ok(VmProcessRuntimeSnapshot {
             counters: self.process_runtime.counters(),
             specs,
-            singleton_slots: self.process_runtime.singleton_by_name.clone(),
+            singleton_slots: (*self.process_runtime.singleton_by_name).clone(),
             processes,
             worker_sets,
             waiting,
@@ -3854,6 +3875,7 @@ impl VM {
         self.bytecode.dbg_templates.extend(dbg_templates);
         self.bytecode.callable_templates.extend(callable_templates);
         self.extend_docs_unique(docs);
+        let specs_changed = !runtime_process_specs.is_empty();
         self.bytecode
             .runtime_process_specs
             .entries
@@ -3870,8 +3892,12 @@ impl VM {
             .runtime_boot_plan
             .handler_overrides
             .extend(runtime_boot_plan.handler_overrides);
-        self.process_runtime
-            .register_spec_table(&self.bytecode.runtime_process_specs);
+        if specs_changed {
+            self.process_runtime
+                .register_spec_table(&self.bytecode.runtime_process_specs);
+        } else {
+            self.process_runtime.reset_spec_overlays();
+        }
         self.apply_runtime_supervisor_overrides();
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
@@ -6770,21 +6796,6 @@ impl ProcessRuntime {
     }
 
     fn register_spec_table(&mut self, spec_table: &RuntimeProcessSpecTable) {
-        self.spec_registry = Rc::new(ProcessSpecRegistry {
-            specs_by_id: spec_table.entries.clone(),
-            spec_id_by_name: spec_table
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(idx, spec)| (spec.type_name.clone(), idx as u32))
-                .collect(),
-            specs_by_name: spec_table
-                .entries
-                .iter()
-                .cloned()
-                .map(|spec| (spec.type_name.clone(), spec))
-                .collect(),
-        });
         let mut effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy> = spec_table
             .entries
             .iter()
@@ -6804,8 +6815,7 @@ impl ProcessRuntime {
                 }
             }
         }
-        self.root_supervisor.effective_supervisors = effective_supervisors;
-        self.handler_contexts = spec_table
+        let handler_defaults = spec_table
             .entries
             .iter()
             .map(|spec| {
@@ -6817,7 +6827,30 @@ impl ProcessRuntime {
                     .collect::<BTreeMap<_, _>>();
                 (spec.type_name.clone(), slots)
             })
-            .collect();
+            .collect::<BTreeMap<_, _>>();
+        self.spec_registry = Rc::new(ProcessSpecRegistry {
+            specs_by_id: spec_table.entries.clone(),
+            spec_id_by_name: spec_table
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(idx, spec)| (spec.type_name.clone(), idx as u32))
+                .collect(),
+            specs_by_name: spec_table
+                .entries
+                .iter()
+                .cloned()
+                .map(|spec| (spec.type_name.clone(), spec))
+                .collect(),
+            handler_defaults: handler_defaults.into(),
+            supervisor_defaults: effective_supervisors.into(),
+        });
+        self.reset_spec_overlays();
+    }
+
+    fn reset_spec_overlays(&mut self) {
+        self.handler_contexts = self.spec_registry.handler_defaults.clone();
+        self.root_supervisor.effective_supervisors = self.spec_registry.supervisor_defaults.clone();
     }
 
     fn canonical_process_name<'a>(&'a self, process_name: &'a str) -> Option<&'a str> {
@@ -6999,9 +7032,16 @@ impl ProcessRuntime {
     }
 
     fn collect_expired_futures(&mut self, now_tick: u64) -> Vec<FutureId> {
+        if !self
+            .deadline_queue
+            .iter()
+            .any(|entry| entry.deadline_tick <= now_tick)
+        {
+            return Vec::new();
+        }
         let mut expired = Vec::new();
         let mut retained = VecDeque::with_capacity(self.deadline_queue.len());
-        while let Some(entry) = self.deadline_queue.pop_front() {
+        for entry in self.deadline_queue.iter().copied() {
             if entry.deadline_tick <= now_tick {
                 let is_running = self
                     .futures
@@ -7019,7 +7059,7 @@ impl ProcessRuntime {
                 retained.push_back(entry);
             }
         }
-        self.deadline_queue = retained;
+        self.deadline_queue = retained.into();
         expired
     }
 
