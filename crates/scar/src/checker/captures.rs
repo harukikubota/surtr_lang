@@ -14,12 +14,21 @@ impl Checker {
                     TypedFacetSegment::MapKey { key, .. } => children.push(key),
                     TypedFacetSegment::Field { .. }
                     | TypedFacetSegment::Tuple { .. }
+                    | TypedFacetSegment::ReadonlyBuiltin { .. }
+                    | TypedFacetSegment::ErrorPayload { .. }
                     | TypedFacetSegment::Variant { .. } => {}
                 }
             }
         }
         let mut children = Self::pattern_expression_nodes(node);
+        children.extend(node.monad_fail_call());
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                children.push(message);
+                children.extend(payload);
+            }
             TypedInner::TraitCall { args, .. } => children.extend(args),
             TypedInner::App(function, args)
             | TypedInner::InjectCall(function, args)
@@ -43,7 +52,6 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, ..)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs) => children.push(rhs),
             TypedInner::DoSafeBind(control) => {
                 children.push(&control.rhs);
@@ -66,10 +74,6 @@ impl Checker {
                 children.push(cond);
                 children.push(then_branch);
                 children.extend(else_branch.as_deref());
-            }
-            TypedInner::RecoverKind(a, _, c) => {
-                children.push(a);
-                children.push(c);
             }
             TypedInner::Ensure(a, b, c) => {
                 children.push(a);
@@ -145,9 +149,8 @@ impl Checker {
             | TypedInner::CaptureConstructorClosure(..)
             | TypedInner::ExtractorClosure(..)
             | TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -176,6 +179,11 @@ impl Checker {
         }
         fn binding(pat: &TypedPattern, outer: &HashSet<u32>, out: &mut Vec<ResolvedId>) {
             match pat {
+                TypedPattern::HashMap(_, entries) => {
+                    for entry in entries {
+                        binding(&entry.pattern, outer, out);
+                    }
+                }
                 TypedPattern::Located(_, inner) => binding(inner, outer, out),
                 TypedPattern::Pin(_, id, _) => reference(id, outer, out),
                 TypedPattern::Extractor {
@@ -220,6 +228,11 @@ impl Checker {
                         matching(item, outer, out);
                     }
                 }
+                TypedMatchPattern::HashMap(entries) => {
+                    for entry in entries {
+                        matching(&entry.pattern, outer, out);
+                    }
+                }
                 TypedMatchPattern::As(inner, _) => matching(inner, outer, out),
                 TypedMatchPattern::ListCons(a, b) => {
                     matching(a, outer, out);
@@ -227,6 +240,8 @@ impl Checker {
                 }
                 TypedMatchPattern::Tuple(items)
                 | TypedMatchPattern::Or(items)
+                | TypedMatchPattern::Record(items)
+                | TypedMatchPattern::ErrorPayload { fields: items, .. }
                 | TypedMatchPattern::Constructor { fields: items, .. } => {
                     for item in items {
                         matching(item, outer, out);

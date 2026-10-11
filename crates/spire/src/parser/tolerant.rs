@@ -202,27 +202,37 @@ fn scan_tolerant(source: &str) -> TolerantScan {
 
         if c == '"' && i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
             let start = i;
-            i += 3;
-            while i + 2 < len && !(chars[i] == '"' && chars[i + 1] == '"' && chars[i + 2] == '"') {
-                i += 1;
+            match crate::lexer::lex_raw_triple_quoted_string(&chars, start, len) {
+                Ok((token, next)) => {
+                    i = next;
+                    push_both(
+                        &mut parser_tokens,
+                        &mut syntax_tokens,
+                        token.token,
+                        SyntaxTokenKind::DocString,
+                        start,
+                        i,
+                    );
+                }
+                Err(error) => {
+                    let incomplete = error.is_incomplete();
+                    diagnostics.push(parse_diag(error));
+                    if incomplete {
+                        break;
+                    }
+                    i = start + 3;
+                    while i + 2 < len
+                        && !(chars[i] == '"' && chars[i + 1] == '"' && chars[i + 2] == '"')
+                    {
+                        i += 1;
+                    }
+                    i += 3;
+                    syntax_tokens.push(SyntaxToken {
+                        kind: SyntaxTokenKind::DocString,
+                        span: Span { start, end: i },
+                    });
+                }
             }
-            if i + 2 >= len {
-                diagnostics.push(parse_diag(ParseError::incomplete(
-                    "\"\"\"",
-                    Span { start, end: len },
-                )));
-                break;
-            }
-            let content = chars[start + 3..i].iter().collect::<String>();
-            i += 3;
-            push_both(
-                &mut parser_tokens,
-                &mut syntax_tokens,
-                Token::DocString(content),
-                SyntaxTokenKind::DocString,
-                start,
-                i,
-            );
             continue;
         }
 
@@ -761,6 +771,12 @@ fn recover_to_boundary(parser: &mut Parser<'_>, allow_rbrace: bool) {
 }
 
 fn keyword_token(text: &str) -> (Token, SyntaxTokenKind) {
+    if let Some(value) = sindr::reflection::Reflection::from_name(text) {
+        return (Token::Reflection(value), SyntaxTokenKind::Identifier);
+    }
+    if text == sindr::reflection::RESERVED_ENV_NAME {
+        return (Token::ReservedEnv, SyntaxTokenKind::Identifier);
+    }
     let keyword = match text {
         "True" => Some(Token::True),
         "False" => Some(Token::False),
@@ -897,6 +913,12 @@ fn outline_item_from_ast(node: &Ast) -> Option<SyntaxOutlineItem> {
         Ast::ExtractorDef(span, name, ..) => (
             SyntaxOutlineKind::Extractor,
             Some(name.clone()),
+            span,
+            Vec::new(),
+        ),
+        Ast::BuiltinReflectionDecl(span, value, _) => (
+            SyntaxOutlineKind::Function,
+            Some(value.name().into()),
             span,
             Vec::new(),
         ),

@@ -21,12 +21,12 @@ enum UnresolvedExecutableTypeArgument {
 }
 
 enum ResolvedDeferredDoFailure {
-    Result(ResultPreserveTarget),
+    Result(MonadFailTarget),
     Alternative(TypedNode),
 }
 
 struct SpecializationContext<'a> {
-    defs_by_fun_idx: &'a HashMap<u32, TypedNode>,
+    defs_by_fun_idx: &'a SpecializableDefinitions,
     bound_tyvars_by_fun_idx: &'a HashMap<u32, Vec<u32>>,
     needs_specialization: &'a HashSet<u32>,
     specialization_fun_idxs: &'a mut HashMap<CallableInstantiationKey, u32>,
@@ -38,72 +38,31 @@ impl Checker {
         &mut self,
         deferred: DeferredDoFailureTarget,
     ) -> Result<ResolvedDeferredDoFailure, Box<TypeError>> {
-        let carrier_ty = self.resolve_ty(&deferred.carrier_ty);
-        match self.resolve_result_effect(&carrier_ty) {
-            ResultEffectResolution::Preserve(target) => {
-                for propagated in &deferred.propagated_error_tys {
-                    let propagated = self.resolve_ty(propagated);
-                    if !self.types_compatible(&target.error_ty, &propagated) {
-                        return Err(Box::new(self.policy_error(
-                            TypeDiagnosticReason::SafeBindErrorTypeMismatch,
-                            diagnostics::TypePolicy::SafeBindFailureTarget,
-                            Some("do failure effect".into()),
-                            Some(&target.error_ty),
-                            Some(&propagated),
-                            None,
-                            None,
-                            &deferred.failure_span,
-                            None,
-                        )));
-                    }
-                }
-                Ok(ResolvedDeferredDoFailure::Result(target))
+        let target = self.resolve_pattern_failure_target(
+            &deferred.carrier_ty,
+            &deferred.propagated_error_tys,
+            &deferred.failure_span,
+            Some((
+                &deferred.alternative_trait_key,
+                &deferred.alternative_method_name,
+                &deferred.do_keyword_span,
+            )),
+            false,
+        )?;
+        match target {
+            SafeBindFailureTarget::DoMonadFail(target) => {
+                Ok(ResolvedDeferredDoFailure::Result(*target))
             }
-            ResultEffectResolution::Unavailable => {
-                let empty = self.check_trait_invocation(
-                    &deferred.failure_span,
-                    &deferred.alternative_trait_key,
-                    &deferred.alternative_method_name,
-                    &[],
-                    None,
-                    Some(&carrier_ty),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
-                Ok(ResolvedDeferredDoFailure::Alternative(empty))
+            SafeBindFailureTarget::DoAlternative { empty } => {
+                Ok(ResolvedDeferredDoFailure::Alternative(*empty))
             }
-            ResultEffectResolution::Deferred => Err(Box::new(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("deferred do failure policy remained unresolved".into()),
-                None,
-                Some(&carrier_ty),
-                None,
-                None,
-                &deferred.failure_span,
-                Some("Resolve the do carrier before code generation.".into()),
-            ))),
-            ResultEffectResolution::InvalidMetadata(subject) => Err(Box::new(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some(subject.into()),
-                None,
-                Some(&carrier_ty),
-                None,
-                None,
-                &deferred.failure_span,
-                None,
-            ))),
+            _ => unreachable!("resolved do failure context"),
         }
     }
 
     fn collect_direct_pattern_requirements(
         &self,
-        definitions: &HashMap<u32, TypedNode>,
+        definitions: &SpecializableDefinitions,
     ) -> Result<HashMap<u32, Vec<u32>>, TypeError> {
         use std::cell::RefCell;
         let mut signatures = HashMap::new();
@@ -221,11 +180,10 @@ impl Checker {
         &mut self,
         stmts: Vec<TypedNode>,
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let mut defs_by_fun_idx = HashMap::new();
-        defs_by_fun_idx.extend(self.specializable_defs.clone());
+        let mut defs_by_fun_idx = self.specializable_defs.clone();
         for stmt in &stmts {
             if let Some(fun_idx) = Self::def_fun_idx(stmt) {
-                defs_by_fun_idx.insert(fun_idx, stmt.clone());
+                defs_by_fun_idx.insert(fun_idx, Arc::new(stmt.clone()));
             }
         }
 
@@ -234,8 +192,19 @@ impl Checker {
 
         let mut needs_specialization = HashSet::new();
         let mut bound_tyvars_by_fun_idx = HashMap::new();
+        // Method identities are unchanged while classifying this compile unit.
+        // Build their membership index once instead of scanning every impl per definition.
+        let trait_impl_method_uids = self
+            .trait_impls
+            .values()
+            .flat_map(|info| {
+                info.methods
+                    .values()
+                    .map(|method| method.function_id.unique_id)
+            })
+            .collect::<HashSet<_>>();
         for (fun_idx, def) in &defs_by_fun_idx {
-            let mut bound_tyvars = self.collect_bound_tyvars_for_def(def);
+            let mut bound_tyvars = self.collect_bound_tyvars_for_def(def, &trait_impl_method_uids);
             if let Some(required) = self.direct_pattern_requirement_tyvars.get(fun_idx) {
                 for variable in required {
                     if !bound_tyvars.contains(variable) {
@@ -265,7 +234,7 @@ impl Checker {
                             &HashSet::new(),
                         );
                     }
-                    self.specializable_defs.insert(fun_idx, stmt);
+                    self.specializable_defs.insert(fun_idx, Arc::new(stmt));
                     continue;
                 }
             }
@@ -383,6 +352,72 @@ impl Checker {
                 }
             });
         }
+        // Generic templates are not executable function-table entries. Validate
+        // after all enclosing calls have supplied their substitutions, so an
+        // unresolved template reference cannot escape to Forge.
+        let executable_functions = rewritten
+            .iter()
+            .filter_map(Self::def_fun_idx)
+            .collect::<HashSet<_>>();
+        for executable in &rewritten {
+            if let Some(error) = self.find_typed_node(executable, &|checker, node| {
+                // A definition's type describes its declaration; only value
+                // references carry an executable function index.
+                if matches!(
+                    node.node,
+                    TypedInner::Def(..) | TypedInner::ExtractorDef(..)
+                ) {
+                    return None;
+                }
+                let Ty::UserFunc {
+                    fun_idx,
+                    call_substitution,
+                    ..
+                } = &node.ty
+                else {
+                    return None;
+                };
+                if !needs_specialization.contains(fun_idx) || executable_functions.contains(fun_idx)
+                {
+                    return None;
+                }
+                let definition = defs_by_fun_idx
+                    .get(fun_idx)
+                    .expect("specialization template has a definition");
+                let pending = checker.find_typed_node(definition, &|_, call| match &call.node {
+                    TypedInner::TraitCall {
+                        trait_name,
+                        method_name,
+                        receiver_ty,
+                        dispatch,
+                        ..
+                    } if matches!(dispatch, TraitDispatch::Pending)
+                        || matches!(dispatch, TraitDispatch::Selected(instantiation)
+                                if Self::selected_instantiation_has_pending_input(instantiation)) =>
+                    {
+                        Some((trait_name, method_name, receiver_ty))
+                    }
+                    _ => None,
+                });
+                if let Some((trait_name, method, subject)) = pending {
+                    let mapping = call_substitution.iter().cloned().collect();
+                    let subject = checker.substitute_ty_with_mapping(subject, &mapping);
+                    return Some(
+                        checker
+                            .pending_trait_helper_error(trait_name, method, &subject, &node.span),
+                    );
+                }
+                Some(
+                    TypeError::new(
+                        "Callable specialization requires concrete type arguments",
+                        node.span.clone(),
+                    )
+                    .with_hint("Add parameter or result type annotations at this call."),
+                )
+            }) {
+                return Err(error);
+            }
+        }
         self.specialization_fun_idxs = specialization_fun_idxs;
         Ok(rewritten)
     }
@@ -393,6 +428,15 @@ impl Checker {
         allowed_vars: &HashSet<u32>,
         allowed_enum_constructor_vars: &HashSet<u32>,
     ) -> Option<UnresolvedExecutableTypeArgument> {
+        if let Some(found) = node.monad_fail_call().and_then(|call| {
+            self.first_unresolved_executable_type_argument(
+                call,
+                allowed_vars,
+                allowed_enum_constructor_vars,
+            )
+        }) {
+            return Some(found);
+        }
         if let Some(pending) = Self::pattern_expression_nodes(node)
             .into_iter()
             .find_map(|expr| {
@@ -502,6 +546,9 @@ impl Checker {
             )
         };
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => visit(message).or_else(|| payload.iter().find_map(visit)),
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)
             | TypedInner::Capture(func, args) => {
@@ -517,7 +564,6 @@ impl Checker {
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _) => visit(rhs),
             TypedInner::DoSafeBind(control) => visit(&control.rhs)
@@ -526,7 +572,6 @@ impl Checker {
                     _ => None,
                 })
                 .or_else(|| visit(&control.continuation)),
-            TypedInner::DeferredDoFailure(_) => None,
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
@@ -537,7 +582,6 @@ impl Checker {
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
-            TypedInner::RecoverKind(first, _, third) => visit(first).or_else(|| visit(third)),
             TypedInner::Ensure(first, second, third) => visit(first)
                 .or_else(|| visit(second))
                 .or_else(|| visit(third)),
@@ -641,8 +685,8 @@ impl Checker {
                 )
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -667,7 +711,7 @@ impl Checker {
         &mut self,
         control: Box<TypedDoSafeBind>,
         span: &Span,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -706,6 +750,28 @@ impl Checker {
             },
         )?;
         let failure_target = match failure_target {
+            SafeBindFailureTarget::DoMonadFail(mut target) => {
+                target.call = self.rewrite_specializations_in_node(
+                    *target.call,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?;
+                SafeBindFailureTarget::DoMonadFail(target)
+            }
+            SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
+                target.call = self.rewrite_specializations_in_node(
+                    *target.call,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?;
+                SafeBindFailureTarget::EnclosingMonadFail(target)
+            }
             SafeBindFailureTarget::DoAlternative { empty } => {
                 SafeBindFailureTarget::DoAlternative {
                     empty: self.rewrite_specializations_in_node(
@@ -725,10 +791,19 @@ impl Checker {
                     alternative_method_name: deferred.alternative_method_name,
                     propagated_error_tys: deferred.propagated_error_tys,
                     failure_span: deferred.failure_span,
+                    do_keyword_span: deferred.do_keyword_span,
                 };
                 match self.resolve_deferred_do_failure(deferred)? {
-                    ResolvedDeferredDoFailure::Result(target) => {
-                        SafeBindFailureTarget::DoResultContext(Box::new(target))
+                    ResolvedDeferredDoFailure::Result(mut target) => {
+                        target.call = self.rewrite_specializations_in_node(
+                            *target.call,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )?;
+                        SafeBindFailureTarget::DoMonadFail(Box::new(target))
                     }
                     ResolvedDeferredDoFailure::Alternative(empty) => {
                         let empty = self.rewrite_specializations_in_node(
@@ -819,7 +894,7 @@ impl Checker {
     fn rewrite_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -863,9 +938,8 @@ impl Checker {
                     generated_defs,
                 ),
             TypedInner::Lit(..)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(..)
-            | TypedInner::ResultEffectFailure(..)
-            | TypedInner::DeferredDoFailure(..)
             | TypedInner::SupervisorSpawn { .. }
             | TypedInner::SupervisorAdopt { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -887,13 +961,11 @@ impl Checker {
             | TypedInner::InterpolatedStr(..)
             | TypedInner::Dbg(..)
             | TypedInner::EagerBoundary(..)
-            | TypedInner::AssertErrorKinds(..)
             | TypedInner::If(..)
             | TypedInner::Require(..)
             | TypedInner::Ensure(..)
             | TypedInner::MapErr(..)
             | TypedInner::Cause(..)
-            | TypedInner::RecoverKind(..)
             | TypedInner::FieldAccess(..)
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::FacetPath(..)
@@ -904,6 +976,7 @@ impl Checker {
             | TypedInner::StructLit(..)
             | TypedInner::ConstructorCall(..)
             | TypedInner::DeferrorDef(..)
+            | TypedInner::ErrorConstruct { .. }
             | TypedInner::Def(..)
             | TypedInner::ExtractorDef(..)
             | TypedInner::BuiltinExtractorDecl(..)
@@ -928,7 +1001,7 @@ impl Checker {
     fn rewrite_app_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1118,7 +1191,7 @@ impl Checker {
     fn rewrite_block_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1157,7 +1230,7 @@ impl Checker {
     fn rewrite_match_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1226,7 +1299,7 @@ impl Checker {
     fn rewrite_closure_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1296,7 +1369,7 @@ impl Checker {
     fn rewrite_other_specializations_in_node(
         &mut self,
         node: TypedNode,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -1306,35 +1379,8 @@ impl Checker {
         let mut ty = node.ty.clone();
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
+            TypedInner::ErrorKind(kind) => TypedInner::ErrorKind(kind),
             TypedInner::Var(id) => TypedInner::Var(id),
-            TypedInner::ResultEffectFailure(target) => TypedInner::ResultEffectFailure(target),
-            TypedInner::DeferredDoFailure(deferred) => {
-                let deferred = DeferredDoFailureTarget {
-                    carrier_ty: deferred.carrier_ty,
-                    alternative_trait_key: deferred.alternative_trait_key,
-                    alternative_method_name: deferred.alternative_method_name,
-                    propagated_error_tys: deferred.propagated_error_tys,
-                    failure_span: deferred.failure_span,
-                };
-                match self.resolve_deferred_do_failure(deferred)? {
-                    ResolvedDeferredDoFailure::Result(target) => {
-                        ty = target.carrier_ty.clone();
-                        TypedInner::ResultEffectFailure(Box::new(target))
-                    }
-                    ResolvedDeferredDoFailure::Alternative(empty) => {
-                        let empty = self.rewrite_specializations_in_node(
-                            empty,
-                            defs_by_fun_idx,
-                            bound_tyvars_by_fun_idx,
-                            needs_specialization,
-                            specialization_fun_idxs,
-                            generated_defs,
-                        )?;
-                        ty = empty.ty.clone();
-                        empty.node
-                    }
-                }
-            }
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -1523,16 +1569,17 @@ impl Checker {
                     args,
                 }
             }
-            TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
-                self.rewrite_specializations_in_node(
+            TypedInner::InjectCall(func, args) => {
+                let mut target = *self.rewrite_specializations_in_node(
                     *func,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?,
-                args.into_iter()
+                )?;
+                let args = args
+                    .into_iter()
                     .map(|arg| {
                         self.rewrite_specializations_in_node(
                             arg,
@@ -1544,8 +1591,19 @@ impl Checker {
                         )
                         .map(|node| *node)
                     })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?;
+                self.specialize_callable_reference(
+                    &mut target,
+                    &mut SpecializationContext {
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    },
+                )?;
+                TypedInner::InjectCall(Box::new(target), args)
+            }
             TypedInner::Bind(pattern, rhs) => *self.rewrite_bind_specializations(
                 pattern,
                 rhs,
@@ -1600,6 +1658,20 @@ impl Checker {
                         generated_defs,
                     },
                 )?;
+                let failure_target = match failure_target {
+                    SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
+                        target.call = self.rewrite_specializations_in_node(
+                            *target.call,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )?;
+                        SafeBindFailureTarget::EnclosingMonadFail(target)
+                    }
+                    other => other,
+                };
                 TypedInner::SafeBind(pattern, rhs, projection, failure_target)
             }
             TypedInner::DoSafeBind(control) => {
@@ -1731,6 +1803,37 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
+            TypedInner::ErrorConstruct {
+                kind,
+                message,
+                payload,
+                payload_fields,
+            } => TypedInner::ErrorConstruct {
+                kind,
+                message: self.rewrite_specializations_in_node(
+                    *message,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+                payload: payload
+                    .into_iter()
+                    .map(|value| {
+                        self.rewrite_specializations_in_node(
+                            value,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )
+                        .map(|node| *node)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                payload_fields,
+            },
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
                     .into_iter()
@@ -1782,17 +1885,6 @@ impl Checker {
                         })
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
-            TypedInner::AssertErrorKinds(marker, inner) => TypedInner::AssertErrorKinds(
-                marker,
-                self.rewrite_specializations_in_node(
-                    *inner,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
             ),
             TypedInner::EagerBoundary(inner) => {
                 TypedInner::EagerBoundary(self.rewrite_specializations_in_node(
@@ -1907,25 +1999,6 @@ impl Checker {
                 )?,
                 self.rewrite_specializations_in_node(
                     *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                self.rewrite_specializations_in_node(
-                    *value,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                marker,
-                self.rewrite_specializations_in_node(
-                    *handler,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
@@ -2183,82 +2256,24 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 if args.is_empty() {
-                    if let Ty::UserFunc {
-                        fun_idx,
-                        type_params,
-                        call_substitution,
-                        params,
-                        ret,
-                    } = target.ty.clone()
-                    {
-                        if needs_specialization.contains(&fun_idx) {
-                            let original_def =
-                                defs_by_fun_idx.get(&fun_idx).ok_or_else(|| TypeError {
-                                    structured: None,
-                                    message: format!(
-                                        "Missing generic definition for fun_idx {}",
-                                        fun_idx
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                })?;
-                            let bound_tyvars = bound_tyvars_by_fun_idx
-                                .get(&fun_idx)
-                                .cloned()
-                                .unwrap_or_default();
-                            let mapping = self.infer_specialization_mapping(
-                                original_def,
-                                &[],
-                                Some(&target.ty),
-                                true,
-                                &bound_tyvars,
-                            )?;
-                            let fully_concrete = mapping.len() == bound_tyvars.len()
-                                && bound_tyvars.iter().all(|var| {
-                                    mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
-                                });
-                            if fully_concrete
-                                || (!Self::typed_node_has_pending_trait_call(original_def)
-                                    && !self
-                                        .direct_pattern_requirement_tyvars
-                                        .contains_key(&fun_idx))
-                            {
-                                let concrete_tys = bound_tyvars
-                                    .iter()
-                                    .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
-                                    .collect::<Vec<_>>();
-                                let specialized_fun_idx = self.ensure_specialized_def(
-                                    fun_idx,
-                                    &concrete_tys,
-                                    &mapping,
-                                    defs_by_fun_idx,
-                                    bound_tyvars_by_fun_idx,
-                                    needs_specialization,
-                                    specialization_fun_idxs,
-                                    generated_defs,
-                                )?;
-                                target.ty = Ty::UserFunc {
-                                    fun_idx: specialized_fun_idx,
-                                    type_params,
-                                    call_substitution: if fully_concrete {
-                                        Vec::new()
-                                    } else {
-                                        call_substitution
-                                    },
-                                    params,
-                                    ret,
-                                };
-                            }
-                        }
-                    }
+                    self.specialize_callable_reference(
+                        &mut target,
+                        &mut SpecializationContext {
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        },
+                    )?;
                 }
                 TypedInner::Capture(Box::new(target), args)
             }
-            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::StructDef(tag, name, field_names, field_policies) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies)
             }
-            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::RecordDef(tag, name, field_names, field_policies) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, where_clause, methods) => {
@@ -2284,7 +2299,7 @@ impl Checker {
     fn rewrite_specializations_in_facet_path(
         &mut self,
         mut path: TypedFacetPath,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2310,7 +2325,7 @@ impl Checker {
     fn rewrite_specializations_in_facet_segment(
         &mut self,
         segment: TypedFacetSegment,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2321,8 +2336,6 @@ impl Checker {
                 index,
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListIndex {
                 index: self.rewrite_specializations_in_node(
                     *index,
@@ -2334,8 +2347,6 @@ impl Checker {
                 )?,
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::ListRange {
                 start,
@@ -2343,8 +2354,6 @@ impl Checker {
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListRange {
                 start: self.rewrite_specializations_in_node(
                     *start,
@@ -2365,15 +2374,11 @@ impl Checker {
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::MapKey {
                 key,
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::MapKey {
                 key: self.rewrite_specializations_in_node(
                     *key,
@@ -2385,8 +2390,6 @@ impl Checker {
                 )?,
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             },
             other => other,
         })
@@ -2395,7 +2398,7 @@ impl Checker {
     fn rewrite_specializations_in_pending_facet_path(
         &mut self,
         mut path: PendingFacetPath,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2421,7 +2424,7 @@ impl Checker {
     fn rewrite_specializations_in_pending_facet_segment(
         &mut self,
         segment: PendingFacetSegment,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2461,12 +2464,92 @@ impl Checker {
         })
     }
 
+    fn specialize_callable_reference(
+        &mut self,
+        target: &mut TypedNode,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<(), TypeError> {
+        if let Ty::UserFunc {
+            fun_idx,
+            type_params,
+            call_substitution,
+            params,
+            ret,
+        } = target.ty.clone()
+        {
+            if context.needs_specialization.contains(&fun_idx) {
+                let original_def =
+                    context
+                        .defs_by_fun_idx
+                        .get(&fun_idx)
+                        .ok_or_else(|| TypeError {
+                            structured: None,
+                            message: format!("Missing generic definition for fun_idx {}", fun_idx),
+                            span: target.span.clone(),
+                            hint: None,
+                        })?;
+                let bound_tyvars = context
+                    .bound_tyvars_by_fun_idx
+                    .get(&fun_idx)
+                    .cloned()
+                    .unwrap_or_default();
+                // The callable signature already carries the declaration's substitution.
+                // InjectCall's bound arguments omit the injected value, so they are
+                // not a complete argument list for ordinary call specialization.
+                let mapping = self.infer_specialization_mapping(
+                    original_def,
+                    &[],
+                    Some(&target.ty),
+                    true,
+                    &bound_tyvars,
+                )?;
+                let fully_concrete = mapping.len() == bound_tyvars.len()
+                    && bound_tyvars
+                        .iter()
+                        .all(|var| mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_))));
+                if fully_concrete
+                    || (!Self::typed_node_has_pending_trait_call(original_def)
+                        && !self
+                            .direct_pattern_requirement_tyvars
+                            .contains_key(&fun_idx))
+                {
+                    let concrete_tys = bound_tyvars
+                        .iter()
+                        .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
+                        .collect::<Vec<_>>();
+                    let specialized_fun_idx = self.ensure_specialized_def(
+                        fun_idx,
+                        &concrete_tys,
+                        &mapping,
+                        context.defs_by_fun_idx,
+                        context.bound_tyvars_by_fun_idx,
+                        context.needs_specialization,
+                        context.specialization_fun_idxs,
+                        context.generated_defs,
+                    )?;
+                    target.ty = Ty::UserFunc {
+                        fun_idx: specialized_fun_idx,
+                        type_params,
+                        call_substitution: if fully_concrete {
+                            Vec::new()
+                        } else {
+                            call_substitution
+                        },
+                        params,
+                        ret,
+                    };
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn ensure_specialized_def(
         &mut self,
         original_fun_idx: u32,
         concrete_tys: &[Ty],
         mapping: &HashMap<u32, Ty>,
-        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        defs_by_fun_idx: &SpecializableDefinitions,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
@@ -2502,8 +2585,11 @@ impl Checker {
         self.env.next_fun_idx += 1;
         specialization_fun_idxs.insert(key, specialized_fun_idx);
 
-        let substituted_def =
-            self.substitute_specialized_def(original_def.clone(), specialized_fun_idx, mapping)?;
+        let substituted_def = self.substitute_specialized_def(
+            original_def.as_ref().clone(),
+            specialized_fun_idx,
+            mapping,
+        )?;
         // Reserve the definition before rewriting its body. A specialization
         // can refer to itself while its body is being rewritten; without the
         // reservation that recursive lookup mistakes the fresh cache entry
@@ -2522,7 +2608,7 @@ impl Checker {
             .map(|node| *node)
             .map_err(|error| *error)?;
         self.specializable_defs
-            .insert(specialized_fun_idx, rewritten_def.clone());
+            .insert(specialized_fun_idx, Arc::new(rewritten_def.clone()));
         generated_defs[generated_index] = rewritten_def;
         Ok(specialized_fun_idx)
     }
@@ -2641,7 +2727,8 @@ impl Checker {
                 update_source: Box::new(self.canonical_ty_key(&update_source)),
                 update_focus: Box::new(self.canonical_ty_key(&update_focus)),
             },
-            Ty::Pid(name) => CanonicalTyKey::Pid(Self::canonical_specialization_name(&name)),
+            Ty::Pid(marker) => CanonicalTyKey::Pid(Box::new(self.canonical_ty_key(&marker))),
+            Ty::ProcessMarker(name) => CanonicalTyKey::ProcessMarker(name),
             Ty::BuiltinFunc { name, params, ret } => CanonicalTyKey::BuiltinFunc {
                 name,
                 params: params
@@ -2875,16 +2962,16 @@ impl Checker {
             .collect()
     }
 
-    fn collect_bound_tyvars_for_def(&self, def: &TypedNode) -> Vec<u32> {
+    fn collect_bound_tyvars_for_def(
+        &self,
+        def: &TypedNode,
+        trait_impl_method_uids: &HashSet<u32>,
+    ) -> Vec<u32> {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
         match &def.node {
             TypedInner::Def(_, id, return_type_arguments, params, ret_ty, _, _body, _) => {
-                let is_trait_impl_method = self.trait_impls.values().any(|info| {
-                    info.methods
-                        .values()
-                        .any(|method| method.function_id.unique_id == id.unique_id)
-                });
+                let is_trait_impl_method = trait_impl_method_uids.contains(&id.unique_id);
                 for argument in return_type_arguments {
                     let mut declared = Vec::new();
                     Self::collect_ty_vars(&argument.ty, &mut declared);
@@ -2975,6 +3062,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        if let Some(call) = node.monad_fail_call() {
+            self.collect_pending_trait_receiver_tyvars_in_node(call, ordered, seen);
+        }
         for expr in Self::pattern_expression_nodes(node) {
             self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
         }
@@ -3040,6 +3130,14 @@ impl Checker {
                 }
                 for arg in args {
                     self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
+                }
+            }
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(message, ordered, seen);
+                for value in payload {
+                    self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
                 }
             }
             TypedInner::ListLiteral(args) | TypedInner::TupleLiteral(args) => {
@@ -3118,7 +3216,6 @@ impl Checker {
                 }
             }
             TypedInner::EagerBoundary(inner)
-            | TypedInner::AssertErrorKinds(_, inner)
             | TypedInner::FieldAccess(inner, _)
             | TypedInner::SupervisorSpawn { init: inner, .. }
             | TypedInner::SupervisorAdopt { pid: inner, .. }
@@ -3144,10 +3241,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(handler, ordered, seen);
             }
             TypedInner::Match(scrutinee, arms) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(scrutinee, ordered, seen);
@@ -3190,27 +3283,9 @@ impl Checker {
             TypedInner::CaptureConstructorClosure(_, _, _, body) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
             }
-            TypedInner::DeferredDoFailure(deferred) => {
-                let mut vars = Vec::new();
-                Self::collect_ty_vars(&deferred.carrier_ty, &mut vars);
-                for var in vars {
-                    if seen.insert(var) {
-                        ordered.push(var);
-                    }
-                }
-                for error_ty in &deferred.propagated_error_tys {
-                    let mut vars = Vec::new();
-                    Self::collect_ty_vars(error_ty, &mut vars);
-                    for var in vars {
-                        if seen.insert(var) {
-                            ordered.push(var);
-                        }
-                    }
-                }
-            }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
             | TypedInner::StructDef(..)
@@ -3243,6 +3318,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        if let Some(call) = node.monad_fail_call() {
+            self.collect_bound_tyvars_in_node(call, ordered, seen);
+        }
         for expr in Self::pattern_expression_nodes(node) {
             self.collect_bound_tyvars_in_node(expr, ordered, seen);
         }
@@ -3287,6 +3365,14 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(head, ordered, seen);
                 self.collect_bound_tyvars_in_node(tail, ordered, seen);
             }
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.collect_bound_tyvars_in_node(message, ordered, seen);
+                for value in payload {
+                    self.collect_bound_tyvars_in_node(value, ordered, seen);
+                }
+            }
             TypedInner::ListLiteral(items) | TypedInner::TupleLiteral(items) => {
                 for item in items {
                     self.collect_bound_tyvars_in_node(item, ordered, seen);
@@ -3310,14 +3396,8 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(&arg.expr, ordered, seen);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
+            TypedInner::EagerBoundary(inner) => {
                 self.collect_bound_tyvars_in_node(inner, ordered, seen)
-            }
-            TypedInner::DeferredDoFailure(deferred) => {
-                self.collect_bound_tyvars_in_ty(&deferred.carrier_ty, ordered, seen);
-                for error_ty in &deferred.propagated_error_tys {
-                    self.collect_bound_tyvars_in_ty(error_ty, ordered, seen);
-                }
             }
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_bound_tyvars_in_node(cond, ordered, seen);
@@ -3338,10 +3418,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                self.collect_bound_tyvars_in_node(value, ordered, seen);
-                self.collect_bound_tyvars_in_node(handler, ordered, seen);
             }
             TypedInner::Match(scrutinee, arms) => {
                 self.collect_bound_tyvars_in_node(scrutinee, ordered, seen);
@@ -3422,8 +3498,8 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(body, ordered, seen);
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
             | TypedInner::StructDef(..)
@@ -3444,7 +3520,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
@@ -3508,7 +3585,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole
-            | Ty::Pid(_) => {}
+            | Ty::ProcessMarker(_) => {}
         }
     }
 
@@ -3521,22 +3598,8 @@ impl Checker {
         let ty = self.substitute_ty_with_mapping(&node.ty, mapping);
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
+            TypedInner::ErrorKind(kind) => TypedInner::ErrorKind(kind),
             TypedInner::Var(id) => TypedInner::Var(id),
-            TypedInner::ResultEffectFailure(mut target) => {
-                target.carrier_ty = self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                target.error_ty = self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                TypedInner::ResultEffectFailure(target)
-            }
-            TypedInner::DeferredDoFailure(mut deferred) => {
-                deferred.carrier_ty =
-                    self.substitute_ty_with_mapping(&deferred.carrier_ty, mapping);
-                deferred.propagated_error_tys = deferred
-                    .propagated_error_tys
-                    .iter()
-                    .map(|ty| self.substitute_ty_with_mapping(ty, mapping))
-                    .collect();
-                TypedInner::DeferredDoFailure(deferred)
-            }
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -3650,23 +3713,25 @@ impl Checker {
                     }
                 },
                 match failure_target {
-                    SafeBindFailureTarget::EnclosingResultContext(mut target) => {
+                    SafeBindFailureTarget::EnclosingMonadFail(mut target) => {
                         target.carrier_ty =
                             self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                        target.error_ty =
-                            self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                        SafeBindFailureTarget::EnclosingResultContext(target)
+                        target.call = Box::new(
+                            self.substitute_typed_node_with_mapping(*target.call, mapping),
+                        );
+                        SafeBindFailureTarget::EnclosingMonadFail(target)
                     }
                     SafeBindFailureTarget::EnclosingMatchResultContext { err_tag } => {
                         SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
-                    SafeBindFailureTarget::DoResultContext(mut target) => {
+                    SafeBindFailureTarget::DoMonadFail(mut target) => {
                         target.carrier_ty =
                             self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                        target.error_ty =
-                            self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                        SafeBindFailureTarget::DoResultContext(target)
+                        target.call = Box::new(
+                            self.substitute_typed_node_with_mapping(*target.call, mapping),
+                        );
+                        SafeBindFailureTarget::DoMonadFail(target)
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         SafeBindFailureTarget::DoAlternative {
@@ -3715,12 +3780,13 @@ impl Checker {
                         }
                     },
                     failure_target: match failure_target {
-                        SafeBindFailureTarget::DoResultContext(mut target) => {
+                        SafeBindFailureTarget::DoMonadFail(mut target) => {
                             target.carrier_ty =
                                 self.substitute_ty_with_mapping(&target.carrier_ty, mapping);
-                            target.error_ty =
-                                self.substitute_ty_with_mapping(&target.error_ty, mapping);
-                            SafeBindFailureTarget::DoResultContext(target)
+                            target.call = Box::new(
+                                self.substitute_typed_node_with_mapping(*target.call, mapping),
+                            );
+                            SafeBindFailureTarget::DoMonadFail(target)
                         }
                         SafeBindFailureTarget::DoAlternative { empty } => {
                             SafeBindFailureTarget::DoAlternative {
@@ -3783,6 +3849,23 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::ErrorConstruct {
+                kind,
+                message,
+                payload,
+                payload_fields,
+            } => TypedInner::ErrorConstruct {
+                kind,
+                message: Box::new(self.substitute_typed_node_with_mapping(*message, mapping)),
+                payload: payload
+                    .into_iter()
+                    .map(|value| self.substitute_typed_node_with_mapping(value, mapping))
+                    .collect(),
+                payload_fields: payload_fields
+                    .into_iter()
+                    .map(|(name, ty)| (name, self.substitute_ty_with_mapping(&ty, mapping)))
+                    .collect(),
+            },
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
                     .into_iter()
@@ -3808,10 +3891,6 @@ impl Checker {
                         expr: self.substitute_typed_node_with_mapping(arg.expr, mapping),
                     })
                     .collect(),
-            ),
-            TypedInner::AssertErrorKinds(marker, inner) => TypedInner::AssertErrorKinds(
-                marker,
-                Box::new(self.substitute_typed_node_with_mapping(*inner, mapping)),
             ),
             TypedInner::EagerBoundary(inner) => TypedInner::EagerBoundary(Box::new(
                 self.substitute_typed_node_with_mapping(*inner, mapping),
@@ -3839,11 +3918,6 @@ impl Checker {
             TypedInner::Cause(value, err) => TypedInner::Cause(
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
-            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                marker,
-                Box::new(self.substitute_typed_node_with_mapping(*handler, mapping)),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.substitute_typed_node_with_mapping(*scrutinee, mapping)),
@@ -4065,11 +4139,11 @@ impl Checker {
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::StructDef(tag, name, field_names, field_policies) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies)
             }
-            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
-                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
+            TypedInner::RecordDef(tag, name, field_names, field_policies) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, where_clause, methods) => {
@@ -4098,7 +4172,6 @@ impl Checker {
             update_focus_ty: self.substitute_ty_with_mapping(&path.update_focus_ty, mapping),
             path_kind: path.path_kind,
             may_fail: path.may_fail,
-            source_readonly_root: path.source_readonly_root,
             segments: path
                 .segments
                 .into_iter()
@@ -4117,14 +4190,10 @@ impl Checker {
                 index,
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListIndex {
                 index: Box::new(self.substitute_typed_node_with_mapping(*index, mapping)),
                 display,
                 literal_index,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::ListRange {
                 start,
@@ -4132,29 +4201,21 @@ impl Checker {
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::ListRange {
                 start: Box::new(self.substitute_typed_node_with_mapping(*start, mapping)),
                 end: Box::new(self.substitute_typed_node_with_mapping(*end, mapping)),
                 display,
                 literal_start,
                 literal_end,
-                focus_readonly_root,
-                focus_type_name,
             },
             TypedFacetSegment::MapKey {
                 key,
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             } => TypedFacetSegment::MapKey {
                 key: Box::new(self.substitute_typed_node_with_mapping(*key, mapping)),
                 display,
                 literal_key,
-                focus_readonly_root,
-                focus_type_name,
             },
             other => other,
         }
@@ -4216,6 +4277,17 @@ impl Checker {
             TypedPattern::Located(source, inner) => TypedPattern::Located(
                 source,
                 Box::new(self.substitute_typed_pattern_with_mapping(*inner, mapping)),
+            ),
+            TypedPattern::HashMap(ty, entries) => TypedPattern::HashMap(
+                self.substitute_ty_with_mapping(&ty, mapping),
+                entries
+                    .into_iter()
+                    .map(|entry| TypedHashMapPatternEntry {
+                        key: self.substitute_typed_node_with_mapping(entry.key, mapping),
+                        pattern: self.substitute_typed_pattern_with_mapping(entry.pattern, mapping),
+                        key_span: entry.key_span,
+                    })
+                    .collect(),
             ),
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(self.substitute_ty_with_mapping(&ty, mapping), id)
@@ -4316,6 +4388,17 @@ impl Checker {
         mapping: &HashMap<u32, Ty>,
     ) -> TypedMatchPattern {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => TypedMatchPattern::HashMap(
+                entries
+                    .into_iter()
+                    .map(|entry| TypedHashMapMatchPatternEntry {
+                        key: self.substitute_typed_node_with_mapping(entry.key, mapping),
+                        pattern: self
+                            .substitute_typed_match_pattern_with_mapping(entry.pattern, mapping),
+                        key_span: entry.key_span,
+                    })
+                    .collect(),
+            ),
             TypedMatchPattern::Binding(id) => TypedMatchPattern::Binding(id),
             TypedMatchPattern::Pin { id, ty, dispatch } => TypedMatchPattern::Pin {
                 id,
@@ -4338,6 +4421,16 @@ impl Checker {
                     .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
                     .collect(),
             ),
+            TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items,
+            } => TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items
+                    .into_iter()
+                    .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
+                    .collect(),
+            },
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()
@@ -4420,6 +4513,7 @@ impl Checker {
             }
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
+            Ty::Pid(inner) => Ty::Pid(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
                 *kind,
                 Box::new(self.substitute_ty_with_mapping(source, mapping)),
@@ -4816,6 +4910,28 @@ impl Checker {
                     self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
                 TypedPattern::Pin(ty, id, dispatch)
             }
+            TypedPattern::HashMap(ty, entries) => {
+                let ty = normalized_ty(self, &ty, expected_ty);
+                let value_ty = self.hash_map_pattern_value_ty(&ty, span)?;
+                let entries = entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(TypedHashMapPatternEntry {
+                            key: self
+                                .specialize_extractor_pre_args(vec![entry.key], context)?
+                                .remove(0),
+                            pattern: self.concretize_specialized_typed_pattern(
+                                entry.pattern,
+                                Some(&value_ty),
+                                span,
+                                context,
+                            )?,
+                            key_span: entry.key_span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?;
+                TypedPattern::HashMap(ty, entries)
+            }
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(normalized_ty(self, &ty, expected_ty), id)
             }
@@ -4958,6 +5074,24 @@ impl Checker {
         context: &mut SpecializationContext<'_>,
     ) -> Result<TypedMatchPattern, TypeError> {
         Ok(match pattern {
+            TypedMatchPattern::HashMap(entries) => TypedMatchPattern::HashMap(
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(TypedHashMapMatchPatternEntry {
+                            key: self
+                                .specialize_extractor_pre_args(vec![entry.key], context)?
+                                .remove(0),
+                            pattern: self.concretize_specialized_match_pattern(
+                                entry.pattern,
+                                span,
+                                context,
+                            )?,
+                            key_span: entry.key_span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+            ),
             TypedMatchPattern::Pin { id, ty, dispatch } => {
                 let dispatch =
                     self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
@@ -4973,6 +5107,16 @@ impl Checker {
                     .map(|item| self.concretize_specialized_match_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items,
+            } => TypedMatchPattern::ErrorPayload {
+                kind,
+                fields: items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()
@@ -5031,6 +5175,10 @@ impl Checker {
 
     fn typed_match_pattern_has_pending_dispatch(pattern: &TypedMatchPattern) -> bool {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => entries.iter().any(|entry| {
+                Self::typed_node_has_pending_trait_call(&entry.key)
+                    || Self::typed_match_pattern_has_pending_dispatch(&entry.pattern)
+            }),
             TypedMatchPattern::Pin { dispatch, .. } => {
                 matches!(
                     dispatch,
@@ -5040,7 +5188,9 @@ impl Checker {
             TypedMatchPattern::As(inner, _) => {
                 Self::typed_match_pattern_has_pending_dispatch(inner)
             }
-            TypedMatchPattern::Or(items) | TypedMatchPattern::Tuple(items) => items
+            TypedMatchPattern::Or(items)
+            | TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::ErrorPayload { fields: items, .. } => items
                 .iter()
                 .any(Self::typed_match_pattern_has_pending_dispatch),
             TypedMatchPattern::Constructor { fields, .. } => fields
@@ -5059,6 +5209,10 @@ impl Checker {
 
     fn typed_pattern_has_pending_dispatch(pattern: &TypedPattern) -> bool {
         match pattern {
+            TypedPattern::HashMap(_, entries) => entries.iter().any(|entry| {
+                Self::typed_node_has_pending_trait_call(&entry.key)
+                    || Self::typed_pattern_has_pending_dispatch(&entry.pattern)
+            }),
             TypedPattern::Located(_, inner) => Self::typed_pattern_has_pending_dispatch(inner),
             TypedPattern::Pin(_, _, dispatch) => matches!(dispatch, TraitDispatch::Pending),
             TypedPattern::As(_, inner, _) => Self::typed_pattern_has_pending_dispatch(inner),
@@ -5093,6 +5247,8 @@ impl Checker {
             }
             TypedFacetSegment::Field { .. }
             | TypedFacetSegment::Tuple { .. }
+            | TypedFacetSegment::ReadonlyBuiltin { .. }
+            | TypedFacetSegment::ErrorPayload { .. }
             | TypedFacetSegment::Variant { .. } => false,
         }
     }
@@ -5118,6 +5274,12 @@ impl Checker {
     }
 
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
+        if node
+            .monad_fail_call()
+            .is_some_and(Self::typed_node_has_pending_trait_call)
+        {
+            return true;
+        }
         if Self::pattern_expression_nodes(node)
             .into_iter()
             .any(Self::typed_node_has_pending_trait_call)
@@ -5177,6 +5339,12 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(head)
                     || Self::typed_node_has_pending_trait_call(tail)
             }
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                Self::typed_node_has_pending_trait_call(message)
+                    || payload.iter().any(Self::typed_node_has_pending_trait_call)
+            }
             TypedInner::ListLiteral(items) | TypedInner::TupleLiteral(items) => {
                 items.iter().any(Self::typed_node_has_pending_trait_call)
             }
@@ -5191,9 +5359,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .any(|arg| Self::typed_node_has_pending_trait_call(&arg.expr)),
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                Self::typed_node_has_pending_trait_call(inner)
-            }
+            TypedInner::EagerBoundary(inner) => Self::typed_node_has_pending_trait_call(inner),
             TypedInner::If(cond, then_branch, else_branch) => {
                 Self::typed_node_has_pending_trait_call(cond)
                     || Self::typed_node_has_pending_trait_call(then_branch)
@@ -5213,10 +5379,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                Self::typed_node_has_pending_trait_call(value)
-                    || Self::typed_node_has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)
@@ -5285,8 +5447,8 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(body)
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
             | TypedInner::StructDef(..)
@@ -5294,7 +5456,6 @@ impl Checker {
             | TypedInner::EnumDef(..)
             | TypedInner::TraitDef(..)
             | TypedInner::TraitImplDef(..) => false,
-            TypedInner::DeferredDoFailure(_) => true,
         }
     }
 
@@ -5479,13 +5640,36 @@ mod tests {
                 payload_ty: Ty::Int,
                 error_ty: Ty::Error,
             },
-            failure_target: SafeBindFailureTarget::DoResultContext(Box::new(
-                ResultPreserveTarget {
-                    carrier_ty: result_ty.clone(),
-                    error_ty: Ty::Error,
-                    construction: ResultPreserveConstruction::CanonicalResult,
+            failure_target: SafeBindFailureTarget::DoMonadFail(Box::new(MonadFailTarget {
+                carrier_ty: result_ty.clone(),
+                error_id: sigil::resolved::ResolvedId {
+                    name: "error".into(),
+                    qualified_name: None,
+                    unique_id: 91999,
+                    compiler_generated: true,
+                    symbol_info: None,
+                    span: spire::ast::Span { start: 0, end: 0 },
                 },
-            )),
+                call: Box::new(TypedNode {
+                    ty: Ty::Error,
+                    span: spire::ast::Span { start: 0, end: 0 },
+                    node: TypedInner::ConstructorCall(
+                        1,
+                        vec![TypedNode {
+                            ty: Ty::Error,
+                            span: spire::ast::Span { start: 0, end: 0 },
+                            node: TypedInner::Var(sigil::resolved::ResolvedId {
+                                name: "error".into(),
+                                qualified_name: None,
+                                unique_id: 91999,
+                                compiler_generated: true,
+                                symbol_info: None,
+                                span: spire::ast::Span { start: 0, end: 0 },
+                            }),
+                        }],
+                    ),
+                }),
+            })),
             continuation: Box::new(TypedNode {
                 ty: result_ty,
                 span: test_span(),
@@ -5519,6 +5703,74 @@ mod tests {
             rewritten.pattern.unlocated(),
             TypedPattern::Wildcard(Ty::Int)
         ));
+    }
+
+    #[test]
+    fn injected_callable_specialization_materializes_target_with_bound_arguments() {
+        for bound_arg_count in [0, 1] {
+            let mut checker = Checker::new(TypecheckContext::default());
+            checker.env.next_fun_idx = 100;
+            let function_id = resolved_id("first", Some("Global::first"), 10);
+            let mut definition =
+                generic_identity_def(20, function_id.clone(), resolved_id("value", None, 11), 1);
+            if bound_arg_count == 1 {
+                let TypedInner::Def(_, _, _, parameters, _, _, _, _) = &mut definition.node else {
+                    unreachable!()
+                };
+                parameters.push(TypedValueParameter {
+                    id: resolved_id("other", None, 12),
+                    mode: spire::ast::ValueParameterMode::PositionalOrNamed,
+                    ty: Ty::Var(1),
+                    span: test_span(),
+                });
+                let Ty::UserFunc { params, .. } = &mut definition.ty else {
+                    unreachable!()
+                };
+                params.push(Ty::Var(1));
+            }
+            let injected = TypedNode {
+                ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+                span: test_span(),
+                node: TypedInner::InjectCall(
+                    Box::new(TypedNode {
+                        ty: Ty::UserFunc {
+                            fun_idx: 20,
+                            type_params: vec![1],
+                            call_substitution: vec![(1, Ty::Int)],
+                            params: vec![Ty::Int; bound_arg_count + 1],
+                            ret: Box::new(Ty::Int),
+                        },
+                        span: test_span(),
+                        node: TypedInner::Var(function_id),
+                    }),
+                    (0..bound_arg_count)
+                        .map(|_| typed_arg(13, Ty::Int))
+                        .collect(),
+                ),
+            };
+            let nodes = checker
+                .specialize_program(vec![definition, injected])
+                .expect("injected callable specialization should succeed");
+            let generated = generated_def_fun_idxs(&nodes, "Global::first");
+            assert_eq!(
+                generated.len(),
+                1,
+                "injected callable must materialize a definition"
+            );
+            let injected = nodes
+                .iter()
+                .find(|node| matches!(node.node, TypedInner::InjectCall(..)))
+                .expect("injected callable remains in the program");
+            assert_eq!(injected.ty, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
+            let TypedInner::InjectCall(target, args) = &injected.node else {
+                unreachable!()
+            };
+            assert_eq!(args.len(), bound_arg_count);
+            assert!(
+                matches!(&target.ty, Ty::UserFunc { fun_idx, call_substitution, .. }
+                if *fun_idx == generated[0] && call_substitution.is_empty())
+            );
+        }
     }
 
     #[test]

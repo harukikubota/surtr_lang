@@ -459,6 +459,12 @@ REPL と共有する semantic resolver は次を担う。
 - call context から active parameter と expected type を出す signature help
 - typed call / operator target query の意味解決
 
+### Error 宣言の照会
+
+言語上の宣言・局所型・Facet の規則は [Error spec](Error_spec.md) に従う。本節はその検査結果を照会・補完へ反映する契約を定める。
+
+`deferror` の保存 Payload スキーマと先頭ブロックの外部入力署名を区別して照会する。constructor call / capture は入力署名、Error Pattern と field / Facet path は保存フィールドの名前・型・宣言順を使う。単一 Error identity への照合成功で導出した局所具象束縛にだけ Payload の読み取り候補を示す。共通 Error と container から取り出した値の候補へ具象フィールドを混ぜない。同名の別 module の宣言は identity で区別する。
+
 ### 7.1 Command Query Parser
 
 command query parser は Surtr source parser ではない。`spire` の責務は `.srt` source の
@@ -643,7 +649,26 @@ DiagnosticSource
 
 ## 11. Cache / Invalidation
 
-cache は `AnalysisContext` 単位で持つ。
+解析結果全体の cache は `AnalysisContext` 単位で持つ。
+
+文書ごとのparseは、`AnalysisService`内のstrict / tolerant結果を再利用する。
+文書pathごとに、source全文、source ID、source kind、compile unit kind、module pathが
+完全一致する場合だけ再利用する。tolerant parseではcursor位置も照合する。hashの一致だけで
+同一とみなさず、成功結果と失敗診断を保持する。moduleの未保存編集は実際の本文で判定する。
+
+保持するのは各文書の現行入力1件、全体で最大64文書とし、最近使われていない文書から除く。
+文書をcloseしたときも除く。64文書を超えるmodule群を順次巡回する場合、再利用できず再parseが
+続くことがある。serviceのclone間で保存領域を共有しても完全なparse入力を照合し、parseや
+host呼出しの間はcacheのlockを保持しない。
+
+埋込標準定義のASTとmodule stageは、process内で一度準備し、この64文書のparse cacheとは
+別に保持する。型検査済みの標準環境は必要な場合だけ遅延構築する。Projectでは構文だけを
+再利用し、追加宣言を含む全indexで標準定義のresolve/typecheckを再実行する。
+標準ファイルの編集中はこの共有を使わず、現在のdocument本文を解析する。
+
+semantic解析結果のcacheと、hostからのrunner / external input変更通知は未実装である。
+現行はcontext解決、module読込、resolve/typecheckを引き続き実行する。以下のcontext全体の
+invalidationを、局所的なparse再利用で満たしたとは扱わない。
 
 cache key には少なくとも次を含める。
 

@@ -1,1 +1,1 @@
-print(inspect(Result::recover_kind(Err(NoneError), MissingError, {|_| Ok(1)})))
+print(inspect(Result::recover_kind(Err(NoneError()), MissingError, {|_| Ok(1)})))

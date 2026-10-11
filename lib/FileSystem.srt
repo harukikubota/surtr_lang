@@ -1,144 +1,4 @@
 @doc """
-Path value used by FS and Shell.
-"""
-@derive Eq, Show
-defstruct FilePath {
-  raw: String,
-}
-
-impl FilePath {
-  def new(raw: String) -> Self {
-    FilePath { raw: raw }
-  }
-}
-
-@doc """
-Portable filesystem entry category.
-"""
-@derive Eq, Compare, Show
-defenum FileSystemEntryKind {
-  File,
-  Directory,
-  Symlink,
-  Other,
-}
-
-@doc """
-Portable permission view.
-"""
-@derive Eq, Show
-defstruct FileSystemPermissions {
-  read_only: Boolean,
-  executable: Boolean,
-}
-
-impl FileSystemPermissions {
-  def new(read_only: Boolean, executable: Boolean) -> Self {
-    FileSystemPermissions { read_only: read_only, executable: executable }
-  }
-}
-
-@doc """
-Best-effort filesystem metadata snapshot.
-"""
-defstruct FileSystemMetadata {
-  size: Option<Int>,
-  modified_at_epoch_ms: Option<Int>,
-  accessed_at_epoch_ms: Option<Int>,
-  created_at_epoch_ms: Option<Int>,
-  permissions: Option<FileSystemPermissions>,
-}
-
-impl FileSystemMetadata {
-  def new(
-    size: Option<Int>,
-    modified_at_epoch_ms: Option<Int>,
-    accessed_at_epoch_ms: Option<Int>,
-    created_at_epoch_ms: Option<Int>,
-    permissions: Option<FileSystemPermissions>,
-  ) -> Self {
-    FileSystemMetadata {
-      size: size,
-      modified_at_epoch_ms: modified_at_epoch_ms,
-      accessed_at_epoch_ms: accessed_at_epoch_ms,
-      created_at_epoch_ms: created_at_epoch_ms,
-      permissions: permissions,
-    }
-  }
-}
-
-@doc """
-One observed filesystem entry.
-"""
-defstruct FileSystemEntry {
-  path: FilePath,
-  name: String,
-  kind: FileSystemEntryKind,
-  metadata: FileSystemMetadata,
-}
-
-impl FileSystemEntry {
-  def new(
-    path: FilePath,
-    name: String,
-    kind: FileSystemEntryKind,
-    metadata: FileSystemMetadata,
-  ) -> Self {
-    FileSystemEntry { path: path, name: name, kind: kind, metadata: metadata }
-  }
-}
-
-@doc """
-Directory snapshot returned by FS listing operations.
-"""
-defstruct FileSystemSnapshot {
-  root: FilePath,
-  entries: List<FileSystemEntry>,
-}
-
-impl FileSystemSnapshot {
-  def new(root: FilePath, entries: List<FileSystemEntry>) -> Self {
-    FileSystemSnapshot { root: root, entries: entries }
-  }
-}
-
-deferror FileSystemNotFound(path: String) {
-  "filesystem path not found: #{path}"
-}
-
-deferror FileSystemAlreadyExists(path: String) {
-  "filesystem path already exists: #{path}"
-}
-
-deferror FileSystemPermissionDenied(path: String) {
-  "filesystem permission denied: #{path}"
-}
-
-deferror FileSystemNotDirectory(path: String) {
-  "filesystem path is not a directory: #{path}"
-}
-
-deferror FileSystemIsDirectory(path: String) {
-  "filesystem path is a directory: #{path}"
-}
-
-deferror FileSystemInvalidPath(path: String) {
-  "invalid filesystem path: #{path}"
-}
-
-deferror FileSystemInvalidDepth(depth: Int) {
-  "invalid filesystem tree depth: #{depth}"
-}
-
-deferror FileSystemUnsupported(detail: String) {
-  detail
-}
-
-deferror FileSystemIoError(detail: String) {
-  detail
-}
-
-@doc """
 Filesystem path helpers, metadata snapshots, and minimal mutation.
 
 File content I/O remains on `File`; FS handles structured path,
@@ -161,4 +21,288 @@ defmod FS {
   @builtin def rm(path: FilePath) -> Result<Unit, Error>
   @builtin def mv(from: FilePath, to: FilePath) -> Result<Unit, Error>
   @builtin def cp(from: FilePath, to: FilePath) -> Result<Unit, Error>
+}
+
+impl FilePath {
+  def new(raw: String) -> Self {
+    FilePath { raw: raw }
+  }
+}
+
+impl FileSystemPermissions {
+  def new(read_only: Boolean, executable: Boolean) -> Self {
+    FileSystemPermissions { read_only: read_only, executable: executable }
+  }
+}
+
+impl FileSystemMetadata {
+  def new(
+    size: Option<Int>,
+    modified_at_epoch_ms: Option<Int>,
+    accessed_at_epoch_ms: Option<Int>,
+    created_at_epoch_ms: Option<Int>,
+    permissions: Option<FileSystemPermissions>,
+  ) -> Self {
+    FileSystemMetadata {
+      size: size,
+      modified_at_epoch_ms: modified_at_epoch_ms,
+      accessed_at_epoch_ms: accessed_at_epoch_ms,
+      created_at_epoch_ms: created_at_epoch_ms,
+      permissions: permissions,
+    }
+  }
+}
+
+impl FileSystemEntry {
+  def new(
+    path: FilePath,
+    name: String,
+    kind: FileSystemEntryKind,
+    metadata: FileSystemMetadata,
+  ) -> Self {
+    FileSystemEntry { path: path, name: name, kind: kind, metadata: metadata }
+  }
+}
+
+impl FileSystemSnapshot {
+  def new(root: FilePath, entries: List<FileSystemEntry>) -> Self {
+    FileSystemSnapshot { root: root, entries: entries }
+  }
+}
+
+@doc """
+Path value used by FS and Shell.
+"""
+@derive Eq, Show
+defstruct FilePath {
+  raw: String,
+}
+
+@doc """
+Portable filesystem entry category.
+"""
+@derive Eq, Compare, Show
+defenum FileSystemEntryKind {
+  File,
+  Directory,
+  Symlink,
+  Other,
+}
+
+@doc """
+Portable permission view.
+"""
+@derive Eq, Show
+defstruct FileSystemPermissions {
+  read_only: Boolean,
+  executable: Boolean,
+}
+
+@doc """
+Best-effort filesystem metadata snapshot.
+"""
+defstruct FileSystemMetadata {
+  size: Option<Int>,
+  modified_at_epoch_ms: Option<Int>,
+  accessed_at_epoch_ms: Option<Int>,
+  created_at_epoch_ms: Option<Int>,
+  permissions: Option<FileSystemPermissions>,
+}
+
+@doc """
+One observed filesystem entry.
+"""
+defstruct FileSystemEntry {
+  path: FilePath,
+  name: String,
+  kind: FileSystemEntryKind,
+  metadata: FileSystemMetadata,
+}
+
+@doc """
+Directory snapshot returned by FS listing operations.
+"""
+defstruct FileSystemSnapshot {
+  root: FilePath,
+  entries: List<FileSystemEntry>,
+}
+
+deferror FileSystemParentMissing(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem parent missing: #{to_string(path)}", path)
+}
+
+deferror FileSystemNameMissing(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem name missing: #{to_string(path)}", path)
+}
+
+deferror FileSystemMoveFailed(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem move failed: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemMoveNotFound(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem move path not found: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemMovePermissionDenied(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem move permission denied: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemMoveAlreadyExists(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem move target already exists: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemMoveInvalidPath(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem move invalid path: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemCopyFailed(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem copy failed: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemCopyNotFound(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem copy path not found: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemCopyPermissionDenied(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem copy permission denied: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemCopyAlreadyExists(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem copy target already exists: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemCopyInvalidPath(from: FilePath, to: FilePath, detail: String) {
+  |from: FilePath, to: FilePath, detail: String|
+  Self(
+    message: "filesystem copy invalid path: #{to_string(from)} -> #{to_string(to)}: #{detail}",
+    from,
+    to,
+    detail,
+  )
+}
+
+deferror FileSystemNotFound(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem path not found: #{to_string(path)}", path)
+}
+
+deferror FileSystemAlreadyExists(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem path already exists: #{to_string(path)}", path)
+}
+
+deferror FileSystemPermissionDenied(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem permission denied: #{to_string(path)}", path)
+}
+
+deferror FileSystemNotDirectory(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem path is not a directory: #{to_string(path)}", path)
+}
+
+deferror FileSystemIsDirectory(path: FilePath) {
+  |path: FilePath|
+  Self(message: "filesystem path is a directory: #{to_string(path)}", path)
+}
+
+deferror FileSystemInvalidPath(raw: String) {
+  |raw: String|
+  Self(message: "invalid filesystem path: #{raw}", raw)
+}
+
+deferror FileSystemInvalidDepth(depth: Int) {
+  |depth: Int|
+  Self(message: "invalid filesystem tree depth: #{depth}", depth)
+}
+
+deferror FileSystemDirectoryCopyUnsupported(from: FilePath, to: FilePath) {
+  |from: FilePath, to: FilePath|
+  Self(message: "directory copy is not supported: #{to_string(from)} -> #{to_string(to)}", from, to)
+}
+
+deferror FileSystemStatFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "filesystem stat failed for #{to_string(path)}: #{detail}", path, detail)
+}
+
+deferror FileSystemListFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "filesystem list failed for #{to_string(path)}: #{detail}", path, detail)
+}
+
+deferror FileSystemTreeReadFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "filesystem tree read failed for #{to_string(path)}: #{detail}", path, detail)
+}
+
+deferror FileSystemMkdirFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "filesystem mkdir failed for #{to_string(path)}: #{detail}", path, detail)
+}
+
+deferror FileSystemMkdirAllFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "filesystem mkdir_all failed for #{to_string(path)}: #{detail}", path, detail)
+}
+
+deferror FileSystemRemoveFailed(path: FilePath, detail: String) {
+  |path: FilePath, detail: String|
+  Self(message: "filesystem remove failed for #{to_string(path)}: #{detail}", path, detail)
 }

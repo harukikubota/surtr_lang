@@ -1,0 +1,2 @@
+def f() -> Result<Int> { hash![] =? hash!["a" => 1]; Ok(1) }
+f()

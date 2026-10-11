@@ -6,14 +6,6 @@ Opaque seeded random generator state.
 @builtin type RandomGenerator
 
 @doc """
-Concrete random-module error for empty half-open ranges.
-Random integer helpers require `start < end`.
-"""
-deferror InvalidRandomRange(start: Int, end: Int) {
-  "random range must be non-empty: #{start}..#{end}"
-}
-
-@doc """
 Random module.
 Provides integer random helpers over half-open ranges.
 
@@ -68,4 +60,13 @@ defmod Random {
   Ok((1, RandomGenerator(<opaque>)))
   """
   @builtin def next_int_range(rng: RandomGenerator, start: Int, end: Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>
+}
+
+@doc """
+Concrete random-module error for empty half-open ranges.
+Random integer helpers require `start < end`.
+"""
+deferror InvalidRandomRange(start: Int, end: Int) {
+  |start: Int, end: Int|
+  Self(message: "random range must be non-empty: #{start}..#{end}", start, end)
 }

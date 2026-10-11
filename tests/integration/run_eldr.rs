@@ -695,7 +695,7 @@ fn run_error_context_verbose_adds_vm_details_to_runtime_error() {
     write_source(
         &source_path,
         r#"def main() -> Result<()> {
-  Err(NoneError)
+  Err(NoneError())
 }
 
 main()
@@ -734,7 +734,7 @@ fn run_error_context_verbose_adds_stack_trace_for_err_result() {
     write_source(
         &source_path,
         r#"def inner() -> Result<Int> {
-  Err(NoneError)
+  Err(NoneError())
 }
 
 def outer() -> Result<Int> {
@@ -780,7 +780,7 @@ fn run_error_context_verbose_preserves_inner_trace_through_safebind() {
     write_source(
         &source_path,
         r#"def inner() -> Result<Int> {
-  Err(NoneError)
+  Err(NoneError())
 }
 
 def outer() -> Result<Int> {
@@ -864,7 +864,7 @@ fn run_error_context_verbose_does_not_reuse_completed_tail_call_trace() {
 }
 
 def fail_later() -> Result<Int> {
-  Err(NoneError)
+  Err(NoneError())
 }
 
 spin(3)
@@ -906,7 +906,7 @@ fn run_error_context_verbose_adds_stack_trace_for_closure_function_err() {
     write_source(
         &source_path,
         r#"def inner() -> Result<Int> {
-  Err(NoneError)
+  Err(NoneError())
 }
 
 def apply(f: (-> Result<Int>)) -> Result<Int> {
@@ -948,7 +948,7 @@ fn run_default_error_context_omits_stack_trace_for_err_result() {
     write_source(
         &source_path,
         r#"def inner() -> Result<Int> {
-  Err(NoneError)
+  Err(NoneError())
 }
 
 inner()
@@ -1064,6 +1064,22 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
         1
     );
     assert_eq!(dump["process_runtime"]["counters"]["process_count"], 1);
+    for counter in [
+        "stopping_process_count",
+        "active_process_execution_count",
+        "stopped_identity_count",
+    ] {
+        assert_eq!(dump["process_runtime"]["counters"][counter], 0);
+        assert_eq!(dump["stats"]["process"][counter], 0);
+    }
+    assert_eq!(
+        dump["process_runtime"]["processes"][0]["acceptance"],
+        "accepting"
+    );
+    assert_eq!(
+        dump["process_runtime"]["processes"][0]["active_executions"],
+        0
+    );
     let specs = dump["process_runtime"]["specs"]
         .as_array()
         .expect("process specs should be an array");
@@ -1127,7 +1143,7 @@ fn run_vm_dump_writes_json_for_err_result_in_error_mode() {
     write_source(
         &source_path,
         r#"def inner() -> Result<Int> {
-  Err(NoneError)
+  Err(NoneError())
 }
 
 def outer() -> Result<Int> {
@@ -1393,7 +1409,7 @@ fn run_source_error_points_to_generation_site() {
     let source_path = temp.join("sample.srt");
     write_source(
         &source_path,
-        r#"err_result: Result<Int> = Err(NoneError)
+        r#"err_result: Result<Int> = Err(NoneError())
 match err_result {
   Ok(num) => print(to_string(num)),
   Err(e)  => eprint(e)
@@ -1521,7 +1537,7 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
+        stdout.contains("Err(ZeroModuloError(\"modulo by zero\"))"),
         "expected safe_mod zero to return Err value, got:\n{}",
         stdout
     );
@@ -1589,7 +1605,7 @@ fn run_source_main_err_overrides_set_exit_code_with_runtime_error_exit() {
         &source_path,
         r#"def main() -> Result<()> {
   set_exit_code(7)
-  Err(NoneError)
+  Err(NoneError())
 }
 
 main()

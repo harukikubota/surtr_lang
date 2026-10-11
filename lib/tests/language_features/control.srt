@@ -95,13 +95,13 @@ test("control") {
     }
     it("selects fallback on mismatch") {
       do {
-        assert_eq(-1, if_let(Err(NoneError), Ok(n), n, -1))
+        assert_eq(-1, if_let(Err(NoneError()), Ok(n), n, -1))
       }
     }
     it("executes only the matching side effect") {
       do {
         if_let_then(Ok("alice"), Ok(name), print(name))
-        if_let_then(Err(NoneError), Ok(name), print(name))
+        if_let_then(Err(NoneError()), Ok(name), print(name))
 
         assert_stdout_eq(["alice"])
       }
@@ -124,7 +124,7 @@ test("control") {
     }
     it("rejects different Result constructors") {
       do {
-        assert_false(is_match(Err(NoneError), Ok(_)))
+        assert_false(is_match(Err(NoneError()), Ok(_)))
       }
     }
   }

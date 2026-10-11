@@ -4,6 +4,33 @@ use crate::{
 };
 use spire::ast::Span;
 
+struct PatternFailureTemplate {
+    message: &'static str,
+    primary_caption: &'static str,
+    help: &'static str,
+}
+
+const CALLABLE_FAILURE_TEMPLATE: PatternFailureTemplate = PatternFailureTemplate {
+    message: "MonadFail is not implemented.",
+    primary_caption: "Requires MonadFail.",
+    help: "Implement MonadFail for the return type to handle FailurePattern.",
+};
+
+const DO_FAILURE_TEMPLATE: PatternFailureTemplate = PatternFailureTemplate {
+    message: "Neither MonadFail nor Alternative is implemented.",
+    primary_caption: "Requires MonadFail or Alternative.",
+    help: "Implement MonadFail -> preserve Error (preferred).\nImplement Alternative -> empty().",
+};
+
+fn pattern_failure_template(
+    context: crate::PatternFailureContext,
+) -> &'static PatternFailureTemplate {
+    match context {
+        crate::PatternFailureContext::Callable => &CALLABLE_FAILURE_TEMPLATE,
+        crate::PatternFailureContext::Do => &DO_FAILURE_TEMPLATE,
+    }
+}
+
 /// Build the explicit producer-contract failure used when an adapter receives
 /// an unstructured Scar type error. Message, hint, and source text are
 /// intentionally unavailable at this boundary.
@@ -55,6 +82,11 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         .chain(input.related.iter())
         .map(source_fact_label)
         .collect();
+    if let DiagnosticData::PatternFailure(value) = &input.data {
+        let template = pattern_failure_template(value.context);
+        spec.labels[0].message = template.primary_caption.into();
+        spec.help = Some(template.help.into());
+    }
     if input.reason.type_reason() == Some(TypeDiagnosticReason::ReservedIntrinsicMarkerUsage) {
         let marker = match &input.data {
             DiagnosticData::Policy(value) => value.subject.as_deref().unwrap_or("intrinsic marker"),
@@ -360,19 +392,16 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 );
             }
         }
-        TypeDiagnosticReason::SafeBindRequiresResultTarget => {
+        TypeDiagnosticReason::SafeBindRequiresMonadFailTarget => {
             if let DiagnosticData::Policy(value) = &input.data {
                 return format!(
-                    "`=?` requires an enclosing ResultContext return type (canonical Result or a valid @result_effect carrier), got {}",
+                    "`=?` requires an enclosing MonadFail return type, got {}",
                     value
                         .actual_type
                         .as_deref()
                         .expect("SafeBind enclosing return type")
                 );
             }
-        }
-        TypeDiagnosticReason::ErrorValueMustBeWrapped => {
-            return "Error values must be wrapped with Err(...)".into();
         }
         TypeDiagnosticReason::FacetSafeBindForbidden => {
             return "Facet values cannot be bound with `=?`".into();
@@ -448,14 +477,6 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                         .expect("nominal declaration bound"),
                     value.stage.as_deref().expect("nominal type name")
                 );
-            }
-        }
-        TypeDiagnosticReason::InvalidResultEffectAnnotation => {
-            if let DiagnosticData::Policy(value) = &input.data {
-                return value
-                    .subject
-                    .clone()
-                    .expect("result effect annotation failure");
             }
         }
         TypeDiagnosticReason::TraitImplementationForbidden => {
@@ -541,15 +562,12 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             let actual = value.actual_type.clone().unwrap_or_else(|| format!("closure with {} parameter(s)", value.actual_arity.expect("closure shape carries its arity")));
             match reason {
                 TypeDiagnosticReason::NotCallable => format!("Not a function: {actual}"),
-                TypeDiagnosticReason::CallableShapeMismatch => match value.return_shape {
-                    crate::CallableReturnShape::Plain => format!("{} expects a plain function return, got {actual}", value.callable),
-                    crate::CallableReturnShape::Any => match value.expected_arity {
-                        Some(arity) => format!("{} expects a callable with {arity} argument(s), got {actual}", value.callable),
-                        None => {
-                            let expected = input.related.iter().find(|fact| fact.role == crate::SourceRole::Expected).and_then(|fact| fact.ty.as_deref()).expect("non-callable expected shape carries its type fact");
-                            format!("{} does not match expected type {expected}", value.callable)
-                        }
-                    },
+                TypeDiagnosticReason::CallableShapeMismatch => match value.expected_arity {
+                    Some(arity) => format!("{} expects a callable with {arity} argument(s), got {actual}", value.callable),
+                    None => {
+                        let expected = input.related.iter().find(|fact| fact.role == crate::SourceRole::Expected).and_then(|fact| fact.ty.as_deref()).expect("non-callable expected shape carries its type fact");
+                        format!("{} does not match expected type {expected}", value.callable)
+                    }
                 },
                 _ => unreachable!("callable shape requires callable reason"),
             }
@@ -591,11 +609,13 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             let obligation = if value.trait_arguments.is_empty() { value.trait_name.clone() } else { format!("{}<{}>", value.trait_name, value.trait_arguments.join(", ")) };
             match reason {
                 TypeDiagnosticReason::NoApplicableTraitImplementation => format!("No implementation satisfies {} for {}", obligation, value.subject_type.as_deref().expect("concrete obligation has a subject")),
+                TypeDiagnosticReason::CyclicTraitObligation => format!("CyclicTraitObligation: {} for {}", obligation, value.subject_type.as_deref().expect("cyclic obligation has a subject")),
                 TypeDiagnosticReason::UnresolvedTraitMethodInstantiation => format!("{}::{} requires a concrete method instantiation", obligation, value.method.as_deref().expect("method instantiation has a method")),
                 TypeDiagnosticReason::MissingTraitDispatchTarget => format!("{}::{} has no concrete dispatch target", obligation, value.method.as_deref().expect("method instantiation has a method")),
                 _ => unreachable!("dispatch diagnostic requires dispatch reason"),
             }
         },
+        DiagnosticData::PatternFailure(value) => pattern_failure_template(value.context).message.into(),
         DiagnosticData::TypeConstructorCarrier(value) => match reason {
             TypeDiagnosticReason::TypePayloadMismatch => format!("Type payload mismatch: expected {}, got {}", value.expected_carrier, value.actual_carrier),
             TypeDiagnosticReason::TypeConstructorFamilyMismatch => format!("Type constructor family mismatch: expected {}, got {}", value.expected_carrier, value.actual_carrier),

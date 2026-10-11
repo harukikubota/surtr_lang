@@ -276,11 +276,11 @@ const REPL_CASES: &[(&str, fn())] = &[
     repl_case!(repl_accepts_explicitly_constrained_result_binding),
     repl_case!(repl_accepts_result_mapping_when_chunk_constrains_type),
     repl_case!(repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli),
-    repl_case!(repl_sig_type_owner_constructor_fallback_renders_through_cli),
+    repl_case!(repl_sig_type_owner_constructor_renders_through_cli),
     repl_case!(repl_doc_type_owner_resolves_canonical_type),
-    repl_case!(repl_sig_attached_extractor_owner_query_matches_zero_arg_form),
+    repl_case!(repl_sig_attached_extractor_owner_query_renders_through_cli),
     repl_case!(repl_range_constructor_and_extractor_queries_render_through_cli),
-    repl_case!(repl_sig_enum_rejects_extra_input_with_shared_message),
+    repl_case!(repl_sig_enum_variant_name_renders_through_cli),
     repl_case!(repl_info_renders_styled_summary_for_queries),
     repl_case!(repl_supports_session_listing_and_reload_commands),
     repl_case!(repl_sig_missing_symbol_prints_guidance),
@@ -726,12 +726,11 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(combined.contains("Unsupported command query form."));
-    assert!(combined.contains("operator target"));
-    assert!(!combined.contains("ret |>= up: Result<Int>"));
+    assert!(combined.contains("Accepted forms:"));
 }
 
 fn repl_rejects_persisting_unresolved_result_callable_binding() {
-    let output = run_repl_session("todo = {|| Err(NoneError)}\n:quit\n");
+    let output = run_repl_session("todo = {|| Err(NoneError())}\n:quit\n");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     let combined = format!("{stdout}\n{stderr}");
@@ -748,7 +747,7 @@ fn repl_rejects_persisting_unresolved_result_callable_binding() {
 }
 
 fn repl_rejects_persisting_unresolved_result_value_binding() {
-    let output = run_repl_session("todo = {|| Err(NoneError)}\nret = todo()\n:quit\n");
+    let output = run_repl_session("todo = {|| Err(NoneError())}\nret = todo()\n:quit\n");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     let combined = format!("{stdout}\n{stderr}");
@@ -762,7 +761,7 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
 }
 
 fn repl_accepts_explicitly_constrained_result_binding() {
-    let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError)}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
+    let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError())}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -780,7 +779,7 @@ fn repl_accepts_explicitly_constrained_result_binding() {
 
 fn repl_accepts_result_mapping_when_chunk_constrains_type() {
     let output = run_repl_session(
-        "todo: (-> Result<Int>) = {|| Err(NoneError)}\nmapped = todo() |*> inspect()\n:type mapped\n:quit\n",
+        "todo: (-> Result<Int>) = {|| Err(NoneError())}\nmapped = todo() |*> inspect()\n:type mapped\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -798,22 +797,25 @@ fn repl_accepts_result_mapping_when_chunk_constrains_type() {
 }
 
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
-    let output = run_repl_session(":sig |>\n:sig id(Int)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
+    let output = run_repl_session(":sig |>\n:sig id\n:quit\n");
+    assert!(output.status.success());
+    let combined = strip_ansi(&format!(
+        "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    ));
+    assert!(
+        combined.contains("Bootstrap::|>(value: $A, f: ($A -> $B)) -> $B"),
+        "{combined}"
     );
-
-    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("Bootstrap::|>(value: $A, f: ($A -> $B)) -> $B"));
-    assert!(stdout.contains("specialized:"));
-    assert!(stdout.contains("id(Int) -> Int"));
+    assert!(
+        combined.contains("Function::id(value: $A) -> $A"),
+        "{combined}"
+    );
 }
 
-fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
-    let output = run_repl_session(":sig Duration\n:sig Duration()\n:sig Option\n:quit\n");
+fn repl_sig_type_owner_constructor_renders_through_cli() {
+    let output = run_repl_session(":sig Duration\n:sig Duration::new\n:sig Option\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -851,44 +853,26 @@ fn repl_doc_type_owner_resolves_canonical_type() {
     assert!(stdout.contains("defenum Option"), "{stdout}");
 }
 
-fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
-    let output =
-        run_repl_session(":sig Duration!\n:sig Duration!()\n:sig Duration!(Duration)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
+fn repl_sig_attached_extractor_owner_query_renders_through_cli() {
+    let output = run_repl_session(":sig Duration!\n:quit\n");
+    assert!(output.status.success());
+    let combined = strip_ansi(&format!(
+        "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(
-        stdout
+    ));
+    assert_eq!(
+        combined
             .matches("Duration::deconstruct(self: Duration) -> MatchResult<Int>")
-            .count()
-            >= 3,
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("specialized:\n  Duration!() -> MatchResult<Int>"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("specialized:\n  Duration!(Duration) -> MatchResult<Int>"),
-        "{stdout}"
+            .count(),
+        1,
+        "{combined}"
     );
 }
 
 fn repl_range_constructor_and_extractor_queries_render_through_cli() {
-    let output =
-        run_repl_session(":doc Range(Int, Int)\n:sig Range\n:sig Range()\n:doc Range!()\n:sig Range!\n:sig Range!()\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
+    let output = run_repl_session(":doc Range::new\n:sig Range\n:doc Range!\n:sig Range!\n:quit\n");
+    assert!(output.status.success());
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("Range::new"), "{stdout}");
     assert!(stdout.contains("min: $A"), "{stdout}");
@@ -896,33 +880,17 @@ fn repl_range_constructor_and_extractor_queries_render_through_cli() {
     assert!(stdout.contains("-> Range<$A>"), "{stdout}");
     assert!(stdout.contains("Range::deconstruct"), "{stdout}");
     assert!(stdout.contains("MatchResult<($A, $A)>"), "{stdout}");
-    assert!(
-        stdout.contains("specialized:\n  Range!() -> MatchResult<($A, $A)>"),
-        "{stdout}"
-    );
 }
 
-fn repl_sig_enum_rejects_extra_input_with_shared_message() {
-    let output = run_repl_session(
-        ":sig Option(Int)\n:sig Option::Some\n:sig Option::Some()\n:sig Option::Some(1)\n:sig Option::Some(Int)\n:quit\n",
-    );
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
+fn repl_sig_enum_variant_name_renders_through_cli() {
+    let output = run_repl_session(":sig Option::Some\n:quit\n");
+    assert!(output.status.success());
+    let combined = strip_ansi(&format!(
+        "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(
-        stdout.matches(
-            "Enum signatures are only available for bare type owners: use `:sig Option` instead"
-        )
-        .count()
-            >= 4,
-        "{stdout}"
-    );
-    assert!(stdout.contains("xldr(1)> xldr(1)>"), "{stdout}");
+    ));
+    assert!(combined.contains("Option::Some"), "{combined}");
 }
 
 fn repl_info_renders_styled_summary_for_queries() {
@@ -944,8 +912,7 @@ fn repl_info_renders_styled_summary_for_queries() {
     assert!(combined.contains("\u{1b}["));
     let plain = strip_ansi(&combined);
     assert!(plain.contains("Unsupported command query form."), "{plain}");
-    assert!(plain.contains("operator target"), "{plain}");
-    assert!(!plain.contains("ret |>= up: Result<Int>"), "{plain}");
+    assert!(plain.contains("Accepted forms:"), "{plain}");
 }
 
 fn repl_supports_session_listing_and_reload_commands() {
@@ -1075,7 +1042,7 @@ fn repl_runtime_diagnostic_points_at_the_full_call() {
     );
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
-    assert!(stderr.contains("ZeroDivisionError"));
+    assert!(stderr.contains("ZeroModuloError"));
     assert!(stderr.contains("REPL:1:1"));
     assert!(stderr.contains("Mod::safe_mod(10, 0)"));
 }
@@ -1455,13 +1422,10 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     assert!(stdout.contains("Imported Add::add"), "{stdout}");
     assert!(stdout.contains("Add::add"), "{stdout}");
     assert!(
-        stdout.contains("No signature found for pair._1"),
+        stdout.contains("Use `:info pair` or `:facet pair._1`"),
         "{stdout}"
     );
-    assert!(
-        stderr.contains("Unsupported command query argument `Tuple._0`"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("ReplQueryParseError"), "{stderr}");
 }
 
 fn repl_colorizes_closure_doc_footer_and_type_output() {
@@ -1710,7 +1674,7 @@ fn repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evide
 
 fn repl_eprint_reports_generation_site_line() {
     let output = run_repl_session(
-        "err_result: Result<Int> = Err(NoneError)\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
+        "err_result: Result<Int> = Err(NoneError())\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1725,7 +1689,7 @@ fn repl_eprint_reports_generation_site_line() {
 
 fn repl_error_generation_site_survives_function_and_extractor_calls() {
     let output = run_repl_session(
-        "Err(NoneError)\ndef source_error(_value: Int) -> Result<Int> {\n  Err(NoneError)\n}\ndef relay_error() -> Result<Int> {\n  found =? source_error(2)\n  Ok(found)\n}\nrelay_error()\ninner = Extractor::from_result(&source_error)\nouter = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}\nouter(found) =? Ok(2)\n2 + 3\n:quit\n",
+        "Err(NoneError())\ndef source_error(_value: Int) -> Result<Int> {\n  Err(NoneError())\n}\ndef relay_error() -> Result<Int> {\n  found =? source_error(2)\n  Ok(found)\n}\nrelay_error()\ninner = Extractor::from_result(&source_error)\nouter = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}\nouter(found) =? Ok(2)\n2 + 3\n:quit\n",
     );
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
@@ -1750,7 +1714,7 @@ fn repl_error_generation_site_survives_function_and_extractor_calls() {
         3,
         "{stderr}"
     );
-    assert!(stderr.contains("Err(NoneError)"), "{stderr}");
+    assert!(stderr.contains("Err(NoneError())"), "{stderr}");
     assert!(!stdout.contains("Error:"), "{stdout}");
     assert!(
         stdout.contains("5"),

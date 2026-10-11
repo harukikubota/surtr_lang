@@ -2,9 +2,9 @@
 
 use scar::env::TypeKind;
 use scar::typed::{
-    OperatorTraitOp, ResultPreserveConstruction, SafeBindFailureTarget, SafeBindRhsProjection,
-    TraitCallOrigin, TypedDoSafeBind, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
-    TypedPattern, TypedProgram, TypedWhereConstraintRhs,
+    OperatorTraitOp, SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin,
+    TypedDoSafeBind, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode, TypedPattern,
+    TypedProgram, TypedWhereConstraintRhs,
 };
 use scar::types::Ty;
 use sigil::resolved::{
@@ -26,7 +26,6 @@ use support::*;
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 
 const SURFACE_WORKER_COUNT: usize = 1;
-const SURFACE_BUCKET_COUNT: usize = 8;
 
 fn resolve_with_standard_environment(source: &str) -> Vec<Resolved> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
@@ -48,6 +47,8 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
+    surface_case!(hash_map_pattern_type_boundaries),
+    surface_case!(pattern_failure_diagnostics_show_target_origins),
     surface_case!(facet_view_capture_infers_source_from_path),
     surface_case!(facet_view_capture_preserves_constraints),
     surface_case!(facet_capture_compile_time_scope_boundaries),
@@ -86,7 +87,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         match_bool_qualified_constructor_patterns_require_exhaustive_arms as fn(),
     ),
     surface_case!(facet_capture_call_inference_preserves_argument_diagnostics),
-    surface_case!(error_kind_rejects_user_type_positions),
+    surface_case!(error_kind_accepts_user_type_positions),
     surface_case!(recover_kind_rejects_invalid_handlers),
     surface_case!(facet_capture_call_inference_resolves_later_arguments),
     surface_case!(facet_capture_call_inference_resolves_dependencies_and_return),
@@ -358,8 +359,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         readonly_field_blocks_deep_mutation_but_owner_can_replace_property as fn(),
     ),
     (
-        "readonly_struct_root_blocks_mutating_facet_even_for_owner",
-        readonly_struct_root_blocks_mutating_facet_even_for_owner as fn(),
+        "readonly_struct_fields_allow_owner_replacement",
+        readonly_struct_fields_allow_owner_replacement as fn(),
     ),
     (
         "facet_standalone_tuple_root_is_rejected",
@@ -605,9 +606,6 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(captured_contextual_callbacks_preserve_payload_views),
     surface_case!(fixed_nominal_callback_parameters_keep_independent_views),
     surface_case!(rigid_callback_payloads_keep_declared_constructor_capability),
-    surface_case!(result_effect_annotation_validates_canonical_monad_t_shape),
-    surface_case!(result_effect_annotation_rejects_invalid_structure_and_capabilities),
-    surface_case!(result_effect_annotation_rejects_noncanonical_trait_metadata),
     (
         "trailing_block_calls_typecheck_inside_script_module_scope",
         trailing_block_calls_typecheck_inside_script_module_scope as fn(),
@@ -1191,24 +1189,24 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         tap_err_accepts_error_observer_captures_and_composition as fn(),
     ),
     (
-        "error_observer_binding_cannot_escape_as_plain_value",
-        error_observer_binding_cannot_escape_as_plain_value as fn(),
+        "error_observer_binding_can_escape_as_plain_value",
+        error_observer_binding_can_escape_as_plain_value as fn(),
     ),
     (
-        "error_observer_binding_cannot_be_called_directly",
-        error_observer_binding_cannot_be_called_directly as fn(),
+        "error_observer_binding_can_be_called_directly",
+        error_observer_binding_can_be_called_directly as fn(),
     ),
     (
-        "error_observer_binding_cannot_use_error_annotation",
-        error_observer_binding_cannot_use_error_annotation as fn(),
+        "error_observer_binding_can_use_error_annotation",
+        error_observer_binding_can_use_error_annotation as fn(),
     ),
     (
-        "error_observer_closure_param_cannot_use_error_annotation",
-        error_observer_closure_param_cannot_use_error_annotation as fn(),
+        "error_observer_closure_param_can_use_error_annotation",
+        error_observer_closure_param_can_use_error_annotation as fn(),
     ),
     (
-        "error_observer_binding_cannot_flow_through_generic_identity",
-        error_observer_binding_cannot_flow_through_generic_identity as fn(),
+        "error_observer_binding_can_flow_through_generic_identity",
+        error_observer_binding_can_flow_through_generic_identity as fn(),
     ),
     (
         "type_kinds_map_to_compile_space_identities",
@@ -1327,7 +1325,19 @@ fn surface_case_inventory_has_unique_names_and_functions() {
     let mut names = HashSet::new();
     let mut functions = HashSet::new();
 
-    for &(name, case) in SURFACE_CASES {
+    for &(name, residue, modulus) in SURFACE_PARTITIONS {
+        assert!(modulus > 0, "invalid surface partition modulus: {name}");
+        assert!(
+            residue < modulus,
+            "invalid surface partition residue: {name}"
+        );
+        assert!(
+            (0..SURFACE_CASES.len()).any(|index| index % modulus == residue),
+            "empty Scar surface partition: {name}"
+        );
+    }
+
+    for (index, &(name, case)) in SURFACE_CASES.iter().enumerate() {
         assert!(
             names.insert(name),
             "duplicate Scar surface case name: {name}"
@@ -1336,26 +1346,47 @@ fn surface_case_inventory_has_unique_names_and_functions() {
             functions.insert(case as usize),
             "duplicate Scar surface case function: {name}"
         );
+        assert_eq!(
+            SURFACE_PARTITIONS
+                .iter()
+                .filter(|&&(_, residue, modulus)| index % modulus == residue)
+                .count(),
+            1,
+            "Scar surface case must belong to exactly one partition: {name}"
+        );
     }
 }
 
-macro_rules! surface_bucket_test {
-    ($name:ident, $bucket:expr) => {
-        #[test]
-        fn $name() {
-            run_surface_case_bucket($bucket, SURFACE_BUCKET_COUNT);
-        }
+macro_rules! surface_bucket_tests {
+    ($(($name:ident, $residue:expr, $modulus:expr)),+ $(,)?) => {
+        const SURFACE_PARTITIONS: &[(&str, usize, usize)] = &[
+            $((stringify!($name), $residue, $modulus)),+
+        ];
+
+        $(
+            #[test]
+            fn $name() {
+                run_surface_case_bucket($residue, $modulus);
+            }
+        )+
     };
 }
 
-surface_bucket_test!(typecheck_surface_bucket_0, 0);
-surface_bucket_test!(typecheck_surface_bucket_1, 1);
-surface_bucket_test!(typecheck_surface_bucket_2, 2);
-surface_bucket_test!(typecheck_surface_bucket_3, 3);
-surface_bucket_test!(typecheck_surface_bucket_4, 4);
-surface_bucket_test!(typecheck_surface_bucket_5, 5);
-surface_bucket_test!(typecheck_surface_bucket_6, 6);
-surface_bucket_test!(typecheck_surface_bucket_7, 7);
+// Split only the slower original buckets; retain every case in its original order.
+surface_bucket_tests!(
+    (typecheck_surface_bucket_0_a, 0, 16),
+    (typecheck_surface_bucket_0_b, 8, 16),
+    (typecheck_surface_bucket_1, 1, 8),
+    (typecheck_surface_bucket_2, 2, 8),
+    (typecheck_surface_bucket_3_a, 3, 16),
+    (typecheck_surface_bucket_3_b, 11, 16),
+    (typecheck_surface_bucket_4, 4, 8),
+    (typecheck_surface_bucket_5, 5, 8),
+    (typecheck_surface_bucket_6_a, 6, 16),
+    (typecheck_surface_bucket_6_b, 14, 16),
+    (typecheck_surface_bucket_7_a, 7, 16),
+    (typecheck_surface_bucket_7_b, 15, 16),
+);
 
 fn run_surface_case_bucket(bucket: usize, bucket_count: usize) {
     assert!(bucket_count > 0, "bucket_count must be positive");
@@ -1505,14 +1536,32 @@ fn process_stdlib_declares_common_process_family_modules() {
     }
 }
 
+fn process_module_source(name: &str) -> String {
+    let ast = spire::parse_with_context(
+        PROCESS_MODULE_SOURCE,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("process standard source should parse");
+    let span = ast
+        .into_iter()
+        .find_map(|node| match node {
+            spire::ast::Ast::Defmod(span, module_name, _, _)
+                if module_name == format!("Global::{name}") =>
+            {
+                Some(span)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{name} module should exist"));
+    PROCESS_MODULE_SOURCE
+        .chars()
+        .skip(span.start)
+        .take(span.end - span.start)
+        .collect()
+}
+
 fn process_module_only_declares_public_runtime_helpers() {
-    let process_start = PROCESS_MODULE_SOURCE
-        .find("defmod Process")
-        .expect("Process module should exist");
-    let out_handler_start = PROCESS_MODULE_SOURCE
-        .find("defmod OutHandler")
-        .expect("OutHandler module should follow Process");
-    let process_module = &PROCESS_MODULE_SOURCE[process_start..out_handler_start];
+    let process_module = process_module_source("Process");
 
     assert!(
         !process_module.contains("@hidden"),
@@ -1535,13 +1584,7 @@ fn process_module_only_declares_public_runtime_helpers() {
 }
 
 fn process_stdlib_declares_agent_lower_surface_with_regular_surface_docs() {
-    let agent_start = PROCESS_MODULE_SOURCE
-        .find("defmod Agent")
-        .expect("Agent module should exist");
-    let process_start = PROCESS_MODULE_SOURCE
-        .find("defmod Process")
-        .expect("Process module should follow Agent");
-    let agent_module = &PROCESS_MODULE_SOURCE[agent_start..process_start];
+    let agent_module = process_module_source("Agent");
 
     for surface in [
         "def pid::<",
@@ -1730,9 +1773,7 @@ fn safebind_function_requires_result_return_type() {
     );
 
     let err = typecheck(resolved).expect_err("typecheck should fail");
-    assert!(err
-        .message
-        .contains("requires an enclosing ResultContext return type"));
+    assert!(err.message.contains("MonadFail is not implemented."));
 }
 
 fn safebind_result_closure_uses_nearest_callable_return_type() {
@@ -1753,9 +1794,7 @@ fn safebind_non_result_closure_is_rejected() {
 }"#,
     );
     let err = typecheck(resolved).expect_err("non-Result closure should reject SafeBind");
-    assert!(err
-        .message
-        .contains("requires an enclosing ResultContext return type"));
+    assert!(err.message.contains("MonadFail is not implemented."));
 }
 
 fn safebind_result_returning_annotated_closure_allows_safebind() {
@@ -1779,9 +1818,7 @@ fn safebind_non_result_closure_rejects_safebind() {
     );
 
     let err = typecheck(resolved).expect_err("non-Result closure should fail");
-    assert!(err
-        .message
-        .contains("requires an enclosing ResultContext return type"));
+    assert!(err.message.contains("MonadFail is not implemented."));
 }
 
 fn safebind_top_ok_pattern_requires_nested_result_rhs() {
@@ -2913,7 +2950,7 @@ boxed = Boxed(Ok(1))"#,
 fn facet_set_rejects_plain_value_for_result_focus() {
     let resolved = resolve_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
-user = User(Err(NoneError))
+user = User(Err(NoneError()))
 Facet::set(User.score, user, 3)"#,
     );
     let err = typecheck(resolved).expect_err("set must not implicitly wrap a Result focus");
@@ -3030,7 +3067,7 @@ Facet::over_result(User.score, user, {|score| Ok(1)})"#,
 fn nested_result_err_expression_has_dedicated_diagnostic() {
     let err = typecheck_with_rules(
         r#"deferror Oops { "oops" }
-value: Result<Result<Int>> = Err(Err(Oops))"#,
+value: Result<Result<Int>> = Err(Err(Oops()))"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested Err expressions must be rejected");
@@ -3043,7 +3080,7 @@ value: Result<Result<Int>> = Err(Err(Oops))"#,
 fn nested_result_err_pattern_has_dedicated_diagnostic() {
     let err = typecheck_with_rules(
         r#"deferror Oops { "oops" }
-value: Result<Result<Int>> = Err(Oops)
+value: Result<Result<Int>> = Err(Oops())
 match value {
   Err(Err(error)) => Error::message(error)
   Ok(_) => "ok"
@@ -3161,7 +3198,7 @@ impl User {
     ));
 }
 
-fn readonly_struct_root_blocks_mutating_facet_even_for_owner() {
+fn readonly_struct_fields_allow_owner_replacement() {
     let err = typecheck_with_rules(
         r#"@readonly
 defstruct Profile {
@@ -3178,10 +3215,10 @@ profile = Profile("alice")
 Facet::over(Profile.name, profile, {|name| Ok(name)})"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("readonly root should reject mutating facet");
-    assert!(err.message.contains("readonly type Profile"));
+    .expect_err("readonly fields should reject external mutation");
+    assert!(err.message.contains("readonly field Profile.name"));
 
-    let err = typecheck_with_rules(
+    let typed = typecheck_with_rules(
         r#"@readonly
 defstruct Profile {
   name: String,
@@ -3198,8 +3235,25 @@ impl Profile {
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("readonly root should also reject owner mutation");
-    assert!(err.message.contains("readonly type Profile"));
+    .expect("owner may replace an annotation-derived readonly field");
+    assert!(matches!(
+        typed.last().map(|node| &node.node),
+        Some(TypedInner::Def(..))
+    ));
+
+    let err = typecheck_with_rules(
+        r#"@readonly
+defstruct Profile { scores: List<Int> }
+impl Profile {
+  def new(scores: List<Int>) -> Self { Profile { scores: scores } }
+  def update_score(self: Self) -> Result<Profile> {
+    Facet::set(Profile.scores -> List.[0], self, 9)
+  }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("owner cannot traverse annotation-derived readonly fields");
+    assert!(err.message.contains("readonly field Profile.scores"));
 }
 
 fn facet_standalone_tuple_root_is_rejected() {
@@ -3669,7 +3723,7 @@ impl User {
 User { name: name, age: age }
   }
   defextractor deconstruct(self: Self) -> MatchResult<(String, Int)> {
-MatchResult::Err(NoneError)
+MatchResult::Err(NoneError())
   }
 }
 user = User("alice", 30)
@@ -3714,7 +3768,7 @@ impl Light {
   defextractor stop_code(self: Self) -> MatchResult<Int> {
 match self {
   Light::Red => MatchResult::Ok(1),
-  _ => MatchResult::Err(NoneError),
+  _ => MatchResult::Err(NoneError()),
 }
   }
 }
@@ -3744,7 +3798,7 @@ User { name: name, age: age }
     let typed = typecheck(resolved).expect("forward struct reference should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _))));
 }
 
 fn generic_struct_single_type_param_typechecks() {
@@ -3818,7 +3872,7 @@ text: String = pair.right"#,
 
 fn forward_deferror_value_can_flow_into_err() {
     let resolved = resolve_with_builtin_prelude(
-        r#"ret: Result<Int> = Err(NotFound)
+        r#"ret: Result<Int> = Err(NotFound())
 deferror NotFound {
   "not found"
 }"#,
@@ -3831,7 +3885,7 @@ deferror NotFound {
 
 fn zero_arg_deferror_value_can_flow_into_error_parameter() {
     let resolved = resolve_with_builtin_prelude(
-        r#"wrapped = Result::cause(Err(NoneError), NotFound)
+        r#"wrapped = Result::cause(Err(NoneError()), NotFound())
 deferror NotFound {
   "not found"
 }"#,
@@ -3845,9 +3899,7 @@ deferror NotFound {
 fn recover_kind_payload_type_name_typechecks() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = Result::recover_kind(Err(NotFound("runtime")), NotFound, {|err| Ok(1)})
-deferror NotFound(detail: String) {
-  detail
-}"#,
+deferror NotFound(detail: String) { |detail: String| Self(message: detail, detail: detail) }"#,
     );
     let typed = typecheck(resolved).expect("recover_kind payload type name should typecheck");
     assert!(typed
@@ -3873,9 +3925,7 @@ User { name: name, age: age }
 
 defrecord Pair(first: Int, second: String)
 
-deferror NotFound(code: String) {
-  "missing #{code}"
-}"#;
+deferror NotFound(code: String) { |code: String| Self(message: "missing #{code}", code: code) }"#;
 
     let first = typecheck_with_builtin_prelude(source);
     let second = typecheck_with_builtin_prelude(source);
@@ -3884,8 +3934,9 @@ deferror NotFound(code: String) {
         nodes
             .iter()
             .filter_map(|node| match &node.node {
-                TypedInner::StructDef(tag, name, _, _, _)
-                | TypedInner::RecordDef(tag, name, _, _, _) => Some((name.clone(), *tag)),
+                TypedInner::StructDef(tag, name, _, _) | TypedInner::RecordDef(tag, name, _, _) => {
+                    Some((name.clone(), *tag))
+                }
                 TypedInner::DeferrorDef(tag, _, id, _, _) => Some((id.name.clone(), *tag)),
                 _ => None,
             })
@@ -3923,7 +3974,7 @@ print(to_string(value))"#,
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _, _))),
+            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _))),
         "expected namespaced record definition to survive typechecking"
     );
     assert!(
@@ -6552,12 +6603,12 @@ fn do_total_extract_allows_mapped_payload_changes() {
 
 fn do_sequences_unit_payloads() {
     for source in [
-        "f: (Unit -> List<Int>) = {|_| do::<List> { value <- [1, 2]; guard::<List>(value > 1); [value] }}",
-        "result: List<Int> = do::<List> { value <- [1, 2]; guard::<List>(value > 1); [value] }",
-        "result: List<Int> = do::<List> { guard::<List>(True); [1] }",
+        "f: (Unit -> List<Int>) = {|_| do::<List> { value <- [1, 2]; Alternative::guard::<List>(value > 1); [value] }}",
+        "result: List<Int> = do::<List> { value <- [1, 2]; Alternative::guard::<List>(value > 1); [value] }",
+        "result: List<Int> = do::<List> { Alternative::guard::<List>(True); [1] }",
         "source: List<Unit> = [()]; result: List<Int> = do::<List> { _ <- source; [1] }",
         "result: List<Int> = Monad::bind([()], {|_| [1]})",
-        "result: Option<Int> = do::<Option> { guard::<Option>(True); Option::Some(1) }",
+        "result: Option<Int> = do::<Option> { Alternative::guard::<Option>(True); Option::Some(1) }",
     ] {
         typecheck_with_rules(source, RuntimeSourcePolicy::script())
             .unwrap_or_else(|error| panic!("Unit payload must sequence: {source}: {error:?}"));
@@ -6751,9 +6802,8 @@ fn do_safebind_selects_typed_failure_targets() {
     ));
     assert!(matches!(
         failure_target,
-        SafeBindFailureTarget::DoResultContext(target)
-            if target.error_ty == Ty::Error
-                && target.construction == ResultPreserveConstruction::CanonicalResult
+        SafeBindFailureTarget::DoMonadFail(target)
+            if matches!(target.call.node, TypedInner::TraitCall { .. })
     ));
     assert_eq!(continuation.ty, result.ty);
     assert_eq!(
@@ -7378,190 +7428,6 @@ fn rigid_callback_payloads_keep_declared_constructor_capability() {
     }
 }
 
-const RESULT_EFFECT_CARRIER_SOURCE: &str = r#"@result_effect
-defstruct TransparentT<$M, $A>
-where
-  $M: Monad
-{
-  inner: __FIELD__,
-}
-
-impl TransparentT {
-  def new(inner: $M<$A>) -> TransparentT<$M, $A>
-  where
-    $M: Monad
-  {
-    TransparentT { inner }
-  }
-}
-
-impl Functor for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: Functor.$A
-{
-  def fmap(self: TransparentT<$M, $A>, mapper: ($A -> $B)) -> TransparentT<$M, $B> {
-    TransparentT::new(Functor::fmap(self.inner, mapper))
-  }
-}
-
-impl Applicative for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: Applicative.$A
-{
-  def pure::<TransparentT<$M, $T>>(value: $A) -> TransparentT<$M, $A> {
-    TransparentT::new(Applicative::pure(value))
-  }
-
-  def ap(
-    mapper: TransparentT<$M, ($A -> $B)>,
-    value: TransparentT<$M, $A>,
-  ) -> TransparentT<$M, $B> {
-    TransparentT::new(Applicative::ap(mapper.inner, value.inner))
-  }
-}
-
-impl Monad for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: Monad.$A
-{
-  def return::<TransparentT<$M, $T>>(value: $A) -> TransparentT<$M, $A> {
-    TransparentT::new(Monad::return(value))
-  }
-
-  def bind(
-    self: TransparentT<$M, $A>,
-    mapper: ($A -> TransparentT<$M, $B>),
-  ) -> TransparentT<$M, $B> {
-    TransparentT::new(Monad::bind(self.inner, {|item| mapper(item).inner}))
-  }
-}
-
-impl MonadT<$M> for TransparentT<$M, $T>
-where
-  $M: Monad
-  $T: MonadT.$A
-{
-  def lift::<TransparentT<$M, $T>>(value: $M<$A>) -> TransparentT<$M, $A> {
-    TransparentT::new(value)
-  }
-}
-"#;
-
-fn result_effect_annotation_validates_canonical_monad_t_shape() {
-    let source = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
-    typecheck_with_rules(&source, RuntimeSourcePolicy::script()).expect(
-        "a canonical MonadT with one public direct-base field should accept @result_effect",
-    );
-}
-
-fn result_effect_annotation_rejects_invalid_structure_and_capabilities() {
-    for (source, expected) in [
-        (
-            "@result_effect\ndefstruct EmptyT<$M, $A> where $M: Monad {}",
-            "exactly one field",
-        ),
-        (
-            "@result_effect\ndefstruct PairT<$M, $A> where $M: Monad { left: $M<$A>, right: $M<$A> }",
-            "exactly one field",
-        ),
-        (
-            "@result_effect\ndefstruct PrivateT<$M, $A> where $M: Monad { private inner: $M<$A> }",
-            "sole field to be public",
-        ),
-        (
-            "@result_effect\ndefstruct Wrapper<$A> { value: $A }",
-            "canonical Monad implementation",
-        ),
-    ] {
-        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
-            .expect_err("invalid @result_effect structure must fail closed");
-        assert_eq!(
-            error.reason(),
-            Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-            "{source}: {error:?}"
-        );
-        assert!(error.message.contains(expected), "{source}: {error:?}");
-        assert_eq!(error.span.start, source.find("@result_effect").unwrap());
-        let structured = error.structured.expect("annotation rejection must be structured");
-        assert_eq!(structured.primary.role, diagnostics::SourceRole::Annotation);
-    }
-
-    let wrong_field = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "Option<$A>");
-    let error = typecheck_with_rules(&wrong_field, RuntimeSourcePolicy::script())
-        .expect_err("the sole field must use the captured MonadT base constructor");
-    assert_eq!(
-        error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-        "{error:?}"
-    );
-    assert!(error.message.contains("outer constructor"), "{error:?}");
-
-    let valid_shape = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
-    let missing_monad_t = valid_shape
-        .split("impl MonadT")
-        .next()
-        .expect("fixture contains MonadT implementation");
-    let error = typecheck_with_rules(missing_monad_t, RuntimeSourcePolicy::script())
-        .expect_err("@result_effect requires a canonical MonadT implementation");
-    assert_eq!(
-        error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-        "{error:?}"
-    );
-    assert!(
-        error.message.contains("canonical MonadT implementation"),
-        "{error:?}"
-    );
-}
-
-fn result_effect_annotation_rejects_noncanonical_trait_metadata() {
-    let source = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
-    let mut resolved = resolve_with_builtin_prelude(&source);
-    let shadow_identity = resolved.iter().find_map(|node| match node {
-        Resolved::TraitImplDef(_, _, id, ..) if id.name == "Functor" => Some(id.clone()),
-        _ => None,
-    });
-    let shadow_identity = shadow_identity.expect("standard Functor identity should be resolved");
-    let shadow_identity = ResolvedId {
-        name: "Monad".into(),
-        unique_id: shadow_identity.unique_id,
-        compiler_generated: true,
-        ..shadow_identity
-    };
-    let mut replaced = false;
-    for node in &mut resolved {
-        let Resolved::StructDef(_, _id, _, _, attrs) = node else {
-            continue;
-        };
-        let result_effect = attrs
-            .result_effect
-            .as_mut()
-            .expect("annotated carrier should retain result effect metadata");
-        result_effect.monad_trait = Some(shadow_identity.clone());
-        replaced = true;
-    }
-    assert!(
-        replaced,
-        "annotated carrier should be present in resolved nodes"
-    );
-
-    let error = typecheck(resolved).expect_err("noncanonical metadata must fail closed");
-    assert_eq!(
-        error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
-        "{error:?}"
-    );
-    assert!(
-        error
-            .message
-            .contains("canonical Monad identity is invalid"),
-        "{error:?}"
-    );
-}
-
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def take(flag: Boolean, value: (-> Int)) -> Int {
@@ -7830,7 +7696,7 @@ fn to_string_helper_typechecks_as_trait_call() {
 fn ensure_rejects_call_expression_predicate() {
     let err = typecheck_with_rules(
         r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
-guard = ensure(4, is_even(), NoneError)"#,
+guard = ensure(4, is_even(), NoneError())"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("call expression predicate must fail");
@@ -7862,40 +7728,36 @@ fn kernel_and_contract_rejects_eager_signature() {
 }
 
 fn special_form_builtin_decl_must_live_at_its_canonical_std_qname() {
-    let err = typecheck_std_modules_with_overrides(&[(
-        "Boolean",
-        r#"@builtin defenum Boolean { True, False }
-
-impl Boolean {
-  def not(value: Boolean) -> Boolean {
-    value
-  }
-
-  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
-}
-
-impl Eq for Boolean {
-  @builtin def eq(self: Self, rhs: Self) -> Boolean
-}"#,
-    )])
-    .expect_err("special-form declaration outside its canonical module must fail");
+    let boolean_source = include_str!("../../../lib/types/boolean.srt").replacen(
+        "impl Boolean {",
+        "impl Boolean {\n  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+        1,
+    );
+    let err = typecheck_std_modules_with_overrides(&[("Boolean", &boolean_source)])
+        .expect_err("special-form declaration outside its canonical module must fail");
     assert!(err
         .message
         .contains("Special-form declaration `if` is only allowed at `Kernel::if`."));
 }
 
 fn kernel_does_not_allow_removed_concat_builtin() {
-    let module_stages = std_module_stages_with_overrides(&[(
-        "Kernel",
+    let ast = spire::parse_with_context(
         r#"defmod Kernel {
   @builtin def concat(left: $A, right: $A) -> String
 }"#,
-    )]);
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("removed builtin fixture should parse");
+    let module_stages = vec![sigil::staged_modules_from_source_ast(ast, None)];
     let declaration_index =
         sigil::precollect_declaration_index(&module_stages).expect("std modules should precollect");
     let err = sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
         .expect_err("concat is no longer a declared runtime builtin");
-    assert!(err.message.contains("Unknown builtin declaration: concat"));
+    assert!(
+        err.message.contains("Unknown builtin declaration: concat"),
+        "{}",
+        err.message
+    );
 }
 
 fn if_auto_forces_zero_arg_closure_once_for_branch_type() {
@@ -7928,7 +7790,7 @@ fn user_lazy_annotation_is_rejected() {
 
 fn require_accepts_lazy_error_branch() {
     let typed = typecheck_with_rules(
-        r#"deferror SomeError(detail: String) { detail }
+        r#"deferror SomeError(detail: String) { |detail: String| Self(message: detail, detail: detail) }
 guard = require(False, {|| SomeError("boom") })"#,
         RuntimeSourcePolicy::script(),
     )
@@ -7942,7 +7804,7 @@ guard = require(False, {|| SomeError("boom") })"#,
 
 fn ensure_accepts_lazy_error_branch() {
     let typed = typecheck_with_rules(
-        r#"deferror SomeError(detail: String) { detail }
+        r#"deferror SomeError(detail: String) { |detail: String| Self(message: detail, detail: detail) }
 def is_positive(value: Int) -> Boolean { value > 0 }
 guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
         RuntimeSourcePolicy::script(),
@@ -7957,8 +7819,8 @@ guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
 
 fn require_accepts_existing_error_value() {
     let typed = typecheck_with_rules(
-        r#"guard = match Err(NoneError) {
-  Ok(_) => require(False, NoneError),
+        r#"guard = match Err(NoneError()) {
+  Ok(_) => require(False, NoneError()),
   Err(e) => require(False, e),
 }"#,
         RuntimeSourcePolicy::script(),
@@ -7974,8 +7836,8 @@ fn require_accepts_existing_error_value() {
 fn ensure_accepts_existing_error_value() {
     let typed = typecheck_with_rules(
         r#"def is_positive(value: Int) -> Boolean { value > 0 }
-guard = match Err(NoneError) {
-  Ok(_) => ensure(-1, &is_positive, NoneError),
+guard = match Err(NoneError()) {
+  Ok(_) => ensure(-1, &is_positive, NoneError()),
   Err(e) => ensure(-1, &is_positive, e),
 }"#,
         RuntimeSourcePolicy::script(),
@@ -8386,7 +8248,7 @@ fn lifted_compose_rhs_closure_allows_explicit_nested_result_expectation() {
 }
 
 def gen(x: Int) -> Result<Int, Oops> {
-  if(x > 0, Ok(x), Err(Oops))
+  if(x > 0, Ok(x), Err(Oops()))
 }
 
 pipeline: (Int -> Result<Result<Int>>) = {|x|
@@ -8814,13 +8676,34 @@ right: String = str_id("ok")"#,
 }
 
 fn cyclic_type_definition_is_rejected() {
-    let resolved = resolve_with_builtin_prelude(
-        r#"defstruct Node {
-  next: Node,
-}"#,
-    );
-    let err = typecheck(resolved).expect_err("cyclic type must fail");
-    assert!(err.message.contains("Cyclic type definition detected"));
+    for (source, cycle_size) in [
+        ("defstruct Node { next: Node, }", 1),
+        (
+            "defrecord Left(right: Right)\ndefrecord Right(left: Left)",
+            2,
+        ),
+    ] {
+        let resolved = resolve_with_builtin_prelude(source);
+        let declaration_spans = resolved
+            .iter()
+            .filter_map(|node| match node {
+                Resolved::StructDef(_, id, ..) | Resolved::RecordDef(_, id, ..) => {
+                    Some((id.name.clone(), id.span.clone()))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let err = typecheck(resolved).expect_err("cyclic type must fail");
+        let cycle = err
+            .message
+            .strip_prefix("Cyclic type definition detected: ")
+            .expect("cycle diagnostic should keep its reason")
+            .split(" -> ")
+            .collect::<Vec<_>>();
+        assert_eq!(cycle.len(), cycle_size + 1);
+        assert_eq!(cycle.first(), cycle.last());
+        assert_eq!(err.span, declaration_spans[cycle[0]]);
+    }
 }
 
 fn enum_cycle_is_allowed_when_not_shared_by_all_variants() {
@@ -9271,15 +9154,15 @@ self
 }
 
 fn deferror_show_type_mismatch_points_to_show_expression_span() {
-    let source = r#"deferror NotFound(code: String) {
-  123
-}"#;
+    let source =
+        r#"deferror NotFound(code: String) { |code: String| Self(message: 123, code: code) }"#;
     let resolved = resolve_with_builtin_prelude(source);
     let err = typecheck(resolved).expect_err("show block must return String");
     let literal_start = source.find("123").expect("literal should exist in source");
-    assert!(err
-        .message
-        .contains("deferror show block must return String"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch)
+    );
     assert_eq!(err.span.start, literal_start);
 }
 
@@ -9456,6 +9339,9 @@ impl Compare for BoxedInt {}
 fn bounded_add_generics_specialize_without_pending_trait_calls() {
     fn has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => has_pending_trait_call(message) || payload.iter().any(has_pending_trait_call),
             TypedInner::TraitCall { dispatch, args, .. } => {
                 matches!(dispatch, scar::typed::TraitDispatch::Pending)
                     || args.iter().any(has_pending_trait_call)
@@ -9477,9 +9363,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                         if has_pending_trait_call(empty))
                     || has_pending_trait_call(&control.continuation)
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                has_pending_trait_call(inner)
-            }
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -9524,9 +9408,6 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, _, handler) => {
-                has_pending_trait_call(value) || has_pending_trait_call(handler)
-            }
             TypedInner::Match(scrutinee, arms) => {
                 has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
@@ -9546,9 +9427,8 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureClosure(_, _, body)
             | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)
@@ -9582,6 +9462,9 @@ b = double(1.5)"#,
 fn range_duration_comparisons_specialize_without_pending_trait_calls() {
     fn has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => has_pending_trait_call(message) || payload.iter().any(has_pending_trait_call),
             TypedInner::TraitCall { dispatch, args, .. } => {
                 matches!(dispatch, scar::typed::TraitDispatch::Pending)
                     || args.iter().any(has_pending_trait_call)
@@ -9603,9 +9486,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
                         if has_pending_trait_call(empty))
                     || has_pending_trait_call(&control.continuation)
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                has_pending_trait_call(inner)
-            }
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -9650,9 +9531,6 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, _, handler) => {
-                has_pending_trait_call(value) || has_pending_trait_call(handler)
-            }
             TypedInner::Match(scrutinee, arms) => {
                 has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
@@ -9672,9 +9550,8 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureClosure(_, _, body)
             | TypedInner::CaptureConstructorClosure(_, _, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)
@@ -10290,64 +10167,11 @@ fn try_to_helper_suggests_to_when_only_infallible_impl_exists() {
 }
 
 fn to_and_try_to_impls_are_mutually_exclusive() {
-    let overrides = [
-        (
-            "String",
-            r#"@builtin type String
-
-defenum StringEncoding {
-  Utf8,
-  Ascii,
-}
-
-deferror InvalidStringEncoding(detail: String) {
-  detail
-}
-
-impl String {
-  @builtin
-  def codepoints(value: String, encoding: StringEncoding) -> Result<List<Int>, InvalidStringEncoding>
-
-  @builtin
-  def from_codepoints(values: List<Int>, encoding: StringEncoding) -> Result<String, InvalidStringEncoding>
-}
-
-impl Show for String {
-  def to_string(self: Self) -> String {
-inspect(self)
-  }
-}
-
-impl Convert<String> for String {
-  def to::<String>(self: Self) -> String {
-self
-  }
-}
-
-impl TryConvert<Int> for String {
-  def try_to::<Int>(self: Self) -> Result<Int, Error> {
-Ok(0)
-  }
-}
-
-impl Convert<Int> for String {
-  def to::<Int>(self: Self) -> Int {
-0
-  }
-}
-
-impl Eq for String {
-  def eq(self: Self, rhs: Self) -> Boolean {
-self == rhs
-  }
-
-  def neq(self: Self, rhs: Self) -> Boolean {
-self != rhs
-  }
-}"#,
-        ),
-        ("StyledDoc", "defmod StyledDoc {}"),
-    ];
+    let string_source = format!(
+        "{}\nimpl Convert<Int> for String {{\n  def to::<Int>(self: Self) -> Int {{ 0 }}\n}}",
+        include_str!("../../../lib/types/string.srt")
+    );
+    let overrides = [("String", string_source.as_str())];
 
     let err = typecheck_std_modules_with_overrides(&overrides)
         .expect_err("conflicting Convert/TryConvert impls must fail");
@@ -10453,7 +10277,10 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
         })
         .expect("expected pid binding");
     match &rhs.ty {
-        Ty::Pid(symbol) => assert!(symbol == "Counter" || symbol == "Global::Counter"),
+        Ty::Pid(marker) => assert_eq!(
+            marker.as_ref(),
+            &Ty::ProcessMarker("Global::Counter".into())
+        ),
         other => panic!("expected PID<Counter>, got {other:?}"),
     }
 }
@@ -10501,7 +10328,10 @@ fn singleton_genserver_pid_surface_returns_concrete_pid() {
         })
         .expect("expected pid binding");
     match &rhs.ty {
-        Ty::Pid(symbol) => assert!(symbol == "QueueServer" || symbol == "Global::QueueServer"),
+        Ty::Pid(marker) => assert_eq!(
+            marker.as_ref(),
+            &Ty::ProcessMarker("Global::QueueServer".into())
+        ),
         other => panic!("expected PID<QueueServer>, got {other:?}"),
     }
 }
@@ -11158,73 +10988,61 @@ fn workers_reserve_can_flow_into_worker_call() {
 fn tap_err_accepts_local_error_observer_binding() {
     let typed = typecheck_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
-value = Result::tap_err(Err(NoneError), handler)"#,
+value = Result::tap_err(Err(NoneError()), handler)"#,
     );
     assert!(!typed.is_empty());
 }
 
 fn tap_err_accepts_error_observer_captures_and_composition() {
     let typed = typecheck_with_builtin_prelude(
-        r#"logged = Result::tap_err(Err(NoneError), &eprint)
-named = Result::tap_err(Err(NoneError), &Error::kind >> &print)"#,
+        r#"logged = Result::tap_err(Err(NoneError()), &eprint)
+named = Result::tap_err(Err(NoneError()), &Error::kind >> &print)"#,
     );
     assert!(!typed.is_empty());
 }
 
-fn error_observer_binding_cannot_escape_as_plain_value() {
+fn error_observer_binding_can_escape_as_plain_value() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
 escaped = handler"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding must not escape");
-    assert!(err.message.contains("Error observer closure cannot escape"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_be_called_directly() {
+fn error_observer_binding_can_be_called_directly() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err| eprint(err)}
-value = match Err(NoneError) {
+value = match Err(NoneError()) {
   Ok(_) => (),
   Err(err) => handler(err),
 }"#,
     );
-    let err =
-        typecheck(resolved).expect_err("Error observer binding must not be callable directly");
-    assert!(err
-        .message
-        .contains("Error observer closure can only be passed"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_use_error_annotation() {
+fn error_observer_binding_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler: (Error -> Unit) = {|err| eprint(err)}
-value = Result::tap_err(Err(NoneError), handler)"#,
+value = Result::tap_err(Err(NoneError()), handler)"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding annotation must fail");
-    assert!(err
-        .message
-        .contains("Error cannot be used as a user-defined function parameter type"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_closure_param_cannot_use_error_annotation() {
+fn error_observer_closure_param_can_use_error_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"handler = {|err: Error| eprint(err)}
-value = Result::tap_err(Err(NoneError), handler)"#,
+value = Result::tap_err(Err(NoneError()), handler)"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer closure param annotation must fail");
-    assert!(err
-        .message
-        .contains("Error cannot be used as a user-defined function parameter type"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
-fn error_observer_binding_cannot_flow_through_generic_identity() {
+fn error_observer_binding_can_flow_through_generic_identity() {
     let resolved = resolve_with_builtin_prelude(
         r#"def id(value: $A) -> $A { value }
 handler = {|err| eprint(err)}
-value = Result::tap_err(Err(NoneError), id(handler))"#,
+value = Result::tap_err(Err(NoneError()), id(handler))"#,
     );
-    let err = typecheck(resolved).expect_err("Error observer binding must be a direct argument");
-    assert!(err.message.contains("Error observer closure cannot escape"));
+    typecheck(resolved).expect("Error callbacks follow ordinary callable rules");
 }
 
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
@@ -11289,19 +11107,12 @@ bad: FixtureEither<_, Int> = FixtureEither::Left("term")"#,
     );
     assert!(!closure_payload.is_empty());
 
-    let abstract_error =
-        typecheck_with_rules("value = Option<Error>::None", RuntimeSourcePolicy::script())
-            .expect_err("abstract Error must remain unavailable as an ordinary enum type argument");
-    assert!(
-        abstract_error
-            .message
-            .contains("Error cannot be used as an enum constructor type argument"),
-        "{abstract_error:?}"
-    );
+    typecheck_with_rules("value = Option<Error>::None", RuntimeSourcePolicy::script())
+        .expect("Error is an ordinary enum type argument");
 
     let result_nodes = typecheck_with_rules(
         r#"ok: Result<Int> = Result<Int>::Ok(1)
-err: Result<Int> = Result<Int>::Err(NoneError)"#,
+err: Result<Int> = Result<Int>::Err(NoneError())"#,
         RuntimeSourcePolicy::script(),
     )
     .expect(
@@ -11321,7 +11132,7 @@ err: Result<Int> = Result<Int>::Err(NoneError)"#,
         );
     }
 
-    let bare_err = typecheck_with_rules("err = Err(NoneError)", RuntimeSourcePolicy::script())
+    let bare_err = typecheck_with_rules("err = Err(NoneError())", RuntimeSourcePolicy::script())
         .expect("a bare Err constructor may leave its success type to surrounding inference");
     assert!(!bare_err.is_empty());
 
@@ -11329,9 +11140,7 @@ err: Result<Int> = Result<Int>::Err(NoneError)"#,
         typecheck_with_rules("err = Result<Int>::Err(1)", RuntimeSourcePolicy::script())
             .expect_err("an explicit Result constructor must retain the concrete Error constraint");
     assert!(
-        invalid_err
-            .message
-            .contains("requires a concrete deferror value"),
+        invalid_err.message.contains("requires an Error value"),
         "{invalid_err:?}"
     );
 
@@ -11659,7 +11468,6 @@ fn match_result_extractor_rejects_ordinary_value_uses() {
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { f = {|x| MatchResult::Ok(x)}\n MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int, Int> { MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::Err(v) } }",
-        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::Ok(v) } } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::Ok(v))\n MatchResult::Ok(v) } }",
         "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::Ok(v), _), MatchResult::Ok(v), MatchResult::Ok(v)) } }",
     ] {
@@ -11719,7 +11527,7 @@ fn match_result_unitonly_rejects_wrong_child_shapes() {
 }
 
 fn match_result_payload_shape_must_be_resolved_before_execution() {
-    let prefix = "impl Int { defextractor trial(v: Int) -> MatchResult<$T> { MatchResult::Err(NoneError) } }\n";
+    let prefix = "impl Int { defextractor trial(v: Int) -> MatchResult<$T> { MatchResult::Err(NoneError()) } }\n";
     let source = format!("{prefix}is_match(1, Int::trial(_))");
     let error = typecheck(resolve_with_builtin_prelude(&source))
         .expect_err("unresolved payload shape must be rejected");
@@ -11729,7 +11537,7 @@ fn match_result_payload_shape_must_be_resolved_before_execution() {
         .expect("payload annotation connects normal inference");
     for source in [
         "def wrapping(v: List<$A>) -> Boolean { is_match(v, uncons(_, _)) }",
-        "impl Int { defextractor pair(v: List<$A>) -> MatchResult<($A, Int)> { MatchResult::Err(NoneError) } }\ndef wrapping_pair(v: List<$A>) -> Boolean { is_match(v, Int::pair(_, _)) }",
+        "impl Int { defextractor pair(v: List<$A>) -> MatchResult<($A, Int)> { MatchResult::Err(NoneError()) } }\ndef wrapping_pair(v: List<$A>) -> Boolean { is_match(v, Int::pair(_, _)) }",
         "impl Int { defextractor list(v: List<$A>) -> MatchResult<List<$A>> { MatchResult::Ok(v) } }\ndef wrapping_list(v: List<$A>) -> Boolean { is_match(v, Int::list(_)) }",
     ] {
         typecheck(resolve_with_builtin_prelude(source)).expect("fixed payload shape permits generic children");
@@ -11789,8 +11597,8 @@ fn extractor_target_requires_concrete_type_head() {
 fn extractor_target_accepts_generic_arguments_under_concrete_head() {
     typecheck(resolve_with_builtin_prelude(
         r#"impl Int {
-  defextractor list(value: List<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError) }
-  defextractor result(value: Result<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError) }
+  defextractor list(value: List<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError()) }
+  defextractor result(value: Result<$T>) -> MatchResult<$T> { MatchResult::Err(NoneError()) }
 }"#,
     ))
     .expect("generic arguments under a concrete Extractor target head must remain valid");
@@ -11804,6 +11612,7 @@ match 5 { pick(value: Int) => value, _ => 0 }
     typecheck(resolve_with_builtin_prelude(source))
         .expect("ExtractorClosure literal and local head");
     for source in [
+        r#"ext = *{|value: (Int, Int)| MatchResult::Ok(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
         r#"typed: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value| MatchResult::Ok(value)}
 match 1 { typed(n) => n, _ => 0 }"#,
         r#"def make(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
@@ -11840,7 +11649,6 @@ match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
         r#"ext = *{|value: Int| MatchResult::Ok(value)}; ext(1)"#,
         r#"ext = *{|value: Int| MatchResult::Ok(value)}; is_match(1, ext(bound))"#,
         r#"ext = *{|value: Int| MatchResult::Ok(value)}; match 1 { ext(a) | ext(b) => 0, _ => 1 }"#,
-        r#"ext = *{|value: (Int, Int)| MatchResult::Ok(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
         r#"ext = *{|value: Int| f = {|nested: Int| MatchResult::Ok(nested)}; MatchResult::Ok(value)}"#,
         r#"ext = *{|value: Int| f = {|nested: Int| True =? nested > 0; nested}; MatchResult::Ok(value)}"#,
         r#"ext = *{|value: Int| Ok(value)}"#,
@@ -11902,11 +11710,11 @@ fn apply_pattern_projection_types_and_boundaries() {
         r#"result: Result<(Int, List<Int>)> = apply_pattern([1, 2, 3], [_1: Int, .._2: List<Int>])"#,
         r#"whole: Result<Result<Int>> = apply_pattern(Ok(1), _1)
 payload: Result<Int> = apply_pattern(Ok(1), Ok(_1))
-failed: Result<Result<Int>> = apply_pattern(Err(NoneError), _1)
-constrained: Result<Int> = apply_pattern(Err(NoneError), Ok(_1: Int))"#,
+failed: Result<Result<Int>> = apply_pattern(Err(NoneError()), _1)
+constrained: Result<Int> = apply_pattern(Err(NoneError()), Ok(_1: Int))"#,
         r#"ext: ExtractorClosure<((Int, String) -> MatchResult<(Int, String)>)> = *{|value| MatchResult::Ok(value)}
 result: Result<(String, Int)> = apply_pattern((3, "text"), ext(_2, _1))"#,
-        r#"unknown: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(NoneError)}
+        r#"unknown: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(NoneError())}
 result: Result<Int> = apply_pattern(1, unknown(_1))"#,
         r#"def ordinary() -> Int { result = apply_pattern(3, _1); 7 }
 ordinary()"#,
@@ -12112,28 +11920,23 @@ fn facet_capture_call_inference_preserves_argument_diagnostics() {
     );
 }
 
-fn error_kind_rejects_user_type_positions() {
+fn error_kind_accepts_user_type_positions() {
     for source in [
         "def expose(kind: ErrorKind) -> Int { 1 }",
         "def expose() -> ErrorKind { NoneError }",
         "value: ErrorKind = NoneError",
-        "defstruct Exposed { kind: ErrorKind }",
+        "defstruct Exposed { kind: ErrorKind }\nimpl Exposed { def new(kind: ErrorKind) -> Exposed { Exposed { kind: kind } } }",
         "def expose(values: List<ErrorKind>) -> Int { 1 }",
     ] {
         let resolved = resolve_with_builtin_prelude(source);
-        let error = typecheck(resolved).expect_err("ErrorKind must stay in direct std parameters");
-        assert!(
-            error
-                .message
-                .contains("ErrorKind is reserved for direct std builtin parameters"),
-            "{source}: {error:?}"
-        );
+        typecheck(resolved).expect("ErrorKind is an ordinary opaque value type");
     }
 }
 
 fn recover_kind_rejects_invalid_handlers() {
     for handler in ["{|| Ok(1)}", "{|left, right| Ok(1)}", "{|_| 1}"] {
-        let source = format!("value = Result::recover_kind(Err(NoneError), NoneError, {handler})");
+        let source =
+            format!("value = Result::recover_kind(Err(NoneError()), NoneError, {handler})");
         let resolved = resolve_with_builtin_prelude(&source);
         typecheck(resolved).expect_err("recover_kind requires one Error input and a Result output");
     }
@@ -12265,4 +12068,163 @@ fn facet_capture_compile_time_scope_boundaries() {
     let source = "defrecord User(name: String)\np = User.name\nf = {|path: Facet<InfallibleStructural, User, String, _, _>| Facet::view(path, User(\"alice\"))}";
     typecheck_with_rules(source, RuntimeSourcePolicy::script())
         .expect_err("Facet closure parameters stay forbidden");
+}
+
+fn pattern_failure_diagnostics_show_target_origins() {
+    let closure = typecheck_with_rules(
+        "def outer() -> Result<Int> { bad: (Int -> Int) = {|x| 2 =? Ok(x); x}; Ok(1) }",
+        RuntimeSourcePolicy::script(),
+    )
+    .unwrap_err();
+    assert_eq!(closure.message, "MonadFail is not implemented.");
+    assert!(closure.structured.as_ref().unwrap().related.is_empty());
+    let ordinary = typecheck_with_rules(
+        "value: Identity<Int> = Alternative::empty()",
+        RuntimeSourcePolicy::script(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        ordinary
+            .structured
+            .as_ref()
+            .map(|diagnostic| &diagnostic.data),
+        Some(diagnostics::DiagnosticData::TraitDispatch(_))
+    ));
+    assert!(!ordinary.message.contains("MonadFail is not implemented."));
+
+    for carrier in ["Identity<Int>", "Option<Int>"] {
+        let tail = if carrier.starts_with("Identity") {
+            "Identity(5)"
+        } else {
+            "Option::Some(5)"
+        };
+        let source = format!("def sample() -> {carrier} {{\n  2 =? Ok(3)\n  {tail}\n}}");
+        let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_err();
+        assert_eq!(error.message, "MonadFail is not implemented.");
+        let diagnostic = error.structured.as_ref().unwrap();
+        let operator = source.find("=?").unwrap();
+        assert_eq!(
+            diagnostic.primary.span,
+            Span {
+                start: operator,
+                end: operator + 2
+            }
+        );
+        let target = diagnostic
+            .related
+            .iter()
+            .find(|fact| fact.role.json_name() == "return_type")
+            .unwrap();
+        let start = source.find(carrier).unwrap();
+        assert_eq!(
+            target.span,
+            Span {
+                start,
+                end: start + carrier.len()
+            }
+        );
+        assert_eq!(target.ty.as_deref(), Some(carrier));
+        let spec = diagnostics::structured_type_error_spec(diagnostic);
+        assert_eq!(
+            spec.help.as_deref(),
+            Some("Implement MonadFail for the return type to handle FailurePattern.")
+        );
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == format!("Return type: {carrier}")));
+        assert_eq!(diagnostic.data.to_json_value()["kind"], "PatternFailure");
+    }
+    for (statement, primary) in [("2 =? Ok(3)", "=?"), ("2 <- Identity(3)", "2")] {
+        let source = format!("def sample() -> Result<Int> {{\n  ret: Result<Int> = do {{\n    nested: Identity<Int> = do::<Identity> {{\n      {statement}\n      Identity(5)\n    }}\n    Ok(5)\n  }}\n  ret\n}}");
+        let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script()).unwrap_err();
+        assert_eq!(
+            error.message,
+            "Neither MonadFail nor Alternative is implemented."
+        );
+        let diagnostic = error.structured.as_ref().unwrap();
+        let statement_start = source.find(statement).unwrap();
+        let primary_start = statement_start + statement.find(primary).unwrap();
+        assert_eq!(
+            diagnostic.primary.span,
+            Span {
+                start: primary_start,
+                end: primary_start + primary.len()
+            }
+        );
+        let target = diagnostic
+            .related
+            .iter()
+            .find(|fact| fact.role.json_name() == "do_carrier")
+            .unwrap();
+        let start = source.find("do::<Identity>").unwrap();
+        assert_eq!(
+            target.span,
+            Span {
+                start,
+                end: start + 2
+            }
+        );
+        assert_eq!(target.ty.as_deref(), Some("Identity<Int>"));
+        let spec = diagnostics::structured_type_error_spec(diagnostic);
+        assert!(spec.help.as_deref().unwrap().contains("preferred"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "do_carrier: Identity<Int>"));
+        assert_eq!(diagnostic.data.to_json_value()["kind"], "PatternFailure");
+    }
+}
+
+fn hash_map_pattern_type_boundaries() {
+    for source in [
+        r#"map = hash!["a" => 2]
+answer = match map { hash!["a" => value] => value, hash![] => 0 }"#,
+        r#"map = hash!["a" => 2]
+hash![] = map"#,
+        r#"map = hash!["a" => 2]
+answer = apply_pattern(map, hash!["a" => _1])"#,
+        r#"map = hash!["a" => Ok(2)]
+answer = match map { hash!["a" => value] => value, hash![] => Ok(0) }"#,
+    ] {
+        typecheck_with_standard_environment(source)
+            .expect("HashMap success boundary should typecheck");
+    }
+    for (source, message) in [
+        (
+            r#"map = hash!["a" => 2]
+answer = match map { hash![1 => _] => True, _ => False }"#,
+            "HashMap Pattern key must be String",
+        ),
+        (
+            r#"map = hash!["a" => 2]
+hash!["a" => value] = map"#,
+            "Only total MatchBlock patterns",
+        ),
+        (
+            r#"map = hash!["a" => 2]
+hash![] =? map"#,
+            "not a SafeBind target",
+        ),
+        (
+            r#"map = hash!["a" => 2]
+answer = match map { hash!["a" => _] => True }"#,
+            "exhaustive",
+        ),
+        (
+            r#"answer = match 2 { hash![] => True, _ => False }"#,
+            "HashMap",
+        ),
+    ] {
+        let error = typecheck_with_standard_environment(source)
+            .expect_err("HashMap rejection boundary should fail");
+        assert!(
+            error
+                .message
+                .to_lowercase()
+                .contains(&message.to_lowercase()),
+            "expected {message}, got {}",
+            error.message
+        );
+    }
 }

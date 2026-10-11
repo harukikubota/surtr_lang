@@ -59,12 +59,9 @@ fn canonical_unifier_preserves_boundaries() {
     assert!(u.unify(&v(3), &v(1)));
     assert_eq!(u.resolve(&v(2)), v(0));
     assert_eq!(u.resolve(&v(3)), v(1));
-    let mut u = CanonicalUnifier {
-        allow_ignored_callable_inputs: true,
-        ..Default::default()
-    };
+    let mut u = CanonicalUnifier::default();
     assert!(u.unify(&v(0), &hole()));
-    assert!(u.unify(&callable(leaf(1), leaf(2)), &callable(v(0), leaf(2))));
+    assert!(!u.unify(&callable(leaf(1), leaf(2)), &callable(v(0), leaf(2))));
     assert!(!u.unify(&callable(hole(), leaf(2)), &callable(leaf(1), leaf(2))));
     assert!(!u.unify(&callable(leaf(1), leaf(2)), &callable(hole(), hole())));
     assert!(
@@ -156,17 +153,22 @@ fn canonical_unifier_overlap_preserves_variable_namespaces() {
 }
 
 #[test]
-fn canonical_unifier_ignored_inputs_use_entry_bindings() {
-    let mut u = CanonicalUnifier {
-        allow_ignored_callable_inputs: true,
-        ..Default::default()
-    };
+fn canonical_applicability_rejects_callable_hole_input() {
+    let mut unifier = CanonicalUnifier::default();
+    assert!(!unifier.unify(&callable(leaf(1), leaf(2)), &callable(hole(), leaf(2))));
+    assert!(!unifier.unify(&callable(hole(), leaf(2)), &callable(leaf(1), leaf(2))));
+    assert!(unifier.unify(&callable(hole(), leaf(2)), &callable(hole(), leaf(2))));
+}
+
+#[test]
+fn canonical_unifier_shared_callable_inputs_preserve_hole_identity() {
+    let mut u = CanonicalUnifier::default();
     let left = CanonicalTy::new(CanonicalTypeHead::Function, vec![hole(), leaf(1), leaf(2)]);
     let right = CanonicalTy::new(
         CanonicalTypeHead::Function,
         vec![CanonicalTy::variable(0), CanonicalTy::variable(0), leaf(2)],
     );
-    // The first input binds variable 0 to Hole. The second input was not an
-    // ignored input on entry and must still reject a concrete type versus Hole.
+    // The first input binds variable 0 to Hole. The second input must reject
+    // a concrete type versus that same Hole identity.
     assert!(!u.unify(&left, &right));
 }

@@ -2,13 +2,17 @@
 
 状態: 未採用の設計案。2026-10-02。level4（型、実行時契約、バックエンド境界）。
 
+2026-10-10 追記: ホスト別の機能制限は第5節の方針に更新した。`erl` / `elixir` ホストは通常モジュールの出力に限定し、Surtr のプロセス機能を提供しない。ホスト別制限と BEAM 出力は未実装である。
+
+同日追記: 停止・完了・回収の方針は [Process Runtime 正本の停止契約](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了) に合わせた。Eldr の停止改修は実装・検証済みであり、本書の定義統一、呼出し一般化、ホスト別制限、BEAM 出力の採用・実装完了を意味しない。
+
 ## 1. 推奨方針
 
 プロセス定義とハンドラから型付き API を生成する仕組みを中心に置く。プロセスの振る舞い、アプリの起動構成、外部言語との接続を分け、Eldr と将来の BEAM で同じ言語上の契約を実装する。
 
 固定条件は、型付きメッセージング、通常の言語機能との接続、BEAM の部分的な利用、アプリホストごとの機能制限である。ここでホストとはユーザ指定の `surtr` / `erl` / `elixir` コマンドが用意する実行環境を指す。BEAM と Eldr はバックエンドとして別軸にする。
 
-外部協調のないプログラムに、外部言語の例外を処理する構文や型を要求しない。停止、タイムアウト、初期化失敗の契約は共通基盤に残す。
+外部協調のないプログラムに、外部言語の例外を処理する構文や型を要求しない。停止、タイムアウト、初期化失敗の契約は `surtr` ホストのプロセス基盤に残す。
 
 ## 2. 現行から生かすもの
 
@@ -65,23 +69,36 @@ I/O 等の依存も明示的な値として通常の helper に渡せる形を�
 |---|---|---|
 | `surtr` | Eldr | Surtr の型付き process、I/O、Task、supervision |
 | `surtr` | BEAM | 同じ Surtr 契約を提供する runtime と必要な OTP 依存 |
-| `erl` | BEAM | 共通 runtime と、明示的に選んだ Erlang 接続 |
-| `elixir` | BEAM | 共通 runtime と、明示的に選んだ Erlang / Elixir 接続 |
+| `erl` | BEAM | 通常の Surtr モジュールを `.erl` へ変換。Surtr のプロセス機能は提供しない |
+| `elixir` | BEAM | 通常の Surtr モジュールを `.erl` へ変換。Surtr のプロセス機能は提供しない |
 
-起動コマンドは既定の機能集合を選ぶ入口にする。コードはコマンド名で分岐せず、利用可能な機能の宣言を参照する。`erl` / `elixir` ホストでも外部接続を使わない Surtr 部分は共通 API だけで動く。
+起動コマンドは既定の機能集合を選ぶ入口にする。コードはコマンド名で分岐せず、利用可能な機能の宣言を参照する。
 
-同じ API の型、停止・返答・タイムアウトの意味はホスト間で変えない。提供しないモジュールを参照した場合は診断にする。依存先の不一致を代替実装や成功値へフォールバックさせない。
+### 5.1 `erl` / `elixir` ホストの制限（2026-10-10）
 
-既存の OTP アプリに組み込む場合は、その supervision tree に Surtr の子を登録する入口を提供する。`surtr` が起動を所有する場合と、親ホストから起動・停止される場合を BootPlan の契約で区別する。
+Surtr のプロセス定義は、静的に検査した宛先・引数・返答から独自の通信 API を生成する。この契約を Erlang / Elixir のプロセス管理へ持ち込まず、外部ホストでは通常の関数・型・モジュールを使う範囲に限定する。
+
+- 出力経路は `Surtr → .erl → .beam` とする。生成した通常関数は Erlang / Elixir 側のプロセスから呼び出せる。
+- Surtr のプロセス定義、生成メッセージ API、`PID<Proc>`、Task、Workers、supervision など、Surtr のプロセス runtime を必要とする機能はコンパイル時に拒否する。依存先の定義・参照も検査する。
+- 非対応の定義を黙って除外したり、メッセージ呼び出しを通常関数へ置き換えたり、代替 runtime へフォールバックしたりしない。
+- プロセスの起動・通信・停止・監督は Erlang / Elixir 側で扱う。Surtr の BootPlan やプロセス子登録の入口を外部ホストへ提供しない。
+- 通常モジュールの変換では、Erlang term への値の表現、Surtr の評価・パターン照合・数値演算の意味、公開 module / function / arity と外部入力の境界を詰める。各型の term 表現と、通常 builtin の対応範囲は未確定である。
+
+同じ通常 API を提供する場合は、その型と意味をホスト間で変えない。提供しないモジュールや機能の参照は診断にする。Surtr の停止・返答・タイムアウト契約は、`surtr` ホスト内の生成 API を通る通信へ適用する。Erlang / Elixir からの直接送信や内部生成関数への直接呼び出しは保証対象外とする。
+
+### 5.2 ロードする機能の境界
 
 ロード可能な `.beam` の集合、依存閉包、起動する OTP application、後続ロード方針を管理する。BEAM は通常、初回参照時に code path から自動ロードするため、起動時点のロード済み集合だけでは機能集合を表せない。[Erlang のコードロード](https://www.erlang.org/doc/system/code_loading.html)。これはサポート機能の境界であり、任意の BEAM コードの動作を隔離する仕組みではない。
 
 ## 6. 失敗と外部例外
 
+以下のプロセス関連の扱いは `surtr` ホストに適用する。`erl` / `elixir` ホストは第5.1節の通常モジュール出力と外部呼び出し境界を対象とする。
+
 | 事象 | 共通 Surtr 側の扱い |
 |---|---|
 | 業務上の失敗 | `Result<T>` の `Err`。現行の concrete error を維持 |
-| 呼び出し先の停止、期限超過 | runtime が共通の process error として返す |
+| 停止要求済み・回収済みへの新規要求 | `ProcessStopped(pid, process)`。型不一致・未知 PID とは区別 |
+| caller の期限超過 | `FutureDeadlineExceeded`。開始済み callee の取消を意味しない |
 | 隔離可能なプロセスの異常終了 | 診断と supervision へ接続。業務上の Err に偽装しない |
 | VM 全体の整合性を損なう内部契約違反 | ホスト実行を停止する。worker 再起動で継続しない |
 | 外部関数の `error` / `exit` / `throw` | 宣言された外部接続の境界で変換する |
@@ -91,17 +108,27 @@ BEAM backend 内部で必要な例外・signal の処理と、利用者が外部
 
 外部例外の class / reason / stack を公開する場合は、外部接続モジュール内の不透明な診断値に閉じる。同期呼び出しの例外捕捉で非同期の exit signal まで回収できるとは定義しない。
 
+通常の handler / callback の `Err` だけをプロセスの異常終了条件にはしない。caller は停止エラーの kind を見て PID の差し替え、元の Error の伝播、自身の Stop 結果への変換を選べる。エラーを受けた caller を runtime が自動停止させない。
+
 ## 7. BEAM へ持ち込む契約
+
+この節のプロセス契約は `surtr` ホストの BEAM backend を対象とする。`erl` / `elixir` ホストの通常モジュール出力には適用しない。
 
 - 状態付きプロセスを OTP `gen_server` に対応させる案を第一候補とする。Task は短命な process、supervision は OTP supervisor への対応を個別に検証する。
 - 型付きの要求・返答にはプロトコル識別子と版を持たせる。外部から来た値は引数・返答を検証し、未検証の Erlang term や生 PID を `PID<Proc>` として信用しない。
-- 一つのプロセスの state 更新は直列に行う。停止後に遅れて返った処理が state を復活させない。
+- メッセージ wrapper の開始時に宛先を検証し、受付確認、state snapshot 取得、実行登録を原子的に行う。Handling で snapshot を一度だけ読み、handler の正常復帰後に Postprocessing へ移って保存・Stop・ReplyLater を扱う。Eldr では canonical hidden builtin `__process_postprocess` がこの遷移を担う。wrapper の保存・返答までを一実行とし、再入は独立した実行として登録する。state 保存は正規 wrapper の完了順を維持し、停止要求後の開始済み wrapper の保存を許すが、受付を再開しない。直列 lock、state revision、暗黙 merge による別の更新規則を追加しない。
 - 同一送信者から同一宛先への順序を守り、異なる送信者間の全順序は保証しない。
-- `cast` の成功は送信手続きの成功に限定する。配達・処理・state 更新の保証が必要なら返答を伴う call を使う。この範囲は現行契約との変更点として採用時に確定する。
+- `cast` の公開署名は現行の `Result<Unit>` とする。停止宛先への拒否と handler 自身の `Err` を返し、fire-and-forget へ変更しない。`CastResult::Stop(StopReason::Normal / Error)` はどちらも `Ok(())` を返し、Error は終了理由として扱う。
 - timeout は待機の終了であり、相手側の処理取り消しや state の巻き戻しを意味しない。遅延した返答は完了済みの要求を上書きしない。
-- `ReplyLater` は次状態を確定してから返答を遅延させる。callback の失敗、元プロセス停止、外側 timeout の競合を一つの要求完了規則にまとめる。
+- `ReplyLater` は次状態を保存し、同じ実行を callback へ移譲して返答を遅延させる。外側 timeout 後も callback の future / timer / I/O 待機を再開し、終了まで追跡する。timeout 結果は caller へ先に配送でき、callback の遅延結果で上書きしない。callback に state 保存権限を渡さない。
 - singleton PID は現行どおり同じ process 型の論理参照として扱い、再起動前後で等しい。worker PID は個体参照とし、再起動した個体は別 identity にする。等価性と生存状態は別である。
-- singleton への新規 call は現在の個体へ解決する。進行中の call を再起動先へ自動再送しない。論理参照の等価性から exactly-once や再送安全性を導かない。
+- singleton の名前からの新規 PID 解決は現在の slot を使う。explicit PID と開始済み実行は指定・開始した個体を指し、古い PID を現在の個体へ転送しない。進行中の call を再起動先へ自動再送しない。論理参照の等価性から exactly-once や再送安全性を導かない。singleton restart の新設は停止改修の対象外である。
+
+通常 Stop は新規受付を閉じる要求と停止完了を分ける。最初の Stop を runtime が受理した時点で受付と終了理由を確定し、新規要求を `ProcessStopped` で拒否する。開始済み handler / wrapper / ReplyLater callback は、停止後も保存・返答・cleanup まで続ける。`StopReply::Normal / Error` と `StopReason::Normal / Error` はいずれもこの完遂対象を取り消さない。call は Normal の reply を `Ok`、Error を元の情報を保った `Err` で返す。停止応答だけでは停止完了を保証せず、無期限待機があれば完了の有限時間も保証しない。`shutdown_timeout` を通常 Stop の強制取消に用いない。
+
+未完了実行がなくなった時点で本体を回収し、Workers・supervisor の所属を一度だけ解除してから Workers の不足分を補充する。停止要求中は新規選択から除外するが、size・child count と target 枠を維持する。選択可能な個体がなければ submit / reserve は `WorkersUnavailable`、broadcast は空 list とする。古い lease を補充個体へ転送しない。未開始要求を queue する実装を後続で持つ場合は、Stop 時に元の配送先へ ProcessStopped を返し、timeout 済みの結果を上書きしない。現在の Eldr mailbox は未使用であり、この方針を queue 実装済みの根拠にしない。
+
+PID の寿命と本体の寿命を分け、旧 PID を保持していても停止完了後の state・mailbox・継続は保持しない。Eldr は不変 identity の Rc と copy-on-write の停止識別表の Weak を使い、参照のない停止 entry を管理境界で除く。回収後も同じ ProcessStopped kind・payload・message を返す。BEAM でも同じ寿命・回収後の拒否契約を満たす管理方式を設計し、履歴だけで無制限に保持する停止表を作らない。Eldr の Rc / Weak 表現を BEAM の wire protocol へ直接流用しない。個体 ID を再利用せず、rollback・別 VM 由来の handle を別個体へ接続しない。
 
 現行の `adopt / handoff` は PID を維持した原子的な所属変更を要求する。通常の OTP child spec への直接変換では満たせないため、BEAM 初期範囲では起動時に supervisor を固定する案を推す。`adopt` は対応能力を持つ backend / ホストだけで公開し、非対応時は拒否する。共通の必須機能へ含めるなら、この契約を満たす管理層を別途設計する。
 
@@ -116,11 +143,12 @@ Erlang の例外とプロセス間の終了観測は別の仕組みである。[
 1. 定義形式、生成関数、参照 identity、失敗、cast、deadline、停止競合を仕様化し、正本へ反映する。
 2. Eldr で共通契約に一本化する。通常関数への接続を検証し、置き換えた旧 lowering を削除する。
 3. ホストの機能集合、成果物の必要機能・ABI、ロード時検査を導入する。
-4. BEAM で初期化・call・cast・停止・timeout・再起動を実装し、同じ契約テストで比較する。
-5. 必要な外部プロトコルごとに adapter を追加する。
+4. `erl` / `elixir` ホスト向けに通常モジュールの `.erl` 出力と Erlang term の対応を実装し、依存先を含むプロセス機能の拒否を検証する。
+5. `surtr` ホストの BEAM backend で初期化・call・cast・停止・timeout・再起動を実装し、同じ契約テストで比較する。
+6. 必要な外部接続ごとに adapter を追加する。外部ホストへ Surtr のプロセス runtime を導入する経路は設けない。
 
-成功境界は PID 付き API の部分適用、通常 helper の合成、ホスト間で共通コードが同じ結果を返すこと。拒否境界は異なる process の PID、引数・返答型の不一致、利用不可の機能、ABI 不一致、不正な外部メッセージである。停止と返答の競合、遅延返答、再起動 identity も固定する。
+成功境界は `surtr` ホストでの PID 付き API の部分適用、通常 helper の合成、ホスト間で通常の共通コードが同じ結果を返すこと。拒否境界は異なる process の PID、引数・返答型の不一致、利用不可の機能、ABI 不一致である。`erl` / `elixir` ホストでは、直接のプロセス定義と依存先経由のプロセス機能使用の両方を拒否する。`surtr` ホストでは停止と返答の競合、遅延返答、再起動 identity も固定する。外部からの直接メッセージングは保証対象外とする。
 
-変更する正本は `docs/dev/ProcessRuntime_spec.md`、`docs/site/process.md`、`lib/process.srt` の `@doc` と関連する backend 仕様。今回は提案のみで正本の契約は変更しない。未確定事項は `doc/open-issues.md` の OI-038 を参照。
+変更する正本は `docs/dev/ProcessRuntime_spec.md`、`docs/site/process.md`、`lib/process.srt` の `@doc` と関連する backend 仕様。本書の再設計は未採用の提案である。停止・完了・回収は Process Runtime 正本に従い、定義統一・呼出し一般化・BEAM 対応の未確定事項は本書の第3〜7節と本節の手順1に残す。
 
-実装時は直接の契約テストから開始し、level4 の `rtk cargo nextest run --profile ci --workspace`、`cargo run -- test --quiet --all`、独立レビューを行う。今回の調査では実行テストを行わない。
+本再設計案を実装する際は直接の契約テストから開始し、level4 の `rtk cargo nextest run --profile ci --workspace`、`cargo run -- test --quiet --all`、独立レビューを行う。本書の作成時は実行テストを行っていない。停止改修の検証結果は[実行時の継続調査書](runtime_audit_followup_20261010.md#2026-10-10-停止回収修正の最終検証)に記録した。

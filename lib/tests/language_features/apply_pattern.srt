@@ -182,14 +182,14 @@ test("apply_pattern projection contract") {
 
   it("preserves existing ordinary Pattern failure kinds") {
     do {
-      match apply_pattern(3, 4) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
+      match apply_pattern(3, 4) { Err(error) => assert_eq("IntLiteralPatternMismatch", Error::kind(error)), Ok(_) => fail("expected IntLiteralPatternMismatch"), }
 
-      assert_err_kind(IndexOutOfBounds, apply_pattern([1], [_, _] @ _1: List<Int>))
-      assert_err_kind(IndexOutOfBounds, apply_pattern([1, 2, 3], [_1, _]))
-      assert_err_kind(EmptyList, apply_pattern([], [_1: Int, .._]))
-      match apply_pattern([2, 3], [1, _1]) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
-      match apply_pattern([2, 3, 4], [1, _1]) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
-      match apply_pattern(Option::None, Option::Some(_1: Int)) { Err(error) => assert_eq("PatternMismatch", Error::kind(error)), Ok(_) => fail("expected PatternMismatch"), }
+      assert_err_kind(ListPatternTooShort, apply_pattern([1], [_, _] @ _1: List<Int>))
+      assert_err_kind(ListPatternTooLong, apply_pattern([1, 2, 3], [_1, _]))
+      assert_err_kind(EmptyHeadTailListPattern, apply_pattern([], [_1: Int, .._]))
+      match apply_pattern([2, 3], [1, _1]) { Err(error) => assert_eq("IntLiteralPatternMismatch", Error::kind(error)), Ok(_) => fail("expected IntLiteralPatternMismatch"), }
+      match apply_pattern([2, 3, 4], [1, _1]) { Err(error) => assert_eq("IntLiteralPatternMismatch", Error::kind(error)), Ok(_) => fail("expected IntLiteralPatternMismatch"), }
+      match apply_pattern(Option::None, Option::Some(_1: Int)) { Err(error) => assert_eq("EnumVariantPatternMismatch", Error::kind(error)), Ok(_) => fail("expected IntLiteralPatternMismatch"), }
     }
   }
 

@@ -326,12 +326,28 @@ fn parse_error_spec_labels_where_clause_staging() {
 
 #[test]
 fn parse_error_spec_guides_missing_process_state_with_concrete_meta_entry() {
-    let source = "defgenserver Ticker {\n  meta {\n    instance: Singleton\n  }\n}";
+    let source =
+        "defgenserver Ticker {\n  meta {\n    instance: Singleton\n    init_policy: Eager\n  }\n}";
     let spec = parser_error_spec(source, None);
 
     assert_eq!(
         spec.help.as_deref(),
         Some("Add a state declaration inside `meta { ... }`. For example:\n\n  state: Int")
+    );
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| label.message == "process declaration"));
+}
+
+#[test]
+fn parse_error_spec_guides_missing_process_init_policy_with_explicit_choices() {
+    let source = "defgenserver Ticker {\n  meta {\n    instance: Singleton\n    state: Int\n  }\n}";
+    let spec = parser_error_spec(source, None);
+
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Add an init policy inside `meta { ... }`: `init_policy: Eager` or `init_policy: Standby`.")
     );
     assert!(spec
         .labels

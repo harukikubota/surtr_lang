@@ -39,7 +39,6 @@ where
 - `lhs |*> rhs` は `Functor::fmap(lhs, rhs)` と同じ値を返す
 - `lhs |>= rhs` は `Monad::bind(lhs, rhs)` と同じ値を返す
 - 右辺が call 式の場合は、従来どおり左辺値を第一引数へ注入した unary callable として扱う
-- `|*>` は plain function を要求し、contextual output を返す RHS には `|>=` を案内する
 - `|>=` は contextual function を要求し、plain output を返す RHS には `|*>` を案内する
 
 標準実装は `Result` / `List` に提供する。`Result` は compiler 直生成ではなく、次の形を Surtr コードの正本にする。
@@ -169,7 +168,6 @@ cargo nextest run --workspace
 追加する失敗系:
 
 - impl のない user-defined container は `|*>` / `|>=` を使えない
-- `|*>` に contextual RHS を渡すと `|>=` を案内する
 - `|>=` に plain RHS を渡すと `|*>` を案内する
 - `Result` と `List` の混在は拒否する
 

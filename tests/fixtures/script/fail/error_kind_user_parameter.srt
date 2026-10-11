@@ -1,1 +1,0 @@
-def exposed(kind: ErrorKind) -> Int { 1 }

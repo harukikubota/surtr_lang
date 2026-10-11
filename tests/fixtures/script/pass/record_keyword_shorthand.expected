@@ -1,0 +1,9 @@
+User(name: "Ada", age: 37)
+User(name: "Ada", age: 37)
+User(name: "Ada", age: 37)
+Pair(first: 2, second: 1)
+Wrapper(user: User(name: "Ada", age: 37), marker: 9)
+name
+age
+User(name: "Ada", age: 37)
+User(name: "Lin", age: 20)

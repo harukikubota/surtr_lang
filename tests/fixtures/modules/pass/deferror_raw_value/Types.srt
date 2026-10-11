@@ -1,0 +1,4 @@
+deferror PageNotFound(html: String) {
+  |html: String|
+  Self(message: "Page Not Found. #{html}", html)
+}

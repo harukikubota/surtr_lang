@@ -1,5 +1,5 @@
 defmod Matchers {
   defextractor never(self: Int) -> MatchResult<Int> {
-    MatchResult::Err(NoneError)
+    MatchResult::Err(NoneError())
   }
 }

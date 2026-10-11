@@ -1,4 +1,4 @@
-use forge::bytecode::{populate_error_template_lines, Bytecode};
+use forge::bytecode::Bytecode;
 use xldr::CompileSources;
 
 use crate::common::ModuleFixtureCase;
@@ -113,11 +113,6 @@ pub(super) fn compile_sources_with_mode(
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     let mut bytecode = forge::compose_bytecode_with_chunk(compile_prefix.bytecode().clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
-    let user_source = compile_sources
-        .sources
-        .source(compile_sources.user_source_id)
-        .unwrap_or("");
-    populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
     bytecode.signatures = signatures;
     store_cached_bytecode(compile_sources, mode, &bytecode)?;

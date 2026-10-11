@@ -122,7 +122,10 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
         "type",
         ":type <binding>  — lookup binding type (annotate unresolved generics before persistence)",
     ),
-    ("facet", ":facet <FacetPath|binding>  — inspect facet path"),
+    (
+        "facet",
+        ":facet <root|FacetPath|binding>  — inspect facet path",
+    ),
     ("save", ":save <path>  — save session to .eldr"),
     ("vars", ":vars  — list visible value bindings"),
     ("imported", ":imported  — list active imports"),
@@ -132,7 +135,7 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("clear", ":clear  — clear the screen"),
 ];
 
-static INPUT_COMMANDS: &[(&str, &str)] = &[("v", ":v <idx>  — recall result")];
+static INPUT_COMMANDS: &[(&str, &str)] = &[("v", ":v <line>  — show saved value")];
 static RESULTS_COMMANDS: &[(&str, &str)] = &[("j", ":j <idx>  — jump to result")];
 static DOCS_COMMANDS: &[(&str, &str)] = &[
     ("doc-focus", ":doc-focus <idx>"),
@@ -511,6 +514,36 @@ mod tests {
     }
 
     #[test]
+    fn value_command_displays_committed_value_without_replaying_source() {
+        let mut engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+        app.push_result(
+            "loaded session",
+            Vec::new(),
+            vec!["loaded session".to_string()],
+            Vec::new(),
+            PresentedResultKind::Info,
+        );
+        for source in ["value = 1", "value = 2"] {
+            app.input.set(source.to_string());
+            submit_input(&mut app, &mut engine, &mut provider);
+        }
+        app.input.set("value".to_string());
+        app.command.set("v 1".to_string());
+        submit_command(&mut app, &mut engine, &mut provider);
+        assert_eq!(
+            app.input.text, "value",
+            "recall must not replace pending input"
+        );
+        let recalled = app.results.back().unwrap();
+        assert_eq!(recalled.source, ":v 1");
+        assert_eq!(recalled.rendered_lines, ["1"]);
+        submit_input(&mut app, &mut engine, &mut provider);
+        assert_eq!(app.results.back().unwrap().rendered_lines, ["2"]);
+    }
+
+    #[test]
     fn submit_input_schedules_context_refresh_without_rebuilding_in_place() {
         let mut engine = ReplEngine::new().expect("REPL engine should bootstrap");
         let mut app = App::new();
@@ -611,13 +644,17 @@ pub(super) fn submit_command(
 
     match cmd {
         "q" | "quit" => app.should_quit = true,
-        "help" | "save" | "doc" | "error" | "stacktrace" | "sig" | "info" | "type" | "facet" => {
+        "help" | "save" | "doc" | "error" | "stacktrace" | "sig" | "info" | "type" | "facet"
+        | "v" => {
             let line = if arg.is_empty() {
                 format!(":{cmd}")
             } else {
                 format!(":{cmd} {arg}")
             };
             let presented = present_for_interaction(engine.handle_line(&line));
+            if presented.should_exit {
+                app.should_quit = true;
+            }
             if let Some(context) = engine.cached_completion_context() {
                 provider.schedule_context_refresh(context);
             }
@@ -633,34 +670,6 @@ pub(super) fn submit_command(
                 }
                 PresentedEvent::Doc(doc) => app.push_doc(doc),
                 PresentedEvent::None => {}
-            }
-        }
-        "v" => {
-            // Recall source of a previous result into the input buffer.
-            match arg.parse::<usize>() {
-                Ok(idx) => {
-                    if let Some(entry) = app.results.iter().find(|e| e.idx == idx) {
-                        let src = entry.source.clone();
-                        app.input.set(src);
-                    } else {
-                        app.push_result(
-                            format!(":v {arg}"),
-                            Vec::new(),
-                            vec![format!("no result with idx {arg}")],
-                            Vec::new(),
-                            PresentedResultKind::EvalError,
-                        );
-                    }
-                }
-                _ => {
-                    app.push_result(
-                        format!(":v {arg}"),
-                        Vec::new(),
-                        vec![format!("invalid index: {arg}")],
-                        Vec::new(),
-                        PresentedResultKind::EvalError,
-                    );
-                }
             }
         }
         "j" => {

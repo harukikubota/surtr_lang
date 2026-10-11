@@ -1,0 +1,2 @@
+error = PageNotFound("404")
+print(error.message)

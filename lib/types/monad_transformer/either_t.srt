@@ -181,7 +181,6 @@ where
 impl Applicative for EitherT<$L, $M, $T>
 where
   $M: Monad
-  $T: Applicative.$A
 {
   @doc """
   Inject a payload through the base Applicative as Right.
@@ -236,7 +235,6 @@ where
 impl Monad for EitherT<$L, $M, $T>
 where
   $M: Monad
-  $T: Monad.$A
 {
   @doc """
   Return a payload as a Right value.
@@ -281,7 +279,6 @@ Lifting maps each base payload to `Either::Right` and preserves base failures.
 impl MonadT<$M> for EitherT<$L, $M, $T>
 where
   $M: Monad
-  $T: MonadT.$A
 {
   @doc """
   Lift a base computation by mapping each payload to Either::Right.
@@ -293,5 +290,29 @@ where
   """
   def lift::<EitherT<$L, $M, $T>>(value: $M<$A>) -> EitherT<$L, $M, $A> {
     EitherT::new(Functor::fmap(value, {|item| Either::Right(item)}))
+  }
+}
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for EitherT<Error, $M, $T>
+where
+  $M: Monad
+{
+  def fail::<EitherT<Error, $M, $T>>(error: Error) -> EitherT<Error, $M, $T> {
+    EitherT::left(error)
+  }
+}
+
+impl Convert<ResultT<$M, $A>> for EitherT<Error, $M, $A>
+where
+  $M: Monad
+{
+  def to::<ResultT<$M, $A>>(self: Self) -> ResultT<$M, $A> {
+    ResultT::new(Functor::fmap(self.inner, {|either|
+      match either {
+        Either::Right(value) => Ok(value),
+        Either::Left(error) => Err(error),
+      }
+    }))
   }
 }

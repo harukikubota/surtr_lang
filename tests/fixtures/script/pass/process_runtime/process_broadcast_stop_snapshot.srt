@@ -1,0 +1,92 @@
+defgenserver SnapshotWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> {
+    print("worker init")
+    Ok(0)
+  }
+
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    print("peer stop")
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+
+  @call
+  def visit(state: Int, peer: WorkerLease<SnapshotWorker>) -> Result<CallResult<Int, Int>> {
+    print("broadcast handler")
+    _ =? SnapshotWorker::stop(peer)
+    # Reentry waits for a separate pool execution after the replacement init.
+    count =? SnapshotPool::count()
+    print(inspect(count))
+    Ok(CallResult::Reply(state + 1, state + 1))
+  }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+defsupervisor SnapshotSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+defgenserver SnapshotPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<SnapshotWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<SnapshotWorker>> {
+    SnapshotSup::workers(SnapshotWorker::init(), WorkerStrategy::fixed(2))
+  }
+
+  @call
+  def count(workers: Workers<SnapshotWorker>) -> Result<CallResult<Int, Workers<SnapshotWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
+  }
+
+  @call
+  def exercise(workers: Workers<SnapshotWorker>) -> Result<CallResult<Unit, Workers<SnapshotWorker>>> {
+    _first =? Workers::reserve(workers)
+    peer =? Workers::reserve(workers)
+    replies = Workers::broadcast(workers, SnapshotWorker::visit(peer))
+    print(inspect(List::len(replies)))
+    match replies {
+      [Ok(reply), Err(error)] => {
+        print(inspect(reply))
+        print(Error::kind(error))
+      },
+      _ => print("unexpected broadcast results"),
+    }
+    print(inspect(Workers::size(workers)))
+    # The initial worker was updated; the replacement was never visited.
+    print(inspect(Workers::broadcast(workers, SnapshotWorker::value())))
+    match SnapshotWorker::value(peer) {
+      Ok(_) => print("unexpected old lease success"),
+      Err(error) => print(Error::kind(error)),
+    }
+    Ok(CallResult::Reply((), workers))
+  }
+}
+
+supervisor_init {
+  SnapshotSup {}
+  SnapshotPool {}
+}
+
+print(inspect(SnapshotPool::exercise()))

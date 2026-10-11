@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -447,36 +447,43 @@ pub fn collect_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     Ok(module_inputs)
 }
 
-fn collect_lib_module_files(
-    dir: &Path,
-    files: &mut Vec<std::path::PathBuf>,
-) -> Result<(), LoadError> {
-    if lib_relative_path(dir) == "tests" {
-        return Ok(());
-    }
-
-    let entries = fs::read_dir(dir).map_err(|e| LoadError::SourceReadFailed {
-        file_name: display_path(dir),
-        message: e.to_string(),
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| LoadError::SourceReadFailed {
-            file_name: display_path(dir),
-            message: e.to_string(),
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_lib_module_files(&path, files)?;
-        } else if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == "srt")
+fn collect_lib_module_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), LoadError> {
+    let read_error = |path: &Path, error: std::io::Error| LoadError::SourceReadFailed {
+        file_name: display_path(path),
+        message: error.to_string(),
+    };
+    let canonical_root = fs::canonicalize(root).map_err(|error| read_error(root, error))?;
+    let tests_path = root.join("tests");
+    let excluded = match fs::canonicalize(&tests_path) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(read_error(&tests_path, error)),
+    };
+    let mut pending = vec![canonical_root.clone()];
+    let mut visited = HashSet::new();
+    while let Some(path) = pending.pop() {
+        let actual = fs::canonicalize(&path).map_err(|error| read_error(&path, error))?;
+        let Ok(relative) = actual.strip_prefix(&canonical_root) else {
+            continue;
+        };
+        if excluded
+            .as_ref()
+            .is_some_and(|tests| actual.starts_with(tests))
+            || !visited.insert(actual.clone())
         {
-            files.push(path);
+            continue;
+        }
+        let metadata = fs::metadata(&actual).map_err(|error| read_error(&path, error))?;
+        if metadata.is_dir() {
+            let entries = fs::read_dir(&actual).map_err(|error| read_error(&path, error))?;
+            for entry in entries {
+                pending.push(entry.map_err(|error| read_error(&path, error))?.path());
+            }
+        } else if actual.extension().and_then(|extension| extension.to_str()) == Some("srt") {
+            // Retain the caller's root spelling, but use the real file's identity.
+            files.push(root.join(relative));
         }
     }
-
     Ok(())
 }
 
@@ -522,7 +529,7 @@ pub fn collect_additional_default_std_module_inputs() -> Result<Vec<ModuleInput>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedModule {
     pub source_id: SourceId,
-    pub module_path: String,
+    pub module_path: Option<String>,
     pub source_kind: SourceKind,
 }
 
@@ -556,7 +563,7 @@ fn build_module_sources_from_stage_specs(
             idx += 1;
             stage_bindings.push(StagedModule {
                 source_id: binding.source_id,
-                module_path: binding.module_path.clone().unwrap_or_default(),
+                module_path: binding.module_path.clone(),
                 source_kind: binding.kind,
             });
         }
@@ -577,7 +584,7 @@ fn build_module_sources_from_stage_specs(
     Ok(ModuleSources {
         sources: collected.sources,
         builtin_source_id: builtin.source_id,
-        builtin_module_path: Some(builtin.module_path.clone()),
+        builtin_module_path: builtin.module_path.clone(),
         module_source_ids,
         module_stages,
     })
@@ -600,7 +607,7 @@ pub(crate) fn stdlib_module_spec_cache_key(stdlib_variant: StdlibVariant) -> Str
     for spec in stdlib_module_specs(stdlib_variant) {
         key.push_str(spec.file_name);
         key.push('\x1e');
-        key.push_str(spec.module_path);
+        key.push_str(&format!("{:?}", spec.module_path));
         key.push('\x1e');
         key.push_str(match spec.stage {
             StdlibStage::Bootstrap => "bootstrap",
@@ -632,7 +639,7 @@ pub fn is_default_std_module_path(module_path: &str) -> bool {
     let module_path = module_path.strip_prefix("Global::").unwrap_or(module_path);
     STDLIB_MODULE_SPECS
         .iter()
-        .any(|spec| spec.module_path == module_path)
+        .any(|spec| spec.module_path == Some(module_path))
 }
 
 pub fn is_default_std_module_file_name(file_name: &str) -> bool {
@@ -659,39 +666,94 @@ pub fn collect_module_sources_with_stdlib_variant(
 ) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
     // modules are appended afterwards so they can depend on
-    // `Bootstrap -> [SpecialTypes + Function + Kernel + other std modules]` but never precede them.
+    // `Bootstrap -> shared standard definitions` but never precede them.
     let mut stage_specs = vec![Vec::new(), Vec::new()];
     for spec in stdlib_module_specs(stdlib_variant) {
         let stage_index = match spec.stage {
             StdlibStage::Bootstrap => 0,
             StdlibStage::Main | StdlibStage::TestExtension => 1,
         };
-        stage_specs[stage_index].push(SourceDescriptor::std_module(
-            spec.file_name,
-            spec.source,
-            spec.module_path,
-        ));
+        stage_specs[stage_index].push(SourceDescriptor {
+            file_name: spec.file_name.into(),
+            source: spec.source.into(),
+            kind: SourceKind::StdDefinitionSource,
+            module_path: spec.module_path.map(str::to_owned),
+        });
     }
 
     if !extra_std_sources.is_empty() {
         stage_specs.push(extra_std_sources.to_vec());
     }
 
+    let module_sources = build_module_sources_from_stage_specs(stage_specs)?;
+    extend_module_sources_with_module_stages(module_sources, module_input_stages)
+}
+
+/// Append definition stages while preserving the prefix's source IDs and layout.
+pub fn extend_module_sources_with_module_stages(
+    mut module_sources: ModuleSources,
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
+    if module_input_stages.iter().all(Vec::is_empty) {
+        return Ok(module_sources);
+    }
+    let mut by_file = HashMap::new();
+    for module in module_sources.module_stages.iter().flatten() {
+        let file_name = module_sources
+            .sources
+            .file_name(module.source_id)
+            .expect("module source must be registered");
+        by_file.insert(
+            file_name.to_string(),
+            (
+                module.source_id,
+                module.source_kind,
+                module.module_path.clone(),
+            ),
+        );
+    }
     for stage in module_input_stages {
         if stage.is_empty() {
             continue;
         }
-        let mut specs = Vec::with_capacity(stage.len());
+        let mut modules = Vec::with_capacity(stage.len());
         for module in stage {
-            specs.push(SourceDescriptor::module(
-                module.file_name.clone(),
-                module.source.clone(),
-                module.module_path.clone(),
-            ));
+            let source_id = if let Some((source_id, source_kind, module_path)) =
+                by_file.get(&module.file_name)
+            {
+                if *source_kind != SourceKind::DefinitionSource
+                    || module_path.as_deref() != Some(module.module_path.as_str())
+                    || module_sources.sources.source(*source_id) != Some(module.source.as_str())
+                {
+                    return Err(LoadError::ConflictingSource {
+                        file_name: module.file_name.clone(),
+                    });
+                }
+                *source_id
+            } else {
+                let source_id = module_sources
+                    .sources
+                    .register(module.file_name.clone(), module.source.clone());
+                by_file.insert(
+                    module.file_name.clone(),
+                    (
+                        source_id,
+                        SourceKind::DefinitionSource,
+                        Some(module.module_path.clone()),
+                    ),
+                );
+                source_id
+            };
+            module_sources.module_source_ids.push(source_id);
+            modules.push(StagedModule {
+                source_id,
+                module_path: Some(module.module_path.clone()),
+                source_kind: SourceKind::DefinitionSource,
+            });
         }
-        stage_specs.push(specs);
+        module_sources.module_stages.push(modules);
     }
-    build_module_sources_from_stage_specs(stage_specs)
+    Ok(module_sources)
 }
 
 pub fn collect_module_sources_with_module_stages(
@@ -818,6 +880,59 @@ pub(crate) fn collect_repl_sources_with_module_stages(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn standard_source_walk_uses_real_paths_for_scope_and_duplicates() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "surtr-stdlib-walk-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        fs::create_dir_all(root.join("lib/nested")).unwrap();
+        let _cleanup = Cleanup(root.clone());
+        fs::create_dir_all(root.join("lib/tests")).unwrap();
+        fs::create_dir_all(root.join("external")).unwrap();
+        for relative in [
+            "lib/main.srt",
+            "lib/nested/extra.srt",
+            "lib/tests/hidden.srt",
+            "external/outside.srt",
+        ] {
+            fs::write(root.join(relative), "defmod Example {}").unwrap();
+        }
+        symlink("tests", root.join("lib/test_alias")).unwrap();
+        symlink("../external", root.join("lib/external_alias")).unwrap();
+        symlink("tests/hidden.srt", root.join("lib/hidden_alias.srt")).unwrap();
+        symlink(
+            "../external/outside.srt",
+            root.join("lib/outside_alias.srt"),
+        )
+        .unwrap();
+        symlink("nested/extra.srt", root.join("lib/valid_alias.srt")).unwrap();
+        let mut files = Vec::new();
+        collect_lib_module_files(&root.join("lib"), &mut files).unwrap();
+        files.sort();
+        assert_eq!(
+            files,
+            vec![root.join("lib/main.srt"), root.join("lib/nested/extra.srt")]
+        );
+        symlink("..", root.join("lib/nested/ancestor")).unwrap();
+        let mut cycle_files = Vec::new();
+        collect_lib_module_files(&root.join("lib"), &mut cycle_files).unwrap();
+        cycle_files.sort();
+        assert_eq!(cycle_files, files);
+    }
+
     fn stdlib_stage_len(stdlib_variant: StdlibVariant, stage: StdlibStage) -> usize {
         stdlib_module_specs(stdlib_variant)
             .filter(|spec| spec.stage == stage)
@@ -833,7 +948,8 @@ mod tests {
             .iter()
             .all(|spec| spec.variant == StdlibVariant::Default));
         assert!(test_specs.iter().any(|spec| {
-            spec.module_path == TEST_STD_MODULE_PATH && spec.variant == StdlibVariant::TestEnabled
+            spec.module_path == Some(TEST_STD_MODULE_PATH)
+                && spec.variant == StdlibVariant::TestEnabled
         }));
         assert!(stdlib_module_spec_cache_key(StdlibVariant::TestEnabled)
             .contains("variant=test-enabled"));
@@ -894,19 +1010,21 @@ mod tests {
         );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
-        assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
+        assert_eq!(
+            loaded.module_stages[0][0].module_path.as_deref(),
+            Some("Bootstrap")
+        );
         assert_eq!(
             loaded.module_stages[1].len(),
             stdlib_stage_len(StdlibVariant::Default, StdlibStage::Main)
         );
         let std_paths = loaded.module_stages[1]
             .iter()
-            .map(|module| module.module_path.as_str())
+            .filter_map(|module| module.module_path.as_deref())
             .collect::<Vec<_>>();
         assert_eq!(
             std_paths,
             vec![
-                "SpecialTypes",
                 "Function",
                 "Kernel",
                 "Add",
@@ -929,6 +1047,8 @@ mod tests {
                 "Bifunctor",
                 "Applicative",
                 "Monad",
+                "MonadFail",
+                "MonadRecover",
                 "MonadT",
                 "Identity",
                 "Reader",
@@ -952,6 +1072,7 @@ mod tests {
                 "Option",
                 "OptionT",
                 "EitherT",
+                "ResultT",
                 "ReaderT",
                 "StateT",
                 "Task",
@@ -967,6 +1088,79 @@ mod tests {
                 "Shell",
                 "StyledDoc",
             ]
+        );
+    }
+
+    #[test]
+    fn extending_module_sources_preserves_prefix_and_duplicate_stages() {
+        let prefix = collect_test_module_sources_with_module_stages(&[])
+            .expect("standard sources should load");
+        let dependency = ModuleInput {
+            file_name: "support/helper.srt".into(),
+            source: "defmod Helper { def value() -> Int { 1 } }".into(),
+            module_path: "Helper".into(),
+        };
+        let extended = extend_module_sources_with_module_stages(
+            prefix.clone(),
+            &[vec![dependency.clone()], vec![dependency]],
+        )
+        .expect("identical source registration should succeed");
+        assert_eq!(
+            &extended.sources.entries()[..prefix.sources.entries().len()],
+            prefix.sources.entries()
+        );
+        assert_eq!(
+            &extended.module_stages[..prefix.module_stages.len()],
+            prefix.module_stages
+        );
+        assert_eq!(
+            extended.sources.entries().len(),
+            prefix.sources.entries().len() + 1
+        );
+        assert_eq!(extended.module_stages.len(), prefix.module_stages.len() + 2);
+        assert_eq!(
+            extended.module_stages[prefix.module_stages.len()][0].source_id,
+            extended.module_stages[prefix.module_stages.len() + 1][0].source_id
+        );
+    }
+
+    #[test]
+    fn extending_module_sources_rejects_conflicting_source_identity() {
+        let prefix = collect_test_module_sources_with_module_stages(&[])
+            .expect("standard sources should load");
+        let dependency = ModuleInput {
+            file_name: "support/helper.srt".into(),
+            source: "defmod Helper { def value() -> Int { 1 } }".into(),
+            module_path: "Helper".into(),
+        };
+        let extended =
+            extend_module_sources_with_module_stages(prefix.clone(), &[vec![dependency.clone()]])
+                .expect("dependency should load");
+        let mut changed_body = dependency.clone();
+        changed_body.source.push_str("\n");
+        let mut changed_module = dependency;
+        changed_module.module_path = "Other".into();
+        for changed in [changed_body, changed_module] {
+            let error =
+                extend_module_sources_with_module_stages(extended.clone(), &[vec![changed]])
+                    .expect_err("different source identities must conflict");
+            assert!(matches!(error, LoadError::ConflictingSource { .. }));
+        }
+        let standard = &prefix.sources.entries()[0];
+        let explicit_standard = ModuleInput {
+            file_name: standard.file_name.clone(),
+            source: standard.source.clone(),
+            module_path: prefix.module_stages[0][0]
+                .module_path
+                .clone()
+                .expect("Bootstrap has a module path"),
+        };
+        assert!(
+            matches!(
+                extend_module_sources_with_module_stages(prefix, &[vec![explicit_standard]]),
+                Err(LoadError::ConflictingSource { .. })
+            ),
+            "source kind differences must conflict"
         );
     }
 
@@ -994,7 +1188,7 @@ mod tests {
         );
         let std_paths = loaded.module_stages[1]
             .iter()
-            .map(|module| module.module_path.as_str())
+            .filter_map(|module| module.module_path.as_deref())
             .collect::<Vec<_>>();
         assert_eq!(std_paths.last().copied(), Some("Test"));
     }
@@ -1095,12 +1289,11 @@ mod tests {
         );
         let std_paths = loaded.module_stages[1]
             .iter()
-            .map(|module| module.module_path.as_str())
+            .filter_map(|module| module.module_path.as_deref())
             .collect::<Vec<_>>();
         assert_eq!(
             std_paths,
             vec![
-                "SpecialTypes",
                 "Function",
                 "Kernel",
                 "Add",
@@ -1123,6 +1316,8 @@ mod tests {
                 "Bifunctor",
                 "Applicative",
                 "Monad",
+                "MonadFail",
+                "MonadRecover",
                 "MonadT",
                 "Identity",
                 "Reader",
@@ -1146,6 +1341,7 @@ mod tests {
                 "Option",
                 "OptionT",
                 "EitherT",
+                "ResultT",
                 "ReaderT",
                 "StateT",
                 "Task",
@@ -1162,9 +1358,18 @@ mod tests {
                 "StyledDoc",
             ]
         );
-        assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
-        assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
-        assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");
+        assert_eq!(
+            loaded.module_stages[2][0].module_path.as_deref(),
+            Some("Std::Math")
+        );
+        assert_eq!(
+            loaded.module_stages[3][0].module_path.as_deref(),
+            Some("Std::String")
+        );
+        assert_eq!(
+            loaded.module_stages[3][1].module_path.as_deref(),
+            Some("Std::List")
+        );
     }
 
     #[test]

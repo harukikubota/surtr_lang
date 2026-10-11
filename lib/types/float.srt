@@ -7,10 +7,6 @@ This top-level declaration exists so the rest of the pipeline can talk about
 """
 @builtin type Float
 
-impl Default for Float {
-  def default::<Float>() -> Float { 0.0 }
-}
-
 impl Float {
   @doc """
   Return the absolute value of `value`.
@@ -91,6 +87,10 @@ impl Float {
   @builtin def e() -> Float
 }
 
+impl Default for Float {
+  def default::<Float>() -> Float { 0.0 }
+}
+
 impl Add for Float {
   @doc """
   Return the sum of the two float values.
@@ -123,7 +123,7 @@ impl Mul for Float {
 
 impl Div for Float {
   @doc """
-  Divide two float values and return `Err(ZeroDivisionError)` instead of trapping.
+  Divide two float values and return `Err(ZeroDivisionError())` instead of trapping.
   ## REPL
   xldr(1)> Div::safe_div(3.0, 2.0)
   Ok(1.5)
@@ -203,4 +203,13 @@ impl Compare for Float {
   True
   """
   @builtin def gte(self: Self, rhs: Self) -> Boolean
+}
+
+impl Encode<JsonValue> for Float {
+  @doc """
+  Encode a floating-point value as `JsonValue::Float`.
+  """
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Float(self))
+  }
 }

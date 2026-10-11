@@ -1,0 +1,34 @@
+@doc """
+A MonadFail that can recover from a retained Error.
+Recovery preserves successful values. The handler receives the original Error
+and returns the same complete carrier type. A failure returned by the handler
+is passed through without another recovery attempt.
+Argument expressions follow ordinary eager evaluation; only the handler body
+is conditional. State restoration is defined by each implementation.
+
+## REPL
+xldr(1)> MonadRecover::recover(Err(NoneError()), {|error| Ok(error.message)})
+Ok("None Value.")
+"""
+deftrait MonadRecover
+where
+  Self: MonadFail
+{
+  def recover(self: Self, handler: (Error -> Self)) -> Self
+
+  @doc """
+  Recover only when the original Error has the supplied declaration kind.
+  A mismatch propagates that same Error, retaining all diagnostic information.
+  The kind is an ordinary opaque value; it does not construct an Error.
+
+  ## REPL
+  xldr(1)> kind = NoneError
+  xldr(2)> MonadRecover::recover_kind(Err(NoneError()), kind, {|_| Ok(3)})
+  Ok(3)
+  """
+  def recover_kind(self: Self, kind: ErrorKind, handler: (Error -> Self)) -> Self {
+    MonadRecover::recover(self, {|error|
+      if(Error::is_kind(error, kind), handler(error), MonadFail::fail(error))
+    })
+  }
+}

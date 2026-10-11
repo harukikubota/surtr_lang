@@ -21,8 +21,18 @@ pub struct TypedNode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
+    /// Checked enum templates visible in this program, including an incremental prefix.
+    pub enum_definitions: std::collections::HashMap<String, Vec<TypedEnumVariantDef>>,
+    /// Checked struct and record templates, preserving formal and phantom type parameters.
+    pub nominal_definitions: std::collections::HashMap<String, TypedNominalDefinition>,
     pub process_specs: Vec<TypedProcessSpec>,
     pub boot_plan: SupervisorInitSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedNominalDefinition {
+    pub type_param_vars: Vec<u32>,
+    pub fields: Vec<(String, Ty)>,
 }
 
 /// A declaration-level constraint clause preserved by Scar. Constructor
@@ -227,6 +237,17 @@ pub enum ComparisonOperator {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedFacetSegment {
+    /// A public observation API, never a runtime representation field.
+    ReadonlyBuiltin {
+        field_name: String,
+        builtin_id: u16,
+    },
+    ErrorPayload {
+        kind: String,
+        field_name: String,
+        field_index: u32,
+        payload_len: u32,
+    },
     Field {
         field_name: String,
         /// Authored positional Record selector. Access still uses field_index.
@@ -236,14 +257,10 @@ pub enum TypedFacetSegment {
         container_type_name: String,
         readonly: bool,
         private: bool,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     Tuple {
         field_index: u32,
         tuple_len: u32,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     Variant {
         enum_name: String,
@@ -252,15 +269,11 @@ pub enum TypedFacetSegment {
         discriminant: SurtrInt,
         payload_arity: u32,
         optional: bool,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     ListIndex {
         index: Box<TypedNode>,
         display: String,
         literal_index: Option<SurtrInt>,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     ListRange {
         start: Box<TypedNode>,
@@ -268,15 +281,11 @@ pub enum TypedFacetSegment {
         display: String,
         literal_start: Option<SurtrInt>,
         literal_end: Option<SurtrInt>,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
     MapKey {
         key: Box<TypedNode>,
         display: String,
         literal_key: Option<String>,
-        focus_readonly_root: bool,
-        focus_type_name: Option<String>,
     },
 }
 
@@ -314,7 +323,6 @@ pub struct TypedFacetPath {
     pub update_focus_ty: Ty,
     pub path_kind: TypedFacetPathKind,
     pub may_fail: bool,
-    pub source_readonly_root: bool,
     pub segments: Vec<TypedFacetSegment>,
 }
 
@@ -438,12 +446,6 @@ pub enum TypedInner {
     /// Both failure routes produce the do carrier value without escaping the
     /// enclosing callable or relying on codegen context.
     DoSafeBind(Box<TypedDoSafeBind>),
-    /// Compiler-owned failure value for a Result effect. This is introduced
-    /// only after Scar has resolved and validated the exact carrier metadata.
-    ResultEffectFailure(Box<ResultPreserveTarget>),
-    /// A do-local failure whose ResultEffect/Alternative policy is waiting on
-    /// carrier specialization. This never reaches Forge unresolved.
-    DeferredDoFailure(Box<DeferredDoFailureTarget>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     Pipe(Box<TypedNode>, Box<TypedNode>),
     Compose(ComposeFlavor, Box<TypedNode>, Box<TypedNode>),
@@ -460,8 +462,7 @@ pub enum TypedInner {
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     MapErr(Box<TypedNode>, Box<TypedNode>),
     Cause(Box<TypedNode>, Box<TypedNode>),
-    RecoverKind(Box<TypedNode>, String, Box<TypedNode>),
-    AssertErrorKinds(sigil::resolved::ErrorKindAssertion<String>, Box<TypedNode>),
+    ErrorKind(String),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
     /// Expression-local Pattern execution with projection results in slot order.
     ApplyPattern {
@@ -546,7 +547,13 @@ pub enum TypedInner {
     /// Constructor call — tag + field values (in definition order)
     ConstructorCall(u32, Vec<TypedNode>),
 
-    /// Error type definition — tag + binding id + params + show expression
+    ErrorConstruct {
+        kind: String,
+        message: Box<TypedNode>,
+        payload: Vec<TypedNode>,
+        payload_fields: Vec<(String, Ty)>,
+    },
+    /// Error type definition — tag + binding id + constructor inputs + body
     DeferrorDef(
         u32,
         u32,
@@ -613,11 +620,11 @@ pub enum TypedInner {
     /// Captured function value
     Capture(Box<TypedNode>, Vec<TypedNode>),
 
-    /// Struct definition — tag + name + field names + field policies + readonly-root flag
-    StructDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
+    /// Struct definition — tag + name + field names + field policies
+    StructDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>),
 
-    /// Record definition — tag + name + field names + field policies + readonly-root flag
-    RecordDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
+    /// Record definition — tag + name + field names + field policies
+    RecordDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>),
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),
@@ -649,6 +656,8 @@ pub enum TypedPattern {
     BoolLit(Ty, bool),
     DurationLit(Ty, SurtrInt),
     Tuple(Ty, Vec<TypedPattern>),
+    /// Ordered String keys and child patterns; only an empty entry list is total.
+    HashMap(Ty, Vec<TypedHashMapPatternEntry>),
     /// Enum/Result constructor pattern checked through the common MatchBlock rules.
     Constructor {
         ty: Ty,
@@ -669,6 +678,21 @@ pub enum TypedPattern {
     },
 }
 
+/// Key source positions survive specialization for missing-key Error origins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedHashMapPatternEntry {
+    pub key: TypedNode,
+    pub pattern: TypedPattern,
+    pub key_span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedHashMapMatchPatternEntry {
+    pub key: TypedNode,
+    pub pattern: TypedMatchPattern,
+    pub key_span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SafeBindRhsProjection {
     CanonicalResultOnce {
@@ -682,21 +706,18 @@ pub enum SafeBindRhsProjection {
     },
 }
 
+/// Resolved ordinary Trait call; the generated argument binding receives the
+/// original Pattern/Result Error without reconstructing its metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ResultPreserveConstruction {
-    CanonicalResult,
-    AnnotatedStruct { tag: u32 },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResultPreserveTarget {
+pub struct MonadFailTarget {
     pub carrier_ty: Ty,
-    pub error_ty: Ty,
-    pub construction: ResultPreserveConstruction,
+    pub error_id: ResolvedId,
+    pub call: Box<TypedNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeferredDoFailureTarget {
+    pub do_keyword_span: Span,
     pub carrier_ty: Ty,
     pub alternative_trait_key: String,
     pub alternative_method_name: String,
@@ -706,10 +727,10 @@ pub struct DeferredDoFailureTarget {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SafeBindFailureTarget {
-    EnclosingResultContext(Box<ResultPreserveTarget>),
+    EnclosingMonadFail(Box<MonadFailTarget>),
     EnclosingMatchResultContext { err_tag: u32 },
     TopLevel,
-    DoResultContext(Box<ResultPreserveTarget>),
+    DoMonadFail(Box<MonadFailTarget>),
     DoAlternative { empty: Box<TypedNode> },
     Deferred(Box<DeferredDoFailureTarget>),
 }
@@ -756,11 +777,16 @@ pub enum TypedMatchPattern {
     DurationLit(SurtrInt),
     /// Concrete `deferror` kind pattern for abstract Error values.
     ErrorKind(String),
+    ErrorPayload {
+        kind: String,
+        fields: Vec<TypedMatchPattern>,
+    },
     /// Pattern alternative. Alternatives are tests only and do not bind names.
     Or(Vec<TypedMatchPattern>),
     Tuple(Vec<TypedMatchPattern>),
     /// Total structural Record head; children may still be partial.
     Record(Vec<TypedMatchPattern>),
+    HashMap(Vec<TypedHashMapMatchPatternEntry>),
     /// Constructor tag + field patterns + payload field offset.
     Constructor {
         tag: u32,
@@ -820,10 +846,29 @@ pub struct TypedClosureParam {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedEnumVariantDef {
+    pub enum_ty: Ty,
+    pub payload_types: Vec<Ty>,
+    pub discriminant: SurtrInt,
     pub lowering: Option<sindr::names::SpecialEnumVariantLowering>,
     pub tag: u32,
     pub constructor_name: String,
     pub field_names: Vec<String>,
+}
+
+impl From<&crate::env::EnumVariantInfo> for TypedEnumVariantDef {
+    fn from(variant: &crate::env::EnumVariantInfo) -> Self {
+        Self {
+            enum_ty: variant.enum_ty.clone(),
+            payload_types: variant.payload.clone(),
+            discriminant: variant.discriminant.clone(),
+            lowering: variant.special_variant,
+            tag: variant.tag,
+            constructor_name: variant.constructor_name.clone(),
+            field_names: (0..variant.payload.len())
+                .map(|idx| format!("_{idx}"))
+                .collect(),
+        }
+    }
 }
 
 pub use diagnostics::TypeListRole;
@@ -839,7 +884,8 @@ pub enum CanonicalTypeHead {
     Function,
     SelfApplication,
     Facet(crate::types::FacetKind),
-    Pid(String),
+    Pid,
+    ProcessMarker(String),
     Hole,
 }
 
@@ -1021,6 +1067,25 @@ impl TypedPattern {
         match self {
             Self::Located(_, inner) => inner.unlocated(),
             other => other,
+        }
+    }
+}
+
+impl TypedNode {
+    /// The embedded ordinary call is a child for specialization and validation.
+    pub fn monad_fail_call(&self) -> Option<&TypedNode> {
+        match &self.node {
+            TypedInner::SafeBind(_, _, _, target) => target.monad_fail_call(),
+            TypedInner::DoSafeBind(control) => control.failure_target.monad_fail_call(),
+            _ => None,
+        }
+    }
+}
+impl SafeBindFailureTarget {
+    pub fn monad_fail_call(&self) -> Option<&TypedNode> {
+        match self {
+            Self::EnclosingMonadFail(target) | Self::DoMonadFail(target) => Some(&target.call),
+            _ => None,
         }
     }
 }

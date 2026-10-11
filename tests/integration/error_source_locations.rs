@@ -3,6 +3,124 @@ use std::fs;
 
 use crate::common::{repo_root, surtr_command, unique_temp_dir, write_source};
 
+#[test]
+fn process_stopped_reports_rejected_request_origin_through_callable_routes() {
+    let definitions = r#"
+defgenserver Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+def invoke(pid: PID<Worker>, message: (PID<Worker> -> Result<Int>)) -> Result<Int> {
+  message(pid)
+}
+"#;
+    for (route, origin) in [
+        ("Worker::value(pid)", "Worker::value(pid)"),
+        ("captured = Worker::value()\ncaptured(pid)", "captured(pid)"),
+        ("invoke(pid, Worker::value())", "message(pid)"),
+    ] {
+        let source =
+            format!("{definitions}\npid =? Worker::init(7)\n_ =? Worker::stop(pid)\n{route}\n");
+        assert_error_source_location(&source, origin, "ProcessStopped");
+    }
+    let pool = r#"
+defsupervisor Root {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+defgenserver Pool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<Worker>
+  }
+  @init
+  def init() -> Result<Workers<Worker>> {
+    Root::workers(Worker::init(7), WorkerStrategy::fixed(1))
+  }
+  @call
+  def rejected(workers: Workers<Worker>) -> Result<CallResult<Int, Workers<Worker>>> {
+    lease =? Workers::reserve(workers)
+    _ =? Worker::stop(lease)
+    reply =? Worker::value(lease)
+    Ok(CallResult::Reply(reply, workers))
+  }
+}
+supervisor_init { Root {} Pool {} }
+Pool::rejected()
+"#;
+    assert_error_source_location(
+        &format!("{definitions}{pool}"),
+        "Worker::value(lease)",
+        "ProcessStopped",
+    );
+}
+
+#[test]
+fn workers_unavailable_reports_selection_request_origin() {
+    let source = r#"
+defgenserver Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init() -> Result<Int> { Ok(0) }
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+defsupervisor Root {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+defgenserver EmptyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<Worker>
+  }
+  @init
+  def init() -> Result<Workers<Worker>> {
+    Root::workers(Worker::init(), WorkerStrategy::fixed(0))
+  }
+  @call
+  def reserve(workers: Workers<Worker>) -> Result<CallResult<Unit, Workers<Worker>>> {
+    _ =? Workers::reserve(workers)
+    Ok(CallResult::Reply((), workers))
+  }
+}
+supervisor_init { Root {} EmptyPool {} }
+EmptyPool::reserve()
+"#;
+    assert_error_source_location(source, "Workers::reserve(workers)", "WorkersUnavailable");
+}
+
 /// Compare structured offsets and the human caption without depending on Ariadne's layout.
 fn assert_error_source_location(input: &str, origin: &str, kind: &str) -> Value {
     assert_error_source_location_with_bytecode(input, origin, kind, false)
@@ -64,10 +182,12 @@ fn assert_error_source_location_with_bytecode(
     assert_eq!(dump["result"]["status"], "result_err", "{dump}\n{source}");
     assert_eq!(dump["result"]["error"]["kind"], kind, "{dump}\n{source}");
     let (origin_source, origin_file, origin, unique) = if origin == "stdlib_parse_error" {
-        (fs::read_to_string(repo_root().join("lib/types/int.srt")).unwrap(),
-         "types/int.srt".to_string(),
-         "ParseIntError(\"invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}\")",
-         false)
+        (
+            fs::read_to_string(repo_root().join("lib/types/int.srt")).unwrap(),
+            "types/int.srt".to_string(),
+            "IntParseInvalidDigit(base, ch, index)",
+            false,
+        )
     } else if definitions
         .as_ref()
         .is_some_and(|definitions| definitions.contains(origin))
@@ -134,7 +254,7 @@ fn assert_error_source_location_with_bytecode(
 
 #[test]
 fn error_source_location_roundtrip_retains_included_generation_site_and_call_trace() {
-    let source = "deferror Rejected(message: String) { message }\ndefmod E {\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"roundtrip\"))\n  }\n}\ndef main() -> Result<Int> {\n  E::checked(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n";
+    let source = "deferror Rejected { |message: String| message }\ndefmod E {\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"roundtrip\"))\n  }\n}\ndef main() -> Result<Int> {\n  E::checked(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n";
     let dump = assert_error_source_location_with_bytecode(
         source,
         "Rejected(\"roundtrip\")",
@@ -156,43 +276,82 @@ fn error_source_location_roundtrip_retains_included_generation_site_and_call_tra
 #[test]
 fn error_source_location_safebind_selects_the_failing_pattern_node() {
     for (setup, binding, origin, kind) in [
-        ("", "1 =? 2", "1", "PatternMismatch"),
-        ("", "(x, 11) =? (3, 2)", "11", "PatternMismatch"),
-        ("", "(\"あ\", 11) =? (\"あ\", 2)", "11", "PatternMismatch"),
-        ("", "[[x]] =? [[]]", "[x]", "IndexOutOfBounds"),
+        (
+            "",
+            "hash![\"欠落\" => _] =? hash![\"a\" => 1]",
+            "\"欠落\"",
+            "HashMapKeyMissing",
+        ),
+        (
+            "key = \"absent\"\n  ",
+            "hash![^key => _] =? hash![\"a\" => 1]",
+            "^key",
+            "HashMapKeyMissing",
+        ),
+        (
+            "inner: HashMap<Int> = hash![]\n  ",
+            "hash![\"a\" => hash![\"nested\" => _]] =? hash![\"a\" => inner]",
+            "\"nested\"",
+            "HashMapKeyMissing",
+        ),
+        (
+            "",
+            "hash![\"a\" => 11] =? hash![\"a\" => 2]",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
+        ("", "1 =? 2", "1", "IntLiteralPatternMismatch"),
+        ("", "(x, 11) =? (3, 2)", "11", "IntLiteralPatternMismatch"),
+        (
+            "",
+            "(\"あ\", 11) =? (\"あ\", 2)",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
+        ("", "[[x]] =? [[]]", "[x]", "ListPatternTooShort"),
         (
             "empty: Option<Int> = Option::None\n  ",
             "Option::Some(x) =? empty",
             "Option::Some(x)",
-            "PatternMismatch",
+            "EnumVariantPatternMismatch",
         ),
         (
             "",
             "Option::Some(11) =? Option::Some(2)",
             "11",
-            "PatternMismatch",
+            "IntLiteralPatternMismatch",
         ),
         (
             "expected = 11\n  ",
             "^expected =? 2",
             "^expected",
-            "PatternMismatch",
+            "PinnedValuePatternMismatch",
         ),
-        ("", "(x, 11) @ whole =? (3, 2)", "11", "PatternMismatch"),
+        (
+            "",
+            "(x, 11) @ whole =? (3, 2)",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
         (
             "empty: List<Int> = []\n  ",
             "[head, ..tail] =? empty",
             "[head, ..tail]",
-            "EmptyList",
+            "EmptyHeadTailListPattern",
         ),
         (
             "",
             "[first, ..rest] =? \"\"",
             "[first, ..rest]",
-            "PatternMismatch",
+            "UnconsEmptyString",
         ),
-        ("", "[x, y] =? [2]", "[x, y]", "IndexOutOfBounds"),
-        ("", "11 =? Int::parse(\"2\")", "11", "PatternMismatch"),
+        ("", "[x, y] =? [2]", "[x, y]", "ListPatternTooShort"),
+        (
+            "",
+            "11 =? Int::parse(\"2\")",
+            "11",
+            "IntLiteralPatternMismatch",
+        ),
     ] {
         let source =
             format!("def main() -> Result<Int> {{\n  {setup}{binding}\n  Ok(0)\n}}\nmain()\n");
@@ -203,16 +362,16 @@ fn error_source_location_safebind_selects_the_failing_pattern_node() {
 #[test]
 fn error_source_location_keeps_generation_site_across_result_and_extractor_propagation() {
     let cases = [
-        ("def main() -> Result<Int> {\n  1 =? Err(NoneError)\n  Ok(0)\n}\nmain()\n", "NoneError", "NoneError"),
-        ("def main() -> Result<Int> {\n  value =? Int::parse(\"a\")\n  Ok(value)\n}\nmain()\n", "stdlib_parse_error", "ParseIntError"),
-        ("deferror Rejected(message: String) { message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  value =? source()\n  Ok(value)\n}\nmain()\n", "Rejected(\"generated\")" , "Rejected"),
-        ("deferror Rejected(message: String) { message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  source()\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
-        ("deferror Rejected(message: String) { message }\ndefmod E {\n  defextractor reject(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"generated\"))\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    reject(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}\ndef main() -> Result<Int> {\n  E::outer(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
-        ("defmod E {\n  defextractor check(value: Int) -> MatchResult<Int> {\n    11 =? value\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::check(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "PatternMismatch"),
-        ("defmod E {\n  defextractor identity(value: Int) -> MatchResult<Int> {\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::identity(11) =? Ok(2)\n  Ok(0)\n}\nmain()\n", "11", "PatternMismatch"),
-        ("def main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int|\n    11 =? value\n    MatchResult::Ok(value)\n  }\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "PatternMismatch"),
-        ("deferror Rejected(message: String) { message }\ndef main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected(\"closure\"))}\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"closure\")", "Rejected"),
-        ("def main() -> Result<Int> {\n  _ =? apply_pattern((2, 3), (_, 11))\n  Ok(0)\n}\nmain()\n", "11", "PatternMismatch"),
+        ("def main() -> Result<Int> {\n  1 =? Err(NoneError())\n  Ok(0)\n}\nmain()\n", "NoneError()", "NoneError"),
+        ("def main() -> Result<Int> {\n  value =? Int::parse(\"a\")\n  Ok(value)\n}\nmain()\n", "stdlib_parse_error", "IntParseInvalidDigit"),
+        ("deferror Rejected { |message: String| message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  value =? source()\n  Ok(value)\n}\nmain()\n", "Rejected(\"generated\")" , "Rejected"),
+        ("deferror Rejected { |message: String| message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  source()\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
+        ("deferror Rejected { |message: String| message }\ndefmod E {\n  defextractor reject(value: Int) -> MatchResult<Int> {\n    MatchResult::Err(Rejected(\"generated\"))\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    reject(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}\ndef main() -> Result<Int> {\n  E::outer(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"generated\")", "Rejected"),
+        ("defmod E {\n  defextractor check(value: Int) -> MatchResult<Int> {\n    11 =? value\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::check(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
+        ("defmod E {\n  defextractor identity(value: Int) -> MatchResult<Int> {\n    MatchResult::Ok(value)\n  }\n}\ndef main() -> Result<Int> {\n  E::identity(11) =? Ok(2)\n  Ok(0)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
+        ("def main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int|\n    11 =? value\n    MatchResult::Ok(value)\n  }\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
+        ("deferror Rejected { |message: String| message }\ndef main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected(\"closure\"))}\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"closure\")", "Rejected"),
+        ("def main() -> Result<Int> {\n  _ =? apply_pattern((2, 3), (_, 11))\n  Ok(0)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
     ];
     for (source, origin, kind) in cases {
         assert_error_source_location(source, origin, kind);
@@ -223,16 +382,16 @@ fn error_source_location_keeps_generation_site_across_result_and_extractor_propa
 fn error_source_location_partial_bind_selects_the_failing_child_in_result_context() {
     for body in [
         "do::<Result> {\n    (x, 11) <- Ok((3, 2))\n    Ok(x)\n  }",
-        "maybe =? OptionT::run(do::<OptionT<Result, _>> {\n    (x, 11) <- OptionT::some::<Result>((3, 2))\n    OptionT::some::<Result>(x)\n  })\n  Ok(0)",
+        "value =? Identity::run(ResultT::run(do::<ResultT<Identity, _>> {\n    (x, 11) <- ResultT::ok::<Identity>((3, 2))\n    ResultT::ok::<Identity>(x)\n  }))\n  Ok(value)",
     ] {
         let source = format!("def main() -> Result<Int> {{\n  {body}\n}}\nmain()\n");
-        assert_error_source_location(&source, "11", "PatternMismatch");
+        assert_error_source_location(&source, "11", "IntLiteralPatternMismatch");
     }
 }
 
 #[test]
 fn error_source_location_statement_question_preserves_error_and_cause() {
-    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n}\n";
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner()), Outer(\"wrapped\"))\n  }\n}\n";
     for body in [
         "E::source()?\n  Ok(0)",
         "match True { True => { E::source()?\n    () }, False => () }\n  Ok(0)",
@@ -250,78 +409,32 @@ fn error_source_location_statement_question_preserves_error_and_cause() {
 }
 
 #[test]
-fn error_source_location_partial_bind_preserves_result_effect_errors_and_causes() {
-    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
+fn error_source_location_partial_bind_preserves_monad_fail_errors_and_causes() {
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner()), Outer(\"wrapped\"))\n  }\n  defextractor checked(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n}\n";
     for body in [
         "do::<Result> {\n    E::checked(found) <- Ok(2)\n    Ok(found)\n  }",
-        "maybe =? OptionT::run(do::<OptionT<Result, _>> {\n    E::checked(found) <- OptionT::some::<Result>(2)\n    OptionT::some::<Result>(found)\n  })\n  Ok(0)",
+        "found =? Identity::run(ResultT::run(do::<ResultT<Identity, _>> {\n    E::checked(found) <- ResultT::ok::<Identity>(2)\n    ResultT::ok::<Identity>(found)\n  }))\n  Ok(found)",
     ] {
         let source = format!("{definitions}def main() -> Result<Int> {{\n  {body}\n}}\nmain()\n");
         let dump = assert_error_source_location(&source, "Outer(\"wrapped\")", "Outer");
         assert_eq!(dump["result"]["error"]["message"], "wrapped");
         assert_eq!(dump["result"]["last_value"], "Err(Outer(\"wrapped\"))\n|_ Inner(\"inner\")");
     }
-    let source = r#"deferror Rejected { "discarded extractor error" }
-ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected)}
-print(inspect(do::<Option> {
-  ext(found) <- Option::Some(2)
-  Option::Some(found)
-}))
-print(inspect(do::<List> {
-  ext(found) <- [2, 3]
-  [found]
-}))
-"#;
-    let output = crate::support::run_project_script("non_result_partial_bind.srt", source)
-        .expect("non-Result failures must keep Alternative semantics");
-    assert_eq!(output, ["Option::None", "[]"]);
 }
 
 #[test]
-fn error_source_location_apply_pattern_inside_non_result_do_keeps_its_result_value() {
-    let source = r#"print(inspect(do::<Option> {
-  1 <- Option::Some(1)
-  Option::Some(apply_pattern(2, 11))
-}))
-"#;
-    let output = crate::support::run_project_script("pattern_result_in_option_do.srt", source)
-        .expect("apply_pattern must return its own Result inside the do body");
-    assert_eq!(
-        output,
-        ["Option::Some(Err(PatternMismatch(\"Pattern did not match.\")))"]
-    );
-}
-
-#[test]
-fn error_source_location_partial_bind_matches_result_payload_without_unwrapping() {
-    let source = r#"print(inspect(do::<List> {
-  Ok(x) <- [Ok(1), Err(NoneError)]
-  [x]
-}))
-print(inspect(do::<Option> {
-  Ok(x) <- Option::Some(Ok(1))
-  Option::Some(x)
-}))
-print(inspect(do::<Result> {
-  Ok(x) <- Ok(Ok(1))
-  Ok(x)
-}))
-"#;
-    let output = crate::support::run_project_script("result_payload_partial_bind.srt", source)
-        .expect("partial bind must match the complete carrier payload");
-    assert_eq!(output, ["[1]", "Option::Some(1)", "Ok(1)"]);
-}
-
-#[test]
-fn error_source_location_rejects_sources_that_exceed_the_span_encoding_range() {
-    let temp = unique_temp_dir("error_source_location_stride");
+fn error_source_location_accepts_source_within_the_span_encoding_range() {
+    let temp = unique_temp_dir("error_source_location_stride_valid");
     let valid_path = temp.join("within_range.srt");
     let tail = "print(\"ok\")\n";
     let valid_padding = sindr::ir::MODULE_SPAN_STRIDE - 1 - tail.chars().count();
+    // Exercise the source-length boundary without parsing a newline token for
+    // every four characters. Include the single comment terminator in padding.
+    let comment_padding = valid_padding - 1;
     let valid_source = format!(
-        "{}{tail}{}",
-        "# あ\n".repeat(valid_padding / 4),
-        "#".repeat(valid_padding % 4)
+        "{}{}\n{tail}",
+        "# あ ".repeat(comment_padding / 4),
+        "#".repeat(comment_padding % 4)
     );
     assert_eq!(
         valid_source.chars().count(),
@@ -340,17 +453,31 @@ fn error_source_location_rejects_sources_that_exceed_the_span_encoding_range() {
     );
     assert_eq!(valid.stdout, b"ok\n");
     assert!(valid.stderr.is_empty(), "{valid:?}");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn error_source_location_rejects_main_source_exceeding_the_span_encoding_range() {
+    let temp = unique_temp_dir("error_source_location_stride_main");
     let padding = "# あ\n".repeat(sindr::ir::MODULE_SPAN_STRIDE / 4 + 1);
     let main_path = temp.join("large_main.srt");
     write_source(
         &main_path,
-        &format!("{padding}def main() -> Result<Int> {{ Err(NoneError) }}\nmain()\n"),
+        &format!("{padding}def main() -> Result<Int> {{ Err(NoneError()) }}\nmain()\n"),
     );
+    assert_oversized_source_rejected(&main_path, &main_path);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn error_source_location_rejects_included_source_exceeding_the_span_encoding_range() {
+    let temp = unique_temp_dir("error_source_location_stride_included");
+    let padding = "# あ\n".repeat(sindr::ir::MODULE_SPAN_STRIDE / 4 + 1);
     let module_path = temp.join("large_module.srt");
     write_source(
         &module_path,
         &format!(
-            "{padding}defmod Oversized {{\n  def fail() -> Result<Int> {{ Err(NoneError) }}\n}}\n"
+            "{padding}defmod Oversized {{\n  def fail() -> Result<Int> {{ Err(NoneError()) }}\n}}\n"
         ),
     );
     let include_path = temp.join("include_main.srt");
@@ -358,30 +485,45 @@ fn error_source_location_rejects_sources_that_exceed_the_span_encoding_range() {
         &include_path,
         "include \"./large_module.srt\"\nOversized::fail()\n",
     );
-    for (entry, rejected_file) in [
-        (&main_path, "large_main.srt"),
-        (&include_path, "large_module.srt"),
-    ] {
-        let output = surtr_command()
-            .arg("run")
-            .arg(entry)
-            .output()
-            .expect("CLI must run");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !output.status.success(),
-            "oversized source must be rejected"
-        );
-        assert!(stderr.contains("LoadError"), "{rejected_file}: {stderr}");
-        assert!(
-            stderr.contains(rejected_file),
-            "rejected source must be identified: {stderr}"
-        );
-        assert!(
-            !stderr.contains("bootstrap.srt"),
-            "oversized source must not be mapped to Bootstrap: {stderr}"
-        );
-        assert!(output.stdout.is_empty(), "oversized input must not execute");
-    }
+    assert_oversized_source_rejected(&include_path, &module_path);
     fs::remove_dir_all(temp).unwrap();
+}
+
+fn assert_oversized_source_rejected(entry: &std::path::Path, rejected_source: &std::path::Path) {
+    let rejected_file = rejected_source.file_name().unwrap().to_str().unwrap();
+    let output = surtr_command()
+        .arg("run")
+        .arg(entry)
+        .output()
+        .expect("CLI must run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "oversized source must be rejected"
+    );
+    assert!(stderr.contains("LoadError"), "{rejected_file}: {stderr}");
+    assert!(
+        stderr.contains(rejected_file),
+        "rejected source must be identified: {stderr}"
+    );
+    assert!(
+        !stderr.contains("bootstrap.srt"),
+        "oversized source must not be mapped to Bootstrap: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "oversized input must not execute");
+}
+
+#[test]
+fn error_source_location_hash_map_consumers_keep_key_origin() {
+    for source in [
+        r#"apply_pattern(hash!["a" => 1], hash!["apply-missing" => _])"#,
+        r#"do::<Result> { hash!["do-missing" => _] <- Ok(hash!["a" => 1]); Ok(0) }"#,
+    ] {
+        let origin = if source.starts_with("apply_pattern") {
+            "\"apply-missing\""
+        } else {
+            "\"do-missing\""
+        };
+        assert_error_source_location(source, origin, "HashMapKeyMissing");
+    }
 }

@@ -21,12 +21,23 @@ test("StyledDoc") {
         StyledDocStyle(Option::Some(StyledDocColor::Red), Option::None, False, False, False, False),
         )
         doc = StyledDoc::concat([
+        StyledDoc::empty(),
         StyledDoc::text("sur"),
-        StyledDoc::line("tr"),
-        styled,
+        StyledDoc::empty(),
+        StyledDoc::append(StyledDoc::line("tr"), styled),
+        StyledDoc::newline(),
+        StyledDoc::empty(),
+        StyledDoc::line("end"),
+        StyledDoc::empty(),
         ])
+        styled_line <- doc.lines.[2]
+        segment <- styled_line.segments.[0]
 
-        assert_doc_plain_eq("sur\ntr\n!", doc)
+        assert_doc_plain_eq("sur\ntr\n!\n\nend", doc)
+        assert_eq(5, List::len(doc.lines))
+        assert_eq(Option::Some(StyledDocColor::Red), segment.style.fg)
+        assert_eq(0, List::len(StyledDoc::concat([]).lines))
+        assert_eq(0, List::len(StyledDoc::concat([StyledDoc::empty(), StyledDoc::empty()]).lines))
       }
     }
 

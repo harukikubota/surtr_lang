@@ -8,20 +8,114 @@ named Extractor と ExtractorClosure は入力を1個以上取り、最後の入
 通常 Enum の canonical variant を参照し、網羅性・payload 規則に従う。
 別 Enum の同名 variant は別 identity として検査し、`MatchResult` の bare alias は追加しない。
 
+## Pattern の一覧
+
+Pattern は照合・分解・束縛を記述する構文であり、PatternConsumer はその Pattern を受け取って成功・失敗を処理する呼出し先である。両者を別々に整理し、Pattern の形から consumer を選んだり、consumer の失敗を通常 Expr への再解釈で救済したりしない。
+
+構文の一覧は [`AstPattern`](../../crates/spire/src/ast.rs) に対応する。`Call` の head が何を指すかは名前解決で確定し、Enum constructor、Record、Error、attached Extractor、named Extractor、local ExtractorClosure の契約を適用する。
+
+| Pattern | 表記 | 照合・束縛の契約 |
+|---|---|---|
+| 変数束縛 | `name`、`name: Type` | 新たな変数を束縛する。注釈は静的な型検査に使う |
+| wildcard | `_`、`_discard`、`_: Type` | 束縛を作らない。数字だけの `_N` は含めない |
+| pin | `^name` | Pattern 開始前の scope にある値と `Eq` で比較する。通常 Bind `=` では拒否する |
+| literal | `1`、`-1`、`"text"`、`20ms`、`True`、`False` | 値または canonical variant を照合する。Float literal と Unit の `()` Pattern は拒否する |
+| Tuple | `(left, right, ...)` | 要素数と各子 Pattern の型を一致させる。`(pattern)` は grouping とする |
+| List / String | `[]`、`[a, b]`、`[head, ..tail]` | 空・固定長・head-tail を照合する。[失敗 Error](#sequence-分解の失敗-error) は構造的分解と `uncons` で区別する |
+| HashMap | `hash![key => child, ...]` | 指定キーの存在と値を照合する。[HashMap の構造的 Pattern](#hashmap-の構造的-pattern) に従う |
+| Enum constructor | `Type::Variant`、`Type::Variant(child)`、`Ok(child)` | canonical variant と payload を照合する。標準 alias も通常 Enum の契約に従う |
+| Record | `User(name, age)`、`User(name: selected, age)` | 宣言 field を構造的に分解する。[Record の構造的 Pattern](#record-の構造的-pattern) に従う |
+| Error | `Failure`、`Failure(child)` | kind と保存 Payload を照合する。[Error Pattern](#error-pattern) の利用位置に限る |
+| named / attached Extractor | `head(...)`、`Owner::head(...)`、Struct の `Type(...)` | 一意に解決した Extractor を実行する。[named Extractor](#named-extractor) と [引数領域](#引数領域) に従う |
+| local ExtractorClosure | `selected(...)` | 選択済みの lexical binding の型を検査する。[適用位置・名前解決](#適用位置・名前解決) に従う |
+| OR | `p1 \| p2` | 左から alternative を試す。許可位置と束縛の一致条件は [予約語・OR・pipe](#予約語・or・pipe) に従う |
+| as-pattern | `pattern @ whole`、`pattern @ whole: Type` | その位置の値全体を alias に束縛する。OR 全体へ結合する |
+| projection | `_1`〜`_16`、`_1: Type` | canonical `apply_pattern` の Pattern 内だけで値を射影する。[slot と出力型](#slot-と出力型) に従う |
+
+子 Pattern は再帰的に照合する。型注釈は静的な型の整合を検査し、暗黙変換や runtime 型検査を追加しない。新規束縛、pin、事前引数、projection の scope は [bind・pin・scope](#bind・pin・scope) に従う。
+
+## PatternConsumer の一覧
+
+共有の構文契約 [`PatternConsumer::ALL`](../../crates/sindr/src/pattern.rs) は、次の4件だけを持つ。すべて第2引数を Pattern として読み、他の引数は Expr として読む。PatternConsumer の identity は canonical な Kernel 宣言で検証する。
+
+| PatternConsumer | 完全 call | 引数数 | 成功 | 不一致・Extractor の Err | OR |
+|---|---|---|---|---|---|
+| `Kernel::if_let` | `if_let(value, pattern, success, failure)` | 4 | 成功 scope の branch を評価する | Error を破棄し、全 alternative 失敗で failure branch を評価する | 許可。各 alternative の束縛を一致させる |
+| `Kernel::if_let_then` | `if_let_then(value, pattern, action)` | 3 | 成功 scope の branch を評価し Unit を返す | Error を破棄し、branch を評価せず Unit を返す | 許可。各 alternative の束縛を一致させる |
+| `Kernel::is_match` | `is_match(value, pattern)` | 2 | True | Error を破棄し、全 alternative 失敗で False | 許可。全 alternative の束縛を禁止する |
+| `Kernel::apply_pattern` | `apply_pattern(value, pattern)` | 2 | projection の Ok | 元 Error を保持した Err | 拒否 |
+
+表の branch 評価は遅延式の規則を示す。固定の括弧付き eager 式は照合前に評価する。裸名と `Kernel::` 修飾、前置・backtick・中置 Call の受理範囲は [予約語・OR・pipe](#予約語・or・pipe) に従う。`if_let` 系の Lazy 引数、完全 call の capture、成功 scope と eager 式の評価境界は [Pattern consumerのキャプチャと成功scope](#pattern-consumerのキャプチャと成功scope) に従う。
+
+### その他の Pattern 利用位置
+
+以下も Pattern を利用するが、`PatternConsumer` の4件には含めない。通常 Bind の totality、SafeBind の RHS 射影、do の carrier、`match` の網羅性は、それぞれの構文の契約として検査する。
+
+| 利用位置 | 成功 | 不一致・Extractor の Err | OR |
+|---|---|---|---|
+| 通常 Bind `pattern = value` | total Pattern で分解・束縛する | partial Pattern を静的に拒否する | 拒否 |
+| SafeBind `pattern =? value` | 束縛して続行する | 現在の failure target へ渡す | 拒否 |
+| `match` の arm | guard が成立した arm の本文を評価する | Error を破棄し、次の alternative / arm へ進む | 許可。各 alternative の束縛を一致させる |
+| do の `pattern <- value` | carrier の payload を照合し、束縛して continuation へ進む | partial Pattern の失敗は do-local failure target へ渡す | 拒否 |
+| do の `pattern =? value` | SafeBind の RHS 射影規則で照合し、束縛して続行する | do-local failure target へ渡す | 拒否 |
+
+Error Pattern は `match`、`if_let`、`if_let_then`、束縛なしの `is_match` に限る。その他の利用位置では拒否する。失敗先の保持・破棄は [consumer の成功・失敗 policy](#consumer-の成功・失敗-policy)、do と SafeBind の詳細は [do intrinsic](./Do_intrinsic_spec.md)、`match` の被覆判定は [網羅性解析の範囲](#match-の網羅性解析の範囲) に従う。
+
 ## Record の構造的 Pattern
 
-`defrecord User(name: String, age: Int)` の `User(name, age)` は compiler-owned な構造的 Pattern として分解する。`User(age: selected_age, name: selected_name)` は field 名で対応付け、照合・binding は宣言順に行う。どちらも全 field が必要で、named と positional の混在、重複・未知・不足 field、field 名 shorthand は拒否する。
+`defrecord User(name: String, age: Int)` の `User(name, age)` は compiler-owned な構造的 Pattern として分解する。各 Record 項目列に keyword 指定がなければ positional、keyword 指定が一つ以上あれば named と確定する。入れ子の子にある keyword は外側の分類に影響しない。named から positional へ戻すフォールバックは設けない。
+
+named 内の裸の束縛名 `field` は `field: field` に正規化する。右側は既存変数の参照ではなく新たな Pattern 束縛である。literal、wildcard（`_` など）、型注釈付き Pattern、入れ子の構造的 Pattern、Extractor 等には明示的な field 名を要求する。`User(name: selected_name, age)` は受理し、`User(name: selected_name, _)` は拒否する。positional の子 Pattern は既存の規則に従う。
+
+正規化後は全 field を宣言に対応付け、重複・未知・不足 field、子 Pattern の型不一致、重複した束縛を拒否する。`User(age: selected_age, name: selected_name)` のような named の記述順によらず、照合・binding は field 宣言順に行う。Spire は項目列の分類と shorthand の構造・ソース位置を保持し、Sigil は Pattern 束縛として解決する。Scar は field 名・型・個数を検査し、後続フェーズへ宣言順に正規化した子を渡す。Struct の attached Extractor、Enum、constructor capture の受理範囲は広げない。
 
 Record の外枠は total である。子もすべて total の場合だけ通常 Bind `=` を許可する。partial な子があれば Pattern 全体も partial として `=` で拒否し、`match` / `if_let` などの consumer で使う。単一 arm が catch-all かどうかは子 Pattern まで再帰的に判定する。複数 arm の部分 Pattern を合成した構造的網羅性解析は行わない。Record Pattern は `MatchResult` を生成せず、一般 Extractor の事前引数・payload arity・失敗伝播規則を使わない。
+
+## HashMap の構造的 Pattern
+
+`hash![key => value_pattern, ...]` は canonical な `HashMap<V>` の指定キーと値を照合する。キーは String 型の通常式、または外側の束縛を参照する `^name` とし、値は V に対する子 Pattern とする。子は再帰的に照合する。未指定キーは許容し、その値は検査しない。同じキーを複数回指定した場合は各値 Pattern を順に検査する。束縛名の重複は静的エラーとする。
+
+キー式と pin は Pattern 開始前の scope で解決する。同じ Pattern が作る新規束縛は参照できず、外側に同名束縛があれば外側を参照する。未束縛名は Sigil の名前解決エラー、非 String キーと対象型の不一致は Scar の型エラーとする。OR・alias・projection・子 Pattern の制約は consumer ごとの既存規則に従う。
+
+対象を一度だけ評価し、エントリの記述順に、キー式を一度評価する（pin は参照値を取得する）、キーを検索する、取得した値を子 Pattern で照合する、の順に進む。最初のキー欠落または子の失敗で停止し、以降のキー式・子 Pattern・guard・本文・continuation は評価しない。全エントリが成功してから consumer の成功処理へ進む。
+
+非空 Pattern は値側が `_` でもキーの存在を要求するため partial とし、通常 Bind `=` では拒否する。空の `hash![]` は任意の HashMap に成功する total Pattern で、対象型が HashMap と決まれば catch-all とする。キー部分集合を複数 arm から合成する網羅性解析は行わない。arm の数によって戻り型や網羅性の既存規則を切り替えない。
+
+| consumer | 成功 | 失敗 |
+|---|---|---|
+| `match` | guard が成立する arm の本文 | 次の候補へ進む |
+| `if_let` / `if_let_then` / `is_match` | 既存の成功処理 | 既存の分岐または False |
+| SafeBind `=?` | 束縛して続行 | 現在の failure target |
+| `apply_pattern` | projection の Ok | 元 Error を保持した Err |
+| do partial `<-` | bind の payload を照合して続行 | do-local failure target |
+
+SafeBind の RHS は canonical Result の外側一段だけを射影する。RHS が Err ならキーを検査せず、元 Error を失敗先へ渡す。non-Result の HashMap は全体を照合し、partial Pattern のみ受理する。空 Pattern の SafeBind は `Result<HashMap<V>>` には使えるが、non-Result の HashMap には使えない。キーや map 内の Result 値を自動 unwrap しない。`hash!["a" => x]` は値全体を束縛し、`hash!["a" => Ok(x)]` は Ok payload を照合する。後者に Err があれば constructor 不一致になる。
+
+失敗先は通常 callable の返り型の MonadFail、do 内の `MonadFail > Alternative > Monad`、do 外の Extractor / ExtractorClosure 本文の compiler-owned MatchResult target に従う。Alternative による失敗では Error を破棄して empty へ進む。
+
+キー欠落は canonical な `HashMapKeyMissing(key)` とする。message は `hash map key not found: <key>`、保存 Payload は実際に検索した String 値、発生位置は失敗したエントリのキー指定位置とする。message には最初の欠落キーだけを含め、pin の変数名、親キー、後続キー、map 全体を加えない。入れ子の HashMap は内側で欠落したキーとその位置を使う。値 Pattern の失敗は子自身の Error とし、kind・message・Payload・location・cause を保つ。親の汎用 Error で包み直さない。runtime の内部不整合は RuntimeError とする。
+
+Spire は式位置の map literal と Pattern 位置を区別し、キー式・子 Pattern・キーの source span を保持する。Sigil はすべてのキーを Pattern 開始前の scope で解決し、子の束縛は consumer の成功 scope へ渡す。Scar は canonical HashMap の型とキー型、partial / total、catch-all を検査する。Forge は共通 Pattern lowering で既存の `HashMap::map_get` と Error constructor を使い、記述順・一度評価・短絡と consumer ごとの失敗処理を保つ。
+
+## Error Pattern
+
+Error 名だけの Pattern は kind を照合し、子 Pattern を指定すると kind 一致後に保存 Payload を分解する。外部コンストラクタの入力は分解しない。宣言・名前付きフィールド・局所具象束縛・readonly Facet の規則は [Error spec](Error_spec.md) を正本とする。
+
+Error 定義 Pattern を使える consumer は `match`、`if_let`、`if_let_then` と束縛なしの `is_match` である。通常 Bind、SafeBind、do partial `<-`、`apply_pattern` では拒否する。一般 Extractor と Error 全体の通常値運搬は既存の consumer 規則に従う。OR の許可対象・束縛 Set・評価順は本書の [予約語・OR・pipe](#予約語・or・pipe) に従う。
 
 ## named Extractor
 
 `defextractor` / `@builtin defextractor` は module または impl の下で宣言する。入力は1個以上で、最後の入力を consumer が渡す照合対象値とし、それ以前は事前引数にする。`impl` に付属する Extractor の `self` も最後に置く。named Extractor の実装一意性を維持し、事前引数数による overload は設けない。
 
+named Extractor は通常関数と共通の import 処理で file scope に取り込む。異なる宣言の同名 import は衝突として拒否し、短名を複数の呼出し先候補として保持しない。Pattern head は lexical scope で選択した宣言または binding の identity に固定する。選択した local の型が ExtractorClosure でなければエラーにし、named Extractor を探し直さない。qualified head と型 head に付属する `deconstruct` は、それぞれの既存解決規則に従う。
+
 照合対象型の head は静的に concrete でなければならない。`value: $T`、未確定 constructor head、`where $T: Trait` で対象を型横断的にする宣言は拒否する。`List<$T>`、`Result<$T>`、`Range<$T>` のように concrete head の型引数へ型変数を置くことは許可する。通常関数が generic / Trait 制約による計算抽象を担当し、Extractor は特定の静的型構造の分解だけを担当する。Union、trait object、runtime type assertion を対象型の代替にしない。
 
 ```surtr
-deferror OutOfRange(value: Int) { "outside range" }
+deferror OutOfRange(value: Int) {
+  |value: Int|
+  Self(message: "outside range", value)
+}
 defmod Bounds {
     defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
         if(min <= value && value <= max, MatchResult::Ok(value), MatchResult::Err(OutOfRange(value)))
@@ -58,18 +152,11 @@ defenum MatchResult<$Value> {
 - `Result` / `Option` と暗黙変換しない。variant 名や tag の類似を根拠に互換扱いしない。
 - constructor は常に `MatchResult::Ok` / `MatchResult::Err` とする。
 
-手書きの `MatchResult::Err(...)` の引数は具象 `deferror` 値に限定する。抽象 Error の直接構築、観測済み abstract Error の手書き constructor への再投入、裸の Error 値の一般保持、String 等の任意値による代用は許可しない。SafeBind の compiler-owned な伝播では取得済みの Error をそのまま保持する。consumer が既存 Error を保持する内部経路と、利用者の明示 constructor の入力制約を区別する。
+`MatchResult::Err(...)` の引数は Error 型で検査する。具象 constructor の生成値と既存の Error を同じ規則で受理し、元の情報を保持する。抽象 Error の直接構築や String 等による代用は拒否する。MatchResult 自体の専用型位置と protocol は維持する。
 
-Error の kind / message / location / cause は既存 Error / RichError 契約に従う。定義側が返した Error を compiler が共通 PatternMismatch で上書きしたり、Extractor 名や型名から message を再構成したりしない。builtin Extractor も同じ契約を持つ。空の list / string に対する `uncons` の Error は標準定義 / builtin の契約が選び、Forge の名前判定に置かない。
+Extractor が返す Error の生成・情報保持・位置は [Error spec](Error_spec.md) に従う。builtin Extractor も同じ契約を使い、元 Error を別の Pattern Error に置き換えない。Extractor の成功後に子 Pattern が失敗した場合は、その子自身の失敗を使う。as-pattern の alias は照合しないため、失敗位置を変更しない。空の list / string に対する `uncons` は標準定義 / builtin の失敗契約に従う。
 
-Error の主キャプションは生成位置である。明示的な Error は構築式、構文 Pattern の不一致は
-失敗した子 Pattern だけを指し、長さ・空入力・variant など構造自体の不一致はその構造 Pattern を指す。
-Extractor 本文内の構文不一致や内部関数の Error は、その定義内の生成位置を保持する。
-`MatchResult::Err` の返却、SafeBind、`Kernel::apply_pattern` は呼出し位置へ置き換えない。
-Extractor が成功した後で子 Pattern が失敗した場合は、その子の位置を使う。
-as-pattern の alias は照合しないため、内部の失敗位置を変更しない。
-新しい Error で wrap した場合は新しい Error の構築位置を使い、呼出し経路は stack trace に保持する。
-`Kernel::apply_pattern` の失敗は常に自身の `Result` に保持する。非 Result-effect の do 本文内でも、
+`Kernel::apply_pattern` の失敗は常に自身の `Result` に保持する。MonadFail を持たない carrier の do 本文内でも、
 外側 carrier の `Alternative::empty` へ変更しない。
 
 ### 利用位置
@@ -178,7 +265,7 @@ apply_pattern("123", decimal(_1: Int))
 ```
 
 - 生成時には callable 値を受け取って capture し、`f` の本体は実行しない。生成した ExtractorClosure の occurrence に到達した時点で、照合対象値を渡して `f` を一回実行する。
-- Result の外側一段だけを SafeBind で射影し、Ok payload をそのまま MatchResult::Ok へ渡す。Err は kind / message / location / cause を保持して MatchResult::Err へ伝播する。payload 自体が Result でも再帰的に unwrap しない。
+- Result の外側一段だけを SafeBind で射影し、Ok payload をそのまま MatchResult::Ok へ渡す。Err は kind / message / Payload / location / cause を保持して MatchResult::Err へ伝播する。payload 自体が Result でも再帰的に unwrap しない。
 - `$A` / `$B` は入力 callable と通常推論から定まる。成功 payload を Unit や固定した共通型へ変更せず、単値 / tuple / Unit の子 Pattern 規則をそのまま適用する。
 - 生成結果は事前引数なしの ExtractorClosure であり、通常の変数または helper 引数へ束縛して Pattern head に使う。生成式を Pattern head に直接埋め込むことや、生成結果の通常 call は許可しない。
 - 複数入力の通常関数を使う場合、必要な値を capture した単一入力の通常 Closure を利用者が明示的に渡す。from_result に可変 arity や暗黙の partial application を追加しない。
@@ -205,6 +292,8 @@ caller.args[pre_arity ..] = payload Pattern
 事前引数の型は対応する input slot、照合対象値の型は最後の input slot に照合する。payload の子 Pattern は成功 payload の shape と各型に照合する。
 
 構文上の区切りや別の PreArgs 型 / metadata は追加しない。Spire は signature を知らない段階で Expr / Pattern 境界を決め打ちしない。解決後に signature から分類して各領域を検査できる表現と source span を保持する。通常 Expr に見える表記を理由に Pattern と推測したり、arity 不一致を暗黙補正したりしない。
+
+この候補保持は引数の役割に限り、呼出し先の一意性とは別である。named Extractor の境界は Sigil が解決した宣言の入力数から選ぶ。local ExtractorClosure の境界は Scar が選択済み binding の signature から選ぶ。成功 payload の shape と子 Pattern の型・個数は Scar で検査する。選択した役割が不正ならエラーにし、別の呼出し先や引数役割を試して受理しない。
 
 ### payload の子 Pattern 数
 
@@ -317,19 +406,19 @@ result = apply_pattern([10, 20], [temporary, _1: Int])
 | `apply_pattern` | projection の Ok | 元の Error を保持した Err |
 | do の partial `<-` | payload の bind と continuation | do-local failure target の preserve / discard policy |
 
-非保持 consumer は Error の kind / message / location / cause を表示・伝播・記録しない。OK 後の literal / constructor / list shape 等の子 Pattern 不一致は既存の Pattern failure である。nested Extractor が Err を返した場合、保持 consumer は実際に失敗した nested Extractor の Error を使う。
+非保持 consumer は Error の kind / message / Payload / location / cause を表示・伝播・記録しない。OK 後の literal / constructor / list shape 等の子 Pattern 不一致は既存の Pattern failure である。nested Extractor が Err を返した場合、保持 consumer は実際に失敗した nested Extractor の Error を使う。
 
 Error を返す consumer policy と Extractor の返却 carrier 解釈は共通 Pattern engine の責務として接続する。apply_pattern や do が独自の Extractor tag / 名前判定を再実装しない。
 
 ## match の網羅性解析の範囲
 
-網羅性は guard のない arm だけから判定する。binding / wildcard、および子がすべて catch-all の tuple / Record は単一 arm の catch-all になる。compiler-owned な `Duration::deconstruct` も子がすべて catch-all なら同じ判定を行う。一般の Extractor は catch-all とみなさない。
+網羅性は guard のない arm だけから判定する。binding / wildcard、空の HashMap Pattern、および子がすべて catch-all の tuple / Record は単一 arm の catch-all になる。compiler-owned な `Duration::deconstruct` も子がすべて catch-all なら同じ判定を行う。一般の Extractor は catch-all とみなさない。
 
 catch-all がない場合、Boolean / Result / enum は外側の variant、List は空 / head-tail、String は空文字 / `uncons` の被覆を検査する。OR と as-pattern を介した被覆も扱うが、constructor の payload や list の子 Pattern がすべての値を覆うかまでは解析しない。したがって、外側の被覆として受理された `match` でも、子 Pattern による実行時の取りこぼしがあり得る。複数 arm の子 Pattern を合成した一般的な構造的網羅性の証明は現行契約に含めない。
 
 ## sequence 分解の失敗 Error
 
-`[head, ..tail]` と `Kernel::uncons(head, tail)` は同じ head / tail の分解を表すが、list の構造的 Pattern と named Extractor の実行経路は区別する。空 list の構造的 head-tail Pattern は `EmptyList`、固定長 list の長さ不一致は `IndexOutOfBounds` を使う。直接 `uncons` を適用した空 list / string は builtin の `PatternMismatch` を保持する。分岐 consumer はこれらを不一致として扱い、保持 consumer は各経路の Error をそのまま返す。分解の説明で用いる alias は Error の同一性まで意味しない。
+`[head, ..tail]` と `Kernel::uncons(head, tail)` は同じ head / tail の分解を表すが、list の構造的 Pattern と named Extractor の実行経路は区別する。空 List の構造的 head-tail Pattern は `EmptyHeadTailListPattern`、固定長 List の長さ不一致は `ListPatternTooShort` / `ListPatternTooLong` を使う。直接 `uncons` を適用した空 List / String は `UnconsEmptyList` / `UnconsEmptyString` を保持する。分岐 consumer はこれらを不一致として扱い、保持 consumer は各経路の Error をそのまま返す。分解の説明で用いる alias は Error の同一性まで意味しない。
 
 ## MatchResult 本文内の SafeBind
 
@@ -348,7 +437,10 @@ RHS が canonical Result の場合は外側一段だけ射影し、Ok payload �
 `=?` 自体の結果型は Unit であり、成功時は全照合成功後に束縛して続行する。failure では後続の式を評価しない。RHS / Pattern の Error 値をそのまま保持し、message や cause を再構成しない。
 
 ```surtr
-deferror OutOfRange(value: Int) { "outside range" }
+deferror OutOfRange(value: Int) {
+  |value: Int|
+  Self(message: "outside range", value)
+}
 
 defmod Bounds {
     defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
@@ -386,8 +478,8 @@ direct = *{|value: Int|
 - 内側の通常 Closure は外側 Extractor の MatchResult target を借りず、自身の合法な戻り値文脈で検査する。
 - 内側の ExtractorClosure は独立した Extractor 本文であり、自身の MatchResult target を持つ。
 - Extractor 内の do でも、failure はその do 自身の carrier へ接続する。外側 MatchResult への直接 return を追加しない。
-- do は引き続き Monad を要求し、failure target は ResultEffect > Alternative > Monad の順に解決する。Result-preserving route は元 Error を保持し、Alternative route は明示的に破棄して resolved empty へ進む。
-- `do::<MatchResult>`、MatchResult への Monad / Alternative / @result_effect の導入は対象外である。
+- do は引き続き Monad を要求し、failure target は MonadFail > Alternative > Monad の順に解決する。MonadFail route は元 Error を保持し、Alternative route は明示的に破棄して resolved empty へ進む。
+- `do::<MatchResult>`、MatchResult への Monad / Alternative / MonadFail の導入は対象外である。
 - REPL top-level SafeBind は既存の Error 表示とセッション継続境界を使う。MatchResult を通常 REPL 値として公開しない。
 
 ## 予約語・OR・pipe
@@ -425,7 +517,7 @@ consumer 判定には canonical identity を使う。`Regex::matches` は通常�
 `if_let`・`if_let_then` の成功 branch は、Pattern が binding を作らない場合だけ通常の Lazy 正規化を使う。
 binding がある場合は Pattern 成功 scope 内の DirectExpression を要求する。
 判定条件は binding の生成であり、成功 branch がその binding を使用するかどうかではない。
-Extractor の Expr / 子 Pattern の役割を確定した情報から binding を求め、OR の名前・型・順序の一致規則を維持する。
+Extractor の Expr / 子 Pattern の役割を確定した情報から binding を求め、OR の名前・型・個数の Set 一致規則を維持する。
 
 DirectExpression は成功 branch 位置へ直接書く Expr を指す。通常データを受け取る `&N` や `x + &N` を許可し、外部 thunk に成功 scope を後から与えない。
 この要求はtyped armに保持し、後続の型推論・generic forwarding・specialization後にも検証する。生成時点で型が未知でも、後から外部0引数関数に確定すれば拒否する。
@@ -442,7 +534,7 @@ Forge 以降には Lazy を残さず、確定した評価順と scope を渡す�
 
 OR Pattern `p1 | p2` は target のホワイトリストで許可する。対象は `match` arm、`if_let`、`if_let_then`、`is_match` のみで、いずれも root / nested OR を許可する。`=` / `=?`、do `<-` / `=?`、`apply_pattern` は binding 数が 0 でも OR を拒否する。`apply_pattern` に OR の projection slot 統一規則や複数の失敗 Error の選択規則を追加しない。
 
-`match` / `if_let` / `if_let_then` の同一 OR 内では、各 alternative の `bind_result_list = [(変数名, canonical な解決済み型), ...]` が、個数・名前・型・順序まで完全一致しなければならない。型表記の一致や暗黙 coercion で代用しない。空 list 同士は一致する。外側にある bind はその OR の比較対象に含めない。alternative 内の重複 bind は拒否する。成功した alternative の値だけを共通 binding に確定し、全 Pattern 成功前の部分 bind は guard / 成功 branch へ公開しない。各 OR は左から順に照合し、最初の成功で停止する。`match` の guard / arm body と `if_let` 系の成功 branch は共有し、一度だけ評価する。
+`match` / `if_let` / `if_let_then` の同一 OR 内では、各 alternative の `bind_result_list = [(変数名, canonical な解決済み型), ...]` を名前と canonical 型の Set として比較し、個数・名前・型が一致しなければならない。走査・収集・代入の順序一致は要求しない。型表記の一致や暗黙 coercion で代用しない。空 list 同士は一致する。外側にある bind はその OR の比較対象に含めない。alternative 内の重複 bind は拒否する。成功した alternative の値を名前で共通 binding に対応付け、全 Pattern 成功前の部分 bind は guard / 成功 branch へ公開しない。各 OR は左から順に照合し、最初の成功で停止する。`match` の guard / arm body と `if_let` 系の成功 branch は共有し、一度だけ評価する。
 
 `if_let` / `if_let_then` は入力を一回評価し、各 alternative の失敗時は次の alternative を試す。全候補失敗時だけ else branch / Unit へ進む。`match` の網羅性検査を要求せず、従来の暗黙 wildcard fallback を維持する。`is_match` は全 alternative の通常 bind / as alias を引き続き禁止するため、空の `bind_result_list` だけを許す。`if_let` 系の OR 受理は canonical Kernel consumer identity に限定し、同名の通常 call を Pattern と再解釈しない。
 
@@ -493,12 +585,15 @@ typed contract は callable identity / 確定 signature、型検査済み事前�
 
 builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、Eldr の BUILTIN_IMPLS と対応させる。各フェーズへ builtin ID / 表示名を直書きしない。専用 Opcode を前提にせず、既存 Closure / call / branch / return の表現を利用する。
 
-未知 tag / variant、不正 field 数、壊れた callable metadata、payload representation 不一致は内部契約違反として即時 failure にする。利用者の Err、PatternMismatch、次の match arm、Alternative::empty へ fallback しない。
+未知 tag / variant、不正 field 数、壊れた callable metadata、payload representation 不一致は内部契約違反として即時 failure にする。利用者の Err、別の Pattern Error、次の match arm、Alternative::empty へ fallback しない。
+通常 Bind / match の全域性が実行時に破れた場合も、compiler-only builtin `__pattern_contract_violation` により
+RuntimeError とする。周囲の SafeBind 失敗先へ転送しない。SafeBind の consumer 失敗先が欠落した typed IR は
+Forge の内部契約エラーとして拒否する。`apply_pattern` の Result と Extractor 本文の MatchResult は明示された契約を使う。
 
 ## 検証境界
 
 
-1. named / builtin Extractor と ExtractorClosure が MatchResult の Ok / Err だけを返す。手書き Err の具象 deferror 引数を受理し、観測済み abstract Error の手書き再投入を拒否する。旧 Option、一般 Result、NoMatch、非 Error payload も拒否する。
+1. named / builtin Extractor と ExtractorClosure が MatchResult の Ok / Err だけを返す。手書き Err は Error 型の引数を受理し、具象 deferror の生成値と既存 Error の再投入を区別しない。旧 Option、一般 Result、NoMatch、非 Error payload も拒否する。
 2. 両者の事前引数0 / 1 / 複数が成立し、総 arity、事前引数型、末尾の consumer input 型、子 Pattern 型・arity の不一致を静的拒否する。
 3. 単値 / tuple / UnitOnly の shape が同じ規則で扱われる。UnitOnly の省略、通常 bind、wildcard、Unit projection、型注釈付き Unit projection が成功する。事前引数付き省略形と tuple の Unit slot も検証する。
 4. projection 0 / 1 / 複数、nested / root alias、list tail、番号と traversal 順が異なる例が所定の値・型になる。最大16、欠番、重複、_01 正規化、不正利用位置を検証する。
@@ -507,12 +602,13 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 7. 通常 call、literal / 生成式の Pattern head 直接適用、通常 Closure との暗黙変換、MatchResult の一般値保持・分解・capture、入力0の ExtractorClosure、partial Pattern の通常 Bind を拒否する。
 8. input / RHS、到達した事前引数、本体の一回評価、到達しない occurrence の未評価、nested failure 後の短絡、全成功後だけの bind / projection 公開を確認する。
 9. match / if_let / if_let_then / is_match が Err を破棄し、apply_pattern が実際に失敗した Extractor の Error を保持する。OK 後の子 Pattern 不一致は既存 Pattern Error になる。
-10. 通常 Result target と MatchResult 本文 target の SafeBind が RHS Result.Err、LHS Extractor.Err、nested Err、通常 Pattern Error の kind / message / location / cause を保持して早期 return する。失敗後の本文は未評価で、成功終端には明示 constructor を必要とする。
+10. 通常 Result target と MatchResult 本文 target の SafeBind が RHS Result.Err、LHS Extractor.Err、nested Err、通常 Pattern Error の kind / message / Payload / location / cause を保持して早期 return する。失敗後の本文は未評価で、成功終端には明示 constructor を必要とする。
 11. Result RHS は外側一段だけ射影する。non-Result partial pass-through、total non-Result 拒否と型エラー優先を維持する。apply_pattern は Result input を自動射影しない。
-12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の Result-effect 保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
-13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR は match / if_let / if_let_then で各 alternative の binding 名・canonical 型・順序が一致する場合に許可する。空 list の OR も同じ規則で扱う。if_let 系は全候補失敗時だけ fallback に進み、網羅性要求を持たない。is_match は OR を許可するが全 alternative の binding を拒否する。`=` / `=?`、do binding、apply_pattern は bind 数にかかわらず OR を拒否する。予約語 shadowing 拒否、Regex::matches の qualified 通常 call / capture と旧名の拒否、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
+12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の MonadFail による保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
+13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR は match / if_let / if_let_then で各 alternative の binding 名・canonical 型・個数の Set が一致する場合に許可する。空 list の OR も同じ規則で扱う。if_let 系は全候補失敗時だけ fallback に進み、網羅性要求を持たない。is_match は OR を許可するが全 alternative の binding を拒否する。`=` / `=?`、do binding、apply_pattern は bind 数にかかわらず OR を拒否する。予約語 shadowing 拒否、Regex::matches の qualified 通常 call / capture と旧名の拒否、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
 14. list / string uncons の成功と空入力 Error、builtin / user-defined / local の consumer 一貫性、不正 tag / metadata の内部 failure を検証する。
 15. 旧専用経路と互換 fallback が残らず、正本・標準 @doc・実装・テストが同じ契約を示す。
 16. Extractor::from_result が単一入力の Result-returning callable を受理し、単値 / tuple / Unit payload を維持する。生成時は本体未評価、各 occurrence 到達時は一回評価とし、元 Error の保持、Result payload の追加 unwrap なし、通常 Closure の capture、Option / raw payload / 入力 arity 不一致の静的拒否を確認する。
 17. 異なる payload 型の Extractor を match の別 branch で使い、各 branch の式が同じ型を返す場合に成立する。apply_pattern の結果が既存 Result / Monad 操作へ接続でき、Pattern 内の bind が外へ漏れない。
 18. named / builtin Extractor の裸 generic target と Trait `where` 一般化を拒否し、concrete head 内の generic argument は受理する。未具体化 Closure / capture / ExtractorClosure の変数束縛を拒否し、高階関数へ直接渡す場合は expected type から導出する。List / String の uncons は別々の concrete 静的契約として検査する。
+19. named Extractor の module / member / list import は短名・修飾名・Pattern head を同じ宣言 UID に結び付ける。Extractor 同士と通常関数／Extractor の同名 import、同一 Extractor の重複 import を拒否する。入力型・事前引数数・成功 payload の shape が異なっても呼出し先候補を増やさない。ファイルごとの import scope、local による shadowing、修飾名による元宣言の参照を維持し、選択済み head の不適合を別 Extractor の再探索で救済しない。

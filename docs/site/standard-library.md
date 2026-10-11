@@ -3,7 +3,7 @@
 このページは、Surtr の標準定義ソース構成を利用者向けにまとめたものです。
 
 標準定義ソースは単なる補助ファイルではなく、language surface の一部です。  
-`lib/*.srt` に書かれた `@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
+`lib/*.srt` の `@doc` は標準 API の説明の正本です。コンパイル時には `.eldr` の `Docs` chunk にも格納されます。
 
 Surtr 全体では、関数は常に何らかの namespace に属します。標準ライブラリでもこの方針は同じです。
 
@@ -28,12 +28,12 @@ stage、user source の順で読み込まれます。完全なモジュール in
 - auto import の起点になる安定アンカー
 - loader が最初に読む固定ステージ
 - `import` / `include` builtin function docs の canonical anchor
-- 標準 concrete error の置き場
+- ソース位置リフレクションの `@builtin def` 宣言と説明
 
 `Bootstrap` は「何かでもかんでも置く場所」ではありません。  
 将来 bootstrap 手順が増えても、入口の module 名と順序を固定するために残しています。
-そのうえで、`NoneError` や `ZeroDivisionError` のような universally useful な
-concrete error は、最初の標準ステージから使えるようここに置きます。
+`NoneError` や `ZeroDivisionError`、Pattern / Extractor の共通 Error は、
+`lib/errors.srt` にまとめています。型や API に固有の Error は各定義ファイルにあります。
 同時に、`import` / `include` のような language-provided macro surface も
 `Bootstrap` module 配下の `@builtin def` として source に残します。
 ただし surface 構文では引き続き top-level 専用の special form として扱います。
@@ -50,42 +50,28 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 `and` / `or` も宣言上は通常の 2 引数関数ですが、コンパイラが short-circuit
 評価へ lower する call-style helper としてここに置きます。
 `eq` / `neq` は auto import される `Eq` trait、`concat` は `Concat` trait、`to_string` は `Show` trait の surface です。`Kernel` の builtin としては提供しません。
-ordered comparison は `compare(left, right)` または `< <= > >=` を使い、専用の Boolean helper 名は公開しません。
+順序比較には `compare(left, right)` と `< <= > >=` を使えます。`Compare` は Boolean を返す
+`lt` / `lte` / `gt` / `gte` も公開し、これらは自動 import されます。
+名前の予約と中置呼出しの規則は[関数名と呼び出し構文](callable-names.md)を参照してください。
 
-### `SpecialTypes`
+### `special_types.srt`
 
 - `special_types.srt` に compiler-special builtin type を集約する
 - 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `DoBlock<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ErrorKind`, `StandbyInit<$T>`, `Hole` をここへ置く
-- `defmod` は持たず、top-level canonical type declaration だけを持つ
+- `defmod` は持たず、型宣言、`Unit` の Trait 実装、待機用の補助関数をまとめる
 - user-facing な振る舞いは各 trait / callable / module surface 側から現れる
 
 ### type modules
 
-現時点では次の module が用意されています。
+型ごとの標準定義は `lib/types/` に置かれています。型の宣言方法は、その型によって異なります。
 
-- `Int`
-- `String`
-- `Boolean`
-- `Error`
-- `List`
-- `Generator`（有限列。step の終端検出は Option、`next` は Result、取得系は List と rest を返す）
-- `InfiniteGenerator`（正常終端のない列。生成と件数・条件指定による List の取得）
-- `HashMap`
-- `Result`
-- `Either`
-- `Range`
-- `Option`
-- `Task`
-- `Facet`
-- `Float`
+- `Int` などは `@builtin type` で宣言する型です。
+- `Result`、`Option`、`Either` は Surtr の `defenum` で定義されています。
+- `Range` は Surtr の `defstruct` で定義されています。
 
-各 type module には 2 つの層があります。
-
-1. file top-level の `@builtin type ...`
-2. `defmod Name { ... }` の module API
-
-この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
-`impl Type` や `impl Trait for Type` は、この module API とは別の型専用 namespace として並びます。
+型に対応する関数は `impl Type`、Trait の実装は `impl Trait for Type` に置きます。
+型宣言と関数の説明は同じファイルで確認できます。全標準定義の構成とロード順は
+上記の `STDLIB_MODULE_SPECS` を参照してください。
 
 `abs`, `min`, `max` などの数値 helper は `Int` / `Float` の type owner surface として置きます。除算と剰余はユーザー拡張可能なトレイトです。
 
@@ -104,7 +90,7 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 - [`Reader`](./reader.md): 同じ環境を計算へ渡す
 - [`State`](./state.md): 次状態を左から右へ引き継ぐ
 
-`OptionT`、`EitherT`、`ReaderT`、`StateT` も通常の source 型です。base の
+`OptionT`、`EitherT`、`ResultT`、`ReaderT`、`StateT` も通常の source 型です。base の
 `Monad` と外側の計算を `MonadT::lift` で明示的に接続します。API と capability 条件は
 [`Monad transformers`](./monad-transformers.md) を参照してください。
 
@@ -154,7 +140,7 @@ compiler-special type の詳しい説明は `./special-types.md` を参照して
 `Error` は具体 error の列挙ではなく、recoverable failure を受ける抽象型です。
 
 - `deferror Boom { ... }` のような宣言が具体 error を作る
-- `Err(Boom)` のように `Result` の失敗側へ乗る
+- `Err(Boom())` のように `Result` の失敗側へ乗る
 - `Error` 自体を new するのではなく、具体 error を経由して使う
 
 `Result` は例外の代用品ではなく、`Either` 指向の値表現として読むと分かりやすくなります。
@@ -193,7 +179,8 @@ Negative counts stay as recoverable values instead of becoming implicit
 runtime traps.
 """
 deferror NegativeRepeatCount(count: Int) {
-  "repeat count must be non-negative: #{count}"
+  |count: Int|
+  Self(message: "repeat count must be non-negative: #{count}", count)
 }
 
 impl String {
@@ -214,7 +201,7 @@ impl String {
 ## 6. いま読むときの目印
 
 - `Bootstrap`
-  - auto import の固定起点と bootstrap error 群
+  - auto import の固定起点と演算子・ソース位置関数の宣言
 - `Kernel`
   - cross-cutting builtin と `Unit`
   - `if` / `if_then` の language-level contract
@@ -344,7 +331,7 @@ ret = List::reverse(acc)
 - `HashMap::map_from_entries(List<(String, $V)>) -> HashMap<$V>`
 - `HashMap::map_len(map) -> Int`
 - `HashMap::map_contains_key(map, key) -> Boolean`
-- `HashMap::map_get(map, key) -> Result<$V>`（miss は `Err(NoneError)`）
+- `HashMap::map_get(map, key) -> Result<$V>`（miss は `Err(HashMapKeyMissing(key))`）
 - `HashMap::map_insert(map, key, value) -> HashMap<$V>`
 - `HashMap::map_remove(map, key) -> HashMap<$V>`
 - `HashMap::map_keys(map) -> List<String>`
@@ -423,8 +410,9 @@ user.nickname
 |> to::<Option>()
 ```
 
-`Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。
-`nickname: String?` も同じく `Option<String>` なので、この変換規則は変わりません。
+この例は field の値を取り出し、変換後の `Option` を返します。構造体自体を更新する場合は、
+`Some` selector を使う Facet 更新も選べます。どちらの操作も `T?` と `Option<T>` で同じです。
+詳しくは[optional field の値変換と Facet 更新](structs.md#optional-field-の値変換と-facet-更新)を参照してください。
 
 ## 12. `Facet` module の位置づけ
 
@@ -472,7 +460,7 @@ Token.Ident
 ```
 
 - selector は PascalCase 固定
-- 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
+- 実行時の値がその variant でなければ `Err(FacetReadVariantMismatch(...))` になる
 
 ネストした path は `->` または `Facet::compose` でつなぎます。
 
@@ -626,7 +614,7 @@ facet = User.name
 name = Facet::view(facet, user)
 ```
 
-REPL では `:type` / `:info` に加えて `:facet <FacetPath|binding>` が使えます。
+REPL では `:type` / `:info` に加えて `:facet <root|FacetPath|binding>` が使えます。
 `type` と `full path` の確認に加えて、variant selector や `Result` source を含む
 path の停止点をまとめて見たいときに使います。
 

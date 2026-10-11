@@ -19,6 +19,12 @@ pub(super) fn visit_pattern_expressions(
     visit: &mut impl FnMut(&Ast) -> Result<(), ResolveError>,
 ) -> Result<(), ResolveError> {
     match pattern {
+        AstPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                visit(key)?;
+                visit_pattern_expressions(child, visit)?;
+            }
+        }
         AstPattern::Call(_, _, args) => {
             for arg in args {
                 if let Some(expr) = &arg.expression {
@@ -53,6 +59,12 @@ fn rewrite_pattern_expressions(
     rewrite: &mut impl FnMut(Ast) -> Result<Ast, ResolveError>,
 ) -> Result<(), ResolveError> {
     match pattern {
+        AstPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                *key = rewrite(key.clone())?;
+                rewrite_pattern_expressions(child, rewrite)?;
+            }
+        }
         AstPattern::Call(_, _, args) => {
             for arg in args {
                 if let Some(expr) = arg.expression.take() {
@@ -90,6 +102,7 @@ const INT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 11;
 const FLOAT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 12;
 const BOOLEAN_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 13;
 const FUNCTION_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 14;
+const ERROR_TYPE_ROOT_UID: u32 = u32::MAX - 15;
 
 fn ast_ty_owner_head(ty: &AstTy) -> Option<&str> {
     match ty {
@@ -116,6 +129,7 @@ fn do_pattern_span(pattern: &AstPattern) -> Span {
         AstPattern::Var(span, _)
         | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
+        | AstPattern::HashMap(span, _)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
         | AstPattern::IntLit(span, _)
@@ -143,6 +157,9 @@ fn synthetic_builtin_symbol_uid(name: &str, info: &SymbolIdentityInfo) -> Option
             Some(BOOLEAN_PRIMITIVE_ROOT_UID)
         }
         ("Function", None) if info.capabilities.module_owner => Some(FUNCTION_PRIMITIVE_ROOT_UID),
+        ("Error", Some(FacetRootKind::TypeRoot)) if info.capabilities.module_owner => {
+            Some(ERROR_TYPE_ROOT_UID)
+        }
         _ => None,
     }
 }
@@ -172,6 +189,7 @@ fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
             | FLOAT_PRIMITIVE_ROOT_UID
             | BOOLEAN_PRIMITIVE_ROOT_UID
             | FUNCTION_PRIMITIVE_ROOT_UID
+            | ERROR_TYPE_ROOT_UID
     )
 }
 
@@ -182,9 +200,6 @@ pub(super) enum CanonicalSpecialForm {
     Ensure,
     MapErr,
     Cause,
-    RecoverKind,
-    AssertErrKind,
-    AssertCauseChain,
     Logic(LogicKind),
 }
 
@@ -199,9 +214,6 @@ impl Resolver {
             "Kernel::or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
             "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
             "Result::cause" => Some(CanonicalSpecialForm::Cause),
-            "Result::recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
-            "Test::assert_err_kind" => Some(CanonicalSpecialForm::AssertErrKind),
-            "Test::assert_cause_chain" => Some(CanonicalSpecialForm::AssertCauseChain),
             _ => None,
         }
     }
@@ -230,9 +242,6 @@ impl Resolver {
             CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
-            CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
-            CanonicalSpecialForm::AssertErrKind => self.resolve_assert_err_kind(span, args),
-            CanonicalSpecialForm::AssertCauseChain => self.resolve_assert_cause_chain(span, args),
             CanonicalSpecialForm::Logic(logic_kind) => {
                 self.resolve_logic_call(span, args, logic_kind)
             }
@@ -601,7 +610,7 @@ impl Resolver {
                 inside_placeholder_capture,
                 used,
             ),
-            Ast::Do(_, _, statements) => {
+            Ast::Do(_, _, statements, _) => {
                 for statement in statements {
                     let node = match statement {
                         AstDoStatement::Extract { rhs, .. }
@@ -660,7 +669,7 @@ impl Resolver {
                 )
             }
             Ast::Bind(_, _, rhs)
-            | Ast::SafeBind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs, _)
             | Ast::StatementQuestion(_, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
@@ -866,6 +875,8 @@ impl Resolver {
             | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
             | Ast::BuiltinDecl(..)
+            | Ast::BuiltinReflectionDecl(..)
+            | Ast::Reflection(..)
             | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
@@ -1004,7 +1015,7 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            Ast::Do(span, return_type_arguments, statements) => Ok(Ast::Do(
+            Ast::Do(span, return_type_arguments, statements, keyword_span) => Ok(Ast::Do(
                 span,
                 return_type_arguments,
                 statements
@@ -1052,6 +1063,7 @@ impl Resolver {
                         )),
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?,
+                keyword_span,
             )),
             Ast::Bind(span, pat, rhs) => Ok(Ast::Bind(
                 span,
@@ -1063,7 +1075,7 @@ impl Resolver {
                     inside_placeholder_capture,
                 )?),
             )),
-            Ast::SafeBind(span, pat, rhs) => Ok(Ast::SafeBind(
+            Ast::SafeBind(span, pat, rhs, operator_span) => Ok(Ast::SafeBind(
                 span,
                 pat,
                 Box::new(self.rewrite_capture_placeholders(
@@ -1072,6 +1084,7 @@ impl Resolver {
                     allow_placeholders,
                     inside_placeholder_capture,
                 )?),
+                operator_span,
             )),
             Ast::StatementQuestion(span, rhs) => Ok(Ast::StatementQuestion(
                 span,
@@ -1719,12 +1732,14 @@ impl Resolver {
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 stmts.iter().find_map(Self::pipe_slot_span)
             }
-            Ast::Do(_, _, statements) => statements.iter().find_map(|statement| match statement {
-                AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
-                    Self::pipe_slot_span(rhs)
-                }
-                AstDoStatement::Statement(statement) => Self::pipe_slot_span(statement),
-            }),
+            Ast::Do(_, _, statements, _) => {
+                statements.iter().find_map(|statement| match statement {
+                    AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
+                        Self::pipe_slot_span(rhs)
+                    }
+                    AstDoStatement::Statement(statement) => Self::pipe_slot_span(statement),
+                })
+            }
             Ast::HashMapLiteral(_, entries) => entries.iter().find_map(|entry| {
                 Self::pipe_slot_span(&entry.key).or_else(|| Self::pipe_slot_span(&entry.value))
             }),
@@ -1732,7 +1747,7 @@ impl Resolver {
                 Self::pipe_slot_span(start).or_else(|| Self::pipe_slot_span(stop))
             }
             Ast::Bind(_, _, rhs)
-            | Ast::SafeBind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs, _)
             | Ast::StatementQuestion(_, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
@@ -2125,12 +2140,13 @@ impl Resolver {
             capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
-            declaration_entries: HashMap::new(),
-            declaration_uids: HashMap::new(),
-            declaration_uid_kinds: HashMap::new(),
-            declaration_hidden_by_uid: HashMap::new(),
-            trait_constructor_slots: HashMap::new(),
-            owner_registry: OwnerRegistry::default(),
+            impl_member_scopes: HashMap::new(),
+            declaration_entries: Arc::new(HashMap::new()),
+            declaration_uids: Arc::new(HashMap::new()),
+            declaration_uid_kinds: Arc::new(HashMap::new()),
+            declaration_hidden_by_uid: Arc::new(HashMap::new()),
+            trait_constructor_slots: Arc::new(HashMap::new()),
+            owner_registry: Arc::new(OwnerRegistry::default()),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -2146,12 +2162,13 @@ impl Resolver {
             capture_placeholder_ids: HashSet::new(),
             pattern_proxies: None,
             predeclared_ids: HashMap::new(),
-            declaration_entries: HashMap::new(),
-            declaration_uids: HashMap::new(),
-            declaration_uid_kinds: HashMap::new(),
-            declaration_hidden_by_uid: HashMap::new(),
-            trait_constructor_slots: HashMap::new(),
-            owner_registry: OwnerRegistry::default(),
+            impl_member_scopes: HashMap::new(),
+            declaration_entries: Arc::new(HashMap::new()),
+            declaration_uids: Arc::new(HashMap::new()),
+            declaration_uid_kinds: Arc::new(HashMap::new()),
+            declaration_hidden_by_uid: Arc::new(HashMap::new()),
+            trait_constructor_slots: Arc::new(HashMap::new()),
+            owner_registry: Arc::new(OwnerRegistry::default()),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -2218,6 +2235,28 @@ impl Resolver {
         )
     }
 
+    fn inherent_impl_body_scope(&self, name: &str, span: &Span) -> Result<Scope, ResolveError> {
+        let mut scope = self.scope.child();
+        if let Some(members) = self.impl_member_scopes.get(name) {
+            for (member, lowered_name) in members {
+                let uid = self
+                    .scope
+                    .lookup(lowered_name)
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Missing predeclared impl member: {lowered_name}"),
+                        span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                            subject: Some(lowered_name.clone()),
+                        },
+                        related_labels: Vec::new(),
+                    })?;
+                scope.define_with_id(member, uid);
+            }
+        }
+        Ok(scope)
+    }
+
     fn symbol_info_for_declaration(
         &self,
         name: &str,
@@ -2227,11 +2266,21 @@ impl Resolver {
         declaration_symbol_identity_info(&self.owner_registry, name, kind, enclosing_owner)
     }
 
+    fn extractor_declaration_entries(&self) -> Arc<HashMap<String, DeclarationEntry>> {
+        Arc::new(
+            self.declaration_entries
+                .iter()
+                .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                .map(|(key, entry)| (key.clone(), entry.clone()))
+                .collect(),
+        )
+    }
+
     pub(super) fn with_child_scope<T>(
         &mut self,
         f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
     ) -> Result<T, ResolveError> {
-        let mut child = Resolver::with_scope(self.scope.clone());
+        let mut child = Resolver::with_scope(self.scope.child());
         child.capture_placeholder_ids = self.capture_placeholder_ids.clone();
         child.pattern_proxies = self.pattern_proxies.clone();
         child.declaration_uids = self.declaration_uids.clone();
@@ -2392,6 +2441,52 @@ impl Resolver {
         name: String,
         compiler_generated: bool,
     ) -> Result<Resolved, ResolveError> {
+        let resolved = self.resolve_declaration_var_like(span.clone(), name, compiler_generated)?;
+        if let Resolved::Var(_, id) = &resolved {
+            if self.declaration_uid_kinds.get(&id.unique_id) == Some(&DeclarationKind::Deferror) {
+                if id.qualified_name.is_none() {
+                    return Err(ResolveError {
+                        message: "ErrorKind identity has no canonical declaration name".into(),
+                        span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                            subject: Some(id.name.clone()),
+                        },
+                        related_labels: Vec::new(),
+                    });
+                }
+                return Ok(Resolved::ErrorKind(span, id.clone()));
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_facet_root_node(&mut self, expr: Ast) -> Result<Resolved, ResolveError> {
+        let reference = match &expr {
+            Ast::Var(span, name) => {
+                Some(self.resolve_declaration_var_like(span.clone(), name.clone(), false)?)
+            }
+            Ast::Path(span, path) => Some(self.resolve_declaration_var_like(
+                span.clone(),
+                path.segments.join("::"),
+                false,
+            )?),
+            _ => None,
+        };
+        if let Some(Resolved::Var(_, id)) = &reference {
+            if self.declaration_uid_kinds.get(&id.unique_id) == Some(&DeclarationKind::Deferror) {
+                return Ok(reference.expect("checked declaration reference"));
+            }
+        }
+        self.resolve_node(expr)
+    }
+
+    fn resolve_declaration_var_like(
+        &self,
+        span: Span,
+        name: String,
+        compiler_generated: bool,
+    ) -> Result<Resolved, ResolveError> {
         let resolved = self.resolve_var_like(span.clone(), name, compiler_generated)?;
         if let Resolved::Var(_, id) = &resolved {
             let qualified = id.qualified_name.as_deref().or_else(|| {
@@ -2519,6 +2614,7 @@ impl Resolver {
         program: super::imports::ImportsResolvedProgram,
     ) -> Result<Vec<Resolved>, ResolveError> {
         let stmts = super::derive::expand_derive_annotations(program.into_statements())?;
+        self.impl_member_scopes.clear();
         let stmts = self.lower_impl_defs(stmts)?;
         self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
@@ -2528,7 +2624,10 @@ impl Resolver {
         for stmt in stmts {
             if matches!(stmt, Ast::Import(_, _, _))
                 || matches!(stmt, Ast::SupervisorInit(_, _))
-                || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
+                || matches!(
+                    stmt,
+                    Ast::BuiltinReflectionDecl(..) | Ast::IntrinsicDecl(_, _, _, _)
+                )
                 || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _, _) if is_doc_only_builtin_decl(name))
             {
                 // ImportsResolvedProgram guarantees file imports were applied before resolution.
@@ -2572,7 +2671,7 @@ impl Resolver {
                     continue;
                 }
                 if let Some(slots) = self.trait_constructor_slots.get(parent).cloned() {
-                    self.trait_constructor_slots.insert(*child, slots);
+                    Arc::make_mut(&mut self.trait_constructor_slots).insert(*child, slots);
                     changed = true;
                 }
             }
@@ -2893,7 +2992,7 @@ impl Resolver {
         extractor: bool,
         capture: bool,
     ) -> Result<Resolved, ResolveError> {
-        let mut closure_scope = self.scope.clone();
+        let mut closure_scope = self.scope.child();
         let mut resolved_params = Vec::new();
         for param in params {
             reject_special_variant_binding(&param.name, &param.span)?;
@@ -2920,12 +3019,7 @@ impl Resolver {
                 .extend(resolved_params.iter().map(|param| param.id.unique_id));
         }
         body_resolver.declaration_uids = self.declaration_uids.clone();
-        body_resolver.declaration_entries = self
-            .declaration_entries
-            .iter()
-            .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-            .map(|(key, entry)| (key.clone(), entry.clone()))
-            .collect();
+        body_resolver.declaration_entries = self.extractor_declaration_entries();
         body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
         body_resolver.owner_registry = self.owner_registry.clone();
@@ -2949,6 +3043,7 @@ impl Resolver {
         match node {
             node @ (Ast::PatternConsumerCall(..)
             | Ast::NumberedPlaceholder(..)
+            | Ast::Reflection(..)
             | Ast::Lit(..)
             | Ast::Var(..)
             | Ast::InternalVar(..)
@@ -2997,6 +3092,7 @@ impl Resolver {
             | Ast::TraitDef(..)
             | Ast::TraitImplDef(..)
             | Ast::BuiltinDecl(..)
+            | Ast::BuiltinReflectionDecl(..)
             | Ast::IntrinsicDecl(..)
             | Ast::BuiltinExtractorDecl(..)
             | Ast::BuiltinTypeDecl(..)
@@ -3048,17 +3144,29 @@ impl Resolver {
                 message: "numbered placeholders are only valid as Pattern projections in apply_pattern or a direct pipe argument".into(), span,
                 diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None }, related_labels: Vec::new(),
             }),
+            Ast::Reflection(span, value) => Err(ResolveError {
+                message: format!("{} was not materialized from its source before resolution", value.name()),
+                span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant, subject: None,
+                },
+                related_labels: Vec::new(),
+            }),
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
 
             Ast::Var(span, name) => self.resolve_value_var_like(span, name, false),
             Ast::InternalVar(span, name) => self.resolve_value_var_like(span, name, true),
             Ast::Path(span, path) => {
                 let name = path.segments.join("::");
+                let resolved = self.resolve_value_var_like(span.clone(), name.clone(), false)?;
+                if matches!(resolved, Resolved::ErrorKind(..)) {
+                    return Ok(resolved);
+                }
                 if path.segments.last().and_then(|segment| segment.chars().next())
                     .is_some_and(char::is_uppercase) {
                     return self.resolve_node(Ast::ConstructorCall(span, name, Vec::new()));
                 }
-                self.resolve_value_var_like(span, name, false)
+                Ok(resolved)
             }
             Ast::FuncLiteralRef(span, func) => Err(ResolveError {
                 message: format!(
@@ -3157,7 +3265,7 @@ impl Resolver {
                 Ok(Resolved::Bind(span, resolved_pat, Box::new(resolved_rhs)))
             }
 
-            Ast::SafeBind(span, pat, rhs) => {
+            Ast::SafeBind(span, pat, rhs, operator_span) => {
                 // Resolve RHS first (before defining the new binding for shadowing)
                 let resolved_rhs = self.resolve_node(*rhs)?;
                 let resolved_pat = self.resolve_pattern(pat)?;
@@ -3165,7 +3273,7 @@ impl Resolver {
                     span,
                     resolved_pat,
                     Box::new(resolved_rhs),
-                ))
+                 operator_span))
             }
 
             Ast::StatementQuestion(span, rhs) => Ok(Resolved::StatementQuestion(
@@ -3173,8 +3281,8 @@ impl Resolver {
                 Box::new(self.resolve_node(*rhs)?),
             )),
 
-            Ast::Do(span, return_type_arguments, statements) => {
-                let resolved_contract = self.resolve_do_contract(&span);
+            Ast::Do(span, return_type_arguments, statements, keyword_span) => {
+                let resolved_contract = self.resolve_do_contract(&span, &keyword_span);
                 let resolved_return_type_arguments = return_type_arguments
                     .into_iter()
                     .map(|argument| self.resolve_return_type_argument(argument))
@@ -3389,7 +3497,7 @@ impl Resolver {
                         return Ok(Resolved::FieldAccess(span, Box::new(root), field));
                     }
                 }
-                let resolved_expr = self.resolve_node(*expr)?;
+                let resolved_expr = self.resolve_facet_root_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
             }
             Ast::FacetSegmentAccess(span, expr, segment) => {
@@ -3492,7 +3600,7 @@ impl Resolver {
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
                             visibility: f.visibility,
-                            readonly: f.readonly,
+                            readonly: f.readonly || attrs.readonly,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
@@ -3501,7 +3609,7 @@ impl Resolver {
                     rid,
                     resolved_type_params,
                     rfields,
-                    self.resolve_result_effect_decl_attrs(&attrs),
+                    resolve_decl_attrs(&attrs),
                 ))
             }
 
@@ -3562,11 +3670,12 @@ impl Resolver {
                     symbol_info,
                     span: span.clone(),
                 };
-                let mut error_scope = self.scope.clone();
+                let mut error_scope = self.scope.child();
+                error_scope.define_with_id("Self", uid);
                 let mut rfields = Vec::new();
                 for f in fields {
                     reject_special_variant_binding(&f.name, &f.span)?;
-                    let uid = error_scope.define(&f.name, f.span.clone());
+                    let uid = error_scope.reserve_id();
                     rfields.push(ResolvedField {
                         id: Some(ResolvedId {
                             name: f.name.clone(),
@@ -3585,12 +3694,7 @@ impl Resolver {
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
                 show_resolver.declaration_uids = self.declaration_uids.clone();
-                show_resolver.declaration_entries = self
-                    .declaration_entries
-                    .iter()
-                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-                    .map(|(key, entry)| (key.clone(), entry.clone()))
-                    .collect();
+                show_resolver.declaration_entries = self.extractor_declaration_entries();
                 show_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 show_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 show_resolver.owner_registry = self.owner_registry.clone();
@@ -3686,18 +3790,13 @@ impl Resolver {
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
-                let mut body_scope = self.scope.clone();
+                let mut body_scope = self.inherent_impl_body_scope(&name, &span)?;
                 // Ensure self-recursion inside this definition binds to this declaration,
                 // not to a newer same-name declaration predeclared later in the chunk.
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
-                body_resolver.declaration_entries = self
-                    .declaration_entries
-                    .iter()
-                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-                    .map(|(key, entry)| (key.clone(), entry.clone()))
-                    .collect();
+                body_resolver.declaration_entries = self.extractor_declaration_entries();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -3792,16 +3891,11 @@ impl Resolver {
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
-                let mut body_scope = self.scope.clone();
+                let mut body_scope = self.inherent_impl_body_scope(&name, &span)?;
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
-                body_resolver.declaration_entries = self
-                    .declaration_entries
-                    .iter()
-                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-                    .map(|(key, entry)| (key.clone(), entry.clone()))
-                    .collect();
+                body_resolver.declaration_entries = self.extractor_declaration_entries();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.owner_registry = self.owner_registry.clone();
@@ -3873,7 +3967,7 @@ impl Resolver {
                     method_headers.push((method.name.clone(), method_uid, qualified_method));
                 }
 
-                let mut trait_method_scope = self.scope.clone();
+                let mut trait_method_scope = self.scope.child();
                 for (method_name, method_uid, _) in &method_headers {
                     trait_method_scope.define_with_id(method_name, *method_uid);
                 }
@@ -3893,14 +3987,9 @@ impl Resolver {
                         attrs,
                         span: method_span,
                     } = method;
-                    let mut method_resolver = Resolver::with_scope(trait_method_scope.clone());
+                    let mut method_resolver = Resolver::with_scope(trait_method_scope.child());
                     method_resolver.declaration_uids = self.declaration_uids.clone();
-                    method_resolver.declaration_entries = self
-                        .declaration_entries
-                        .iter()
-                        .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-                        .map(|(key, entry)| (key.clone(), entry.clone()))
-                        .collect();
+                    method_resolver.declaration_entries = self.extractor_declaration_entries();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -4109,7 +4198,7 @@ impl Resolver {
                         .get(&qualified_function_name)
                         .copied()
                         .unwrap_or_else(|| self.scope.reserve_id());
-                    let mut method_scope = self.scope.clone();
+                    let mut method_scope = self.scope.child();
                     // A trait method's bare self-name denotes its contract,
                     // just as in a default body. The call's types select the
                     // implementation; binding the concrete method here would
@@ -4124,12 +4213,7 @@ impl Resolver {
                     // Only declared trait members introduce a self-name alias.
                     let mut method_resolver = Resolver::with_scope(method_scope);
                     method_resolver.declaration_uids = self.declaration_uids.clone();
-                    method_resolver.declaration_entries = self
-                        .declaration_entries
-                        .iter()
-                        .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-                        .map(|(key, entry)| (key.clone(), entry.clone()))
-                        .collect();
+                    method_resolver.declaration_entries = self.extractor_declaration_entries();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -4255,14 +4339,9 @@ impl Resolver {
                     .or_else(|| self.declaration_uids.get(&qualified_name).copied())
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
-                let mut decl_resolver = Resolver::with_scope(self.scope.clone());
+                let mut decl_resolver = Resolver::with_scope(self.scope.child());
                 decl_resolver.declaration_uids = self.declaration_uids.clone();
-                decl_resolver.declaration_entries = self
-                    .declaration_entries
-                    .iter()
-                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-                    .map(|(key, entry)| (key.clone(), entry.clone()))
-                    .collect();
+                decl_resolver.declaration_entries = self.extractor_declaration_entries();
                 decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 decl_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 decl_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -4304,6 +4383,18 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
+            Ast::BuiltinReflectionDecl(span, value, _) => Err(ResolveError {
+                message: format!(
+                    "builtin value declaration {} must not reach resolution",
+                    value.name()
+                ),
+                span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
+            }),
             Ast::IntrinsicDecl(span, name, _, _) => Err(ResolveError {
                 message: format!(
                     "Intrinsic declaration `{name}` is docs-only and should not reach resolution"
@@ -4529,7 +4620,10 @@ impl Resolver {
                 match self.lower_capture_expr(span.clone(), *target, args)? {
                     Ast::Capture(_, target, args) => {
                         let resolved_target = match *target {
-                            Ast::Path(path_span, path) => self.resolve_value_var_like(
+                            Ast::Var(target_span, name) => {
+                                self.resolve_declaration_var_like(target_span, name, false)?
+                            }
+                            Ast::Path(path_span, path) => self.resolve_declaration_var_like(
                                 path_span,
                                 path.segments.join("::"),
                                 false,
@@ -4728,8 +4822,24 @@ impl Resolver {
                     symbol_info,
                     span: span.clone(),
                 };
+                // Only the selected Record declaration admits shorthand. Keep the
+                // source expression shape until this point so qualified paths and
+                // other expressions cannot be mistaken for bare variables.
+                let named_record = self
+                    .declaration_uid_kinds
+                    .get(&uid)
+                    .is_some_and(|kind| matches!(kind, DeclarationKind::Record))
+                    && args
+                        .iter()
+                        .any(|arg| matches!(arg, RecordLitArg::Named(..)));
                 let resolved_args = args
                     .into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(Ast::Var(span, name)) if named_record => {
+                            RecordLitArg::Named(name.clone(), Ast::Var(span, name))
+                        }
+                        other => other,
+                    })
                     .map(|arg| match arg {
                         spire::ast::RecordLitArg::Positional(e) => {
                             Ok(ResolvedRecordLitArg::Positional(self.resolve_node(e)?))
@@ -4991,7 +5101,7 @@ impl Resolver {
         })
     }
 
-    fn resolve_do_contract(&self, span: &Span) -> ResolvedDoContract {
+    fn resolve_do_contract(&self, span: &Span, keyword_span: &Span) -> ResolvedDoContract {
         let resolve_trait = |identity: sindr::intrinsic::CanonicalTraitIdentity| {
             let name = identity.surface_name();
             let unique_id = self.declaration_uids.get(name).copied()?;
@@ -5014,49 +5124,11 @@ impl Resolver {
             })
         };
         ResolvedDoContract {
+            keyword_span: keyword_span.clone(),
+            monad_fail_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::MonadFail),
             monad_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Monad),
             alternative_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Alternative),
         }
-    }
-
-    /// Resolve a compiler-owned Trait by its canonical declaration identity.
-    /// A display-name lookup is insufficient here: an annotation must retain
-    /// the exact predeclared id that Scar will later compare with Trait impls.
-    fn resolve_canonical_constructor_trait(&self, name: &str, span: &Span) -> Option<ResolvedId> {
-        let unique_id = self.declaration_uids.get(name).copied()?;
-        if !matches!(
-            self.declaration_uid_kinds.get(&unique_id),
-            Some(DeclarationKind::Trait)
-        ) {
-            return None;
-        }
-        let owner = self.owner_registry.get(name)?;
-        if owner.canonical_key != name
-            || owner.kind != OwnerKind::Trait
-            || owner.identity != TypeIdentity::TypeConstructor
-        {
-            return None;
-        }
-        let qualified_name = self.declaration_fq_name_for_uid(unique_id)?;
-        Some(ResolvedId {
-            name: name.to_string(),
-            qualified_name: Some(qualified_name),
-            unique_id,
-            compiler_generated: true,
-            symbol_info: self.symbol_info_for_declaration(name, &DeclarationKind::Trait, None),
-            span: span.clone(),
-        })
-    }
-
-    fn resolve_result_effect_decl_attrs(&self, attrs: &DeclAttrs) -> ResolvedDeclAttrs {
-        let mut resolved = resolve_decl_attrs(attrs);
-        if let Some(result_effect) = resolved.result_effect.as_mut() {
-            result_effect.monad_trait =
-                self.resolve_canonical_constructor_trait("Monad", &result_effect.annotation_span);
-            result_effect.monad_t_trait =
-                self.resolve_canonical_constructor_trait("MonadT", &result_effect.annotation_span);
-        }
-        resolved
     }
 
     fn direct_constructor_trait_for_signature_type(&self, ty: &AstTy) -> Option<ResolvedId> {
@@ -5296,8 +5368,8 @@ mod special_form_identity_tests {
         let mut resolver = Resolver::new();
         let name = "Global::User::map_err".to_string();
         let uid = resolver.scope.define("map_err", Span { start: 0, end: 7 });
-        resolver.declaration_uids.insert(name.clone(), uid);
-        resolver.declaration_entries.insert(
+        Arc::make_mut(&mut resolver.declaration_uids).insert(name.clone(), uid);
+        Arc::make_mut(&mut resolver.declaration_entries).insert(
             name.clone(),
             DeclarationEntry {
                 module_path: "Global::User".into(),
@@ -5351,5 +5423,49 @@ mod special_form_identity_tests {
             .expect_err("an unresolved callee must not become a special form");
         assert!(error.message.contains("Undefined"), "{}", error.message);
         assert_eq!(error.span, span);
+    }
+}
+
+#[cfg(test)]
+mod child_entry_tests {
+    use super::*;
+
+    #[test]
+    fn body_declaration_entries_keep_only_extractors_and_isolate_updates() {
+        let mut resolver = Resolver::new();
+        let make_entry = |name: &str, kind| DeclarationEntry {
+            module_path: "Test".into(),
+            name: name.into(),
+            fq_name: format!("Test::{name}"),
+            kind,
+            stage_index: 0,
+            registration_order: 0,
+            auto_import: false,
+            hidden: false,
+            visibility: spire::ast::Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+            value_parameter_count: None,
+        };
+        resolver.declaration_entries = Arc::new(HashMap::from([
+            (
+                "Test::Match".into(),
+                make_entry("Match", DeclarationKind::Extractor),
+            ),
+            (
+                "Test::function".into(),
+                make_entry("function", DeclarationKind::Def),
+            ),
+        ]));
+        let mut body = resolver.extractor_declaration_entries();
+        assert_eq!(body.len(), 1);
+        assert!(body.contains_key("Test::Match"));
+        assert!(!body.contains_key("Test::function"));
+        Arc::make_mut(&mut body).insert(
+            "Test::Nested".into(),
+            make_entry("Nested", DeclarationKind::Extractor),
+        );
+        assert!(!resolver.declaration_entries.contains_key("Test::Nested"));
+        assert_eq!(resolver.declaration_entries.len(), 2);
     }
 }

@@ -1,0 +1,47 @@
+import Test;
+
+deferror RetainedFailure { "retained" }
+
+def failure_message(value: Result<$A>) -> String {
+  match value {
+    Err(error) => Error::message(error),
+    Ok(_) => "unexpected success",
+  }
+}
+
+test("MonadFail") {
+  it("retains Error in Result and Either") {
+    do {
+      result: Result<Int> = MonadFail::fail(RetainedFailure())
+      either: Either<Error, Int> = MonadFail::fail(RetainedFailure())
+      converted: Result<Int> = to(either)
+      assert_eq("retained", failure_message(result))
+      assert_eq("retained", failure_message(converted))
+    }
+  }
+  it("stores EitherT failure inside a successful base Result") {
+    do {
+      transformed: EitherT<Error, Result, Int> = MonadFail::fail(RetainedFailure())
+      inner =? EitherT::run(transformed)
+      result: Result<Int> = to(inner)
+      assert_eq("retained", failure_message(result))
+    }
+  }
+  it("fails ReaderT and StateT in their base without a success pair") {
+    do {
+      reader: ReaderT<String, Result, Int> = MonadFail::fail(RetainedFailure())
+      state: StateT<Int, Result, Int> = MonadFail::fail(RetainedFailure())
+      assert_eq("retained", failure_message(ReaderT::run(reader, "environment")))
+      assert_eq("retained", failure_message(StateT::run(state, 5)))
+    }
+  }
+  it("selects fail_if through the complete expected carrier") {
+    do {
+      failed: Result<Int> = MonadFail::fail_if(True, RetainedFailure(), Ok(4))
+      succeeded: Result<Int> = MonadFail::fail_if(False, RetainedFailure(), Ok(4))
+      assert_eq("retained", failure_message(failed))
+      value =? succeeded
+      assert_eq(4, value)
+    }
+  }
+}

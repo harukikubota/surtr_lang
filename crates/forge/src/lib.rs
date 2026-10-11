@@ -76,14 +76,22 @@ mod tests {
         }
     }
 
-    fn parse_std_module_stage(source: &str, module_path: &str) -> Vec<sigil::StagedModuleAst> {
+    fn parse_std_module_stage(
+        source: &str,
+        module_path: Option<&str>,
+    ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             source,
-            spire::ParserContext::module(0, (module_path == "Facet").then(|| module_path.into()))
-                .with_rules(spire::ParseRules::std_module()),
+            spire::ParserContext::module(
+                0,
+                module_path
+                    .filter(|path| *path == "Facet")
+                    .map(str::to_owned),
+            )
+            .with_rules(spire::ParseRules::std_module()),
         )
-        .unwrap_or_else(|error| panic!("standard module {module_path} should parse: {error:?}"));
-        let fallback = sigil::const_only_fallback_module_path(&ast, Some(module_path));
+        .unwrap_or_else(|error| panic!("standard source {module_path:?} should parse: {error:?}"));
+        let fallback = sigil::const_only_fallback_module_path(&ast, module_path);
         sigil::staged_modules_from_source_ast(ast, fallback)
     }
 
@@ -134,7 +142,14 @@ mod tests {
             let resolve_state = resolved.resume_state;
             let mut scar_session = ScarSession::new();
             let typed = scar_session
-                .typecheck_staged_program_with_context(resolved, TypecheckContext::default())
+                .typecheck_staged_program_with_context(
+                    resolved,
+                    TypecheckContext {
+                        runtime_policy: sindr::policy::RuntimeSourcePolicy::std_module(),
+                        enforce_builtin_type_contracts: true,
+                        allow_private_facet_inspection: false,
+                    },
+                )
                 .expect("std modules should typecheck");
             let bytecode = codegen_typed_program(typed).expect("std modules should codegen");
             scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&bytecode));
@@ -157,7 +172,7 @@ mod tests {
         })
     }
 
-    fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
+    fn typed_with_builtin_prelude(source: &str) -> scar::typed::TypedProgram {
         let prelude = cached_std_compile_prefix();
         let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
@@ -175,7 +190,6 @@ mod tests {
         scar_session
             .typecheck_staged_program_in_place_with_context(resolved, TypecheckContext::default())
             .expect("source should typecheck")
-            .nodes
     }
 
     fn typed_module_program_with_builtin_prelude(source: &str) -> scar::typed::TypedProgram {
@@ -277,7 +291,7 @@ mod tests {
         let prelude = cached_std_compile_prefix();
         let mut forge_session = ForgeSession::from_bytecode(&prelude.bytecode);
         let (chunk, _) = forge_session
-            .codegen_chunk(typed)
+            .codegen_chunk_typed_program(typed)
             .expect("codegen should succeed");
         compose_bytecode_with_chunk(prelude.bytecode.clone(), chunk)
             .expect("bytecode should compose")
@@ -293,7 +307,6 @@ mod tests {
         compose_bytecode_with_chunk(prelude.bytecode.clone(), chunk)
     }
 
-    #[test]
     fn codegen_rejects_call_arity_above_u8_limit() {
         fn source_with_arity(arity: usize) -> String {
             let params = (0..arity)
@@ -414,6 +427,10 @@ mod tests {
         semantic_prefix_case!(codegen_rejects_boot_plan_handler_override_for_unknown_slot),
         semantic_prefix_case!(codegen_typed_program_embeds_genserver_runtime_handler_specs),
         semantic_prefix_case!(codegen_typed_program_emits_v2_process_spec_for_standby_process_init),
+        semantic_prefix_case!(codegen_rejects_call_arity_above_u8_limit),
+        semantic_prefix_case!(special_enum_captures_use_normal_constructor_lowering),
+        semantic_prefix_case!(safe_mod_trait_call_preserves_builtin_source_context),
+        semantic_prefix_case!(facet_api_capture_preserves_resolved_callable_metadata),
     ];
 
     #[test]
@@ -1279,7 +1296,6 @@ print("ok")"#,
         assert_no_call_builtin(&bytecode, "len");
     }
 
-    #[test]
     fn special_enum_captures_use_normal_constructor_lowering() {
         let bytecode = codegen_source(
             "yes: (-> Boolean) = &True\nno: (-> Boolean) = &Boolean::False\nwrap: (Int -> Result<Int>) = &Result<_>::Ok\n(yes(), no(), wrap(3))",
@@ -1299,16 +1315,10 @@ print("ok")"#,
         assert_eq!(ids, (0..ids.len() as u32).collect::<Vec<_>>());
     }
 
-    #[test]
-    fn safe_mod_trait_call_lowers_to_specialized_opcode() {
+    fn safe_mod_trait_call_preserves_builtin_source_context() {
         let bytecode = codegen_source("remainder = Mod::safe_mod(7, 3)");
-
-        assert!(bytecode
-            .opcodes
-            .iter()
-            .any(|op| matches!(op, Opcode::SafeModInt)));
-
-        assert_no_call_builtin(&bytecode, "safe_mod");
+        let id = sindr::builtin::builtin_id_by_name("safe_mod").unwrap();
+        assert!(bytecode.opcodes.iter().any(|op|matches!(op,Opcode::CallBuiltin{builtin_id,arity:2,span_start,span_end} if *builtin_id==id && span_end>span_start)));
     }
 
     #[test]
@@ -1381,7 +1391,7 @@ print("ok")"#,
     }
 
     #[test]
-    fn direct_shift_and_bit_index_builtins_lower_to_specialized_opcodes() {
+    fn fallible_shift_and_bit_index_builtins_preserve_call_continuations() {
         let bytecode = codegen_typed(vec![
             builtin_app(
                 "shl",
@@ -1399,17 +1409,6 @@ print("ok")"#,
             builtin_app("toggle_bit", vec![int_lit(5), int_lit(0)], Ty::Int),
         ]);
 
-        for opcode in [
-            Opcode::ShlInt,
-            Opcode::ShrInt,
-            Opcode::TestBitInt,
-            Opcode::SetBitInt,
-            Opcode::ClearBitInt,
-            Opcode::ToggleBitInt,
-        ] {
-            assert!(bytecode.opcodes.iter().any(|op| *op == opcode));
-        }
-
         for name in [
             "shl",
             "shr",
@@ -1418,7 +1417,11 @@ print("ok")"#,
             "clear_bit",
             "toggle_bit",
         ] {
-            assert_no_call_builtin(&bytecode, name);
+            let id = sindr::builtin::builtin_id_by_name(name).unwrap();
+            assert!(bytecode
+                .opcodes
+                .iter()
+                .any(|op| matches!(op,Opcode::CallBuiltin{builtin_id,..} if *builtin_id==id)));
         }
     }
 
@@ -1521,7 +1524,6 @@ value4 =? Facet::set(User.score.["talk"], user, 90)"#,
         }
     }
 
-    #[test]
     fn facet_api_capture_preserves_resolved_callable_metadata() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
@@ -1601,18 +1603,16 @@ expr = Expr::Halt
 Facet::view(Expr.Add, expr)"#,
         );
 
-        let has_segment_detail = bytecode.constants.iter().any(|constant| {
-            matches!(
-                constant,
-                Constant::Str(message)
-                    if message.contains("Variant mismatch at segment 1")
-                        && message.contains(".Add")
-            )
-        });
-        assert!(
-            has_segment_detail,
-            "expected variant mismatch detail with segment context in constants"
-        );
+        assert!(bytecode
+            .constants
+            .iter()
+            .any(|constant| matches!(constant,Constant::Str(segment) if segment==".Add")));
+        let definition = bytecode
+            .error_templates
+            .iter()
+            .find(|definition| definition.kind == "Global::FacetReadVariantMismatch")
+            .unwrap();
+        assert!(bytecode.opcodes.iter().any(|opcode|matches!(opcode,Opcode::Call{fun_idx,arity:5,..} if *fun_idx==definition.constructor_fun_idx)));
     }
 
     fn bounded_add_generic_helpers_emit_specialized_functions() {
@@ -1748,7 +1748,7 @@ supervisor_init {
         assert_eq!(handler.handler_target.named_args[0].value, "./logs/app.log");
         assert_eq!(bytecode.runtime_boot_plan.supervisor_overrides.len(), 1);
         let supervisor = &bytecode.runtime_boot_plan.supervisor_overrides[0];
-        assert_eq!(supervisor.process_name, "DynamicSupervisor");
+        assert_eq!(supervisor.process_name, "Global::DynamicSupervisor");
         assert_eq!(supervisor.policy.max_restarts, 10);
         assert!(supervisor.policy.allow_adopt);
     }

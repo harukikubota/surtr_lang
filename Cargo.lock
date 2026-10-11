@@ -376,6 +376,7 @@ dependencies = [
  "diagnostics",
  "num-bigint",
  "regex",
+ "serde",
  "serde_json",
  "sindr",
 ]
@@ -883,15 +884,21 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 name = "rune"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "diagnostics",
  "eldr",
  "forge",
  "libc",
  "scar",
+ "scar-test-cache-key",
+ "serde",
  "serde_json",
+ "sha2",
  "sigil",
  "sindr",
  "spire",
+ "terminal_size",
+ "unicode-width 0.2.0",
  "xldr",
 ]
 
@@ -1222,6 +1229,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

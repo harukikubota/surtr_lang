@@ -1,6 +1,7 @@
 @doc """
 One of two independently typed values.
-Either is a general choice value, not Result-style error control flow.
+Either is a general choice value. Either<Error, A> also implements MonadFail;
+SafeBind still unwraps only Result, so inspect Either explicitly.
 It derives `Eq` when both payload types support `Eq`.
 
 ## REPL
@@ -245,10 +246,7 @@ where
 `Applicative` implementation for `Either`.
 The mapper is inspected first, and the first encountered Left value is kept.
 """
-impl Applicative for Either<$L, $R>
-where
-  $R: Applicative.$A
-{
+impl Applicative for Either<$L, $R> {
   @doc """
   Inject a payload as `Either::Right`.
 
@@ -287,10 +285,7 @@ where
 `Monad` implementation for `Either`.
 Binding continues Right payloads and short-circuits Left values.
 """
-impl Monad for Either<$L, $R>
-where
-  $R: Monad.$A
-{
+impl Monad for Either<$L, $R> {
   @doc """
   Return a payload as `Either::Right`.
 
@@ -336,5 +331,21 @@ impl Convert<Option<$R>> for Either<$L, $R> {
   """
   def to::<Option<$R>>(self: Self) -> Option<$R> {
     Either::to_option(self)
+  }
+}
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for Either<Error, $T> {
+  def fail::<Either<Error, $T>>(error: Error) -> Either<Error, $T> {
+    Either::Left(error)
+  }
+}
+
+impl Convert<Result<$A>> for Either<Error, $A> {
+  def to::<Result<$A>>(self: Self) -> Result<$A> {
+    match self {
+      Either::Right(value) => Ok(value),
+      Either::Left(error) => Err(error),
+    }
   }
 }

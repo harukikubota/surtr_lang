@@ -1,7 +1,9 @@
 deferror SomeError(detail: String) {
-  detail
+  |detail: String|
+  Self(message: detail, detail)
 }
 
 deferror OtherError(detail: String) {
-  detail
+  |detail: String|
+  Self(message: detail, detail)
 }

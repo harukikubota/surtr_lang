@@ -423,6 +423,7 @@ impl Checker {
                         for (trait_key, info) in &self.traits {
                             if !info.constructor_slots.is_empty()
                                 && matches!(
+                                    // This enumerates optional capabilities; only required proofs propagate errors.
                                     self.constructor_projection(trait_key, &result_ty),
                                     ConstructorProjectionOutcome::Applicable { .. }
                                 )
@@ -678,6 +679,7 @@ impl Checker {
             Ty::ExtractorClosure(element) => Ok(Ty::ExtractorClosure(Box::new(recurse(element)?))),
             Ty::MatchResult(element) => Ok(Ty::MatchResult(Box::new(recurse(element)?))),
             Ty::List(element) => Ok(Ty::List(Box::new(recurse(element)?))),
+            Ty::Pid(marker) => Ok(Ty::Pid(Box::new(recurse(marker)?))),
             Ty::Tuple(items) => Ok(Ty::Tuple(
                 items.iter().map(recurse).collect::<Result<_, _>>()?,
             )),
@@ -922,6 +924,10 @@ impl Checker {
         outcome: ConstructorApplicationOutcome,
         span: &Span,
     ) -> TypeError {
+        let outcome = match outcome.into_checked() {
+            Ok(outcome) => outcome,
+            Err(error) => return error.at_span(span),
+        };
         let detail = match outcome {
             ConstructorApplicationOutcome::Deferred { .. } => {
                 "Callback input provenance remains unresolved".to_string()
@@ -988,7 +994,10 @@ impl Checker {
         if let Some(outcome) = self.constructor_provenance_application_outcome(&actual) {
             self.require_constructor_projection_type(outcome, required, &source.1, span, callable)?;
         }
-        if !self.constructor_provenance_allows(&actual, required, &source.1) {
+        if !self
+            .constructor_provenance_allows(&actual, required, &source.1)
+            .map_err(|error| error.at_span(span))?
+        {
             return Err(self.trait_failure(
                 TypeDiagnosticReason::MissingTypeConstructorCapability,
                 required,
@@ -1217,7 +1226,8 @@ impl Checker {
             Ty::List(item)
             | Ty::Lazy(item)
             | Ty::MatchResult(item)
-            | Ty::ExtractorClosure(item) => Self::has_callback_slot(item),
+            | Ty::ExtractorClosure(item)
+            | Ty::Pid(item) => Self::has_callback_slot(item),
             Ty::Result(ok, error) => Self::has_callback_slot(ok) || Self::has_callback_slot(error),
             _ => false,
         }
@@ -1627,8 +1637,8 @@ impl Checker {
         provenance: &Provenance,
         required: &str,
         actual_ty: &Ty,
-    ) -> bool {
-        match provenance {
+    ) -> Result<bool, TypeError> {
+        Ok(match provenance {
             Provenance::Constrained(capabilities) => capabilities.iter().any(|actual| {
                 self.constructor_capability_allows(actual, required, &mut HashSet::new())
             }),
@@ -1639,9 +1649,9 @@ impl Checker {
             }
             Provenance::Intersection(sources) => {
                 !sources.is_empty()
-                    && sources.iter().all(|(source, ty)| {
+                    && try_all(sources.iter(), |(source, ty)| {
                         self.constructor_provenance_allows(source, required, ty)
-                    })
+                    })?
             }
             Provenance::Template { ty, .. }
                 if self.constructor_capability_for_type(ty).is_some() =>
@@ -1658,25 +1668,30 @@ impl Checker {
                     .collect();
                 let declared = self.substitute_ty_with_mapping(ty, &mapping);
                 matches!(
-                    self.constructor_projection(required, &declared),
+                    self.constructor_projection(required, &declared)
+                        .into_checked()?,
                     ConstructorProjectionOutcome::Applicable { .. }
                 )
             }
             Provenance::Parameter(_) | Provenance::Projection { .. } | Provenance::Call { .. } => {
                 false
             }
-            Provenance::ConstructorApplication(_) => false,
+            Provenance::ConstructorApplication(outcome) => {
+                outcome.clone().into_checked()?;
+                false
+            }
             _ => {
                 if let Some(capability) = self.constructor_capability_for_type(actual_ty) {
                     self.constructor_capability_allows(&capability, required, &mut HashSet::new())
                 } else {
                     matches!(
-                        self.constructor_projection(required, actual_ty),
+                        self.constructor_projection(required, actual_ty)
+                            .into_checked()?,
                         ConstructorProjectionOutcome::Applicable { .. }
                     )
                 }
             }
-        }
+        })
     }
 
     fn template_provenance(&self, template: &Ty, actual: &Ty, variables: &Bindings) -> Source {
@@ -2005,6 +2020,11 @@ impl Checker {
                 nominal.arguments.get(*index).cloned()
             }
             (Ty::List(element), Projection::Element) => Some(element.as_ref().clone()),
+            (Ty::Enum(name, arguments), Projection::Element)
+                if name == "HashMap" && arguments.len() == 1 =>
+            {
+                Some(arguments[0].clone())
+            }
             (
                 Ty::MatchResult(payload),
                 Projection::Field {
@@ -2418,6 +2438,12 @@ impl Checker {
             TypedPattern::Located(_, inner) => {
                 self.pattern_provenance_bindings(inner, source, bindings)
             }
+            TypedPattern::HashMap(_, entries) => {
+                let payload = self.project_provenance(source, &Projection::Element, &Ty::Hole);
+                for entry in entries {
+                    self.pattern_provenance_bindings(&entry.pattern, &payload, bindings);
+                }
+            }
             TypedPattern::Var(_, id) => {
                 bindings.insert(id.unique_id, source.clone());
             }
@@ -2500,6 +2526,12 @@ impl Checker {
         bindings: &mut Bindings,
     ) {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => {
+                let payload = self.project_provenance(source, &Projection::Element, &Ty::Hole);
+                for entry in entries {
+                    self.match_provenance_bindings(&entry.pattern, &payload, bindings);
+                }
+            }
             TypedMatchPattern::Binding(id) => {
                 bindings.insert(id.unique_id, source.clone());
             }

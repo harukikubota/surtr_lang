@@ -9,4 +9,4 @@ else
   exit "$check_status"
 fi
 
-cargo run --quiet -p scar --example scar-test-prewarm
+cargo run --quiet -p rune --example scar-test-prewarm

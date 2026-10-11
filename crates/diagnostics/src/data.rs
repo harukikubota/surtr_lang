@@ -59,8 +59,7 @@ pub enum TypeDiagnosticReason {
     ExtractorArityMismatch,
     NonExhaustiveMatch,
     SafeBindErrorTypeMismatch,
-    SafeBindRequiresResultTarget,
-    ErrorValueMustBeWrapped,
+    SafeBindRequiresMonadFailTarget,
     FacetSafeBindForbidden,
     FacetPatternBindingForbidden,
     FacetOperationPolicyViolation,
@@ -70,11 +69,11 @@ pub enum TypeDiagnosticReason {
     SourcePolicyViolation,
     CompilePolicyViolation,
     NominalDeclarationConstraintViolation,
-    InvalidResultEffectAnnotation,
     TraitHelperCaptureNeedsExpectedType,
     ReservedIntrinsicMarkerUsage,
     TypecheckInvariantViolation,
     TraitImplementationForbidden,
+    CyclicTraitObligation,
 }
 
 impl TypeDiagnosticReason {
@@ -99,6 +98,7 @@ impl TypeDiagnosticReason {
             Self::MissingGenericBound => "MissingGenericBound",
             Self::MissingTraitCapability => "MissingTraitCapability",
             Self::NoApplicableTraitImplementation => "NoApplicableTraitImplementation",
+            Self::CyclicTraitObligation => "CyclicTraitObligation",
             Self::UnresolvedTraitMethodInstantiation => "UnresolvedTraitMethodInstantiation",
             Self::MissingTraitDispatchTarget => "MissingTraitDispatchTarget",
             Self::MissingTypeConstructorConstraint => "MissingTypeConstructorConstraint",
@@ -133,8 +133,7 @@ impl TypeDiagnosticReason {
             Self::ExtractorArityMismatch => "ExtractorArityMismatch",
             Self::NonExhaustiveMatch => "NonExhaustiveMatch",
             Self::SafeBindErrorTypeMismatch => "SafeBindErrorTypeMismatch",
-            Self::SafeBindRequiresResultTarget => "SafeBindRequiresResultTarget",
-            Self::ErrorValueMustBeWrapped => "ErrorValueMustBeWrapped",
+            Self::SafeBindRequiresMonadFailTarget => "SafeBindRequiresMonadFailTarget",
             Self::FacetSafeBindForbidden => "FacetSafeBindForbidden",
             Self::FacetPatternBindingForbidden => "FacetPatternBindingForbidden",
             Self::FacetOperationPolicyViolation => "FacetOperationPolicyViolation",
@@ -144,7 +143,6 @@ impl TypeDiagnosticReason {
             Self::SourcePolicyViolation => "SourcePolicyViolation",
             Self::CompilePolicyViolation => "CompilePolicyViolation",
             Self::NominalDeclarationConstraintViolation => "NominalDeclarationConstraintViolation",
-            Self::InvalidResultEffectAnnotation => "InvalidResultEffectAnnotation",
             Self::TraitHelperCaptureNeedsExpectedType => "TraitHelperCaptureNeedsExpectedType",
             Self::ReservedIntrinsicMarkerUsage => "ReservedIntrinsicMarkerUsage",
             Self::TypecheckInvariantViolation => "TypecheckInvariantViolation",
@@ -183,8 +181,8 @@ impl RuntimeDiagnosticReason {
     }
 }
 
-/// Stable parser failure families. The producer selects a reason from parser
-/// state; diagnostic adapters never recover it from rendered text.
+/// Stable parse-phase failure families, including worker startup failures.
+/// Producers select reasons; adapters never recover them from rendered text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseDiagnosticReason {
     IncompleteInput,
@@ -201,6 +199,7 @@ pub enum ParseDiagnosticReason {
     ReturnTypeArgumentArityMismatch,
     InvalidDoCarrierReturnTypeArgument,
     CompilerInvariant,
+    WorkerSpawnFailure,
 }
 
 impl ParseDiagnosticReason {
@@ -220,6 +219,7 @@ impl ParseDiagnosticReason {
             Self::ReturnTypeArgumentArityMismatch => "ReturnTypeArgumentArityMismatch",
             Self::InvalidDoCarrierReturnTypeArgument => "InvalidDoCarrierReturnTypeArgument",
             Self::CompilerInvariant => "CompilerInvariant",
+            Self::WorkerSpawnFailure => "WorkerSpawnFailure",
         }
     }
 }
@@ -248,15 +248,6 @@ pub enum ResolveDiagnosticReason {
 pub enum ReplDiagnosticReason {
     QueryEmpty,
     QueryUnsupported,
-    TypedCallMissingClosingParen,
-    TypedCallMissingCallee,
-    TypedCallInvalidCallee,
-    TypedCallEmptyArgument,
-    OperatorMissingTarget,
-    QueryArgumentUnsupported,
-    QueryArgumentListUnterminated,
-    QueryTypeInvalid,
-    QueryEvaluationFailed,
     CommandUnknown,
     CommandArgumentInvalid,
 }
@@ -266,15 +257,6 @@ impl ReplDiagnosticReason {
         match self {
             Self::QueryEmpty => "QueryEmpty",
             Self::QueryUnsupported => "QueryUnsupported",
-            Self::TypedCallMissingClosingParen => "TypedCallMissingClosingParen",
-            Self::TypedCallMissingCallee => "TypedCallMissingCallee",
-            Self::TypedCallInvalidCallee => "TypedCallInvalidCallee",
-            Self::TypedCallEmptyArgument => "TypedCallEmptyArgument",
-            Self::OperatorMissingTarget => "OperatorMissingTarget",
-            Self::QueryArgumentUnsupported => "QueryArgumentUnsupported",
-            Self::QueryArgumentListUnterminated => "QueryArgumentListUnterminated",
-            Self::QueryTypeInvalid => "QueryTypeInvalid",
-            Self::QueryEvaluationFailed => "QueryEvaluationFailed",
             Self::CommandUnknown => "CommandUnknown",
             Self::CommandArgumentInvalid => "CommandArgumentInvalid",
         }
@@ -407,6 +389,7 @@ pub enum ParseDiagnosticGuidance {
     WhereClause,
     MissingMetaState,
     MissingMetaInstance,
+    MissingMetaInitPolicy,
     AnonymousCaptureIdentity,
     AnonymousCaptureRequiresHelper,
     ImmediateAnonymousCall,
@@ -459,6 +442,8 @@ pub enum SourceRole {
     OperatorSignature,
     Value,
     ReturnTypeArgument,
+    ReturnType,
+    DoCarrier,
     Annotation,
     Expected,
     Contract,
@@ -480,6 +465,8 @@ impl SourceRole {
             Self::OperatorSignature => "operator_signature",
             Self::Value => "value",
             Self::ReturnTypeArgument => "return_type_argument",
+            Self::ReturnType => "return_type",
+            Self::DoCarrier => "do_carrier",
             Self::Annotation => "annotation",
             Self::Expected => "expected",
             Self::Contract => "contract",
@@ -501,6 +488,8 @@ impl SourceRole {
             Self::OperatorSignature => "OperatorSignature",
             Self::Value => "Value",
             Self::ReturnTypeArgument => "ReturnTypeArgument",
+            Self::ReturnType => "Return type",
+            Self::DoCarrier => "do_carrier",
             Self::Annotation => "Annotation",
             Self::Expected => "Expected",
             Self::Contract => "Contract",
@@ -563,18 +552,12 @@ impl SourceFact {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum CallableReturnShape {
-    Any,
-    Plain,
-}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallableShapeData {
     pub callable: String,
     pub actual_type: Option<String>,
     pub expected_arity: Option<u32>,
     pub actual_arity: Option<u32>,
-    pub return_shape: CallableReturnShape,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -861,11 +844,10 @@ pub struct PatternDiagnosticData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TypePolicy {
-    ErrorValuePlacement,
     SafeBindFacet,
     FacetPatternBinding,
     FacetOperation,
-    SafeBindRequiresResultTarget,
+    SafeBindRequiresMonadFailTarget,
     SafeBindFailureTarget,
     FacetStageRestriction,
     ProcessHandlerScope,
@@ -874,7 +856,6 @@ pub enum TypePolicy {
     SourceExitCode,
     EntrypointRequirement,
     NominalDeclarationConstraint,
-    ResultEffectAnnotation,
     TraitHelperCaptureInference,
     IntrinsicMarkerUsage,
     ProducerContract,
@@ -901,6 +882,19 @@ pub struct RuntimeData {
     pub rhs: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternFailureContext {
+    Callable,
+    Do,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PatternFailureData {
+    pub context: PatternFailureContext,
+    pub carrier_type: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticData {
     CallableShape(CallableShapeData),
@@ -918,6 +912,7 @@ pub enum DiagnosticData {
     TypeConstructorCarrier(TypeConstructorCarrierData),
     BranchAssertion(BranchAssertionData),
     SafeBindRelation(SafeBindRelationData),
+    PatternFailure(PatternFailureData),
     Pattern(PatternDiagnosticData),
     Policy(PolicyData),
     Runtime(RuntimeData),
@@ -959,6 +954,7 @@ impl DiagnosticData {
             }
             Self::BranchAssertion(value) => ("BranchAssertion", serde_json::to_value(value)),
             Self::SafeBindRelation(value) => ("SafeBindRelation", serde_json::to_value(value)),
+            Self::PatternFailure(value) => ("PatternFailure", serde_json::to_value(value)),
             Self::Pattern(value) => ("Pattern", serde_json::to_value(value)),
             Self::Policy(value) => ("Policy", serde_json::to_value(value)),
             Self::Runtime(value) => ("Runtime", serde_json::to_value(value)),

@@ -1,0 +1,1 @@
+is_match(hash!["a" => 1], hash![^missing => _])

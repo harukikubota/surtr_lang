@@ -152,7 +152,10 @@ Int から Float への暗黙変換はありません。負の許容誤差や、
 ```surtr
 import Test;
 
-deferror InvalidCount(count: Int) { "count must be positive: #{count}" }
+deferror InvalidCount(count: Int) {
+  |count: Int|
+  Self(message: "count must be positive: #{count}", count)
+}
 
 test("expected failure") {
   it("checks the kind and message") {
@@ -177,7 +180,7 @@ import Test;
 
 test("cause chain") {
   it("keeps the original cause") {
-    result = Result::cause(Err(NoneError), ZeroDivisionError)
+    result = Result::cause(Err(NoneError()), ZeroDivisionError())
     assert_cause_chain([ZeroDivisionError, NoneError], result)
   }
 }
@@ -197,6 +200,7 @@ test("cause chain") {
 
 `push_stdin(text)` はテスト用の入力を追加します。
 入力と出力はケースごとに分かれており、読み残しは次の `it` に持ち越されません。
+ケースの入力は空の状態から始まります。入力を追加する前と、すべて読み終えた後は、`IO::get` は `Err(InputCharacterEnd())`、`IO::get_line` は `Err(InputLineEnd())` を返します。端末の入力は待ちません。
 
 ```surtr
 import Test;
@@ -255,9 +259,15 @@ test("Parser") {
 
 ## 実行結果と CLI オプション
 
-結果は PASS / FAIL / SKIP / PENDING / FILTERED で表示します。テストと各ケースは直列に実行します。
+全ファイルのコンパイルを終えてから、テストと各ケースを直列に実行します。コンパイルに失敗したファイルがあっても残りのファイルを確認し、失敗した各ファイルで最初に見つかったエラー1件を報告します。読み取り・コンパイルに失敗したファイルがある場合は、テストを実行せず終了します。
+
+成功したコンパイル結果はキャッシュに保存します。修正後の再実行では、変更されていないファイルと依存の有効なキャッシュを使い、再コンパイルを省きます。対象一覧と入力内容は変更の検出のために確認します。
+
+結果は PASS / FAIL / SKIP / PENDING / FILTERED で表示します。
 `--quiet` は成功・停止・許容された未実装項目の詳細と成功サマリーを省きます。
 失敗と拒否された pend は省きません。一覧表示では quiet でも選択項目を表示します。
+
+端末では Cargo と同じ形式で、標準環境の準備中は `Preparing`、ファイルのコンパイル中は `Compiling`、実行中は `Running` を一時表示します。ファイル番号・総数・パスから処理中の場所を確認できます。`--quiet` でも表示し、完了時に消去します。進捗は stderr に出すため、`--format json` の結果には混ざりません。stderrをファイルへ保存する場合や端末幅を取得できない場合は表示しません。
 
 `--timings` は実行したケースとコマンド全体の所要時間を表示します。
 実行しないケースに時間は付きません。一覧表示ではコマンド全体だけを計測します。

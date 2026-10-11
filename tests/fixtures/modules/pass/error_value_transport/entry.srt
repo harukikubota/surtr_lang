@@ -1,0 +1,5 @@
+error: Error = Failures::make()
+saved = Failures::save(error)
+value =? Ok(saved())
+print(value.message)
+print(Facet::view(Error.kind, value))

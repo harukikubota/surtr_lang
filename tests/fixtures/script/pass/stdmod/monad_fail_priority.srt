@@ -1,0 +1,118 @@
+deferror ChoiceEmpty { "empty" }
+deferror SourceFailure { "source" }
+
+defstruct FailureChoice<$A> { inner: Result<$A> }
+
+impl FailureChoice {
+  def new(inner: Result<$A>) -> FailureChoice<$A> { FailureChoice { inner } }
+  def run(self: FailureChoice<$A>) -> Result<$A> { self.inner }
+}
+
+impl Functor for FailureChoice<$T>
+where $T: Functor.$A
+{
+  def fmap(self: FailureChoice<$A>, mapper: ($A -> $B)) -> FailureChoice<$B> {
+    FailureChoice::new(Functor::fmap(self.inner, mapper))
+  }
+}
+
+impl Applicative for FailureChoice<$T>
+where $T: Applicative.$A
+{
+  def pure::<FailureChoice<$T>>(value: $A) -> FailureChoice<$A> {
+    FailureChoice::new(Ok(value))
+  }
+  def ap(mapper: FailureChoice<($A -> $B)>, value: FailureChoice<$A>) -> FailureChoice<$B> {
+    FailureChoice::new(Applicative::ap(mapper.inner, value.inner))
+  }
+}
+
+impl Monad for FailureChoice<$T>
+where $T: Monad.$A
+{
+  def return::<FailureChoice<$T>>(value: $A) -> FailureChoice<$A> {
+    FailureChoice::new(Ok(value))
+  }
+  def bind(self: FailureChoice<$A>, mapper: ($A -> FailureChoice<$B>)) -> FailureChoice<$B> {
+    FailureChoice::new(Monad::bind(self.inner, {|value| mapper(value).inner}))
+  }
+}
+
+impl MonadFail for FailureChoice<$T>
+where $T: MonadFail.$A
+{
+  def fail::<FailureChoice<$T>>(error: Error) -> FailureChoice<$T> {
+    print("fail")
+    FailureChoice::new(Err(error))
+  }
+}
+
+impl Alternative for FailureChoice<$T>
+where $T: Alternative.$A
+{
+  def empty::<FailureChoice<$T>>() -> FailureChoice<$T> {
+    print("empty")
+    FailureChoice::new(Err(ChoiceEmpty()))
+  }
+  def choose(left: FailureChoice<$A>, right: FailureChoice<$A>) -> FailureChoice<$A> {
+    match left.inner {
+      Ok(_) => left,
+      Err(_) => right,
+    }
+  }
+}
+
+def source() -> Result<Int> { Err(SourceFailure()) }
+
+def report(value: FailureChoice<$A>) -> Unit {
+  match FailureChoice::run(value) {
+    Ok(_) => print("unexpected success"),
+    Err(error) => print(Error::kind(error)),
+  }
+}
+
+partial: FailureChoice<Int> = do::<FailureChoice> {
+  2 <- FailureChoice::new(Ok(1))
+  print("unexpected partial continuation")
+  FailureChoice::new(Ok(3))
+}
+report(partial)
+
+safe: FailureChoice<Int> = do::<FailureChoice> {
+  value =? source()
+  print("unexpected SafeBind continuation")
+  FailureChoice::new(Ok(value))
+}
+report(safe)
+
+blocked: FailureChoice<Int> = do::<FailureChoice> {
+  Alternative::guard::<FailureChoice>(False)
+  print("unexpected guard continuation")
+  FailureChoice::new(Ok(3))
+}
+report(blocked)
+
+inner_error = ResultT::err::<Identity, Int>(SourceFailure())
+bound = Monad::bind(inner_error, {|value|
+  print("unexpected ResultT continuation")
+  ResultT::ok::<Identity>(value + 1)
+})
+match Identity::run(ResultT::run(bound)) {
+  Ok(_) => print("unexpected ResultT success"),
+  Err(error) => print(Error::kind(error)),
+}
+
+# do resolves Alternative::empty without importing the trait helpers.
+partial_option: Option<Int> = do::<Option> {
+  2 <- Option::Some(1)
+  print("unexpected Option pattern continuation")
+  Option::Some(3)
+}
+print(inspect(partial_option))
+
+safe_option: Option<Int> = do::<Option> {
+  value =? source()
+  print("unexpected Option SafeBind continuation")
+  Option::Some(value)
+}
+print(inspect(safe_option))

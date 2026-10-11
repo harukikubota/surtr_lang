@@ -1,82 +1,4 @@
 @doc """
-Concrete file-system errors returned by `File`.
-
-`File` is a UTF-8 text-only surface in v1. Host I/O failures are normalized
-into these recoverable Surtr errors so ordinary code can handle them through
-`Result` instead of treating them as VM failures.
-
-Typical mapping:
-- missing file or missing parent path: `FileNotFound`
-- permission failure: `FilePermissionDenied`
-- invalid or unsupported path syntax: `FileInvalidPath`
-- non-UTF-8 text input: `FileEncodingError`
-- other host-side failures: `FileIoError`
-"""
-deferror FileNotFound(path: String) {
-  "file not found: #{path}"
-}
-
-deferror FilePermissionDenied(path: String) {
-  "permission denied: #{path}"
-}
-
-deferror FileAlreadyExists(path: String) {
-  "file already exists: #{path}"
-}
-
-deferror FileInvalidPath(path: String) {
-  "invalid path: #{path}"
-}
-
-deferror FileClosed {
-  "file is already closed"
-}
-
-deferror FileEncodingError(detail: String) {
-  detail
-}
-
-deferror FileIoError(detail: String) {
-  detail
-}
-
-@doc """
-Opaque runtime-managed file handle used by `File::with_open`.
-
-`FileHandle` values are created by the runtime and are only valid inside the
-callback passed to `File::with_open`. User code cannot construct, store, or
-close them directly. The runtime owns their lifetime and guarantees cleanup
-when the callback returns, when the current VM run ends, and when an
-interactive chunk is rolled back.
-"""
-@builtin type FileHandle
-
-@doc """
-Open mode for `File::with_open`.
-
-Modes describe how one temporary handle is opened for the callback body.
-
-- `Read`
-  Read-only access. `File::write_chunk` returns `Err(FileIoError(...))`.
-- `Write`
-  Create or truncate, then write from the start of the file.
-- `Append`
-  Create if missing and write at the end of the file.
-- `ReadWrite`
-  Open for both reading and writing. The write position starts at the
-  beginning of the file.
-- `ReadAppend`
-  Open for reading and appending. Writes always target the end of the file.
-"""
-defenum FileMode {
-  Read,
-  Write,
-  Append,
-  ReadWrite,
-  ReadAppend,
-}
-
-@doc """
 UTF-8 text file helpers.
 
 `File` is intentionally not auto-imported; use qualified calls such as
@@ -110,8 +32,8 @@ defmod File {
   Returns:
   - `Ok(text)` on success
   - `Err(FileNotFound(path))` when the path is missing
-  - `Err(FileEncodingError(...))` when the bytes are not valid UTF-8
-  - `Err(FilePermissionDenied(path))` or `Err(FileIoError(...))` for host-side
+  - `Err(FileReadEncodingError(...))` when the bytes are not valid UTF-8
+  - `Err(FilePermissionDenied(path))` or `Err(FileHandleNotWritable(...))` for host-side
     failures
 
   ## REPL
@@ -176,7 +98,9 @@ defmod File {
   call, whether `body` returns `Ok(...)` or `Err(...)`.
 
   This is the primary API when several operations should share one open file.
-  `FileHandle` values are opaque and only meaningful inside `body`.
+  `FileHandle` values are opaque. A handle may be stored or returned from
+  `body`, but it is closed before this call returns. Later read, write, or
+  flush operations on it return `Err(FileClosed(...))`.
 
   Cleanup guarantee:
   - success path: flush, then close
@@ -186,14 +110,12 @@ defmod File {
   Prefer this API over any manual open/close pattern. `File` does not expose a
   user-visible `close` function on purpose.
 
-  ## Example
-  ```surtr
-  File::with_open("./tmp/sandbox/chunked.txt", Write, fn(file) {
-    _ =? File::write_chunk(file, "hello")
-    _ =? File::write_chunk(file, "\\nworld")
-    File::flush(file)
-  })
-  ```
+  ## REPL
+  Create `./tmp/sandbox/` before running this example.
+  xldr(1)> File::with_open("./tmp/sandbox/chunked.txt", FileMode::Write, {|file| _ =? File::write_chunk(file, "hello"); File::write_chunk(file, "\nworld")})
+  Ok(())
+  xldr(2)> File::read("./tmp/sandbox/chunked.txt")
+  Ok("hello\nworld")
   """
   @builtin def with_open(path: String, mode: FileMode, body: (FileHandle -> Result<$A>)) -> Result<$A>
 
@@ -205,14 +127,12 @@ defmod File {
   the API predictable for text processing, though it is not intended as a
   binary streaming surface.
 
-  ## Example
-  ```surtr
-  File::with_open("./tmp/sandbox/chunked.txt", Read, fn(file) {
-    first =? File::read_chunk(file, 5)
-    second =? File::read_chunk(file, 5)
-    Ok((first, second))
-  })
-  ```
+  ## REPL
+  Create `./tmp/sandbox/` before running this example.
+  xldr(1)> File::write("./tmp/sandbox/chunked.txt", "helloworld")
+  Ok(())
+  xldr(2)> File::with_open("./tmp/sandbox/chunked.txt", FileMode::Read, {|file| first =? File::read_chunk(file, 5); second =? File::read_chunk(file, 5); Ok((first, second))})
+  Ok(("hello", "world"))
   """
   @builtin def read_chunk(file: FileHandle, max_chars: Int) -> Result<String>
 
@@ -220,14 +140,16 @@ defmod File {
   Write UTF-8 text through an opened file handle.
 
   The exact behavior depends on the `FileMode` used to open the handle.
-  Writing through a `Read` handle returns `Err(FileIoError(...))`.
+  Writing through a `FileMode::Read` handle returns `Err(FileHandleNotWritable(...))`.
 
-  ## Example
-  ```surtr
-  File::with_open("./tmp/sandbox/chunked.txt", Append, fn(file) {
-    File::write_chunk(file, "tail")
-  })
-  ```
+  ## REPL
+  Create `./tmp/sandbox/` before running this example.
+  xldr(1)> File::write("./tmp/sandbox/chunked.txt", "head")
+  Ok(())
+  xldr(2)> File::with_open("./tmp/sandbox/chunked.txt", FileMode::Append, {|file| File::write_chunk(file, "tail")})
+  Ok(())
+  xldr(3)> File::read("./tmp/sandbox/chunked.txt")
+  Ok("headtail")
   """
   @builtin def write_chunk(file: FileHandle, text: String) -> Result<Unit>
 
@@ -239,4 +161,164 @@ defmod File {
   visible before the callback returns.
   """
   @builtin def flush(file: FileHandle) -> Result<Unit>
+}
+
+@doc """
+Opaque runtime-managed file handle used by `File::with_open`.
+
+`FileHandle` values are created and closed by the runtime. User code can
+store a handle or return it from the callback passed to `File::with_open`,
+but the file is closed before `with_open` returns. Reading, writing, or
+flushing that closed handle returns `Err(FileClosed(...))`.
+
+User code cannot construct or close handles directly. The runtime guarantees
+cleanup when the callback returns, when the current VM run ends, and when
+an interactive chunk is rolled back.
+
+## REPL
+Create `./tmp/sandbox/` before running this example.
+xldr(1)> File::write("./tmp/sandbox/handle.txt", "hello")
+Ok(())
+xldr(2)> handle =? File::with_open("./tmp/sandbox/handle.txt", FileMode::Read, {|file| Ok(file)}); print(inspect(File::read_chunk(handle, 1)))
+Err(FileClosed("file is already closed"))
+handle: FileHandle = FileHandle#1
+"""
+@builtin type FileHandle
+
+@doc """
+Open mode for `File::with_open`.
+
+Modes describe how one temporary handle is opened for the callback body.
+
+- `Read`
+  Read-only access. `File::write_chunk` returns `Err(FileHandleNotWritable(...))`.
+- `Write`
+  Create or truncate, then write from the start of the file.
+- `Append`
+  Create if missing and write at the end of the file.
+- `ReadWrite`
+  Open for both reading and writing. The write position starts at the
+  beginning of the file.
+- `ReadAppend`
+  Open for reading and appending. Writes always target the end of the file.
+"""
+defenum FileMode {
+  Read,
+  Write,
+  Append,
+  ReadWrite,
+  ReadAppend,
+}
+
+@doc """
+Concrete file-system errors returned by `File`.
+
+`File` is a UTF-8 text-only surface in v1. Host I/O failures are normalized
+into these recoverable Surtr errors so ordinary code can handle them through
+`Result` instead of treating them as VM failures.
+
+Typical mapping:
+- missing file or missing parent path: `FileNotFound`
+- permission failure: `FilePermissionDenied`
+- invalid or unsupported path syntax: `FileInvalidPath`
+- non-UTF-8 text input: `FileReadEncodingError` or `FileChunkEncodingError`
+- other host-side failures: operation-specific file errors
+"""
+deferror FileNotFound(path: String) {
+  |path: String|
+  Self(message: "file not found: #{path}", path)
+}
+
+deferror FilePermissionDenied(path: String) {
+  |path: String|
+  Self(message: "permission denied: #{path}", path)
+}
+
+deferror FileAlreadyExists(path: String) {
+  |path: String|
+  Self(message: "file already exists: #{path}", path)
+}
+
+deferror FileInvalidPath(path: String) {
+  |path: String|
+  Self(message: "invalid path: #{path}", path)
+}
+
+deferror FileClosed {
+  "file is already closed"
+}
+
+deferror FileReadEncodingError(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file read encoding failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileChunkEncodingError(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file chunk read encoding failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileReadFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file read failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileWriteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileAppendOpenFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file append open failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileAppendWriteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file append write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileAppendCloseFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file append close failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileDeleteFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file delete failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileOpenFailed(path: String, detail: String, mode: FileMode) {
+  |path: String, detail: String, mode: FileMode|
+  Self(message: "file open failed for #{path}: #{detail}", path, detail, mode)
+}
+
+deferror FileReadChunkFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file chunk read failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileWriteChunkFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file chunk write failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileFlushFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file flush failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileCloseFailed(path: String, detail: String) {
+  |path: String, detail: String|
+  Self(message: "file close failed for #{path}: #{detail}", path, detail)
+}
+
+deferror FileHandleNotReadable(path: String, mode: FileMode) {
+  |path: String, mode: FileMode|
+  Self(message: "file handle is not readable for #{path} in mode #{inspect(mode)}", path, mode)
+}
+
+deferror FileHandleNotWritable(path: String, mode: FileMode) {
+  |path: String, mode: FileMode|
+  Self(message: "file handle is not writable for #{path} in mode #{inspect(mode)}", path, mode)
 }

@@ -660,11 +660,170 @@ fn checkpoint(vm: &VM) -> VmCheckpoint {
     })
 }
 
+fn suspended_process_vm(process_count: u64) -> (VM, usize) {
+    reset_flat_map_metrics();
+    let (mut vm, mapper) = constant_mapper_vm(list((0..512).map(|n| Value::Int(int(n)))));
+    let mut context = vm
+        .prepare_callable_context(
+            flat_map_callable(),
+            vec![list([Value::Unit]), Value::Callable(mapper)],
+        )
+        .unwrap();
+    assert!(matches!(
+        vm.run_quantum(&mut context, &mut Budget::new(32)),
+        ProcessRunOutcome::QuantumExpired
+    ));
+    let builder_len = flat_map_metrics().builder_pushes;
+    assert!(builder_len > 0);
+    for pid in 0..process_count {
+        vm.process_runtime.processes.insert(
+            pid,
+            ProcessInstance {
+                pid,
+                spec_id: 0,
+                identity: PidHandle::new(pid, "Worker".into(), PidKind::Worker),
+                acceptance: if pid % 2 == 0 {
+                    ProcessAcceptance::Stopping
+                } else {
+                    ProcessAcceptance::Accepting
+                },
+                stop_reason: None,
+                status: ProcessStatus::Waiting(ProcessWaitReason::Boot),
+                mailbox: VecDeque::new(),
+                execution_context: Some(context.clone()),
+                state_value: None,
+                owner: None,
+                lifecycle_sink: None,
+                standby_state_pending: false,
+            },
+        );
+    }
+    reset_flat_map_metrics();
+    (vm, builder_len)
+}
+
+#[test]
+fn unchanged_process_checkpoints_do_not_clone_suspended_builders() {
+    let mut samples = Vec::new();
+    for process_count in [1, 8, 32] {
+        for chunk_count in [1, 4, 16] {
+            let (vm, builder_len) = suspended_process_vm(process_count);
+            let start = std::time::Instant::now();
+            for _ in 0..chunk_count {
+                drop(checkpoint(&vm));
+            }
+            let clones = flat_map_metrics().builder_clones;
+            samples.push((
+                process_count,
+                chunk_count,
+                builder_len,
+                clones,
+                clones * builder_len,
+                start.elapsed().as_micros(),
+            ));
+        }
+    }
+    eprintln!("checkpoint samples (processes, checkpoints, builder_len, clones, copied_items, microseconds): {samples:?}");
+    assert!(
+        samples.iter().all(|(_, _, _, clones, _, _)| *clones == 0),
+        "unchanged checkpoint builders must stay shared"
+    );
+}
+
+#[test]
+fn process_checkpoint_copies_only_mutated_entry_and_restores_future() {
+    let (mut vm, _) = suspended_process_vm(3);
+    let future = vm.process_runtime.allocate_future(Some(1), None, false);
+    let saved = checkpoint(&vm);
+    assert_eq!(flat_map_metrics().builder_clones, 0);
+    vm.process_runtime
+        .processes
+        .get_mut(&1)
+        .unwrap()
+        .state_value = Some(Value::Int(int(9)));
+    vm.process_runtime
+        .mark_process_waiting(1, ProcessWaitReason::Future(future));
+    vm.process_runtime
+        .resolve_future(future, Value::Int(int(17)));
+    assert_eq!(
+        flat_map_metrics().builder_clones,
+        1,
+        "unmodified processes must not copy their builders"
+    );
+    assert_eq!(vm.ready_future_value(future), Some(Value::Int(int(17))));
+    assert_eq!(vm.process_runtime.run_queue.front(), Some(&1));
+    vm.rollback_to_checkpoint(saved);
+    assert!(vm.ready_future_value(future).is_none());
+    assert!(vm.process_runtime.run_queue.is_empty());
+    assert_eq!(
+        vm.process_runtime.processes[&1].status,
+        ProcessStatus::Waiting(ProcessWaitReason::Boot)
+    );
+    assert_eq!(vm.process_runtime.processes[&1].state_value, None);
+
+    let committed = checkpoint(&vm);
+    vm.process_runtime
+        .processes
+        .get_mut(&1)
+        .unwrap()
+        .state_value = Some(Value::Int(int(42)));
+    drop(committed);
+    assert_eq!(
+        vm.process_runtime.processes[&1].state_value,
+        Some(Value::Int(int(42)))
+    );
+}
+
+#[test]
+fn process_checkpoint_stop_copies_only_owned_detached_task() {
+    let expected = list((0..4096).map(|n| Value::Int(int(n))));
+    let (mut vm, mapper) = constant_mapper_vm(expected.clone());
+    vm.frames[0].call_site = Some((0, 1));
+    let mut futures = Vec::new();
+    for owner in [7, 8] {
+        let mut computation = flat_map_callable();
+        computation.lexical_captures = vec![list([Value::Unit]), Value::Callable(mapper.clone())];
+        let Value::TaskHandle(future) = vm.invoke_task(computation, TaskMode::Async).unwrap()
+        else {
+            panic!("expected task handle")
+        };
+        futures.push(future);
+        let id = *vm.process_runtime.detached_tasks.iter().last().unwrap().0;
+        vm.process_runtime
+            .detached_tasks
+            .get_mut(&id)
+            .unwrap()
+            .owner_pid = Some(owner);
+    }
+    assert_eq!(vm.process_runtime.detached_tasks.len(), 2);
+    reset_flat_map_metrics();
+    let saved = checkpoint(&vm);
+    vm.remove_process_detached_tasks(7);
+    assert_eq!(
+        flat_map_metrics().builder_clones,
+        1,
+        "stopping one owner must not copy another owner's suspended task"
+    );
+    vm.rollback_to_checkpoint(saved);
+    vm.drain_background_tasks().unwrap();
+    for future in futures {
+        assert_eq!(vm.ready_future_value(future), Some(expected.clone()));
+    }
+    assert_eq!(
+        flat_map_metrics().callback_calls,
+        0,
+        "restoring task cursors must not invoke completed mappers again"
+    );
+    assert_eq!(flat_map_metrics().builder_finishes, 2);
+    assert_eq!(flat_map_metrics().builder_clones, 1);
+}
+
 #[test]
 fn flat_map_checkpoint_restores_independent_partial_builder_and_cursor() {
     reset_flat_map_metrics();
     let expected = list((0..4096).map(|n| Value::Int(int(n))));
     let (mut vm, mapper) = constant_mapper_vm(expected.clone());
+    vm.frames[0].call_site = Some((0, 1));
     let mut computation = flat_map_callable();
     computation.lexical_captures = vec![list([Value::Unit]), Value::Callable(mapper)];
     let task = vm.invoke_task(computation, TaskMode::Async).unwrap();
@@ -682,10 +841,15 @@ fn flat_map_checkpoint_restores_independent_partial_builder_and_cursor() {
     let saved = checkpoint(&vm);
     assert_eq!(
         flat_map_metrics().builder_clones,
-        1,
-        "only the checkpoint copies mutable construction state"
+        0,
+        "the checkpoint shares suspended construction state"
     );
     vm.drive_ready_runtime_quantum().unwrap();
+    assert_eq!(
+        flat_map_metrics().builder_clones,
+        1,
+        "only advancing the saved task copies its mutable construction state"
+    );
     let advanced_pushes = flat_map_metrics().builder_pushes;
     assert!(advanced_pushes > saved_pushes && advanced_pushes < 4096);
     vm.rollback_to_checkpoint(saved);

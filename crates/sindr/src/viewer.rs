@@ -72,6 +72,7 @@ pub enum ConstantView {
     Str { idx: u32, value: String },
     Bool { idx: u32, value: bool },
     Unit { idx: u32 },
+    ErrorKind { idx: u32, value: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,13 +122,6 @@ pub enum OpcodeView {
     },
     StringLen,
     ListLen,
-    SafeModInt,
-    ShlInt,
-    ShrInt,
-    TestBitInt,
-    SetBitInt,
-    ClearBitInt,
-    ToggleBitInt,
     StringContains,
     StringStartsWith,
     StringEndsWith,
@@ -254,6 +248,9 @@ pub enum OpcodeView {
     Pop,
     Return,
     Halt,
+    ErrorOperation {
+        operation: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -281,9 +278,9 @@ pub struct SourceRefView {
 pub struct ErrorTemplateView {
     pub template_id: u32,
     pub kind: String,
-    pub format: String,
-    pub num_params: u8,
-    pub source_ref: Option<SourceRefView>,
+    pub constructor_fun_idx: u32,
+    pub input_types: Vec<String>,
+    pub payload_fields: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -486,11 +483,31 @@ fn constant_view(idx: u32, constant: &Constant) -> ConstantView {
         },
         Constant::Bool(value) => ConstantView::Bool { idx, value: *value },
         Constant::Unit => ConstantView::Unit { idx },
+        Constant::ErrorKind(value) => ConstantView::ErrorKind {
+            idx,
+            value: value.clone(),
+        },
     }
 }
 
 fn opcode_view(opcode: &Opcode) -> OpcodeView {
     match opcode {
+        Opcode::IsErrorKind { .. } => OpcodeView::ErrorOperation {
+            operation: "IsErrorKind".into(),
+        },
+        Opcode::GetErrorPayload {
+            kind,
+            field_index,
+            payload_len,
+        } => OpcodeView::ErrorOperation {
+            operation: format!("GetErrorPayload {kind} {field_index}/{payload_len}"),
+        },
+        Opcode::AnnotateError { diagnostic } => OpcodeView::ErrorOperation {
+            operation: format!("AnnotateError {diagnostic:?}"),
+        },
+        Opcode::RuntimeContractViolation { message } => OpcodeView::ErrorOperation {
+            operation: format!("RuntimeContractViolation {message}"),
+        },
         Opcode::Reserved56 => panic!("reserved opcode tag 56 cannot be displayed"),
         Opcode::LoadConst(idx) => OpcodeView::LoadConst { const_idx: *idx },
         Opcode::LoadBuiltinRef(id) => OpcodeView::LoadBuiltinRef {
@@ -532,13 +549,6 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         },
         Opcode::StringLen => OpcodeView::StringLen,
         Opcode::ListLen => OpcodeView::ListLen,
-        Opcode::SafeModInt => OpcodeView::SafeModInt,
-        Opcode::ShlInt => OpcodeView::ShlInt,
-        Opcode::ShrInt => OpcodeView::ShrInt,
-        Opcode::TestBitInt => OpcodeView::TestBitInt,
-        Opcode::SetBitInt => OpcodeView::SetBitInt,
-        Opcode::ClearBitInt => OpcodeView::ClearBitInt,
-        Opcode::ToggleBitInt => OpcodeView::ToggleBitInt,
         Opcode::StringContains => OpcodeView::StringContains,
         Opcode::StringStartsWith => OpcodeView::StringStartsWith,
         Opcode::StringEndsWith => OpcodeView::StringEndsWith,
@@ -709,24 +719,22 @@ fn source_file_view(source: &SourceFileEntry) -> SourceFileView {
 
 fn error_template_view(
     template: &ErrTemplate,
-    source_lookup: &HashMap<String, String>,
+    _source_lookup: &HashMap<String, String>,
 ) -> ErrorTemplateView {
     ErrorTemplateView {
         template_id: template.id,
         kind: template.kind.clone(),
-        format: template.format.clone(),
-        num_params: template.num_params,
-        source_ref: Some(SourceRefView {
-            source_id: source_lookup
-                .values()
-                .next()
-                .cloned()
-                .unwrap_or_else(|| "0".to_string()),
-            span_start: template.span_start,
-            span_end: template.span_end,
-            line: template.line,
-            column: template.column,
-        }),
+        constructor_fun_idx: template.constructor_fun_idx,
+        input_types: template
+            .input_types
+            .iter()
+            .map(|ty| format!("{ty:?}"))
+            .collect(),
+        payload_fields: template
+            .payload_fields
+            .iter()
+            .map(|(name, ty)| (name.clone(), format!("{ty:?}")))
+            .collect(),
     }
 }
 
@@ -848,14 +856,9 @@ mod tests {
             error_templates: vec![ErrTemplate {
                 id: 0,
                 kind: "SampleError".into(),
-                location_source: crate::ir::ErrorLocationSource::SourceSpan,
-                span_start: 0,
-                span_end: 5,
-                line: 1,
-                column: 1,
-                format: "sample".into(),
-                num_params: 0,
-                diagnostic: None,
+                constructor_fun_idx: 0,
+                input_types: Vec::new(),
+                payload_fields: Vec::new(),
             }],
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),

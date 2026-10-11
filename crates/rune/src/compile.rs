@@ -4,9 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use diagnostics::{SourceId, SourceRegistry};
-use forge::bytecode::{
-    populate_error_template_lines, stable_hash_hex, synthesize_source_map, SourceFileEntry,
-};
+use forge::bytecode::{stable_hash_hex, synthesize_source_map, SourceFileEntry};
 use sindr::policy::EntryPoint;
 use spire::ast::{Ast, Span};
 use spire::error::ParseError;
@@ -230,7 +228,7 @@ pub(crate) fn collect_default_script_compile_sources(
     include_modules: &[xldr::ModuleInput],
     stdlib_variant: xldr::StdlibVariant,
 ) -> RuneResult<xldr::CompileSources> {
-    let module_inputs = xldr::cached_additional_default_std_module_inputs().map_err(|e| {
+    let base_sources = xldr::cached_default_script_module_sources(stdlib_variant).map_err(|e| {
         module_source_collection_error_as_rune_error(
             file_path,
             source,
@@ -242,24 +240,26 @@ pub(crate) fn collect_default_script_compile_sources(
         )
     })?;
 
-    let mut module_input_stages = vec![module_inputs];
-    for module_input in include_modules {
-        module_input_stages.push(vec![module_input.clone()]);
-    }
+    let module_input_stages = include_modules
+        .iter()
+        .map(|module| vec![module.clone()])
+        .collect::<Vec<_>>();
 
-    let module_sources =
-        xldr::collect_module_sources_with_stdlib_variant(stdlib_variant, &[], &module_input_stages)
-            .map_err(|e| {
-                module_source_collection_error_as_rune_error(
-                    file_path,
-                    source,
-                    format!(
-                        "{}: failed to collect definition sources: {}",
-                        env.command_name(),
-                        e
-                    ),
-                )
-            })?;
+    let module_sources = xldr::extend_module_sources_with_module_stages(
+        (*base_sources).clone(),
+        &module_input_stages,
+    )
+    .map_err(|e| {
+        module_source_collection_error_as_rune_error(
+            file_path,
+            source,
+            format!(
+                "{}: failed to collect definition sources: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
     Ok(xldr::compose_script_compile_sources_with_stdlib_variant(
         file_path,
         source,
@@ -268,7 +268,7 @@ pub(crate) fn collect_default_script_compile_sources(
     ))
 }
 
-fn load_default_stdlib_snapshot(
+pub(crate) fn load_default_stdlib_snapshot(
     env: ExecutionEnv,
     sources: &xldr::CompileSources,
 ) -> RuneResult<std::sync::Arc<xldr::DefaultStdlibSnapshot>> {
@@ -316,12 +316,6 @@ fn build_cached_script_compile_prefix(
     module_stages: &[Vec<sigil::StagedModuleAst>],
     sources: &SourceRegistry,
 ) -> RuneResult<SharedScriptCompilePrefix> {
-    let rebuilt_declaration_index =
-        sigil::precollect_declaration_index(module_stages).map_err(|e| {
-            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
-            RuneError::diagnostic(1, sources, source_id, phase, spec)
-        })?;
-
     let cache_key = xldr::test_semantic_prefix_cache_key(env.compile_unit_kind(), compile_sources)
         .map_err(|e| {
             RuneError::message(
@@ -345,6 +339,11 @@ fn build_cached_script_compile_prefix(
             .map_err(|message| RuneError::message(1, message));
     }
 
+    let rebuilt_declaration_index =
+        sigil::precollect_declaration_index(module_stages).map_err(|e| {
+            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+            RuneError::diagnostic(1, sources, source_id, phase, spec)
+        })?;
     let mut cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
     let _semantic_cache_lock = if cached_payload.is_none() {
         xldr::acquire_semantic_cache_lock(&cache_path)
@@ -489,29 +488,7 @@ fn parse_program_with_module_sources<'a>(
     let expanded =
         xldr::expand_snapshot_module_stages(compile_sources, std_snapshot, compile_unit_kind)
             .map_err(|e| {
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    e.source_id,
-                    "parse",
-                    match &e.kind {
-                        xldr::ModuleStageParseErrorKind::Parse { error } => {
-                            diagnostics::parse_error_spec(
-                                e.source_id,
-                                sources.source(e.source_id).unwrap_or(""),
-                                error,
-                            )
-                        }
-                        xldr::ModuleStageParseErrorKind::DuplicateModulePath { .. } => {
-                            diagnostics::parse_policy_error_spec(
-                                e.source_id,
-                                sources.source(e.source_id).unwrap_or(""),
-                                e.message(),
-                                e.span(),
-                            )
-                        }
-                    },
-                )
+                RuneError::diagnostic(1, sources, e.source_id, "parse", e.diagnostic_spec(sources))
             })?;
     if let Some(measurement) = measurement.as_deref_mut() {
         measurement.parse_modules = elapsed(parse_modules_start);
@@ -520,6 +497,13 @@ fn parse_program_with_module_sources<'a>(
     let user_source = sources.source(user_source_id).unwrap_or("");
     let parse_user_start = std::time::Instant::now();
     let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
+        .and_then(|ast| {
+            spire::materialize_reflections(
+                ast,
+                user_source,
+                sources.file_name(user_source_id).map(std::path::Path::new),
+            )
+        })
         .map_err(|script_err: ParseError| {
             RuneError::diagnostic(
                 1,
@@ -748,7 +732,6 @@ pub(crate) fn compile_source_with_measurement(
         measurement.codegen = elapsed(codegen_start);
     }
 
-    populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
     bytecode.signatures = signatures;
     bytecode.compile_info.bytecode_version = 1;
@@ -892,6 +875,141 @@ mod tests {
     use crate::error::RuneError;
     use spire::ast::Span;
     use xldr::{SourceKind, StagedModule};
+
+    #[test]
+    fn compile_source_rejects_test_assertion_type_boundaries() {
+        const FILE: &str = "lib/tests/local/math.srt";
+        let module_sources = xldr::collect_test_module_sources_with_module_stages(&[])
+            .expect("Test-enabled standard sources must load");
+        for (source, expected, expected_phase) in [
+            (
+                "assert_cause_chain([\"NoneError\"], Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
+            ),
+            (
+                "assert_cause_chain([PayloadFailure(\"x\")], Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
+            ),
+            (
+                "assert_cause_chain([Error], Err(NoneError()))",
+                "Undefined variable: Error",
+                "typecheck",
+            ),
+            (
+                "assert_cause_chain([Int], Err(NoneError()))",
+                "Undefined variable: Int",
+                "resolve",
+            ),
+            ("assert_cause_chain([NoneError], 3)", "Result", "typecheck"),
+            ("assert_ne({|x: Int| x}, {|x: Int| x})", "Eq", "typecheck"),
+            (
+                "assert_some_eq({|x: Int| x}, Option::Some({|x: Int| x}))",
+                "Eq",
+                "typecheck",
+            ),
+            ("assert_approx(1, 1.0, 0.0)", "Float", "typecheck"),
+            ("assert(1, \"message\")", "Boolean", "typecheck"),
+            (
+                "assert_satisfies(1, \"message\", {|n| n + 1})",
+                "Boolean",
+                "typecheck",
+            ),
+            ("assert_lt(1, 2.0)", "Int", "typecheck"),
+            (
+                "assert_gt({|x: Int| x}, {|x: Int| x})",
+                "Compare",
+                "typecheck",
+            ),
+            ("assert_some(Ok(1))", "Option", "typecheck"),
+            (
+                "assert_err_kind(\"NoneError\", Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
+            ),
+            (
+                "assert_err_kind(PayloadFailure(\"x\"), Err(NoneError()))",
+                "ErrorKind",
+                "typecheck",
+            ),
+            (
+                "assert_err_kind(Int, Err(NoneError()))",
+                "Undefined variable: Int",
+                "resolve",
+            ),
+            (
+                "assert_err_kind(Error, Err(NoneError()))",
+                "Undefined variable: Error",
+                "typecheck",
+            ),
+        ] {
+            let source = format!(
+                "import Test;\ndeferror PayloadFailure(detail: String) {{ |detail: String| Self(message: detail, detail) }}\n{source}\n"
+            );
+            let plan = prepare_script_compile_plan(FILE, &source, None)
+                .expect("assertion input must have a valid script plan");
+            let compile_sources = xldr::compose_script_compile_sources_with_stdlib_variant(
+                FILE,
+                &plan.source_for_parse,
+                module_sources.clone(),
+                xldr::StdlibVariant::TestEnabled,
+            );
+            let error = compile_source(ExecutionEnv::Test, &compile_sources, &plan)
+                .expect_err("invalid assertion input must fail before codegen");
+            assert_eq!(error.exit_code(), 1, "{source}: {error:?}");
+            let RuneError::Diagnostic { diagnostic, .. } = &error else {
+                panic!("assertion input must produce a compiler diagnostic: {source}: {error:?}");
+            };
+            assert_eq!(diagnostic.phase, expected_phase, "{source}: {error:?}");
+            assert_eq!(
+                diagnostic.source_id, compile_sources.user_source_id,
+                "{source}"
+            );
+            assert_eq!(
+                diagnostic.sources.file_name(diagnostic.source_id),
+                Some(FILE),
+                "{source}"
+            );
+            assert_eq!(
+                diagnostic.sources.source(diagnostic.source_id),
+                Some(source.as_str()),
+                "{source}"
+            );
+            let span = &diagnostic.spec.primary_span;
+            assert!(
+                span.start <= span.end && span.end <= source.chars().count(),
+                "{source}: {span:?}"
+            );
+            let report = error.to_serializable_report();
+            assert_eq!(report.errors.len(), 1, "{source}: {report:?}");
+            assert!(
+                report.errors[0].message.contains(expected),
+                "{source}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compile_source_accepts_dynamic_error_kind_test_arguments() {
+        const FILE: &str = "lib/tests/local/math.srt";
+        let module_sources = xldr::collect_test_module_sources_with_module_stages(&[]).unwrap();
+        for body in [
+            "kind = PayloadFailure\nassert_err_kind(kind, Err(PayloadFailure(\"dynamic\")))",
+            "kinds = [PayloadFailure, NoneError]\nassert_cause_chain(kinds, Result::cause(Err(NoneError()), PayloadFailure(\"outer\")))",
+            "tail = [NoneError]\nassert_cause_chain([PayloadFailure, ..tail], Result::cause(Err(NoneError()), PayloadFailure(\"outer\")))",
+            "captured: (ErrorKind, Result<Int> -> Result<()>) = &Test::assert_err_kind(&1, &2)\ncaptured(PayloadFailure, Err(PayloadFailure(\"capture\")))",
+            "captured: (List<ErrorKind>, Result<Int> -> Result<()>) = &Test::assert_cause_chain(&1, &2)\ncaptured([NoneError], Err(NoneError()))",
+        ] {
+            let source = format!("import Test;\ndeferror PayloadFailure(detail: String) {{ |detail: String| Self(message: detail, detail) }}\n{body}\n");
+            let plan = prepare_script_compile_plan(FILE, &source, None).unwrap();
+            let compile_sources = xldr::compose_script_compile_sources_with_stdlib_variant(
+                FILE, &plan.source_for_parse, module_sources.clone(), xldr::StdlibVariant::TestEnabled,
+            );
+            compile_source(ExecutionEnv::Test, &compile_sources, &plan)
+                .unwrap_or_else(|error| panic!("dynamic ErrorKind input must compile: {source}: {error:?}"));
+        }
+    }
 
     #[test]
     fn parse_adapter_preserves_the_parser_reason_and_origin() {
@@ -1212,7 +1330,7 @@ print(to_string(1))
             module_source_ids: vec![module_source_id],
             module_stages: vec![vec![StagedModule {
                 source_id: module_source_id,
-                module_path: "MahjongCli".into(),
+                module_path: Some("MahjongCli".into()),
                 source_kind: SourceKind::DefinitionSource,
             }]],
             stdlib_variant: xldr::StdlibVariant::Default,
@@ -1248,7 +1366,7 @@ print(to_string(1))
             module_source_ids: vec![module_source_id],
             module_stages: vec![vec![StagedModule {
                 source_id: module_source_id,
-                module_path: "MahjongCli".into(),
+                module_path: Some("MahjongCli".into()),
                 source_kind: SourceKind::DefinitionSource,
             }]],
             stdlib_variant: xldr::StdlibVariant::Default,

@@ -10,7 +10,7 @@ Surtr の trait system は V1 です。
 - capability trait
   - `Show`, `Compare`, `Default`, `Convert`, `TryConvert`
 - operator dispatch trait
-  - `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Eq`, `Neq`, `Concat`
+  - `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Eq`, `Concat`
   - `Functor`, `Applicative`, `Monad`
 
 `->` は `Facet::compose` に対応する固定構文です。`|>`、`>>`、`>*`、`>=>` は関数演算子の固定規則であり、関数型への trait impl を要求しません。
@@ -18,6 +18,7 @@ Surtr の trait system は V1 です。
 ### `Eq` と比較できる型
 
 `Eq` は同じ静的型の値同士に適用し、異種比較や暗黙変換はしません。通常型に自動で付く能力ではなく、標準 impl、明示 impl、`@derive Eq` のいずれかが必要です。
+`==` / `eq` と `!=` / `neq` は、いずれも `Eq` の契約です。
 
 | 型 | 等価性 |
 | --- | --- |
@@ -29,7 +30,7 @@ Surtr の trait system は V1 です。
 | `Result<T>` | `T: Eq` を要求する。`Ok` 同士は値を比較し、`Ok` と `Err` は異なる。`Err` 同士は先頭の具象 error kind だけを比較する |
 | `Option<T>` / `Either<L, R>` | variant と payload を比較する。payload に対応する `Eq` が必要 |
 | `Duration` / `Range<T>` | 通常の標準 impl。`Range<T>` は `T: Eq` を要求する |
-| 通常の struct / record / enum | 明示 impl または `@derive Eq` に従う。payload のない enum のみ compiler が Eq を提供する |
+| 通常の struct / record / enum | 明示 impl または `@derive Eq` に従う。payload のない enum にも実装が必要 |
 | singleton / worker の `PID<T>` | 同じ process 型に限る。singleton は等しく、worker は個体 ID を比較する |
 
 `Result` の失敗枝では message・cause・発生位置・診断情報を比較しません。`Error` 自体に `Eq` はなく、`inspect` の表示が同じでも `Eq` の結果は変わりません。`Test::assert_eq` は `Eq` だけで合否を決め、`inspect` は失敗時の説明に使います。表示文字列の契約を検査するときは `inspect(value)` の結果を明示的に比較します。
@@ -161,9 +162,13 @@ Trait impl methodの本体から同じmethod名を非修飾で呼ぶ場合、そ
 通常どおりstatic dispatchするため、同じimplへの再帰と別implへの再dispatchを同じ規則で扱います。
 local bindingやparameterによる通常のshadowingは維持されます。
 
-callable signature直下のTypeConstructor trait名は名前文字列ではなく、名前解決で選ばれたTrait定義のidentityを
-後続phaseへ渡します。別々のdirect parameterは同じfamilyでも独立し、同じcarrierが必要なmethod contractは
-`Self`または同じ名前付きconstructor variable `$F`で関係を明示します。
+関数の引数や戻り値に TypeConstructor trait 名を直接書く場合、同じ Trait 名を使った箇所は
+同じ型コンストラクタに揃います。たとえば二つの引数がどちらも `Functor` なら、
+中身の型が異なっていても、一方に `List`、もう一方に `Option` を渡すことはできません。
+異なる Trait 名を使う箇所は、同じ能力の系統に属していても、それぞれ別の型コンストラクタを選べます。
+名前付きの型コンストラクタ変数 `$F` を繰り返し使う場合も、同じ型コンストラクタを要求します。
+Trait method の `Self` は、その Trait を実装する型を表します。
+詳しくは[トレイトシステム](trait-system.md)を参照してください。
 
 TypeCtorTraitを要求するcall-site RTAでは、constructor headだけでなく完全・部分型applicationと`_`を指定できます。
 例えば`pure::<Either<String, _>>(10)`は`Either<String, Int>`へ解決されます。通常の型注釈にある`_`はこの推論へ
@@ -225,10 +230,10 @@ deftrait Mod {
 }
 ```
 
-標準では `Div for Int`、`Div for Float`、`Mod for Int` を提供します。各標準実装は `Result<Self, ZeroDivisionError>` のエラー契約を持ち、ゼロ除算は `Err(ZeroDivisionError)` です。整数除算・剰余の符号規則と Float の有限値制約は、各標準実装に従います。標準の `Mod for Float` はありません。
+標準では `Div for Int`、`Div for Float`、`Mod for Int` を提供します。各標準実装は `Result<Self, ZeroDivisionError>` と注釈し、ゼロ除算は `Err(ZeroDivisionError())` です。エラー名の注釈はドキュメント用で、返すエラーの種類を静的に制限するものではありません。整数除算・剰余の符号規則と Float の有限値制約は、各標準実装に従います。標準の `Mod for Float` はありません。
 
 通常のトレイト実装規則に従い、ユーザー型も `Div` / `Mod` を実装できます。型変数に `where $A: Div` や `where $A: Mod` を付ければ、その型の演算子とトレイトメソッドを使えます。異種数値の暗黙変換や `Result` の自動 unwrap は行いません。
 
-トレイト定義の `Result<Self>` はエラー契約を固定しません。実装は `Result<Self, DomainDivisionError>` のような独自の `deferror`、抽象 `Error`、エラー位置の省略を既存規則に従って指定できます。`Div` と `Mod` で同じエラーを返す必要はありません。値の型はどちらも `Result<Self>` であり、エラー契約は定義の metadata として保持します。引数と成功型の一致は通常どおり検査します。
+実装は `Result<Self, DomainDivisionError>` のような独自の `deferror`、抽象 `Error`、エラー位置の省略を既存規則に従って指定できます。`Div` と `Mod` で同じエラーを返す必要はありません。値の型はどちらも `Result<Self>` であり、エラー名の注釈はドキュメント用の metadata として保持します。指定したエラー名の存在は確認しますが、返すエラーの種類の静的制限・網羅検査は行いません。引数と成功型の一致は通常どおり検査します。
 
 `/` と `%` は `+`, `-`, `*` と同じ Expr グループで左結合です。例えば `8 / 2 * 3` は除算結果の `Result<Int>` と `Int` の乗算になるため拒否されます。その型不一致診断には、原因となった演算子の具体的なシグネチャが補助ラベルで表示されます。

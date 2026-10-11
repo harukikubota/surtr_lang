@@ -1,0 +1,9 @@
+namespace Left {
+  deferror Failure(value: Int) { |input: Int| Self(message: "left", value: input) }
+}
+namespace Right {
+  deferror Failure(value: String) { |input: String| Self(message: "right", value: input) }
+}
+defmod PayloadFactory {
+  def make() -> Error { Right::Failure("saved") }
+}

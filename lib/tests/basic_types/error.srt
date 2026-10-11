@@ -1,15 +1,18 @@
 import Test;
-deferror ApiError(detail: String) { detail }
+deferror ApiError(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
 test("Error") {
   describe("kind") { it("returns the declaration name") {
                        do {
-                         assert_eq("NoneError", Error::kind(NoneError))
+                         assert_eq("NoneError", Error::kind(NoneError()))
                        }
                      } }
   describe("message") {
     it("returns the predefined message") {
       do {
-        assert_eq("None Value.", Error::message(NoneError))
+        assert_eq("None Value.", Error::message(NoneError()))
       }
     }
     it("returns the payload message") {
@@ -20,12 +23,12 @@ test("Error") {
   }
   describe("format") { it("includes the kind and message") {
                          do {
-                           assert_eq("Error: ZeroDivisionError: division by zero", Error::format(ZeroDivisionError))
+                           assert_eq("Error: ZeroDivisionError: division by zero", Error::format(ZeroDivisionError()))
                          }
                        } }
   describe("Error abstraction") { it("retains a concrete error through an OR Pattern") {
                                     do {
-                                      actual = match Err(ZeroDivisionError) {
+                                      actual = match Err(ZeroDivisionError()) {
                                         Ok(value) => value,
                                         Err(NoneError | ZeroDivisionError @ error: Error) => Error::kind(error),
                                         Err(error) => Error::kind(error),
@@ -42,7 +45,7 @@ test("Error") {
     }
     it("distinguishes declaration identities") {
       do {
-        assert_false(Error::same_kind(NoneError, ZeroDivisionError))
+        assert_false(Error::same_kind(NoneError(), ZeroDivisionError()))
       }
     }
   }

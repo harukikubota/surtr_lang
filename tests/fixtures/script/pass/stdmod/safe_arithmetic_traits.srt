@@ -2,7 +2,7 @@ deferror DomainDivisionError { "domain division rejected" }
 defrecord Metric(value: Int)
 impl Div for Metric {
   def safe_div(self: Self, rhs: Self) -> Result<Self, DomainDivisionError> {
-    if(rhs.value == 0, Err(DomainDivisionError), Ok(Metric(self.value - rhs.value)))
+    if(rhs.value == 0, Err(DomainDivisionError()), Ok(Metric(self.value - rhs.value)))
   }
 }
 impl Mod for Metric {

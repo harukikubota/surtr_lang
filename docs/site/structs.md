@@ -113,7 +113,7 @@ impl User {
 
 - `User { name }` は `User { name: name }` の sugar
 - shorthand と明示 field は混在可能
-- shorthand は struct literal 専用で、`User(...)` の named argument や pattern には広がらない
+- Struct の shorthand は struct literal 専用で、Struct の `User(...)` / `User::new(...)` の named argument や Pattern には広がらない。Record の名前指定内の省略記法は [Record](./record.md) を参照
 
 `inspect(...)` は構造体の全フィールドを定義順に表示します。private フィールドも省略せず、呼び出し側のスコープや `Show` の有無によって表示を変えません。
 
@@ -175,41 +175,51 @@ print(name)
 
 `deconstruct` の一般的な extractor 契約は `./extractors.md`、pattern 全体は `./pattern-matching.md` を参照してください。
 
-## プライベートフィールド
+## 外側スコープからの操作権限
 
-構造体フィールドは `private` を付けられます。
+`public` / `readonly` / `private` は、外側スコープからフィールドを読み取り・更新できるかを指定します。Facet の読み取り（`view`）・更新（`put` / `set` / `over`）の可否も、この操作権限から導出されます。
+
+| フィールドの指定 | 外側からの読み取り | 外側からの更新 |
+|---|---|---|
+| 指定なし／`public` | 可 | 可 |
+| `readonly` | 可 | 不可 |
+| `private` | 不可 | 不可 |
 
 ```surtr
 defstruct User {
   name: String,
+  readonly age: Int,
   private password: String,
 }
 ```
 
-private フィールドへの直接アクセスと Facet の導出は、所有者の `impl User` 内だけで許可されます。
+フィールドの操作権限指定は `public` / `readonly` / `private` のいずれか1つだけです。同じ指定の繰り返しも含め、複数指定は拒否します。
 
-- `User.password` のような type-root access は所有者の `impl User` の外では不可
-- `user.password` のような value access も同じく 所有者の `impl User` の外では不可
-- closure の中かどうかで特別扱いはされず、field access が path segment を作る時点で同じ規則が適用される
+owner は、その型の `impl Type` 本体です。owner 内ではフィールドそのものを常に `public` として操作できます。`impl Trait for Type` は外側スコープに当たります。
+
+`@readonly defstruct` は全フィールドに `readonly` を付与します。操作権限指定のないフィールドには `readonly` が適用され、`private` フィールドの外側からの操作権限は `private` のままです。明示的な `public` フィールドとの併用は拒否します。
+
+`user.age` のような値アクセスと、`User.age` のような Facet path は同じ操作権限に従います。外側では readonly フィールドの読み取り用 path を使えますが、更新には使えません。private フィールドは値アクセスも path の導出も拒否されます。クロージャや内側のスコープは、定義されたレキシカルスコープの操作権限を引き継ぎます。操作権限は呼び出し元ではなく定義場所で決まり、owner 内で定義したクロージャは外側で実行してもその権限を保持します。
+
+たとえば `impl User` 内では、private フィールドの値をそのまま返す関数やクロージャを定義できます。
 
 ```surtr
 impl User {
-  def password_via_reader(self) -> String {
-    password = self.password
-    reader = {|| password}
-    reader()
+  def password(self: Self) -> String {
+    self.password
+  }
+
+  def password_reader(self: Self) -> (-> String) {
+    {|| self.password}
   }
 }
 ```
 
-上のように owner impl の内側で一度 plain value として取り出してから closure に渡す形は許可されます。  
-一方で impl の外側にある `{|| user.password}` は compile error です。
+外側から `User::password(user)` を呼び出すことも、`reader = User::password_reader(user)` で受け取ったクロージャを `reader()` で実行することもできます。返された String は通常の値です。外側での `user.password` や `{|| user.password}` の定義は、引き続き拒否されます。
 
-Facet の `User.password` path も同じ private 境界に従います。path と更新 API の詳細は `./facet.md` を参照してください。
+外側に公開する操作を型の定義側で管理するには、owner 内に公開関数を定義します。外側の通常コードやトレイト実装は、その関数を通じて読み取り・更新を行えます。Facet のネストした path と更新 API の詳細は [Facet](./facet.md) を参照してください。
 
-`impl Trait for User` も外側スコープです。private フィールドを使うトレイト実装では、`impl User` に公開関数を定義し、その関数に委譲します。
-
-`private` はフィールドの扱い方を型の定義側で管理するための境界であり、情報の秘匿は保証しません。たとえば `inspect` は private な password の名前と内容も表示します。表示された String を解析しても、元のフィールド参照や Facet、更新権限は得られません。型の定義側が公開関数で値を返すことはできます。
+`private` は情報の秘匿を保証しません。たとえば `inspect` は private フィールドの名前と内容も表示します。表示された String を解析しても、元のフィールド参照や Facet、更新権限は得られません。
 
 ## プロパティアクセス
 
@@ -224,11 +234,10 @@ print(to_string(user.age))
 - enum 値に対する field access はない
 - field の更新は代入ではなく、新しい値を組み立てる helper か Facet API で扱う
 
-### `Option<T>` field と `T?` field の使い分け
+### optional field の値変換と Facet 更新
 
-field を「値として optional に持つだけ」なら `Option<T>` でも問題ありません。
-ただし、構造体 field を `Facet` で取り出して `Result`-returning helper へ流したい場合は
-`T?` の方が更新パイプを短く保てます。
+`T?` は `Option<T>` の短い表記で、使える操作は同じです。
+field の値を取り出して `Result` を返す関数へ渡す場合は、明示的な変換を組み合わせます。
 
 ```surtr
 defstruct User {
@@ -242,8 +251,8 @@ next =
   |> to::<Option>()
 ```
 
-上のように `Option<T>` field は `Result` パイプへ入る前に `Option -> Result`、
-戻すときに `Result -> Option` の変換が要ります。
+この例の `next` は変換後の `Option<String>` です。`user` 自体は更新しません。
+構造体の中の `Some` の値を更新するなら、Facet の selector を使えます。
 
 ```surtr
 defstruct User {
@@ -253,9 +262,9 @@ defstruct User {
 next =? Facet::case_over(User.nickname.Some, user, normalize_name)
 ```
 
-`nickname: String?` は `Option<String>` と同じなので、
-optional payload を更新するときは required `Some` selector を経由した
-`Facet::case_over` / `Facet::case_set` が自然です。
+この例の `next` は更新後の `User` です。`nickname: Option<String>` と宣言しても、
+同じ `User.nickname.Some` と `Facet::case_over` / `Facet::case_set` を使えます。
+値の変換と構造体の更新の違いであり、型の表記による機能差はありません。
 
 たとえば `impl User` 内で `with_age` を定義して再構築できます。
 

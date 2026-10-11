@@ -34,10 +34,7 @@ enum OrderedCallArgument<'a> {
 
 #[derive(Clone, Copy)]
 enum CallArgumentMode {
-    User {
-        allow_error_observer: bool,
-        defer_constructor_conflicts: bool,
-    },
+    User { defer_constructor_conflicts: bool },
     Positional,
 }
 
@@ -72,7 +69,6 @@ struct PreparedTraitInvocation {
     declared_param_tys: Vec<Ty>,
     constructor_receiver_index: Option<usize>,
     prepared_args: Vec<Option<TypedNode>>,
-    plain_output_parameters: Vec<bool>,
 }
 
 enum TraitInvocationPreparation {
@@ -203,6 +199,7 @@ pub(super) struct CandidateProbeCheckpoint {
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     explicit_closure_parameters: HashMap<u32, Ty>,
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     safe_operator_results: HashMap<(usize, usize), SourceFact>,
     warnings: WarningBuffer,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
@@ -215,7 +212,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::type_contains_constructor_application(inner),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => Self::type_contains_constructor_application(inner),
             Ty::Tuple(items) => items
                 .iter()
                 .any(Self::type_contains_constructor_application),
@@ -267,7 +265,7 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Pid(_) => false,
+            | Ty::ProcessMarker(_) => false,
         }
     }
 
@@ -298,7 +296,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.unresolved_constructor_application_in_type(inner),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.unresolved_constructor_application_in_type(inner),
             Ty::Tuple(items) => items
                 .iter()
                 .find_map(|item| self.unresolved_constructor_application_in_type(item)),
@@ -341,7 +340,7 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Pid(_) => None,
+            | Ty::ProcessMarker(_) => None,
         }
     }
 
@@ -383,7 +382,13 @@ impl Checker {
             }
         }
         let recurse = |child: &TypedNode| self.unresolved_executable_constructor_application(child);
+        if let Some(found) = node.monad_fail_call().and_then(recurse) {
+            return Some(found);
+        }
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => recurse(message).or_else(|| payload.iter().find_map(recurse)),
             TypedInner::TraitCall {
                 receiver_ty, args, ..
             } => self
@@ -408,7 +413,6 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs) => recurse(rhs),
             TypedInner::DoSafeBind(control) => recurse(&control.rhs)
                 .or_else(|| match &control.failure_target {
@@ -429,9 +433,6 @@ impl Checker {
             TypedInner::Ensure(value, predicate, error) => recurse(value)
                 .or_else(|| recurse(predicate))
                 .or_else(|| recurse(error)),
-            TypedInner::RecoverKind(value, _, handler) => {
-                recurse(value).or_else(|| recurse(handler))
-            }
             TypedInner::Match(scrutinee, arms) => recurse(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
@@ -467,9 +468,8 @@ impl Checker {
                 source, update_fun, ..
             } => recurse(source).or_else(|| recurse(update_fun)),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -499,6 +499,7 @@ impl Checker {
             constructor_capabilities: self.constructor_capabilities.clone(),
             explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            process_marker_tyvars: self.process_marker_tyvars.clone(),
             safe_operator_results: self.safe_operator_results.clone(),
             warnings: self.warnings.clone(),
             pattern_binding_aliases: self.pattern_binding_aliases.clone(),
@@ -516,6 +517,7 @@ impl Checker {
         self.constructor_capabilities = checkpoint.constructor_capabilities;
         self.explicit_closure_parameters = checkpoint.explicit_closure_parameters;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
+        self.process_marker_tyvars = checkpoint.process_marker_tyvars;
         self.safe_operator_results = checkpoint.safe_operator_results;
         self.warnings = checkpoint.warnings;
         self.pattern_binding_aliases = checkpoint.pattern_binding_aliases;
@@ -524,7 +526,7 @@ impl Checker {
     fn collect_callable_value_tyvars(ty: &Ty, variables: &mut Vec<u32>) {
         match ty {
             Ty::Func(..) | Ty::ExtractorClosure(_) => Self::collect_ty_vars(ty, variables),
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::MatchResult(inner) => {
+            Ty::List(inner) | Ty::Pid(inner) | Ty::Lazy(inner) | Ty::MatchResult(inner) => {
                 Self::collect_callable_value_tyvars(inner, variables);
             }
             Ty::Tuple(items) | Ty::Enum(_, items) | Ty::SelfApp(items) => {
@@ -553,7 +555,7 @@ impl Checker {
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
-            | Ty::Pid(_)
+            | Ty::ProcessMarker(_)
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error => {}
@@ -685,7 +687,10 @@ impl Checker {
                 method_name,
             )?;
         }
-        if self.constructor_provenance_allows(&actual, required_trait, &arg.ty) {
+        if self
+            .constructor_provenance_allows(&actual, required_trait, &arg.ty)
+            .map_err(|error| error.at_span(&arg.span))?
+        {
             return Ok(());
         }
         Err(self.trait_failure(
@@ -715,32 +720,35 @@ impl Checker {
         trait_key: &str,
         expected: &Ty,
         actual: &Ty,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         let expected = self.resolve_ty(expected);
         let actual = self.resolve_ty(actual);
         // A concrete value can expose a constructor capability. An abstract
         // caller-owned carrier cannot be chosen by a nominal body annotation.
         let Ty::SelfApp(items) = &expected else {
-            return false;
+            return Ok(false);
         };
         let Some((_, abstract_slots)) = Self::constructor_application_parts(items) else {
-            return false;
+            return Ok(false);
         };
-        let concrete_slots =
-            match self.constructor_application_slots_for_trait(trait_key, &actual) {
-                ConstructorSlotsOutcome::Projected(slots) => slots,
-                ConstructorSlotsOutcome::Deferred { .. }
-                | ConstructorSlotsOutcome::Rejected { .. } => return false,
-            };
+        let concrete_slots = match self
+            .constructor_application_slots_for_trait(trait_key, &actual)
+            .into_checked()?
+        {
+            ConstructorSlotsOutcome::Projected(slots) => slots,
+            ConstructorSlotsOutcome::Deferred { .. } | ConstructorSlotsOutcome::Rejected { .. } => {
+                return Ok(false)
+            }
+        };
         if abstract_slots.len() != concrete_slots.len() {
-            return false;
+            return Ok(false);
         }
 
         let substitutions = self.substitutions.clone();
-        let slots_ok = abstract_slots
-            .iter()
-            .zip(concrete_slots.iter())
-            .all(|(expected_slot, actual_slot)| self.types_compatible(expected_slot, actual_slot));
+        let slots_ok = try_all(
+            abstract_slots.iter().zip(concrete_slots.iter()),
+            |(expected_slot, actual_slot)| self.types_compatible(expected_slot, actual_slot),
+        );
         self.substitutions = substitutions;
         slots_ok
     }
@@ -816,7 +824,20 @@ impl Checker {
         {
             return Some(pending);
         }
+        if let Some(found) = node
+            .monad_fail_call()
+            .and_then(|call| self.find_typed_node(call, inspect))
+        {
+            return Some(found);
+        }
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => self.find_typed_node(message, inspect).or_else(|| {
+                payload
+                    .iter()
+                    .find_map(|value| self.find_typed_node(value, inspect))
+            }),
             TypedInner::TraitCall { args, .. } => args
                 .iter()
                 .find_map(|arg| self.find_typed_node(arg, inspect)),
@@ -879,9 +900,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => self
                 .find_typed_node(value, inspect)
                 .or_else(|| self.find_typed_node(err, inspect)),
-            TypedInner::RecoverKind(value, _, handler) => self
-                .find_typed_node(value, inspect)
-                .or_else(|| self.find_typed_node(handler, inspect)),
             TypedInner::Match(scrutinee, arms) => {
                 self.find_typed_node(scrutinee, inspect).or_else(|| {
                     arms.iter().find_map(|arm| {
@@ -901,9 +919,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .find_map(|arg| self.find_typed_node(&arg.expr, inspect)),
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                self.find_typed_node(inner, inspect)
-            }
+            TypedInner::EagerBoundary(inner) => self.find_typed_node(inner, inspect),
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
@@ -927,9 +943,8 @@ impl Checker {
                 .find_typed_node(source, inspect)
                 .or_else(|| self.find_typed_node(update_fun, inspect)),
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -947,10 +962,21 @@ impl Checker {
 
     pub(super) fn full_trait_obligations(node: &TypedNode) -> Vec<TraitObligation> {
         fn collect(node: &TypedNode, obligations: &mut Vec<TraitObligation>) {
+            if let Some(call) = node.monad_fail_call() {
+                collect(call, obligations);
+            }
             for expr in Checker::pattern_expression_nodes(node) {
                 collect(expr, obligations);
             }
             match &node.node {
+                TypedInner::ErrorConstruct {
+                    message, payload, ..
+                } => {
+                    collect(message, obligations);
+                    for value in payload {
+                        collect(value, obligations);
+                    }
+                }
                 TypedInner::TraitCall {
                     obligation, args, ..
                 } => {
@@ -995,7 +1021,6 @@ impl Checker {
                 | TypedInner::SafeBind(_, rhs, _, _)
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _)
-                | TypedInner::AssertErrorKinds(_, rhs)
                 | TypedInner::EagerBoundary(rhs) => collect(rhs, obligations),
                 TypedInner::BinOp(_, left, right)
                 | TypedInner::Pipe(left, right)
@@ -1018,10 +1043,6 @@ impl Checker {
                     collect(value, obligations);
                     collect(pred, obligations);
                     collect(err, obligations);
-                }
-                TypedInner::RecoverKind(value, _, handler) => {
-                    collect(value, obligations);
-                    collect(handler, obligations);
                 }
                 TypedInner::Match(scrutinee, arms) => {
                     collect(scrutinee, obligations);
@@ -1093,6 +1114,29 @@ impl Checker {
         for expr in Self::pattern_expression_nodes_mut(node) {
             self.concretize_pending_trait_calls_in_place(expr)?;
         }
+        match &mut node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.concretize_pending_trait_calls_in_place(message)?;
+                for value in payload {
+                    self.concretize_pending_trait_calls_in_place(value)?;
+                }
+            }
+            TypedInner::SafeBind(
+                _,
+                _,
+                _,
+                SafeBindFailureTarget::EnclosingMonadFail(target)
+                | SafeBindFailureTarget::DoMonadFail(target),
+            ) => self.concretize_pending_trait_calls_in_place(&mut target.call)?,
+            TypedInner::DoSafeBind(control) => {
+                if let SafeBindFailureTarget::DoMonadFail(target) = &mut control.failure_target {
+                    self.concretize_pending_trait_calls_in_place(&mut target.call)?;
+                }
+            }
+            _ => {}
+        }
         node.ty = self.resolve_ty(&node.ty);
         match &mut node.node {
             TypedInner::TraitCall {
@@ -1122,14 +1166,6 @@ impl Checker {
                     dispatch,
                 )?;
             }
-            TypedInner::DeferredDoFailure(deferred) => {
-                deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
-                deferred.propagated_error_tys = deferred
-                    .propagated_error_tys
-                    .iter()
-                    .map(|ty| self.resolve_ty(ty))
-                    .collect();
-            }
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)
             | TypedInner::Capture(func, args) => {
@@ -1150,7 +1186,6 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::Semi(rhs)
@@ -1190,7 +1225,6 @@ impl Checker {
             | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right)
-            | TypedInner::RecoverKind(left, _, right)
             | TypedInner::SupervisorWorkers {
                 init: left,
                 strategy: right,
@@ -1356,6 +1390,20 @@ impl Checker {
                 })
             }
 
+            Resolved::ErrorKind(span, id) => {
+                if !self.env.is_error_constructor(id.unique_id) {
+                    return Err(TypeError::new("ErrorKind requires a canonical deferror declaration", span.clone()));
+                }
+                let kind = id.qualified_name.clone().ok_or_else(|| {
+                    TypeError::new("ErrorKind identity has no canonical declaration name", span.clone())
+                })?;
+                Ok(TypedNode {
+                    ty: Ty::Enum("ErrorKind".into(), Vec::new()),
+                    span: span.clone(),
+                    node: TypedInner::ErrorKind(kind),
+                })
+            }
+
             Resolved::Var(span, id) => {
                 let canonical = self.canonical_pattern_id(id)?;
                 if canonical.unique_id != id.unique_id { return self.check_node(&Resolved::Var(span.clone(), canonical)); }
@@ -1396,11 +1444,6 @@ impl Checker {
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
-                    if self.error_observer_bindings.contains(&id.unique_id)
-                        && self.allow_error_observer_value_use == 0
-                    {
-                        return Err(self.error_observer_escape_error(span));
-                    }
                     if matches!(ty, Ty::Facet(..)) {
                         if let Some(path) = self.facet_bindings.get(&id.unique_id).cloned() {
                             return Ok(match path {
@@ -1425,7 +1468,6 @@ impl Checker {
                                             update_focus_ty,
                                             path_kind: path.path_kind,
                                             may_fail: path.may_fail,
-                                            source_readonly_root: path.source_readonly_root,
                                             segments: path.segments,
                                         }),
                                     }
@@ -1554,14 +1596,22 @@ impl Checker {
                             "Use `=?` for partial destructuring and extractor-driven matches.",
                         ));
                 }
+                let inherited_error_kind = self.resolved_concrete_error_identity(rhs).map(str::to_string);
+                if let ResolvedPattern::Annotated(_, ast_ty) = pat {
+                    let annotation_kind = self.concrete_error_annotation_identity(ast_ty);
+                    if let Some(kind) = inherited_error_kind.as_deref() {
+                        if annotation_kind.as_deref() != Some(kind) {
+                            return Err(TypeError::new("A narrowed Error local annotation must match its concrete declaration", Self::ast_ty_span(ast_ty).clone()));
+                        }
+                    } else if annotation_kind.is_some() {
+                        return Err(TypeError::new("A common Error cannot be cast by a concrete Error annotation", Self::ast_ty_span(ast_ty).clone()));
+                    }
+                }
                 let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    if Self::ty_exposes_error_value(&expected) {
-                        return Err(self.lazy_error_transport_error(self.error_function_param_not_allowed_error(
-                            Self::ast_ty_span(ast_ty),
-                        ), rhs));
-                    }
+                        self.resolve_ast_ty_in_context(ast_ty, if inherited_error_kind.is_some() {
+                            TypeSyntaxContext::ConcreteErrorLocal
+                        } else { self.local_type_syntax_context() })?;
                     let relation = ExpectedTypeRelation::annotation(Self::ast_ty_span(ast_ty));
                     let mut typed_rhs = self.check_node_with_expected_relation(
                         rhs,
@@ -1569,19 +1619,22 @@ impl Checker {
                         Some(&relation),
                     )?;
                     self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
-                    let relation = self.assert_value_type_relation(&expected, &typed_rhs.ty,
+                    let relation = self.assert_type_relation(&expected, &typed_rhs.ty,
                         self.type_fact(SourceRole::Annotation, Self::ast_ty_span(ast_ty), &expected), self.type_fact(SourceRole::Value, &typed_rhs.span, &typed_rhs.ty),
                         TypeDiagnosticReason::AnnotationTypeMismatch, DiagnosticOrigin::Annotation, "binding", 0);
                     if let Err(error) = relation {
+                        if error.reason() != Some(TypeDiagnosticReason::AnnotationTypeMismatch) {
+                            return Err(error);
+                        }
                         let constructor_coercion = self
                             .constructor_trait_key_for_ast_ty(ast_ty)
-                            .is_some_and(|trait_key| {
+                            .map(|trait_key| {
                                 self.constructor_annotation_compatible(
                                     &trait_key,
                                     &expected,
                                     &typed_rhs.ty,
                                 )
-                            });
+                            }).transpose().map_err(|error| error.at_span(Self::ast_ty_span(ast_ty)))?.unwrap_or(false);
                         if constructor_coercion {
                             typed_rhs.ty = expected.clone();
                         } else {
@@ -1611,25 +1664,18 @@ impl Checker {
                 } else {
                     None
                 };
-                if matches!(typed_rhs.ty, Ty::Error) {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::ErrorValueMustBeWrapped,
-                        diagnostics::TypePolicy::ErrorValuePlacement,
-                        Some("Error".into()),
-                        None,
-                        Some(&typed_rhs.ty),
-                        None,
-                        None,
-                        &typed_rhs.span,
-                        None,
-                    ));
-                }
                 let inherited_constructor_provenance =
                     self.constructor_capability_for_node(&typed_rhs);
+                if let (Some(kind), ResolvedPattern::Annotated(binding, _)) = (&inherited_error_kind, pat) {
+                    self.env.concrete_error_bindings.insert(binding.unique_id, kind.clone());
+                }
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                if let Some(kind) = inherited_error_kind {
+                    self.bind_local_error_identity(&typed_pat, &kind);
+                }
                 let binding_constructor_provenance = match pat {
                     ResolvedPattern::Annotated(_, ast_ty) => self
                         .constructor_trait_key_for_ast_ty(ast_ty)
@@ -1657,8 +1703,9 @@ impl Checker {
             }
 
             Resolved::ApplyPattern(span, value, pattern) => self.check_apply_pattern(span, value, pattern, None),
-            Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs, false),
+            Resolved::SafeBind(span, pat, rhs, operator_span) => self.check_safebind(span, operator_span, pat, rhs, false),
             Resolved::StatementQuestion(span, rhs) => self.check_safebind(
+                span,
                 span,
                 &ResolvedPattern::Wildcard(span.clone()),
                 rhs,
@@ -1704,10 +1751,6 @@ impl Checker {
             Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
             Resolved::MapErr(span, value, err) => self.check_map_err(span, value, err),
             Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
-            Resolved::AssertErrorKinds(span, marker, value) => self.check_assert_error_kinds(span, marker, value),
-            Resolved::RecoverKind(span, value, marker, handler) => {
-                self.check_recover_kind(span, value, marker, handler)
-            }
 
             Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, None, *then_only)
@@ -1816,8 +1859,41 @@ impl Checker {
                         &deferred_self,
                     )?;
                     if let Some(body) = &method.body {
-                        let mut tyvars = HashMap::from([("Self".into(),deferred_self.clone())]);
-                        for (param, resolved) in method.value_parameters.iter().zip(params.iter()) {
+                        // Default bodies need an application witness for abstract
+                        // Self, just as generic constructor parameters do.
+                        let (body_self, slot_vars) = if trait_info.constructor_slots.is_empty() {
+                            (deferred_self.clone(), Vec::new())
+                        } else {
+                            let witness = self.env.fresh_tyvar();
+                            let Ty::Var(variable) = witness else { unreachable!() };
+                            self.register_tyvar_bound(variable, &trait_key);
+                            self.constructor_witness_traits.insert(variable, trait_key.clone());
+                            let mut application = vec![Ty::Hole, witness];
+                            let mut slots = Vec::new();
+                            for _ in &trait_info.constructor_slots {
+                                let slot = self.env.fresh_tyvar();
+                                let Ty::Var(variable) = slot else { unreachable!() };
+                                slots.push(variable);
+                                application.push(slot);
+                            }
+                            (Ty::SelfApp(application), slots)
+                        };
+                        let (body_params, body_ret) = if trait_info.constructor_slots.is_empty() {
+                            (params.clone(), ret_ty.clone())
+                        } else {
+                            let (body_params, body_ret, _, _, _) = self.resolve_trait_method_signature(
+                                &trait_info,
+                                method_info,
+                                &body_self,
+                            )?;
+                            let body_params = body_params.into_iter()
+                                .map(|ty| self.expand_trait_self_apps(ty, &body_self, &slot_vars))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let body_ret = self.expand_trait_self_apps(body_ret, &body_self, &slot_vars)?;
+                            (body_params, body_ret)
+                        };
+                        let mut tyvars = HashMap::from([("Self".into(), body_self)]);
+                        for (param, resolved) in method.value_parameters.iter().zip(body_params.iter()) {
                             self.collect_signature_ty_bindings(
                                 &param.ty,
                                 resolved,
@@ -1826,7 +1902,7 @@ impl Checker {
                         }
                         self.collect_signature_ty_bindings(
                             &method.ret_ty,
-                            &ret_ty,
+                            &body_ret,
                             &mut tyvars,
                         );
                         self.seed_missing_method_type_params(&method.type_params, &mut tyvars);
@@ -1837,7 +1913,7 @@ impl Checker {
                         let local_bindings = method
                             .value_parameters
                             .iter()
-                            .zip(params.iter())
+                            .zip(body_params.iter())
                             .map(|(param, ty)| (param.id.unique_id, ty.clone()))
                             .collect::<Vec<_>>();
                         let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
@@ -1848,8 +1924,9 @@ impl Checker {
                             &mut [],
                             tyvars.clone(),
                             rigid_tyvars.clone(),
-                            ret_ty.clone(),
+                            body_ret.clone(),
                             Self::ast_ty_span(method.ret_ty.syntax()),
+                            Some(Self::ast_ty_span(method.ret_ty.syntax())),
                             method.id.name.clone(),
                             None,
                             None,
@@ -1858,7 +1935,7 @@ impl Checker {
                         )?;
                         if let Some(concrete) = self.resolve_contextual_return_body(
                             &method.ret_ty,
-                            &ret_ty,
+                            &body_ret,
                             &typed_body,
                             &rigid_tyvars,
                         )? {
@@ -2048,7 +2125,6 @@ impl Checker {
             args,
             span,
             Some(&callable_hint),
-            false,
         )?;
         let substitution =
             match self.complete_call_constraint_set(&mut constraints, &typed_args, span, None) {
@@ -2133,10 +2209,10 @@ impl Checker {
                 Ty::Var(variable) if self.constructor_witness_traits.contains_key(&variable) => {
                     let checkpoint = self.candidate_probe_checkpoint();
                     let matched = self.match_explicit_constructor_occurrence(variable, explicit_ty);
-                    if !matched {
+                    if !matches!(matched, Ok(true)) {
                         self.rollback_candidate_probe(checkpoint);
                     }
-                    !matched
+                    !matched.map_err(|error| error.at_span(constraint.span()))?
                 }
                 _ => self
                     .assert_type_relation(
@@ -2268,7 +2344,7 @@ impl Checker {
         else {
             return Ok(());
         };
-        self.assert_value_type_relation(
+        self.assert_type_relation(
             expected,
             &constraints.signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, expected),
@@ -2327,7 +2403,8 @@ impl Checker {
                 Ty::List(inner)
                 | Ty::MatchResult(inner)
                 | Ty::ExtractorClosure(inner)
-                | Ty::Lazy(inner) => needs_context(inner),
+                | Ty::Lazy(inner)
+                | Ty::Pid(inner) => needs_context(inner),
                 Ty::Result(ok, error) => needs_context(ok) || needs_context(error),
                 Ty::Tuple(items) => items.iter().any(needs_context),
                 Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
@@ -2349,7 +2426,7 @@ impl Checker {
                 | Ty::Bool
                 | Ty::Unit
                 | Ty::Error
-                | Ty::Pid(_) => false,
+                | Ty::ProcessMarker(_) => false,
             }
         }
         if !constraints
@@ -2363,7 +2440,7 @@ impl Checker {
         if !is_stable_context(&canonical_expected, &self.rigid_tyvars) {
             return Ok(());
         }
-        self.assert_value_type_relation(
+        self.assert_type_relation(
             &normalized_expected,
             &constraints.signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, &normalized_expected),
@@ -2415,7 +2492,7 @@ impl Checker {
         }
 
         for argument in &constraints.value_arguments {
-            let relation = self.assert_value_type_relation(
+            let relation = self.assert_type_relation(
                 &argument.expected,
                 &argument.actual,
                 self.type_fact(SourceRole::Expected, span, &argument.expected),
@@ -2426,6 +2503,9 @@ impl Checker {
                 argument.ordinal,
             );
             if let Err(error) = relation {
+                if error.reason() != Some(TypeDiagnosticReason::ArgumentTypeMismatch) {
+                    return super::signatures::SolveState::Failed(error);
+                }
                 if let Some(ordinal) = self.conflicting_return_type_argument_ordinal(
                     &argument.expected,
                     &argument.actual,
@@ -2481,11 +2561,22 @@ impl Checker {
                                 .map(|previous| self.resolve_ty(&previous.actual))
                                 .unwrap_or_else(|| self.resolve_ty(witness));
                             let actual_carrier = self.resolve_ty(&argument.actual);
-                            let reason = match self.constructor_carrier_relation(
-                                &family_trait,
-                                &expected_carrier,
-                                &actual_carrier,
-                            ) {
+                            let relation = self
+                                .constructor_carrier_relation(
+                                    &family_trait,
+                                    &expected_carrier,
+                                    &actual_carrier,
+                                )
+                                .into_checked();
+                            let relation = match relation {
+                                Ok(relation) => relation,
+                                Err(error) => {
+                                    return super::signatures::SolveState::Failed(
+                                        error.at_span(&argument.span),
+                                    )
+                                }
+                            };
+                            let reason = match relation {
                                 ConstructorCarrierRelation::SameCarrier => {
                                     TypeDiagnosticReason::TypePayloadMismatch
                                 }
@@ -2560,16 +2651,23 @@ impl Checker {
         for obligation in &constraints.obligations {
             let subject = self.resolve_ty(&obligation.subject);
             let trait_key = &obligation.trait_name;
-            let constructor_head_satisfies = matches!(
-                &obligation.subject,
-                Ty::Var(variable) if self.constructor_witness_traits.contains_key(variable)
-            ) && matches!(
-                self.constructor_head_projection(trait_key, &subject),
-                ConstructorProjectionOutcome::Applicable { .. }
-            );
-            if !constructor_head_satisfies
-                && !self.ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key))
-            {
+            let obligation_satisfied = (|| -> Result<bool, TypeError> {
+                let constructor_head_satisfies = matches!(
+                    &obligation.subject,
+                    Ty::Var(variable) if self.constructor_witness_traits.contains_key(variable)
+                ) && matches!(
+                    self.constructor_head_projection(trait_key, &subject)
+                        .into_checked()?,
+                    ConstructorProjectionOutcome::Applicable { .. }
+                );
+                Ok(constructor_head_satisfies
+                    || self.ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key))?)
+            })();
+            let obligation_satisfied = match obligation_satisfied {
+                Ok(satisfied) => satisfied,
+                Err(error) => return super::signatures::SolveState::Failed(error.at_span(span)),
+            };
+            if !obligation_satisfied {
                 let reason = if matches!(subject, Ty::Var(var) if self.rigid_tyvars.contains(&var))
                 {
                     TypeDiagnosticReason::MissingGenericBound
@@ -2750,7 +2848,8 @@ impl Checker {
                 (Ty::MatchResult(left), Ty::MatchResult(right))
                 | (Ty::ExtractorClosure(left), Ty::ExtractorClosure(right))
                 | (Ty::List(left), Ty::List(right))
-                | (Ty::Lazy(left), Ty::Lazy(right)) => {
+                | (Ty::Lazy(left), Ty::Lazy(right))
+                | (Ty::Pid(left), Ty::Pid(right)) => {
                     find(checker, left, right, explicit_slot_for_var)
                 }
                 (Ty::Result(left_ok, left_err), Ty::Result(right_ok, right_err)) => {
@@ -3126,10 +3225,6 @@ impl Checker {
                 .check_explicit_enum_constructor_call(span, id, type_args, args, Some(expected_ty)),
             _ => {
                 let typed = self.check_node(node)?;
-                if matches!(expected_ty, Ty::Error) && self.is_concrete_error_value(&typed) {
-                    let call_span = typed.span.clone();
-                    return Ok(self.maybe_call_zero_arg_function(typed, call_span));
-                }
                 Ok(typed)
             }
         }
@@ -3204,8 +3299,8 @@ impl Checker {
 
         if !expected_kind.is_atomic()
             || expected_kind != actual_kind
-            || !self.types_compatible(expected_source, actual_source)
-            || !self.types_compatible(expected_focus, actual_focus)
+            || !self.types_compatible(expected_source, actual_source)?
+            || !self.types_compatible(expected_focus, actual_focus)?
         {
             return Err(TypeError {
                 structured: None,
@@ -3255,7 +3350,6 @@ impl Checker {
                 update_focus_ty: self.resolve_ty(&slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
-                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             })),
             TypedInner::PendingFacetPath(path) => Ok(StoredFacetPath::Pending(path)),
@@ -3307,6 +3401,11 @@ impl Checker {
 
     fn clear_facet_pattern_bindings(&mut self, pattern: &TypedPattern) {
         match pattern {
+            TypedPattern::HashMap(_, entries) => {
+                for entry in entries {
+                    self.clear_facet_pattern_bindings(&entry.pattern);
+                }
+            }
             TypedPattern::Located(_, inner) => self.clear_facet_pattern_bindings(inner),
             TypedPattern::Var(_, id) => {
                 self.facet_bindings.remove(&id.unique_id);
@@ -3498,9 +3597,10 @@ impl Checker {
         })
     }
 
-    pub(super) fn check_safebind(
+    fn check_safebind(
         &mut self,
         span: &Span,
+        operator_span: &Span,
         pat: &ResolvedPattern,
         rhs: &Resolved,
         unit_success_only: bool,
@@ -3513,57 +3613,17 @@ impl Checker {
             let (_, err_tag) = self.match_result_variant_tags(span)?;
             SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
         } else if let Some(ret_ty) = self.function_return_ty.clone() {
-            let target = match self.resolve_result_effect(&ret_ty) {
-                ResultEffectResolution::Preserve(target) => target,
-                ResultEffectResolution::Unavailable | ResultEffectResolution::Deferred => {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::SafeBindRequiresResultTarget,
-                        diagnostics::TypePolicy::SafeBindRequiresResultTarget,
-                        Some("=?".into()),
-                        None,
-                        Some(&ret_ty),
-                        None,
-                        None,
-                        span,
-                        None,
-                    ));
-                }
-                ResultEffectResolution::InvalidMetadata(subject) => {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::TypecheckInvariantViolation,
-                        diagnostics::TypePolicy::ProducerContract,
-                        Some(subject.into()),
-                        None,
-                        Some(&ret_ty),
-                        None,
-                        None,
-                        span,
-                        None,
-                    ));
-                }
-            };
-
             self.collect_pattern_result_error_types(
                 &checked.typed_pattern,
                 &mut checked.propagated_error_tys,
             );
-
-            for propagated in checked.propagated_error_tys {
-                if !self.types_compatible(&target.error_ty, &propagated) {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::SafeBindErrorTypeMismatch,
-                        diagnostics::TypePolicy::SafeBindFailureTarget,
-                        Some("=?".into()),
-                        Some(&target.error_ty),
-                        Some(&propagated),
-                        None,
-                        None,
-                        &checked.typed_rhs.span,
-                        None,
-                    ));
-                }
-            }
-            SafeBindFailureTarget::EnclosingResultContext(Box::new(target))
+            self.resolve_pattern_failure_target(
+                &ret_ty,
+                &checked.propagated_error_tys,
+                operator_span,
+                None,
+                false,
+            )?
         } else {
             SafeBindFailureTarget::TopLevel
         };
@@ -3715,7 +3775,25 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if Self::can_use_expected_callable_context(node) {
             let expected = self.expected_callable_ty(contract);
-            self.check_node_with_expected(node, Some(&expected))
+            let typed = self.check_node_with_expected(node, Some(&expected))?;
+            // Connect contextual output variables to the checked callable before
+            // its pending method calls are finalized by the enclosing expression.
+            // Input compatibility remains the composition operator's obligation.
+            if let Some(output) = &contract.ret {
+                let (_, actual_output) =
+                    self.unary_function_parts(&typed.ty, op_name, &typed.span)?;
+                self.assert_type_relation(
+                    output,
+                    &actual_output,
+                    self.type_fact(SourceRole::Expected, &typed.span, output),
+                    self.type_fact(SourceRole::Value, &typed.span, &actual_output),
+                    TypeDiagnosticReason::ReturnTypeMismatch,
+                    DiagnosticOrigin::Return,
+                    op_name,
+                    0,
+                )?;
+            }
+            Ok(typed)
         } else {
             self.check_operator_compose_callable(node, op_name)
         }
@@ -3871,7 +3949,7 @@ impl Checker {
             Box::new(body),
         );
         let typed = self.check_node_with_expected(&synthetic, Some(&expected_ty))?;
-        if !self.types_compatible(&expected_ty, &typed.ty) {
+        if !self.types_compatible(&expected_ty, &typed.ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -4087,7 +4165,7 @@ impl Checker {
         let Ty::Func(params, ret) = &expected_ty else {
             return self.check_app(span, func, args);
         };
-        if params.len() != 2 || !self.types_compatible(&params[0], &params[1]) {
+        if params.len() != 2 || !self.types_compatible(&params[0], &params[1])? {
             return self.check_app(span, func, args);
         }
         let [ResolvedRecordLitArg::Positional(compare_expr), ResolvedRecordLitArg::Positional(key_expr)] =
@@ -4149,13 +4227,7 @@ impl Checker {
             Ok(typed)
         } else {
             Err(self
-                .callable_shape_error(
-                    &typed.ty,
-                    op_name,
-                    &typed.span,
-                    Some(1),
-                    diagnostics::CallableReturnShape::Any,
-                )
+                .callable_shape_error(&typed.ty, op_name, &typed.span, Some(1))
                 .with_hint(self.compose_function_value_hint(&typed, op_name)))
         }
     }
@@ -4217,12 +4289,13 @@ impl Checker {
         match node {
             Resolved::Lit(span, _)
             | Resolved::Var(span, _)
+            | Resolved::ErrorKind(span, _)
             | Resolved::App(span, _, _)
             | Resolved::ReturnTypeArgumentApply(span, _, _)
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
             | Resolved::ApplyPattern(span, _, _)
-            | Resolved::SafeBind(span, _, _)
+            | Resolved::SafeBind(span, _, _, _)
             | Resolved::StatementQuestion(span, _)
             | Resolved::Do(span, _, _, _, _)
             | Resolved::BinOp(span, _, _, _)
@@ -4248,8 +4321,6 @@ impl Checker {
             | Resolved::Ensure(span, _, _, _)
             | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
-            | Resolved::RecoverKind(span, _, _, _)
-            | Resolved::AssertErrorKinds(span, _, _)
             | Resolved::IfLet(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::IsMatch(span, _, _)
@@ -4452,22 +4523,10 @@ impl Checker {
         span: &Span,
     ) -> Result<(Ty, Ty), TypeError> {
         let Some((params, ret)) = self.function_parts(ty) else {
-            return Err(self.callable_shape_error(
-                ty,
-                callable,
-                span,
-                Some(1),
-                diagnostics::CallableReturnShape::Any,
-            ));
+            return Err(self.callable_shape_error(ty, callable, span, Some(1)));
         };
         if params.len() != 1 {
-            return Err(self.callable_shape_error(
-                ty,
-                callable,
-                span,
-                Some(1),
-                diagnostics::CallableReturnShape::Any,
-            ));
+            return Err(self.callable_shape_error(ty, callable, span, Some(1)));
         }
         Ok((self.resolve_ty(&params[0]), self.resolve_ty(ret)))
     }
@@ -4746,7 +4805,10 @@ impl Checker {
         span: &Span,
         operation: &str,
     ) -> Result<Ty, TypeError> {
-        match outcome {
+        match outcome
+            .into_checked()
+            .map_err(|error| error.at_span(span))?
+        {
             ConstructorApplicationOutcome::Applied(ty) => Ok(ty),
             ConstructorApplicationOutcome::Deferred { waiting_on } => {
                 let mut error = self.ambiguous_constructor_result(trait_name, operation, span);
@@ -5574,6 +5636,22 @@ impl Checker {
             }
         }
 
+        // Return-only inputs cannot be inferred from value arguments. Report
+        // that missing context before dispatch so branch checking can supply its
+        // expected result through the ordinary ReturnTypeArgument protocol.
+        if explicit_type_args.is_none()
+            && expected_ret_ty.is_none()
+            && explicit_slots.iter().any(|slot| {
+                let mut variables = Vec::new();
+                Self::collect_ty_vars(&self.resolve_ty(slot), &mut variables);
+                variables
+                    .iter()
+                    .any(|variable| !self.rigid_tyvars.contains(variable))
+            })
+        {
+            return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+        }
+
         let declared_param_tys = param_tys.clone();
         let mut constructor_receiver_index = None;
         let mut prepared_args = vec![None; args.len()];
@@ -5593,7 +5671,8 @@ impl Checker {
                 Ty::List(inner)
                 | Ty::MatchResult(inner)
                 | Ty::ExtractorClosure(inner)
-                | Ty::Lazy(inner) => contains_trait_constructor_input(inner, trait_args),
+                | Ty::Lazy(inner)
+                | Ty::Pid(inner) => contains_trait_constructor_input(inner, trait_args),
                 Ty::Result(ok, error) => {
                     contains_trait_constructor_input(ok, trait_args)
                         || contains_trait_constructor_input(error, trait_args)
@@ -5642,7 +5721,7 @@ impl Checker {
                 | Ty::Bool
                 | Ty::Unit
                 | Ty::Error
-                | Ty::Pid(_) => false,
+                | Ty::ProcessMarker(_) => false,
             }
         }
         // When a receiverless constructor method's value parameter carries a
@@ -5744,13 +5823,6 @@ impl Checker {
                 ret_ty = self.resolve_ty(expected);
             }
         }
-        let plain_output_parameters = param_tys
-            .iter()
-            .map(|param| {
-                matches!((param, &ret_ty), (Ty::Func(_, output), Ty::SelfApp(slots))
-                if slots.contains(output.as_ref()))
-            })
-            .collect::<Vec<_>>();
         if !trait_info.constructor_slots.is_empty()
             && args.len() == param_tys.len()
             && !receiverless_head_input
@@ -5881,8 +5953,8 @@ impl Checker {
                             captured.remove(slot);
                         }
                         (
-                            implementation.target_ty,
-                            implementation.constructor_slot_vars,
+                            implementation.target_ty.clone(),
+                            implementation.constructor_slot_vars.clone(),
                             captured,
                             Some(implementation_trait_args),
                         )
@@ -6032,7 +6104,6 @@ impl Checker {
                 declared_param_tys,
                 constructor_receiver_index,
                 prepared_args,
-                plain_output_parameters,
             },
         ))
     }
@@ -6073,6 +6144,10 @@ impl Checker {
                 };
                 let typed = self
                     .with_callback_parameter_provenance(expr, &inputs, |checker| {
+                        if checker.trait_parameter_is_lazy(call.trait_name, call.method_name, index)
+                        {
+                            return checker.check_trait_lazy_argument(expr, expected, call.span);
+                        }
                         checker.check_invocation_argument(
                             expr,
                             expected,
@@ -6187,28 +6262,8 @@ impl Checker {
             self_ty,
             declared_param_tys,
             constructor_receiver_index,
-            plain_output_parameters,
             ..
         } = prepared;
-        if expected_ret_ty.is_none() {
-            for (index, arg) in typed_args.iter().enumerate() {
-                if plain_output_parameters[index] {
-                    if let Some((_, output)) = self.function_parts(&arg.ty) {
-                        self.ensure_plain_map_output(
-                            &output,
-                            &format!("{trait_name}::{method_name}"),
-                            arg,
-                        )
-                        .map_err(|mut error| {
-                            if let Some(diagnostic) = &mut error.structured {
-                                diagnostic.origin = DiagnosticOrigin::TraitCall;
-                            }
-                            error
-                        })?;
-                    }
-                }
-            }
-        }
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
 
         self.check_trait_method_constructor_capabilities(
@@ -6304,9 +6359,10 @@ impl Checker {
                 // establish Self. Probe without committing failed substitutions.
                 // An incompatible context is necessarily rejected by the outside
                 // annotation, return, or argument relation; it is not accepted here.
-                let compatible = self.with_type_relation_probe(&[expected, &ret_ty], |checker| {
-                    checker.types_compatible(expected, &ret_ty)
-                });
+                let compatible = self
+                    .with_type_relation_probe(&[expected, &ret_ty], |checker| {
+                        checker.types_compatible(expected, &ret_ty)
+                    })?;
                 if compatible {
                     self.assert_trait_return_context(
                         expected,
@@ -6506,7 +6562,29 @@ impl Checker {
             });
         }
 
-        let typed_func = self.check_node(func)?;
+        let explicit = Self::explicit_type_args(func);
+        let named_target = match func {
+            Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+            other => other,
+        };
+        let has_named_signature = match named_target {
+            Resolved::Var(_, id) => {
+                self.callable_signatures.contains_key(&id.unique_id)
+                    || self.is_registered_callable_declaration(id.unique_id)
+            }
+            _ => false,
+        };
+        let typed_func = if explicit.is_some() || has_named_signature {
+            let (mut typed, signature, return_type_arguments) =
+                self.instantiate_named_callable_signature(span, named_target, explicit.as_deref())?;
+            let constraints =
+                self.call_constraint_set(signature, return_type_arguments, None, span, &typed.ty);
+            self.apply_return_type_argument_constraints(&constraints)?;
+            typed.ty = self.callable_ty_from_signature(&typed.ty, &constraints.signature);
+            typed
+        } else {
+            self.check_node(func)?
+        };
         let (params, ret) = match self.resolve_ty(&typed_func.ty) {
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
                 (params, ret.as_ref().clone())
@@ -6651,40 +6729,6 @@ impl Checker {
         let expected = self.expected_callable_ty(&contract);
         self.check_node_with_expected(&synthetic, Some(&expected))
             .map(Some)
-    }
-
-    pub(super) fn ensure_plain_map_output(
-        &self,
-        output_ty: &Ty,
-        op_name: &str,
-        operand: &TypedNode,
-    ) -> Result<(), TypeError> {
-        let contextual = self.constructor_capability_for_type(output_ty).is_some()
-            || self
-                .trait_key_by_short_name("Functor")
-                .is_some_and(|trait_name| {
-                    matches!(
-                        self.constructor_projection(&trait_name, output_ty),
-                        ConstructorProjectionOutcome::Applicable { .. }
-                    )
-                });
-        if contextual {
-            let mut error = self.callable_shape_error(
-                output_ty,
-                op_name,
-                &operand.span,
-                None,
-                diagnostics::CallableReturnShape::Plain,
-            );
-            error
-                .structured
-                .as_mut()
-                .expect("callable shape is structured")
-                .primary = self.type_fact(SourceRole::RightValue, &operand.span, &operand.ty);
-            Err(error)
-        } else {
-            Ok(())
-        }
     }
 
     fn flow_operator_trait_call(
@@ -6884,7 +6928,6 @@ impl Checker {
                 callable,
                 &argument.span,
                 Some(inputs.len()),
-                diagnostics::CallableReturnShape::Any,
             ));
         }
         let inputs = inputs.to_vec();
@@ -6892,9 +6935,6 @@ impl Checker {
         let output = output.clone();
         let actual_output = actual_output.clone();
         for (input, actual_input) in inputs.iter().zip(&actual_inputs) {
-            if matches!(self.resolve_ty(actual_input), Ty::Hole) {
-                continue;
-            }
             self.assert_operand_relation(
                 input,
                 actual_input,
@@ -6931,6 +6971,95 @@ impl Checker {
                 ordinal,
             )
         }
+    }
+
+    fn trait_parameter_is_lazy(&self, trait_name: &str, method_name: &str, index: usize) -> bool {
+        self.traits
+            .get(trait_name)
+            .filter(|declaration| declaration.standard_lazy_contract)
+            .and_then(|declaration| declaration.methods.get(method_name))
+            .and_then(|method| method.value_parameters.get(index))
+            .is_some_and(|parameter| Self::lazy_parameter_inner(parameter.ty.syntax()).is_some())
+    }
+
+    /// Trait bodies receive the same normalized shell as special forms, but
+    /// consume it themselves. Hoist an explicit eager boundary before creating it.
+    fn check_trait_lazy_argument(
+        &mut self,
+        expression: &Resolved,
+        expected: &Ty,
+        span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        let Ty::Func(parameters, result) = self.resolve_ty(expected) else {
+            return Err(TypeError::new(
+                "Invalid normalized Lazy parameter contract",
+                span.clone(),
+            ));
+        };
+        if !parameters.is_empty() {
+            return Err(TypeError::new(
+                "Lazy parameter requires a zero-argument callable",
+                span.clone(),
+            ));
+        }
+        if matches!(expression, Resolved::Grouped(..)) && !Self::is_lazy_placeholder(expression) {
+            if let Some(reference) = sigil::collect_resolved_closure_captures(expression, &[])
+                .into_iter()
+                .find(|id| id.compiler_generated && id.name.starts_with("__cap_"))
+            {
+                return Err(TypeError::new(
+                    "capture placeholder is not available in a Lazy eager expression",
+                    reference.span,
+                ));
+            }
+        }
+        let mut input = self.check_lazy_input(expression, Some(&result), span)?;
+        let mut eager_binding = None;
+        let mut outer_ids = self
+            .env
+            .vars
+            .iter()
+            .filter_map(|(id, ty)| {
+                (!matches!(ty, Ty::UserFunc { .. } | Ty::BuiltinFunc { .. })
+                    && !self.env.type_constructor_ids.contains(id))
+                .then_some(*id)
+            })
+            .collect::<HashSet<_>>();
+        if let TypedInner::EagerBoundary(inner) = &input.node.node {
+            let id = ResolvedId {
+                name: "__lazy_eager".into(),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            };
+            outer_ids.insert(id.unique_id);
+            eager_binding = Some(TypedNode {
+                ty: Ty::Unit,
+                span: input.node.span.clone(),
+                node: TypedInner::Bind(
+                    TypedPattern::Var(inner.ty.clone(), id.clone()),
+                    inner.clone(),
+                ),
+            });
+            input.node.node = TypedInner::Var(id);
+        }
+        let body = self.normalize_lazy_single(input, &result, span)?;
+        let captures = Self::finalized_closure_captures(&body, &outer_ids);
+        let closure = TypedNode {
+            ty: Ty::Func(vec![], Box::new(body.ty.clone())),
+            span: span.clone(),
+            node: TypedInner::Closure(vec![], captures, Box::new(body)),
+        };
+        Ok(match eager_binding {
+            Some(binding) => TypedNode {
+                ty: closure.ty.clone(),
+                span: span.clone(),
+                node: TypedInner::Block(vec![binding, closure]),
+            },
+            None => closure,
+        })
     }
 
     fn check_invocation_argument(
@@ -7119,6 +7248,30 @@ impl Checker {
         self.check_context_bind_with_expected(span, left, right, None)
     }
 
+    /// Roll back speculative checking while returning source type-syntax
+    /// failures separately from candidate-dependent invocation failures.
+    fn probe_constructor_invocation<T>(
+        &mut self,
+        probe: impl FnOnce(&mut Self) -> Result<T, TypeError>,
+    ) -> Result<Result<T, TypeError>, TypeError> {
+        let checkpoint = self.candidate_probe_checkpoint();
+        let retained = Rc::new(RefCell::new(None));
+        let outer_probe = self.type_syntax_probe_error.replace(retained.clone());
+        let result = probe(self);
+        self.type_syntax_probe_error = outer_probe;
+        self.rollback_candidate_probe(checkpoint);
+        if let Some(error) = retained.borrow_mut().take() {
+            if let Some(outer) = &self.type_syntax_probe_error {
+                let mut retained = outer.borrow_mut();
+                if retained.is_none() {
+                    *retained = Some(error.clone());
+                }
+            }
+            return Err(error);
+        }
+        Ok(result)
+    }
+
     /// A receiverless constructor helper exposes its mapped input through its
     /// signature. Probe each carrier with the complete invocation constraints;
     /// only a unique successful carrier may commit its substitutions.
@@ -7146,7 +7299,7 @@ impl Checker {
             return Ok(None);
         };
         let helper_info = self.traits[&helper_trait].clone();
-        let helper_method = helper_info.methods[&helper_method].clone();
+        let helper_method = &helper_info.methods[&helper_method];
         if helper_info.constructor_slots.len() != 1 {
             return Ok(None);
         }
@@ -7155,7 +7308,7 @@ impl Checker {
         };
         let helper_self = self.env.fresh_tyvar();
         let (helper_params, helper_result, _, _, _) =
-            self.resolve_trait_method_signature(&helper_info, &helper_method, &helper_self)?;
+            self.resolve_trait_method_signature(&helper_info, helper_method, &helper_self)?;
         let (Some(parameter), Ty::SelfApp(slots)) = (helper_params.first(), &helper_result) else {
             return Ok(None);
         };
@@ -7164,24 +7317,32 @@ impl Checker {
         }
         let typed_value = self.check_node(value)?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let mut carrier_evidence = expected.and_then(|ty| {
-            match self.constructor_context_type_for(trait_name, ty, &value_ty) {
+        let mut carrier_evidence = match expected {
+            Some(ty) => match self
+                .constructor_context_type_for(trait_name, ty, &value_ty)
+                .into_checked()
+                .map_err(|error| error.at_span(span))?
+            {
                 ConstructorApplicationOutcome::Applied(context) => Some(context),
                 ConstructorApplicationOutcome::Deferred { .. }
                 | ConstructorApplicationOutcome::Rejected { .. } => None,
-            }
-        });
+            },
+            None => None,
+        };
         if carrier_evidence.is_none() && Self::explicit_type_args(helper).is_some() {
             let ResolvedRecordLitArg::Positional(receiver) = &args[receiver_index] else {
                 unreachable!()
             };
             let typed = self.check_node(receiver)?;
-            carrier_evidence =
-                match self.constructor_context_type_for(trait_name, &typed.ty, &value_ty) {
-                    ConstructorApplicationOutcome::Applied(context) => Some(context),
-                    ConstructorApplicationOutcome::Deferred { .. }
-                    | ConstructorApplicationOutcome::Rejected { .. } => None,
-                };
+            carrier_evidence = match self
+                .constructor_context_type_for(trait_name, &typed.ty, &value_ty)
+                .into_checked()
+                .map_err(|error| error.at_span(&typed.span))?
+            {
+                ConstructorApplicationOutcome::Applied(context) => Some(context),
+                ConstructorApplicationOutcome::Deferred { .. }
+                | ConstructorApplicationOutcome::Rejected { .. } => None,
+            };
         }
         if carrier_evidence.is_none() {
             for (index, (argument, parameter)) in args.iter().zip(declared_params).enumerate() {
@@ -7191,38 +7352,41 @@ impl Checker {
                 let ResolvedRecordLitArg::Positional(argument) = argument else {
                     continue;
                 };
-                let checkpoint = self.candidate_probe_checkpoint();
-                let observed = match parameter {
-                    Ty::SelfApp(_) => self.check_node(argument).ok().map(|typed| typed.ty),
-                    Ty::Func(inputs, output)
-                        if inputs.len() == 1 && matches!(output.as_ref(), Ty::SelfApp(_)) =>
-                    {
-                        let result = self.env.fresh_tyvar();
-                        let callable = Ty::Func(vec![value_ty.clone()], Box::new(result));
-                        self.check_invocation_argument(
-                            argument,
-                            &callable,
-                            operator.clone(),
-                            index,
-                            None,
-                        )
-                        .ok()
-                        .and_then(|typed| {
-                            self.function_parts(&typed.ty)
-                                .map(|(_, output)| self.resolve_ty(output))
-                        })
-                    }
-                    _ => None,
-                };
-                if let Some(observed) = observed {
-                    carrier_evidence =
-                        match self.constructor_context_type_for(trait_name, &observed, &value_ty) {
-                            ConstructorApplicationOutcome::Applied(context) => Some(context),
-                            ConstructorApplicationOutcome::Deferred { .. }
-                            | ConstructorApplicationOutcome::Rejected { .. } => None,
+                carrier_evidence = self
+                    .probe_constructor_invocation(|checker| {
+                        let observed = match parameter {
+                            Ty::SelfApp(_) => Some(checker.check_node(argument)?.ty),
+                            Ty::Func(inputs, output)
+                                if inputs.len() == 1
+                                    && matches!(output.as_ref(), Ty::SelfApp(_)) =>
+                            {
+                                let result = checker.env.fresh_tyvar();
+                                let callable = Ty::Func(vec![value_ty.clone()], Box::new(result));
+                                let typed = checker.check_invocation_argument(
+                                    argument,
+                                    &callable,
+                                    operator.clone(),
+                                    index,
+                                    None,
+                                )?;
+                                checker
+                                    .function_parts(&typed.ty)
+                                    .map(|(_, output)| checker.resolve_ty(output))
+                            }
+                            _ => None,
                         };
-                }
-                self.rollback_candidate_probe(checkpoint);
+                        Ok(observed.and_then(|observed| {
+                            match checker
+                                .constructor_context_type_for(trait_name, &observed, &value_ty)
+                            {
+                                ConstructorApplicationOutcome::Applied(context) => Some(context),
+                                ConstructorApplicationOutcome::Deferred { .. }
+                                | ConstructorApplicationOutcome::Rejected { .. } => None,
+                            }
+                        }))
+                    })?
+                    .ok()
+                    .flatten();
                 if carrier_evidence.is_some() {
                     break;
                 }
@@ -7235,29 +7399,30 @@ impl Checker {
         let mut accepted = Vec::new();
         let mut failures = Vec::new();
         for candidate in candidates {
-            let checkpoint = self.candidate_probe_checkpoint();
-            let result = self.check_trait_invocation(
-                span,
-                trait_name,
-                method_name,
-                args,
-                None,
-                expected,
-                expected_relation,
-                argument_expected_relation,
-                constructor_failure_reason,
-                explicit,
-                operator.clone(),
-                Some(&candidate),
-            );
+            let result = self.probe_constructor_invocation(|checker| {
+                checker.check_trait_invocation(
+                    span,
+                    trait_name,
+                    method_name,
+                    args,
+                    None,
+                    expected,
+                    expected_relation,
+                    argument_expected_relation,
+                    constructor_failure_reason,
+                    explicit,
+                    operator.clone(),
+                    Some(&candidate),
+                )
+            })?;
             match result {
                 Ok(_) => accepted.push(candidate.clone()),
+                Err(error) if carrier_evidence.is_some() => return Err(error),
                 Err(error) => failures.push(CandidateFailureData {
                     candidate_type: self.diagnostic_ty_name(&candidate),
                     detail: error.message,
                 }),
             }
-            self.rollback_candidate_probe(checkpoint);
         }
         if !accepted.is_empty() && carrier_evidence.is_none() {
             return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
@@ -7410,9 +7575,6 @@ impl Checker {
         let trait_args = match kind {
             CompositionOperator::Plain => vec![left_input, left_output, right_output],
             CompositionOperator::Lifted => {
-                if expected_output.is_none() {
-                    self.ensure_plain_map_output(&right_output, label, &typed_right)?;
-                }
                 let outcome =
                     self.constructor_context_type_for("Functor", &left_output, &right_output);
                 let mapped = self.require_constructor_projection_type(
@@ -7828,7 +7990,7 @@ impl Checker {
                 span.clone(),
             ));
         }
-        self.types_compatible(input, observed_ty);
+        self.types_compatible(input, observed_ty)?;
         let pre_args = pre_args
             .iter()
             .cloned()
@@ -7905,7 +8067,6 @@ impl Checker {
         params: &[Ty],
         args: &[ResolvedRecordLitArg],
         callable_hint: Option<&str>,
-        allow_error_observer_args: bool,
         defer_constructor_conflicts: bool,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let has_named = args
@@ -8028,7 +8189,6 @@ impl Checker {
                 &ordered,
                 callable_hint,
                 CallArgumentMode::User {
-                    allow_error_observer: allow_error_observer_args,
                     defer_constructor_conflicts,
                 },
             );
@@ -8070,7 +8230,6 @@ impl Checker {
             &ordered,
             callable_hint,
             CallArgumentMode::User {
-                allow_error_observer: allow_error_observer_args,
                 defer_constructor_conflicts,
             },
         )
@@ -8124,18 +8283,25 @@ impl Checker {
         None
     }
 
-    fn facet_capture_root(expr: &Resolved) -> Option<&Resolved> {
-        fn root(expr: &Resolved) -> &Resolved {
-            match expr {
-                Resolved::FieldAccess(_, inner, _)
-                | Resolved::FacetSegmentAccess(_, inner, _)
-                | Resolved::Grouped(_, inner) => root(inner),
-                _ => expr,
-            }
+    fn facet_path_root(expr: &Resolved) -> &Resolved {
+        match expr {
+            Resolved::FieldAccess(_, inner, _)
+            | Resolved::FacetSegmentAccess(_, inner, _)
+            | Resolved::Grouped(_, inner) => Self::facet_path_root(inner),
+            _ => expr,
         }
+    }
+
+    fn has_concrete_error_facet_root(&self, expr: &Resolved) -> bool {
+        matches!(Self::facet_path_root(expr), Resolved::Var(_, root)
+            if self.env.is_error_constructor(root.unique_id)
+                || self.env.concrete_error_bindings.contains_key(&root.unique_id))
+    }
+
+    fn facet_capture_root(expr: &Resolved) -> Option<&Resolved> {
         match expr {
             Resolved::Grouped(_, inner) => Self::facet_capture_root(inner),
-            Resolved::Capture(_, target, _) => Some(root(target)),
+            Resolved::Capture(_, target, _) => Some(Self::facet_path_root(target)),
             _ => None,
         }
     }
@@ -8409,7 +8575,6 @@ impl Checker {
     ) -> Result<(TypedNode, bool), TypeError> {
         Ok(match mode {
             CallArgumentMode::User {
-                allow_error_observer,
                 defer_constructor_conflicts,
             } => {
                 let defer = defer_constructor_conflicts
@@ -8417,11 +8582,7 @@ impl Checker {
                 let typed = if defer {
                     self.check_node(expr)?
                 } else {
-                    self.check_argument_node_with_error_observer_context(
-                        expr,
-                        expected_ty,
-                        allow_error_observer,
-                    )?
+                    self.check_node_with_expected(expr, Some(expected_ty))?
                 };
                 self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
                 self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
@@ -8450,7 +8611,7 @@ impl Checker {
         if matches!(self.resolve_ty(expected), Ty::Hole) {
             return Ok(());
         }
-        self.assert_value_type_relation(
+        self.assert_type_relation(
             expected,
             &typed.ty,
             self.type_fact(SourceRole::Expected, span, expected),
@@ -8502,50 +8663,6 @@ impl Checker {
             .is_some_and(|identity| identity != resolved)
     }
 
-    fn typed_callee_allows_error_observer_arg(&self, typed_func: &TypedNode) -> bool {
-        let TypedInner::Var(id) = &typed_func.node else {
-            return false;
-        };
-        matches!(
-            Self::surface_qualified_name(id.qualified_name.as_deref()),
-            Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
-        )
-    }
-
-    fn check_argument_node_with_error_observer_context(
-        &mut self,
-        expr: &Resolved,
-        expected_ty: &Ty,
-        allow_error_observer_args: bool,
-    ) -> Result<TypedNode, TypeError> {
-        let allow = allow_error_observer_args
-            && Self::ty_is_error_observer_callable(&self.resolve_ty(expected_ty));
-        let allow_restricted_binding =
-            allow && self.resolved_is_error_observer_binding_reference(expr);
-        if allow_restricted_binding {
-            self.allow_error_observer_value_use =
-                self.allow_error_observer_value_use.saturating_add(1);
-        }
-        let result = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
-            self.check_node(expr)
-        } else {
-            self.check_node_with_expected(expr, Some(expected_ty))
-        };
-        if allow_restricted_binding {
-            self.allow_error_observer_value_use =
-                self.allow_error_observer_value_use.saturating_sub(1);
-        }
-        result
-    }
-
-    fn resolved_is_error_observer_binding_reference(&self, expr: &Resolved) -> bool {
-        match expr {
-            Resolved::Var(_, id) => self.error_observer_bindings.contains(&id.unique_id),
-            Resolved::Grouped(_, inner) => self.resolved_is_error_observer_binding_reference(inner),
-            _ => false,
-        }
-    }
-
     fn facet_intrinsic_kind(&self, func: &Resolved) -> Option<&'static str> {
         let Resolved::Var(_, id) = func else {
             return None;
@@ -8573,7 +8690,9 @@ impl Checker {
                 origin_index: Some(index),
                 ..
             } => format!("_{index}"),
-            TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+            TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+            | TypedFacetSegment::ErrorPayload { field_name, .. }
+            | TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
             TypedFacetSegment::ListIndex { index, display, .. } => {
@@ -8710,7 +8829,7 @@ impl Checker {
     ) -> Result<TypedFacetPath, TypeError> {
         let mut current_source = if let Some(source_ty_hint) = path.source_ty_hint.clone() {
             if let Some(expected_source) = expected_source {
-                if !self.types_compatible(&source_ty_hint, expected_source) {
+                if !self.types_compatible(&source_ty_hint, expected_source)? {
                     return Err(TypeError {
                         structured: None,
                         message: format!(
@@ -8770,7 +8889,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(&segments),
             may_fail,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments,
         })
     }
@@ -8805,7 +8923,6 @@ impl Checker {
                 update_focus_ty: self.resolve_ty(&update_slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
-                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
             TypedInner::PendingFacetPath(path) => {
@@ -8846,7 +8963,7 @@ impl Checker {
             self.resolve_facet_path_from_node(right, span, Some(&left_path.focus_ty))?;
         self.ensure_deferred_facet_slots(operator_name, &right_path, span)?;
 
-        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
+        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -8881,7 +8998,6 @@ impl Checker {
                 TypedFacetPathKind::InfallibleStructural
             },
             may_fail: left_path.may_fail || right_path.may_fail,
-            source_readonly_root: left_path.source_readonly_root,
             segments,
         };
         Ok(TypedNode {
@@ -9037,6 +9153,12 @@ impl Checker {
                 _ => break,
             }
         }
+        if self.has_concrete_error_facet_root(&current) {
+            return Err(TypeError::new(
+                "Concrete Error Facet paths cannot be captured",
+                span.clone(),
+            ));
+        }
         if segments.is_empty() {
             return Err(TypeError {
                 structured: None,
@@ -9077,7 +9199,7 @@ impl Checker {
             ),
             FacetPathInput::Capture(path) => {
                 let path = self.specialize_pending_facet_path(path, span, Some(source_value_ty))?;
-                if !self.types_compatible(&path.source_ty, source_value_ty) {
+                if !self.types_compatible(&path.source_ty, source_value_ty)? {
                     return Err(TypeError {
                         structured: None,
                         message: format!(
@@ -9123,7 +9245,7 @@ impl Checker {
         let path_node = self.check_node_with_expected(path_expr, path_expected)?;
         let path = self.resolve_facet_path_from_node(path_node, span, Some(source_value_ty))?;
 
-        if !self.types_compatible(&path.source_ty, source_value_ty) {
+        if !self.types_compatible(&path.source_ty, source_value_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -9230,6 +9352,16 @@ impl Checker {
         source_expr: &Resolved,
         path_input: FacetPathInput<'_>,
     ) -> Result<PreparedFacetInput, TypeError> {
+        // Common fields normalize to an Error path, so check the resolved root first.
+        if self.is_capture_closure
+            && matches!(&path_input, FacetPathInput::Expr(expr)
+                if self.has_concrete_error_facet_root(expr))
+        {
+            return Err(TypeError::new(
+                "Concrete Error Facet paths cannot be captured",
+                span.clone(),
+            ));
+        }
         let (typed_source, source_is_result, source_value_ty) =
             self.check_facet_source_value(op_name, source_expr)?;
         let path = self.check_facet_path_input(
@@ -9239,6 +9371,29 @@ impl Checker {
             &source_value_ty,
             &typed_source.ty,
         )?;
+        if self.is_capture_closure
+            && path
+                .segments
+                .iter()
+                .any(|segment| matches!(segment, TypedFacetSegment::ErrorPayload { .. }))
+        {
+            return Err(TypeError::new(
+                "Concrete Error Facet paths cannot be captured",
+                span.clone(),
+            ));
+        }
+        for (index, segment) in path.segments.iter().enumerate() {
+            if let TypedFacetSegment::ErrorPayload { kind, .. } = segment {
+                if index != 0
+                    || self.resolved_concrete_error_identity(source_expr) != Some(kind.as_str())
+                {
+                    return Err(TypeError::new(
+                        "Concrete Error Payload Facet requires a matching narrowed local binding",
+                        span.clone(),
+                    ));
+                }
+            }
+        }
         Ok(PreparedFacetInput {
             typed_source,
             source_is_result,
@@ -9366,7 +9521,7 @@ impl Checker {
             }
             (Ty::List(inner), TypedFacetSegment::ListIndex { .. }) => {
                 let rebuilt = self.rebuild_facet_source_type(&inner, rest, replacement_ty, span)?;
-                if !self.types_compatible(&inner, &rebuilt) {
+                if !self.types_compatible(&inner, &rebuilt)? {
                     return Err(TypeError {
                         structured: None,
                         message:
@@ -9382,7 +9537,7 @@ impl Checker {
                 let expected = Ty::List(inner.clone());
                 let rebuilt =
                     self.rebuild_facet_source_type(&expected, rest, replacement_ty, span)?;
-                if !self.types_compatible(&expected, &rebuilt) {
+                if !self.types_compatible(&expected, &rebuilt)? {
                     return Err(TypeError {
                         structured: None,
                         message:
@@ -9400,7 +9555,7 @@ impl Checker {
                 let value_ty = args[0].clone();
                 let rebuilt =
                     self.rebuild_facet_source_type(&value_ty, rest, replacement_ty, span)?;
-                if !self.types_compatible(&value_ty, &rebuilt) {
+                if !self.types_compatible(&value_ty, &rebuilt)? {
                     return Err(TypeError {
                         structured: None,
                         message:
@@ -9430,7 +9585,7 @@ impl Checker {
                         hint: None,
                     })?;
                 let enum_template = variant.enum_ty.clone();
-                if !self.types_compatible(&variant.enum_ty, &source) {
+                if !self.types_compatible(&variant.enum_ty, &source)? {
                     return Err(TypeError {
                         structured: None,
                         message: "Facet enum path is inconsistent with its source type".into(),
@@ -9479,7 +9634,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.count_tyvar_occurrences(inner, needle),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.count_tyvar_occurrences(inner, needle),
             Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .map(|item| self.count_tyvar_occurrences(item, needle))
@@ -9523,7 +9679,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole
-            | Ty::Pid(_) => 0,
+            | Ty::ProcessMarker(_) => 0,
         }
     }
 
@@ -9557,7 +9713,8 @@ impl Checker {
             (Ty::MatchResult(template), Ty::MatchResult(replacement))
             | (Ty::ExtractorClosure(template), Ty::ExtractorClosure(replacement))
             | (Ty::List(template), Ty::List(replacement))
-            | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
+            | (Ty::Lazy(template), Ty::Lazy(replacement))
+            | (Ty::Pid(template), Ty::Pid(replacement)) => self
                 .collect_facet_rebuild_tyvar_replacements(
                     template,
                     replacement,
@@ -9640,11 +9797,15 @@ impl Checker {
                         }
                         replacement_slots.to_vec()
                     }
-                    _ => match self.constructor_application_slots_for_witness(
-                        template_witness,
-                        template_slots.len(),
-                        &resolved_replacement,
-                    ) {
+                    _ => match self
+                        .constructor_application_slots_for_witness(
+                            template_witness,
+                            template_slots.len(),
+                            &resolved_replacement,
+                        )
+                        .into_checked()
+                        .map_err(|error| error.at_span(span))?
+                    {
                         ConstructorSlotsOutcome::Projected(slots) => slots,
                         ConstructorSlotsOutcome::Deferred { .. }
                         | ConstructorSlotsOutcome::Rejected { .. } => {
@@ -9742,7 +9903,7 @@ impl Checker {
                 hint: None,
             });
         };
-        if !self.types_compatible(expected_field, rebuilt_field) {
+        if !self.types_compatible(expected_field, rebuilt_field)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -9845,6 +10006,9 @@ impl Checker {
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::Pid(inner) => Ty::Pid(Box::new(
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
             Ty::Tuple(items) => Ty::Tuple(
@@ -10046,7 +10210,7 @@ impl Checker {
         self.validate_nominal_type_well_formed(&update_source_ty, span, false)?;
 
         if !matches!(path.update_focus_ty, Ty::Hole)
-            && !self.types_compatible(&path.update_focus_ty, &replacement_ty)
+            && !self.types_compatible(&path.update_focus_ty, &replacement_ty)?
         {
             return Err(TypeError {
                 structured: None,
@@ -10060,7 +10224,7 @@ impl Checker {
             });
         }
         if !matches!(path.update_source_ty, Ty::Hole)
-            && !self.types_compatible(&path.update_source_ty, &update_source_ty)
+            && !self.types_compatible(&path.update_source_ty, &update_source_ty)?
         {
             return Err(TypeError {
                 structured: None,
@@ -10508,7 +10672,7 @@ impl Checker {
         let mode = if require_result_focus {
             TypedFacetOverMode::FocusResult
         } else if let Some(value_focus_ty) = &value_focus_ty {
-            if self.types_compatible(value_focus_ty, &in_ty) {
+            if self.types_compatible(value_focus_ty, &in_ty)? {
                 TypedFacetOverMode::FocusValue
             } else if allow_result_focus_input {
                 TypedFacetOverMode::FocusResult
@@ -10534,7 +10698,7 @@ impl Checker {
             (TypedFacetOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
             _ => &resolved_focus_ty,
         };
-        if !self.types_compatible(expected_input_ty, &in_ty) {
+        if !self.types_compatible(expected_input_ty, &in_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -10575,7 +10739,7 @@ impl Checker {
                 ),
             });
         }
-        if !self.types_compatible(&Ty::Error, &out_err) {
+        if !self.types_compatible(&Ty::Error, &out_err)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -10596,44 +10760,26 @@ impl Checker {
         Ok((mode, replacement_ty))
     }
 
-    fn readonly_type_name(ty: &Ty) -> Option<&str> {
-        match ty {
-            Ty::Struct(name, _) | Ty::Record(name, _) => Some(Self::surface_name(name)),
-            _ => None,
-        }
-    }
-
     fn check_mutating_facet_path_permissions(
         &self,
         facet_name: &str,
         path: &TypedFacetPath,
         span: &Span,
     ) -> Result<(), TypeError> {
-        if path.source_readonly_root {
-            let resolved_source_ty = self.resolve_ty(&path.source_ty);
-            let type_name = Self::readonly_type_name(&resolved_source_ty).unwrap_or("<anonymous>");
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{} cannot mutably traverse readonly type {}",
-                    facet_name, type_name
-                ),
-                span: span.clone(),
-                hint: Some(
-                    "Use an explicit helper that returns a replacement value instead.".into(),
-                ),
-            });
-        }
-
         for (index, segment) in path.segments.iter().enumerate() {
             let is_final = index + 1 == path.segments.len();
             match segment {
+                TypedFacetSegment::ReadonlyBuiltin { field_name, .. }
+                | TypedFacetSegment::ErrorPayload { field_name, .. } => {
+                    return Err(TypeError::new(
+                        format!("{facet_name} cannot update readonly Error.{field_name}"),
+                        span.clone(),
+                    ));
+                }
                 TypedFacetSegment::Field {
                     field_name,
                     container_type_name,
                     readonly,
-                    focus_readonly_root,
-                    focus_type_name,
                     ..
                 } => {
                     if *readonly {
@@ -10666,65 +10812,12 @@ impl Checker {
                             });
                         }
                     }
-
-                    if *focus_readonly_root && !is_final {
-                        let type_name = focus_type_name
-                            .as_deref()
-                            .unwrap_or(container_type_name.as_str());
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "{} cannot mutably traverse readonly type {}",
-                                facet_name, type_name
-                            ),
-                            span: span.clone(),
-                            hint: Some(
-                                "Replace the containing property with a freshly computed value instead."
-                                    .into(),
-                            ),
-                        });
-                    }
                 }
-                TypedFacetSegment::Tuple {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::Variant {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::ListIndex {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::ListRange {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                }
-                | TypedFacetSegment::MapKey {
-                    focus_readonly_root,
-                    focus_type_name,
-                    ..
-                } => {
-                    if *focus_readonly_root && !is_final {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "{} cannot mutably traverse readonly type {}",
-                                facet_name,
-                                focus_type_name.as_deref().unwrap_or("<anonymous>")
-                            ),
-                            span: span.clone(),
-                            hint: Some(
-                                "Replace the containing value with an updated copy instead.".into(),
-                            ),
-                        });
-                    }
-                }
+                TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::Variant { .. }
+                | TypedFacetSegment::ListIndex { .. }
+                | TypedFacetSegment::ListRange { .. }
+                | TypedFacetSegment::MapKey { .. } => {}
             }
         }
 
@@ -10779,7 +10872,7 @@ impl Checker {
         Ok(())
     }
 
-    fn ensure_no_runtime_facet_value(
+    pub(super) fn ensure_no_runtime_facet_value(
         &self,
         value: &TypedNode,
         context: &str,
@@ -10885,13 +10978,6 @@ impl Checker {
             );
         }
 
-        if let Resolved::Var(call_span, id) = func {
-            if self.error_observer_bindings.contains(&id.unique_id) {
-                return Err(self
-                    .lazy_error_transport_error(self.error_observer_call_error(call_span), func));
-            }
-        }
-
         let result = (|| {
             let explicit_type_arguments = Self::explicit_type_args(func);
             let call_target = match func {
@@ -10927,7 +11013,7 @@ impl Checker {
                         .map(|_| self.env.fresh_tyvar())
                         .collect::<Vec<_>>();
                     let ret = self.env.fresh_tyvar();
-                    if self.bind_tyvar(var, &Ty::Func(params, Box::new(ret))) {
+                    if self.bind_tyvar(var, &Ty::Func(params, Box::new(ret)))? {
                         return self.check_app_with_expected(span, func, args, expected_return);
                     }
                 }
@@ -11011,7 +11097,6 @@ impl Checker {
                                 args,
                                 span,
                                 callable_hint.as_deref(),
-                                false,
                             )?
                         } else {
                             self.typecheck_positional_call_args(
@@ -11074,7 +11159,7 @@ impl Checker {
                                 ));
                             };
                             return Ok(TypedNode {
-                                ty: Ty::Pid(process_name),
+                                ty: Ty::pid(process_name),
                                 span: span.clone(),
                                 node: TypedInner::App(Box::new(typed_func), typed_args),
                             });
@@ -11207,8 +11292,6 @@ impl Checker {
                                 explicit_type_arguments.as_deref(),
                             )?;
                         }
-                        let allow_error_observer_args =
-                            self.typed_callee_allows_error_observer_arg(&typed_func);
                         let typed_args = if let Some(signature) = application_constraints
                             .as_ref()
                             .map(|constraints| &constraints.signature)
@@ -11239,7 +11322,6 @@ impl Checker {
                                 args,
                                 span,
                                 callable_hint.as_deref(),
-                                allow_error_observer_args,
                             )?
                         } else {
                             self.typecheck_user_function_args(
@@ -11249,7 +11331,6 @@ impl Checker {
                                 params,
                                 args,
                                 callable_hint.as_deref(),
-                                allow_error_observer_args,
                                 false,
                             )?
                         };
@@ -11332,7 +11413,6 @@ impl Checker {
                     "function",
                     &typed_func.span,
                     None,
-                    diagnostics::CallableReturnShape::Any,
                 )),
             }
         })();
@@ -11359,7 +11439,6 @@ impl Checker {
         args: &[ResolvedRecordLitArg],
         span: &Span,
         callable_hint: Option<&str>,
-        allow_error_observer_args: bool,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let params = signature
             .value_parameters
@@ -11373,7 +11452,6 @@ impl Checker {
             &params,
             args,
             callable_hint,
-            allow_error_observer_args,
             true,
         )?;
 
@@ -11588,7 +11666,7 @@ impl Checker {
 
         Ok(Some(TypedNode {
             ty: Ty::Result(
-                Box::new(Ty::Pid(worker_process.clone())),
+                Box::new(Ty::pid(worker_process.clone())),
                 Box::new(Ty::Error),
             ),
             span: span.clone(),
@@ -11654,7 +11732,12 @@ impl Checker {
         };
         let typed_pid = self.check_node(pid_expr)?;
         let worker_process = match self.resolve_ty(&typed_pid.ty) {
-            Ty::Pid(process_name) => process_name,
+            Ty::Pid(marker) if matches!(marker.as_ref(), Ty::ProcessMarker(_)) => {
+                let Ty::ProcessMarker(name) = *marker else {
+                    unreachable!()
+                };
+                name
+            }
             other => {
                 return Err(self.process_policy_error(
                     format!(
@@ -11873,7 +11956,7 @@ impl Checker {
             })
             .ok_or_else(|| self.typecheck_invariant_error("WorkerStrategy type metadata", span))?;
         let typed_strategy = self.check_node_with_expected(strategy_expr, Some(&strategy_ty))?;
-        if !self.types_compatible(&strategy_ty, &typed_strategy.ty) {
+        if !self.types_compatible(&strategy_ty, &typed_strategy.ty)? {
             return Err(self.type_relation_error(
                 &strategy_ty,
                 &typed_strategy.ty,
@@ -11889,7 +11972,7 @@ impl Checker {
             ty: Ty::Result(
                 Box::new(Ty::Enum(
                     "Workers".into(),
-                    vec![Ty::Pid(worker_process.clone())],
+                    vec![Ty::pid(worker_process.clone())],
                 )),
                 Box::new(Ty::Error),
             ),
@@ -12012,7 +12095,7 @@ impl Checker {
         let Ty::Pid(pid_process) = self.resolve_ty(first_param) else {
             return Ok(None);
         };
-        if Self::surface_name(&pid_process) != Self::surface_name(&process_name) {
+        if !matches!(pid_process.as_ref(), Ty::ProcessMarker(name) if name == &process_name) {
             return Ok(None);
         }
         if args.len() != remaining_params.len() {
@@ -12029,12 +12112,12 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for (expected, actual) in remaining_params.iter().zip(typed_args.iter()) {
-            if !self.types_compatible(expected, &actual.ty) {
+            if !self.types_compatible(expected, &actual.ty)? {
                 return Ok(None);
             }
         }
         Ok(Some(TypedNode {
-            ty: Ty::Func(vec![Ty::Pid(process_name)], ret),
+            ty: Ty::Func(vec![Ty::pid(process_name)], ret),
             span: span.clone(),
             node: TypedInner::InjectCall(Box::new(typed_func), typed_args),
         }))
@@ -12085,14 +12168,14 @@ impl Checker {
             return Ok(None);
         }
 
-        let pid_ty = Ty::Pid(process_name.clone());
+        let pid_ty = Ty::pid(process_name.clone());
         let typed_pid = match &args[0] {
             ResolvedRecordLitArg::Positional(expr) => {
                 self.check_node_with_expected(expr, Some(&pid_ty))?
             }
             ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
         };
-        if !self.types_compatible(&pid_ty, &typed_pid.ty) {
+        if !self.types_compatible(&pid_ty, &typed_pid.ty)? {
             return Ok(None);
         }
 
@@ -12107,7 +12190,7 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for (expected, actual) in params.iter().zip(typed_args.iter()) {
-            if !self.types_compatible(expected, &actual.ty) {
+            if !self.types_compatible(expected, &actual.ty)? {
                 return Ok(None);
             }
         }
@@ -12310,7 +12393,7 @@ impl Checker {
             ));
         };
         Ok(TypedNode {
-            ty: Ty::Pid(capability),
+            ty: Ty::pid(Self::canonical_user_type_name(&capability)),
             span: span.clone(),
             node: TypedInner::ProcessContextHandler {
                 process_name,
@@ -12387,7 +12470,9 @@ impl Checker {
         expected: Option<&Ty>,
         expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
-        self.check_closure_with_kind(
+        let saved_capture_kind = self.is_capture_closure;
+        self.is_capture_closure = false;
+        let result = self.check_closure_with_kind(
             span,
             params,
             captures,
@@ -12395,7 +12480,9 @@ impl Checker {
             expected,
             expected_relation,
             CallableContext::Closure,
-        )
+        );
+        self.is_capture_closure = saved_capture_kind;
+        result
     }
 
     fn check_closure_with_kind(
@@ -12409,6 +12496,7 @@ impl Checker {
         kind: CallableContext,
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_function_return_origin = self.function_return_origin.take();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_current_private_field_owner = self.current_private_field_owner.clone();
@@ -12455,7 +12543,6 @@ impl Checker {
                             actual_type: None,
                             expected_arity: None,
                             actual_arity: Some(params.len() as u32),
-                            return_shape: diagnostics::CallableReturnShape::Any,
                         }),
                         primary: SourceFact::untyped(
                             SourceRole::CallTarget,
@@ -12481,11 +12568,6 @@ impl Checker {
                 let param_ty = if let Some(ast_ty) = &param.ty {
                     let annotated =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    if Self::ty_exposes_error_value(&annotated) {
-                        return Err(
-                            self.error_function_param_not_allowed_error(Self::ast_ty_span(ast_ty))
-                        );
-                    }
                     self.assert_type_relation(
                         param_ty,
                         &annotated,
@@ -12648,6 +12730,7 @@ impl Checker {
 
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
+        self.function_return_origin = saved_function_return_origin;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.current_private_field_owner = saved_current_private_field_owner;
@@ -12668,9 +12751,20 @@ impl Checker {
         let saved_capture = self.active_lazy_capture.take();
         self.active_lazy_capture =
             ActiveLazyCapture::new(params, expected, self.resolved_span(body).clone());
+        let saved_capture_kind = self.is_capture_closure;
+        self.is_capture_closure = true;
         let result = self
-            .check_closure(span, params, captures, body, expected, None)
+            .check_closure_with_kind(
+                span,
+                params,
+                captures,
+                body,
+                expected,
+                None,
+                CallableContext::Closure,
+            )
             .map_err(|error| self.lazy_capture_annotation_error(error));
+        self.is_capture_closure = saved_capture_kind;
         self.active_lazy_capture = saved_capture;
         let mut typed = result?;
         let TypedInner::Closure(params, captures, typed_body) = typed.node else {
@@ -12812,17 +12906,17 @@ impl Checker {
                                 hint: None,
                             });
                         }
-                        crate::env::TypeKind::ConcreteError => {
-                            return Err(TypeError {
-                                structured: None,
-                                message: format!(
-                                    "constructor capture is forbidden for `{}`",
-                                    id.name
-                                ),
-                                span: span.clone(),
-                                hint: None,
-                            });
-                        }
+                        crate::env::TypeKind::ConcreteError => self
+                            .env
+                            .error_constructor_inputs
+                            .get(&id.unique_id)
+                            .ok_or_else(|| {
+                                TypeError::new(
+                                    "Error constructor input signature is missing",
+                                    span.clone(),
+                                )
+                            })?
+                            .len(),
                     };
                     (
                         Resolved::ConstructorCall(span.clone(), id.clone(), Vec::new()),
@@ -12921,7 +13015,19 @@ impl Checker {
             }
         }
 
-        if self.trait_method_ref(target).is_some() {
+        if let Some((_, trait_name, method_name)) = self.trait_method_ref(target) {
+            let declaration = &self.traits[&trait_name];
+            if declaration.standard_lazy_contract
+                && declaration.methods[&method_name]
+                    .value_parameters
+                    .iter()
+                    .any(|parameter| Self::lazy_parameter_inner(parameter.ty.syntax()).is_some())
+            {
+                return Err(TypeError::new(
+                    format!("{trait_name}::{method_name} has Lazy arguments and cannot be captured without explicit arguments"),
+                    span.clone(),
+                ));
+            }
             let Some(expected_ty) = expected else {
                 if let Resolved::Var(_, id) = target {
                     return Err(self.policy_error(
@@ -13000,6 +13106,12 @@ impl Checker {
         }
 
         if Self::capture_target_is_facet_path(target) {
+            if self.has_concrete_error_facet_root(target) {
+                return Err(TypeError::new(
+                    "Concrete Error Facet paths cannot be captured",
+                    span.clone(),
+                ));
+            }
             if let Some(expected_ty) = expected {
                 let expected_ty_resolved = self.resolve_ty(expected_ty);
                 if let Ty::Func(params, _) = &expected_ty_resolved {
@@ -13096,8 +13208,9 @@ impl Checker {
             };
             let compatible = callable_shape
                 .as_ref()
-                .is_some_and(|shape| self.types_compatible(shape, expected_ty));
-            if compatible {
+                .map(|shape| self.types_compatible(shape, expected_ty))
+                .transpose();
+            if matches!(compatible, Ok(Some(true))) {
                 target_ty = self.resolve_ty(&target_ty);
             } else {
                 // Operator checking supplies a provisional callable shape so
@@ -13106,6 +13219,7 @@ impl Checker {
                 // leak partial type bindings.
                 self.rollback_candidate_probe(checkpoint);
             }
+            compatible?;
         }
         if let Ty::Facet(_, source_ty, focus_ty, ..) = &target_ty {
             let view_id = self.runtime_helper_id("Facet::view", span)?;
@@ -13156,13 +13270,7 @@ impl Checker {
             Ty::UserFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
-                return Err(self.callable_shape_error(
-                    other,
-                    "capture",
-                    &typed_target.span,
-                    None,
-                    diagnostics::CallableReturnShape::Any,
-                ));
+                return Err(self.callable_shape_error(other, "capture", &typed_target.span, None));
             }
         };
         if let Some(signature) = &capture_signature {
@@ -13580,7 +13688,7 @@ impl Checker {
             }
         };
 
-        if !self.types_compatible(&typed_head.ty, &tail_elem_ty) {
+        if !self.types_compatible(&typed_head.ty, &tail_elem_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -13620,7 +13728,7 @@ impl Checker {
 
         let elem_ty = typed_elems[0].ty.clone();
         for te in typed_elems.iter().skip(1) {
-            if !self.types_compatible(&elem_ty, &te.ty) {
+            if !self.types_compatible(&elem_ty, &te.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -13658,7 +13766,7 @@ impl Checker {
         for entry in entries {
             let typed_key = self.check_node(&entry.key)?;
             self.ensure_no_runtime_facet_value(&typed_key, "HashMap literal key")?;
-            if !self.types_compatible(&Ty::Str, &typed_key.ty) {
+            if !self.types_compatible(&Ty::Str, &typed_key.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -13680,7 +13788,7 @@ impl Checker {
 
         let value_ty = typed_entries[0].1.ty.clone();
         for (_, value) in typed_entries.iter().skip(1) {
-            if !self.types_compatible(&value_ty, &value.ty) {
+            if !self.types_compatible(&value_ty, &value.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -13890,7 +13998,7 @@ impl Checker {
         })
     }
 
-    fn next_synthetic_range_uid() -> u32 {
+    pub(super) fn next_synthetic_range_uid() -> u32 {
         SYNTHETIC_RANGE_UID.fetch_add(1, Ordering::Relaxed)
     }
 
@@ -13948,6 +14056,7 @@ impl Checker {
                             ResolvedRecordLitArg::Positional(stop),
                         ],
                     )),
+                    span.clone(),
                 ),
                 Resolved::ConstructorCall(
                     span.clone(),
@@ -14153,8 +14262,6 @@ impl Checker {
                     | Resolved::Ensure(..)
                     | Resolved::MapErr(..)
                     | Resolved::Cause(..)
-                    | Resolved::RecoverKind(..)
-                    | Resolved::AssertErrorKinds(..)
                     | Resolved::ApplyPattern(..)
                     | Resolved::IsMatch(..)
                     | Resolved::Dbg(..)
@@ -14443,7 +14550,7 @@ impl Checker {
         if let Some(other) = &typed_else {
             if let Some(expected) = &callable_expected {
                 for (ordinal, branch) in [&typed_then, other].into_iter().enumerate() {
-                    self.assert_value_type_relation(
+                    self.assert_type_relation(
                         expected,
                         &branch.ty,
                         self.type_fact(SourceRole::Expected, span, expected),
@@ -14509,7 +14616,7 @@ impl Checker {
         };
         self.record_lazy_capture_signature(span, &ty);
         if let Some(expected) = expected {
-            self.assert_value_type_relation(
+            self.assert_type_relation(
                 expected,
                 &ty,
                 self.type_fact(SourceRole::Expected, span, expected),
@@ -14572,7 +14679,7 @@ impl Checker {
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_cond = self.check_node(cond)?;
-        if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
+        if !self.types_compatible(&Ty::Bool, &typed_cond.ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -14681,127 +14788,6 @@ impl Checker {
         })
     }
 
-    fn checked_error_kind(&self, marker: &ResolvedId, api: &str) -> Result<String, TypeError> {
-        if !self.env.is_error_constructor(marker.unique_id) {
-            return Err(TypeError::new(
-                format!("{api} marker must be a concrete deferror type name"),
-                marker.span.clone(),
-            ));
-        }
-        let kind = marker.qualified_name.clone().ok_or_else(|| {
-            TypeError::new(
-                format!("{api} ErrorKind identity has no canonical declaration name"),
-                marker.span.clone(),
-            )
-        })?;
-        Ok(kind)
-    }
-
-    fn check_assert_error_kinds(
-        &mut self,
-        span: &Span,
-        markers: &sigil::resolved::ErrorKindAssertion<ResolvedId>,
-        value: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
-        use sigil::resolved::ErrorKindAssertion;
-        let api = markers.api();
-        let kinds = match markers {
-            ErrorKindAssertion::Root(marker) => {
-                ErrorKindAssertion::Root(self.checked_error_kind(marker, api)?)
-            }
-            ErrorKindAssertion::Chain(markers) => ErrorKindAssertion::Chain(
-                markers
-                    .iter()
-                    .map(|marker| self.checked_error_kind(marker, api))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-        };
-        let value = self.check_result_value(value, api, None)?;
-        Ok(TypedNode {
-            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
-            span: span.clone(),
-            node: TypedInner::AssertErrorKinds(kinds, Box::new(value)),
-        })
-    }
-
-    pub(super) fn check_recover_kind(
-        &mut self,
-        span: &Span,
-        value: &Resolved,
-        marker: &ResolvedId,
-        handler: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
-        let kind = self.checked_error_kind(marker, "recover_kind")?;
-        // Infer the success type from the handler before checking a
-        // polymorphic `Err(...)` value.  Otherwise `Err(NoneError)` is
-        // checked without context and its success slot defaults to `Unit`,
-        // rejecting valid handlers such as `Error -> Result<Int>`.
-        let ok_ty = self.env.fresh_tyvar();
-        let expected_handler = Ty::Func(
-            vec![Ty::Error],
-            Box::new(Ty::Result(Box::new(ok_ty.clone()), Box::new(Ty::Error))),
-        );
-        let mut typed_handler = self.check_node_with_expected(handler, Some(&expected_handler))?;
-        if matches!(self.resolve_ty(&typed_handler.ty), Ty::Var(_)) {
-            self.assert_type_relation(
-                &expected_handler,
-                &typed_handler.ty,
-                self.type_fact(SourceRole::Expected, span, &expected_handler),
-                self.type_fact(SourceRole::Value, &typed_handler.span, &typed_handler.ty),
-                TypeDiagnosticReason::ArgumentTypeMismatch,
-                DiagnosticOrigin::Call,
-                "recover_kind",
-                2,
-            )?;
-            typed_handler.ty = self.resolve_ty(&typed_handler.ty);
-        }
-        let (handler_in, handler_out) =
-            self.unary_function_parts(&typed_handler.ty, "recover_kind", &typed_handler.span)?;
-        if !self.types_compatible(&Ty::Error, &handler_in) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "recover_kind handler must accept Error, got {}",
-                    self.ty_name(&handler_in)
-                ),
-                span: typed_handler.span.clone(),
-                hint: None,
-            });
-        }
-        if !self.types_compatible(&expected_handler, &typed_handler.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "recover_kind handler must return Result<{}>, got {}",
-                    self.ty_name(&ok_ty),
-                    self.ty_name(&handler_out)
-                ),
-                span: typed_handler.span.clone(),
-                hint: None,
-            });
-        }
-        let typed_value = self.check_result_value(value, "recover_kind", Some(&ok_ty))?;
-        let value_ty = self.resolve_ty(&typed_value.ty);
-        let Ty::Result(ok_ty, _) = &value_ty else {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "recover_kind value must resolve to Result<...>, got {}",
-                    self.ty_name(&value_ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        };
-        let ok_ty = ok_ty.as_ref().clone();
-
-        Ok(TypedNode {
-            ty: Ty::Result(Box::new(ok_ty), Box::new(Ty::Error)),
-            span: span.clone(),
-            node: TypedInner::RecoverKind(Box::new(typed_value), kind, Box::new(typed_handler)),
-        })
-    }
-
     fn check_result_value(
         &mut self,
         value: &Resolved,
@@ -14818,7 +14804,7 @@ impl Checker {
         );
         let typed_value = self.check_node_with_expected(value, Some(&expected_result_ty))?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        if !self.types_compatible(&expected_result_ty, &value_ty) {
+        if !self.types_compatible(&expected_result_ty, &value_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -14849,7 +14835,7 @@ impl Checker {
                 Ty::List(inner) => {
                     let expr_ty = self.resolve_ty(&typed_expr.ty);
                     if let Ty::Result(ok, _) = &expr_ty {
-                        if self.types_compatible(ok.as_ref(), &Ty::Int) {
+                        if self.types_compatible(ok.as_ref(), &Ty::Int)? {
                             return Err(TypeError {
                                 structured: None,
                                 message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
@@ -14858,7 +14844,7 @@ impl Checker {
                             });
                         }
                     }
-                    if !self.types_compatible(&Ty::Int, &expr_ty) {
+                    if !self.types_compatible(&Ty::Int, &expr_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: "List Facet index expression must be Int".into(),
@@ -14877,9 +14863,6 @@ impl Checker {
                             index: Box::new(typed_expr),
                             display: display.clone(),
                             literal_index,
-                            focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                                .map(str::to_string),
                         },
                         focus_ty,
                         true,
@@ -14890,7 +14873,7 @@ impl Checker {
                 {
                     let expr_ty = self.resolve_ty(&typed_expr.ty);
                     if let Ty::Result(ok, _) = &expr_ty {
-                        if self.types_compatible(ok.as_ref(), &Ty::Str) {
+                        if self.types_compatible(ok.as_ref(), &Ty::Str)? {
                             return Err(TypeError {
                                 structured: None,
                                 message: "Facet bracket expression must be plain String; unwrap Result<String> before using it".into(),
@@ -14899,7 +14882,7 @@ impl Checker {
                             });
                         }
                     }
-                    if !self.types_compatible(&Ty::Str, &expr_ty) {
+                    if !self.types_compatible(&Ty::Str, &expr_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: "HashMap Facet key expression must be String".into(),
@@ -14918,9 +14901,6 @@ impl Checker {
                             key: Box::new(typed_expr),
                             display: display.clone(),
                             literal_key,
-                            focus_readonly_root: self.ty_is_readonly_root(&value_ty),
-                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&value_ty))
-                                .map(str::to_string),
                         },
                         value_ty,
                         true,
@@ -14957,7 +14937,7 @@ impl Checker {
                     for typed_expr in [&typed_start, &typed_end] {
                         let expr_ty = self.resolve_ty(&typed_expr.ty);
                         if let Ty::Result(ok, _) = &expr_ty {
-                            if self.types_compatible(ok.as_ref(), &Ty::Int) {
+                            if self.types_compatible(ok.as_ref(), &Ty::Int)? {
                                 return Err(TypeError {
                                     structured: None,
                                     message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
@@ -14966,7 +14946,7 @@ impl Checker {
                                 });
                             }
                         }
-                        if !self.types_compatible(&Ty::Int, &expr_ty) {
+                        if !self.types_compatible(&Ty::Int, &expr_ty)? {
                             return Err(TypeError {
                                 structured: None,
                                 message: "List Facet index expression must be Int".into(),
@@ -14992,9 +14972,6 @@ impl Checker {
                             display: display.clone(),
                             literal_start,
                             literal_end,
-                            focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                                .map(str::to_string),
                         },
                         focus_ty,
                         true,
@@ -15040,6 +15017,22 @@ impl Checker {
             });
         }
         match self.resolve_ty(source_ty) {
+            Ty::Error if matches!(field.as_str(), "kind" | "message") => {
+                let builtin_id =
+                    sindr::builtin::builtin_meta_for_decl(field, Some(&format!("Error::{field}")))
+                        .map(|meta| meta.runtime_id())
+                        .ok_or_else(|| {
+                            TypeError::new("Missing Error observation builtin", span.clone())
+                        })?;
+                Ok((
+                    TypedFacetSegment::ReadonlyBuiltin {
+                        field_name: field.clone(),
+                        builtin_id,
+                    },
+                    Ty::Str,
+                    false,
+                ))
+            }
             Ty::Tuple(items) => {
                 let index = field
                     .strip_prefix('_')
@@ -15070,9 +15063,6 @@ impl Checker {
                     TypedFacetSegment::Tuple {
                         field_index: index as u32,
                         tuple_len: items.len() as u32,
-                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
-                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
-                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -15152,9 +15142,6 @@ impl Checker {
                         container_type_name: Self::surface_name(&name).to_string(),
                         readonly: field_policy.is_some_and(|policy| policy.readonly),
                         private: field_policy.is_some_and(|policy| policy.private),
-                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
-                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
-                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -15188,7 +15175,7 @@ impl Checker {
                     });
                 };
                 let variant = self.instantiate_enum_variant(&variant);
-                if !self.types_compatible(&variant.enum_ty, source_ty) {
+                if !self.types_compatible(&variant.enum_ty, source_ty)? {
                     return Err(TypeError {
                         structured: None,
                         message: format!(
@@ -15215,9 +15202,6 @@ impl Checker {
                         discriminant: variant.discriminant,
                         payload_arity,
                         optional: *optional,
-                        focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                            .map(str::to_string),
                     },
                     focus_ty,
                     true,
@@ -15325,7 +15309,7 @@ impl Checker {
             hint: Some(Self::tuple_index_hint(tuple_items.len())),
         })?;
 
-        if !self.types_compatible(&focus_ty, &expected_focus) {
+        if !self.types_compatible(&focus_ty, &expected_focus)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -15347,16 +15331,12 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![TypedFacetSegment::Tuple {
                 field_index: index as u32,
                 tuple_len: match &source_ty {
                     Ty::Tuple(items) => items.len() as u32,
                     _ => unreachable!("source_ty is always Tuple here"),
                 },
-                focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                    .map(str::to_string),
             }],
         };
 
@@ -15415,7 +15395,7 @@ impl Checker {
         let (typed_segment, focus_ty, may_fail) =
             self.resolve_facet_segment_for_source_ty(&expected_source, segment, span, true)?;
         let focus_ty = self.resolve_ty(&focus_ty);
-        if !self.types_compatible(&focus_ty, &expected_focus) {
+        if !self.types_compatible(&focus_ty, &expected_focus)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -15436,7 +15416,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&typed_segment)),
             may_fail,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![typed_segment],
         };
 
@@ -15456,6 +15435,7 @@ impl Checker {
             Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.as_str(),
             Ty::Bool => "Boolean",
             Ty::Result(_, _) => "Result",
+            Ty::Error => "Error",
             _ => return false,
         };
         Self::canonical_user_type_name(authored_owner)
@@ -15495,15 +15475,26 @@ impl Checker {
                 (expected_source_ty, Some(focus.as_ref().clone()))
             }
             _ => {
-                let typed_root = self.check_node(expr)?;
-                (self.resolve_ty(&typed_root.ty), None)
+                if let Resolved::Var(_, id) = expr {
+                    if sindr::names::builtin_type_name(Self::surface_name(
+                        id.qualified_name.as_deref().unwrap_or(&id.name),
+                    )) == Some(sindr::names::TypeName::Error)
+                    {
+                        (Ty::Error, None)
+                    } else {
+                        let typed_root = self.check_node(expr)?;
+                        (self.resolve_ty(&typed_root.ty), None)
+                    }
+                } else {
+                    unreachable!("type-root Facet paths are resolved variables")
+                }
             }
         };
         let (segment, focus_ty, may_fail) =
             self.resolve_facet_segment_for_source_ty(&source_ty, segment, span, true)?;
         let focus_ty = self.resolve_ty(&focus_ty);
         if let Some(expected_focus_ty) = expected_focus_ty {
-            if !self.types_compatible(&focus_ty, &expected_focus_ty) {
+            if !self.types_compatible(&focus_ty, &expected_focus_ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -15523,7 +15514,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
-            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![segment],
         };
         Ok(TypedNode {
@@ -15566,6 +15556,76 @@ impl Checker {
         }
     }
 
+    fn bind_local_error_identity(&mut self, pattern: &TypedPattern, kind: &str) {
+        match pattern {
+            TypedPattern::Var(_, binding) => {
+                self.env
+                    .concrete_error_bindings
+                    .insert(binding.unique_id, kind.to_string());
+            }
+            TypedPattern::Located(_, inner) => self.bind_local_error_identity(inner, kind),
+            _ => {}
+        }
+    }
+
+    fn resolved_concrete_error_identity<'a>(&'a self, expression: &Resolved) -> Option<&'a str> {
+        match expression {
+            Resolved::Var(_, id) => self
+                .canonical_pattern_id(id)
+                .ok()
+                .and_then(|id| self.env.concrete_error_bindings.get(&id.unique_id))
+                .map(String::as_str),
+            Resolved::Grouped(_, inner) => self.resolved_concrete_error_identity(inner),
+            _ => None,
+        }
+    }
+
+    pub(super) fn concrete_error_annotation_identity(&self, annotation: &AstTy) -> Option<String> {
+        let AstTy::Named(_, name) = annotation else {
+            return None;
+        };
+        self.env
+            .lookup_type_def(name)
+            .filter(|def| def.kind == crate::env::TypeKind::ConcreteError)
+            .map(|def| def.name.clone())
+    }
+
+    fn error_payload_facet_path(
+        &self,
+        kind: &str,
+        field: &str,
+        span: &Span,
+    ) -> Result<TypedFacetPath, TypeError> {
+        let schema = self.env.lookup_type_def(kind).ok_or_else(|| {
+            TypeError::new("Concrete Error Payload schema is missing", span.clone())
+        })?;
+        let (field_index, (_, focus_ty)) = schema
+            .fields
+            .iter()
+            .enumerate()
+            .find(|(_, (name, _))| name == field)
+            .ok_or_else(|| {
+                TypeError::new(
+                    format!("Unknown Error Payload field: {}", field),
+                    span.clone(),
+                )
+            })?;
+        Ok(TypedFacetPath {
+            source_ty: Ty::Error,
+            focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
+            may_fail: false,
+            segments: vec![TypedFacetSegment::ErrorPayload {
+                kind: kind.to_string(),
+                field_name: field.to_string(),
+                field_index: field_index as u32,
+                payload_len: schema.fields.len() as u32,
+            }],
+        })
+    }
+
     fn check_field_access_with_expected(
         &mut self,
         span: &Span,
@@ -15596,6 +15656,57 @@ impl Checker {
             _ => None,
         };
 
+        if let (Resolved::Var(_, id), Some(field)) = (expr, field) {
+            if self.env.is_error_constructor(id.unique_id) {
+                let kind = id.qualified_name.as_deref().ok_or_else(|| {
+                    TypeError::new(
+                        "Error Facet root is missing declaration identity",
+                        span.clone(),
+                    )
+                })?;
+                if matches!(field, "kind" | "message") {
+                    let segment = Self::pending_field_segment(field.to_string());
+                    let (segment, focus_ty, may_fail) =
+                        self.resolve_facet_segment_for_source_ty(&Ty::Error, &segment, span, true)?;
+                    let path = TypedFacetPath {
+                        source_ty: Ty::Error,
+                        focus_ty: focus_ty.clone(),
+                        update_source_ty: Ty::Hole,
+                        update_focus_ty: Ty::Hole,
+                        path_kind: TypedFacetPathKind::InfallibleStructural,
+                        may_fail,
+                        segments: vec![segment],
+                    };
+                    return Ok(TypedNode {
+                        ty: Self::deferred_facet_ty(path.path_kind, Ty::Error, focus_ty),
+                        span: span.clone(),
+                        node: TypedInner::FacetPath(path),
+                    });
+                }
+                let path = self.error_payload_facet_path(kind, field, span)?;
+                return Ok(TypedNode {
+                    ty: Self::deferred_facet_ty(path.path_kind, Ty::Error, path.focus_ty.clone()),
+                    span: span.clone(),
+                    node: TypedInner::FacetPath(path),
+                });
+            }
+            if let Some(kind) = self.env.concrete_error_bindings.get(&id.unique_id).cloned() {
+                if !matches!(field, "kind" | "message") {
+                    let path = self.error_payload_facet_path(&kind, field, span)?;
+                    let source = self.check_node(expr)?;
+                    return Ok(TypedNode {
+                        ty: path.focus_ty.clone(),
+                        span: span.clone(),
+                        node: TypedInner::FacetView {
+                            api: TypedFacetApi::View,
+                            source: Box::new(source),
+                            path,
+                            source_is_result: false,
+                        },
+                    });
+                }
+            }
+        }
         if let Some(root_kind) = Self::facet_root_kind(expr) {
             match root_kind {
                 FacetRootKind::TypeRoot => {
@@ -15669,7 +15780,6 @@ impl Checker {
                 update_focus_ty: Ty::Hole,
                 path_kind: Self::facet_path_kind_for_segments(&segments),
                 may_fail: path.may_fail || may_fail || result_transparent,
-                source_readonly_root: path.source_readonly_root,
                 segments,
             };
             return Ok(TypedNode {
@@ -15697,7 +15807,6 @@ impl Checker {
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
-            source_readonly_root: false,
             segments: vec![segment],
         };
         let out_ty = if source_is_result || path.may_fail {
@@ -15725,13 +15834,6 @@ impl Checker {
         field: &str,
     ) -> Result<TypedNode, TypeError> {
         self.check_field_access_with_expected(span, expr, field, None)
-    }
-
-    fn ty_is_readonly_root(&self, ty: &Ty) -> bool {
-        match self.resolve_ty(ty) {
-            Ty::Struct(name, _) | Ty::Record(name, _) => self.env.is_readonly_root(&name),
-            _ => false,
-        }
     }
 }
 
@@ -15929,6 +16031,8 @@ mod tests {
             test_span(),
             sindr::intrinsic::IntrinsicId::Do,
             sigil::resolved::ResolvedDoContract {
+                keyword_span: test_span(),
+                monad_fail_trait: None,
                 monad_trait: None,
                 alternative_trait: None,
             },
@@ -16094,7 +16198,6 @@ mod tests {
         name: &str,
         fields: Vec<(&str, Ty)>,
         readonly_fields: &[&str],
-        readonly_root: bool,
     ) {
         checker
             .env
@@ -16111,7 +16214,6 @@ mod tests {
                 .iter()
                 .map(|field| (*field).into())
                 .collect(),
-            readonly_root,
         );
     }
 
@@ -16120,8 +16222,6 @@ mod tests {
         field_name: &str,
         field_index: u32,
         readonly: bool,
-        focus_readonly_root: bool,
-        focus_type_name: Option<&str>,
     ) -> TypedFacetSegment {
         TypedFacetSegment::Field {
             field_name: field_name.into(),
@@ -16131,15 +16231,35 @@ mod tests {
             container_type_name: container_type_name.into(),
             private: false,
             readonly,
-            focus_readonly_root,
-            focus_type_name: focus_type_name.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn error_observation_facet_has_no_owner_update_exception() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker.current_impl_struct_target = Some("Error".into());
+        let path = TypedFacetPath {
+            source_ty: Ty::Error,
+            focus_ty: Ty::Str,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
+            may_fail: false,
+            segments: vec![TypedFacetSegment::ReadonlyBuiltin {
+                field_name: "message".into(),
+                builtin_id: sindr::builtin::builtin_id_by_name("message").unwrap(),
+            }],
+        };
+        let error = checker
+            .check_mutating_facet_path_permissions("Facet::set", &path, &test_span())
+            .expect_err("Error observations remain readonly in the owner scope");
+        assert!(error.message.contains("readonly Error.message"));
     }
 
     #[test]
     fn mutating_facet_rejects_deep_traversal_through_readonly_field_even_for_owner() {
         let mut checker = Checker::new(TypecheckContext::default());
-        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[]);
         setup_type(
             &mut checker,
             "User",
@@ -16151,7 +16271,6 @@ mod tests {
                 ),
             )],
             &["profile"],
-            false,
         );
         checker.current_impl_struct_target = Some("User".into());
 
@@ -16171,10 +16290,9 @@ mod tests {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: false,
             segments: vec![
-                field_segment("User", "profile", 0, true, false, Some("Profile")),
-                field_segment("Profile", "name", 0, false, false, Some("String")),
+                field_segment("User", "profile", 0, true),
+                field_segment("Profile", "name", 0, false),
             ],
         };
 
@@ -16188,7 +16306,7 @@ mod tests {
     #[test]
     fn mutating_facet_allows_owner_to_replace_readonly_field_itself() {
         let mut checker = Checker::new(TypecheckContext::default());
-        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[]);
         setup_type(
             &mut checker,
             "User",
@@ -16200,7 +16318,6 @@ mod tests {
                 ),
             )],
             &["profile"],
-            false,
         );
         checker.current_impl_struct_target = Some("User".into());
 
@@ -16223,96 +16340,12 @@ mod tests {
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
-            source_readonly_root: false,
-            segments: vec![field_segment(
-                "User",
-                "profile",
-                0,
-                true,
-                false,
-                Some("Profile"),
-            )],
+            segments: vec![field_segment("User", "profile", 0, true)],
         };
 
         checker
             .check_mutating_facet_path_permissions("Facet::set", &path, &test_span())
             .expect("owner replacement of readonly field should succeed");
-    }
-
-    #[test]
-    fn mutating_facet_rejects_readonly_root_and_nested_readonly_type_boundaries() {
-        let mut checker = Checker::new(TypecheckContext::default());
-        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], true);
-        setup_type(
-            &mut checker,
-            "User",
-            vec![(
-                "profile",
-                Ty::Struct(
-                    "Profile".into(),
-                    NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-                ),
-            )],
-            &[],
-            false,
-        );
-        checker.current_impl_struct_target = Some("Profile".into());
-
-        let readonly_root_path = TypedFacetPath {
-            source_ty: Ty::Struct(
-                "Profile".into(),
-                NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-            ),
-            focus_ty: Ty::Str,
-            update_source_ty: Ty::Hole,
-            update_focus_ty: Ty::Hole,
-            path_kind: TypedFacetPathKind::InfallibleStructural,
-            may_fail: false,
-            source_readonly_root: true,
-            segments: vec![field_segment(
-                "Profile",
-                "name",
-                0,
-                false,
-                false,
-                Some("String"),
-            )],
-        };
-        let err = checker
-            .check_mutating_facet_path_permissions("Facet::over", &readonly_root_path, &test_span())
-            .expect_err("readonly root should fail");
-        assert!(err.message.contains("readonly type Profile"));
-
-        let nested_readonly_path = TypedFacetPath {
-            source_ty: Ty::Struct(
-                "User".into(),
-                NominalType::monomorphic(vec![(
-                    "profile".into(),
-                    Ty::Struct(
-                        "Profile".into(),
-                        NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-                    ),
-                )]),
-            ),
-            focus_ty: Ty::Str,
-            update_source_ty: Ty::Hole,
-            update_focus_ty: Ty::Hole,
-            path_kind: TypedFacetPathKind::InfallibleStructural,
-            may_fail: false,
-            source_readonly_root: false,
-            segments: vec![
-                field_segment("User", "profile", 0, false, true, Some("Profile")),
-                field_segment("Profile", "name", 0, false, false, Some("String")),
-            ],
-        };
-        let err = checker
-            .check_mutating_facet_path_permissions(
-                "Facet::over_result",
-                &nested_readonly_path,
-                &test_span(),
-            )
-            .expect_err("nested readonly type boundary should fail");
-        assert!(err.message.contains("readonly type Profile"));
     }
 }
 

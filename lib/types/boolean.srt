@@ -10,6 +10,7 @@ True
 This exact top-level declaration is part of the compiler-checked builtin type
 contract.
 """
+@derive Eq
 @builtin
 defenum Boolean {
   True,
@@ -85,12 +86,11 @@ impl Convert<String> for Boolean {
   }
 }
 
-impl Eq for Boolean {
+impl Encode<JsonValue> for Boolean {
   @doc """
-  Return `True` when both boolean values are equal.
-  ## REPL
-  xldr(1)> eq(True, True)
-  True
+  Encode a boolean as `JsonValue::Bool`.
   """
-  @builtin def eq(self: Self, rhs: Self) -> Boolean
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Bool(self))
+  }
 }

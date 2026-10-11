@@ -79,7 +79,7 @@
 | `@autoimport` | Trait helper aliasをfile-local preludeへ入れるTrait単位のopt-in |
 | `@derive` | 対応Trait implをresolverが生成する型宣言側annotator |
 
-関数型の入力にある`_`は、関数がその入力を使わないことを表す。期待関数型を与えて式を検査するときも、この入力契約を維持して返り型を推論する。groupingは期待型を内側へ伝え、通常引数・注釈・返り値・分岐とパイプで同じ規則を使う。単項関数値の実際の入力が`_`の場合に限り期待入力を受け入れ、返り型は通常通り照合する。使用する入力型や引数数は従来通り検査する。trait signatureの一致判定、集約型の内部、関数の返り型内へこの適合規則を広げず、`Hole`を一般の型比較のwildcardにしない。既知の期待型を持つ分岐では各枝を期待型へ照合し、枝の順序で結果を変えない。
+関数型の入力にある`_`は、関数がその入力を使わないことを表す。`Hole` は通常の型関係では同じ `Hole` とだけ一致し、実入力が `(_ -> Int)` の関数値を `(Int -> Int)` に適合させない。通常引数・binding・return・分岐・container は同じ型関係を使い、入力・出力・引数数を照合する。grouping は期待型を内側へ伝えるが、この型関係を変えない。既知の期待型を持つ分岐では各枝を期待型へ照合し、枝の順序で結果を変えない。ignored-input callable の直接呼出しでは入力値を観測せず、呼出し先の入力契約に従って値を受け入れる。これは関数値同士の型適合とは別の呼出し規則である。
 
 `Type`は型形状指定のcompiler-special surface name、`TypeConstructor`はcompiler内部のkind/identity分類、
 `TypeCtorTrait`は`Self: Type<...>`を持つTraitの分類であり、相互に同義ではない。
@@ -358,29 +358,25 @@ path 返却は拒否する。`const Facet<...>` の literal bracket 制約は維
   carrier推論、core lowering、SafeBind failure target、Forge lowering、診断整備、全carrier受入検証は
   実装・検証済みである。現行の詳細契約は[do intrinsic](./Do_intrinsic_spec.md)に置く。
 
-`@result_effect` は MonadT の内部表現を探索する機能ではなく、宣言へ明示する compiler-owned assertion である。
-surface は引数を取らず、1つの `defstruct` 宣言へ一度だけ指定できる。重複、引数付き、または
-`defstruct` 以外への指定は parse error とする。
+`MonadFail` は `Self: Monad` を親制約に持ち、`fail::<Self>(error: Error) -> Self` を宣言する。
+Self は完成した返り型であり、期待型または ReturnTypeArgument から決定する。標準宣言の identity により
+能力を選び、struct の内部表現や同名 Trait から推測しない。通常 callable の失敗は MonadFail、do は
+MonadFail、次に Alternative の順で解決する。Monad 単独は失敗値を構築しない。
+標準宣言の欠落や同名の非標準宣言による代用は契約エラーとし、Alternative へ切り替えない。
+通常 callable の戻り先に必要な impl がなければ拒否する。generic の能力は宣言した bound のみで判定する。
+`fail` は渡された Error を保持し、成功 payload や bind の後続を生成・実行しない。
+標準実装はこの契約を満たす。ユーザー impl の法則証明や実行結果の補正はコンパイラでは行わない。
 
-annotation が付いた struct だけについて、次の assertion を宣言時にすべて検証する。
+`fail_if(condition: Boolean, err: Lazy<Error>, then: Lazy<Self>) -> Self` は default method とする。
+condition は strict、True は err を一回評価して fail、False は then を一回評価して返す。
+Self は then に現れるため RTA に重複指定できない。Lazy 宣言契約はユーザー override にも引き継ぐ。
 
-1. canonical `Monad` 実装と canonical `MonadT<$M>` 実装がある。
-2. field は正確に1つで public である。
-3. sole field の最外 constructor は `MonadT<$M>` が capture する同一の `$M` である。
-4. field 型は通常の型形成規則を満たす。
+標準実装は Result、Either<Error, A>、ResultT、EitherT<Error, M, A>、および base が MonadFail の
+ReaderT / StateT に限る。Either / EitherT の任意 Left を覆うユーザー blanket impl は通常の coherence 検査で拒否する。
+ResultT / EitherT は内側の失敗を base の pure で保持し、ReaderT / StateT は run 時に base の fail を返す。
+Option / List / OptionT は標準 MonadFail を持たない。guard は常に Alternative の通常呼出しである。
 
-Trait 名の文字列や short-name lookup ではなく、Sigil が保持した canonical `ResolvedId` と resolved impl
-substitution で照合する。identity や必要 metadata が欠ける場合は別の同名 Trait、field layout、または
-`Alternative` へ fallback せず fail closed とする。annotation のない型では field 数・field 名・function field・
-内部の Result から effect を推論しない。
-
-検証済み carrier の直接 base が canonical `Result` の場合に Result effect を提供し、failure context は
-`ResultEffect > Alternative > Monad` の順で解決する。failureMatcher/partial `<-` は Result effect があれば Error を保持し、
-なければ Alternative の `empty`、どちらもなければ capability error とする。total `<-` は Monad のみを要求し、
-`guard` は常に通常の Alternative call とする。
-
-互換用の二重field、旧用語alias、旧経路fallbackを追加してはならない。serialized cacheやfixture更新が
-必要な場合も一括更新し、旧形式を読み戻すcompatibility layerは設けない。
+旧 `@result_effect` annotation は未定義として拒否し、専用 metadata・構築・互換読取り経路を保持しない。
 
 ## 1. パイプラインと phase ownership
 
@@ -512,9 +508,9 @@ ReturnTypeArguments、expected return、captured impl-target argumentsを含め�
 | parent coverage | 全称 | child の全 instance を 1 parent impl が cover し、parent `where` を証明できる |
 
 `CanonicalUnifier` の構造比較は変数の束縛先だけをたどり、型部分木を各深さで再コピーしない。
-所有する解決済み型は束縛の追加時と結果の取り出し時に構築する。ignored callable input の判定は、
-その関数型の比較開始時の束縛に基づく。前の入力の照合で変数が `Hole` になっても、後続の入力を
-遡って ignored input にはしない。
+所有する解決済み型は束縛の追加時と結果の取り出し時に構築する。callable の候補適合も入力・出力を
+構造的に照合し、入力の `Hole` を wildcard として扱わない。前の入力の照合で変数が `Hole` に
+束縛された場合も、後続の入力は同じ型 identity として照合する。
 
 ### 3.1 Coherence
 
@@ -580,7 +576,23 @@ ProofEnvironment {
 parent coverage は child variables を rigid、parent variables を flexible として一方向 match を行う。
 child `where` を仮定として、substitute 済み parent `where` obligations を同じ solver で証明する。`Self` は
 child impl target に lower する。head coverage、constructor slot mapping、where entailment は別々に診断する。
-複数の disjoint parent impl の和集合による coverage は V1 では行わない。
+複数の disjoint parent impl の和集合による coverage は行わない。
+
+TypeCtorTrait の Root（constructor slot を持つ親がない Trait）は impl の明示指定で対応を確定する。
+スロットが1つ、対象直下の型変数も1つの場合だけ指定を省略できる。候補が複数あれば明示指定を要求する。
+子 impl は、適用範囲を覆い、制約を証明できる親 impl の対応をスロット順に継承する。
+子側の指定は任意の一致確認であり、親の欠如や不足を代用しない。型変数名の違いや、非スロット引数の固定は許可する。
+継承先も直下の型変数位置でなければならず、具象型への固定や複数スロットの同一変数への集約は拒否する。
+複数の constructor parent はすべて同じ対応を要求する。diamond は一致すれば成功し、不一致や循環は拒否する。
+通常 Trait の親はスロットを供給しないが、親能力の検査は行う。子自身の `Self: Type<...>` も親と同じ構成を要求し、
+スロットの追加や対応の上書きを認めない。独立した位置を扱う能力は、継承関係のない TypeCtorTrait として宣言する。
+
+Scar は全 impl の head と制約を収集し、Root と親への依存に沿って対応を確定してから method signature を解決する。
+確定した impl metadata を `Self<$...>`、constructor witness、dispatch と共有し、署名ごとに対応を再推論しない。
+親制約の証明が未確定の対応を必要とした場合、試行状態を戻して依存先を確定し、証明をやり直す。
+依存循環は拒否し、未確定の対応や試行中の制約を署名・本体検査へ持ち越さない。
+宣言順や探索順、型変数名、標準型の名前で対応を選ばない。診断は親 head の不足、親制約不足、継承対応の不一致、
+Root の対応不足を区別する。標準定義は Functor の Root 指定だけを残し、子の重複指定を省く。
 
 親 Trait closure は TraitRef の argument を substitution して導く。`Child<Int>` は `Parent<Int>` を導けても
 `Parent<String>` は導かない。
@@ -696,13 +708,15 @@ well-formedness診断は少なくとも次のmessage、label、helpを構築で�
 
 `@derive` による生成処理は型宣言の所有者に由来するため、private フィールドを処理できる。Scar は生成由来情報を用いてこの権限を保持し、手書きのトレイト実装へは付与しない。トレイト名による可視性の特例は設けない。
 
-標準 `Eq` の compiler-generated な enum 比較は payload のない variant に限る。payload を持つ enum の値比較には、各 payload の `Eq` を要求する明示 impl または `@derive Eq` を使う。variant tag だけの比較を payload を持つ値の Eq として公開しない。
+通常の enum の `Eq` は、payload の有無によらず明示 impl または `@derive Eq` で提供する。enum 宣言だけで compiler が証明や dispatch を補うことはない。`@derive Eq` は各 payload の `Eq` を要求し、variant tag だけの比較を payload を持つ値の Eq として公開しない。
 
 Trait impl target の権限は inherent impl の可否と独立して Sindr の型ポリシーに置く。Error・関数型・Facet・構文／プロトコル用 marker・未確定の opaque/handle 型はユーザ impl を拒否する。PID は singleton / worker に compiler-owned Eq だけを提供し、ユーザ impl と他の Trait capability を拒否する。通常型と Tuple / List / HashMap / Result は通常の coherence 規則に従う。
 
-Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が提供する Eq は信頼済みの標準 `Eq` に限り、payload のない enum と有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。
+Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が暗黙に提供する Eq は信頼済みの標準 `Eq` に限り、有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。
 
 標準 Eq の実装主体は各 `lib/types/*.srt` とする。Unit、Tuple 2〜8、List、HashMap、Result は通常の impl と要素条件を使う。Result の `Ok` 同士は成功値の Eq、`Ok` / `Err` は不一致、`Err` 同士は具象 Error の先頭 kind の一致で判定し、message・cause・場所・診断情報を含めない。Error 自体の Eq / Show / Convert は禁止し、観測は `inspect` / `eprint` と Error の公開 helper を使う。`Test::assert_eq` は Eq obligation と dispatch のみで合否を決め、表示は失敗文の生成に限る。
+
+標準 `Boolean` は `@derive Eq` で能力を宣言する。生成由来情報、canonical Eq の `compiler_owned_equality`、canonical target head の `TypeName::Boolean` が揃う生成メソッドだけを、Sindr の既存 metadata を介して Boolean `eq` / `neq` builtin dispatch へ接続する。
 
 ### 4.3 `Default` derive の生成境界
 
@@ -826,6 +840,10 @@ generalization である。
 
 `/` は `Div::safe_div`、`%` は `Mod::safe_mod` の通常の operator dispatch に接続する。数値型専用 dispatch、旧 concrete owner helper 宣言、互換 wrapper は持たない。ユーザー実装と bounded generic は通常のトレイト規則に従う。両引数と成功型は同じ `Self` であり、暗黙の数値変換や Result unwrap は行わない。
 
-トレイトメソッドは `(Self, Self) -> Result<Self>` と宣言し、エラー位置を固定しない。実装の `Result<Self, E>` は値の型として `Result<Self>` と照合し、`E` は既存のエラー契約 metadata として保持する。トレイト定義の省略を実装のエラー指定禁止として扱わない。ユーザー実装は具体的な `deferror`、抽象 `Error`、エラー位置の省略を指定できる。引数・成功型・通常の impl 制約の照合は緩めない。
+トレイトメソッドは `(Self, Self) -> Result<Self>` と宣言し、エラー位置を指定しない。実装の `Result<Self, E>` は値の型として `Result<Self>` と照合し、`E` はドキュメント用の metadata として保持する。指定したエラー名の存在と記述位置は検査するが、返却 kind の静的制限・網羅検査は行わず、別の kind を返すことだけでは拒否しない。トレイト定義の省略を実装のエラー指定禁止として扱わない。ユーザー実装は具体的な `deferror`、抽象 `Error`、エラー位置の省略を指定できる。引数・成功型・通常の impl 制約の照合は緩めない。
 
-標準実装は `Div for Int`、`Div for Float`、`Mod for Int` で、エラー契約は `ZeroDivisionError` に固定する。標準の `Mod for Float` は提供しない。runtime の整数除算・符号・Float finite-only 制約は既存 builtin の契約を維持する。Facet の `->` は固定構文であり、このユーザー拡張経路に接続しない。
+標準実装は `Div for Int`、`Div for Float`、`Mod for Int` で、ドキュメント用のエラー名には `ZeroDivisionError` を指定する。ゼロ除算時は `Err(ZeroDivisionError())` を返す。標準の `Mod for Float` は提供しない。runtime の整数除算・符号・Float finite-only 制約は既存 builtin の契約を維持する。Facet の `->` は固定構文であり、このユーザー拡張経路に接続しない。
+
+## MonadRecover
+
+`MonadRecover` は `Self: MonadFail` を親制約に持ち、完成した `Self` に対する `recover(self: Self, handler: (Error -> Self)) -> Self` を必須操作とする。`recover_kind` は Error::is_kind と MonadFail::fail を用いたデフォルト実装である。標準の初回実装は Result のみで、MonadFail の実装だけでは回復能力を付与しない。kind 不一致は元 Error を保持し、handler の再失敗は handler が返した失敗をそのまま返す。成功値は変えない。handler 生成式は通常の eager 評価に従う。状態復元は各実装の契約であり、この Trait では保証しない。SafeBind と do の failure target 選択は変更しない。

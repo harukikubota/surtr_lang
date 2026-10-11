@@ -435,6 +435,9 @@ pub fn symbol_semantic_infos_from_metadata(
 
     let mut infos = Vec::new();
     for entry in signatures {
+        if sindr::reflection::Reflection::from_builtin_name(&entry.qualified_name).is_some() {
+            continue;
+        }
         let qualified_name = surface_name(&entry.qualified_name);
         infos.push(SymbolSemanticInfo {
             canonical_name: entry.qualified_name.clone(),
@@ -460,6 +463,11 @@ pub fn symbol_semantic_infos_from_metadata(
         });
     }
     for entry in docs {
+        // Reflection functions are command targets. REPL expressions and
+        // qualified references reject them, so omit general completions.
+        if sindr::reflection::Reflection::from_builtin_name(&entry.qualified_name).is_some() {
+            continue;
+        }
         let detail = signature_by_name
             .get(entry.qualified_name.as_str())
             .map(|signature| (*signature).to_string())

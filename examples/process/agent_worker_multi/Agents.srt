@@ -7,7 +7,7 @@ defagent Worker {
 
   @init
   def init(initial_jobs: Int) -> Result<Int> {
-    if(initial_jobs >= 0, Ok(initial_jobs), Err(NoneError))
+    if(initial_jobs >= 0, Ok(initial_jobs), Err(NoneError()))
   }
 
   @get
@@ -18,6 +18,6 @@ defagent Worker {
   @set
   def set(state: Int, completed_jobs: Int) -> Result<Int> {
     next = state - completed_jobs
-    if(next >= 0, Ok(next), Err(NoneError))
+    if(next >= 0, Ok(next), Err(NoneError()))
   }
 }

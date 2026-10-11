@@ -7,6 +7,7 @@ pub mod operator_diagnostics;
 pub mod pattern;
 pub mod policy;
 pub mod primitives;
+pub mod reflection;
 pub mod runtime;
 pub mod signature;
 pub mod stdlib;

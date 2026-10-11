@@ -20,7 +20,7 @@
 optional enum selector は廃止され、`Option.Some` のような required selector を
 `Facet::case_set` / `Facet::case_over` で使います。selector mismatch は常に `Err` です。
 `Result` を返す helper と直接つなぎたい field では、
-`Result<T>` を使い、値がない場合は `Err(NoneError)` を返します。
+`Result<T>` を使い、値がない場合は `Err(NoneError())` を返します。
 
 また、source を伴う API では `~source.path` shorthand が使えます。
 これは source 実体と structural path の組を compiler-managed に expand する sugar で、
@@ -396,6 +396,10 @@ xldr(4)>
 - `:facet path`
   - segment 一覧と、`Result` 化しうる停止点を詳しく確認する
 
+`:facet User` のようにルート型だけを指定すると、フィールド名と型の一覧を表示します。struct では可視性と readonly も表示し、private フィールドも確認できます。enum ではバリアント名と、その path で読み取る型を表示します。`:info User` でも同じ一覧を確認できます。
+
+`:facet Tuple`、`:facet List`、`:facet HashMap` は、要素を指定する形式を表示します。具象エラーでは、共通の `kind`・`message` と保存ペイロードを一覧表示します。ペイロードを読むには同じエラーへの照合に成功した局所束縛が必要で、Error を通る更新はできません。
+
 ### `:facet` の例
 
 ```text
@@ -472,7 +476,58 @@ normalized =? Facet::over(User.nickname, user, {|name|
 - `Facet::view(User.profile.name, user)` のような read は許可されます
 - `Facet::set(User.profile.name, user, "bob")` のような深い mutable traversal は拒否されます
 - owner の `impl User` 本体では `Facet::set(User.profile, self, next_profile)` のような property そのものの置換だけが許可されます
-- `@readonly defstruct Profile { ... }` は readonly root になり、`Facet::set(Profile.name, profile, ...)` のような mutable Facet operation を owner を含めて拒否します
+- `@readonly defstruct Profile { ... }` は全フィールドに `readonly` を付けます。通常の readonly field と同じく、owner の `impl Profile` 本体ではフィールドそのものを置換できます。`@readonly` の struct で明示的な `public` field を宣言するとコンパイルエラーになります
+
+`Error.kind` と `Error.message` は常に読み取り専用です。`error.kind` / `error.message` の値アクセスも、標準の `Error::kind` / `Error::message` と同じ読み取りを使います。他の型の Error field を通る path や合成・capture 後の path でも、`set`、`over`、bulk update はコンパイルエラーになります。宣言元や標準コードにも更新権限はありません。cause や location は公開 field ではありません。
+
+共通情報の path capture は `&Error.message` / `&Error.kind` を使えます。具象 Error を root にした `&InvalidCount.message` / `&InvalidCount.kind` は capture できません。共通情報の値アクセスは、具象 Error への照合がなくても使えます。
+
+```surtr
+error: Error = NoneError
+message: (Error -> String) = &Error.message
+message(error) # "None Value."
+error.message  # "None Value."
+```
+
+### Error の保存フィールド
+
+具象 Error の保存フィールドから readonly path を作れます。読むときは、対応する Error Pattern の照合が成功した局所束縛を渡します。
+
+```surtr
+deferror InvalidCount(count: Int) {
+  |input: Int|
+  Self(message: "invalid count", count: input)
+}
+path = InvalidCount.count
+match InvalidCount(-1) {
+  InvalidCount @ e => Facet::view(path, e),
+  _ => 0,
+}
+```
+
+`e.count` も同じ読み取りです。パスの作成時には Error 値の照合は不要です。共通 `Error` の変数、コンストラクタの結果、List・Tuple・field から取り出した Error には直接適用できません。先に `match`、`if_let`、`if_let_then` で種類を照合してください。
+
+保存フィールドを通る `set`、`over`、bulk update は、深いパスや合成パスでも拒否されます。`&InvalidCount.count` のようなパスキャプチャも使えません。照合に成功した束縛を通常クロージャで捕捉する `{|| e.count}` は使えます。パス自体は同じスコープと内側クロージャで消費し、一般の関数引数・戻り値・container へ運ばないでください。
+
+```surtr
+error: Error = InvalidCount(-1)
+error.message # OK: 共通情報
+
+match error {
+  InvalidCount @ e => {
+    read = {|| e.count}
+    read() # -1
+  },
+  _ => 0,
+}
+```
+
+```surtr
+error: Error = InvalidCount(-1)
+error.count # compile error: 保存フィールドを読む前に種類の照合が必要
+```
+
+照合した Error の保存フィールドを読める範囲と、クロージャで捕捉する例は [Pattern Matching](./pattern-matching.md#error-の照合とダウンキャスト) を参照してください。
 
 ## private field path
 
@@ -499,7 +554,7 @@ facet = User.password
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
 - `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。同じレキシカルスコープと内側のクロージャで、`Facet::view(...)` や `->` に使えます。
 - 合成した path は canonical 表示へ圧縮されるので、`User.profile -> Profile.name` を inspect すると `User.profile.name` に見えます。`->` の組み立て履歴そのものは残りません。
-- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|binding>` で確認するのが一番わかりやすいです。
+- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <root|FacetPath|binding>` で確認するのが一番わかりやすいです。
 - 関数へ渡す値には、path を消費した読み取り関数や `Facet::view(...)` の結果を使います。
 - `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。
 - `bulk_update` は DSL ですが path 能力は通常の Facet API と揃っているので、dynamic bracket や `case_*` も同じ感覚で使えます。

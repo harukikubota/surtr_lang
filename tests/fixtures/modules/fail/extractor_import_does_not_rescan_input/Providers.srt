@@ -1,0 +1,11 @@
+defmod Selected {
+  defextractor select(value: Int) -> MatchResult<Int> {
+    MatchResult::Ok(value)
+  }
+}
+
+defmod Other {
+  defextractor select(value: String) -> MatchResult<String> {
+    MatchResult::Ok(value)
+  }
+}

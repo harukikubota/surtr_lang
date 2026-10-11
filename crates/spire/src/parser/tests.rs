@@ -282,6 +282,62 @@ defstruct CounterState {
 }
 
 #[test]
+fn test_process_helpers_require_defp_and_handlers_require_def() {
+    for (kind, marker, handler_return) in [
+        ("defagent", "get", "Result<Int>"),
+        ("defgenserver", "call", "Result<CallResult<Int, Int>>"),
+    ] {
+        let source = format!(
+            r#"{kind} Counter {{
+  meta {{
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }}
+  @init
+  def init(seed: Int) -> Result<Int> {{ Ok(seed) }}
+  @{marker}
+  def read(state: Int) -> {handler_return} {{ helper(state) }}
+  def helper(state: Int) -> Int {{ state }}
+}}"#
+        );
+        for source in [
+            source.clone(),
+            source.replace("  def helper", "  @doc \"\"\"Helper.\"\"\"\n  def helper"),
+        ] {
+            let error = parse_with_context(&source, ParserContext::module(1, None))
+                .expect_err("annotation-less def must be rejected");
+            assert!(
+                error
+                    .message()
+                    .contains("Process helpers must use `defp`; change `def` to `defp`"),
+                "{error:?}"
+            );
+        }
+        let valid = source.replace("def helper", "defp helper");
+        let ast = parse_with_context(&valid, ParserContext::module(1, None)).unwrap();
+        let body = match &ast[0] {
+            Ast::Defagent(_, _, body, _, _) | Ast::Defgenserver(_, _, body, _, _) => body,
+            other => panic!("expected process, got {other:?}"),
+        };
+        let attrs = body
+            .iter()
+            .find_map(|node| match node {
+                Ast::Def(_, name, _, _, _, _, _, attrs) if name == "helper" => Some(attrs),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(attrs.visibility, Visibility::Private);
+        let bad = valid.replace("def read", "defp read");
+        let error = parse_with_context(&bad, ParserContext::module(1, None)).unwrap_err();
+        assert!(
+            error.message().contains("must be followed by def"),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn test_doc_on_private_process_helper_is_rejected() {
     let err = parse_with_context(
         r#"defagent Counter {
@@ -298,11 +354,11 @@ fn test_doc_on_private_process_helper_is_rejected() {
   def read(state: Int) -> Result<Int> { Ok(state) }
 
   @doc """Internal helper."""
-  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+  defp hidden_value(_state: Int) -> Result<Int> { Ok(99) }
 }"#,
         ParserContext::module(1, None),
     )
-    .expect_err("@doc on lowered private process helper should fail");
+    .expect_err("@doc on explicit private process helper should fail");
 
     assert!(err
         .message()
@@ -690,7 +746,7 @@ fn test_facet_bulk_update_special_form_parses() {
     .expect("bulk update should parse");
 
     match &ast[0] {
-        Ast::SafeBind(_, AstPattern::Var(_, name), rhs) => {
+        Ast::SafeBind(_, AstPattern::Var(_, name), rhs, _) => {
             assert_eq!(name, "updated");
             match rhs.as_ref() {
                 Ast::BulkUpdate(_, source, entries) => {
@@ -766,7 +822,7 @@ fn test_facet_bulk_update_rejects_qualified_facet_leaf_call() {
 fn test_safebind() {
     let ast = parse("num =? gen()").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, AstPattern::Var(_, name), rhs) => {
+        Ast::SafeBind(_, AstPattern::Var(_, name), rhs, _) => {
             assert_eq!(name, "num");
             assert!(matches!(rhs.as_ref(), Ast::App(_, _, _)));
         }
@@ -1794,7 +1850,7 @@ fn test_constructor_application_parser_preserves_type_identity_boundaries() {
         "value: Applicative<$A> = value",
         "defstruct Holder { value: Applicative<$A> }",
         "defrecord Holder(value: Applicative<$A>)",
-        "deferror Holder(value: Applicative<$A>) { \"holder\" }",
+        "deferror Holder(value: Applicative<$A>) { |value: Applicative<$A>| Self(message: \"holder\", value: value) }",
         "callback = {|value: Applicative<$A>| value}",
         "def nested(value: List<Applicative<$A>>) -> Int { 0 }",
         "def paired(value: (Applicative<$A>, Int)) -> Int { 0 }",
@@ -2482,34 +2538,6 @@ fn test_derive_annotation_rejects_non_data_declarations() {
     let err =
         parse("@derive Eq\ndef main() -> Int { 0 }").expect_err("derive on a function should fail");
     assert!(err.message().contains("DeriveNotAllowed"));
-}
-
-#[test]
-fn test_result_effect_annotation_is_struct_only_and_argument_free() {
-    let ast = parse("@result_effect\ndefstruct Wrapper<$M, $A> where $M: Monad { inner: $M<$A> }")
-        .expect("compiler-owned result effect annotation should parse on a struct");
-    let [Ast::StructDef(_, _, _, _, attrs)] = ast.as_slice() else {
-        panic!("expected annotated struct")
-    };
-    assert_eq!(attrs.result_effect, Some(Span { start: 0, end: 14 }));
-
-    let duplicate = parse(
-        "@result_effect\n@result_effect\ndefstruct Wrapper<$M, $A> where $M: Monad { inner: $M<$A> }",
-    )
-    .expect_err("duplicate result effect annotation must be rejected");
-    assert!(duplicate.message().contains("may only appear once"));
-
-    let arguments = parse(
-        "@result_effect(Result)\ndefstruct Wrapper<$M, $A> where $M: Monad { inner: $M<$A> }",
-    )
-    .expect_err("result effect annotation must not accept a path argument");
-    assert!(arguments.message().contains("does not accept arguments"));
-
-    let non_struct = parse("@result_effect\ndef make() -> Int { 1 }")
-        .expect_err("result effect annotation must reject non-struct declarations");
-    assert!(non_struct
-        .message()
-        .contains("may only annotate `defstruct`"));
 }
 
 #[test]
@@ -3241,7 +3269,7 @@ fn test_string_range_literal_expr() {
 fn test_single_item_list_pattern_accepts_trailing_comma() {
     let ast = parse("[head,] =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::ListCons(_, head, tail)
@@ -3258,7 +3286,7 @@ fn test_single_item_list_pattern_accepts_trailing_comma() {
 fn test_list_pattern_safebind() {
     let ast = parse("[head, ..tail] =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::ListCons(_, head, tail)
@@ -3275,7 +3303,7 @@ fn test_list_pattern_safebind() {
 fn test_as_pattern_safebind_with_annotation() {
     let ast = parse("[head, ..tail] @ list_dup: List<Int> =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, name, args)), _)
@@ -3294,7 +3322,7 @@ fn test_as_pattern_safebind_with_annotation() {
 fn test_nested_as_pattern_safebind() {
     let ast = parse("[head, .. [e2, ..tail] @ tail_dup] @ list_dup =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::As(_, outer_inner, outer_alias, None, _)
@@ -3337,7 +3365,7 @@ fn test_as_pattern_bind() {
 fn test_constructor_pattern_safebind() {
     let ast = parse("Ok(num) =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::Call(_, ctor, inner)
@@ -3354,7 +3382,7 @@ fn test_constructor_pattern_safebind() {
 fn test_wildcard_pattern_safebind() {
     let ast = parse("_ =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(pattern, AstPattern::Wildcard(_)));
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
         }
@@ -3406,7 +3434,7 @@ fn test_as_pattern_accepts_compact_at_alias() {
 fn test_integer_literal_pattern_safebind() {
     let ast = parse("1 =? value").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(pattern, AstPattern::IntLit(_, n) if n == &int(1)));
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
         }
@@ -3418,7 +3446,7 @@ fn test_integer_literal_pattern_safebind() {
 fn test_list_pattern_with_nested_constructor_literals_safebind() {
     let ast = parse("[Ok(1), Ok(2), _] =? lr").unwrap();
     match &ast[0] {
-        Ast::SafeBind(_, pattern, rhs) => {
+        Ast::SafeBind(_, pattern, rhs, _) => {
             assert!(matches!(
                 pattern,
                 AstPattern::ListCons(_, first, rest)
@@ -4154,7 +4182,7 @@ fn test_safebind_allows_trailing_semicolon() {
     let ast = parse("[] =? value;").unwrap();
     assert!(matches!(
         &ast[0],
-        Ast::Semi(_, inner) if matches!(inner.as_ref(), Ast::SafeBind(_, _, _))
+        Ast::Semi(_, inner) if matches!(inner.as_ref(), Ast::SafeBind(_, _, _, _))
     ));
 }
 
@@ -4801,7 +4829,7 @@ fn test_facet_capture_shorthand_allows_bare_inner_expr_for_later_diagnostics() {
 #[test]
 fn parses_facet_index_and_key_segments() {
     let ast = parse("updated =? Facet::set(~user.score.[\"talk\"], 90)").unwrap();
-    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+    let Ast::SafeBind(_, _, rhs, _) = &ast[0] else {
         panic!("expected safe bind");
     };
     let Ast::App(_, callee, args) = rhs.as_ref() else {
@@ -4856,7 +4884,7 @@ fn parses_bulk_update_index_key_and_case_actions() {
 }"#,
     )
     .unwrap();
-    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+    let Ast::SafeBind(_, _, rhs, _) = &ast[0] else {
         panic!("expected safe bind");
     };
     let Ast::BulkUpdate(_, _, entries) = rhs.as_ref() else {
@@ -5972,7 +6000,7 @@ namespace Auth {
   }
 }
 
-deferror Oops(reason: String) { reason }
+deferror Oops(reason: String) { |reason: String| Self(message: reason, reason: reason) }
 
 defenum Role { Admin }
 
@@ -6313,6 +6341,45 @@ fn test_defagent_parses_as_dedicated_process_ast_node() {
 }
 
 #[test]
+fn test_process_meta_requires_explicit_init_policy() {
+    for (kind, handler) in [
+        (
+            "defagent",
+            "@get def read(state: Int) -> Result<Int> { Ok(state) }",
+        ),
+        (
+            "defgenserver",
+            "@call def read(state: Int) -> Result<CallResult<Int, Int>> { Ok(Reply(state, state)) }",
+        ),
+    ] {
+        for instance in ["Singleton", "Worker"] {
+            let source = format!(
+                "{kind} Counter {{\n  meta {{\n    instance: {instance}\n    state: Int\n  }}\n  @init def init() -> Result<Int> {{ Ok(0) }}\n  {handler}\n}}"
+            );
+            let error = parse_with_context(&source, ParserContext::module(1, None))
+                .expect_err("process meta must declare init_policy");
+            assert_eq!(error.message(), "meta requires init_policy", "{source}");
+            assert_eq!(
+                error.reason(),
+                crate::error::ParseErrorReason::DeclarationSyntax
+            );
+            assert_eq!(
+                error.guidance(),
+                Some(&crate::error::ParseErrorGuidance::MissingMetaInitPolicy)
+            );
+            assert_eq!(
+                error.span(),
+                &Span {
+                    start: source.find("meta").unwrap(),
+                    end: source.find("meta {").unwrap() + "meta {".len(),
+                },
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_defagent_accepts_standby_init_policy() {
     let ast = parse_with_context(
         r#"defagent Counter {
@@ -6574,6 +6641,74 @@ fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
     }
 }
 
+fn process_execution_statements(body: &Ast) -> &[Ast] {
+    let Ast::Block(_, outer) = body else {
+        panic!("process wrapper must be a block");
+    };
+    let Ast::App(_, callee, args) = outer.last().expect("wrapper result") else {
+        panic!("process wrapper must end at the common execution boundary");
+    };
+    assert!(matches!(callee.as_ref(), Ast::InternalVar(_, name) if name == "__process_execute"));
+    let [RecordLitArg::Positional(Ast::Var(_, pid)), RecordLitArg::Positional(Ast::Closure(_, params, callback))] =
+        args.as_slice()
+    else {
+        panic!(
+            "execution boundary must receive the target PID and a zero-argument wrapper closure"
+        );
+    };
+    assert_eq!(pid, "pid");
+    assert!(params.is_empty());
+    let Ast::Block(_, stmts) = callback.as_ref() else {
+        panic!("wrapper callback must contain state reading and all postprocessing");
+    };
+    assert!(matches!(stmts.first(), Some(Ast::SafeBind(_, _, rhs, _))
+        if matches!(rhs.as_ref(), Ast::App(_, callee, _)
+            if matches!(callee.as_ref(), Ast::InternalVar(_, name)
+                if name == "Agent::state" || name == "GenServer::state"))));
+    stmts
+}
+
+#[test]
+fn test_process_message_wrappers_use_common_execution_boundary() {
+    for (kind, instance, handlers, wrappers) in [
+        ("defagent", "Singleton", "@get def read(state: Int) -> Result<Int> { Ok(state) }", vec!["read"]),
+        ("defagent", "Singleton", "@get def read(state: Int) -> Result<Int> { Ok(state) } @set def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }", vec!["read", "write"]),
+        ("defagent", "Worker", "@get def read(state: Int) -> Result<Int> { Ok(state) } @set def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }", vec!["read", "write"]),
+        ("defgenserver", "Singleton", "@call def read(state: Int) -> Result<CallResult<Int, Int>> { Ok(Reply(state, state)) } @cast def write(_state: Int, next: Int) -> Result<CastResult<Int>> { Ok(Next(next)) }", vec!["read", "write"]),
+        ("defgenserver", "Worker", "@call def read(state: Int) -> Result<CallResult<Int, Int>> { Ok(Reply(state, state)) } @cast def write(_state: Int, next: Int) -> Result<CastResult<Int>> { Ok(Next(next)) }", vec!["read", "write"]),
+    ] {
+        let handlers = handlers
+            .replace("@get def", "\n@get\ndef")
+            .replace("@set def", "\n@set\ndef")
+            .replace("@call def", "\n@call\ndef")
+            .replace("@cast def", "\n@cast\ndef");
+        let source = format!("{kind} Counter {{\nmeta {{\ninstance: {instance}\ninit_policy: Eager\nstate: Int\n}}\n@init\ndef boot() -> Result<Int> {{ Ok(0) }}\n{handlers}\n}}");
+        let ast = parse_with_context(&source, ParserContext::module(1, None))
+            .expect("process declaration");
+        let body = match &ast[0] {
+            Ast::Defagent(_, _, body, _, _) | Ast::Defgenserver(_, _, body, _, _) => body,
+            other => panic!("expected process declaration, got {other:?}"),
+        };
+        for wrapper in wrappers {
+            let wrapper_body = body.iter().find_map(|node| match node {
+                Ast::Def(_, name, _, _, _, _, body, _) if name == wrapper => Some(body.as_ref()),
+                _ => None,
+            }).expect("generated message wrapper");
+            let stmts = process_execution_statements(wrapper_body);
+            assert!(matches!(stmts, [Ast::SafeBind(..), Ast::SafeBind(..), Ast::App(_, marker, args), _]
+                if matches!(marker.as_ref(), Ast::InternalVar(_, name) if name == "__process_postprocess")
+                    && matches!(args.as_slice(), [RecordLitArg::Positional(Ast::Var(_, name))] if name == "pid")),
+                "state read, successful handler result, postprocessing transition, and final result must occur in order");
+            if kind == "defagent" && wrapper == "read" {
+                assert!(matches!(stmts.last(), Some(Ast::ConstructorCall(_, name, args))
+                    if name == "Global::Result::Ok"
+                        && matches!(args.as_slice(), [RecordLitArg::Positional(Ast::Var(_, reply))] if reply == "reply")),
+                    "Agent success must use the canonical payload constructor call");
+            }
+        }
+    }
+}
+
 #[test]
 fn test_defagent_worker_init_route_is_public_surface() {
     let ast = parse_with_context(
@@ -6656,12 +6791,16 @@ fn test_defagent_worker_init_route_is_public_surface() {
             }
             match set_wrapper {
                 Ast::Def(_, _, _, _, _, _, body, _) => {
+                    let execution_body = Ast::Block(
+                        body.span().clone(),
+                        process_execution_statements(body).to_vec(),
+                    );
                     assert!(matches!(
-                        body.as_ref(),
+                        &execution_body,
                         Ast::Block(_, stmts)
                             if stmts.iter().any(|stmt| matches!(
                                     stmt,
-                                    Ast::SafeBind(_, _, rhs)
+                                    Ast::SafeBind(_, _, rhs, _)
                                         if matches!(
                                             rhs.as_ref(),
                                             Ast::App(_, callee, _)
@@ -6909,7 +7048,7 @@ fn test_defagent_rejects_compiler_managed_surface_names() {
   @get
   def get(state: Int) -> Result<Int> { Ok(state) }
 
-  def spawn() -> Int { 1 }
+  defp spawn() -> Int { 1 }
 }"#,
         ParserContext::module(1, None),
     )
@@ -6935,7 +7074,7 @@ fn test_defgenserver_rejects_compiler_managed_surface_names() {
   @call
   def view(state: Int) -> Result<(Int, Int)> { Ok((state, state)) }
 
-  def workers() -> Int { 1 }
+  defp workers() -> Int { 1 }
 }"#,
         ParserContext::module(1, None),
     )
@@ -7390,7 +7529,7 @@ fn do_expression_preserves_carrier_and_statement_kinds() {
     let Ast::Bind(_, _, rhs) = &ast[0] else {
         panic!("expected outer binding");
     };
-    let Ast::Do(_, return_type_arguments, statements) = rhs.as_ref() else {
+    let Ast::Do(_, return_type_arguments, statements, _) = rhs.as_ref() else {
         panic!("expected do expression, got {rhs:?}");
     };
     assert!(matches!(
@@ -7431,7 +7570,7 @@ fn do_expression_preserves_annotated_safebind_pattern() {
     let Ast::Bind(_, _, rhs) = &ast[0] else {
         panic!("expected outer binding");
     };
-    let Ast::Do(_, _, statements) = rhs.as_ref() else {
+    let Ast::Do(_, _, statements, _) = rhs.as_ref() else {
         panic!("expected do expression");
     };
     assert!(matches!(
@@ -8081,7 +8220,7 @@ fn statement_question_accepts_whole_statements_and_existing_separators() {
         let ast = parse(source).unwrap_or_else(|err| panic!("{source}: {err:?}"));
         let node = match &ast[0] {
             Ast::Semi(_, inner) => inner.as_ref(),
-            Ast::Do(_, _, statements) => match &statements[0] {
+            Ast::Do(_, _, statements, _) => match &statements[0] {
                 AstDoStatement::Statement(node) => node,
                 other => panic!("expected question statement, got {other:?}"),
             },
@@ -8133,7 +8272,7 @@ fn statement_question_retains_optional_type_and_plain_facet() {
 fn special_enum_aliases_normalize_to_canonical_constructor_calls() {
     for (input, canonical) in [
         ("Ok(1)", "Result::Ok"),
-        ("Err(NoneError)", "Result::Err"),
+        ("Err(NoneError())", "Result::Err"),
         ("True", "Boolean::True"),
         ("False", "Boolean::False"),
         ("Boolean::True", "Boolean::True"),
@@ -8198,7 +8337,7 @@ fn special_enum_pattern_aliases_normalize_without_confusing_other_owners() {
         ("MatchResult::Err = item", "MatchResult::Err"),
     ] {
         let ast = parse(input).unwrap();
-        let (Ast::Bind(_, pattern, _) | Ast::SafeBind(_, pattern, _)) = &ast[0] else {
+        let (Ast::Bind(_, pattern, _) | Ast::SafeBind(_, pattern, _, _)) = &ast[0] else {
             panic!("binding expected");
         };
         assert!(
@@ -8642,4 +8781,305 @@ fn boolean_function_suffix_self_name_keeps_receiver_boundary() {
     let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
     assert!(tolerant.diagnostics.is_empty());
     assert_eq!(strict, tolerant.ast);
+}
+
+#[test]
+fn removed_result_effect_annotation_is_rejected() {
+    let error =
+        parse("@result_effect\ndefstruct Legacy { value: Int }").expect_err("removed annotation");
+    assert!(error.message().contains("Unknown annotation"));
+}
+
+#[test]
+fn safe_bind_operator_and_do_keyword_spans_survive_rebasing() {
+    for source in ["x =? Ok(1)", "x: Int =? Ok(1)", "(a, b) =? Ok((1, 2))"] {
+        let ast = parse(source).unwrap().remove(0);
+        let original_span = ast.span().clone();
+        let shifted = shift_ast_span(ast, 100);
+        let Ast::SafeBind(span, _, _, operator_span) = shifted else {
+            panic!("expected SafeBind");
+        };
+        assert_eq!(
+            span,
+            Span {
+                start: original_span.start + 100,
+                end: original_span.end + 100
+            }
+        );
+        let start = source.find("=?").unwrap() + 100;
+        assert_eq!(
+            operator_span,
+            Span {
+                start,
+                end: start + 2
+            }
+        );
+    }
+    let source = "do::<Identity> { 2 =? Ok(3); Identity(5) }";
+    let ast = parse(source).unwrap().remove(0);
+    let shifted = shift_ast_span(ast, 100);
+    let Ast::Do(_, _, _, keyword_span) = shifted else {
+        panic!("expected do");
+    };
+    assert_eq!(
+        keyword_span,
+        Span {
+            start: 100,
+            end: 102
+        }
+    );
+}
+
+#[test]
+fn test_deferror_payload_header_and_constructor_block_arguments_are_distinct() {
+    let parsed = parse_with_context(
+        r#"deferror Trouble(code: Int) { |input: String| Self(message: input, code: 1) }
+        deferror Empty() { Self(message: "empty") }
+        deferror Text { "text" }"#,
+        ParserContext::script(1),
+    )
+    .unwrap();
+    let Ast::DeferrorDef(_, _, fields, body, _) = &parsed[0] else {
+        panic!("expected Error declaration")
+    };
+    assert_eq!(fields[0].name, "code");
+    let Ast::Closure(_, inputs, _) = body.as_ref() else {
+        panic!("expected constructor block")
+    };
+    assert_eq!(inputs[0].name, "input");
+    for declaration in &parsed[1..] {
+        let Ast::DeferrorDef(_, _, fields, body, _) = declaration else {
+            panic!("expected Error declaration")
+        };
+        assert!(fields.is_empty());
+        assert!(matches!(body.as_ref(), Ast::Closure(_, params, _) if params.is_empty()));
+    }
+}
+
+#[test]
+fn struct_field_rejects_multiple_visibility_modifiers() {
+    for annotation in ["", "@readonly\n"] {
+        for modifiers in [
+            "public private",
+            "private public",
+            "public public",
+            "private private",
+            "public readonly private",
+            "private readonly public",
+        ] {
+            let source = format!("{annotation}defstruct User {{ {modifiers} name: String }}");
+            let err = parse_with_context(&source, ParserContext::project(0))
+                .expect_err("field visibility may only be specified once");
+            assert!(err
+                .message()
+                .contains("field visibility may only be specified once"));
+        }
+    }
+}
+
+#[test]
+fn readonly_struct_rejects_explicit_public_field() {
+    for modifiers in ["public", "readonly public", "public readonly"] {
+        let source = format!("@readonly\ndefstruct User {{ {modifiers} name: String }}");
+        let err = parse_with_context(&source, ParserContext::project(0))
+            .expect_err("explicit public conflicts with readonly struct");
+        assert!(err
+            .message()
+            .contains("@readonly struct fields cannot be explicitly public"));
+    }
+}
+
+#[test]
+fn hashmap_structural_pattern_syntax() {
+    parse("match map { hash![^key => [x, ..xs], \"nested\" => hash![]] => x, _ => 0 }")
+        .expect("HashMap structural patterns accept expressions, pins and nested children");
+    parse("hash![] = map").expect("empty HashMap pattern is valid binding syntax");
+    assert!(parse("match map { hash![\"a\" x] => 1, _ => 0 }").is_err());
+}
+
+#[test]
+fn function_expression_bodies_accept_all_definition_contexts() {
+    for source in [
+        "def name(user: User) -> String = user.name",
+        "defp value() -> Int = 1",
+        "impl Int { def value(self: Self) -> Self = self }",
+        "impl Show for Int { def show(self: Self) -> String = to_string(self) }",
+        "deftrait Show { def show(self: Self) -> String = to_string(self)\n def other(self: Self) -> String }",
+        "deftrait Show { defp value() -> Int = 1 }",
+        "def value() -> Unit = 1;",
+        "def value() -> Int = if(True, 1, 0)",
+        "def value() -> Int = apply({ |x| print(x); x }, 1)",
+        "def value() -> String = \"日本語\"\ndef next() -> Int = 2",
+    ] {
+        parse(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+    parse_with_context(
+        "defmod Values { def value() -> Int = 1 }",
+        ParserContext::module(1, None),
+    )
+    .unwrap();
+    let ast = parse("def value() -> Unit = 1;").unwrap();
+    assert!(matches!(&ast[0], Ast::Def(_, _, _, _, _, _, body, _)
+        if matches!(body.as_ref(), Ast::Block(_, statements)
+            if matches!(statements.as_slice(), [Ast::Semi(_, _)]))));
+}
+
+#[test]
+fn function_expression_bodies_accept_structured_multiline_expressions() {
+    for body in [
+        "do {\n value <- Ok(1)\n Ok(value)\n}",
+        "do::<Result> {\n Ok(1)\n}",
+        "match value {\n 0 => 0,\n _ => 1\n}",
+        "cond {\n value > 0 => 1,\n True => 0\n}",
+        "cond({\n True => 0\n})",
+    ] {
+        for source in [
+            format!("def value() -> Int = {body}"),
+            format!("impl Int {{ def value(self: Self) -> Int = {body}\n}}"),
+            format!("deftrait Value {{ def value() -> Int = {body}\n}}"),
+        ] {
+            parse(&source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
+    }
+}
+
+#[test]
+fn function_expression_bodies_reject_invalid_boundaries() {
+    for source in [
+        "def value() -> Int =\n 1",
+        "def value() -> Int = (\n 1\n)",
+        "def value() -> Int = call(\n 1\n)",
+        "def value() -> Int = value\n |> next()",
+        "def value() -> Int = value |>\n next()",
+        "def value() -> Int = apply({\n 1\n})",
+        "def value() -> String = \"\"\"\n  text\n  \"\"\"",
+        "def value() -> Int = if(True,\n 1, 0)",
+        "def value() -> Int = (cond {\n True => 1\n})",
+        "def value() -> Int = x = 1",
+        "def value() -> Int = x =? Ok(1)",
+        "def value() -> Unit = operation()?",
+        "def value() -> Unit = 1;;",
+        "def value() -> Unit = 1; print(\"outside\")",
+        "def value() -> Int = 1 2",
+        "def value() -> Int = cond { True => 1 } + 1",
+        "def value() -> Int = match 1 { _ => 1 };",
+        "defextractor value(input: Int) -> MatchResult<Int> = MatchResult::Ok(input)",
+        "@builtin def value() -> Int = 1",
+    ] {
+        parse(source).expect_err(source);
+    }
+}
+
+#[test]
+fn function_expression_bodies_tolerant_parser_preserves_definitions() {
+    let source = "def value() -> Int = 1\ndef other() -> Int = cond {\n True => 2\n}";
+    let parsed = parse(source).unwrap();
+    let tolerant = parse_tolerant_with_context(source, ParserContext::default(), None);
+    assert_eq!(tolerant.ast, parsed);
+    assert!(tolerant.diagnostics.is_empty());
+}
+
+#[test]
+fn function_expression_bodies_report_multiline_source_span() {
+    let source = "def value() -> String = call(\"日本語\",\n 1)";
+    let error = parse(source).expect_err("multiline argument must be rejected");
+    assert_eq!(error.reason(), ParseErrorReason::DeclarationSyntax);
+    assert!(error.message().contains("must stay on one source line"));
+    assert_eq!(error.span().start, source.find('=').unwrap() + 1);
+    assert_eq!(error.span().end, source.chars().count());
+}
+
+#[test]
+fn source_reflections_reject_reserved_env_and_repl_expressions() {
+    for source in ["__ENV__", "__ENV__()", "\"#{__ENV__}\""] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+    for source in ["__FILE__", "__DIR__", "__LINE__", "\"#{__LINE__}\""] {
+        assert!(
+            parse_with_context(source, ParserContext::repl(0)).is_err(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn source_reflections_cannot_be_shadowed() {
+    for source in [
+        "__LINE__ = 1",
+        "def __FILE__() -> String { \"x\" }",
+        "def f(__DIR__: String) -> String { __DIR__ }",
+        "const __LINE__ = 1",
+        "__ENV__ = 1",
+        "def __ENV__() -> String { \"x\" }",
+        "def f(__ENV__: String) -> String { \"x\" }",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn source_reflections_materialize_original_positions_and_paths() {
+    let source = "# あいう\n(__FILE__, __DIR__, __LINE__, \"#{__LINE__}\")";
+    let ast = materialize_reflections(
+        parse(source).unwrap(),
+        source,
+        Some(std::path::Path::new("/repo/src/example.srt")),
+    )
+    .unwrap();
+    let [Ast::TupleLiteral(_, items)] = ast.as_slice() else {
+        panic!("tuple expected");
+    };
+    assert!(matches!(&items[0], Ast::Lit(_, Lit::Str(value)) if value == "example.srt"));
+    assert!(matches!(&items[1], Ast::Lit(_, Lit::Str(value)) if value == "/repo/src"));
+    assert!(matches!(&items[2], Ast::Lit(_, Lit::Int(value)) if *value == int(2)));
+    assert!(
+        matches!(&items[3], Ast::InterpolatedStr(_, parts) if matches!(&parts[0], InterpolatedPart::Expr(expr) if matches!(expr.as_ref(), Ast::Lit(_, Lit::Int(value)) if *value == int(2))))
+    );
+    assert!(materialize_reflections(parse("__FILE__").unwrap(), "__FILE__", None).is_err());
+    assert!(materialize_reflections(parse("__DIR__").unwrap(), "__DIR__", None).is_err());
+}
+
+#[test]
+fn source_reflections_in_triple_interpolations_keep_original_line() {
+    let source = "# header\n\"\"\"\n  text\n  #{__LINE__}\n\"\"\"";
+    let ast = materialize_reflections(parse(source).unwrap(), source, None).unwrap();
+    let [Ast::InterpolatedStr(_, parts)] = ast.as_slice() else {
+        panic!("interpolation expected");
+    };
+    assert!(parts.iter().any(|part| matches!(part, InterpolatedPart::Expr(expr) if matches!(expr.as_ref(), Ast::Lit(_, Lit::Int(value)) if *value == int(4)))));
+}
+
+#[test]
+fn source_reflections_validate_builtin_function_declarations() {
+    let context = ParserContext::module(0, None).with_rules(ParseRules::std_module());
+    for source in [
+        "@builtin def __FILE__() -> String",
+        "@builtin def __DIR__() -> String",
+        "@builtin def __LINE__() -> Int",
+    ] {
+        assert!(
+            parse_with_context(source, context.clone()).is_ok(),
+            "{source}"
+        );
+        assert!(parse(source).is_err(), "user source: {source}");
+    }
+    for source in [
+        "@builtin def __FILE__() -> Int",
+        "@builtin def __LINE__() -> Int = 1",
+        "@builtin def __ENV__()",
+        "@builtin def __ENV__() -> String",
+        "@builtin def __FILE__() -> String\n{ \"x\" }",
+        "@builtin const FOO: Int",
+        "@builtin const __FILE__: String",
+        "@builtin def __FILE__(x: String) -> String",
+        "@builtin def __FILE__() -> String { \"x\" }",
+    ] {
+        assert!(
+            parse_with_context(source, context.clone()).is_err(),
+            "{source}"
+        );
+    }
+    for source in ["__LINE__()", "__DIR__(1)", "&__LINE__", "^__LINE__"] {
+        assert!(parse(source).is_err(), "{source}");
+    }
 }

@@ -36,10 +36,18 @@ source span を必要としない説明や修正案を `labels` に置かない�
 - runtime SafeBind failure は typed IR の `RuntimeErrorDiagnostic` を VM まで保持する。表示用 marker を message へ埋め込まない。
 - source-backed builtin declaration は `BUILTIN_METAS.surfaces` の owner/name/RTA/parameter mode・型/return/where と完全一致させる。compiler-generated declaration identityは別の`compiler_generated_surfaces`へ正確なowner/nameだけを登録し、ASTの生成由来も同時に要求する。runtime/compiler-only builtinをsource surfaceへ混入させず、名前接頭辞や任意owner合成で検証を迂回しない。
 
+module stageのparse workerをOSが起動できない場合は、`WorkerSpawnFailure`をparse phaseの診断として返す。
+対象module名とOSのエラーを保持し、対象ファイルのsource IDと先頭の空spanをprimaryにする。
+構文上の誤りやsource policy違反として扱わず、通常のmodule読み込みではCLIとREPLが同じ構造化診断を表示する。
+標準定義snapshotの構築中は、既存の`LoadError::BootstrapFailed`でparse phase・ファイル名・messageを返す。
+このbootstrap経路はstructured reasonとspanを保持しない。
+stage内の結果は入力順に扱い、起動済みworkerはjoinする。worker内部のpanicは元のpayloadを再送する。
+
 ## 型関係と呼び出しの診断（実装済み）
 
 - Scar の `assert_type_relation` は、失敗時に部分的な型代入と capability / obligation の変更を rollback する。成功した制約だけを後続へ渡す。両側の source fact は照合対象の型とともに保持する。
 - 呼び出しの arity / mode / named 引数、通常の型関係、Trait obligation / dispatch、constructor family / payload / capability は共通の reason を使う。演算子と対応する helper は同じ検査を通し、文脈の違いを `DiagnosticOrigin` に保持する。入れ子の呼び出し・annotation の失敗を外側の演算子へ付け替えない。
+- carrier 未確定の constructor 呼び出しでは、予備検査と候補検査を rollback しても、型注釈を解決する producer が返したエラーをそのまま保持する。未知型や型引数 arity など候補に依存しない失敗は、パラメータ・body・入れ子の注釈の元 span、reason、source fact を返す。正しく解決した注釈との型関係が候補ごとに成立しない場合は `CandidateSelection` の候補情報を保持する。message や structured 情報の有無から失敗を分類せず、最初の候補の失敗を最終診断に採用しない。
 - `cond` の節と `if_let` の発生文脈は Spire / Sigil から Scar まで保持する。分岐診断には全 body の型・span・ordinal と guard の source fact を含める。`cond` の実行は型検査後に既存の `TypedInner::If` へ lowering する。
 - JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
 - constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。familyはcapability継承を表し、別direct parameterのcarrier同一性を暗黙に作らない。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
@@ -65,8 +73,7 @@ Lazyキャプチャの型不一致では、通常のreasonを維持し、解決�
 同じplaceholderに通常値とLazyの要求が競合する場合は番号を分ける案内とし、両branchが未知の場合は具体的な期待関数型を与える案内とする。
 Pattern bindingを伴う成功branchにはDirectExpressionの契約を適用し、通常値をthunkで包む修正案を出さない。
 入れ子callの失敗を外側のLazyキャプチャへ付け替えず、由来が確定していない通常の関数値には通常の型診断を使う。
-error placeholderを持つ`require`、`ensure`、`Result::map_err`、`Result::cause`のcaptureにも既存のError受け渡し制約を適用する。
-通常callの拒否reasonは維持し、error式をcapture内に固定する修正案を示す。`(-> Error)`を通常引数として渡す修正で既存制約を迂回しない。
+error placeholder を持つ capture は、正規化後の `(-> Error)` を通常の callable として受け渡せる。Error の運搬を理由とする拒否診断は設けず、通常の引数型の不一致を報告する。
 裸の標準Lazy special formのcaptureはSigilで拒否し、引数を記述したcaptureへ案内する。Lazy markerを保持したbuiltin参照を通常の関数値として後段へ渡さない。
 
 Sigilはcanonical calleeの種類、直接placeholderの引数位置・span、通常Expr内での使用を生成parameterへ記録する。
@@ -77,10 +84,8 @@ REPLの保存・復元と候補検査のrollbackにはこの状態も含め、�
 placeholderの競合では、その正規化で確定した要求型をまとめて使う。未確定型を含むsignatureを完成済みとして表示しない。
 追加の案内はhuman表示と構造化remediationへ同じ内容を渡し、通常のreason・primary spanを保持する。
 
-`ErrorKind` には具体的な `deferror` の解決済み型 identity だけを渡す。
-未定義型名、非エラー型、抽象 `Error`、runtime Error 値、constructor call、文字列、直接 placeholder を静的に拒否する。
-標準引数以外の marker 使用も拒否し、旧 Lazy marker や任意文字列へ fallback しない。
-表示名の比較で ErrorKind の許可を判定せず、Sigil が確定した canonical identity を使う。
+裸の canonical `deferror` 名は期待型によらず ErrorKind を生成する。Error 期待位置でも旧自動構築に戻さず、通常の型不一致として診断し、ErrorKind と Error の違いを Help で説明する。直接の裸宣言なら明示 constructor call を案内し、入力を持つ宣言には必要入力を示す。既存 ErrorKind 変数に `kind()` は勧めない。ErrorKind 期待位置に String・Error instance・constructor call を渡した場合も通常の型不一致にする。抽象 Error、未定義参照、非エラー型名はそれぞれ通常の名前解決規則で拒否する。
+値・戻り値・field・container・placeholder での ErrorKind 運搬は許可する。生成元の判定は Sigil が最初に選択した canonical declaration identity に従い、表示名や外側の同名宣言へ fallback しない。
 
 ## stable reason と typed data
 
@@ -94,18 +99,23 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | type relation / callable | `ArgumentTypeMismatch`, `ReturnTypeMismatch`, `AnnotationTypeMismatch`, `NotCallable`, `CallableShapeMismatch`, `CallableSignatureMetadataMismatch` |
 | ReturnTypeArgument | `ReturnTypeArgumentArityMismatch`, `ReturnTypeArgumentMismatch`, `AmbiguousReturnTypeArgument`, `DuplicateReturnTypeArgumentInput`, `MissingReturnTypeArgument`, `UnusedReturnTypeArgument`, `ConcreteReturnTypeArgumentInDefinition`, `InlineReturnTypeArgumentConstraint` |
 | Enum constructor | `UnresolvedEnumConstructorTypeArgument` |
-| constraint / Trait | `InvalidTraitConstraintSubject`, `MissingGenericBound`, `MissingTraitCapability`, `NoApplicableTraitImplementation`, `UnresolvedTraitMethodInstantiation`, `MissingTraitDispatchTarget` |
+| constraint / Trait | `InvalidTraitConstraintSubject`, `MissingGenericBound`, `MissingTraitCapability`, `NoApplicableTraitImplementation`, `CyclicTraitObligation`, `UnresolvedTraitMethodInstantiation`, `MissingTraitDispatchTarget` |
 | TypeCtorTrait | `MissingTypeConstructorConstraint`, `TypeConstructorFamilyMismatch`, `TypePayloadMismatch`, `MissingTypeConstructorCapability` |
 | Trait method contract | `TraitMethodTypeListMismatch`, `TraitMethodTypeListArityMismatch`, `TraitMethodConstraintMismatch` |
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `InvalidResultEffectAnnotation`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
+| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
 `MissingTypeConstructorCapability`はconstructor carrier occurrenceの能力不足であり、相互に置換しない。
 未確定inference variableのobligationは`Deferred`として保持し、候補数や登録順からreasonや型を決めない。
+`CyclicTraitObligation`は、同じTraitとcanonical subjectの証明を再訪した循環を表す。
+Traitとsubjectを構造化して保持し、constructor投影でも能力不足やmetadata破損へ置き換えない。
+必須の能力検証では要求元のcall / annotation位置をprimaryにし、元のreasonと原因を返す。
+候補headが一致しないimplや、要求されていないTraitの能力列挙で見つけた失敗は、
+無関係なcallの循環診断へ昇格させない。
 `TraitImplementationForbidden`は対象型の実装権限に反する宣言に使い、`Policy` dataに対象型、Trait、
 制限理由を保持する。impl対象とTrait名をそれぞれ source fact に結び、単なる能力不足と区別する。
 生成された `Eq` / `Show` の実装本体または `Eq` の呼出しで能力が不足するときは、元のTrait失敗reasonを維持し、
@@ -145,18 +155,15 @@ canonical Monad proofが成立すれば`SafeBindTotalPatternNonResultMonadRhs`�
 既存structured failureをこの二reasonへ畳み込まない。どちらのheadlineもcanonical Resultだけが
 外側一段の自動分解対象であることを本文に含め、変換APIのhelpは生成しない。
 
-SafeBind/failureMatcher の ResultContext は `ResultEffect > Alternative > Monad` の順で解決する。
-canonical `Result` または検証済み `@result_effect` carrier は既存 Error を保持し、Result effect がない場合だけ
-`Alternative::empty` へ置換する。`Monad` 単独は sequencing capability であり failure target ではない。
-failureMatcher/partial `<-` は Result effect があれば Error を保持し、なければ `Alternative::empty`、どちらもなければ
-capability error とする。total `<-` は Monad のみを要求し、`guard` は Result effect を参照しない通常の Alternative
-call として扱う。annotation、carrier、policy が未確定な場合は `Deferred` を保持し、候補数や登録順で
-Result/Alternativeを選ばない。
+Pattern failure の処理先は通常 callable では `MonadFail`、do では `MonadFail > Alternative` の順で解決する。
+MonadFail は元の Error を通常の `fail(error)` 呼出しへ渡す。Alternative は `empty()` に置き換える。
+Monad 単独は失敗を構築しない。total `<-` は Monad だけを要求し、guard は常に Alternative の通常呼出しとする。
+返り型が未確定の通常 closure は外側の能力を借りず拒否する。do の未確定 carrier は Deferred obligation として
+保持し、候補数や登録順で選ばない。generic の能力は宣言した bound に限る。
 
-`InvalidResultEffectAnnotation` は annotation span を primary とし、sole field、visibility、canonical Monad / MonadT
-impl、captured base relation のうち失敗根拠となる宣言 span を related fact として保持する。必要 metadata の
-欠落を annotation 無視や `Alternative` route への切り替えで隠さない。SafeBind/failureMatcher では元の `=?`、
-pattern、RHS、return/do result span と Error の kind、message、location、cause を、Result-preserving target まで保持する。
+必要 metadata の欠落や不正、曖昧な dispatch を Alternative への切替えで隠さない。
+SafeBind / partial `<-` は元の operator、pattern、RHS、return / do result span と Error の
+kind、message、location、cause を保持する。失敗処理先の Trait 呼出しで Error を再生成しない。
 
 constructor-context経路の`CandidateFailureData`は候補ごとの型と失敗detailを保持する。通常のTrait候補選択は
 閉じた`CandidateRejection`からrelated factsとsummary noteを構築する。どちらも候補の失敗をtyped dataとして保持し、
@@ -196,7 +203,7 @@ do専用の未採用JSON fieldを一般診断schemaへ混入させない。詳�
 - `assert_eq` の LHS/RHS term は比較対象の span を指すため label、失敗の説明は `help` に置く。
 - contextual type syntax では、`Trait<...>` を where RHS に置いた parser diagnostic、Trait-head / nominal binderへ constraint を併記した位置違反、通常型注釈などでの constructor application の位置違反、`Self::...` / `Type::...` の owner-path 違反を parser phase にする。TypeCtorTrait の call-site ReturnTypeArgument 内の完全・部分型applicationと`_`は合法な型入力として扱う。position rule は `notes`、bare constraint や許可された位置への書換えは `help` に置く。
 - `Enum<...>::Variant` は Spire で callable の `::<...>` と別の expression として保持する。owner が enum でない、variant が owner に属さない、owner 型引数 arity が一致しない場合は Sigil の resolve diagnostic とする。payload または expected type と明示型引数が一致しない場合は Scar の既存 type relation / argument diagnostic とする。
-- `Ok` / `Err` / `True` / `False` は通常 Enum の解決済み variant を診断 subject にする。再定義・shadowing は共有予約名規則で拒否する。`Err` の concrete Error 制約と通常 callable への Error 公開禁止は、解決済み variant metadata に基づいて検査する。
+- `Ok` / `Err` / `True` / `False` は通常 Enum の解決済み variant を診断 subject にする。再定義・shadowing は共有予約名規則で拒否する。`Err` の引数は Error 型として検査し、既存 Error の再格納も受理する。
 - constructor capture の禁止 policy は resolver の `ConstructorCaptureForbidden` reason とし、通常の `Capture` reason や表示 message の文字列判定へ fallback しない。constructor identity と source span は診断 producer が保持する。
 - bare または `_` を含む通常 enum constructor の型引数が Scar の finalization まで未確定なら `UnresolvedEnumConstructorTypeArgument` とする。`DiagnosticOrigin::EnumConstructor` と constructor span、未確定 ordinal、`Insufficient` constraint status を保持する。`Err` の失敗値が保持する未確定の成功 slot は多相性として許可する。constructor capture の callable signature は既存の具体化規則で検査する。
 - bare capability の未使用、fresh result witness の未確定、full obligation / pending dispatch の未解決は typecheck phase にする。position rule は `notes`、constraint の削除または必要な式の利用は `help` に置く。
@@ -218,19 +225,21 @@ source ID を符号化する現行の span 範囲は、各 source の Unicode sc
 
 renderer は `message`、`labels`、`notes`、`help` をそれぞれ headline、source caption、note、help として出力する。Ariadne の色、罫線、空白、label の順序は安定契約にしない。
 
-言語レベルの Error の主キャプションは、その Error を生成したソース位置を使う。
+言語レベルの Error の主キャプションは、[Error spec](Error_spec.md) の生成位置を使う。
 明示的な `deferror` の構築は構築式、構文 Pattern の不一致は実際に失敗した子 Pattern を指す。
 list の長さや空入力など構造自体の不一致は、失敗した構造 Pattern 全体を指す。
 入れ子の失敗を親 Pattern、alias、SafeBind の RHS、外側の呼出し位置へ置き換えない。
 関数、named Extractor、ExtractorClosure による区別は設けない。
 
-`Err` / `MatchResult::Err` への格納、SafeBind、および Result-effect context の partial `<-` は、
+`Err` / `MatchResult::Err` への格納、SafeBind、および MonadFail context の partial `<-` は、
 元 Error の kind / message / location / cause を保持する。新しい Error で wrap した場合は、
 新しい Error の構築位置を主キャプションとし、元 Error の位置は cause に保持する。
 呼出し経路は stack trace で追跡し、stack trace の先頭で生成位置を上書きしない。
 位置の由来を Error 名、表示文、carrier 名から推測するフォールバックは設けない。
 REPL も同じ生成位置の契約を使う。入力単位のソースを保持し、後続入力で呼び出した関数・Extractor 内の
 Error は生成元の入力内の行・列を指す。`eprint` はその位置をそのまま表示する。
+
+停止要求済み・回収済みの process への新規要求を拒否する `ProcessStopped` は、その要求の呼出し位置を生成元にする。Stop handler、生成 wrapper の内部 builtin、deferror 宣言の位置へ置き換えない。direct / capture / 高階関数 / Workers / lease の各経路も同じ source origin 契約を使う。kind は canonical な Error 宣言の identity から得て、message の表示文字列から推測しない。timeout や後発 reply との競合で確定済み Error の位置を上書きしない。
 
 ### JSON
 
@@ -289,7 +298,8 @@ cargo nextest run --workspace
 
 named `defextractor` の戻り型は `MatchResult<P>` を正規表記とし、`MatchResult<P, Error>` も受理する。ExtractorClosure の型注釈は `MatchResult<P>` のみを受理する。
 旧 Option / 通常 Result、第二型引数の非 abstract Error、一般の値位置、通常 Closure の
-返却・構築、abstract Error の手書き Err 再投入を静的拒否する。
+返却・構築を静的拒否する。`MatchResult::Err` の引数は Error 型で検査し、
+既存の Error も具象 constructor の生成値と同じ規則で受理する。
 Unit payload の子 Pattern は0または1であり、arity / annotation 不一致は型エラーとする。
 入力の末尾を照合対象、それ以前を事前引数として検査する。signature から引数領域を
 確定し、総 arity の不足・余剰を拒否してから、事前引数の型と payload の子 Pattern を
@@ -325,10 +335,14 @@ local head は選ばれた lexical identity の型を検査し、named Extractor
 文末 `?` 自体の型は Unit とする。Result を返す関数やクロージャの末尾に置いた場合は、
 必要な Result と Unit の不一致を通常の型診断で報告する。
 構文段階の末尾禁止や専用のエラー経路は設けず、暗黙の `Ok(())` も挿入しない。
-途中の Unit が受理される位置では、既存の ResultContext の制約に従って使用できる。
+途中の Unit が受理される位置では、最も近い callable / do の失敗処理能力の制約に従って使用できる。
 
 ## Boolean 関数名の suffix
 
 関数名末尾の `?` は Spire が関数名位置だけで受理する。変数・束縛・フィールド・Extractor 名などの不正な位置は構文エラーとし、名前解決や型検査の結果を使った再解析は行わない。suffix 名の解決失敗は通常の名前解決診断を維持し、suffix を取り除いて再検索しない。
 
 Scar は解決・正規化した署名の返り型が canonical Boolean でない宣言を拒否し、宣言の span に Boolean 制約と実際の返り型を示す。未確定型・コンテナ型・関数型は拒否する。型 alias の既存規則は変更しない。`predicate?(value)?` の最後の `?` に対する拒否は、既存の文末アンラップ診断を維持する。廃止済み OptionalSelector も構文位置で拒否する。
+
+## Error Payload の診断
+
+宣言・入力・Payload・内部構築・局所具象型・Facet の成功／拒否条件は [Error spec](Error_spec.md) を正本とする。拒否診断では、可能なら宣言側と指定側の位置を併記し、生成ノードの位置だけを表示しない。runtime Error の主キャプションには、同仕様の生成位置を使う。診断用の source facts を message や Error 名から再構成しない。

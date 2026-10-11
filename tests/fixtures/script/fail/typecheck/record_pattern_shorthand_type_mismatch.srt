@@ -1,0 +1,6 @@
+defrecord User(name: String, age: Int)
+user = User("Ada", 37)
+print(match user {
+  User(name: 1, age) => age,
+  _ => 0,
+})

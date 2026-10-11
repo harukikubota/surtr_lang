@@ -1,12 +1,15 @@
 import Test;
 
-deferror ApiError(detail: String) { detail }
+deferror ApiError(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
 def inc(x: Int) -> Int { x + 1 }
 def add2(x: Int, y: Int) -> Int { x + y }
 def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
 def safe_inc(x: Int) -> Result<Int> { Ok(x + 1) }
 def result_pure(x: Int) -> Result<Int> { Applicative::pure(x) }
-def safe_double_under_limit(x: Int) -> Result<Int> { if(x < 5, Ok(x * 2), Err(NoneError)) }
+def safe_double_under_limit(x: Int) -> Result<Int> { if(x < 5, Ok(x * 2), Err(NoneError())) }
 def safe_step3(x: Int) -> Result<Int> { Ok(x - 3) }
 def safe_add2(x: Int, y: Int) -> Result<Int> { Ok(x + y) }
 def safe_add3(x: Int, y: Int, z: Int) -> Result<Int> { Ok(x + y + z) }
@@ -29,8 +32,14 @@ impl Eq for EqByValue {
 }
 
 
-deferror FirstFailure(detail: String) { detail }
-deferror SecondFailure(detail: String) { detail }
+deferror FirstFailure(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
+deferror SecondFailure(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
 
 test("Result") {
   describe("canonical variant constructors") {
@@ -47,12 +56,12 @@ test("Result") {
 
     it("keeps nested success and failure branches distinct") {
       do {
-        value: Result<Result<Int>> = Result::Ok(Result::Err(NoneError))
+        value: Result<Result<Int>> = Result::Ok(Result::Err(NoneError()))
         answer = match value {
           Result::Ok(Result::Err(_)) => 1,
           _ => 0,
         }
-        failure: Result<Result<Int>> = Result<_>::Err(NoneError)
+        failure: Result<Result<Int>> = Result<_>::Err(NoneError())
 
         assert_eq(1, answer)
         assert_err_kind(NoneError, failure)
@@ -68,7 +77,7 @@ test("Result") {
     }
     it("returns False for Err") {
       do {
-        assert_false(is_ok(Err(NoneError)))
+        assert_false(is_ok(Err(NoneError())))
       }
     }
   }
@@ -81,7 +90,7 @@ test("Result") {
     }
     it("returns True for Err") {
       do {
-        assert_true(is_err(Err(NoneError)))
+        assert_true(is_err(Err(NoneError())))
       }
     }
   }
@@ -89,21 +98,21 @@ test("Result") {
   describe("map_err") {
     it("keeps Ok") {
       do {
-        assert_ok_eq(1, map_err(Ok(1), NoneError))
+        assert_ok_eq(1, map_err(Ok(1), NoneError()))
       }
     }
 
     it("replaces Err") {
       do {
-        assert_err_kind(ZeroDivisionError, map_err(Err(NoneError), ZeroDivisionError))
+        assert_err_kind(ZeroDivisionError, map_err(Err(NoneError()), ZeroDivisionError()))
       }
     }
 
     it("accepts an existing Error value from Err binding") {
       do {
-        rebound = match Err(ZeroDivisionError) {
-          Ok(_) => map_err(Err(NoneError), NoneError),
-          Err(e) => map_err(Err(NoneError), e),
+        rebound = match Err(ZeroDivisionError()) {
+          Ok(_) => map_err(Err(NoneError()), NoneError()),
+          Err(e) => map_err(Err(NoneError()), e),
         }
 
         assert_err_kind(ZeroDivisionError, rebound)
@@ -114,7 +123,7 @@ test("Result") {
   describe("cause") {
     it("keeps Ok") {
       do {
-        assert_ok_eq(1, cause(Ok(1), ZeroDivisionError))
+        assert_ok_eq(1, cause(Ok(1), ZeroDivisionError()))
       }
     }
 
@@ -122,16 +131,16 @@ test("Result") {
       do {
         assert_cause_chain(
           [ZeroDivisionError, NoneError],
-          cause(Err(NoneError), ZeroDivisionError),
+          cause(Err(NoneError()), ZeroDivisionError()),
         )
       }
     }
 
     it("accepts an existing Error value from Err binding") {
       do {
-        wrapped = match Err(ZeroDivisionError) {
-          Ok(_) => cause(Err(NoneError), NoneError),
-          Err(e) => cause(Err(NoneError), e),
+        wrapped = match Err(ZeroDivisionError()) {
+          Ok(_) => cause(Err(NoneError()), NoneError()),
+          Err(e) => cause(Err(NoneError()), e),
         }
 
         assert_cause_chain(
@@ -153,14 +162,14 @@ test("Result") {
       do {
         assert_cause_chain(
           [ZeroDivisionError],
-          chain(Ok(1), Err(ZeroDivisionError)),
+          chain(Ok(1), Err(ZeroDivisionError())),
         )
       }
     }
 
     it("keeps left Err when right succeeds") {
       do {
-        assert_cause_chain([NoneError], chain(Err(NoneError), Ok(())))
+        assert_cause_chain([NoneError], chain(Err(NoneError()), Ok(())))
       }
     }
 
@@ -168,7 +177,7 @@ test("Result") {
       do {
         assert_cause_chain(
           [ZeroDivisionError, NoneError],
-          chain(Err(NoneError), Err(ZeroDivisionError)),
+          chain(Err(NoneError()), Err(ZeroDivisionError())),
         )
       }
     }
@@ -177,13 +186,13 @@ test("Result") {
   describe("recover / recover_kind") {
     it("recover keeps Ok without running the handler") {
       do {
-        assert_ok_eq(7, recover(Ok(7), {|| Ok(1)}))
+        assert_ok_eq(7, recover(Ok(7), {|_| Ok(1)}))
       }
     }
 
     it("recover handles Err values") {
       do {
-        assert_ok_eq(1, recover(Err(NoneError), {|| Ok(1)}))
+        assert_ok_eq(1, recover(Err(NoneError()), {|_| Ok(1)}))
       }
     }
 
@@ -195,13 +204,13 @@ test("Result") {
 
     it("recover_kind handles matching errors") {
       do {
-        assert_ok_eq("None Value.", recover_kind(Err(NoneError), NoneError, {|err| Ok(Error::message(err))}))
+        assert_ok_eq("None Value.", recover_kind(Err(NoneError()), NoneError, {|err| Ok(Error::message(err))}))
       }
     }
 
     it("recover_kind keeps non-matching errors") {
       do {
-        assert_err_kind(ZeroDivisionError, recover_kind(Err(ZeroDivisionError), NoneError, {|err| print("unexpected"); Ok(Error::message(err))}))
+        assert_err_kind(ZeroDivisionError, recover_kind(Err(ZeroDivisionError()), NoneError, {|err| print("unexpected"); Ok(Error::message(err))}))
       }
     }
 
@@ -245,30 +254,30 @@ test("Result") {
 
     it("preserves mapper errors before value errors") {
       do {
-        mapper: Result<(Int -> Int)> = Err(NoneError)
+        mapper: Result<(Int -> Int)> = Err(NoneError())
 
-        assert_err_kind(NoneError, mapper |*| Err(ZeroDivisionError))
+        assert_err_kind(NoneError, mapper |*| Err(ZeroDivisionError()))
       }
     }
 
     it("preserves a wrapped mapper error while currying") {
       do {
-        mapper: Result<(Int, Int -> Int)> = Err(NoneError)
+        mapper: Result<(Int, Int -> Int)> = Err(NoneError())
 
-        assert_err_kind(NoneError, (mapper |*> {|fun| curry(fun)}) |*| Err(ZeroDivisionError) |*| Ok(2))
+        assert_err_kind(NoneError, (mapper |*> {|fun| curry(fun)}) |*| Err(ZeroDivisionError()) |*| Ok(2))
       }
     }
 
     it("preserves the first value error from left to right") {
       do {
-        assert_err_kind(NoneError, Ok(curry(&add3)) |*| Err(NoneError) |*| Err(ZeroDivisionError) |*| Ok(3))
-        assert_err_kind(NoneError, Ok(curry(&add3)) |*| Ok(1) |*| Err(NoneError) |*| Err(ZeroDivisionError))
+        assert_err_kind(NoneError, Ok(curry(&add3)) |*| Err(NoneError()) |*| Err(ZeroDivisionError()) |*| Ok(3))
+        assert_err_kind(NoneError, Ok(curry(&add3)) |*| Ok(1) |*| Err(NoneError()) |*| Err(ZeroDivisionError()))
       }
     }
 
     it("propagates a final value error") {
       do {
-        assert_err_kind(NoneError, Ok(curry(&add3)) |*| Ok(1) |*| Ok(2) |*| Err(NoneError))
+        assert_err_kind(NoneError, Ok(curry(&add3)) |*| Ok(1) |*| Ok(2) |*| Err(NoneError()))
       }
     }
 
@@ -279,7 +288,7 @@ test("Result") {
             value + 1
         })
 
-        assert_err_kind(NoneError, mapper |*| Err(NoneError))
+        assert_err_kind(NoneError, mapper |*| Err(NoneError()))
         assert_stdout_eq([])
       }
     }
@@ -293,7 +302,7 @@ test("Result") {
               {|c| a + b + c}
             }
         })
-        result = mapper |*| Ok(1) |*| Err(NoneError) |*| Ok(3)
+        result = mapper |*| Ok(1) |*| Err(NoneError()) |*| Ok(3)
 
         assert_err_kind(NoneError, result)
         assert_stdout_eq(["first:1"])
@@ -350,8 +359,8 @@ test("Result") {
 
     it("preserves mapper errors before value errors when joining") {
       do {
-        mapper: Result<(Int, Int -> Result<Int>)> = Err(NoneError)
-        nested = (mapper |*> {|fun| curry(fun)}) |*| Err(ZeroDivisionError) |*| Ok(2)
+        mapper: Result<(Int, Int -> Result<Int>)> = Err(NoneError())
+        nested = (mapper |*> {|fun| curry(fun)}) |*| Err(ZeroDivisionError()) |*| Ok(2)
 
         assert_err_kind(NoneError, nested |>= {|inner| inner})
       }
@@ -360,7 +369,7 @@ test("Result") {
     it("preserves the first value error when joining") {
       do {
         mapper: Result<(Int, Int, Int -> Result<Int>)> = Ok(&safe_add3)
-        nested = (mapper |*> {|fun| curry(fun)}) |*| Ok(1) |*| Err(NoneError) |*| Err(ZeroDivisionError)
+        nested = (mapper |*> {|fun| curry(fun)}) |*| Ok(1) |*| Err(NoneError()) |*| Err(ZeroDivisionError())
 
         assert_err_kind(NoneError, nested |>= {|inner| inner})
       }
@@ -372,7 +381,7 @@ test("Result") {
             print("unexpected")
             Ok(a + b)
         })
-        nested = (mapper |*> {|fun| curry(fun)}) |*| Ok(1) |*| Err(NoneError)
+        nested = (mapper |*> {|fun| curry(fun)}) |*| Ok(1) |*| Err(NoneError())
 
         assert_err_kind(NoneError, nested |>= {|inner| inner})
         assert_stdout_eq([])
@@ -399,7 +408,7 @@ test("Result") {
     it("direct bind stops at Err before invoking subsequent functions") {
       do {
         result = Ok(1) |>= {|a|
-          Err(NoneError) |>= {|b|
+          Err(NoneError()) |>= {|b|
             print("unexpected")
             safe_add2(a, b)
           }
@@ -423,7 +432,7 @@ test("Result") {
 
     it("zip short-circuits on Err") {
       do {
-        assert_err_kind(NoneError, zip(Err(NoneError), Ok(2)))
+        assert_err_kind(NoneError, zip(Err(NoneError()), Ok(2)))
       }
     }
 
@@ -439,7 +448,7 @@ test("Result") {
 
     it("zip3 returns the first Err") {
       do {
-        assert_err_kind(NoneError, zip3(Ok(1), Err(NoneError), Ok(3)))
+        assert_err_kind(NoneError, zip3(Ok(1), Err(NoneError()), Ok(3)))
       }
     }
 
@@ -451,7 +460,7 @@ test("Result") {
 
     it("returns first Err from all") {
       do {
-        assert_err_kind(NoneError, all([Ok(1), Err(NoneError), Ok(3)]))
+        assert_err_kind(NoneError, all([Ok(1), Err(NoneError()), Ok(3)]))
       }
     }
 
@@ -463,7 +472,7 @@ test("Result") {
 
     it("keeps outer Err values") {
       do {
-        assert_err_kind(NoneError, flatten(Err(NoneError)))
+        assert_err_kind(NoneError, flatten(Err(NoneError())))
       }
     }
   }
@@ -480,7 +489,7 @@ test("Result") {
 
     it("tap_err observes Err and keeps error") {
       do {
-        result = tap_err(Err(NoneError), {|err| print("tap_err:#{inspect(err)}")})
+        result = tap_err(Err(NoneError()), {|err| print("tap_err:#{inspect(err)}")})
 
         assert_err_kind(NoneError, result)
         assert_stdout_eq(["tap_err:NoneError(\"None Value.\")"])
@@ -489,7 +498,7 @@ test("Result") {
 
     it("tap_ok skips handlers for Err") {
       do {
-        result = tap_ok(Err(NoneError), {|_| print("unexpected")})
+        result = tap_ok(Err(NoneError()), {|_| print("unexpected")})
 
         assert_err_kind(NoneError, result)
         assert_stdout_eq([])
@@ -514,7 +523,7 @@ test("Result") {
 
     it("then short-circuits on Err") {
       do {
-        result = then(Err(NoneError), {|| print("then-next"); Ok("next")})
+        result = then(Err(NoneError()), {|| print("then-next"); Ok("next")})
 
         assert_err_kind(NoneError, result)
         assert_stdout_eq([])
@@ -537,7 +546,7 @@ test("Result") {
     }
     it("right identity keeps Err") {
       do {
-        value: Result<Int> = Err(NoneError)
+        value: Result<Int> = Err(NoneError())
 
         assert_eq(value, value |>= result_pure())
       }
@@ -621,7 +630,7 @@ test("Result") {
 
     it("identity preserves Err") {
       do {
-        value: Result<Int> = Err(NoneError)
+        value: Result<Int> = Err(NoneError())
         identity = Ok({|x| x}) |*| value
 
         assert_eq(value, identity)
@@ -687,8 +696,8 @@ test("Result") {
   describe("recover") {
     it("calls a fallback once only for Err") {
       do {
-        kept = Result::recover(Ok("ok"), {|| print("unexpected"); Ok("wrong")})
-        recovered = Result::recover(Err(NoneError), {|| print("fallback"); Ok("fallback")})
+        kept = Result::recover(Ok("ok"), {|_| print("unexpected"); Ok("wrong")})
+        recovered = Result::recover(Err(NoneError()), {|_| print("fallback"); Ok("fallback")})
 
         assert_ok_eq("ok", kept)
         assert_ok_eq("fallback", recovered)
@@ -701,12 +710,12 @@ test("Result") {
   describe("recover_kind") {
     it("calls the handler only for a matching kind") {
       do {
-        retried = Result::recover_kind(Err(NoneError), NoneError, {|err|
+        retried = Result::recover_kind(Err(NoneError()), NoneError, {|err|
           print("retry:" ++ Error::kind(err))
           print(Error::format(err))
           Ok("retry")
         })
-        untouched: Result<String> = Result::recover_kind(Err(ZeroDivisionError), NoneError, {|err|
+        untouched: Result<String> = Result::recover_kind(Err(ZeroDivisionError()), NoneError, {|err|
           print("unexpected")
           Ok("wrong")
         })

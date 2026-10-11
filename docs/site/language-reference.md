@@ -35,11 +35,34 @@ private const PROFILE_NAME = User.profile -> Profile.name
 - 値は primitive literal、Facet path、別の Facet const、またはそれらの `->` 合成に限定する
 - const Facet の bracket segment は literal `Int` / `String`、または両端が literal `Int` の range だけを受け付ける
 
+### ソース位置リフレクション
+
+`__FILE__` は参照を書いたファイルの名前、`__DIR__` はそのファイルの親ディレクトリの絶対パス、`__LINE__` は参照位置の行番号（1始まり）です。戻り値の型は順に `String`、`String`、`Int` です。引数なしの関数で、括弧を付けずに呼び出します。`__FILE__()` など括弧付きの呼出しはエラーです。関数・closure内でも参照を書いた位置を返し、呼出し位置には変わりません。
+
+`__ENV__` は予約名で、使用・定義・照会はできません。標準ソースに宣言はありません。これらの名前をユーザ定義の関数・引数・束縛等に使うこともできません。通常の定数名の規則は変わりません。
+
+REPLの式からは参照できません。`:doc __FILE__` などで説明、`:sig __FILE__` などで関数シグネチャを確認できます。REPLにロードする実ファイルでは使えます。
+
 ### 関数
 
 ```surtr
 def name(args...) -> Ty { expr }
+def name(args...) -> Ty = expr
+def name(args...) -> Ty = do { ... }
+def name(args...) -> Ty = match value { ... }
+def name(args...) -> Ty = cond { ... }
 ```
+
+`{ ... }` 本体に加え、`=` の後へ本体を直接書けます。`defp`、module 関数、inherent / trait impl、trait のデフォルト本体でも同じ規則です。`defextractor` と本体を持たない builtin / intrinsic 宣言は対象外です。
+
+- `= do { ... }`、`= match ... { ... }`、`= cond { ... }` は複数行で書けます。既存の carrier 指定や `match` / `cond` の括弧付き構文も使えます。本体はその式全体で終わり、外側へ演算を続けたり末尾に `;` を付けたりはできません。
+- その他の `= expr` は、`=` の直後から同じ行に単一の式を書きます。括弧、引数、closure、文字列の内部も改行できません。`if` ファミリーもこの規則に従います。
+- `= expr` の末尾に `;` を1個付けると、本体の結果を Unit にします。式内部の `;` は、この末尾の回数制限に含めません。
+- 本体の直後は改行、EOF、または外側の閉じ `}` とします。末尾 `;` の後にも同じ行で次の式は書けません。
+- 直接の束縛文、SafeBind 文、文末の `?` は `= expr` 本体にできません。必要な場合は `{ ... }` 本体を使います。
+- 複数行の許可は `=` の直後に直接書く `do` / `match` / `cond` に限ります。括弧で包んだり、別の式の引数に入れたりしても改行の制約は解除されません。
+
+`do` 本体は関数の戻り値型を期待型として carrier を決定します。戻り値が `Result<()>` なら carrier は `Result` です。本文や明示 carrier と戻り値型が一致しない場合は型エラーになります。
 
 Boolean を返す関数は `def positive?(value: Int) -> Boolean { value > 0 }` のように名前の末尾へ隣接する `?` を1個付けられます。`positive?(1)` で呼び出し、`&positive?` で capture します。未確定の返り型や `Result<Boolean>`、`Option<Boolean>` は対象外です。変数・引数・Pattern 束縛・フィールド・型・モジュール・Extractor の名前には付けられません。
 
@@ -69,7 +92,7 @@ where
 
 defrecord Name(field: Ty, ...) # 1個以上の public field。可視性指定は不可
 
-deferror Name(field: Ty, ...) { "message" }
+deferror Name(field: Ty) { |input: Ty| Self(message: "message", field: input) }
 
 defenum Name { Variant, Variant(Ty), Variant = Int, ... }
 
@@ -86,10 +109,8 @@ impl Show for Int {
 }
 ```
 
-`@result_effect` は `Monad` と `MonadT<$M>` を実装する `defstruct` にだけ指定できる
-compiler-owned annotationです。対象は単一のpublic fieldを持ち、そのfieldの最外
-constructorが`MonadT`のcaptured base `$M`と一致しなければなりません。具体化された
-baseがcanonical `Result`へ直接一致する場合だけResult effectを提供します。
+失敗を Error として保持する型は `MonadFail` を実装します。`Result`、`Either<Error, A>`、
+`ResultT` などが標準で対応します。構造体の field の形から失敗処理を推測する規則はありません。
 
 ### 制御構造
 
@@ -136,8 +157,8 @@ do::<Carrier> {
 - `defenum` で定義する
 - 値生成は `Enum::Variant(...)` または `Enum<TypeArgument, ...>::Variant(...)`
 - 後者の型引数 arity は enum 宣言と一致させる。各 `_` はその位置だけを payload と expected type から推論し、明示した通常型・scope 内型変数は固定する
-- 通常の型引数位置ではTypeConstructor traitやabstract `Error`を使えない。nominal declaration parameterがTypeCtorTrait constraintを持つ位置だけは、対応する具象constructorのbare headを指定できる。call-site ReturnTypeArgumentでは完全・部分型applicationと`_`もcarrier入力として指定できる
-- `Ok(...)` / `Err(...)` は通常 Enum の variant として解決し、Result の型制約と runtime 表現を適用する。成功型を固定したい場合は `failed: Result<Int> = Err(NoneError)` のように型注釈を付ける
+- 通常の型引数位置ではTypeConstructor traitを使えない。nominal declaration parameterがTypeCtorTrait constraintを持つ位置だけは、対応する具象constructorのbare headを指定できる。call-site ReturnTypeArgumentでは完全・部分型applicationと`_`もcarrier入力として指定できる
+- `Ok(...)` / `Err(...)` は通常 Enum の variant として解決し、Result の型制約と runtime 表現を適用する。成功型を固定したい場合は `failed: Result<Int> = Err(NoneError())` のように型注釈を付ける
 - `Enum<...>::method`、struct constructor、型注釈・signature・pattern・impl target の `_` にはこの規則を適用しない
 - `match` は網羅必須
 - enum 値への field access（例: `.idx`）は不可
@@ -211,7 +232,10 @@ variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使�
 - `deferror` で定義した具体 error がここへ流れ込む
 - `Error` 自体をユーザーが直接具体化する前提ではない
 - source で `Error` が見えても、runtime 実体は常に具体 `deferror`
-- user-defined parameter / return / local annotation に `Error` は持ち出さない
+- 引数、戻り値、型注釈、field、container、closure で通常値として運べる
+- 共通 `kind` / `message` は照合なしで readonly field と Facet として読める。共通情報の path capture は `&Error.kind` / `&Error.message` を使う。具象 Error を root にした path capture は共通情報・保存 Payload のどちらも拒否する
+- 保存 Payload は、単一種類への照合が成功した局所束縛と、その束縛を捕捉した通常クロージャから読める。異なる種類の OR 全体の alias、関数・match の戻り値、container から取り出した値は共通 Error なので、Payload を読むには再照合が必要
+- `Error(...)` / `&Error` と Error 自体への Trait impl は拒否する。Payload 分解は `match` / `if_let` / `if_let_then` / 束縛なしの `is_match` に限る
 
 ## 3. リテラル
 
@@ -370,8 +394,22 @@ Ok(1) |*> add(2)            # => Ok(add(1, 2))
 ["a", "b"] |*> wrap("[", "]")
 ```
 
-`|*>` の右辺は plain function である必要があります。  
-`A -> Result<B>`、`A -> List<B>`、`A -> Option<B>` のような文脈付き関数は受けません。
+`|*>` の右辺は通常、文脈の中身 `A` から値 `B` を返す関数として推論されます。
+
+文脈付きの値も内側の値として保持できます。`|*>` は入れ子を平らにしません。
+
+```surtr
+nested: Result<Result<Int>> = Ok(1) |*> {|x: Int| Ok(x)}
+flat = Ok(1) |>= {|x: Int| Ok(x)}
+print(inspect(nested)) # Ok(Ok(1))
+print(inspect(flat))   # Ok(1)
+```
+
+次の例は結果の型を指定していないため、型エラーになります。
+
+```surtr
+value = Ok(1) |*> {|x: Int| Ok(x)}
+```
 
 #### `|>=` 文脈 bind
 
@@ -432,7 +470,7 @@ pipeline = &parse >* &render
 - `List` なら `(A -> List<B>) >* (B -> C)`
 - `Option` なら `(A -> Option<B>) >* (B -> C)`
 
-右辺は plain function でなければなりません。これも compose なので、左右とも関数値に限ります。
+これも compose なので、左右とも関数値に限ります。
 `parse() >* render()` は不許可です。
 
 #### `>=>` Kleisli 合成
@@ -467,9 +505,9 @@ Option::Some(saved) =? Option::Some(1)
 - Result 以外の RHS は値と型を変えず、constructor / literal / list / string / Extractor などの partial patternが値全体を明示検査するときだけ受理する
 - total pattern + non-Result RHS は、非MonadとResult以外のMonadを区別したSafeBind compile errorにする
 - 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
-- `do` 外の通常関数・Closureでは、enclosing callableがcanonical `Result`または有効なResult-effect carrierを返す必要がある。Extractor・ExtractorClosure本文では、その本文自身の `MatchResult::Err` へ元Errorを保持して返す
-- `do` 内では、do-local carrierのResult effectを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
-- Extractor の `MatchResult::Err` は元 Error を保持する。一般の不一致は `PatternMismatch`、list/string 等の構造 pattern 固有 Error は維持する
+- `do` 外の通常関数・Closureでは、enclosing callableが`MonadFail` を実装した型を返す必要がある。Extractor・ExtractorClosure本文では、その本文自身の `MatchResult::Err` へ元Errorを保持して返す
+- `do` 内では、do-local carrierのMonadFailを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
+- Extractor の `MatchResult::Err` は元 Error を保持する。literal・pin・variant の不一致はそれぞれの Error、List/String 等の構造 Pattern 固有 Error は維持する
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### `do` と failure matcher
@@ -490,9 +528,9 @@ result: Option<Int> = do::<Option> {
 
 - total patternの`<-`は`Monad`だけを要求する
 - literal、constructor、list/string、Extractor等のpartial patternを使う`<-`はfailure matcherになる
-- failure targetは`Result effect > Alternative > Monad`の順で選び、`Monad`単独ではfailure targetを提供しない
+- failure targetは`MonadFail > Alternative > Monad`の順で選び、`Monad`単独ではfailure targetを提供しない
 - SafeBind `=?` もdo-local failure targetを使うが、RHSだけからdo carrierを推論しない
-- `guard`は通常の`Alternative`関数であり、Result effectを参照しない
+- `guard`は通常の`Alternative`関数であり、MonadFailを参照しない
 - base Monad値をTransformerへ暗黙liftせず、`MonadT::lift`を明示する
 - nested `do` はそれぞれ自身のcarrierだけでfailure targetを決める
 
@@ -509,10 +547,10 @@ result: Option<Int> = do::<Option> {
 - `[String..String]` は `Result<List<String>, Error>`
 - `String` endpoint は single ASCII char として扱う
 - constant endpoint は compile-time に fold される
-- `""` や `"ab"` のような不正な string endpoint は `Generator::range_char` と同じく runtime に `InvalidCharRange` になる
+- `""` や `"ab"` のような不正な string endpoint は `Generator::range_char` と同じく start / stop の文字数または ASCII 制約に対応する Error になる
 - `[head, ..tail]` とは別構文で、range form は comma を持たない
 
-有限の range helper は `Generator<Item>` を返し、整数は `Generator::range` → `Generator::to_list`、文字は `Generator::range_char` の入力検証 → `Generator::to_list` で List 化します。構築時に全件生成せず、文字 endpoint の検証エラーは従来どおり `InvalidCharRange` です。
+有限の range helper は `Generator<Item>` を返し、整数は `Generator::range` → `Generator::to_list`、文字は `Generator::range_char` の入力検証 → `Generator::to_list` で List 化します。構築時に全件生成せず、文字 endpoint の検証エラーは start / stop、文字数 / 非 ASCII の条件ごとに分かれます。
 
 #### 共通制約
 
@@ -528,9 +566,9 @@ result: Option<Int> = do::<Option> {
 - `&`name`` / `&`Type::method`` はそれぞれ通常の capture と同義
 - `&`op`` は 2 引数 callable に lower される
 - `&`op`(args...)`` は placeholder capture 規約で lower される
-- `&Type`、`&Type::Variant` は user-defined Record / Struct / Enum の constructor capture として扱う
+- `&Type`、`&Type::Variant` は user-defined Record / Struct / Enum / Error の constructor capture として扱う。具象 `deferror` constructor は外部入力を受けて共通 `Error` を返す callable として capture できる
 - constructor capture の引数は位置指定だけで、引数ブロックには少なくとも1個の placeholderが必要
-- constructor capture は `Capture` origin と canonical constructor identity を保持し、`deferror` / compiler-managed constructor は対象外
+- constructor capture は `Capture` origin と canonical constructor identity を保持する。compiler-managed constructor と抽象 `Error` 自体の capture はできない
 - capture placeholder は `&1` から `&16` までとし、`&0` と `&17` 以上は parse error とする
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, sig: sig)` 形式で表示する
@@ -568,12 +606,13 @@ Pattern は照合位置に直接記述します。通常の式や第一級の値
 - pin `^name`（外側で束縛済みの値と `Eq` で比較）
 - tuple Pattern `(left, right)`（1要素の tuple Pattern は使えない）
 - list Pattern `[]`、`[first, second]`、`[head, ..tail]`。String の head / tail 分解にも `[head, ..tail]` を使う
+- HashMap Pattern `hash![key => child, ...]`（String キーの存在と値を照合し、追加キーを許容する。空 Pattern は任意の HashMap に成功する）
 - 入れ子になった constructor pattern
-- Record の構造的 Pattern `User(name, age)` / `User(age: selected_age, name: selected_name)`（全 field を指定する）
+- Record の構造的 Pattern `User(name, age)` / `User(age: selected_age, name: selected_name)` / `User(name: selected_name, age)`（全 field を指定する。名前指定内の裸の束縛名は同名 field の省略記法）
 - named Extractor または束縛済み ExtractorClosure の `head(pre_args..., payload_patterns...)`
 - OR Pattern `p1 | p2`（`match` arm、`if_let`、`if_let_then`、binding-free な `is_match`。子 Pattern 内でも使用可能）
 
-`match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・順序が一致する必要があります。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding、`apply_pattern` の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
+`match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・個数が一致する必要があります。Pattern 内での順序は異なっても構いません。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding、`apply_pattern` の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
 
 構造体の constructor Pattern は attached Extractor `Type::deconstruct(...)` を通ります。Record の構造的 Pattern とは別の契約です。通常の `=` は全体が必ず成功する Pattern だけに使えます。Extractor は常に partial として扱います。
 
@@ -594,6 +633,7 @@ value.field
 - `Type { ... }` 構造体リテラルは `impl Type` の同型メソッド本体内でのみ使用可能
 - struct literal の field は `field: expr` または shorthand の `field` を使える
 - shorthand は `field: field` の sugar で、`Type { name, age: next_age }` のように混在可能
+- Struct の `Type(...)` / `Type::new(...)` や Struct Pattern にはこの shorthand を追加しない
 - `Type::new` は import 対象外
 - `Type(...)` の pattern 側は `Type::deconstruct(...)` を要求する
 
@@ -601,8 +641,10 @@ private field と property access を含む構造体全体の契約は `./struct
 
 ### 引数規約
 
-- 名前付き引数は利用可能
-- 位置引数と名前付き引数の混在は禁止
+- 通常の関数呼出しと Struct の `Type(...)` / `Type::new(...)` は名前付き引数を使えるが、位置引数との混在は禁止
+- Record 構築は名前指定がなければ位置指定、名前指定が一つ以上あれば名前指定として扱う。名前指定内の裸の変数 `field` は `field: field` の省略記法で、任意式には field 名が必要
+- Record は全 field の指定が必要。名前指定の記述順は自由で、構築値の評価・配置は宣言順。入れ子の名前指定は外側の分類に影響しない
+- constructor capture の引数は位置指定だけで、Record の省略記法は使えない
 
 ## 7. 組込み関数
 
@@ -641,7 +683,7 @@ private field と property access を含む構造体全体の契約は `./struct
 - `eq` / `neq` は call-style helper で、`==` / `!=` と同じ比較制約に従う
 - `<` / `<=` / `>` / `>=` は `Compare` を満たす型に対してのみ使え、それぞれ `Compare::lt` / `Compare::lte` / `Compare::gt` / `Compare::gte` に対応する
 - `concat` は call-style helper で、`++` と同じく `String` 同士だけを受ける
-- `Div` / `Mod` の標準数値実装はゼロ除算時に `Err(ZeroDivisionError)` を返す。トレイトはエラー契約を固定せず、ユーザー実装は独自エラーを指定できる
+- `Div` の標準数値実装はゼロ除算時に `Err(ZeroDivisionError())`、`Mod` は `Err(ZeroModuloError())` を返す。トレイトはエラー契約を固定せず、ユーザー実装は独自エラーを指定できる
 - `set_exit_code` は処理系側で使用位置制約を持つ
 
 ## 8. 標準エラー
@@ -651,13 +693,17 @@ private field と property access を含む構造体全体の契約は `./struct
 ```surtr
 deferror NoneError { "None Value." }
 deferror ZeroDivisionError { "division by zero" }
+deferror ZeroModuloError { "modulo by zero" }
 ```
 
 現在の実装には次も含まれます。
 
 ```surtr
-deferror EmptyList { "Empty List." }
-deferror IndexOutOfBounds(detail: String) { detail }
+deferror EmptyHeadTailListPattern { "head-tail list pattern requires a non-empty List" }
+deferror ListIndexOutOfBounds(index: Int, length: Int) {
+  |index: Int, length: Int|
+  Self(message: "list index #{index} out of bounds for length #{length}", index, length)
+}
 ```
 
 これらは `Error` 抽象に乗る具体 error です。
@@ -782,6 +828,8 @@ import Kernel::print;
 
 これは「builtin をユーザーが追加するための構文」ではなく、「処理系内の共有 builtin テーブルを Surtr source 側から宣言するための構文」です。
 
+`@builtin def __FILE__() -> String` などは `Bootstrap` に置く、ソース位置リフレクションの専用関数宣言です。
+
 `@builtin type ...` も同じく標準定義ソース専用です。  
 各標準定義ソース file の top-level に置いて、compiler が canonical head と照合します。
 
@@ -828,7 +876,7 @@ defmod Bootstrap {
 
 `Extractor::from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B>)>` は通常SRTの標準APIです。単項callableをcaptureし、各Pattern occurrenceで1回実行します。外側Resultだけをunwrapし、成功payloadと元Errorを保持します。Option/raw/入力0個/複数入力の暗黙変換はありません。
 
-詳しい使い方は [Pattern Matching](./pattern-matching.md) と [Extractors](./extractors.md)、実装契約は [Pattern / Extractor 実装契約](../dev/Pattern_spec.md) を参照してください。
+詳しい使い方は [Pattern Matching](./pattern-matching.md)、[HashMap](./hash_map.md)、[Extractors](./extractors.md)、実装契約は [Pattern / Extractor 実装契約](../dev/Pattern_spec.md) を参照してください。
 
 ## 12. 現在のスコープ外
 

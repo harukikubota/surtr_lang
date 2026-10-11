@@ -1,0 +1,43 @@
+defgenserver Session {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @call
+  def stop(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+}
+
+
+def value_or_replace(pid: PID<Session>) -> Result<(PID<Session>, Int)> {
+  match Session::value(pid) {
+    Ok(value) => Ok((pid, value)),
+    Err(error) => match Error::kind(error) {
+      "ProcessStopped" => {
+        replacement =? Session::init(0)
+        value =? Session::value(replacement)
+        Ok((replacement, value))
+      },
+      _ => Err(error),
+    },
+  }
+}
+
+pid =? Session::init(7)
+_ =? Session::stop(pid)
+(current, value) =? value_or_replace(pid)
+print(inspect((pid == current, value)))
+# (False, 0)

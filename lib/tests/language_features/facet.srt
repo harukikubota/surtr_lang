@@ -1,3 +1,29 @@
+@readonly
+defstruct ReadonlyFacetFixture {
+  name: String,
+  scores: List<Int>,
+}
+
+defrecord ReadonlyFacetWrapper(profile: ReadonlyFacetFixture)
+
+impl ReadonlyFacetFixture {
+  def new(name: String, scores: List<Int>) -> Self {
+    ReadonlyFacetFixture { name: name, scores: scores }
+  }
+
+  def rename(self: Self, name: String) -> Result<Self> {
+    Facet::set(ReadonlyFacetFixture.name, self, name)
+  }
+
+  def replace_scores(self: Self, scores: List<Int>) -> Result<Self> {
+    Facet::set(ReadonlyFacetFixture.scores, self, scores)
+  }
+
+  def rename_nested(wrapper: ReadonlyFacetWrapper, name: String) -> Result<ReadonlyFacetWrapper> {
+    Facet::set(ReadonlyFacetWrapper.profile -> ReadonlyFacetFixture.name, wrapper, name)
+  }
+}
+
 defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
 
   def demo_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
@@ -10,7 +36,7 @@ defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
 
   def pending_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
     (
-      (Config::new("Guest"), Err(NoneError)),
+      (Config::new("Guest"), Err(NoneError())),
       ("score", 1),
       BitWidth::Any(2),
     )
@@ -35,20 +61,36 @@ def bind_nominal_facet_source(source: Result<(Config, Int)>) -> Result<Config> {
 import Test;
 
 test("Facet") {
+  describe("readonly fields") {
+    it("allows owners to replace annotation-derived readonly fields") {
+      do {
+        original = ReadonlyFacetFixture("alice", [1, 2])
+        renamed <- ReadonlyFacetFixture::rename(original, "bob")
+        updated <- ReadonlyFacetFixture::replace_scores(renamed, [3, 4])
+        nested <- ReadonlyFacetFixture::rename_nested(ReadonlyFacetWrapper(original), "nested")
+
+        assert_eq("nested", Facet::view(ReadonlyFacetWrapper.profile -> ReadonlyFacetFixture.name, nested))
+        assert_eq("bob", Facet::view(ReadonlyFacetFixture.name, updated))
+        assert_eq([3, 4], Facet::view(ReadonlyFacetFixture.scores, updated))
+        assert_eq("alice", Facet::view(ReadonlyFacetFixture.name, original))
+      }
+    }
+  }
+
   describe("Result binding") {
     it("preserves nominal index failures and skips the continuation") {
       do {
         result = bind_missing_nominal_facet()
 
-        assert_err_kind(IndexOutOfBounds, result)
-        assert_err_message_eq("index 2 out of bounds for len 1", result)
+        assert_err_kind(FacetListIndexOutOfBounds, result)
+        assert_err_message_eq("facet list index 2 out of bounds for length 1", result)
         assert_stdout_eq([])
       }
     }
 
     it("preserves the failed source cause chain and skips the continuation") {
       do {
-        source: Result<(Config, Int)> = Result::cause(Err(NoneError), ZeroDivisionError)
+        source: Result<(Config, Int)> = Result::cause(Err(NoneError()), ZeroDivisionError())
         result = bind_nominal_facet_source(source)
 
         assert_err_kind(ZeroDivisionError, result)
@@ -177,12 +219,12 @@ test("Facet") {
       do {
         assert_err_contains(
         "ZeroDivisionError",
-        Facet::over(Tuple._0 -> Tuple._0 -> Config.entrypoint, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+        Facet::over(Tuple._0 -> Tuple._0 -> Config.entrypoint, demo_fixture(), {|_| Err(ZeroDivisionError())}),
         )
 
         assert_err_contains(
         "ZeroDivisionError",
-        Facet::over_result(Tuple._0 -> Tuple._1, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+        Facet::over_result(Tuple._0 -> Tuple._1, demo_fixture(), {|_| Err(ZeroDivisionError())}),
         )
       }
     }
@@ -224,10 +266,10 @@ test("Facet") {
         map = HashMap::map_from_entries([("talk", 80)])
         user = ScoreFixture([10], map)
 
-        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[2], user))
-        assert_err_contains("KeyNotFound", Facet::view(ScoreFixture.score.["missing"], user))
-        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[-2], user))
-        assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[1..2], user))
+        assert_err_contains("FacetListIndexOutOfBounds", Facet::view(ScoreFixture.scores.[2], user))
+        assert_err_contains("FacetKeyNotFound", Facet::view(ScoreFixture.score.["missing"], user))
+        assert_err_contains("FacetListIndexOutOfBounds", Facet::view(ScoreFixture.scores.[-2], user))
+        assert_err_contains("FacetListIndexOutOfBounds", Facet::view(ScoreFixture.scores.[1..2], user))
       }
     }
   }
@@ -250,7 +292,7 @@ test("Facet") {
 
         assert_some_eq(Ok("alice!"), rewritten)
         none: Option<Result<String>> = Option::None
-        assert_err_contains("VariantMismatch", Facet::case_over(Option.Some, none, {|name| Ok(name ++ "!")}))
+        assert_err_contains("FacetUpdateVariantMismatch", Facet::case_over(Option.Some, none, {|name| Ok(name ++ "!")}))
       }
     }
   }
@@ -259,7 +301,7 @@ test("Facet") {
     it("views matching variants") {
       do {
         assert_ok_eq(5, Facet::view(BitWidth.Any, demo_fixture()._2))
-        nested: Option<Result<String>> = Option::Some(Err(NoneError))
+        nested: Option<Result<String>> = Option::Some(Err(NoneError()))
         value <- Facet::view(Option.Some, nested)
 
         assert_err_kind(NoneError, value)
@@ -298,9 +340,9 @@ test("Facet") {
         fixture = demo_fixture()
         replaced = (fixture._0, fixture._1, BitWidth::W8)
 
-        assert_err_contains("VariantMismatch", Facet::view(BitWidth.Any, replaced._2))
-        assert_err_contains("VariantMismatch", Facet::set(Tuple._2 -> BitWidth.Any, replaced, 9))
-        assert_err_contains("VariantMismatch", Facet::over(Tuple._2 -> BitWidth.Any, replaced, {|value| Ok(value + 1)}))
+        assert_err_contains("FacetReadVariantMismatch", Facet::view(BitWidth.Any, replaced._2))
+        assert_err_contains("FacetUpdateVariantMismatch", Facet::set(Tuple._2 -> BitWidth.Any, replaced, 9))
+        assert_err_contains("FacetUpdateVariantMismatch", Facet::over(Tuple._2 -> BitWidth.Any, replaced, {|value| Ok(value + 1)}))
       }
     }
   }

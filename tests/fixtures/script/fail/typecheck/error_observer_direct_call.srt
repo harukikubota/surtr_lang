@@ -1,5 +1,0 @@
-handler = {|err| eprint(err)}
-value = match Err(NoneError) {
-  Ok(_) => (),
-  Err(err) => handler(err),
-}

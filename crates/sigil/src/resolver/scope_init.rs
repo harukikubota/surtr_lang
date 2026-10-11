@@ -25,6 +25,8 @@ pub(super) fn is_compiler_runtime_builtin(name: &str) -> bool {
     matches!(
         name,
         "__task_call_timeout"
+            | "__process_execute"
+            | "__process_postprocess"
             | "__task_await_timeout"
             | "__workers_submit_timeout"
             | "__workers_broadcast_timeout"
@@ -43,14 +45,6 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
         builtin: attrs.builtin,
         derives: attrs.derives.clone(),
-        result_effect: attrs
-            .result_effect
-            .as_ref()
-            .map(|annotation_span| ResolvedResultEffect {
-                annotation_span: annotation_span.clone(),
-                monad_trait: None,
-                monad_t_trait: None,
-            }),
         facet_path_kind: attrs.facet_path_kind.clone(),
         hidden: attrs.hidden,
         readonly: attrs.readonly,
@@ -76,9 +70,6 @@ pub(super) fn is_special_form_builtin_decl(name: &str, qualified_name: &str) -> 
                 | "map_err"
                 | "cause"
                 | "recover"
-                | "recover_kind"
-                | "assert_err_kind"
-                | "assert_cause_chain"
                 | "and"
                 | "or"
                 | "(,)"

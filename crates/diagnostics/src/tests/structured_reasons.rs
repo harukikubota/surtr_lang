@@ -26,7 +26,6 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             actual_type: Some("Int".into()),
             expected_arity: Some(1),
             actual_arity: None,
-            return_shape: CallableReturnShape::Any,
         }),
         CallableSignatureMetadataMismatch => {
             DiagnosticData::CallableSignature(CallableSignatureData {
@@ -87,6 +86,7 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             })
         }
         NoApplicableTraitImplementation
+        | CyclicTraitObligation
         | UnresolvedTraitMethodInstantiation
         | MissingTraitDispatchTarget => DiagnosticData::TraitDispatch(TraitDispatchData {
             impl_declaration: None,
@@ -236,19 +236,11 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: None,
             entrypoint: None,
         }),
-        SafeBindRequiresResultTarget => DiagnosticData::Policy(PolicyData {
-            policy: TypePolicy::SafeBindRequiresResultTarget,
+        SafeBindRequiresMonadFailTarget => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::SafeBindRequiresMonadFailTarget,
             subject: Some("safe bind target".into()),
             expected_type: Some("Result<T>".into()),
             actual_type: Some("Option<T>".into()),
-            stage: None,
-            entrypoint: None,
-        }),
-        ErrorValueMustBeWrapped => DiagnosticData::Policy(PolicyData {
-            policy: TypePolicy::ErrorValuePlacement,
-            subject: Some("error value".into()),
-            expected_type: Some("Result::Err(error)".into()),
-            actual_type: Some("Error".into()),
             stage: None,
             entrypoint: None,
         }),
@@ -314,14 +306,6 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             expected_type: Some("Monad".into()),
             actual_type: Some("Plain".into()),
             stage: Some("OptionT".into()),
-            entrypoint: None,
-        }),
-        InvalidResultEffectAnnotation => DiagnosticData::Policy(PolicyData {
-            policy: TypePolicy::ResultEffectAnnotation,
-            subject: Some("@result_effect requires one public base field".into()),
-            expected_type: Some("MonadT base field".into()),
-            actual_type: Some("invalid declaration".into()),
-            stage: Some("Wrapper".into()),
             entrypoint: None,
         }),
         TraitImplementationForbidden => DiagnosticData::Policy(PolicyData {
@@ -424,6 +408,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         MissingGenericBound,
         MissingTraitCapability,
         NoApplicableTraitImplementation,
+        CyclicTraitObligation,
         UnresolvedTraitMethodInstantiation,
         MissingTraitDispatchTarget,
         MissingTypeConstructorConstraint,
@@ -454,8 +439,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         ExtractorArityMismatch,
         NonExhaustiveMatch,
         SafeBindErrorTypeMismatch,
-        SafeBindRequiresResultTarget,
-        ErrorValueMustBeWrapped,
+        SafeBindRequiresMonadFailTarget,
         FacetSafeBindForbidden,
         FacetPatternBindingForbidden,
         FacetOperationPolicyViolation,

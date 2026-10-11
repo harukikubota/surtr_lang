@@ -19,6 +19,18 @@ impl Eq for EqByValue {
 }
 
 
+deferror HashMapPatternSource { "map child rejected" }
+deferror HashMapPatternContext { "map child context" }
+
+def hashmap_pattern_source(value: Int) -> Result<Int> {
+  Result::cause(Err(HashMapPatternSource()), HashMapPatternContext())
+}
+
+def hashmap_pattern_select(source: Result<HashMap<Int>>) -> Result<Int> {
+  hash!["a" => value] =? source
+  Ok(value)
+}
+
 test("HashMap") {
   describe("constructors and lookup") {
     it("builds and inspects the empty map") {
@@ -41,15 +53,15 @@ test("HashMap") {
       }
     }
 
-    it("returns Ok for present keys and NoneError for missing keys") {
+    it("returns Ok for present keys and HashMapKeyMissing for missing keys") {
       do {
         map = HashMap::map_insert(HashMap::map_insert(HashMap::empty_map(), "a", 1), "b", 2)
 
         assert_ok_eq(1, HashMap::map_get(map, "a"))
         result = HashMap::map_get(map, "z")
 
-        assert_err_kind(NoneError, result)
-        assert_err_contains("None Value.", result)
+        assert_err_kind(HashMapKeyMissing, result)
+        assert_err_message_eq("hash map key not found: z", result)
       }
     }
   }
@@ -105,7 +117,7 @@ test("HashMap") {
       do {
         mapped: HashMap<Result<Int>> = HashMap::map_values(
           hash!["b" => 2, "a" => 1],
-          {|n| if(n == 1, Err(NoneError), Ok(n))},
+          {|n| if(n == 1, Err(NoneError()), Ok(n))},
         )
         assert_eq(["a", "b"], HashMap::map_keys(mapped))
         a <- HashMap::map_get(mapped, "a")
@@ -147,4 +159,66 @@ test("HashMap") {
 
   }
 
+}
+
+
+test("HashMap structural patterns") {
+  it("accepts additional keys and empty patterns") {
+    do {
+      map = hash!["a" => 2, "extra" => 3]
+      assert_true(is_match(map, hash!["a" => 2]))
+      assert_true(is_match(map, hash![]))
+      assert_ok_eq(2, apply_pattern(map, hash!["a" => _1]))
+      assert_eq(2, match map { hash!["a" => n] => n, hash![] => 0, })
+    }
+  }
+
+  it("requires wildcard keys and reports only the first missing key") {
+    do {
+      map: HashMap<Int> = hash![]
+      result = apply_pattern(map, hash!["b" => _, "a" => _])
+      assert_err_kind(HashMapKeyMissing, result)
+      assert_err_message_eq("hash map key not found: b", result)
+      assert_eq("b", match result { Err(HashMapKeyMissing(key)) => key, _ => "wrong", })
+      assert_err_message_eq("hash map key not found: z", apply_pattern(hash!["a" => map], hash!["a" => hash!["z" => _]]))
+    }
+  }
+
+  it("does not unwrap Result values or inspect extra keys") {
+    do {
+      map: HashMap<Result<Int>> = hash!["a" => Ok(2), "extra" => Err(NoneError())]
+      assert_ok_eq(Ok(2), apply_pattern(map, hash!["a" => _1]))
+      assert_ok_eq(2, apply_pattern(map, hash!["a" => Ok(_1)]))
+      assert_true(is_match(apply_pattern(hash!["a" => Err(NoneError())], hash!["a" => _1: Result<Int>]), Ok(Err(NoneError()))))
+      assert_false(is_match(hash!["a" => Err(NoneError())], hash!["a" => Ok(_: Int)]))
+    }
+  }
+
+  it("preserves child Error cause chains through apply_pattern and SafeBind") {
+    do {
+      rejected = *{|value: Int| accepted =? hashmap_pattern_source(value); MatchResult::Ok(accepted)}
+      assert_cause_chain([HashMapPatternContext, HashMapPatternSource], apply_pattern(hash!["a" => 1], hash!["a" => rejected(_1)]))
+      runner: (HashMap<Int> -> Result<Int>) = {|map: HashMap<Int>| hash!["a" => rejected(value)] =? map; Ok(value)}
+      assert_cause_chain([HashMapPatternContext, HashMapPatternSource], runner(hash!["a" => 1]))
+      do_child: Result<Int> = do::<Result> {
+        hash!["a" => rejected(value)] <- Ok(hash!["a" => 1])
+        Ok(value)
+      }
+      assert_cause_chain([HashMapPatternContext, HashMapPatternSource], do_child)
+      original: Result<HashMap<Int>> = Result::cause(Err(HashMapPatternSource()), HashMapPatternContext())
+      transported = hashmap_pattern_select(original)
+      assert_cause_chain([HashMapPatternContext, HashMapPatternSource], transported)
+      original_text = match original { Err(err) => Error::format(err), _ => "wrong", }
+      transported_text = match transported { Err(err) => Error::format(err), _ => "wrong", }
+      assert_eq(original_text, transported_text)
+      do_transported: Result<Int> = do::<Result> {
+        hash!["a" => value] <- original
+        Ok(value)
+      }
+      assert_cause_chain([HashMapPatternContext, HashMapPatternSource], do_transported)
+      do_text = match do_transported { Err(err) => Error::format(err), _ => "wrong", }
+      assert_eq(original_text, do_text)
+
+    }
+  }
 }

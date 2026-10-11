@@ -1,0 +1,2 @@
+capture: (Result<Int>, ErrorKind, (Error -> Result<Int>) -> Result<Int>) = &Result::recover_kind(&1, &2, &3)
+print(inspect(capture(Err(NoneError()), NoneError, {|_| Ok(2)})))

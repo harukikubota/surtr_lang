@@ -13,7 +13,7 @@ Extractor は `match` や `=?` で使う「分解の入口」です。
 
 これは `$Tail` や Union を対象にする1個の generic Extractor ではありません。適用する値から、`List<$T>` と `String` のどちらか一方の concrete な静的契約が選ばれます。runtime 実装は共有できますが、SRT だけで定義する場合は型ごとに別の Extractor として記述します。
 
-Pattern の `[head, ..tail]` も同じ head / tail の分解を表します。ただし、list の構造的 Pattern と `uncons(...)` では失敗 Error が異なります。空 list の `[head, ..tail]` は `EmptyList`、`uncons(head, tail)` は `PatternMismatch` を返します。分岐ではどちらも不一致ですが、`=?` や `apply_pattern` ではこの違いが保持されます。
+Pattern の `[head, ..tail]` も同じ head / tail の分解を表します。ただし、list の構造的 Pattern と `uncons(...)` では失敗 Error が異なります。空 List の `[head, ..tail]` は `EmptyHeadTailListPattern`、`uncons(head, tail)` は `UnconsEmptyList` を返します。空 String の `uncons` は `UnconsEmptyString` です。分岐ではどちらも不一致ですが、`=?` や `apply_pattern` ではこの違いが保持されます。
 
 ## user-defined extractor
 
@@ -24,7 +24,7 @@ deferror Rejected { "input rejected" }
 
 defmod Matchers {
   defextractor never(value: Int) -> MatchResult<Int, Error> {
-    MatchResult::Err(Rejected)
+    MatchResult::Err(Rejected())
   }
 }
 ```
@@ -42,7 +42,7 @@ print(match 1 {
 })
 ```
 
-この例では `never(...)` が常に `MatchResult::Err(Rejected)` を返すため、fallback 側に流れます。
+この例では `never(...)` が常に `MatchResult::Err(Rejected())` を返すため、fallback 側に流れます。
 
 named `defextractor` の戻り値は `MatchResult<$A>` が正規表記です。戻り値位置では `MatchResult<$A, Error>` と Error を明記することもできます。ExtractorClosure の型注釈には第二型引数を書きません。
 `MatchResult::Ok(payload)` は子 pattern の照合へ進み、`MatchResult::Err(error)` は
@@ -68,7 +68,7 @@ Extractor 本文の計算量や Effect は制限しません。Process messaging
 deferror Outside { "outside range" }
 defmod Bounds {
   defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
-    if(and(min <= value, value <= max), MatchResult::Ok(value), MatchResult::Err(Outside))
+    if(and(min <= value, value <= max), MatchResult::Ok(value), MatchResult::Err(Outside()))
   }
 }
 # 利用側

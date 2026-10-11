@@ -16,46 +16,232 @@ process surface の `init` / `get` / `set` / `call` でも同じ流儀を使い�
 - 失敗値は `Err(error)`
 - `Err(...)` を見つけたら、そのまま呼び出し元へ早期リターンできる
 
+## Error の構築と種類による回復
+
+裸の `deferror` 名は、種類を表す `ErrorKind` 値です。Error を作るには明示的に呼び出します。入力がない Error も `NoneError()` と書きます。
+
+```surtr
+kind = NoneError
+error = NoneError()
+Result::recover_kind(Err(error), kind, {|original| Ok(original.message)})
+```
+
+ErrorKind は変数、引数、戻り値、List、Tuple、field に保持できます。`Error::is_kind(error, kind)` は種類の一致を Boolean で返します。文字列や Error instance から ErrorKind を作る API はありません。
+
+`Result::recover(value, {|error| ...})` は失敗時に元の Error をハンドラへ渡します。Error が不要なら `{|_| ...}` を使います。成功値はそのまま返り、ハンドラの再失敗もそのまま返ります。`recover_kind` は種類が一致した失敗だけを回復し、不一致なら元の Error とその情報を保持します。両関数とも引数式は呼出し前に評価し、ハンドラ本体だけを条件付きで実行します。Result はこの能力を `MonadRecover` としても提供します。
+
+SafeBind で種類の判定を失敗条件にすると、元の Error が失われることがあります。たとえば `True =? Error::is_kind(error, kind)` は False のとき `BooleanLiteralPatternMismatch` を返し、元の Error を再伝播しません。種類による回復には `recover_kind`、元の Error を保持する分岐には `match` を使います。Error の Pattern を SafeBind へ移しても、通常の型・Pattern 規則に従うため、種類による回復の代わりにはなりません。
+
 ## `Error` は抽象、実体は常に具象 error
 
 Surtr でコード中に `Error` と書かれていても、それは「失敗値の共通な見え方」を指す抽象名です。  
 runtime にある実体は常に `deferror` で定義した具象 error です。
 
 ```surtr
-deferror InvalidPort(port: Int) { "invalid port" }
+deferror InvalidPort(port: Int) {
+  |port: Int|
+  Self(message: "invalid port", port)
+}
 
 ret: Result<Int> = Err(InvalidPort(0))
 ```
 
 このとき `Err(...)` の中に入っている実値は `InvalidPort(0)` であり、`Error(...)` のような別の concrete value が存在するわけではありません。
 
-あわせて、`Error` は user-owned な一般データ型としては使えません。
-
-- ユーザー定義関数の引数型に `Error` は書けない
-- ユーザー定義関数の戻り値型に `Error` は書けない
-- 変数や field の型注釈に `Error` は書けない
-- `Error` が生きられるのは `Err(...)` の内側、`match` の `Err(err)` で取り出したスコープ、標準定義ソース内の `Error` を受ける helper の中だけ
-
-つまり、ユーザーコードが `Error` を保存したり運び回ったりするのではなく、具象 error を `Result` の失敗枝として流し、その観測だけを抽象 `Error` 越しに行うのが Surtr の流儀です。
+`Error` は内部表現を公開しない通常値です。引数、戻り値、型注釈、field、container、closure に保存して渡せます。`Err(err)` で取り出した Error もスコープの外へ返せます。
 
 ```surtr
-def parse_port(text: String) -> Result<Int> {
-  value: Int =? try_to::<Int>(text)
-  if(value > 0, Ok(value), Err(InvalidPort(value)))
+deferror InvalidPort(port: Int) {
+  |port: Int|
+  Self(message: "invalid port", port)
+}
+def relay(error: Error) -> Error { error }
+error: Error = relay(InvalidPort(0))
+errors: List<Error> = [error]
+saved: Result<Error> = Ok(error)
+```
+
+`Ok(error)` は成功です。`value =? Ok(error)` は Error を束縛して続行します。
+抽象 `Error` の直接構築と Error 自体への Trait impl はできません。保存した値は具象 Error Pattern で取り出せます。
+
+`error.kind` と `error.message` は、それぞれ `Error::kind(error)` と `Error::message(error)` と同じ文字列を返します。`Error.kind` と `Error.message` は読み取り専用の Facet path です。他の型の Error field を経由する `Failure.error.message` も読み取り専用で、`set`・`over`・bulk update は使えません。cause や location などの内部 field は公開しません。
+
+## Error の定義・生成・分解
+
+### 定義する
+
+`deferror` のヘッダには保存するフィールド、本体先頭の `|...|` にはコンストラクタの入力を書きます。末尾の `Self(...)` で message と保存値を指定します。入力と保存値は同じ名前・型でなくても構いません。
+
+```surtr
+deferror InvalidPort(port: Int) {
+  |input: Int|
+  Self(message: "invalid port: #{input}", port: input)
 }
 ```
 
-上は「失敗したらその地点で抜ける」コードですが、例外を投げているわけではありません。  
-概念的には次の `match` に近い動きです。
+保存フィールドがない Error は `deferror NoValue { "no value" }` と書けます。`deferror NoValue() { Self(message: "no value") }` も同じ空フィールドの定義です。String を返す形では、分岐の結果から message を作れます。
 
 ```surtr
-def parse_port(text: String) -> Result<Int> {
-  parsed = try_to::<Int>(text)
-  match parsed {
-    Ok(value) => if(value > 0, Ok(value), Err(InvalidPort(value))),
-    _ => parsed,
+deferror MissingInput {
+  |blank: Boolean|
+  if(blank, "blank input", "missing input")
+}
+```
+
+`Self(...)` による内部構築は、定義本体のトップレベルかつ末尾に直接置きます。分岐の内側や束縛の右辺には置けません。次はコンパイルエラーです。
+
+```surtr
+# NG: 分岐の内側で Self(...) を構築している
+deferror BranchConstruction {
+  |blank: Boolean|
+  if(blank, Self(message: "blank input"), Self(message: "missing input"))
+}
+```
+
+分岐と保存フィールドを組み合わせる場合は、String や保存値を先に計算します。
+
+```surtr
+deferror InvalidPort(port: Int) {
+  |input: Int|
+  message = if(input < 0, "negative port", "invalid port")
+  Self(message: message, port: input)
+}
+```
+
+### 生成する
+
+定義名を呼び出すと、入力を受け取って共通 `Error` を返します。生成しただけでは、保存フィールドにアクセスできる具象型にはなりません。
+
+```surtr
+err: Error = InvalidPort(0)
+err.message                 # OK: 共通情報はそのまま読める
+failed: Result<Int> = Err(err)
+```
+
+引数はキーワード指定がなければ宣言順で対応します。キーワードを一つでも書くと、裸変数は同名の指定になります。
+
+```surtr
+deferror PairError(left: Int, right: Int) {
+  |a: Int, b: Int|
+  left = a
+  right = b
+  Self(message: "pair", left, right)
+}
+a = 1
+b = 2
+PairError(b, a)    # 位置指定: a は 2、b は 1
+PairError(a: a, b) # 名前指定: a は 1、b は 2
+```
+
+内部の `Self(...)` と保存値の Pattern も同じ指定規則です。名前指定の列に任意の式を混ぜて、残りの位置を推測させることはできません。
+
+### 分解する
+
+`InvalidPort` だけなら種類を照合し、`InvalidPort(port)` なら保存した値も取り出します。コンストラクタの入力 `input` ではなく、保存フィールド `port` を照合します。
+
+```surtr
+def describe_port(error: Error) -> String {
+  match error {
+    InvalidPort(port) @ e => "#{port}: #{e.message}",
+    other => other.message,
   }
 }
+```
+
+単一の種類への照合が成功した `@ e` では、`e.port` も読めます。この読み取りは `match`、`if_let`、`if_let_then` の成功側のレキシカルスコープに限ります。同じ成功側の別名と、そこで作る通常のクロージャは読み取りを引き継ぎます。
+
+通常の関数や List・Tuple・field を通して運ぶと共通 `Error` として扱います。保存値は保持されるので、取り出した Error を再び照合してから読んでください。異なる種類の OR 全体につけた alias も共通 `Error` です。範囲とクロージャの例は [Error Pattern](./pattern-matching.md#error-の照合とダウンキャスト) を参照してください。
+
+`is_match(InvalidPort(0), InvalidPort(0))` は保存値の一致を Boolean で返します。`is_match` は変数束縛と alias を作りません。
+
+## コンパイルエラーになる例
+
+次の NG 例はそれぞれ独立した拒否例です。`InvalidPort` と `PairError` は上の定義を使います。
+
+### 定義のフィールドや最終結果が合わない
+
+`kind` と `message` は保存フィールド名に使えません。保存フィールドを宣言した場合は、String だけを返しても構築できません。`Self(...)` では宣言したフィールドを不足・重複なく、正しい型で指定します。
+
+```surtr
+# NG: message は共通情報なので保存フィールド名にできない
+deferror ReservedField(message: Int) { |value: Int| "invalid" }
+
+# NG: 保存フィールドがあるのに String だけを返している
+deferror MissingPayload(port: Int) { |input: Int| "invalid port" }
+
+# NG: port が指定されていない
+deferror MissingField(port: Int) { |input: Int| Self(message: "invalid port") }
+
+# NG: port は Int であり、String を保存できない
+deferror WrongFieldType(port: Int) {
+  |input: Int|
+  Self(message: "invalid port", port: "zero")
+}
+```
+
+`Self(...)` を一度変数へ代入し、その変数を末尾で返す形も拒否されます。
+
+```surtr
+# NG: 内部構築が末尾の直接式ではない
+deferror StoredConstruction(port: Int) {
+  |input: Int|
+  saved = Self(message: "invalid port", port: input)
+  saved
+}
+```
+
+### コンストラクタの入力指定が合わない
+
+生成時は、保存フィールド名ではなく本体の入力名・型に合わせます。引数の不足・未知名・重複・型不一致を拒否します。
+
+```surtr
+InvalidPort()                  # NG: input が不足
+InvalidPort(input: "zero")     # NG: input は Int
+InvalidPort(port: 0)           # NG: 入力名は port ではなく input
+InvalidPort(input: 0, input: 1) # NG: input が重複
+PairError(a: 1, 2)             # NG: 名前指定の残りを位置で推測しない
+```
+
+### 照合せずに保存フィールドを読む・具象型を付ける
+
+`err.message` と `err.kind` は共通 `Error` でも読めます。保存フィールドを読むには、先に種類を照合する必要があります。具象型の注釈を付けてもダウンキャストにはなりません。
+
+```surtr
+err = InvalidPort(0)
+err.message                   # OK
+err.port                      # NG: まだ共通 Error
+typed: InvalidPort = err       # NG: 型注釈によるダウンキャスト
+```
+
+### Error のパスを更新する・具象パスをキャプチャする
+
+Error の共通情報と保存フィールドは読み取り専用です。共通 root の読み取りキャプチャは使えますが、具象 Error を root にしたパスはキャプチャできません。
+
+```surtr
+read: (Error -> String) = &Error.message # OK
+read_message = &InvalidPort.message     # NG: 具象 Error root
+read_port = &InvalidPort.port           # NG: 具象 Error root
+```
+
+```surtr
+err = InvalidPort(0)
+match err {
+  InvalidPort @ e => Facet::set(InvalidPort.port, e, 1), # NG: readonly
+  _ => err,
+}
+```
+
+保存フィールドを読んだ値自体は通常値です。元の Error を変更せず、その値を別の処理へ渡すことはできます。
+
+### 許可されていない位置で Error Pattern を使う
+
+Error 定義 Pattern を通常の `=`、SafeBind `=?`、do の `<-`、`apply_pattern` に使うことはできません。種類の分岐には `match`、`if_let`、`if_let_then` を使います。
+
+```surtr
+InvalidPort(port) = InvalidPort(0)       # NG: 通常の束縛
+InvalidPort(port) =? Ok(InvalidPort(0))  # NG: SafeBind での直接照合
+is_match(InvalidPort(0), InvalidPort(port)) # NG: is_match は束縛を作らない
+is_match(InvalidPort(0), InvalidPort @ e)  # NG: is_match は alias を作らない
 ```
 
 ## Result の variant と型推論
@@ -65,18 +251,18 @@ def parse_port(text: String) -> Result<Int> {
 
 ```surtr
 value: Result<Int> = Ok(1)
-failed: Result<Int> = Err(NoneError)
+failed: Result<Int> = Err(NoneError())
 wrap: (Int -> Result<Int>) = &Ok
 ```
 
 成功型は payload と期待型から推論できます。`value: Result<Int> = Ok("text")` は型不一致で拒否されます。
-`err = Err(NoneError)` のような失敗値は成功型の多相性を保持します。
-Error の制約は capture でも変わりません。詳細は [constructor capture](./capture-operator.md#result-と-boolean) を参照してください。
+`err = Err(NoneError())` のような失敗値は成功型の多相性を保持します。
+具象 error constructor と `Err` は通常の capture を使えます。詳細は [constructor capture](./capture-operator.md#result-と-boolean) を参照してください。
 
 ## `Result` が標準、`Option` は別コンテナ
 
 Surtr では optional value も、まず `Result` で扱うのが基本です。  
-特に「値がない」を recoverable failure として扱うときは `Err(NoneError)` を使います。
+特に「値がない」を recoverable failure として扱うときは `Err(NoneError())` を使います。
 
 ```surtr
 def first_or_error(xs: List<Int>) -> Result<Int> {
@@ -85,12 +271,12 @@ def first_or_error(xs: List<Int>) -> Result<Int> {
 ```
 
 この種の API は、利用者視点では `Option<T>` ではなく
-`Result<T, NoneError>` を返す失敗 API として読むのが自然です。
+`Result<T, ListFirstEmpty>` を返す失敗 API として読むのが自然です。
 
 ```surtr
 match List::first([10, 20, 30]) {
   Ok(value) => to_string(value),
-  Err(NoneError) => "empty",
+  Err(ListFirstEmpty) => "empty",
   Err(err) => inspect(err),
 }
 ```
@@ -106,7 +292,7 @@ def parse_bool(text: String) -> Result<Boolean> {
   match text {
     "true" => Ok(True),
     "false" => Ok(False),
-    _ => Err(NoneError),
+    _ => Err(NoneError()),
   }
 }
 
@@ -130,7 +316,7 @@ def render_bool(text: String) -> String {
 
 ### `Result` の等価性
 
-`Result<T>` の `Eq` は `T: Eq` を要求します。`Ok` 同士は成功値の `Eq` を使い、`Ok` と `Err` は異なります。`Err` 同士は先頭の具象 error kind だけを比較し、message、cause、発生位置や診断情報は比較しません。`Error::same_kind` はこの kind 判定用の helper であり、`Error` 自体の `Eq` や `Show` を提供するものではありません。
+`Result<T>` の `Eq` は `T: Eq` を要求します。`Ok` 同士は成功値の `Eq` を使い、`Ok` と `Err` は異なります。`Err` 同士は先頭の具象 error kind だけを比較し、message、保存した値、cause、発生位置や診断情報は比較しません。`Error::same_kind` はこの kind 判定用の helper であり、`Error` 自体の `Eq` や `Show` を提供するものではありません。
 
 `inspect(result)` は表示の観測です。等価性を検査するときは `Eq::eq`、表示そのものを検査するときは `inspect` の戻り値を比較します。
 
@@ -166,17 +352,16 @@ def check_value(value: Int) -> Result<()> {
 `Ok(Err(error))` は外側が Ok なので、内側の値を捨てて次へ進みます。
 内側の Err も検査する場合は、`=?` で内側の Result を取り出して検査してください。
 
-`do` の外で `?` を使う関数やクロージャは、Result または Result-effect に対応した型を返す必要があります。
+`do` の外で `?` を使う関数やクロージャは、`MonadFail` を実装した型を返す必要があります。
 クロージャの場合も、そのクロージャ自身の返り型が型注釈や呼び出し先の引数型から決まっている必要があります。
 `do` の中で失敗した場合は、その `do` の処理を止めます。詳しくは [Monad の逐次処理](./do.md)を参照してください。
 [テストを書く](./test.md)では、複数のアサーションを並べる例を紹介しています。
 
 ## `=?` SafeBind と早期リターン
 
-`=?` は「`Ok` を取り出し、`Err` ならその場で返す」ための束縛です。通常は
-canonical `Result` を返す関数で使いますが、`@result_effect` が有効な
-Result-effect carrier を返す関数でも使えます。その場合は `Err(error)` を
-carrier の最終 failure として保持します。
+`=?` は右辺の `Result` から成功値を取り出し、失敗時はその場で返す束縛です。
+関数やクロージャの返り型には `MonadFail` が必要です。`Result`、`Either<Error, A>`、
+`ResultT` などが対応しており、失敗時は元の Error を `MonadFail::fail` に渡します。
 
 ```surtr
 def parse_and_increment(text: String) -> Result<Int> {
@@ -210,13 +395,12 @@ def load_pair(a: String, b: String) -> Result<Int> {
 SafeBind が自動分解する RHS は canonical `Result` の外側一段だけです。Result 以外の値は、
 partial pattern が値全体を明示的に検査するときだけ利用できます。
 
-RHS の自動分解と failure target の選択は別の規則です。`OptionT<Result, A>` の
-ような Result-effect carrier でも、RHS が `OptionT` なら payload を暗黙に取り出し
-ません。SafeBind が外側一段を自動分解するのは canonical `Result` だけです。
+右辺からの取り出しと、失敗を返す型は別の規則です。たとえば `ResultT` を返す関数でも、
+右辺の `ResultT` を暗黙に取り出すことはありません。`run` で明示的に取り出します。
 
-Result-effect carrier の SafeBind では、RHS の `Err(error)`、pattern failure、
-Extractor の `MatchResult::Err(error)` が保持する元 Error を
-`inner: Err(error)` として保持します。
+SafeBind は右辺の `Err(error)`、パターンの不一致、Extractor の失敗を返り先へ渡します。
+`ResultT<Result, A>` では内側に Error を保持するため、`run` の結果は `Ok(Err(error))` です。
+`Error` 自体は通常値なので、`value =? Ok(error)` は Error を value に束縛して続行します。
 
 エラー表示の主キャプションは、Error を生成した位置を指します。明示的に Error を作った場合は
 その構築式、パターンの不一致は失敗した子パターンを表示します。list の長さなど構造自体が
@@ -225,17 +409,14 @@ Extractor の `MatchResult::Err(error)` が保持する元 Error を
 新しい Error で wrap すると、その新しい Error の構築位置を表示し、元 Error は cause に残ります。
 呼び出し経路はスタックトレースで確認できます。
 
-`do` 内では、Result effect がない carrier の同じ failure を
-`Alternative::empty()` へ変換します。failureMatcher となる partial `<-` も同じ規則で、
-do-local ResultContext の能力判定は `Result effect > Alternative > Monad` です。
-ただし `Monad` 単独では failure target を構築できないため、SafeBind / partial `<-` では
-capability error になります。total `<-` の sequencing は `Monad` のみを要求します。
-`do` 外の SafeBind は、enclosing callable 自身に canonical `Result` または有効な
-Result-effect return target を要求し、通常の `Alternative` returnへは接続しません。
+`do` 内では `MonadFail` があれば `MonadFail::fail(error)` で元の Error を保持し、なければ `Alternative::empty()` を使います。
+partial `<-` のパターン不一致も同じ規則です。どちらの能力もなければコンパイルエラーになります。
+常に一致するパターンの `<-` は `Monad` だけで利用できます。
+`do` の外で使う SafeBind は、その関数やクロージャ自身の返り型に `MonadFail` を要求します。
 
-`guard` はこの規則の対象外です。通常の `Alternative` 関数なので、
-`OptionT<Result, A>` でも `guard(False)` は `OptionT::empty()`（`Ok(None)`）となり、
-Result の `Err` を保持しません。
+`OptionT<Result, A>` のパターン不一致や SafeBind の失敗は `Ok(None)` になります。
+一方、`<-` の右辺にある base の `Err(error)` は bind がそのまま保持します。
+`guard` は常に `Alternative` の操作です。`Alternative::guard(False)` も `OptionT` では `Ok(None)` になります。
 
 ```surtr
 Option::Some(value) =? Option::Some(1) # value は Int
@@ -395,8 +576,8 @@ def require_port(text: String) -> Result<Int> {
 
 ## 使い分けの目安
 
-複数のMonad値を順に扱う場合は[do](./do.md)を使います。Result / Result-effect carrierではErrorを保持し、
-Result effectのないAlternative carrierではfailure matcher / SafeBindのErrorを破棄してそのcarrierのemptyになります。
+複数のMonad値を順に扱う場合は[do](./do.md)を使います。MonadFail を実装した型ではErrorを保持し、
+MonadFailのないAlternative carrierではfailure matcher / SafeBindのErrorを破棄してそのcarrierのemptyになります。
 
 - 分岐を明示したいときは `match`
 - 失敗をそのまま流したいときは `=?`

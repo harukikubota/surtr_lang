@@ -2,43 +2,68 @@
 Standard `Error` type declaration.
 `Error` is an abstract type for recoverable failure values.
 The names of its observation functions are ordinary function names. Reusing a
-name in user code does not grant access to compiler-managed Error positions.
+name in user code does not grant access to the internal Error representation.
 Concrete failures are introduced with `deferror` and then flow through this
 abstract surface, most often inside `Result<T>`.
-The important point is that user code does not normally construct `Error`
-directly; it defines concrete error values and lets them be viewed through this
-shared abstraction.
+Abstract `Error` cannot be constructed directly. Concrete error values use
+this shared abstraction.
 
-`Error` is not a user-owned data shape. In ordinary user code it cannot appear
-as a local variable annotation, a user-defined parameter type, or a user-defined
-return type. It survives only in compiler-managed positions such as `Err(...)`,
-pattern-bound `Err(err)` arms, and standard-module helpers that observe or
-forward an existing error.
+`Error` is an opaque ordinary value. It can be stored in variables, fields,
+containers and closures, and passed to or returned from ordinary functions.
+Putting it in `Ok(error)` remains a successful Result.
 
-Code that mentions `Error` is therefore talking about the shared abstract view.
-The runtime value is always some concrete `deferror` instance.
+Create errors through concrete `deferror` constructors; these constructors and
+`Err` support ordinary callable capture. Abstract `Error` itself cannot be
+constructed or captured. A concrete Error pattern can destructure its saved Payload.
+
+`error.kind` and `error.message` read the same information as the functions
+below. `Error.kind` and `Error.message` are readonly Facet paths. These paths
+remain readonly through composition and cannot be updated from any scope.
+Other runtime fields are not exposed. Transport preserves the original kind,
+message, Payload, location and cause without reconstructing the error.
+
+The `deferror` header declares saved fields; constructor inputs are the leading
+block arguments. A nonempty Payload requires a direct terminal construction.
+Only successful `match`, `if_let`, and `if_let_then` bindings expose concrete fields.
+The constructor itself returns common `Error`; transport does not grant field access.
+Concrete Payload paths are readonly and remain local to the successful scope.
+
+## REPL
+xldr(1)> match List::at([1], 2) { Err(ListIndexOutOfBounds(index, length) @ e) => e.index, _ => 0 }
+2
 """
 @builtin type Error
 
 impl Error {
   @doc """
+  Compare an Error with an opaque declaration kind. The comparison does not
+  grant access to concrete Payload fields.
+
+  ## REPL
+  xldr(1)> kind = NoneError
+  xldr(2)> Error::is_kind(NoneError(), kind)
+  True
+  """
+  @builtin def is_kind(err: Error, kind: ErrorKind) -> Boolean
+
+  @doc """
   Return the concrete `deferror` kind name stored in an `Error` value.
   ## REPL
-  xldr(1)> Error::kind(NoneError)
+  xldr(1)> Error::kind(NoneError())
   "NoneError"
   """
   @builtin def kind(err: Error) -> String
 
   @doc """
   Test whether two failures have the same concrete declaration kind.
-  Messages, causes, and diagnostic context do not affect this comparison.
+  Messages, Payloads, causes, and diagnostic context do not affect this comparison.
   """
   @builtin def same_kind(left: Error, right: Error) -> Boolean
 
   @doc """
   Return the human message stored in an `Error` value.
   ## REPL
-  xldr(1)> Error::message(NoneError)
+  xldr(1)> Error::message(NoneError())
   "None Value."
   """
   @builtin def message(err: Error) -> String
@@ -46,7 +71,7 @@ impl Error {
   @doc """
   Render an `Error` into the same human-oriented multiline text used by `eprint`.
   ## REPL
-  xldr(1)> Error::format(NoneError)
+  xldr(1)> Error::format(NoneError())
   "Error: NoneError: None Value."
   """
   @builtin def format(err: Error) -> String

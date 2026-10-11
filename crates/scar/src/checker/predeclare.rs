@@ -11,298 +11,13 @@ pub(super) fn is_generated_derive_impl(methods: &[ResolvedTraitImplMethod]) -> b
             .all(|method| method.function_id.compiler_generated)
 }
 
+enum ParentImplCoverage {
+    HeadMismatch,
+    ConstraintMismatch,
+    Covers,
+}
+
 impl Checker {
-    fn invalid_result_effect_annotation(
-        &self,
-        annotation_span: &Span,
-        type_name: &str,
-        message: impl Into<String>,
-        related: Vec<diagnostics::SourceFact>,
-    ) -> TypeError {
-        TypeError::from_structured(diagnostics::StructuredDiagnostic {
-            reason: diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation.into(),
-            origin: diagnostics::DiagnosticOrigin::Annotation,
-            data: diagnostics::DiagnosticData::Policy(diagnostics::PolicyData {
-                policy: diagnostics::TypePolicy::ResultEffectAnnotation,
-                subject: Some(message.into()),
-                expected_type: Some("MonadT with one public direct-base field".into()),
-                actual_type: Some(Self::surface_name(type_name).into()),
-                stage: Some("declaration".into()),
-                entrypoint: None,
-            }),
-            primary: diagnostics::SourceFact::untyped(
-                diagnostics::SourceRole::Annotation,
-                diagnostics::SourceId(0),
-                annotation_span.clone(),
-            ),
-            related,
-            remediation: None,
-        })
-    }
-
-    fn result_effect_target_matches(&self, target: &Ty, expected_tag: u32) -> bool {
-        let Ty::Struct(name, _) = target else {
-            return false;
-        };
-        self.env
-            .lookup_type_def(name)
-            .is_some_and(|definition| definition.tag == expected_tag)
-    }
-
-    fn canonical_result_effect_trait_key(
-        &self,
-        resolved: &ResolvedId,
-        expected_name: &str,
-    ) -> Option<String> {
-        if !resolved.compiler_generated || resolved.name != expected_name {
-            return None;
-        }
-        let key = self.trait_key(resolved);
-        self.traits
-            .get(&key)
-            .filter(|registered| {
-                registered.id.unique_id == resolved.unique_id
-                    && registered.id.name == expected_name
-                    && self.trait_key(&registered.id) == key
-            })
-            .map(|_| key)
-    }
-
-    pub(super) fn validate_result_effect_annotations(
-        &mut self,
-        stmts: &[Resolved],
-    ) -> Result<(), TypeError> {
-        let annotated = stmts
-            .iter()
-            .filter_map(|statement| match statement {
-                Resolved::StructDef(_, id, _, fields, attrs) => attrs
-                    .result_effect
-                    .as_ref()
-                    .map(|effect| (id, fields.as_slice(), effect)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if annotated.is_empty() {
-            return Ok(());
-        }
-
-        for (id, fields, result_effect) in annotated {
-            let annotation_span = &result_effect.annotation_span;
-            let Some(monad_trait) = result_effect.monad_trait.as_ref() else {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect canonical Monad identity is missing",
-                    vec![diagnostics::SourceFact::untyped(
-                        diagnostics::SourceRole::Declaration,
-                        diagnostics::SourceId(0),
-                        id.span.clone(),
-                    )],
-                ));
-            };
-            let Some(monad_t_trait) = result_effect.monad_t_trait.as_ref() else {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect canonical MonadT identity is missing",
-                    vec![diagnostics::SourceFact::untyped(
-                        diagnostics::SourceRole::Declaration,
-                        diagnostics::SourceId(0),
-                        id.span.clone(),
-                    )],
-                ));
-            };
-            let monad_key = self
-                .canonical_result_effect_trait_key(monad_trait, "Monad")
-                .ok_or_else(|| {
-                    self.invalid_result_effect_annotation(
-                        annotation_span,
-                        &id.name,
-                        "@result_effect canonical Monad identity is invalid",
-                        vec![diagnostics::SourceFact::untyped(
-                            diagnostics::SourceRole::Declaration,
-                            diagnostics::SourceId(0),
-                            id.span.clone(),
-                        )],
-                    )
-                })?;
-            let monad_t_key = self
-                .canonical_result_effect_trait_key(monad_t_trait, "MonadT")
-                .ok_or_else(|| {
-                    self.invalid_result_effect_annotation(
-                        annotation_span,
-                        &id.name,
-                        "@result_effect canonical MonadT identity is invalid",
-                        vec![diagnostics::SourceFact::untyped(
-                            diagnostics::SourceRole::Declaration,
-                            diagnostics::SourceId(0),
-                            id.span.clone(),
-                        )],
-                    )
-                })?;
-
-            let definition = self.env.lookup_type_def(&id.name).cloned().ok_or_else(|| {
-                self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect target metadata is missing",
-                    vec![],
-                )
-            })?;
-            let declaration_fact = diagnostics::SourceFact::untyped(
-                diagnostics::SourceRole::Declaration,
-                diagnostics::SourceId(0),
-                id.span.clone(),
-            );
-            if fields.len() != 1 {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    format!(
-                        "@result_effect requires exactly one field; {} has {}",
-                        Self::surface_name(&id.name),
-                        fields.len()
-                    ),
-                    vec![declaration_fact],
-                ));
-            }
-            let field = &fields[0];
-            let field_fact = diagnostics::SourceFact::untyped(
-                diagnostics::SourceRole::Other,
-                diagnostics::SourceId(0),
-                field.span.clone(),
-            );
-            if field.visibility != spire::ast::Visibility::Public {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect requires its sole field to be public",
-                    vec![declaration_fact, field_fact],
-                ));
-            }
-
-            let has_monad_impl = self.trait_impls.values().any(|implementation| {
-                self.trait_key(&implementation.trait_id) == monad_key
-                    && self.result_effect_target_matches(&implementation.target_ty, definition.tag)
-            });
-            if !has_monad_impl {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect requires a canonical Monad implementation for its target",
-                    vec![declaration_fact, field_fact],
-                ));
-            }
-
-            let monad_t_impls = self
-                .trait_impls
-                .values()
-                .filter(|implementation| {
-                    self.trait_key(&implementation.trait_id) == monad_t_key
-                        && self
-                            .result_effect_target_matches(&implementation.target_ty, definition.tag)
-                })
-                .collect::<Vec<_>>();
-            if monad_t_impls.is_empty() {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect requires a canonical MonadT implementation for its target",
-                    vec![declaration_fact, field_fact],
-                ));
-            }
-            let mut resolved_base_parameter_index = None;
-            for monad_t_impl in monad_t_impls {
-                let Ty::Struct(_, target_nominal) = &monad_t_impl.target_ty else {
-                    unreachable!("result effect target was matched as a struct")
-                };
-                let [base_monad] = monad_t_impl.trait_arg_tys.as_slice() else {
-                    return Err(self.invalid_result_effect_annotation(
-                        annotation_span,
-                        &id.name,
-                        "@result_effect requires MonadT to expose one base Monad parameter",
-                        vec![declaration_fact, field_fact],
-                    ));
-                };
-                let base_positions = target_nominal
-                    .arguments
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, argument)| (argument == base_monad).then_some(index))
-                    .collect::<Vec<_>>();
-                let [base_parameter_index] = base_positions.as_slice() else {
-                    return Err(self.invalid_result_effect_annotation(
-                        annotation_span,
-                        &id.name,
-                        "@result_effect requires MonadT to capture one declaration parameter as its base Monad",
-                        vec![
-                            declaration_fact,
-                            field_fact,
-                            diagnostics::SourceFact::untyped(
-                                diagnostics::SourceRole::Impl,
-                                diagnostics::SourceId(0),
-                                Self::ast_ty_span(&monad_t_impl.target_ast_ty).clone(),
-                            ),
-                        ],
-                    ));
-                };
-                if resolved_base_parameter_index
-                    .is_some_and(|resolved| resolved != *base_parameter_index)
-                {
-                    return Err(self.invalid_result_effect_annotation(
-                        annotation_span,
-                        &id.name,
-                        "@result_effect MonadT implementations disagree on the captured base Monad parameter",
-                        vec![declaration_fact, field_fact],
-                    ));
-                }
-                resolved_base_parameter_index = Some(*base_parameter_index);
-            }
-            let base_parameter_index =
-                resolved_base_parameter_index.expect("non-empty MonadT implementation set");
-            let Some(base_parameter_var) = definition.type_param_vars.get(base_parameter_index)
-            else {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect base parameter metadata is incomplete",
-                    vec![declaration_fact, field_fact],
-                ));
-            };
-            let Some((Ty::Var(field_constructor), _)) =
-                definition.fields.first().and_then(|(_, ty)| match ty {
-                    Ty::SelfApp(items) => Self::constructor_application_parts(items),
-                    _ => None,
-                })
-            else {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect requires the sole field's outer constructor to be the MonadT base parameter",
-                    vec![declaration_fact, field_fact],
-                ));
-            };
-            if field_constructor != base_parameter_var {
-                return Err(self.invalid_result_effect_annotation(
-                    annotation_span,
-                    &id.name,
-                    "@result_effect requires the sole field's outer constructor to be the same parameter captured by MonadT",
-                    vec![declaration_fact, field_fact],
-                ));
-            }
-
-            self.env
-                .lookup_type_def_mut(&id.name)
-                .expect("validated result effect type remains registered")
-                .result_effect = Some(ResultEffectTypeInfo {
-                base_parameter_index,
-                annotation_span: annotation_span.clone(),
-                field_span: field.span.clone(),
-            });
-        }
-        Ok(())
-    }
-
     fn validate_type_shape_clause(
         clause: Option<&ResolvedWhereClause>,
         trait_definition: bool,
@@ -919,15 +634,19 @@ impl Checker {
         }
     }
 
-    fn struct_new_return_allowed(&mut self, expected_self_ty: &Ty, ret_ty: &Ty) -> bool {
+    fn struct_new_return_allowed(
+        &mut self,
+        expected_self_ty: &Ty,
+        ret_ty: &Ty,
+    ) -> Result<bool, TypeError> {
         let resolved_ret = self.resolve_ty(ret_ty);
-        if self.types_compatible(expected_self_ty, &resolved_ret) {
-            return true;
+        if self.types_compatible(expected_self_ty, &resolved_ret)? {
+            return Ok(true);
         }
-        match resolved_ret {
-            Ty::Result(ok, _) => self.types_compatible(expected_self_ty, ok.as_ref()),
+        Ok(match resolved_ret {
+            Ty::Result(ok, _) => self.types_compatible(expected_self_ty, ok.as_ref())?,
             _ => false,
-        }
+        })
     }
 
     pub(super) fn predeclare_error_types(&mut self, stmts: &[Resolved]) {
@@ -1165,7 +884,7 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, type_params, fields, attrs) => {
+                Resolved::StructDef(_, id, type_params, fields, _) => {
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);
                     let ty_fields = fields
@@ -1213,7 +932,6 @@ impl Checker {
                             type_param_vars.clone(),
                             private_fields,
                             readonly_fields,
-                            attrs.readonly,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,
@@ -1278,7 +996,6 @@ impl Checker {
                             Vec::new(),
                             HashSet::new(),
                             HashSet::new(),
-                            false,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,
@@ -1321,7 +1038,6 @@ impl Checker {
                             Vec::new(),
                             private_fields,
                             HashSet::new(),
-                            false,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,
@@ -1365,7 +1081,6 @@ impl Checker {
                             type_param_vars,
                             HashSet::new(),
                             HashSet::new(),
-                            false,
                         )
                         .ok_or_else(|| TypeError {
                             structured: None,
@@ -1491,7 +1206,7 @@ impl Checker {
 
                     self.env
                         .enum_variants_by_enum
-                        .insert(id.name.clone(), enum_variants);
+                        .insert(id.name.clone(), Arc::new(enum_variants));
                 }
                 _ => {}
             }
@@ -1558,52 +1273,54 @@ impl Checker {
             Done,
         }
 
-        fn dfs(
-            node: &str,
-            edges: &HashMap<String, HashSet<String>>,
+        fn find_cycle<'a>(
+            node: &'a str,
+            edges: &'a HashMap<String, HashSet<String>>,
             states: &mut HashMap<String, Visit>,
-            stack: &mut Vec<String>,
         ) -> Option<Vec<String>> {
-            if let Some(state) = states.get(node) {
-                if *state == Visit::Visiting {
-                    let start = stack.iter().position(|name| name == node).unwrap_or(0);
-                    let mut cycle = stack[start..].to_vec();
-                    cycle.push(node.to_string());
-                    return Some(cycle);
-                }
-                if *state == Visit::Done {
-                    return None;
-                }
+            if states.get(node) == Some(&Visit::Done) {
+                return None;
             }
-
             states.insert(node.to_string(), Visit::Visiting);
-            stack.push(node.to_string());
-
-            if let Some(nexts) = edges.get(node) {
-                for next in nexts {
-                    if let Some(cycle) = dfs(next, edges, states, stack) {
-                        return Some(cycle);
+            let mut stack = vec![(node, edges[node].iter())];
+            // Each frame retains its iterator so returning from a child resumes
+            // the same dependency order as the recursive traversal.
+            while let Some((_, nexts)) = stack.last_mut() {
+                if let Some(next) = nexts.next() {
+                    match states.get(next) {
+                        Some(Visit::Done) => {}
+                        Some(Visit::Visiting) => {
+                            let start = stack
+                                .iter()
+                                .position(|(name, _)| *name == next)
+                                .expect("visiting dependency remains on the traversal stack");
+                            let mut cycle = stack[start..]
+                                .iter()
+                                .map(|(name, _)| (*name).to_string())
+                                .collect::<Vec<_>>();
+                            cycle.push(next.clone());
+                            return Some(cycle);
+                        }
+                        None => {
+                            states.insert(next.clone(), Visit::Visiting);
+                            stack.push((next.as_str(), edges[next].iter()));
+                        }
                     }
+                } else {
+                    let (finished, _) = stack.pop().expect("traversal has an active frame");
+                    states.insert(finished.to_string(), Visit::Done);
                 }
             }
-
-            stack.pop();
-            states.insert(node.to_string(), Visit::Done);
             None
         }
 
         let mut states: HashMap<String, Visit> = HashMap::new();
-        let mut stack = Vec::new();
         for name in decl_spans.keys() {
-            if let Some(cycle) = dfs(name, &edges, &mut states, &mut stack) {
-                let head = cycle.first().cloned().unwrap_or_else(|| name.clone());
+            if let Some(cycle) = find_cycle(name, &edges, &mut states) {
                 return Err(TypeError {
                     structured: None,
                     message: format!("Cyclic type definition detected: {}", cycle.join(" -> ")),
-                    span: decl_spans
-                        .get(&head)
-                        .cloned()
-                        .unwrap_or(Span { start: 0, end: 0 }),
+                    span: decl_spans[&cycle[0]].clone(),
                     hint: None,
                 });
             }
@@ -1758,6 +1475,12 @@ impl Checker {
             TypedPattern::Located(_, inner) => {
                 self.ensure_self_rebinding_types_inner(inner, span, expected_self)
             }
+            TypedPattern::HashMap(_, entries) => {
+                for entry in entries {
+                    self.ensure_self_rebinding_types_inner(&entry.pattern, span, expected_self)?;
+                }
+                Ok(())
+            }
             TypedPattern::Var(bind_ty, id) => {
                 if id.name == "self" {
                     let Some(expected) = expected_self else {
@@ -1768,7 +1491,7 @@ impl Checker {
                             hint: None,
                         });
                     };
-                    if !self.types_compatible(expected, bind_ty) {
+                    if !self.types_compatible(expected, bind_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: format!(
@@ -1793,7 +1516,7 @@ impl Checker {
                             hint: None,
                         });
                     };
-                    if !self.types_compatible(expected, alias_ty) {
+                    if !self.types_compatible(expected, alias_ty)? {
                         return Err(TypeError {
                             structured: None,
                             message: format!(
@@ -1915,7 +1638,7 @@ impl Checker {
                             return Err(self.struct_new_contract_error(&target, span, Some(&other)))
                         }
                     };
-                    if !self.struct_new_return_allowed(expected_self_ty, &ret_ty) {
+                    if !self.struct_new_return_allowed(expected_self_ty, &ret_ty)? {
                         return Err(self.struct_new_contract_error(&target, span, Some(&ret_ty)));
                     }
                 }
@@ -2001,7 +1724,10 @@ impl Checker {
         }
     }
 
-    pub(super) fn trait_impl_for_declaration(&self, declaration_id: u32) -> Option<TraitImplInfo> {
+    pub(super) fn trait_impl_for_declaration(
+        &self,
+        declaration_id: u32,
+    ) -> Option<Arc<TraitImplInfo>> {
         self.trait_impls
             .values()
             .find(|info| info.declaration_key.declaration_id == declaration_id)
@@ -2072,7 +1798,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => Self::collect_ty_vars(inner, out),
             Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
@@ -2115,7 +1842,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole
-            | Ty::Pid(_) => {}
+            | Ty::ProcessMarker(_) => {}
         }
     }
 
@@ -2238,7 +1965,7 @@ impl Checker {
     fn resolve_trait_constraint_closure(&mut self) -> Result<(), TypeError> {
         fn visit(
             key: &str,
-            traits: &HashMap<String, TraitInfo>,
+            traits: &TraitDefinitions,
             visiting: &mut Vec<String>,
             resolved: &mut HashMap<String, Vec<String>>,
         ) -> Result<Vec<String>, TypeError> {
@@ -2295,14 +2022,15 @@ impl Checker {
         }
 
         let keys = self.traits.keys().cloned().collect::<Vec<_>>();
-        let snapshot = self.traits.clone();
         let mut resolved = HashMap::new();
         for key in &keys {
-            visit(key, &snapshot, &mut Vec::new(), &mut resolved)?;
+            visit(key, &self.traits, &mut Vec::new(), &mut resolved)?;
         }
         for (key, slots) in resolved {
             if let Some(info) = self.traits.get_mut(&key) {
-                info.constructor_slots = slots;
+                if info.constructor_slots != slots {
+                    Arc::make_mut(info).constructor_slots = slots;
+                }
             }
         }
         Ok(())
@@ -2320,14 +2048,15 @@ impl Checker {
             .collect()
     }
 
-    fn constructor_slot_vars_for_impl(
+    fn explicit_constructor_slot_vars_for_impl(
         &self,
         trait_info: &TraitInfo,
         target_ast_ty: &AstTy,
         where_clause: Option<&TypedWhereClause>,
         target_param_vars: &HashMap<String, u32>,
         span: &Span,
-    ) -> Result<(Vec<u32>, Vec<usize>), TypeError> {
+        root: bool,
+    ) -> Result<(Vec<Option<u32>>, Vec<Option<usize>>), TypeError> {
         let target_params = Self::target_top_level_type_params(target_ast_ty);
         let mut mapped_slots = vec![None; trait_info.constructor_slots.len()];
         let mut mapped_params = HashSet::new();
@@ -2399,14 +2128,15 @@ impl Checker {
             }
         }
 
-        if mapped_slots.iter().all(Option::is_none)
+        if root
+            && mapped_slots.iter().all(Option::is_none)
             && trait_info.constructor_slots.len() == 1
             && target_params.len() == 1
         {
             mapped_slots[0] = target_param_vars.get(&target_params[0]).copied();
         }
 
-        if mapped_slots.iter().any(Option::is_none) {
+        if root && mapped_slots.iter().any(Option::is_none) {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -2423,20 +2153,36 @@ impl Checker {
             });
         }
 
-        let vars = mapped_slots.into_iter().flatten().collect::<Vec<_>>();
-        let positions = vars
-            .iter()
-            .map(|var| {
-                let AstTy::Generic(_, _, arguments) = target_ast_ty else {
-                    unreachable!("mapped constructor target is an application")
-                };
-                arguments
-                    .iter()
-                    .position(|argument| matches!(argument, AstTy::Named(_, name) if target_param_vars.get(name) == Some(var)))
-                    .expect("mapped constructor variable must belong to target parameters")
-            })
-            .collect();
-        Ok((vars, positions))
+        let positions = mapped_slots.iter().map(|var| var.map(|var| {
+            let AstTy::Generic(_, _, arguments) = target_ast_ty else {
+                unreachable!("mapped constructor target is an application")
+            };
+            arguments.iter().position(|argument| matches!(argument, AstTy::Named(_, name) if target_param_vars.get(name) == Some(&var)))
+                .expect("mapped constructor variable belongs to target parameters")
+        })).collect();
+        Ok((mapped_slots, positions))
+    }
+
+    fn root_constructor_slot_vars_for_impl(
+        &self,
+        trait_info: &TraitInfo,
+        target_ast_ty: &AstTy,
+        where_clause: Option<&TypedWhereClause>,
+        target_param_vars: &HashMap<String, u32>,
+        span: &Span,
+    ) -> Result<(Vec<u32>, Vec<usize>), TypeError> {
+        let (vars, positions) = self.explicit_constructor_slot_vars_for_impl(
+            trait_info,
+            target_ast_ty,
+            where_clause,
+            target_param_vars,
+            span,
+            true,
+        )?;
+        Ok((
+            vars.into_iter().map(Option::unwrap).collect(),
+            positions.into_iter().map(Option::unwrap).collect(),
+        ))
     }
 
     pub(super) fn trait_head_parameter_constructor_bound(
@@ -2474,10 +2220,11 @@ impl Checker {
         target_ast_ty: &AstTy,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, HashMap<String, u32>), TypeError> {
         let mut tyvars = HashMap::new();
-        let target_ty = self.resolve_signature_ast_ty_in_context(
+        let target_ty = self.resolve_signature_like_ast_ty_in_context(
             target_ast_ty,
             TypeSyntaxContext::General,
             &mut tyvars,
+            super::types::SignatureTyMode::ImplHead { self_ty: None },
         )?;
         let trait_arg_tys = trait_info
             .type_params
@@ -2491,11 +2238,13 @@ impl Checker {
                 {
                     self.resolve_type_constructor_head(arg)
                 } else {
-                    self.resolve_trait_signature_ast_ty_in_context(
+                    self.resolve_signature_like_ast_ty_in_context(
                         arg,
                         TypeSyntaxContext::General,
-                        &target_ty,
                         &mut tyvars,
+                        super::types::SignatureTyMode::ImplHead {
+                            self_ty: Some(&target_ty),
+                        },
                     )
                 }
             })
@@ -2558,7 +2307,7 @@ impl Checker {
             Ty::Bool => Some("Boolean".into()),
             Ty::Unit => Some("Unit".into()),
             Ty::Error => Some("Error".into()),
-            Ty::Pid(name) => Some(format!("PID<{name}>")),
+            Ty::Pid(marker) => Some(format!("PID<{}>", self.ty_name(&marker))),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
             Ty::Facet(..) => Some("Facet".into()),
@@ -2589,15 +2338,14 @@ impl Checker {
         }
     }
 
-    fn pid_eq_process_spec_exists(&self, name: &str) -> bool {
-        let implicit_root = (!name.starts_with(sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX))
-            .then(|| format!("{}{}", sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX, name));
-        let mut matches = self.process_specs.iter().filter(|spec| {
-            spec.process_name == name
-                || implicit_root
-                    .as_ref()
-                    .is_some_and(|alias| spec.process_name == *alias)
-        });
+    fn pid_eq_process_spec_exists(&self, marker: &Ty) -> bool {
+        let Ty::ProcessMarker(name) = marker else {
+            return false;
+        };
+        let mut matches = self
+            .process_specs
+            .iter()
+            .filter(|spec| spec.process_name == *name);
         let Some(spec) = matches.next() else {
             return false;
         };
@@ -2726,19 +2474,10 @@ impl Checker {
         })
     }
 
-    fn enum_has_only_payload_free_variants(&self, name: &str) -> bool {
-        self.lookup_enum_variants_of(name)
-            .is_some_and(|variants| variants.iter().all(|variant| variant.payload.is_empty()))
-    }
-
     pub(super) fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
         let ty = self.resolve_ty(ty);
         if self.is_standard_eq_trait(trait_name) {
             return match &ty {
-                Ty::Enum(name, _) => {
-                    self.trait_impl_policy_for_ty(&ty) == TraitImplPolicy::Open
-                        && self.enum_has_only_payload_free_variants(name)
-                }
                 Ty::Pid(name) => self.pid_eq_process_spec_exists(name),
                 _ => false,
             };
@@ -2755,18 +2494,6 @@ impl Checker {
         let target_ty = self.resolve_ty(target_ty);
         if self.is_standard_eq_trait(trait_name) {
             return match (method_name, &target_ty) {
-                ("eq", Ty::Enum(name, _))
-                    if self.trait_impl_policy_for_ty(&target_ty) == TraitImplPolicy::Open
-                        && self.enum_has_only_payload_free_variants(name) =>
-                {
-                    Some(TraitDispatchTarget::BinOp(BinOp::Eq))
-                }
-                ("neq", Ty::Enum(name, _))
-                    if self.trait_impl_policy_for_ty(&target_ty) == TraitImplPolicy::Open
-                        && self.enum_has_only_payload_free_variants(name) =>
-                {
-                    Some(TraitDispatchTarget::BinOp(BinOp::Neq))
-                }
                 ("eq", Ty::Pid(name)) if self.pid_eq_process_spec_exists(name) => {
                     Some(TraitDispatchTarget::BinOp(BinOp::Eq))
                 }
@@ -2819,11 +2546,11 @@ impl Checker {
             .value_parameters
             .iter()
             .map(|param| {
-                let ty = self.resolve_trait_signature_ty_in_context(
+                let ty = self.resolve_trait_parameter_contract(
                     &param.ty,
-                    TypeSyntaxContext::General,
                     self_ty,
                     &mut tyvars,
+                    trait_info.standard_lazy_contract,
                 )?;
                 super::signatures::remember_direct_constructor_input(
                     self,
@@ -2952,6 +2679,11 @@ impl Checker {
                     .collect::<Result<_, _>>()?,
                 Box::new(self.expand_trait_self_apps(*ret, target_ty, constructor_slot_vars)?),
             ),
+            Ty::Pid(inner) => Ty::Pid(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.expand_trait_self_apps(
                 *inner,
                 target_ty,
@@ -3083,6 +2815,7 @@ impl Checker {
         fallback_ret_ty: &sigil::resolved::ResolvedSignatureTy,
         impl_where_clause: Option<&TypedWhereClause>,
         generated_derive: bool,
+        constructor_slot_positions: &[usize],
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>, MethodTypeEnvironment), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
@@ -3159,12 +2892,21 @@ impl Checker {
         let params = method
             .value_parameters
             .iter()
-            .map(|param| {
-                let ty = self.resolve_trait_signature_ty_in_context(
+            .enumerate()
+            .map(|(index, param)| {
+                let allows_lazy = trait_info.standard_lazy_contract
+                    && trait_info
+                        .methods
+                        .get(&method.method_name)
+                        .and_then(|declaration| declaration.value_parameters.get(index))
+                        .is_some_and(|parameter| {
+                            Self::lazy_parameter_inner(parameter.ty.syntax()).is_some()
+                        });
+                let ty = self.resolve_trait_parameter_contract(
                     &param.ty,
-                    TypeSyntaxContext::General,
                     &self_ty,
                     &mut tyvars,
+                    allows_lazy,
                 )?;
                 super::signatures::remember_direct_constructor_input(
                     self,
@@ -3213,18 +2955,10 @@ impl Checker {
             Some(&self_ty),
             generated_derive,
         )?;
-        let target_vars = head_bindings
-            .iter()
-            .filter_map(|(name, ty)| match ty {
-                Ty::Var(var) => Some((name.clone(), *var)),
-                _ => None,
-            })
-            .collect();
-        let (slots, _) = self.constructor_slot_vars_for_impl(
-            trait_info,
+        let slots = self.slot_vars_at_positions(
             target_ast_ty,
-            impl_where_clause,
-            &target_vars,
+            &head_bindings,
+            constructor_slot_positions,
             &method.span,
         )?;
         let params = params
@@ -3363,7 +3097,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.validate_nominal_declaration_constructor_applications(
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.validate_nominal_declaration_constructor_applications(
                 inner, parameters, owner, span,
             )?,
             Ty::Tuple(items) => {
@@ -3422,7 +3157,7 @@ impl Checker {
             | Ty::Error
             | Ty::Hole
             | Ty::Var(_)
-            | Ty::Pid(_) => {}
+            | Ty::ProcessMarker(_) => {}
         }
         Ok(())
     }
@@ -3598,16 +3333,19 @@ impl Checker {
             }
             let trait_info = TraitInfo {
                 id: id.clone(),
+                compiler_owned_failure: self.enforce_builtin_type_contracts
+                    && trait_key == "MonadFail",
                 compiler_owned_equality: self.enforce_builtin_type_contracts
                     && id.name == "Eq"
                     && trait_key == "Eq",
+                standard_lazy_contract: self.enforce_builtin_type_contracts,
                 type_params: type_params.clone(),
                 where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                 constructor_slots,
                 parents,
                 methods: method_map,
             };
-            self.traits.insert(trait_key.clone(), trait_info.clone());
+            self.traits.insert(trait_key, Arc::new(trait_info));
 
             let _ = span;
         }
@@ -3636,7 +3374,7 @@ impl Checker {
                         self.resolve_trait_method_signature(&trait_info, method, &self_ty)?;
                     self.callable_signatures.insert(
                         method.id.unique_id,
-                        super::signatures::canonical_callable_signature(
+                        Arc::new(super::signatures::canonical_callable_signature(
                             self,
                             &method.id,
                             &method.return_type_arguments,
@@ -3647,7 +3385,7 @@ impl Checker {
                             sindr::signature::CanonicalConstraintSet::default(),
                             sindr::signature::RuntimeTarget::TraitDispatch(method.id.unique_id),
                             sindr::signature::CallableDeclarationKind::TraitMethod,
-                        )?,
+                        )?),
                     );
                 }
             }
@@ -3746,15 +3484,186 @@ impl Checker {
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
             })?;
-            let (constructor_slot_vars, constructor_slot_positions) = self
-                .constructor_slot_vars_for_impl(
+            let has_constructor_parent = trait_info.parents.iter().any(|parent| {
+                !self.traits[&self.trait_key(&parent.trait_id)]
+                    .constructor_slots
+                    .is_empty()
+            });
+            let (constructor_slot_vars, constructor_slot_positions) = if has_constructor_parent {
+                (Vec::new(), Vec::new())
+            } else {
+                self.root_constructor_slot_vars_for_impl(
                     &trait_info,
                     target_ast_ty,
-                    where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
+                    typed_impl_clause.as_ref(),
                     &target_param_vars,
                     span,
-                )?;
+                )?
+            };
 
+            let head_environment = MethodTypeEnvironment {
+                head_bindings: target_param_vars
+                    .iter()
+                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                    .collect(),
+                bindings: target_param_vars
+                    .iter()
+                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                    .collect(),
+                trait_arguments: trait_arg_tys.clone(),
+                self_ty: target_ty.clone(),
+                direct_inputs: super::signatures::DirectConstructorInputs::default(),
+            };
+            let (head_type_list, canonical_environment) =
+                self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
+            let impl_constraints = self
+                .canonical_method_list(
+                    &[],
+                    &[],
+                    &Ty::Unit,
+                    &[],
+                    &[],
+                    &AstTy::Named(span.clone(), "Unit".into()),
+                    typed_impl_clause.as_ref(),
+                    &head_environment,
+                    &canonical_environment,
+                    None,
+                    false,
+                )?
+                .where_constraints;
+            let impl_key =
+                CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);
+            let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+            for existing in existing_impls {
+                if self.trait_key(&existing.trait_id) != trait_key {
+                    continue;
+                }
+                if Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern) {
+                    return Err(TypeError {
+                        structured: None,
+                        message: format!(
+                            "Overlapping trait impls for {}: {} and {}",
+                            trait_id.name,
+                            Self::surface_ast_ty_key(target_ast_ty),
+                            Self::surface_ast_ty_key(&existing.target_ast_ty)
+                        ),
+                        span: span.clone(),
+                        hint: Some("Trait impl patterns must be structurally disjoint; Surtr does not use specialization or declaration-order dispatch.".into()),
+                    });
+                }
+            }
+
+            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "Convert") {
+                self.trait_key_by_short_name("TryConvert")
+            } else if self.trait_matches_short_name(&trait_key, "TryConvert") {
+                self.trait_key_by_short_name("Convert")
+            } else {
+                None
+            };
+            if let Some(peer_trait_key) = exclusive_peer {
+                let peers = self
+                    .trait_impls
+                    .values()
+                    .filter(|existing| self.trait_key(&existing.trait_id) == peer_trait_key)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let peer = peers.into_iter().find(|existing| {
+                    Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern)
+                });
+                if let Some(existing) = peer {
+                    return Err(TypeError {
+                        structured: None,
+                        message: format!(
+                            "{} and {} cannot both be implemented for {} -> {}",
+                            trait_id.name,
+                            existing
+                                .trait_id
+                                .name
+                                .rsplit("::")
+                                .next()
+                                .unwrap_or(&existing.trait_id.name),
+                            Self::surface_ast_ty_key(target_ast_ty),
+                            trait_args
+                                .iter()
+                                .map(Self::ast_ty_key)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+
+            self.trait_impls.insert(
+                impl_key.clone(),
+                Arc::new(TraitImplInfo {
+                    declaration_key: TraitImplDeclarationKey {
+                        pattern: impl_key.clone(),
+                        declaration_id: *declaration_id,
+                    },
+                    head_type_list,
+                    impl_constraints,
+                    method_signature_lists: HashMap::new(),
+                    trait_id: trait_id.clone(),
+                    trait_args: trait_args.clone(),
+                    trait_arg_tys,
+                    target_name,
+                    target_ast_ty: target_ast_ty.clone(),
+                    target_ty,
+                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
+                    generated_derive,
+                    type_param_vars,
+                    type_param_vars_by_name: target_param_vars,
+                    constructor_slot_vars,
+                    constructor_slot_positions,
+                    methods: HashMap::new(),
+                }),
+            );
+            self.constructor_mapping_resolution
+                .pending
+                .insert(impl_key.clone());
+            self.index_trait_impl(impl_key);
+        }
+
+        if declared_trait_impl {
+            self.resolve_impl_constructor_mappings()?;
+        }
+
+        // Methods consume the declaration's resolved mapping, never re-infer it.
+        for stmt in stmts {
+            let Resolved::TraitImplDef(
+                span,
+                declaration_id,
+                trait_id,
+                trait_args,
+                target_ast_ty,
+                where_clause,
+                methods,
+            ) = stmt
+            else {
+                continue;
+            };
+            let trait_key = self.trait_key(trait_id);
+            let trait_info = self.traits[&trait_key].clone();
+            let impl_info = self
+                .trait_impls
+                .values()
+                .find(|info| info.declaration_key.declaration_id == *declaration_id)
+                .expect("collected impl head")
+                .clone();
+            let generated_derive = impl_info.generated_derive;
+            let target_ty = impl_info.target_ty.clone();
+            let target_name = impl_info.target_name.clone();
+            let trait_arg_tys = impl_info.trait_arg_tys.clone();
+            let constructor_slot_vars = impl_info.constructor_slot_vars.clone();
+            let constructor_slot_positions = impl_info.constructor_slot_positions.clone();
+            let typed_impl_clause = impl_info.where_clause.clone();
+            let head_type_list = impl_info.head_type_list.clone();
+            self.validate_nominal_type_well_formed(&target_ty, span, false)?;
+            for argument in &trait_arg_tys {
+                self.validate_nominal_type_well_formed(argument, span, false)?;
+            }
             let mut method_map = HashMap::new();
             for method in methods {
                 method_map.insert(
@@ -3775,6 +3684,7 @@ impl Checker {
                         is_builtin: method.is_builtin,
                         body_obligations: Vec::new(),
                         instantiation_contract: None,
+                        resolved_signature: None,
                     },
                 );
             }
@@ -3826,6 +3736,7 @@ impl Checker {
                         is_builtin: false,
                         body_obligations: Vec::new(),
                         instantiation_contract: None,
+                        resolved_signature: None,
                     },
                 );
                 locally_reserved_default_uids
@@ -3846,38 +3757,9 @@ impl Checker {
                 }
             }
 
-            let head_environment = MethodTypeEnvironment {
-                head_bindings: target_param_vars
-                    .iter()
-                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
-                    .collect(),
-                bindings: target_param_vars
-                    .iter()
-                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
-                    .collect(),
-                trait_arguments: trait_arg_tys.clone(),
-                self_ty: target_ty.clone(),
-                direct_inputs: super::signatures::DirectConstructorInputs::default(),
-            };
-            let (head_type_list, canonical_environment) =
-                self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
-            let impl_constraints = self
-                .canonical_method_list(
-                    &[],
-                    &[],
-                    &Ty::Unit,
-                    &[],
-                    &[],
-                    &AstTy::Named(span.clone(), "Unit".into()),
-                    typed_impl_clause.as_ref(),
-                    &head_environment,
-                    &canonical_environment,
-                    None,
-                    false,
-                )?
-                .where_constraints;
             let mut method_signature_lists = HashMap::new();
             let mut instantiation_contracts = HashMap::new();
+            let mut resolved_signatures = HashMap::new();
             let mut dispatch_overrides = HashMap::new();
             for (method_name, impl_method) in &method_map {
                 let trait_method =
@@ -3937,8 +3819,8 @@ impl Checker {
                         self.expand_trait_self_apps(param, &target_ty, &constructor_slot_vars)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let (impl_params, impl_ret, _, impl_return_type_arguments, impl_env) = self
-                    .resolve_trait_impl_method_signature(
+                let (impl_params, impl_ret, impl_type_params, impl_return_type_arguments, impl_env) =
+                    self.resolve_trait_impl_method_signature(
                         &trait_info,
                         trait_args,
                         impl_method,
@@ -3946,8 +3828,15 @@ impl Checker {
                         &trait_method.ret_ty,
                         where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
                         generated_derive,
+                        &constructor_slot_positions,
                     )?;
-                if impl_method.is_builtin {
+                let generated_boolean_equality = generated_derive
+                    && trait_info.compiler_owned_equality
+                    && matches!(
+                        self.canonical_request(&target_ty)?.head,
+                        CanonicalTypeHead::Builtin(sindr::names::TypeName::Boolean)
+                    );
+                if impl_method.is_builtin || generated_boolean_equality {
                     dispatch_overrides.insert(
                         method_name.clone(),
                         self.trait_dispatch_override(
@@ -4046,6 +3935,16 @@ impl Checker {
                         impl_constraints: instantiated_impl_constraints,
                     },
                 );
+                resolved_signatures.insert(
+                    method_name.clone(),
+                    ResolvedImplMethodSignature {
+                        params: impl_params,
+                        result: impl_ret,
+                        type_params: impl_type_params,
+                        return_type_arguments: impl_return_type_arguments,
+                        environment: impl_env,
+                    },
+                );
                 let mapping = self
                     .validate_trait_method_contract(
                         &head_type_list,
@@ -4118,6 +4017,12 @@ impl Checker {
                 method_signature_lists.insert(method_name.clone(), actual);
             }
 
+            for (name, signature) in resolved_signatures {
+                method_map
+                    .get_mut(&name)
+                    .expect("declared method")
+                    .resolved_signature = Some(signature);
+            }
             for (name, contract) in instantiation_contracts {
                 method_map
                     .get_mut(&name)
@@ -4130,161 +4035,239 @@ impl Checker {
                     .expect("declared method")
                     .dispatch_override = Some(dispatch);
             }
-            let impl_key =
-                CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);
-            let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-            for existing in existing_impls {
-                if self.trait_key(&existing.trait_id) != trait_key {
-                    continue;
-                }
-                if Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Overlapping trait impls for {}: {} and {}",
-                            trait_id.name,
-                            Self::surface_ast_ty_key(target_ast_ty),
-                            Self::surface_ast_ty_key(&existing.target_ast_ty)
-                        ),
-                        span: span.clone(),
-                        hint: Some("Trait impl patterns must be structurally disjoint; Surtr does not use specialization or declaration-order dispatch.".into()),
-                    });
-                }
-            }
-
-            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "Convert") {
-                self.trait_key_by_short_name("TryConvert")
-            } else if self.trait_matches_short_name(&trait_key, "TryConvert") {
-                self.trait_key_by_short_name("Convert")
-            } else {
-                None
-            };
-            if let Some(peer_trait_key) = exclusive_peer {
-                let peers = self
-                    .trait_impls
-                    .values()
-                    .filter(|existing| self.trait_key(&existing.trait_id) == peer_trait_key)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let peer = peers.into_iter().find(|existing| {
-                    Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern)
-                });
-                if let Some(existing) = peer {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "{} and {} cannot both be implemented for {} -> {}",
-                            trait_id.name,
-                            existing
-                                .trait_id
-                                .name
-                                .rsplit("::")
-                                .next()
-                                .unwrap_or(&existing.trait_id.name),
-                            Self::surface_ast_ty_key(target_ast_ty),
-                            trait_args
-                                .iter()
-                                .map(Self::ast_ty_key)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-            }
-
-            self.trait_impls.insert(
-                impl_key.clone(),
-                TraitImplInfo {
-                    declaration_key: TraitImplDeclarationKey {
-                        pattern: impl_key.clone(),
-                        declaration_id: *declaration_id,
-                    },
-                    head_type_list,
-                    impl_constraints,
-                    method_signature_lists,
-                    trait_id: trait_id.clone(),
-                    trait_args: trait_args.clone(),
-                    trait_arg_tys,
-                    target_name,
-                    target_ast_ty: target_ast_ty.clone(),
-                    target_ty,
-                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
-                    generated_derive,
-                    type_param_vars,
-                    type_param_vars_by_name: target_param_vars,
-                    constructor_slot_vars,
-                    constructor_slot_positions,
-                    methods: method_map,
-                },
+            let impl_info = Arc::make_mut(
+                self.trait_impls
+                    .get_mut(&impl_info.declaration_key.pattern)
+                    .expect("registered impl head"),
             );
-            self.index_trait_impl(impl_key);
-        }
-
-        if declared_trait_impl {
-            let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-            for child_impl in &impls {
-                self.validate_parent_impl_chain(child_impl, &mut HashSet::new())?;
-            }
+            impl_info.methods = method_map;
+            impl_info.method_signature_lists = method_signature_lists;
         }
 
         Ok(())
     }
 
-    fn validate_parent_impl_chain(
-        &mut self,
-        child_impl: &TraitImplInfo,
-        visiting: &mut HashSet<(String, String)>,
-    ) -> Result<(), TypeError> {
-        let child_trait_key = self.trait_key(&child_impl.trait_id);
-        let visit_key = (child_trait_key.clone(), child_impl.target_name.clone());
-        if !visiting.insert(visit_key.clone()) {
-            return Ok(());
-        }
-        let Some(child_trait) = self.traits.get(&child_trait_key).cloned() else {
-            return Ok(());
-        };
-        for parent in &child_trait.parents {
-            let parent_key = self.trait_key(&parent.trait_id);
-            self.traits.get(&parent_key).ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Unknown parent trait: {}", parent.trait_id.name),
-                span: parent.trait_id.span.clone(),
-                hint: None,
-            })?;
-            let parent_candidates = self
-                .trait_impls
-                .values()
-                .filter(|impl_info| self.trait_key(&impl_info.trait_id) == parent_key)
-                .cloned()
-                .collect::<Vec<_>>();
-            let parent_impl = parent_candidates
-                .into_iter()
-                .find(|impl_info| self.parent_impl_covers_child(impl_info, child_impl))
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!(
-                        "Trait impl {} for {} requires parent impl {} for the same target",
-                        child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
+    fn slot_vars_at_positions(
+        &self,
+        target: &AstTy,
+        bindings: &HashMap<String, Ty>,
+        positions: &[usize],
+        span: &Span,
+    ) -> Result<Vec<u32>, TypeError> {
+        let mut vars = Vec::new();
+        for position in positions {
+            let argument = match target {
+                AstTy::Generic(_, _, args) => args.get(*position),
+                _ => None,
+            };
+            let Some(AstTy::Named(_, name)) = argument else {
+                return Err(TypeError::new(
+                    "Inherited constructor slot must remain a top-level type parameter of the impl target",
+                    span.clone(),
+                ));
+            };
+            let Some(Ty::Var(var)) = bindings.get(name) else {
+                return Err(TypeError::new(
+                    "Inherited constructor slot must remain a top-level type parameter of the impl target",
+                    span.clone(),
+                ));
+            };
+            if vars.contains(var) {
+                return Err(TypeError::new(
+                    format!(
+                        "Impl target parameter {name} is mapped to more than one constructor slot"
                     ),
-                    span: child_impl.trait_id.span.clone(),
-                    hint: None,
-                })?;
-            if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
-                        child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
-                    ),
-                    span: child_impl.trait_id.span.clone(),
-                    hint: None,
-                });
+                    span.clone(),
+                ));
             }
-            self.validate_parent_impl_chain(&parent_impl, visiting)?;
+            vars.push(*var);
         }
-        visiting.remove(&visit_key);
+        Ok(vars)
+    }
+
+    fn resolve_impl_constructor_mappings(&mut self) -> Result<(), TypeError> {
+        let mut keys = self
+            .constructor_mapping_resolution
+            .pending
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort_by_key(|key| self.trait_impls[key].declaration_key.declaration_id);
+        let result = (|| {
+            for key in keys {
+                self.resolve_impl_constructor_mapping(&key)?;
+            }
+            if !self.constructor_mapping_resolution.pending.is_empty()
+                || self
+                    .constructor_mapping_resolution
+                    .requests
+                    .borrow()
+                    .is_some()
+            {
+                return Err(TypeError::new(
+                    "Internal error: unfinished impl mapping resolution",
+                    Span { start: 0, end: 0 },
+                ));
+            }
+            Ok(())
+        })();
+        // Declaration dependency state never escapes into body checking or a checkpoint.
+        self.constructor_mapping_resolution = ConstructorMappingResolution::default();
+        result
+    }
+
+    fn parent_coverage_with_resolved_mappings(
+        &mut self,
+        parent: &TraitImplInfo,
+        child: &TraitImplInfo,
+    ) -> Result<ParentImplCoverage, TypeError> {
+        loop {
+            assert!(self
+                .constructor_mapping_resolution
+                .requests
+                .borrow()
+                .is_none());
+            *self.constructor_mapping_resolution.requests.borrow_mut() = Some(HashSet::new());
+            let result = self.parent_impl_covers_child(parent, child);
+            let requests = self
+                .constructor_mapping_resolution
+                .requests
+                .borrow_mut()
+                .take()
+                .expect("declaration proof frame");
+            if requests.is_empty() {
+                return result;
+            }
+            // Even a successful trial may have used a pending projection during
+            // canonicalization. Discard every trial result which requested metadata.
+            let mut requests = requests.into_iter().collect::<Vec<_>>();
+            requests.sort_by_key(|key| self.trait_impls[key].declaration_key.declaration_id);
+            for key in requests {
+                self.resolve_impl_constructor_mapping(&key)?;
+            }
+        }
+    }
+
+    fn resolve_impl_constructor_mapping(&mut self, key: &TraitImplKey) -> Result<(), TypeError> {
+        if !self.constructor_mapping_resolution.pending.contains(key) {
+            return Ok(());
+        }
+        let child = self.trait_impls[key].clone();
+        if !self
+            .constructor_mapping_resolution
+            .resolving
+            .insert(key.clone())
+        {
+            return Err(TypeError::new(
+                format!(
+                    "Constructor slot mapping dependency cycle for {}",
+                    child.trait_id.name
+                ),
+                child.trait_id.span.clone(),
+            ));
+        }
+        let trait_info = self.traits[&self.trait_key(&child.trait_id)].clone();
+        let mut inherited: Option<Vec<usize>> = None;
+        for parent in &trait_info.parents {
+            let parent_key = self.trait_key(&parent.trait_id);
+            let parent_info = self
+                .traits
+                .get(&parent_key)
+                .ok_or_else(|| {
+                    TypeError::new(
+                        format!("Unknown parent trait: {}", parent.trait_id.name),
+                        parent.trait_id.span.clone(),
+                    )
+                })?
+                .clone();
+            let mut candidates = self.trait_impl_candidate_keys(&parent_key);
+            candidates.sort_by_key(|key| self.trait_impls[key].declaration_key.declaration_id);
+            let mut covered = false;
+            let mut head_covered = false;
+            for candidate_key in candidates {
+                let candidate = self.trait_impls[&candidate_key].clone();
+                match self.parent_coverage_with_resolved_mappings(&candidate, &child)? {
+                    ParentImplCoverage::HeadMismatch => continue,
+                    ParentImplCoverage::ConstraintMismatch => {
+                        head_covered = true;
+                        continue;
+                    }
+                    ParentImplCoverage::Covers => {}
+                }
+                covered = true;
+                self.resolve_impl_constructor_mapping(&candidate_key)?;
+                if parent_info.constructor_slots.is_empty() {
+                    continue;
+                }
+                let positions = self.trait_impls[&candidate_key]
+                    .constructor_slot_positions
+                    .clone();
+                if let Some(previous) = &inherited {
+                    if previous != &positions {
+                        return Err(TypeError::new(
+                            format!("Trait impl {} for {} has conflicting inherited constructor slot mappings from parent {}",
+                                child.trait_id.name, child.target_name, parent.trait_id.name),
+                            child.trait_id.span.clone(),
+                        ));
+                    }
+                } else {
+                    inherited = Some(positions);
+                }
+            }
+            if !covered {
+                let message = if head_covered {
+                    format!(
+                        "Trait impl {} for {} cannot prove parent constraint(s) of {}",
+                        child.trait_id.name, child.target_name, parent.trait_id.name
+                    )
+                } else {
+                    format!(
+                        "Trait impl {} for {} requires parent impl {} for the same target",
+                        child.trait_id.name, child.target_name, parent.trait_id.name
+                    )
+                };
+                return Err(TypeError::new(message, child.trait_id.span.clone()));
+            }
+        }
+        if let Some(positions) = inherited {
+            let bindings = child
+                .type_param_vars_by_name
+                .iter()
+                .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                .collect();
+            let vars = self.slot_vars_at_positions(
+                &child.target_ast_ty,
+                &bindings,
+                &positions,
+                &child.trait_id.span,
+            )?;
+            let (_, confirmations) = self.explicit_constructor_slot_vars_for_impl(
+                &trait_info,
+                &child.target_ast_ty,
+                child.where_clause.as_ref(),
+                &child.type_param_vars_by_name,
+                &child.trait_id.span,
+                false,
+            )?;
+            if confirmations
+                .iter()
+                .zip(&positions)
+                .any(|(explicit, inherited)| {
+                    explicit.is_some_and(|explicit| explicit != *inherited)
+                })
+            {
+                return Err(TypeError::new(
+                    format!("Trait impl {} for {} must use the same constructor slot mapping as its parent",
+                        child.trait_id.name, child.target_name),
+                    child.trait_id.span.clone(),
+                ));
+            }
+            let info = Arc::make_mut(self.trait_impls.get_mut(key).expect("collected impl"));
+            info.constructor_slot_vars = vars;
+            info.constructor_slot_positions = positions;
+        }
+        self.constructor_mapping_resolution.resolving.remove(key);
+        self.constructor_mapping_resolution.pending.remove(key);
         Ok(())
     }
 
@@ -4296,9 +4279,11 @@ impl Checker {
         &mut self,
         parent_impl: &TraitImplInfo,
         child_impl: &TraitImplInfo,
-    ) -> bool {
+    ) -> Result<ParentImplCoverage, TypeError> {
         let before_substitutions = self.substitutions.clone();
         let before_rigid = self.rigid_tyvars.clone();
+        let before_bounds = self.tyvar_bounds.clone();
+        let before_witnesses = self.constructor_witness_traits.clone();
         let mut child_vars = Vec::new();
         Self::collect_ty_vars(&child_impl.target_ty, &mut child_vars);
         for arg in &child_impl.trait_arg_tys {
@@ -4318,12 +4303,26 @@ impl Checker {
         for arg in &parent_impl.trait_arg_tys {
             self.instantiate_ty_with_fresh(arg, &mut fresh);
         }
-        let head_covers = self.types_compatible(&parent_target, &child_impl.target_ty);
-        let obligations_hold =
-            head_covers && self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh);
+        let obligations_hold = (|| {
+            // Head coverage is structural. Bounds are proved separately below,
+            // rather than making a missing bound look like a head mismatch.
+            let Some(mapping) =
+                self.parent_head_substitution(&parent_target, &child_impl.target_ty, &fresh)?
+            else {
+                return Ok(ParentImplCoverage::HeadMismatch);
+            };
+            self.substitutions.extend(mapping);
+            if self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh)? {
+                Ok(ParentImplCoverage::Covers)
+            } else {
+                Ok(ParentImplCoverage::ConstraintMismatch)
+            }
+        })();
 
         self.substitutions = before_substitutions;
         self.rigid_tyvars = before_rigid;
+        self.tyvar_bounds = before_bounds;
+        self.constructor_witness_traits = before_witnesses;
         obligations_hold
     }
 
@@ -4336,12 +4335,12 @@ impl Checker {
         parent_impl: &TraitImplInfo,
         child_impl: &TraitImplInfo,
         fresh: &HashMap<u32, Ty>,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         let Some(parent_where) = &parent_impl.where_clause else {
-            return true;
+            return Ok(true);
         };
 
-        parent_where.constraints.iter().all(|constraint| {
+        for constraint in &parent_where.constraints {
             let parent_subject =
                 match &constraint.subject {
                     AstTy::Named(_, subject) if subject == "Self" => Some(self.resolve_ty(
@@ -4355,23 +4354,25 @@ impl Checker {
                     _ => None,
                 };
             let Some(parent_subject) = parent_subject else {
-                return false;
+                return Ok(false);
             };
 
-            constraint.bounds.iter().all(|bound| {
+            for bound in &constraint.bounds {
                 let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                    return true;
+                    continue;
                 };
                 let required = self.trait_key(trait_id);
-                self.child_where_entails(child_impl, &parent_subject, &required)
-                    || self.trait_obligation_satisfied_with_args(
-                        &required,
-                        &[],
-                        &parent_subject,
-                        &mut HashSet::new(),
+                if !self.child_where_entails(child_impl, &parent_subject, &required)
+                    && !matches!(
+                        self.probe_trait_head(&required, &[], &parent_subject)?,
+                        ApplicabilityProof::Satisfied(_)
                     )
-            })
-        })
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     fn child_where_entails(
@@ -4511,13 +4512,7 @@ impl Checker {
                     let param_tys = params
                         .iter()
                         .enumerate()
-                        .map(|(index, param)| {
-                            if Self::is_cause_chain_marker_parameter(id, index, &param.ty) {
-                                return Ok(Ty::List(Box::new(Ty::Enum(
-                                    "ErrorKind".into(),
-                                    Vec::new(),
-                                ))));
-                            }
+                        .map(|(_index, param)| {
                             self.resolve_builtin_signature_ty_in_context(
                                 &param.ty,
                                 TypeSyntaxContext::StdBuiltinParameter,
@@ -4543,7 +4538,7 @@ impl Checker {
                     if let Some(meta) = meta {
                         self.callable_signatures.insert(
                             id.unique_id,
-                            super::signatures::canonical_callable_signature(
+                            Arc::new(super::signatures::canonical_callable_signature(
                                 self,
                                 id,
                                 return_type_arguments,
@@ -4554,7 +4549,7 @@ impl Checker {
                                 canonical_where_constraints,
                                 sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
                                 sindr::signature::CallableDeclarationKind::Builtin,
-                            )?,
+                            )?),
                         );
                     }
                     self.env.bind_var(
@@ -4663,14 +4658,6 @@ impl Checker {
                                 param_ty,
                                 &direct_constructor_inputs,
                             );
-                            if !self.allow_error_function_params
-                                && !Self::allows_std_error_function_param_exception(id)
-                                && Self::ty_exposes_error_value(&param_ty)
-                            {
-                                return Err(self.error_function_param_not_allowed_error(
-                                    Self::ast_ty_span(&param.ty),
-                                ));
-                            }
                             Ok(param_ty)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
@@ -4760,7 +4747,7 @@ impl Checker {
                     );
                     self.callable_signatures.insert(
                         id.unique_id,
-                        super::signatures::canonical_callable_signature(
+                        Arc::new(super::signatures::canonical_callable_signature(
                             self,
                             id,
                             return_type_arguments,
@@ -4771,7 +4758,7 @@ impl Checker {
                             canonical_where_constraints,
                             sindr::signature::RuntimeTarget::UserFunction(fun_idx),
                             sindr::signature::CallableDeclarationKind::Function,
-                        )?,
+                        )?),
                     );
                     self.user_func_params.insert(id.unique_id, param_names);
                     if let Some(qualified_name) = id.qualified_name.as_ref() {
@@ -4835,14 +4822,33 @@ impl Checker {
                     );
                     fun_idx += 1;
                 }
-                Resolved::DeferrorDef(_, id, fields, _) => {
+                Resolved::DeferrorDef(span, id, _, body) => {
                     self.register_function_id(id);
-                    let param_tys = fields
+                    let Resolved::Closure(_, params, _, _) = body.as_ref() else {
+                        return Err(TypeError::new(
+                            "deferror body must be a constructor block",
+                            span.clone(),
+                        ));
+                    };
+                    let inputs = params
                         .iter()
-                        .map(|field| {
-                            self.resolve_ast_ty_in_context(&field.ty, TypeSyntaxContext::General)
+                        .map(|param| {
+                            let ty = param.ty.as_ref().ok_or_else(|| {
+                                TypeError::new(
+                                    "deferror constructor inputs require type annotations",
+                                    param.id.span.clone(),
+                                )
+                            })?;
+                            Ok((
+                                param.id.name.clone(),
+                                self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::General)?,
+                            ))
                         })
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .collect::<Result<Vec<_>, TypeError>>()?;
+                    let param_tys = inputs.iter().map(|(_, ty)| ty.clone()).collect();
+                    self.env
+                        .error_constructor_inputs
+                        .insert(id.unique_id, inputs);
 
                     self.env.bind_var(
                         id.unique_id,
@@ -4914,6 +4920,7 @@ impl Checker {
                         &trait_method.ret_ty,
                         trait_impl.where_clause.as_ref(),
                         trait_impl.generated_derive,
+                        &trait_impl.constructor_slot_positions,
                     )?;
                 let param_names = method
                     .value_parameters
@@ -4934,7 +4941,7 @@ impl Checker {
                     .insert(method.function_id.unique_id, param_names);
                 self.callable_signatures.insert(
                     method.function_id.unique_id,
-                    super::signatures::canonical_callable_signature(
+                    Arc::new(super::signatures::canonical_callable_signature(
                         self,
                         &method.function_id,
                         &method.return_type_arguments,
@@ -4947,7 +4954,7 @@ impl Checker {
                             method.function_id.unique_id,
                         ),
                         sindr::signature::CallableDeclarationKind::TraitMethod,
-                    )?,
+                    )?),
                 );
                 if let Some(qualified_name) = method.function_id.qualified_name.as_ref() {
                     if Self::split_impl_method_name(qualified_name).is_some() {
@@ -4961,5 +4968,246 @@ impl Checker {
 
         self.env.next_fun_idx = fun_idx;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod shared_registry_tests {
+    use super::*;
+
+    fn resolve(source: &str) -> Vec<Resolved> {
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap()
+    }
+
+    #[test]
+    fn inherited_slots_detach_only_changed_traits_from_saved_branches() {
+        let source = "deftrait CowRoot where Self: Type<$A> {}\ndeftrait CowChild where Self: CowRoot {}\ndeftrait CowPlain {}";
+        let mut parent = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        parent.check_program(resolve(source)).unwrap();
+        let child_key = parent.trait_key_by_short_name("CowChild").unwrap();
+        let root_key = parent.trait_key_by_short_name("CowRoot").unwrap();
+        let plain_key = parent.trait_key_by_short_name("CowPlain").unwrap();
+        assert_eq!(parent.traits[&child_key].constructor_slots, vec!["$A"]);
+        assert_eq!(
+            bincode::serialize(&parent.traits[&child_key]).unwrap(),
+            bincode::serialize(parent.traits[&child_key].as_ref()).unwrap(),
+        );
+        // Model the declaration state before inherited slots are resolved.
+        Arc::make_mut(parent.traits.get_mut(&child_key).unwrap())
+            .constructor_slots
+            .clear();
+        let checkpoint = parent
+            .persistent_state_with_env(parent.env.clone())
+            .checkpoint(Vec::new());
+        let sibling = parent.spawn_child_checker(parent.env.clone());
+        let mut child = parent.spawn_child_checker(parent.env.clone());
+        assert!(Arc::ptr_eq(
+            &parent.traits[&child_key],
+            &child.traits[&child_key]
+        ));
+
+        child.resolve_trait_constraint_closure().unwrap();
+        assert_eq!(child.traits[&child_key].constructor_slots, vec!["$A"]);
+        assert!(parent.traits[&child_key].constructor_slots.is_empty());
+        assert!(sibling.traits[&child_key].constructor_slots.is_empty());
+        assert!(checkpoint.traits[&child_key].constructor_slots.is_empty());
+        assert!(!Arc::ptr_eq(
+            &parent.traits[&child_key],
+            &child.traits[&child_key]
+        ));
+        for unchanged in [&root_key, &plain_key] {
+            assert!(Arc::ptr_eq(
+                &parent.traits[unchanged],
+                &child.traits[unchanged]
+            ));
+        }
+        let resolved_child = child.traits[&child_key].clone();
+        child.resolve_trait_constraint_closure().unwrap();
+        assert!(Arc::ptr_eq(&resolved_child, &child.traits[&child_key]));
+
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let restored: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        let mut restored =
+            Checker::with_persistent_state(restored.into(), TypecheckContext::default());
+        restored.resolve_trait_constraint_closure().unwrap();
+        assert_eq!(restored.traits[&child_key].constructor_slots, vec!["$A"]);
+        assert!(checkpoint.traits[&child_key].constructor_slots.is_empty());
+    }
+
+    #[test]
+    fn shared_callable_signatures_keep_instantiations_and_failed_sessions_independent() {
+        const DEFINITION: &str = "def cow_identity(value: $A) -> $A { value }";
+        let mut original = crate::test_support::session_from_cached_std_prelude();
+        let definition = resolve(DEFINITION);
+        let Resolved::Def(_, id, ..) = &definition[0] else {
+            panic!("expected the identity definition");
+        };
+        let uid = id.unique_id;
+        original.typecheck(definition).unwrap();
+        let declaration = original.state.callable_signatures[&uid].clone();
+        assert!(matches!(declaration.value_parameters[0].ty, Ty::Var(_)));
+        assert_eq!(
+            bincode::serialize(&declaration).unwrap(),
+            bincode::serialize(declaration.as_ref()).unwrap(),
+        );
+        let checkpoint = original.checkpoint();
+        let mut successful = original.clone();
+        let mut rejected = original.clone();
+        let calls = |suffix: &str| {
+            let resolved = resolve(&format!("{DEFINITION}\n{suffix}"));
+            let Resolved::Def(_, id, ..) = &resolved[0] else {
+                panic!("expected the identity definition before calls");
+            };
+            assert_eq!(id.unique_id, uid);
+            resolved.into_iter().skip(1).collect()
+        };
+        let typed = successful
+            .typecheck(calls("cow_identity(1)\ncow_identity(\"ok\")"))
+            .unwrap();
+        assert_eq!(typed[0].ty, Ty::Int);
+        assert_eq!(typed[1].ty, Ty::Str);
+        assert!(Arc::ptr_eq(
+            &declaration,
+            &successful.state.callable_signatures[&uid]
+        ));
+        let error = rejected
+            .typecheck(calls("wrong: Boolean = cow_identity(1)"))
+            .expect_err("Boolean annotation cannot accept an Int result");
+        assert!(
+            error.message.contains("Boolean") && error.message.contains("Int"),
+            "expected the annotation type mismatch: {error:?}"
+        );
+        assert!(Arc::ptr_eq(
+            &declaration,
+            &rejected.state.callable_signatures[&uid]
+        ));
+        let mut sibling = original.clone();
+        assert_eq!(
+            sibling
+                .typecheck(calls("cow_identity(\"after failure\")"))
+                .unwrap()[0]
+                .ty,
+            Ty::Str
+        );
+        assert!(Arc::ptr_eq(
+            &declaration,
+            &checkpoint.callable_signatures[&uid]
+        ));
+        assert!(matches!(declaration.value_parameters[0].ty, Ty::Var(_)));
+
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let decoded: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        let mut restored = ScarSession::new();
+        restored.rollback(decoded);
+        assert_eq!(
+            restored.typecheck(calls("cow_identity(2)")).unwrap()[0].ty,
+            Ty::Int
+        );
+    }
+}
+
+#[cfg(test)]
+mod constructor_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn declaration_parent_proof_resolves_mapping_through_an_ordinary_trait() {
+        // This test targets declaration coverage. Body checking separately
+        // rejects the deliberately unconsumed capabilities of these empty impls.
+        let ast = spire::parse_with_context(
+            r#"
+deftrait DepRoot where Self: Type<$A> {}
+deftrait DepChild where Self: DepRoot {}
+deftrait Marker {}
+defenum Leaf<$A> { Leaf($A), }
+defenum Bridge<$M> { Bridge($M), }
+defenum DepShell<$L, $A> { Shell($L, $A), }
+impl DepChild for DepShell<Bridge<Leaf<Int>>, $T> {}
+impl DepRoot for DepShell<$L, $A>
+where
+  $L: Marker
+  $A: DepRoot.$A
+{}
+impl Marker for Bridge<$M> where $M: DepChild {}
+impl DepChild for Leaf<$T> {}
+impl DepRoot for Leaf<$T> {}
+"#,
+            spire::ParserContext::project(0),
+        )
+        .unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        checker.predeclare_type_signatures(&resolved).unwrap();
+        checker.predeclare_traits(&resolved).unwrap();
+        let trait_key = checker.trait_key_by_short_name("DepChild").unwrap();
+        let implementation = checker
+            .trait_impl_candidate_keys(&trait_key)
+            .into_iter()
+            .map(|key| &checker.trait_impls[&key])
+            .find(|info| info.target_name.ends_with("DepShell"))
+            .unwrap();
+        assert_eq!(implementation.constructor_slot_positions, vec![1]);
+        assert!(checker.constructor_mapping_resolution.pending.is_empty());
+        assert!(checker.constructor_mapping_resolution.resolving.is_empty());
+        assert!(checker
+            .constructor_mapping_resolution
+            .requests
+            .borrow()
+            .is_none());
+    }
+
+    #[test]
+    fn declaration_mapping_cycle_rejects_reentry_and_clears_transient_state() {
+        let ast = spire::parse_with_context(
+            "deftrait MappingRoot where Self: Type<$A> {}\n\
+             deftrait MappingChild where Self: MappingRoot {}\n\
+             defenum MappingBox<$A> { Box($A), }\n\
+             impl MappingRoot for MappingBox<$A> {}\n\
+             impl MappingChild for MappingBox<$A> {}",
+            spire::ParserContext::project(0),
+        )
+        .unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        checker.check_program(resolved).unwrap();
+        let trait_key = checker.trait_key_by_short_name("MappingChild").unwrap();
+        let key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
+        // Simulate a declaration dependency requesting its own unfinished impl.
+        // Source-level trait inheritance cycles are rejected earlier by closure.
+        checker
+            .constructor_mapping_resolution
+            .pending
+            .insert(key.clone());
+        checker.constructor_mapping_resolution.resolving.insert(key);
+        let substitutions = checker.substitutions.clone();
+        let bounds = checker.tyvar_bounds.clone();
+        let witnesses = checker.constructor_witness_traits.clone();
+        let rigid = checker.rigid_tyvars.clone();
+        let error = checker.resolve_impl_constructor_mappings().unwrap_err();
+        assert!(
+            error.message.contains("mapping dependency cycle"),
+            "{error}"
+        );
+        assert!(checker.constructor_mapping_resolution.pending.is_empty());
+        assert!(checker.constructor_mapping_resolution.resolving.is_empty());
+        assert!(checker
+            .constructor_mapping_resolution
+            .requests
+            .borrow()
+            .is_none());
+        assert_eq!(checker.substitutions, substitutions);
+        assert_eq!(checker.tyvar_bounds, bounds);
+        assert_eq!(checker.constructor_witness_traits, witnesses);
+        assert_eq!(checker.rigid_tyvars, rigid);
     }
 }

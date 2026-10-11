@@ -15,7 +15,7 @@ apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capt
 
 `|>`, `>>`, `>*`, `>=>` は `Bootstrap` の builtin 宣言に対応する固定規則です。関数型への trait impl は不要です。`>*` は `Functor` の `fmap`、`>=>` は `Monad` の `bind` が使える型を要求します。`->` は別の固定規則で、Facet path の `Facet::compose` に対応します。
 
-REPL の `:doc` / `:sig` は `:doc |>`, `:sig >>`, `:doc >*`, `:sig >=>`, `:doc ->` のように演算子記号を直接引けます。`->` は `Facet::compose` の説明と signature を表示します。`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` に対応し、`:sig / Int` のように具体的な実装の signature も確認できます。
+REPL の `:doc` / `:sig` は `:doc |>`, `:sig >>`, `:doc >*`, `:sig >=>`, `:doc ->` のように演算子記号を直接引けます。`->` は `Facet::compose` の説明と signature を表示します。`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` に対応し、`:sig /` で定義側の signature を確認できます。引数型による実装指定は受け付けません。
 
 ## `=` Bind
 
@@ -103,8 +103,22 @@ users |*> _.name
 - `List<A> |*> (A -> B) -> List<B>`
 - `Option<A> |*> (A -> B) -> Option<B>`
 
-`Result` のときは `Err` をそのまま通します。  
-右辺は plain function である必要があり、`A -> Result<B>` は受けません。
+`Result` のときは `Err` をそのまま通します。右辺は通常、文脈の中身 `A` から値 `B` を返す関数として推論されます。
+
+右辺が返した `Result` を内側の値として保持できます。`|*>` は入れ子を平らにしません。次の処理が返す `Result` をそのまま結果にしたい場合は `|>=` を使います。
+
+```surtr
+nested: Result<Result<Int>> = Ok(1) |*> {|x: Int| Ok(x)}
+flat = Ok(1) |>= {|x: Int| Ok(x)}
+print(inspect(nested)) # Ok(Ok(1))
+print(inspect(flat))   # Ok(1)
+```
+
+次の例は結果の型を指定していないため、型エラーになります。
+
+```surtr
+value = Ok(1) |*> {|x: Int| Ok(x)}
+```
 
 ```surtr
 scores = [1, 2, 3] |*> add(10)
@@ -235,7 +249,7 @@ def parse_int(text: String) -> Result<Int> {
 }
 
 def require_small(x: Int) -> Result<Int> {
-  if(x < 100, Ok(x), Err(NoneError))
+  if(x < 100, Ok(x), Err(NoneError()))
 }
 
 pipeline = &parse_int >=> &require_small
@@ -244,9 +258,8 @@ pipeline = &parse_int >=> &require_small
 ## `=?` SafeBind
 
 `=?` は失敗しうる値から成功側だけを束縛し、失敗はそのまま返す構文です。
-通常の user code では、`Result<T>` または有効な `@result_effect` carrier を返す
-関数の中で使います。Result effect がある場合、RHS の失敗と pattern failure は
-最終 carrier の Result failure として保持されます。
+通常の関数では、返り型がMonadFailを実装しているときに使えます。
+RHSの失敗とPattern不一致で生じたErrorを、返り型の`fail`に渡します。
 REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
 
 ```surtr
@@ -260,18 +273,11 @@ Option::Some(saved) =? Option::Some(1)
 Result 以外の RHS は、constructor、literal、list/string、Extractor などの partial pattern が
 値全体を明示検査するときだけそのまま渡されます。Monad payload の暗黙取り出しはありません。
 
-`@result_effect` は Monad / `MonadT<$M>`、単一 public field、field の最外
-constructor と captured base `$M` の一致を満たす struct 宣言にだけ指定できます。
-具体化された base が canonical `Result` の場合だけ有効で、`T<U<Result, _>, A>` や
-annotation のない wrapper の内部から Result を探索することはありません。
-
-`do` 内の Result-context failure target は `Result effect > Alternative > Monad` の順で
-判定されます。Result effect がなければ `Alternative::empty()` に進み、`Monad` 単独では
-failure target を構築できないため compile error です。`do` 外の SafeBind は enclosing
-callable 自身に canonical `Result` または有効な Result-effect return target を要求し、
-通常の `Alternative` returnへは接続しません。`guard` は通常の `Alternative` 関数なので、
-この選択に参加せず、Result effect carrier でも `guard(False)` はその carrier の `empty`
-になります。
+`do`内では`MonadFail > Alternative`の順に失敗を処理します。
+MonadFailがなければ`Alternative::empty()`を使い、どちらもなければコンパイルエラーです。
+`do`外の通常の関数やclosureは、自身の返り型にMonadFailを要求します。
+内側のcallableやdoは、外側の失敗処理能力を引き継ぎません。
+`guard`はFalseのとき、常にAlternativeの`empty`を使います。
 
 `Option::Some(saved) =? Option::Some(1)` は Option 全体を明示的に検査するため有効です。
 一方、`saved =? Option::Some(1)` のような total pattern は、RHS が Result 以外の Monad なので
@@ -283,7 +289,7 @@ SafeBind の流れは次です。
 
 - RHS が `Err(...)` なら現在の failure target に従い、errorを保持するか`empty`へ接続して早期終了します
 - nested Result は再帰的に分解せず、内側の `Ok` / `Err` は通常 constructor pattern として照合します
-- Extractor の `MatchResult::Err` は元 Error を保持し、一般の pattern mismatch は `PatternMismatch` Error にします。構造 pattern 固有の failure kind は維持します
+- Extractor の `MatchResult::Err` は元 Error を保持し、literal・pin・variant の不一致は、それぞれの条件に対応する Error にします。構造 pattern 固有の failure kind は維持します
 - LHS には `uncons`、literal match、Extractor を再帰的に書けます
 - 上のチェックが全部成功したときだけ変数が束縛されて続行します
 
@@ -295,7 +301,7 @@ def parse_int(text: String) -> Result<Int> {
 }
 
 def require_small(x: Int) -> Result<Int> {
-  if(x < 100, Ok(x), Err(NoneError))
+  if(x < 100, Ok(x), Err(NoneError()))
 }
 
 def render(x: Int) -> String {

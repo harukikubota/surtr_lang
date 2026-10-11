@@ -133,8 +133,8 @@ fn format_builtin_type_signature(head: &BuiltinTypeHead) -> String {
     }
 }
 
-fn format_deferror_signature(name: &str, fields: &[RecordField]) -> String {
-    if fields.is_empty() {
+fn format_deferror_signature(name: &str, fields: &[RecordField], body: &Ast) -> String {
+    let header = if fields.is_empty() {
         format!("deferror {}", surface_path_name(name))
     } else {
         let fields = fields
@@ -143,7 +143,22 @@ fn format_deferror_signature(name: &str, fields: &[RecordField]) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         format!("deferror {}({fields})", surface_path_name(name))
+    };
+    let Ast::Closure(_, parameters, _) = body else {
+        unreachable!("deferror body is a block");
+    };
+    if parameters.is_empty() {
+        return header;
     }
+    let inputs = parameters
+        .iter()
+        .map(|parameter| match &parameter.ty {
+            Some(ty) => format!("{}: {}", parameter.name, format_ast_ty(ty)),
+            None => parameter.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{header} {{ |{inputs}| ... }}")
 }
 
 fn format_defenum_signature(name: &str, variants: &[EnumVariant]) -> String {
@@ -439,6 +454,17 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     });
                 }
             }
+            Ast::BuiltinReflectionDecl(_, value, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, value.name()),
+                        kind: DocKind::Function,
+                        module_path: surface_path_name(module_path).to_string(),
+                        signature: Some(value.signature()),
+                        doc: doc.clone(),
+                    });
+                }
+            }
             Ast::IntrinsicDecl(_, name, signature, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
@@ -499,7 +525,9 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         )),
                         doc: doc.clone(),
                     });
-                    for method in methods {
+                }
+                for method in methods {
+                    if let Some(doc) = &method.attrs.doc {
                         out.push(DocEntry {
                             qualified_name: qualified_name(
                                 module_path,
@@ -618,80 +646,6 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     }
                 }
             }
-            Ast::TraitImplDef(_, trait_name, trait_args, target_ty, _, methods, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, &rendered),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(rendered),
-                        doc: doc.clone(),
-                    });
-                }
-                for method in methods {
-                    let method_parts = match method {
-                        Ast::Def(
-                            _,
-                            name,
-                            _return_type_arguments,
-                            params,
-                            ret_ty,
-                            where_clause,
-                            _,
-                            method_attrs,
-                        ) => Some((
-                            name,
-                            [].as_slice(),
-                            params.as_slice(),
-                            ret_ty,
-                            where_clause.as_ref(),
-                            method_attrs,
-                        )),
-                        Ast::BuiltinDecl(_, name, _, params, ret_ty, _, method_attrs) => Some((
-                            name,
-                            [].as_slice(),
-                            params.as_slice(),
-                            ret_ty,
-                            None,
-                            method_attrs,
-                        )),
-                        _ => None,
-                    };
-                    if let Some((name, type_params, params, ret_ty, where_clause, method_attrs)) =
-                        method_parts
-                    {
-                        if let Some(doc) = &method_attrs.doc {
-                            let rendered = format_trait_impl_method_signature(
-                                trait_name,
-                                trait_args,
-                                target_ty,
-                                name,
-                                type_params,
-                                params,
-                                ret_ty,
-                                where_clause,
-                            );
-                            out.push(DocEntry {
-                                qualified_name: qualified_name(
-                                    module_path,
-                                    &format!(
-                                        "{}::{}",
-                                        format_trait_impl_signature(
-                                            trait_name, trait_args, target_ty,
-                                        ),
-                                        name
-                                    ),
-                                ),
-                                kind: DocKind::Function,
-                                module_path: surface_path_name(module_path).to_string(),
-                                signature: Some(rendered),
-                                doc: doc.clone(),
-                            });
-                        }
-                    }
-                }
-            }
             Ast::BuiltinTypeDecl(_, head, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
@@ -703,13 +657,13 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     });
                 }
             }
-            Ast::DeferrorDef(_, name, fields, _, attrs) => {
+            Ast::DeferrorDef(_, name, fields, body, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
                         module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_deferror_signature(name, fields)),
+                        signature: Some(format_deferror_signature(name, fields, body)),
                         doc: doc.clone(),
                     });
                 }
@@ -787,6 +741,15 @@ fn collect_signature_entries_for_ast(
                     qualified_name(module_path, name),
                     DocKind::Function,
                     format_fun_signature(name, &[], params, ret_ty),
+                );
+            }
+            Ast::BuiltinReflectionDecl(_, reflection, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, reflection.name()),
+                    DocKind::Function,
+                    reflection.signature(),
                 );
             }
             Ast::IntrinsicDecl(_, name, signature, _) => {
@@ -991,13 +954,13 @@ fn collect_signature_entries_for_ast(
                     format_builtin_type_signature(head),
                 );
             }
-            Ast::DeferrorDef(_, name, fields, _, _) => {
+            Ast::DeferrorDef(_, name, fields, body, _) => {
                 push_signature_entry(
                     out,
                     module_path,
                     qualified_name(module_path, name),
                     DocKind::Type,
-                    format_deferror_signature(name, fields),
+                    format_deferror_signature(name, fields, body),
                 );
             }
             Ast::EnumDef(_, name, type_params, variants, attrs) => {
@@ -1122,6 +1085,91 @@ pub fn collect_signature_entries_with_base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_doc_fixture(source: &str) -> Vec<Ast> {
+        spire::parse_with_context(source, spire::ParserContext::module(0, None)).unwrap()
+    }
+
+    #[test]
+    fn trait_body_and_method_docs_are_independent() {
+        for (body_doc, method_doc) in [
+            (None, None),
+            (Some("body"), None),
+            (None, Some("method")),
+            (Some("body"), Some("method")),
+        ] {
+            let attribute = |doc: Option<&str>| {
+                doc.map(|text| format!("@doc \"\"\"{text}\"\"\"\n"))
+                    .unwrap_or_default()
+            };
+            let ast = parse_doc_fixture(&format!(
+                "{}deftrait Describable {{ {}def describe(self: Self) -> String }}",
+                attribute(body_doc),
+                attribute(method_doc)
+            ));
+            let docs = collect_doc_entries(&[], &ast, None);
+            assert_eq!(
+                docs.len(),
+                usize::from(body_doc.is_some()) + usize::from(method_doc.is_some())
+            );
+            assert_eq!(
+                docs.iter()
+                    .find(|entry| entry.qualified_name == "Describable")
+                    .map(|entry| entry.doc.as_str()),
+                body_doc
+            );
+            assert_eq!(
+                docs.iter()
+                    .find(|entry| entry.qualified_name == "Describable::describe")
+                    .map(|entry| entry.doc.as_str()),
+                method_doc
+            );
+            assert_eq!(collect_signature_entries(&[], &ast, None).len(), 2);
+        }
+    }
+
+    #[test]
+    fn trait_impl_docs_remain_in_ast_but_are_not_collected() {
+        let ast = parse_doc_fixture(
+            r#"@doc """implementation body"""
+impl Describable for User {
+  @doc """implementation method"""
+  def describe(self: Self) -> String { "user" }
+}"#,
+        );
+        let Ast::TraitImplDef(_, _, _, _, _, methods, attrs) = &ast[0] else {
+            panic!("trait impl");
+        };
+        assert_eq!(attrs.doc.as_deref(), Some("implementation body"));
+        let Ast::Def(_, _, _, _, _, _, _, method_attrs) = &methods[0] else {
+            panic!("impl method");
+        };
+        assert_eq!(method_attrs.doc.as_deref(), Some("implementation method"));
+        assert!(collect_doc_entries(&[], &ast, None).is_empty());
+        let signatures = collect_signature_entries(&[], &ast, None);
+        assert_eq!(signatures.len(), 2);
+        assert!(signatures
+            .iter()
+            .any(|entry| entry.signature.contains("describe(")));
+    }
+
+    #[test]
+    fn error_signature_distinguishes_payload_and_constructor_input() {
+        let ast = spire::parse_with_context(
+            "deferror Negative(num: Int) { |value: Int| Self(message: \"negative\", num: value) }",
+            spire::ParserContext::project(0),
+        )
+        .unwrap();
+        let signatures = collect_signature_entries(&[], &ast, None);
+        let error = signatures
+            .iter()
+            .find(|entry| entry.qualified_name.ends_with("Negative"))
+            .unwrap();
+        assert_eq!(
+            error.signature,
+            "deferror Negative(num: Int) { |value: Int| ... }"
+        );
+    }
 
     #[test]
     fn malformed_special_variant_does_not_invent_a_signature_payload() {

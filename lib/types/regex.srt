@@ -5,25 +5,6 @@ builtins.
 """
 @builtin type Regex
 
-@doc """
-Standard `RegexCaptures` type declaration.
-Represents one successful capture set produced by `Regex::captures`.
-"""
-@builtin type RegexCaptures
-
-@doc """
-Standard `RegexMatch` type declaration.
-Represents one concrete match span produced by `Regex::find` / `Regex::find_all`.
-"""
-@builtin type RegexMatch
-
-@doc """
-Regex compile error returned by `Regex::compile`.
-"""
-deferror RegexCompileError(detail: String) {
-  detail
-}
-
 impl Regex {
   @doc """
   Compile a pattern string into a `Regex` value.
@@ -45,25 +26,25 @@ impl Regex {
 
   @doc """
   Return the first capture set for `input`.
-  Missing match returns `Err(NoneError)`.
+  Missing matches return the corresponding Regex operation error.
   ## REPL
   xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
   xldr(2)> caps =? Regex::captures(re, "aaabbb")
   xldr(3)> RegexCaptures::whole(caps)
   "aaabbb"
   """
-  @builtin def captures(re: Regex, input: String) -> Result<RegexCaptures, NoneError>
+  @builtin def captures(re: Regex, input: String) -> Result<RegexCaptures, RegexCapturesNoMatch>
 
   @doc """
   Return the first match span for `input`.
-  Missing match returns `Err(NoneError)`.
+  Missing matches return the corresponding Regex operation error.
   ## REPL
   xldr(1)> re =? Regex::compile("a+")
   xldr(2)> m =? Regex::find(re, "caaat")
   xldr(3)> RegexMatch::text(m)
   "aaa"
   """
-  @builtin def find(re: Regex, input: String) -> Result<RegexMatch, NoneError>
+  @builtin def find(re: Regex, input: String) -> Result<RegexMatch, RegexFindNoMatch>
 
   @doc """
   Return all match spans for `input`.
@@ -142,25 +123,25 @@ impl RegexCaptures {
 
   @doc """
   Return capture text by index.
-  Missing index or non-participating group returns `Err(NoneError)`.
+  Unknown indexes and non-participating groups return distinct capture errors.
   ## REPL
   xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
   xldr(2)> caps =? Regex::captures(re, "aaabbb")
   xldr(3)> RegexCaptures::get(caps, 1)
   Ok("aaa")
   """
-  @builtin def get(caps: RegexCaptures, idx: Int) -> Result<String, NoneError>
+  @builtin def get(caps: RegexCaptures, idx: Int) -> Result<String>
 
   @doc """
   Return capture text by group name.
-  Missing name or non-participating group returns `Err(NoneError)`.
+  Unknown names and non-participating groups return distinct capture errors.
   ## REPL
   xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
   xldr(2)> caps =? Regex::captures(re, "aaabbb")
   xldr(3)> RegexCaptures::get_name(caps, "rhs")
   Ok("bbb")
   """
-  @builtin def get_name(caps: RegexCaptures, name: String) -> Result<String, NoneError>
+  @builtin def get_name(caps: RegexCaptures, name: String) -> Result<String>
 }
 
 impl RegexMatch {
@@ -193,4 +174,54 @@ impl RegexMatch {
   4
   """
   @builtin def end(m: RegexMatch) -> Int
+}
+
+@doc """
+Standard `RegexCaptures` type declaration.
+Represents one successful capture set produced by `Regex::captures`.
+"""
+@builtin type RegexCaptures
+
+@doc """
+Standard `RegexMatch` type declaration.
+Represents one concrete match span produced by `Regex::find` / `Regex::find_all`.
+"""
+@builtin type RegexMatch
+
+deferror RegexFindNoMatch(pattern: String, input: String) {
+  |pattern: String, input: String|
+  Self(message: "regex #{inspect(pattern)} found no match in #{inspect(input)}", pattern, input)
+}
+
+deferror RegexCapturesNoMatch(pattern: String, input: String) {
+  |pattern: String, input: String|
+  Self(message: "regex #{inspect(pattern)} captured no match in #{inspect(input)}", pattern, input)
+}
+
+deferror RegexCaptureIndexMissing(index: Int) {
+  |index: Int|
+  Self(message: "regex capture index not found: #{index}", index)
+}
+
+deferror RegexCaptureNameMissing(name: String) {
+  |name: String|
+  Self(message: "regex capture name not found: #{name}", name)
+}
+
+deferror RegexCaptureIndexUnmatched(index: Int) {
+  |index: Int|
+  Self(message: "regex capture index did not participate: #{index}", index)
+}
+
+deferror RegexCaptureNameUnmatched(name: String) {
+  |name: String|
+  Self(message: "regex capture name did not participate: #{name}", name)
+}
+
+@doc """
+Regex compile error returned by `Regex::compile`.
+"""
+deferror RegexCompileError(pattern: String, detail: String) {
+  |pattern: String, detail: String|
+  Self(message: "regex compile failed for #{inspect(pattern)}: #{detail}", pattern, detail)
 }

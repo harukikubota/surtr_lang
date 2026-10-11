@@ -154,7 +154,8 @@ fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result
         ));
     }
     match parser.peek().clone() {
-        Token::DocString(text) => {
+        Token::DocString(raw) => {
+            let text = raw.text;
             if Parser::string_has_interpolation(&text) {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::DeclarationSyntax,
@@ -175,25 +176,6 @@ fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result
     }
 }
 
-fn make_process_helper_private(def: Ast) -> Ast {
-    match def {
-        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, mut attrs) => {
-            attrs.visibility = Visibility::Private;
-            Ast::Def(
-                span,
-                name,
-                type_params,
-                params,
-                ret_ty,
-                where_clause,
-                body,
-                attrs,
-            )
-        }
-        other => other,
-    }
-}
-
 fn private_doc_forbidden_error(span: Span) -> ParseError {
     ParseError::syntax(
         crate::error::ParseErrorReason::DeclarationSyntax,
@@ -208,6 +190,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         | Ast::ConstDef(_, _, _, _, attrs)
         | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
         | Ast::BuiltinDecl(_, _, _, _, _, _, attrs)
+        | Ast::BuiltinReflectionDecl(_, _, attrs)
         | Ast::IntrinsicDecl(_, _, _, attrs)
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
@@ -277,6 +260,12 @@ fn process_self_param(span: &Span, agent_name: &str) -> ValueParameter {
 
 fn rewrite_process_pattern_self_refs(pattern: &mut AstPattern) {
     match pattern {
+        AstPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                *key = rewrite_process_self_refs(key.clone());
+                rewrite_process_pattern_self_refs(child);
+            }
+        }
         AstPattern::Call(_, _, args) => {
             for arg in args {
                 if let Some(expr) = arg.expression.take() {
@@ -349,7 +338,7 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             span,
             stmts.into_iter().map(rewrite_process_self_refs).collect(),
         ),
-        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+        Ast::Do(span, return_type_arguments, statements, keyword_span) => Ast::Do(
             span,
             return_type_arguments,
             statements
@@ -382,13 +371,17 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
                     }
                 })
                 .collect(),
+            keyword_span,
         ),
         Ast::Bind(span, pat, rhs) => {
             Ast::Bind(span, pat, Box::new(rewrite_process_self_refs(*rhs)))
         }
-        Ast::SafeBind(span, pat, rhs) => {
-            Ast::SafeBind(span, pat, Box::new(rewrite_process_self_refs(*rhs)))
-        }
+        Ast::SafeBind(span, pat, rhs, operator_span) => Ast::SafeBind(
+            span,
+            pat,
+            Box::new(rewrite_process_self_refs(*rhs)),
+            operator_span,
+        ),
         Ast::BinOp(span, op, lhs, rhs) => Ast::BinOp(
             span,
             op,
@@ -788,6 +781,56 @@ fn process_pid_call(span: &Span, lower_module: &str, process_name: &str) -> Ast 
     )
 }
 
+// Keep PID lookup outside the runtime-owned message execution. State reading,
+// handler evaluation, and every postprocessing path belong to its callback.
+fn process_execution_body(
+    span: &Span,
+    lower_module: &str,
+    process_name: &str,
+    singleton: bool,
+    statements: Vec<Ast>,
+) -> Ast {
+    let mut outer = Vec::new();
+    if singleton {
+        outer.push(pid_bind(span, lower_module, process_name));
+    }
+    outer.push(hidden_runtime_call(
+        span,
+        "__process_execute",
+        vec![
+            var(span, "pid"),
+            Ast::Closure(
+                span.clone(),
+                Vec::new(),
+                Box::new(Ast::Block(span.clone(), statements)),
+            ),
+        ],
+    ));
+    Ast::Block(span.clone(), outer)
+}
+
+fn process_postprocess_call(span: &Span) -> Ast {
+    hidden_runtime_call(span, "__process_postprocess", vec![var(span, "pid")])
+}
+
+fn process_get_statements(span: &Span, call_args: Vec<Ast>) -> Vec<Ast> {
+    vec![
+        process_state_bind(span, "Agent"),
+        Ast::SafeBind(
+            span.clone(),
+            AstPattern::Var(span.clone(), "reply".to_string()),
+            Box::new(call(span, "__agent_get", call_args)),
+            span.clone(),
+        ),
+        process_postprocess_call(span),
+        Ast::ConstructorCall(
+            span.clone(),
+            "Global::Result::Ok".to_string(),
+            vec![positional(var(span, "reply"))],
+        ),
+    ]
+}
+
 fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
     Ast::SafeBind(
         span.clone(),
@@ -797,6 +840,7 @@ fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
             &[lower_module, "state"],
             vec![var(span, "pid")],
         )),
+        span.clone(),
     )
 }
 
@@ -846,13 +890,12 @@ fn build_readonly_get_wrapper(
     let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, &surface_params));
-    let body = Ast::Block(
-        span.clone(),
-        vec![
-            pid_bind(span, "Agent", agent_name),
-            process_state_bind(span, "Agent"),
-            call(span, "__agent_get", call_args),
-        ],
+    let body = process_execution_body(
+        span,
+        "Agent",
+        agent_name,
+        true,
+        process_get_statements(span, call_args),
     );
     Ok(Ast::Def(
         span.clone(),
@@ -1118,13 +1161,13 @@ fn build_state_get_wrapper(
     };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
-    let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "Agent", agent_name));
-    }
-    stmts.push(process_state_bind(span, "Agent"));
-    stmts.push(call(span, "__agent_get", call_args));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(
+        span,
+        "Agent",
+        agent_name,
+        singleton,
+        process_get_statements(span, call_args),
+    );
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -1160,21 +1203,20 @@ fn build_state_set_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "Agent", agent_name));
-    }
     stmts.push(process_state_bind(span, "Agent"));
     stmts.push(Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "next_state".to_string()),
         Box::new(call(span, "__agent_set", call_args)),
+        span.clone(),
     ));
+    stmts.push(process_postprocess_call(span));
     stmts.push(internal_qualified_call(
         span,
         &["Agent", "store"],
         vec![var(span, "pid"), var(span, "next_state")],
     ));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(span, "Agent", agent_name, singleton, stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -1245,15 +1287,14 @@ fn build_genserver_call_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "GenServer", process_name));
-    }
     stmts.push(process_state_bind(span, "GenServer"));
     stmts.push(Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "call_result".to_string()),
         Box::new(call(span, internal_handler_name, call_args)),
+        span.clone(),
     ));
+    stmts.push(process_postprocess_call(span));
     stmts.push(Ast::Match(
         span.clone(),
         Box::new(var(span, "call_result")),
@@ -1334,7 +1375,7 @@ fn build_genserver_call_wrapper(
             },
         ],
     ));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(span, "GenServer", process_name, singleton, stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -1371,15 +1412,14 @@ fn build_genserver_cast_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    if singleton {
-        stmts.push(pid_bind(span, "GenServer", process_name));
-    }
     stmts.push(process_state_bind(span, "GenServer"));
     stmts.push(Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "cast_result".to_string()),
         Box::new(call(span, internal_handler_name, call_args)),
+        span.clone(),
     ));
+    stmts.push(process_postprocess_call(span));
     stmts.push(Ast::Match(
         span.clone(),
         Box::new(var(span, "cast_result")),
@@ -1429,7 +1469,7 @@ fn build_genserver_cast_wrapper(
             },
         ],
     ));
-    let body = Ast::Block(span.clone(), stmts);
+    let body = process_execution_body(span, "GenServer", process_name, singleton, stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -1483,6 +1523,15 @@ impl Parser<'_> {
         span: Span,
         kind: &str,
     ) -> Result<(), ParseError> {
+        if sindr::reflection::Reflection::from_name(name).is_some()
+            || name == sindr::reflection::RESERVED_ENV_NAME
+        {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                format!("{name} is reserved for source reflection"),
+                span,
+            ));
+        }
         if sindr::names::special_enum_variant_alias_meta(name).is_some() {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::DeclarationSyntax,
@@ -1517,54 +1566,50 @@ impl Parser<'_> {
         Ok(())
     }
 
-    pub(super) fn parse_field_modifiers(&mut self) -> Result<(Visibility, bool), ParseError> {
+    pub(super) fn parse_field_modifiers(
+        &mut self,
+        struct_readonly: bool,
+    ) -> Result<(Visibility, bool), ParseError> {
         let mut visibility = Visibility::Public;
-        let mut saw_visibility = false;
+        let mut visibility_span = None;
         let mut readonly = false;
-
         loop {
             match self.peek() {
-                Token::Private => {
-                    if saw_visibility {
+                Token::Private | Token::Public => {
+                    if visibility_span.is_some() {
                         return Err(ParseError::syntax(
                             crate::error::ParseErrorReason::DeclarationSyntax,
                             "field visibility may only be specified once",
                             self.peek_span(),
                         ));
                     }
-                    saw_visibility = true;
-                    visibility = Visibility::Private;
-                    self.advance();
-                    self.skip_newlines();
-                }
-                Token::Public => {
-                    if saw_visibility {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "field visibility may only be specified once",
-                            self.peek_span(),
-                        ));
-                    }
-                    saw_visibility = true;
-                    visibility = Visibility::Public;
+                    visibility = if matches!(self.peek(), Token::Private) {
+                        Visibility::Private
+                    } else {
+                        Visibility::Public
+                    };
+                    visibility_span = Some(self.peek_span());
                     self.advance();
                     self.skip_newlines();
                 }
                 Token::Readonly => {
-                    if readonly {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "readonly field modifier may only be specified once",
-                            self.peek_span(),
-                        ));
-                    }
                     readonly = true;
                     self.advance();
                     self.skip_newlines();
                 }
-                _ => return Ok((visibility, readonly)),
+                _ => break,
             }
         }
+        if struct_readonly && visibility == Visibility::Public {
+            if let Some(span) = visibility_span {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "@readonly struct fields cannot be explicitly public",
+                    span,
+                ));
+            }
+        }
+        Ok((visibility, readonly))
     }
 
     pub(super) fn parse_import_selector_list(&mut self) -> Result<(Vec<Symbol>, Span), ParseError> {
@@ -2065,27 +2110,10 @@ impl Parser<'_> {
         let where_clause = self.parse_optional_where_clause(
             WhereClauseContext::inherent_implementation_method(target.to_string()),
         )?;
-        self.skip_newlines();
-        self.expect(&Token::LBrace)?;
         self.impl_target_stack.push(target.to_string());
-        let body_stmts = self.parse_block_stmts();
+        let parsed_body = self.parse_function_body(&sp);
         self.impl_target_stack.pop();
-        let body_stmts = body_stmts?;
-        if body_stmts.is_empty() {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::DeclarationSyntax,
-                "Function body must not be empty",
-                self.peek_span(),
-            ));
-        }
-        let end = self.expect(&Token::RBrace)?;
-        let body = Ast::Block(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            body_stmts,
-        );
+        let (body, end) = parsed_body?;
 
         let ast = Ast::Def(
             Span {
@@ -2103,7 +2131,6 @@ impl Parser<'_> {
                 builtin: attrs.builtin,
                 compiler_generated: attrs.compiler_generated,
                 derives: attrs.derives,
-                result_effect: attrs.result_effect,
                 facet_path_kind: attrs.facet_path_kind,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
@@ -2365,7 +2392,8 @@ impl Parser<'_> {
                         ));
                     }
                     match self.peek().clone() {
-                        Token::DocString(text) => {
+                        Token::DocString(raw) => {
+                            let text = raw.text;
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
                                     crate::error::ParseErrorReason::DeclarationSyntax,
@@ -2806,32 +2834,13 @@ impl Parser<'_> {
 
         let (body, end) = if matches!(
             self.tokens.get(lookahead).map(|sp| &sp.token),
-            Some(Token::LBrace)
+            Some(Token::LBrace | Token::Bind)
         ) {
-            self.skip_newlines();
-            self.expect(&Token::LBrace)?;
             self.impl_target_stack.push("Self".to_string());
-            let body_stmts = self.parse_block_stmts();
+            let parsed_body = self.parse_function_body(&sp);
             self.impl_target_stack.pop();
-            let body_stmts = body_stmts?;
-            if body_stmts.is_empty() {
-                return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::DeclarationSyntax,
-                    "Function body must not be empty",
-                    self.peek_span(),
-                ));
-            }
-            let end = self.expect(&Token::RBrace)?;
-            (
-                Some(Box::new(Ast::Block(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    body_stmts,
-                ))),
-                end.end,
-            )
+            let (body, end) = parsed_body?;
+            (Some(Box::new(body)), end.end)
         } else {
             if visibility == Visibility::Private {
                 return Err(ParseError::syntax(
@@ -3018,7 +3027,7 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let (visibility, readonly) = self.parse_field_modifiers()?;
+            let (visibility, readonly) = self.parse_field_modifiers(attrs.readonly)?;
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type_in_context(field_type_context.clone())?;
@@ -3427,7 +3436,7 @@ impl Parser<'_> {
                         return Err(ParseError::incomplete(")", self.peek_span()));
                     }
                     self.skip_newlines();
-                    let (visibility, readonly) = self.parse_field_modifiers()?;
+                    let (visibility, readonly) = self.parse_field_modifiers(false)?;
                     if readonly {
                         return Err(ParseError::syntax(
                             crate::error::ParseErrorReason::DeclarationSyntax,
@@ -3460,13 +3469,37 @@ impl Parser<'_> {
             self.expect(&Token::RParen)?;
         }
 
-        // Show block: { expr }
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        }
+        // The header declares stored payload; block arguments are constructor inputs.
         self.skip_newlines();
-        self.expect(&Token::LBrace)?;
+        let body_start = self.expect(&Token::LBrace)?;
         self.skip_newlines();
-        let show_expr = self.parse_expr()?;
-        self.skip_newlines();
-        let end = self.expect(&Token::RBrace)?;
+        let show_expr = if matches!(self.peek(), Token::Pipe) {
+            self.parse_closure_literal(body_start)?
+        } else {
+            let stmts = self.parse_block_stmts()?;
+            let end = self.expect(&Token::RBrace)?;
+            Ast::Closure(
+                Span {
+                    start: body_start.start,
+                    end: end.end,
+                },
+                Vec::new(),
+                Box::new(Ast::Block(
+                    Span {
+                        start: body_start.start,
+                        end: end.end,
+                    },
+                    stmts,
+                )),
+            )
+        };
+        let Ast::Closure(end, _, _) = &show_expr else {
+            unreachable!("deferror body is a block")
+        };
+        let end = end.clone();
 
         Ok(Ast::DeferrorDef(
             Span {
@@ -4020,23 +4053,6 @@ impl Parser<'_> {
                         }
                     }
                 }
-                "result_effect" => {
-                    if attrs.result_effect.is_some() {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "@result_effect may only appear once before a declaration",
-                            annotator_span,
-                        ));
-                    }
-                    if matches!(self.peek(), Token::LParen) {
-                        return Err(ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "@result_effect does not accept arguments",
-                            annotator_span,
-                        ));
-                    }
-                    attrs.result_effect = Some(annotator_span);
-                }
                 "FacetPathKind" => {
                     if saw_facet_path_kind {
                         return Err(ParseError::syntax(
@@ -4090,7 +4106,8 @@ impl Parser<'_> {
                     }
                     let token = self.peek().clone();
                     match token {
-                        Token::DocString(text) => {
+                        Token::DocString(raw) => {
+                            let text = raw.text;
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
                                     crate::error::ParseErrorReason::DeclarationSyntax,
@@ -4179,16 +4196,6 @@ impl Parser<'_> {
             .as_ref()
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
-
-        if let Some(annotation_span) = attrs.result_effect.as_ref() {
-            if !matches!(self.peek(), Token::Defstruct) {
-                return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::DeclarationSyntax,
-                    "@result_effect may only annotate `defstruct` declarations",
-                    annotation_span.clone(),
-                ));
-            }
-        }
 
         if saw_facet_path_kind {
             if saw_builtin || saw_intrinsic {
@@ -5109,7 +5116,14 @@ impl Parser<'_> {
                 )
                 .with_guidance(crate::error::ParseErrorGuidance::MissingMetaInstance)
             })?,
-            init_policy: init_policy.unwrap_or(InitPolicy::Eager),
+            init_policy: init_policy.ok_or_else(|| {
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "meta requires init_policy",
+                    meta_span.clone(),
+                )
+                .with_guidance(crate::error::ParseErrorGuidance::MissingMetaInitPolicy)
+            })?,
             state: state.ok_or_else(|| {
                 ParseError::syntax(
                     crate::error::ParseErrorReason::DeclarationSyntax,
@@ -5207,6 +5221,13 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
+            if marker.is_none() && matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "Process helpers must use `defp`; change `def` to `defp`",
+                    self.peek_span(),
+                ));
+            }
             let def = self.parse_def_with_attrs(member_attrs, None)?;
             self.ensure_stmt_boundary(&def, true)?;
             match marker {
@@ -5241,15 +5262,6 @@ impl Parser<'_> {
                     set = Some(AgentHandler { def });
                 }
                 None => {
-                    let def = make_process_helper_private(def);
-                    let attrs = ast_decl_attrs(&def).ok_or_else(|| {
-                        ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "process helper lowering must produce a declaration",
-                            def.span().clone(),
-                        )
-                    })?;
-                    validate_doc_visibility(attrs, def.span())?;
                     helpers.push(def);
                 }
             }
@@ -5361,10 +5373,10 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
-            if matches!(self.peek(), Token::Defp) {
+            if marker.is_none() && matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::DeclarationSyntax,
-                    "GenServer body uses `def`; visibility is controlled by annotations.",
+                    "Process helpers must use `defp`; change `def` to `defp`",
                     self.peek_span(),
                 ));
             }
@@ -5399,15 +5411,6 @@ impl Parser<'_> {
                     ));
                 }
                 None => {
-                    let def = make_process_helper_private(def);
-                    let attrs = ast_decl_attrs(&def).ok_or_else(|| {
-                        ParseError::syntax(
-                            crate::error::ParseErrorReason::DeclarationSyntax,
-                            "process helper lowering must produce a declaration",
-                            def.span().clone(),
-                        )
-                    })?;
-                    validate_doc_visibility(attrs, def.span())?;
                     helpers.push(def);
                 }
             }
@@ -5903,6 +5906,12 @@ impl Parser<'_> {
         start: usize,
         attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
+        if matches!(
+            self.tokens.get(self.pos + 1).map(|token| &token.token),
+            Some(Token::Reflection(_))
+        ) {
+            return self.parse_builtin_reflection_decl(start, attrs);
+        }
         let (_def_span, name, return_type_arguments, params, ret_ty, where_clause, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
 
@@ -6121,6 +6130,71 @@ impl Parser<'_> {
         self.parse_def_with_attrs(DeclAttrs::default(), None)
     }
 
+    fn parse_builtin_reflection_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Def)?;
+        let span = self.peek_span();
+        let Token::Reflection(value) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "@builtin def requires a canonical reflection name",
+                span,
+            ));
+        };
+        self.advance();
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.expect(&Token::RParen)?;
+        }
+        let expected = value.type_name();
+        self.expect(&Token::Arrow)?;
+        let ty = self.parse_type()?;
+        if !matches!(&ty, AstTy::Named(_, name) if name == expected) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                format!("{} must return {expected}", value.name()),
+                super::ast_ty_span(&ty).clone(),
+            ));
+        }
+        if !matches!(self.peek(), Token::Newline | Token::Eof | Token::RBrace) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "@builtin reflection function has no body",
+                self.peek_span(),
+            ));
+        }
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|token| &token.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+        if matches!(
+            self.tokens.get(lookahead).map(|token| &token.token),
+            Some(Token::LBrace)
+        ) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "@builtin reflection function has no body",
+                self.tokens[lookahead].span.clone(),
+            ));
+        }
+        Ok(Ast::BuiltinReflectionDecl(
+            Span {
+                start,
+                end: self.tokens[self.pos - 1].span.end,
+            },
+            value,
+            attrs,
+        ))
+    }
+
     pub(super) fn parse_const_def(&mut self) -> Result<Ast, ParseError> {
         let start = self.peek_span().start;
         let visibility = match self.peek() {
@@ -6170,6 +6244,92 @@ impl Parser<'_> {
         self.parse_extractor_def_with_attrs(DeclAttrs::default(), None)
     }
 
+    fn parse_function_body(&mut self, definition_span: &Span) -> Result<(Ast, Span), ParseError> {
+        self.skip_newlines();
+        let previous_level = self.context.level;
+        self.context.level = super::context::DeclLevel::Expr;
+        let result = (|| {
+            if matches!(self.peek(), Token::LBrace) {
+                self.advance();
+                let statements = self.parse_block_stmts()?;
+                if statements.is_empty() {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "Function body must not be empty",
+                        self.peek_span(),
+                    ));
+                }
+                let end = self.expect(&Token::RBrace)?;
+                return Ok((
+                    Ast::Block(
+                        Span {
+                            start: definition_span.start,
+                            end: end.end,
+                        },
+                        statements,
+                    ),
+                    end,
+                ));
+            }
+
+            let equals = self.expect(&Token::Bind)?;
+            let structured_body = matches!(self.peek(), Token::Do | Token::Match | Token::Cond);
+            let mut expression = self.parse_non_assignment_expr()?;
+            if structured_body
+                && !matches!(expression, Ast::Do(..) | Ast::Match(..) | Ast::Cond(..))
+            {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "A do, match, or cond function body must end at that expression",
+                    expression.span().clone(),
+                ));
+            }
+            let mut end = expression.span().clone();
+            if !structured_body {
+                if matches!(self.peek(), Token::Semicolon) {
+                    end = self.advance().span;
+                    expression = Ast::Semi(
+                        Span {
+                            start: expression.span().start,
+                            end: end.end,
+                        },
+                        Box::new(expression),
+                    );
+                }
+                let body_span = Span {
+                    start: equals.end,
+                    end: end.end,
+                };
+                if self.source_text_for_span(&body_span).contains('\n') {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "An expression function body must stay on one source line; use a block, do, match, or cond for multiple lines",
+                        body_span,
+                    ));
+                }
+            }
+            if !matches!(self.peek(), Token::Newline | Token::Eof | Token::RBrace) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "Expected newline, end of input, or closing brace after function body",
+                    self.peek_span(),
+                ));
+            }
+            Ok((
+                Ast::Block(
+                    Span {
+                        start: definition_span.start,
+                        end: end.end,
+                    },
+                    vec![expression],
+                ),
+                end,
+            ))
+        })();
+        self.context.level = previous_level;
+        result
+    }
+
     pub(super) fn parse_def_with_attrs(
         &mut self,
         attrs: DeclAttrs,
@@ -6187,24 +6347,7 @@ impl Parser<'_> {
             },
         )?;
 
-        self.skip_newlines();
-        self.expect(&Token::LBrace)?;
-        let body_stmts = self.parse_block_stmts()?;
-        if body_stmts.is_empty() {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::DeclarationSyntax,
-                "Function body must not be empty",
-                self.peek_span(),
-            ));
-        }
-        let end = self.expect(&Token::RBrace)?;
-        let body = Ast::Block(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            body_stmts,
-        );
+        let (body, end) = self.parse_function_body(&sp)?;
 
         let ast = Ast::Def(
             Span {

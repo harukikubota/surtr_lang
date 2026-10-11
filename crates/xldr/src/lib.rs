@@ -24,11 +24,11 @@ pub use loader::{
     collect_module_sources_with_stdlib_variant, collect_script_include_directives,
     collect_test_module_sources_with_module_stages, compose_script_compile_sources,
     compose_script_compile_sources_with_stdlib_variant, derive_primary_module_path,
-    is_default_std_module_file_name, is_default_std_module_path,
-    module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
-    CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
-    ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
-    StdlibVariant,
+    extend_module_sources_with_module_stages, is_default_std_module_file_name,
+    is_default_std_module_path, module_path_from_source_or_file_name, prepare_script_sources,
+    script_pseudo_module_path, CompileSources, LoadError, ModuleInput, ModuleSources,
+    PreparedScriptSources, ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor,
+    StagedModule, StdlibVariant,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +182,10 @@ pub enum ModuleStageParseErrorKind {
         second_file_name: String,
         span: spire::ast::Span,
     },
+    WorkerSpawnFailure {
+        module_path: Option<String>,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +198,15 @@ impl ModuleStageParseError {
     pub fn message(&self) -> String {
         match &self.kind {
             ModuleStageParseErrorKind::Parse { error } => error.message(),
+            ModuleStageParseErrorKind::WorkerSpawnFailure {
+                module_path,
+                message,
+            } => match module_path {
+                Some(module_path) => {
+                    format!("cannot start parser worker for module `{module_path}`: {message}")
+                }
+                None => format!("cannot start parser worker for definition source: {message}"),
+            },
             ModuleStageParseErrorKind::DuplicateModulePath {
                 module_path,
                 first_file_name,
@@ -210,6 +223,53 @@ impl ModuleStageParseError {
         match &self.kind {
             ModuleStageParseErrorKind::Parse { error } => error.span().clone(),
             ModuleStageParseErrorKind::DuplicateModulePath { span, .. } => span.clone(),
+            ModuleStageParseErrorKind::WorkerSpawnFailure { .. } => {
+                spire::ast::Span { start: 0, end: 0 }
+            }
+        }
+    }
+
+    pub fn diagnostic_spec(
+        &self,
+        sources: &diagnostics::SourceRegistry,
+    ) -> diagnostics::DiagnosticSpec {
+        let source = sources.source(self.source_id).unwrap_or("");
+        match &self.kind {
+            ModuleStageParseErrorKind::Parse { error } => {
+                diagnostics::parse_error_spec(self.source_id, source, error)
+            }
+            ModuleStageParseErrorKind::DuplicateModulePath { .. } => {
+                diagnostics::parse_policy_error_spec(
+                    self.source_id,
+                    source,
+                    self.message(),
+                    self.span(),
+                )
+            }
+            ModuleStageParseErrorKind::WorkerSpawnFailure { .. } => {
+                let span = self.span();
+                let diagnostic = diagnostics::StructuredDiagnostic {
+                    reason: diagnostics::DiagnosticReason::Parse(
+                        diagnostics::ParseDiagnosticReason::WorkerSpawnFailure,
+                    ),
+                    origin: diagnostics::DiagnosticOrigin::Parse,
+                    data: diagnostics::DiagnosticData::Parse(diagnostics::ParseDiagnosticData {
+                        detail: self.message(),
+                        expected_tokens: Vec::new(),
+                        cursor_span: span.clone(),
+                        guidance: None,
+                        token_kind: None,
+                    }),
+                    primary: diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::Other,
+                        self.source_id,
+                        span,
+                    ),
+                    related: Vec::new(),
+                    remediation: None,
+                };
+                diagnostics::structured_compile_error_spec(source, &diagnostic)
+            }
         }
     }
 }
@@ -238,6 +298,16 @@ pub fn derive_parser_context(
         derive_source_policy(compile_unit_kind, source_kind, None),
         module_path,
     )
+}
+
+/// Parse and materialize source-position values while spans are file-local.
+pub fn parse_file_source(
+    source: &str,
+    context: spire::ParserContext,
+    file_name: &str,
+) -> Result<Vec<spire::ast::Ast>, spire::error::ParseError> {
+    let ast = spire::parse_with_context(source, context)?;
+    spire::materialize_reflections(ast, source, Some(std::path::Path::new(file_name)))
 }
 
 pub fn derive_runtime_policy(
@@ -468,10 +538,21 @@ pub fn cached_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     CACHE.get_or_init(collect_lib_module_inputs).clone()
 }
 
-pub fn cached_additional_default_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
-    static CACHE: OnceLock<Result<Vec<ModuleInput>, LoadError>> = OnceLock::new();
-    CACHE
-        .get_or_init(collect_additional_default_std_module_inputs)
+pub fn cached_default_script_module_sources(
+    stdlib_variant: StdlibVariant,
+) -> Result<Arc<ModuleSources>, LoadError> {
+    static DEFAULT: OnceLock<Result<Arc<ModuleSources>, LoadError>> = OnceLock::new();
+    static TEST_ENABLED: OnceLock<Result<Arc<ModuleSources>, LoadError>> = OnceLock::new();
+    let cache = match stdlib_variant {
+        StdlibVariant::Default => &DEFAULT,
+        StdlibVariant::TestEnabled => &TEST_ENABLED,
+    };
+    cache
+        .get_or_init(|| {
+            let additional = collect_additional_default_std_module_inputs()?;
+            collect_module_sources_with_stdlib_variant(stdlib_variant, &[], &[additional])
+                .map(Arc::new)
+        })
         .clone()
 }
 
@@ -511,15 +592,6 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
     compile_unit_kind: CompileUnitKind,
     compile_sources: &CompileSources,
 ) -> String {
-    let user_file_name = compile_sources
-        .sources
-        .file_name(compile_sources.user_source_id)
-        .unwrap_or("<unknown>");
-    let user_source = compile_sources
-        .sources
-        .source(compile_sources.user_source_id)
-        .unwrap_or("");
-
     let mut key = String::new();
     key.push_str("surtr-test-semantic-prefix-v");
     key.push_str(&TEST_SEMANTIC_PREFIX_CACHE_SCHEMA.to_string());
@@ -538,13 +610,6 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
         CompileUnitKind::Project => "project",
         CompileUnitKind::Repl => "repl",
     });
-    key.push('\x1f');
-    key.push_str(user_file_name);
-    key.push('\x1f');
-    key.push_str(&compile_sources.user_module_path);
-    key.push('\x1f');
-    key.push_str(&stable_hash_hex(user_source));
-
     for stage in &compile_sources.module_stages {
         key.push('|');
         for module in stage {
@@ -556,9 +621,11 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
                 .sources
                 .source(module.source_id)
                 .unwrap_or("");
+            key.push_str(&module.source_id.0.to_string());
+            key.push('\x1e');
             key.push_str(file_name);
             key.push('\x1e');
-            key.push_str(&module.module_path);
+            key.push_str(&format!("{:?}", module.module_path));
             key.push('\x1e');
             key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');
@@ -571,15 +638,25 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
 }
 
 fn default_stdlib_source_fingerprint() -> Result<String, String> {
-    let module_sources =
-        collect_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
-    Ok(stdlib_semantic_cache_key(&module_sources))
+    static FINGERPRINT: OnceLock<Result<String, String>> = OnceLock::new();
+    FINGERPRINT
+        .get_or_init(|| {
+            let module_sources =
+                collect_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
+            Ok(stdlib_semantic_cache_key(&module_sources))
+        })
+        .clone()
 }
 
 fn test_enabled_stdlib_source_fingerprint() -> Result<String, String> {
-    let module_sources =
-        collect_test_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
-    Ok(stdlib_semantic_cache_key(&module_sources))
+    static FINGERPRINT: OnceLock<Result<String, String>> = OnceLock::new();
+    FINGERPRINT
+        .get_or_init(|| {
+            let module_sources = collect_test_module_sources_with_module_stages(&[])
+                .map_err(|err| err.to_string())?;
+            Ok(stdlib_semantic_cache_key(&module_sources))
+        })
+        .clone()
 }
 
 pub fn load_cached_test_semantic_prefix(
@@ -813,7 +890,6 @@ fn build_stdlib_snapshot(
         SourceKind::StdDefinitionSource.policy(CompileUnitKind::DefinitionCheck, None),
     );
     typecheck_context.enforce_builtin_type_contracts = true;
-    typecheck_context.allow_error_function_params = true;
     let typed = scar_session
         .typecheck_staged_program_with_context(resolved, typecheck_context)
         .map_err(|e| LoadError::BootstrapFailed {
@@ -996,7 +1072,7 @@ fn stdlib_semantic_cache_material(
         .module_stages
         .iter()
         .flatten()
-        .any(|module| module.module_path == "Test")
+        .any(|module| module.module_path.as_deref() == Some("Test"))
     {
         StdlibVariant::TestEnabled
     } else {
@@ -1017,7 +1093,7 @@ fn stdlib_semantic_cache_material(
                 .unwrap_or("");
             key.push_str(file_name);
             key.push('\x1e');
-            key.push_str(&module.module_path);
+            key.push_str(&format!("{:?}", module.module_path));
             key.push('\x1e');
             key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');
@@ -1309,6 +1385,123 @@ defmod B {
         assert_eq!(
             policy.runtime_policy.normalized_entrypoint.as_deref(),
             Some("App::main")
+        );
+    }
+
+    #[test]
+    fn cached_script_module_sources_isolates_entry_sources() {
+        let first = cached_default_script_module_sources(StdlibVariant::TestEnabled)
+            .expect("script sources should load");
+        let second = cached_default_script_module_sources(StdlibVariant::TestEnabled)
+            .expect("script sources should be shared");
+        assert!(Arc::ptr_eq(&first, &second));
+        let first_entry = compose_script_compile_sources_with_stdlib_variant(
+            "first.srt",
+            "1",
+            (*first).clone(),
+            StdlibVariant::TestEnabled,
+        );
+        let second_entry = compose_script_compile_sources_with_stdlib_variant(
+            "second.srt",
+            "2",
+            (*second).clone(),
+            StdlibVariant::TestEnabled,
+        );
+        assert_eq!(first_entry.user_source_id, second_entry.user_source_id);
+        assert_eq!(
+            first_entry.sources.source(first_entry.user_source_id),
+            Some("1")
+        );
+        assert_eq!(
+            second_entry.sources.source(second_entry.user_source_id),
+            Some("2")
+        );
+        assert!(first.sources.get(first_entry.user_source_id).is_none());
+    }
+
+    #[test]
+    fn test_semantic_prefix_key_shares_dependencies_across_entries() {
+        let dependency = ModuleInput {
+            file_name: "support/helper.srt".into(),
+            source: "defmod Helper { def value() -> Int { 1 } }".into(),
+            module_path: "Helper".into(),
+        };
+        let modules = collect_test_module_sources_with_module_stages(&[vec![dependency]])
+            .expect("dependency sources should load");
+        let first = compose_script_compile_sources_with_stdlib_variant(
+            "first.srt",
+            "Helper::value()",
+            modules.clone(),
+            StdlibVariant::TestEnabled,
+        );
+        let second = compose_script_compile_sources_with_stdlib_variant(
+            "second.srt",
+            "Helper::value() + 1",
+            modules,
+            StdlibVariant::TestEnabled,
+        );
+        let key = |sources: &CompileSources| {
+            test_semantic_prefix_cache_key_with_fingerprint(
+                "compiler",
+                "stdlib",
+                CompileUnitKind::Script,
+                sources,
+            )
+        };
+        assert_eq!(key(&first), key(&second));
+    }
+
+    #[test]
+    fn test_semantic_prefix_key_tracks_dependency_identity_and_layout() {
+        let dependency = ModuleInput {
+            file_name: "support/helper.srt".into(),
+            source: "defmod Helper { def value() -> Int { 1 } }".into(),
+            module_path: "Helper".into(),
+        };
+        let modules = collect_test_module_sources_with_module_stages(&[vec![dependency]])
+            .expect("dependency sources should load");
+        let original = compose_script_compile_sources_with_stdlib_variant(
+            "entry.srt",
+            "Helper::value()",
+            modules,
+            StdlibVariant::TestEnabled,
+        );
+        let key = |sources: &CompileSources| {
+            test_semantic_prefix_cache_key_with_fingerprint(
+                "compiler",
+                "stdlib",
+                CompileUnitKind::Script,
+                sources,
+            )
+        };
+        let original_key = key(&original);
+        let mut changed = original.clone();
+        changed.module_stages.push(Vec::new());
+        assert_ne!(
+            original_key,
+            key(&changed),
+            "stage boundaries must be retained"
+        );
+        let mut changed = original.clone();
+        let dependency_id = changed.module_stages.last().unwrap()[0].source_id;
+        changed
+            .sources
+            .update_source(dependency_id, "defmod Helper { def value() -> Int { 2 } }");
+        assert_ne!(
+            original_key,
+            key(&changed),
+            "dependency content must be retained"
+        );
+        let mut changed = original.clone();
+        let replacement_id = changed.sources.register(
+            "support/helper.srt",
+            original.sources.source(dependency_id).unwrap(),
+        );
+        changed.module_stages.last_mut().unwrap()[0].source_id = replacement_id;
+        assert_ne!(
+            original_key,
+            key(&changed),
+            "source ID layout must be retained"
         );
     }
 
@@ -1848,10 +2041,11 @@ defmod Kernel {
     }
 
     #[test]
-    fn collect_doc_entries_includes_impl_and_trait_docs() {
+    fn collect_doc_entries_keeps_trait_definition_docs_and_excludes_trait_impl_docs() {
         let ast = spire::parse_with_context(
             r#"@doc """Trait docs."""
 deftrait Metric {
+  @doc """Method docs."""
   def add(self: Self, rhs: Self) -> Self
 }
 
@@ -1894,13 +2088,10 @@ impl Metric for Int {
             entry.qualified_name == "Sample::Metric::add"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref() == Some("Metric::add(self: Self, rhs: Self) -> Self")
-                && entry.doc == "Trait docs."
+                && entry.doc == "Method docs."
         }));
-        assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::impl Metric for Int"
-                && entry.kind == DocKind::Type
-                && entry.signature.as_deref() == Some("impl Metric for Int")
-                && entry.doc == "Metric Int docs."
+        assert!(!docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::impl Metric for Int" || entry.doc == "Metric Int docs."
         }));
     }
 
@@ -1943,7 +2134,7 @@ impl User {
     }
 
     #[test]
-    fn collect_doc_entries_includes_impl_method_docs() {
+    fn collect_doc_entries_keeps_inherent_method_docs_and_excludes_trait_impl_method_docs() {
         let ast = spire::parse_with_context(
             r#"defstruct User {
   name: String,
@@ -2001,12 +2192,10 @@ impl Show for Int {
                     == Some("User::deconstruct(self: User) -> MatchResult<String, Error>")
                 && entry.doc == "Deconstruct a user value for pattern matching."
         }));
-        assert!(docs.iter().any(|entry| {
+        assert!(!docs.iter().any(|entry| {
             entry.qualified_name == "Sample::impl Show for Int::to_string"
-                && entry.kind == DocKind::Function
-                && entry.signature.as_deref()
-                    == Some("impl Show for Int::to_string(self: Int) -> String")
-                && entry.doc == "Render `Int` through the standard display surface."
+                || entry.doc == "Render `Int` through the standard display surface."
+                || entry.doc == "String conversion for `Int`."
         }));
     }
 

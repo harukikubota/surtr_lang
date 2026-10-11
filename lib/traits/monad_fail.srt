@@ -1,0 +1,76 @@
+@doc """
+A Monad that retains an Error without producing a successful payload.
+A failed value does not call bind's mapper.
+
+## Failure in ordinary functions
+SafeBind (`=?`) in an ordinary function or closure requires its own return
+type to implement MonadFail. An Err on the right-hand side, a Pattern mismatch,
+or an Extractor failure supplies an Error to `MonadFail::fail`. The resulting
+value is returned immediately; the remaining statements are skipped.
+
+Here the literal Pattern `True` can fail. A mismatch produces a
+`BooleanLiteralPatternMismatch` Error, and `MonadFail::fail` for Result constructs `Err(error)`
+as the function's return value. The successful path returns `Ok(1)`.
+
+xldr(1)> def require_true(value: Boolean) -> Result<Int> { True =? value; Ok(1) }
+xldr(2)> require_true(True)
+Ok(1)
+xldr(3)> match require_true(False) { Err(error) => Error::kind(error), Ok(_) => "success" }
+"BooleanLiteralPatternMismatch"
+
+## Failure in do
+SafeBind and partial Patterns in `<-` use the do block's carrier as their
+failure target. When it implements MonadFail, the failure Error is passed to
+`MonadFail::fail` to construct the do block's result. Otherwise Alternative
+supplies `empty()` and discards the Error. If neither capability is available,
+these potentially failing statements are rejected. Total `<-` Patterns only
+require Monad.
+
+In this Result do block, `<-` matches the payload of `Ok(value)` against `True`.
+When it fails, the block returns `Err(error)` without reaching `Ok(1)`.
+
+xldr(1)> def require_true_do(value: Boolean) -> Result<Int> { do { True <- Ok(value); Ok(1) } }
+xldr(2)> require_true_do(True)
+Ok(1)
+xldr(3)> match require_true_do(False) { Err(error) => Error::kind(error), Ok(_) => "success" }
+"BooleanLiteralPatternMismatch"
+
+SafeBind automatically unwraps only the outer layer of a canonical Result on
+its right-hand side. Implementing MonadFail does not make other carriers
+implicitly unwrap there.
+"""
+deftrait MonadFail
+where
+  Self: Monad
+{
+  @doc """
+  Construct a failed value that retains the supplied Error and has no
+  successful payload. `Self` is the complete result type, selected from the
+  expected type or an explicit ReturnTypeArgument. For Result this constructs
+  `Err(error)`; for `Either<Error, A>` it constructs `Either::Left(error)`.
+
+  Ordinary functions and do blocks use this operation when a potentially
+  failing Pattern or SafeBind produces an Error and the failure target
+  implements MonadFail. The original Error is retained.
+
+  ## REPL
+  xldr(1)> value: Result<Int> = MonadFail::fail(NoneError())
+  xldr(2)> match value { Err(error) => Error::kind(error), Ok(_) => "success" }
+  "NoneError"
+  xldr(3)> Result::is_err(MonadFail::fail::<Result<Int>>(NoneError))
+  True
+  """
+  def fail::<Self>(error: Error) -> Self
+
+  @doc """
+  Fail when cond is True; otherwise evaluate then. Only the selected lazy
+  argument runs, exactly once. Parentheses retain the ordinary eager boundary.
+
+  ## REPL
+  xldr(1)> MonadFail::fail_if(False, NoneError(), Ok(3))
+  Ok(3)
+  """
+  def fail_if(condition: Boolean, err: Lazy<Error>, then: Lazy<Self>) -> Self {
+    if(condition, MonadFail::fail(err()), then())
+  }
+}

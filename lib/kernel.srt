@@ -19,24 +19,13 @@ xldr(2)> ("alice", 42)
 @autoimport
 defmod Kernel {
   @doc """
-  Construct `Unit` in an `Alternative` context when `condition` is true,
-  otherwise return that context's empty value.
-
-  The context can be selected explicitly (`guard::<Option>(True)`) or inferred
-  from the expected result type (`value: Option<Unit> = guard(True)`).
-  """
-  def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
-    if(condition, Applicative::pure(()), Alternative::empty())
-  }
-
-  @doc """
   Conditional execution for side-effect-oriented code paths.
 
   The declared type is:
   `if_then(Boolean, Lazy<Unit>) -> Unit`
 
-  `Lazy<T>` is a compiler marker used only in std builtin declarations to
-  express delayed evaluation. This does not mean everyday source code must wrap
+  `Lazy<T>` is a compiler marker declared by standard APIs to express
+  delayed evaluation. This does not mean everyday source code must wrap
   the argument in an explicit closure.
 
   Ordinary expression form stays available:
@@ -228,7 +217,6 @@ defmod Kernel {
   """
   @builtin def apply_pattern(value: $Value, pattern: $Pattern) -> Result<$Return>
 
-
   @doc """
   Duplicate one value into a pair.
 
@@ -300,15 +288,15 @@ defmod Kernel {
   Parenthesizing the error expression evaluates it once before the condition
   is checked. An error placeholder normalizes to `(-> Error)`, giving
   `&require(&1, &2)` the shape `(Boolean, (-> Error) -> Result<Unit>)`.
-  Existing Error restrictions prevent calling or forwarding that capture as
-  an ordinary function value. Fix the error expression inside the capture:
+  That capture is an ordinary function value; pass a zero-argument Error
+  callable for the placeholder. The error may also be fixed in the capture:
   `&require(&1, NoneError())` has type `(Boolean -> Result<Unit>)`.
 
   Ordinary expression form stays available:
   `require(user.age >= 0, InvalidUserAge(user.age))`
 
   ## REPL
-  xldr(1)> require(True, NoneError)
+  xldr(1)> require(True, NoneError())
   Ok(())
   xldr(2)> check = &require(&1, NoneError())
   xldr(3)> check(True)
@@ -327,9 +315,8 @@ defmod Kernel {
   The error branch is evaluated only when validation fails. Call sites may
   construct a fresh `deferror` or forward an existing `Error` value.
   A captured error placeholder normalizes to `(-> Error)`; the predicate
-  remains an ordinary unary callable. Existing Error restrictions prevent
-  exposing that thunk as an ordinary function parameter. Fix the error
-  expression instead: for an `Int` input,
+  remains an ordinary unary callable. Both callables can be stored and passed
+  as ordinary arguments. The error expression can also be fixed: for an `Int` input,
   `&ensure(&1, {|n| n > 0}, NoneError())` has type `(Int -> Result<Int>)`.
 
   The predicate must be a unary callable value such as a capture or closure:
@@ -337,7 +324,7 @@ defmod Kernel {
   Call expressions such as `ensure(num, is_even(), SomeError)` are rejected.
 
   ## REPL
-  xldr(1)> ensure(3, {|n| n > 0}, NoneError)
+  xldr(1)> ensure(3, {|n| n > 0}, NoneError())
   Ok(3)
   xldr(2)> positive: (Int -> Result<Int>) = &ensure(&1, {|n| n > 0}, NoneError())
   xldr(3)> positive(3)
@@ -358,36 +345,6 @@ defmod Kernel {
     f(value)
     value
   }
-
-  @doc """
-  Decompose a non-empty sequence in MatchBlock positions.
-
-  `uncons(term)` is a builtin Extractor used by `=?` and `match`.
-  It accepts both `List` and `String`.
-
-  - `List<$A>` becomes `(head: $A, tail: List<$A>)`
-  - `String` becomes `(head: String, tail: String)`
-
-  These are two concrete static contracts selected from the matched input.
-  `uncons` does not expose a bare generic target or a Union. The declaration
-  below records the List contract; the compiler-owned String pattern route uses
-  the String contract while sharing the same runtime primitive.
-
-  In pattern position, `[head, ..tail]` expresses the same head/tail decomposition.
-  A structural List pattern has its own failure Error: empty head/tail input
-  gives `EmptyList`, whereas direct `uncons(head, tail)` gives `PatternMismatch`.
-  Expression position keeps list construction semantics, so `["t", ..source]`
-  is still a list expression.
-
-  Empty input to `uncons` returns `MatchResult::Err` with
-  `PatternMismatch("Pattern did not match.")`.
-  Branch consumers treat this as no match; `=?` preserves the Error.
-
-  ## REPL
-  xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
-  "1"
-  """
-  @builtin defextractor uncons(term: List<$A>) -> MatchResult<($A, List<$A>), Error>
 
   @doc """
   Print a string to stdout.
@@ -423,7 +380,7 @@ defmod Kernel {
   @builtin def inspect(a: $A) -> String
 
   @doc """
-  Mark an unimplemented function that returns `Result` by returning `Err(NotImplemented)`.
+  Mark an unimplemented function that returns `Result` by returning `Err(NotImplemented())`.
 
   ## Examples
   def load_config() -> Result<String> {
@@ -435,7 +392,7 @@ defmod Kernel {
   "Err(NotImplemented(\"not implemented\"))"
   """
   def todo::<$T>() -> Result<$T> {
-    Err(NotImplemented)
+    Err(NotImplemented())
   }
 
   @doc """
@@ -444,7 +401,7 @@ defmod Kernel {
   surface, not an `Error`-specific helper family.
 
   ## REPL
-  xldr(1)> eprint(NoneError)
+  xldr(1)> eprint(NoneError())
   Error: NoneError
   """
   @builtin def eprint(err: Error) -> Unit
@@ -472,4 +429,36 @@ defmod Kernel {
   []
   """
   @builtin def project_args() -> List<String>
+
+  @doc """
+  Decompose a non-empty sequence in MatchBlock positions.
+
+  `uncons(term)` is a builtin Extractor used by `=?` and `match`.
+  It accepts both `List` and `String`.
+
+  - `List<$A>` becomes `(head: $A, tail: List<$A>)`
+  - `String` becomes `(head: String, tail: String)`
+
+  These are two concrete static contracts selected from the matched input.
+  `uncons` does not expose a bare generic target or a Union. The declaration
+  below records the List contract; the compiler-owned String pattern route uses
+  the String contract while sharing the same runtime primitive.
+
+  In pattern position, `[head, ..tail]` expresses the same head/tail decomposition.
+  A structural List pattern has its own failure Error: empty head/tail input
+  gives `EmptyHeadTailListPattern`, whereas direct `uncons(head, tail)` gives
+  `UnconsEmptyList` or `UnconsEmptyString`.
+  Expression position keeps list construction semantics, so `["t", ..source]`
+  is still a list expression.
+
+  Empty input to `uncons` returns `MatchResult::Err` with
+  `UnconsEmptyList("cannot uncons empty list")` or
+  `UnconsEmptyString("cannot uncons empty string")`.
+  Branch consumers treat this as no match; `=?` preserves the Error.
+
+  ## REPL
+  xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
+  "1"
+  """
+  @builtin defextractor uncons(term: List<$A>) -> MatchResult<($A, List<$A>), Error>
 }

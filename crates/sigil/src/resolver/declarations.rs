@@ -617,7 +617,7 @@ pub fn lower_module_source_ast(
                     ast: module_ast,
                     declared_span: Some(declared_span),
                     owner: None,
-                    module_doc: attrs.doc,
+                    module_doc: None,
                     auto_import: attrs.auto_import,
                     process_spec: None,
                 });
@@ -1409,6 +1409,39 @@ mod declaration_surface_tests {
     }
 
     #[test]
+    fn trait_impl_lowering_does_not_export_body_doc_as_module_doc() {
+        let ast = spire::parse_with_context(
+            r#"@doc """implementation body"""
+impl Describable for User {
+  @doc """implementation method"""
+  def describe(self: Self) -> String { "user" }
+}"#,
+            spire::ParserContext::module(0, None),
+        )
+        .unwrap();
+        let lowered = lower_module_source_ast(ast, Some("Example"));
+        let implementation = lowered
+            .iter()
+            .find(|module| {
+                module
+                    .ast
+                    .iter()
+                    .any(|stmt| matches!(stmt, Ast::TraitImplDef(..)))
+            })
+            .expect("lowered implementation");
+        assert!(implementation.module_doc.is_none());
+        let Ast::TraitImplDef(_, _, _, _, _, _, attrs) = implementation
+            .ast
+            .iter()
+            .find(|stmt| matches!(stmt, Ast::TraitImplDef(..)))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(attrs.doc.as_deref(), Some("implementation body"));
+    }
+
+    #[test]
     fn declaration_import_surface_status_classifies_effective_user_import_policy() {
         assert_eq!(
             declaration_import_surface_status(
@@ -1740,6 +1773,18 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
             inner: Box::new(rewrite_self_pattern(*inner, target)),
             annotation: annotation.map(|ty| rewrite_self_type(ty, target)),
         },
+        AstPattern::HashMap(span, entries) => AstPattern::HashMap(
+            span,
+            entries
+                .into_iter()
+                .map(|(key, child)| {
+                    (
+                        rewrite_self_ast(key, target),
+                        rewrite_self_pattern(child, target),
+                    )
+                })
+                .collect(),
+        ),
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(span, name, rewrite_self_type(ty, target))
         }
@@ -1826,10 +1871,11 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             rewrite_self_pattern(pat, target),
             Box::new(rewrite_self_ast(*rhs, target)),
         ),
-        Ast::SafeBind(span, pat, rhs) => Ast::SafeBind(
+        Ast::SafeBind(span, pat, rhs, operator_span) => Ast::SafeBind(
             span,
             rewrite_self_pattern(pat, target),
             Box::new(rewrite_self_ast(*rhs, target)),
+            operator_span,
         ),
         Ast::BinOp(span, op, left, right) => Ast::BinOp(
             span,
@@ -2138,7 +2184,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|arg| rewrite_self_ast(arg, target))
                 .collect(),
         ),
-        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+        Ast::Do(span, return_type_arguments, statements, keyword_span) => Ast::Do(
             span,
             return_type_arguments
                 .into_iter()
@@ -2174,6 +2220,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                     }
                 })
                 .collect(),
+            keyword_span,
         ),
         Ast::ReturnTypeArgumentApply(span, target_expr, args) => Ast::ReturnTypeArgumentApply(
             span,
@@ -2548,10 +2595,48 @@ pub fn precollect_declarations(
     let owner_registry = precollect_owner_registry(module_stages)?;
     let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
     let mut seen_public_consts: HashMap<String, (usize, String)> = HashMap::new();
+    let mut seen_builtin_reflections = HashMap::<String, Span>::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
             for stmt in &module.ast {
+                if let Ast::BuiltinReflectionDecl(span, value, attrs) = stmt {
+                    if global_surface_name(&module.module_path) != "Bootstrap" || !attrs.builtin {
+                        return Err(ResolveError {
+                            message: format!(
+                                "{} requires its canonical Bootstrap builtin reflection function declaration",
+                                value.name()
+                            ),
+                            span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: Some(value.name().into()),
+                            },
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    if let Some(first) =
+                        seen_builtin_reflections.insert(value.name().into(), span.clone())
+                    {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Duplicate builtin reflection function {}",
+                                value.name()
+                            ),
+                            span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: Some(value.name().into()),
+                            },
+                            related_labels: vec![ResolveErrorLabel {
+                                span: first,
+                                message: "first builtin reflection function declaration".into(),
+                                source: None,
+                            }],
+                        });
+                    }
+                    continue;
+                }
                 if let Ast::IntrinsicDecl(span, name, signature, _) = stmt {
                     validate_intrinsic_surface(
                         &owner_registry,
@@ -2904,7 +2989,7 @@ pub fn precollect_declarations(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::IntrinsicDecl(_, _, _, _) => continue,
+                        Ast::BuiltinReflectionDecl(..) | Ast::IntrinsicDecl(_, _, _, _) => continue,
                         Ast::BuiltinExtractorDecl(span, name, _, _, attrs) => (
                             span,
                             name.as_str(),
@@ -3106,8 +3191,7 @@ impl Resolver {
             .copied()
             .unwrap_or_else(|| {
                 let fresh = self.scope.reserve_id();
-                self.declaration_uids
-                    .insert(qualified_name.to_string(), fresh);
+                Arc::make_mut(&mut self.declaration_uids).insert(qualified_name.to_string(), fresh);
                 fresh
             })
     }
@@ -3117,7 +3201,7 @@ impl Resolver {
             .entry(name.to_string())
             .or_default()
             .push_back(uid);
-        self.declaration_uid_kinds.insert(uid, kind);
+        Arc::make_mut(&mut self.declaration_uid_kinds).insert(uid, kind);
     }
 
     fn predeclare_scope_binding(&mut self, name: &str, uid: u32, alias: Option<&str>) {
@@ -3127,13 +3211,13 @@ impl Resolver {
         }
     }
 
-    pub(super) fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
+    pub(super) fn lower_impl_defs(&mut self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
         for statement in &stmts {
             validate_definition_return_type_arguments(&self.owner_registry, statement)?;
         }
 
         let local_impl_targets;
-        let impl_targets = if let Some(stage_targets) = self.current_stage_impl_targets.as_ref() {
+        let impl_targets = if let Some(stage_targets) = self.current_stage_impl_targets.as_deref() {
             stage_targets
         } else {
             let mut local_targets = HashMap::new();
@@ -3219,6 +3303,27 @@ impl Resolver {
                     }
 
                     let lowered_module_path = self.current_module_path.as_deref();
+                    let members = methods
+                        .iter()
+                        .filter_map(|method| {
+                            let name = match method {
+                                Ast::Def(_, name, ..)
+                                | Ast::ExtractorDef(_, name, ..)
+                                | Ast::BuiltinDecl(_, name, ..)
+                                | Ast::BuiltinExtractorDecl(_, name, ..) => name,
+                                _ => return None,
+                            };
+                            Some((
+                                name.clone(),
+                                lower_impl_member_name(lowered_module_path, &target, name),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    for (_, lowered_name) in &members {
+                        self.impl_member_scopes
+                            .insert(lowered_name.clone(), members.clone());
+                    }
+
                     for method in methods {
                         match method {
                             Ast::Def(
@@ -3467,7 +3572,7 @@ impl Resolver {
                     let qualified_name = self.qualify_current_declaration_name(name);
                     validate_reserved_callable_declaration(&qualified_name, stmt.span())?;
                     let uid = self.reserve_declaration_uid(&qualified_name);
-                    self.declaration_uids.insert(qualified_name.clone(), uid);
+                    Arc::make_mut(&mut self.declaration_uids).insert(qualified_name.clone(), uid);
                     let mut entry = self
                         .declaration_entries
                         .get(&qualified_name)
@@ -3487,7 +3592,7 @@ impl Resolver {
                             )
                         });
                     entry = entry.with_callable_parameters(stmt);
-                    self.declaration_entries
+                    Arc::make_mut(&mut self.declaration_entries)
                         .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
@@ -3530,7 +3635,7 @@ impl Resolver {
                                 if let spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) =
                                     bound
                                 {
-                                    self.trait_constructor_slots.insert(
+                                    Arc::make_mut(&mut self.trait_constructor_slots).insert(
                                         uid,
                                         slots
                                             .iter()
@@ -3584,7 +3689,7 @@ impl Resolver {
                     self.record_predeclared_uid(name, uid, DeclarationKind::Def);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
-                Ast::IntrinsicDecl(_, _, _, _) => continue,
+                Ast::BuiltinReflectionDecl(..) | Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
                     reject_special_variant_binding(name, stmt.span())?;
                     if !declared_in_batch.insert(name.clone()) {
@@ -3615,7 +3720,7 @@ impl Resolver {
                             )
                         });
                     entry = entry.with_callable_parameters(stmt);
-                    self.declaration_entries
+                    Arc::make_mut(&mut self.declaration_entries)
                         .insert(qualified_name.clone(), entry);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));

@@ -1,3 +1,42 @@
+#![deny(dead_code)]
+
+#[path = "support/case_registry.rs"]
+mod case_registry;
+
+case_registry::register_case_suite!(
+    "default_trait_methods.rs",
+    [
+        synthesized_trait_default_does_not_require_an_explicit_resolved_impl_method,
+        impl_block_capability_consumed_by_one_explicit_method_survives_default_synthesis,
+        bare_impl_capability_defers_candidate_proof_to_the_full_body_obligation,
+        bare_impl_capability_does_not_replace_the_full_body_obligation,
+        canonical_builtin_signature_forwards_the_callers_bare_capability,
+        canonical_builtin_signature_still_rejects_a_missing_capability,
+        canonical_builtin_signature_preserves_parameter_names_for_named_calls,
+        builtin_declaration_rejects_an_unregistered_owner_alias,
+        internal_runtime_name_does_not_authorize_an_unknown_owner,
+        checked_generic_constructor_signature_replaces_predeclared_type_variables,
+        receiverless_trait_call_consumes_the_contextual_return_capability,
+        receiverless_value_trait_call_receives_the_declared_tail_result,
+        inherited_rigid_bound_forwards_and_consumes_the_declared_capability,
+        generic_trait_candidate_does_not_hide_an_unproven_rigid_bound,
+        concrete_trait_candidate_checks_transitive_body_obligations,
+        mutually_recursive_concrete_impl_obligations_report_a_cycle,
+        receiverless_constructor_dispatch_checks_concrete_impl_cycles,
+        constructor_projection_cycle_preserves_reason_and_argument_span,
+        constructor_projection_keeps_one_way_success_and_plain_missing_bound,
+        unrelated_cyclic_constructor_impl_does_not_reject_matching_head,
+        unused_cyclic_constructor_capability_does_not_reject_plain_value,
+        explicit_constructor_helper_preserves_required_cycle,
+    ],
+    standalone = [
+        canonical_builtin_signature_rejects_a_noncanonical_constraint,
+        canonical_builtin_signature_rejects_parameter_name_drift,
+        canonical_builtin_signature_rejects_return_type_argument_drift,
+        internal_runtime_name_does_not_bypass_builtin_surface_signature_validation,
+    ]
+);
+
 #[allow(dead_code)]
 mod support;
 
@@ -17,7 +56,6 @@ fn typecheck_with_standard_environment(
     support::typecheck(resolve_with_standard_environment(source))
 }
 
-#[test]
 fn synthesized_trait_default_does_not_require_an_explicit_resolved_impl_method() {
     let typed = typecheck_with_standard_environment(
         r#"deftrait Choice {
@@ -43,7 +81,6 @@ value: Int = Choice::fallback(1)"#,
     }));
 }
 
-#[test]
 fn impl_block_capability_consumed_by_one_explicit_method_survives_default_synthesis() {
     typecheck_with_standard_environment(
         r#"defenum Verdict {
@@ -72,7 +109,6 @@ where
     .expect("the impl-block capability is consumed by the explicit equal method");
 }
 
-#[test]
 fn bare_impl_capability_defers_candidate_proof_to_the_full_body_obligation() {
     typecheck_with_standard_environment(
         r#"deftrait Marker<$Tag> {
@@ -106,7 +142,6 @@ result = Use::use(value)"#,
     .expect("the body-emitted Marker<Int> obligation must prove the generic Use candidate");
 }
 
-#[test]
 fn bare_impl_capability_does_not_replace_the_full_body_obligation() {
     let err = typecheck_with_standard_environment(
         r#"deftrait Marker<$Tag> {
@@ -147,7 +182,6 @@ result = Use::use(value)"#,
     assert!(err.message.contains("Box<Int>"), "{err:?}");
 }
 
-#[test]
 fn canonical_builtin_signature_forwards_the_callers_bare_capability() {
     typecheck_with_standard_environment(
         "def count(values: List<$A>) -> List<($A, Int)> where $A: Eq { List::group_count(values) }",
@@ -170,7 +204,6 @@ fn canonical_builtin_signature_rejects_a_noncanonical_constraint() {
     );
 }
 
-#[test]
 fn canonical_builtin_signature_still_rejects_a_missing_capability() {
     let err = typecheck_with_standard_environment(
         "def count(values: List<$A>) -> List<($A, Int)> { List::group_count(values) }",
@@ -183,7 +216,6 @@ fn canonical_builtin_signature_still_rejects_a_missing_capability() {
     );
 }
 
-#[test]
 fn canonical_builtin_signature_preserves_parameter_names_for_named_calls() {
     typecheck_with_standard_environment(r#"def emit() -> Unit { Kernel::print(a: "ok") }"#)
         .expect("builtin calls use canonical named arguments from standard declarations");
@@ -219,7 +251,6 @@ fn canonical_builtin_signature_rejects_return_type_argument_drift() {
     );
 }
 
-#[test]
 fn builtin_declaration_rejects_an_unregistered_owner_alias() {
     let source = r#"impl String {
   @builtin def print(a: String) -> Unit
@@ -252,7 +283,6 @@ fn internal_runtime_name_does_not_bypass_builtin_surface_signature_validation() 
     );
 }
 
-#[test]
 fn internal_runtime_name_does_not_authorize_an_unknown_owner() {
     let source = r#"impl String {
   @builtin def __test_pop() -> Unit
@@ -270,7 +300,6 @@ fn internal_runtime_name_does_not_authorize_an_unknown_owner() {
     );
 }
 
-#[test]
 fn checked_generic_constructor_signature_replaces_predeclared_type_variables() {
     let typed = typecheck_with_standard_environment(
         r#"defstruct Box<$A> { value: $A }
@@ -299,7 +328,6 @@ value = Box(1)"#,
     );
 }
 
-#[test]
 fn receiverless_trait_call_consumes_the_contextual_return_capability() {
     typecheck_with_standard_environment(
         r#"def make(seed: $A) -> $A
@@ -314,7 +342,6 @@ value: Int = make(1)"#,
     .expect("the contextual Default call must consume $A: Default");
 }
 
-#[test]
 fn receiverless_value_trait_call_receives_the_declared_tail_result() {
     typecheck_with_standard_environment(
         r#"deftrait FixtureApplicative
@@ -341,7 +368,6 @@ result: Boxed<Int> = lift(1)"#,
     );
 }
 
-#[test]
 fn inherited_rigid_bound_forwards_and_consumes_the_declared_capability() {
     typecheck_with_standard_environment(
         r#"deftrait Marker {
@@ -379,7 +405,6 @@ where
     .expect("StrongMarker must entail Marker and be consumed by generic proof forwarding");
 }
 
-#[test]
 fn generic_trait_candidate_does_not_hide_an_unproven_rigid_bound() {
     let err = typecheck_with_standard_environment(
         r#"deftrait Marker {
@@ -413,7 +438,6 @@ def hidden(values: List<$A>) -> Int { Use::use(values) }"#,
     );
 }
 
-#[test]
 fn concrete_trait_candidate_checks_transitive_body_obligations() {
     let err = typecheck_with_standard_environment(
         r#"defenum Box<$A> { Box($A) }
@@ -465,7 +489,6 @@ result = Use::use(value)"#,
     assert!(err.message.contains("Box<List<(Int -> Int)>>"), "{err:?}");
 }
 
-#[test]
 fn mutually_recursive_concrete_impl_obligations_report_a_cycle() {
     let err = typecheck_with_standard_environment(
         r#"deftrait First {
@@ -495,9 +518,12 @@ value = First::first(1)"#,
     .expect_err("mutually recursive concrete obligations must not prove one another");
 
     assert!(err.message.contains("CyclicTraitObligation"), "{err:?}");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+    );
 }
 
-#[test]
 fn receiverless_constructor_dispatch_checks_concrete_impl_cycles() {
     let err = typecheck_with_standard_environment(
         r#"defenum Boxed<$A> { Boxed($A) }
@@ -535,4 +561,118 @@ value: Boxed<Int> = FirstFactory::make()"#,
     .expect_err("receiverless constructor dispatch must reject mutually recursive impl proofs");
 
     assert!(err.message.contains("CyclicTraitObligation"), "{err:?}");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+    );
+}
+
+fn projection_cycle_declarations() -> &'static str {
+    r#"defenum Boxed<$A> { Boxed($A), }
+deftrait FirstFamily where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+deftrait SecondFamily where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+impl FirstFamily for Boxed<$A> where Self: SecondFamily {
+  def use(self: Boxed<Int>) -> Int { SecondFamily::use(self) }
+}
+impl SecondFamily for Boxed<$A> where Self: FirstFamily {
+  def use(self: Boxed<Int>) -> Int { FirstFamily::use(self) }
+}
+def accept(value: FirstFamily<Int>) -> Unit { () }
+"#
+}
+
+fn constructor_projection_cycle_preserves_reason_and_argument_span() {
+    for use_site in [
+        "accept(Boxed::Boxed(1))",
+        "def make() -> FirstFamily<Int> { Boxed::Boxed(1) }",
+    ] {
+        let source = format!("{}{use_site}", projection_cycle_declarations());
+        let error =
+            typecheck_with_standard_environment(&source).expect_err("cyclic constructor proof");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation),
+            "{error:?}"
+        );
+        let start = source.rfind("Boxed::Boxed(1)").unwrap();
+        assert_eq!(
+            error.span,
+            spire::ast::Span {
+                start,
+                end: start + "Boxed::Boxed(1)".len()
+            }
+        );
+        assert!(error.message.contains("CyclicTraitObligation"), "{error:?}");
+        let structured = error.structured.as_ref().expect("structured cycle cause");
+        assert_eq!(structured.primary.span, error.span);
+        assert!(
+            matches!(&structured.data, diagnostics::DiagnosticData::TraitDispatch(data)
+    if data.trait_name.ends_with("Family") && data.subject_type.as_deref().is_some_and(|name| name.contains("Boxed")))
+        );
+    }
+}
+
+fn constructor_projection_keeps_one_way_success_and_plain_missing_bound() {
+    let declarations = projection_cycle_declarations();
+    let success = declarations.replace(
+        "impl SecondFamily for Boxed<$A> where Self: FirstFamily {\n  def use(self: Boxed<Int>) -> Int { FirstFamily::use(self) }\n}",
+        "impl SecondFamily for Boxed<$A> { def use(self: Boxed<Int>) -> Int { 1 } }",
+    );
+    typecheck_with_standard_environment(&format!("{success}accept(Boxed::Boxed(1))"))
+        .expect("a one-way satisfied bound remains applicable");
+    let missing = r#"defenum Boxed<$A> { Boxed($A), }
+deftrait FirstFamily where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+def accept(value: FirstFamily<Int>) -> Unit { () }
+"#;
+    let error = typecheck_with_standard_environment(&format!("{missing}accept(Boxed::Boxed(1))"))
+        .expect_err("missing FirstFamily implementation is not a cycle");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
+    );
+}
+
+fn unrelated_cyclic_constructor_impl_does_not_reject_matching_head() {
+    let source = format!(
+        r#"{}
+defenum Other<$A> {{ Other($A), }}
+impl FirstFamily for Other<$A> {{ def use(self: Other<Int>) -> Int {{ 1 }} }}
+accept(Other::Other(1))"#,
+        projection_cycle_declarations()
+    );
+    typecheck_with_standard_environment(&source)
+        .expect("the unrelated Boxed cycle is not requested");
+}
+
+fn unused_cyclic_constructor_capability_does_not_reject_plain_value() {
+    let source = format!(
+        "{}def plain(value: Boxed<Int>) -> Boxed<Int> {{ value }}\nplain(Boxed::Boxed(1))",
+        projection_cycle_declarations()
+    );
+    typecheck_with_standard_environment(&source)
+        .expect("optional capability enumeration must not require the cyclic FirstFamily proof");
+}
+
+fn explicit_constructor_helper_preserves_required_cycle() {
+    let source = format!(
+        r#"{}
+deftrait Wrap where Self: Type<$A> {{ def wrap::<Self>(value: $A) -> Self<$A> }}
+impl Wrap for Boxed<$T> {{
+  def wrap::<Boxed<$T>>(value: $A) -> Boxed<$A> {{ Boxed::Boxed(value) }}
+}}
+FirstFamily::use(Wrap::wrap::<Boxed<Int>>(1))"#,
+        projection_cycle_declarations()
+    );
+    let error = typecheck_with_standard_environment(&source)
+        .expect_err("known carrier requires FirstFamily");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation),
+        "{error:?}"
+    );
+    assert!(matches!(
+        &error.structured.as_ref().unwrap().data,
+        diagnostics::DiagnosticData::TraitDispatch(_)
+    ));
 }

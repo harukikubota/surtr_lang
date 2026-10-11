@@ -1,4 +1,4 @@
-err1: Result<Int> = Err(ValidationError)
+err1: Result<Int> = Err(ValidationError())
 match err1 {
   Ok(val)  => print("ok"),
   Err(e)   => print("got error"),

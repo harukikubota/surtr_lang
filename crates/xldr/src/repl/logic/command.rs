@@ -98,7 +98,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show documentation for visible symbols, including process surfaces",
         detail_help: &[
             "Usage: :doc <symbol|query>",
-            "Examples: :doc print, :doc Facet.User, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option",
+            "Examples: :doc print, :doc Facet.User, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User::new, :doc Compare::compare, :doc |*>",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },
@@ -109,7 +109,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show signatures for visible callable, family, owner, or process surfaces",
         detail_help: &[
             "Usage: :sig <symbol|query>",
-            "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option",
+            "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig Compare::compare, :sig User!, :sig |*>",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },
@@ -120,8 +120,8 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show derived information for visible symbols, retained query targets, or process handles",
         detail_help: &[
             "Usage: :info <query>",
-            "Accepts: symbol | type-definition | singleton-owner | typed-call | operator-target",
-            "Examples: :info User, :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option",
+            "Accepts: symbol | type-definition | singleton-owner | Facet-root | field-path",
+            "Examples: :info User, :info print, :info Counter, :info pid, :info Compare::compare, :info Facet.User, :info |*>",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },
@@ -140,11 +140,11 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
     ReplCommandSpec {
         kind: ReplCommandKind::Facet,
         aliases: &["facet"],
-        usage: ":facet <FacetPath|binding>",
-        summary: "Inspect a FacetPath and its API boundaries",
+        usage: ":facet <root|FacetPath|binding>",
+        summary: "Inspect a Facet root, path, and API boundaries",
         detail_help: &[
-            "Usage: :facet <FacetPath|binding>",
-            "Examples: :facet path, :facet Tuple._1, :facet User.password, :facet BitWidth.Any",
+            "Usage: :facet <root|FacetPath|binding>",
+            "Examples: :facet User, :facet Tuple, :facet List, :facet path, :facet Tuple._1, :facet User.password, :facet BitWidth.Any",
             "Shows canonical path, API availability, segment policies, and where the path may stop. Private paths are inspectable but remain unavailable to ordinary REPL source.",
         ],
         arg_completion: ReplCommandArgCompletion::FacetTarget,

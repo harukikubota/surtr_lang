@@ -1,6 +1,5 @@
 use scar::typed::{
-    ResultPreserveConstruction, SafeBindFailureTarget, SafeBindRhsProjection, TypedInner,
-    TypedNode, TypedPattern,
+    SafeBindFailureTarget, SafeBindRhsProjection, TypedInner, TypedNode, TypedPattern,
 };
 use scar::types::Ty;
 use sindr::warning::WarningKind;
@@ -63,7 +62,7 @@ fn question_rejects_non_result_values() {
 #[test]
 fn question_does_not_infer_unknown_success_as_unit() {
     for source in [
-        "Err(NoneError)?",
+        "Err(NoneError())?",
         "def reject(value: Result<$T>) -> Result<()> { value?\n Ok(()) }",
         "def reject(value: Result<Result<$T>>) -> Result<()> { value?\n Ok(()) }",
     ] {
@@ -88,9 +87,7 @@ fn question_uses_nearest_callable_target() {
         let error = typecheck(resolve_with_builtin_prelude(source))
             .expect_err("a non-Result callable must not use an outer failure target");
         assert!(
-            error
-                .message
-                .contains("requires an enclosing ResultContext return type"),
+            error.message.contains("MonadFail is not implemented."),
             "{error:?}"
         );
     }
@@ -124,7 +121,7 @@ fn question_inside_do_uses_do_local_failure_target() {
     ));
     assert!(matches!(
         control.failure_target,
-        SafeBindFailureTarget::DoResultContext(_)
+        SafeBindFailureTarget::DoMonadFail(_)
     ));
     assert!(matches!(
         control.projection,
@@ -142,7 +139,7 @@ fn question_inside_do_uses_do_local_failure_target() {
 fn question_inside_do_enforces_terminal_success_constraint() {
     for source in [
         "result = do::<Result> { Ok(1)?\n Ok(()) }",
-        "result = do::<Result> { Err(NoneError)?\n Ok(()) }",
+        "result = do::<Result> { Err(NoneError())?\n Ok(()) }",
     ] {
         let error = typecheck(resolve_with_builtin_prelude(source))
             .expect_err("do must preserve question-specific type constraints");
@@ -178,17 +175,26 @@ fn question_does_not_accept_nominal_result_lookalikes() {
 }
 
 #[test]
-fn question_preserves_result_effect_targets_in_callable_and_do() {
-    let source = "def run() -> OptionT<Result, Int> { Ok(())?\n OptionT::some::<Result>(1) }\nresult = do::<OptionT<Result, _>> { Ok(())?; OptionT::some::<Result>(1) }";
-    let typed = typecheck_with_builtin_prelude(source);
+fn question_uses_option_t_alternative_only_inside_do() {
+    let error = typecheck(resolve_with_builtin_prelude(
+        "def run() -> OptionT<Result, Int> { Ok(())?\n OptionT::some::<Result>(1) }",
+    ))
+    .expect_err("OptionT has no MonadFail for an ordinary callable");
+    assert!(
+        error.message.contains("MonadFail is not implemented."),
+        "{error:?}"
+    );
+
+    let typed = typecheck_with_builtin_prelude(
+        "result = do::<OptionT<Result, _>> { Ok(())?; OptionT::some::<Result>(1) }",
+    );
     let rhs = result_binding_rhs(&typed);
     let TypedInner::DoSafeBind(control) = &rhs.node else {
-        panic!("question in Result-effect do must preserve do-local control")
+        panic!("question in OptionT do must preserve do-local control")
     };
     assert!(matches!(
         &control.failure_target,
-        SafeBindFailureTarget::DoResultContext(target)
-            if matches!(target.construction, ResultPreserveConstruction::AnnotatedStruct { .. })
+        SafeBindFailureTarget::DoAlternative { .. }
     ));
 }
 
@@ -198,12 +204,7 @@ fn question_in_non_result_closure_inside_do_rejects_outer_failure_targets() {
         "def outer() -> Result<()> { result = do::<Result> { inner: (Int -> Int) = {|value| Ok(())?\n value}\n Ok(()) }\n Ok(()) }",
     ))
     .expect_err("a nested non-Result callable cannot borrow a do or outer callable target");
-    assert!(
-        error
-            .message
-            .contains("requires an enclosing ResultContext return type"),
-        "{error:?}"
-    );
+    assert!(error.message.contains("MonadFail"), "{error:?}");
 }
 
 #[test]
@@ -240,17 +241,17 @@ fn unannotated_closures_cannot_borrow_outer_safebind_failure_targets() {
         ] {
             let error = typecheck(resolve_with_builtin_prelude(&source))
                 .expect_err("an unannotated closure has no concrete local Result failure target");
-            assert!(error.message.contains("requires an enclosing ResultContext return type"), "{source}: {error:?}");
+            assert!(
+                error
+                    .message
+                    .contains("MonadFail"),
+                "{source}: {error:?}"
+            );
         }
         let source = format!("impl Int {{ defextractor outer(value: Int) -> MatchResult<Int> {{ closure = {{|item: Int| {statement}\n ()}}\n MatchResult::Ok(value) }} }}");
         let error = typecheck(resolve_with_builtin_prelude(&source))
             .expect_err("an ordinary closure cannot borrow an enclosing MatchResult target");
-        assert!(
-            error
-                .message
-                .contains("requires an enclosing ResultContext return type"),
-            "{error:?}"
-        );
+        assert!(error.message.contains("MonadFail"), "{error:?}");
     }
 }
 

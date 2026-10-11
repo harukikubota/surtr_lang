@@ -16,13 +16,15 @@ fn standard_test_stages() -> &'static Vec<Vec<StagedModuleAst>> {
                 spec.source,
                 spire::ParserContext::module(
                     index as u32 + 1,
-                    (spec.module_path == "Facet").then(|| spec.module_path.to_string()),
+                    spec.module_path
+                        .filter(|path| *path == "Facet")
+                        .map(str::to_owned),
                 )
                 .with_rules(spire::ParseRules::std_module()),
             )
             .expect("standard source parses");
             let fallback =
-                const_only_fallback_module_path(&ast, Some(spec.module_path)).map(str::to_owned);
+                const_only_fallback_module_path(&ast, spec.module_path).map(str::to_owned);
             let stage_index = usize::from(spec.stage != sindr::stdlib::StdlibStage::Bootstrap);
             stages[stage_index].extend(staged_modules_from_source_ast(ast, fallback.as_deref()));
         }
@@ -372,6 +374,8 @@ fn boolean_owner_type_arguments_use_the_normal_enum_arity_diagnostic() {
 #[test]
 fn compiler_registered_internal_builtins_resolve_only_generated_references() {
     for name in [
+        "__process_execute",
+        "__process_postprocess",
         "__genserver_call_reply",
         "__task_call_timeout",
         "__task_await_timeout",
@@ -966,7 +970,7 @@ fn resolve_user_with_modules(
 deferror NoneError { "none" }
 deferror ZeroDivisionError { "division by zero" }
 deferror EmptyList { "Empty List." }
-deferror IndexOutOfBounds(detail: String) { detail }"#,
+deferror IndexOutOfBounds(detail: String) { |detail: String| Self(message: detail, detail: detail) }"#,
                 "Bootstrap",
             ),
         ),
@@ -1047,7 +1051,7 @@ fn resolve_user_with_modules_with_warnings(
 deferror NoneError { "none" }
 deferror ZeroDivisionError { "division by zero" }
 deferror EmptyList { "Empty List." }
-deferror IndexOutOfBounds(detail: String) { detail }"#,
+deferror IndexOutOfBounds(detail: String) { |detail: String| Self(message: detail, detail: detail) }"#,
                 "Bootstrap",
             ),
         ),
@@ -1115,7 +1119,7 @@ fn test_precollect_declaration_index_succeeds_without_body_resolution() {
         parse_module_ast(
             r#"def to_int(x: String) -> Int { unknown_name }
 defrecord Pair(left: Int, right: Int)
-deferror Oops(reason: String) { reason }"#,
+deferror Oops(reason: String) { |reason: String| Self(message: reason, reason: reason) }"#,
             "Bootstrap",
         ),
     )]];
@@ -1195,7 +1199,12 @@ fn test_resolve_staged_program_keeps_process_specs() {
         },
         other => panic!("expected defagent, got {other:?}"),
     };
-    let module_stages = vec![vec![kernel, module]];
+    // Generated getters construct the canonical Result::Ok after postprocessing.
+    let standard_stage = canonical_test_enum_declarations()
+        .into_iter()
+        .flat_map(|declaration| staged_modules_from_source_ast(vec![declaration], None))
+        .collect();
+    let module_stages = vec![standard_stage, vec![kernel, module]];
     let declaration_index =
         precollect_declaration_index(&module_stages).expect("precollect should succeed");
     let resolved =
@@ -1599,7 +1608,7 @@ where
     assert_eq!(match_result.capabilities.facet_root_path, None);
     assert_eq!(owners.owner_ref("Option").unwrap().canonical_key, "Option");
     let mut resolver = Resolver::new();
-    resolver.owner_registry = owners.clone();
+    resolver.owner_registry = owners.clone().into();
     assert_eq!(
         resolver.owner_identity_for_declaration("App::run", &DeclarationKind::Def, Some("App"),),
         Some(TypeIdentity::Mod)
@@ -3591,51 +3600,6 @@ fn test_builtin_decl_resolution() {
 }
 
 #[test]
-fn result_effect_attrs_use_standard_canonical_traits() {
-    let resolved = parse_and_resolve(
-        r#"@result_effect
-defstruct Carrier<$M, $A>
-where
-  $M: Monad
-{
-  inner: $M<$A>
-}
-"#,
-    )
-    .expect("source should resolve");
-
-    let attrs = resolved.iter().find_map(|node| match node {
-        Resolved::StructDef(_, id, _, _, attrs) if id.name == "Global::Carrier" => Some(attrs),
-        _ => None,
-    });
-    let attrs = attrs.expect("annotated struct should resolve");
-    let result_effect = attrs
-        .result_effect
-        .as_ref()
-        .expect("result effect metadata should be retained");
-    assert_eq!(result_effect.annotation_span.start, 0);
-    assert_eq!(result_effect.annotation_span.end, 14);
-    assert_eq!(
-        result_effect
-            .monad_trait
-            .as_ref()
-            .and_then(|id| id.qualified_name.as_deref()),
-        Some("Monad")
-    );
-    assert_eq!(
-        result_effect
-            .monad_t_trait
-            .as_ref()
-            .and_then(|id| id.qualified_name.as_deref()),
-        Some("MonadT")
-    );
-    assert_ne!(
-        result_effect.monad_trait.as_ref().map(|id| id.unique_id),
-        result_effect.monad_t_trait.as_ref().map(|id| id.unique_id)
-    );
-}
-
-#[test]
 fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
     let ast = spire::parse_with_context(
         "@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
@@ -3820,7 +3784,7 @@ fn test_builtin_type_decl_resolution() {
 #[test]
 fn test_struct_readonly_metadata_and_fields_resolve() {
     let ast = spire::parse_with_context(
-        "@readonly\ndefstruct User { private readonly password: String, readonly name: String }",
+        "@readonly\ndefstruct User { private password: String, name: String }",
         spire::ParserContext::project(0),
     )
     .expect("readonly struct should parse");
@@ -4244,17 +4208,20 @@ fn test_if_let_then_or_binding_is_visible_in_success_block() {
 }
 
 #[test]
-fn test_if_let_or_alternatives_require_same_ordered_binding_names() {
-    for pattern in ["(1, left) | (right, 2)", "(left, right) | (right, left)"] {
+fn test_if_let_or_alternatives_require_same_binding_names() {
+    for pattern in ["(1, left) | (right, 2)"] {
         let source = format!("result = if_let((1, 2), {pattern}, 1, 0)");
         let error = parse_and_resolve_pattern_consumers(&source).expect_err(&source);
-        assert!(
-            error
-                .message
-                .contains("same binding names in the same order"),
-            "{error:?}"
-        );
+        assert!(error.message.contains("same binding names"), "{error:?}");
     }
+}
+
+#[test]
+fn test_if_let_or_alternatives_accept_reordered_binding_names() {
+    parse_and_resolve_pattern_consumers(
+        "result = if_let((1, 2), (left, right) | (right, left), left + right, 0)",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -4342,42 +4309,6 @@ x = ensure(1, &is_even, SomeError)"#,
             assert!(matches!(rhs.as_ref(), Resolved::Ensure(_, _, _, _)));
         }
         _ => panic!("Expected Bind with Ensure"),
-    }
-}
-
-#[test]
-fn test_recover_kind_accepts_payload_error_type_name() {
-    let resolved = parse_and_resolve(
-        r#"deferror Timeout(detail: String) { detail }
-x = Result::recover_kind(Err(Timeout("runtime")), Timeout, {|err| Ok(1)})"#,
-    )
-    .expect("payload error kind name should resolve");
-    assert!(
-        matches!(&resolved[1], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::RecoverKind(..)))
-    );
-}
-
-#[test]
-fn test_recover_kind_rejects_runtime_marker_expressions() {
-    for marker in [
-        "Timeout()",
-        "Timeout(\"marker\")",
-        "\"Timeout\"",
-        "Error",
-        "Int",
-        "&1",
-    ] {
-        let source = format!("deferror Timeout(detail: String) {{ detail }}\nx = Result::recover_kind(Err(Timeout(\"runtime\")), {marker}, {{|err| Ok(1)}})");
-        let error =
-            parse_and_resolve(&source).expect_err("ErrorKind requires a concrete type name");
-        assert!(
-            error
-                .message
-                .contains("recover_kind marker must be a concrete deferror type name")
-                || ((marker == "Error" || marker == "Int")
-                    && error.message.contains("Undefined variable")),
-            "{marker}: {error:?}"
-        );
     }
 }
 
@@ -4824,9 +4755,7 @@ defrecord Point(x: Float, y: Float)"#,
 fn test_forward_reference_to_deferror_constructor_resolves_to_same_unique_id() {
     let resolved = parse_and_resolve(
         r#"err = PageNotFound("404")
-deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
-}"#,
+deferror PageNotFound(html: String) { |html: String| Self(message: "Page Not Found. #{html}", html: html) }"#,
     )
     .unwrap();
 
@@ -4854,9 +4783,7 @@ err = NotFound("404")
 
 def build_user(name: String) -> String { name }
 defrecord Point(x: Int, y: Int)
-deferror NotFound(code: String) {
-  "missing #{code}"
-}"#;
+deferror NotFound(code: String) { |code: String| Self(message: "missing #{code}", code: code) }"#;
 
     let first = parse_and_resolve(source).unwrap();
     let second = parse_and_resolve(source).unwrap();
@@ -5296,7 +5223,7 @@ out = 1 |> (mk())"#,
 fn test_safebind_resolution() {
     let resolved = parse_and_resolve("num =? Ok(1)").unwrap();
     match &resolved[0] {
-        Resolved::SafeBind(_, ResolvedPattern::Var(id), rhs) => {
+        Resolved::SafeBind(_, ResolvedPattern::Var(id), rhs, _) => {
             assert_eq!(id.name, "num");
             assert!(matches!(rhs.as_ref(), Resolved::ConstructorCall(_, _, _)));
         }
@@ -5324,7 +5251,7 @@ Ok(num) =? value"#,
         _ => panic!("Expected prelude bind"),
     }
     match &resolved[1] {
-        Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs) => {
+        Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs, _) => {
             assert_eq!(ctor.name, "Result::Ok");
             assert!(matches!(inner.as_slice(), [ResolvedPattern::Var(id)] if id.name == "num"));
             assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
@@ -5345,7 +5272,7 @@ fn test_safebind_list_with_constructor_literal_pattern_resolution() {
         _ => panic!("Expected prelude bind"),
     }
     match &resolved[1] {
-        Resolved::SafeBind(_, pattern, rhs) => {
+        Resolved::SafeBind(_, pattern, rhs, _) => {
             let ResolvedPattern::ListCons(head, tail) = pattern.unlocated() else {
                 panic!("list pattern");
             };
@@ -5370,7 +5297,7 @@ fn test_as_pattern_resolution() {
     )
     .unwrap();
     match &resolved[1] {
-        Resolved::SafeBind(_, ResolvedPattern::As(inner, alias, Some(_)), rhs) => {
+        Resolved::SafeBind(_, ResolvedPattern::As(inner, alias, Some(_)), rhs, _) => {
             assert_eq!(alias.name, "list_dup");
             assert!(matches!(inner.unlocated(), ResolvedPattern::ListCons(_, _)));
             assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
@@ -6080,6 +6007,423 @@ print(to_string(add(7, 3)))"#,
     )
     .expect_err("explicit import must reject auto-import conflicts");
     assert!(error.message.contains("Import conflict"), "{error:?}");
+}
+
+fn extractor_import_forms(owner: &str) -> [String; 3] {
+    [
+        format!("import {owner}"),
+        format!("import {owner}::unique_ext"),
+        format!("import {owner}::{{unique_ext}}"),
+    ]
+}
+
+fn extractor_import_environment(
+    left: &str,
+    right: &str,
+    auto_import_left: bool,
+) -> ResolveEnvironment {
+    let mut stages = standard_test_stages().clone();
+    let mut left = staged_module("ExtractorLeft", parse_module_ast(left, "ExtractorLeft"));
+    left.auto_import = auto_import_left;
+    stages.push(vec![
+        left,
+        staged_module("ExtractorRight", parse_module_ast(right, "ExtractorRight")),
+    ]);
+    ResolveEnvironment::from_stages(&stages).expect("Extractor import environment")
+}
+
+#[test]
+fn extractor_import_forms_preserve_selected_declaration_and_pattern_uid() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        false,
+    );
+    let declared = environment
+        .global_scope
+        .lookup("ExtractorLeft::unique_ext")
+        .unwrap();
+    let other = environment
+        .global_scope
+        .lookup("ExtractorRight::unique_ext")
+        .unwrap();
+    assert_ne!(declared, other);
+    assert_eq!(
+        environment.declaration_uid_kinds[&declared],
+        DeclarationKind::Extractor
+    );
+    for import in extractor_import_forms("ExtractorLeft") {
+        let mut session =
+            SigilSession::from_environment(&environment, None, ResolveResumeState::default())
+                .unwrap();
+        let source = format!("{import}\nmatch (1, 1) {{ (unique_ext(2, left), ExtractorLeft::unique_ext(2, right)) => (left, right), _ => (0, 0) }}");
+        let resolved = session.resolve(parse(&source).unwrap()).expect(&source);
+        assert_eq!(session.lookup_uid("unique_ext"), Some(declared), "{import}");
+        assert_eq!(
+            session.lookup_uid("ExtractorLeft::unique_ext"),
+            Some(declared)
+        );
+        assert_eq!(
+            session.lookup_uid("ExtractorRight::unique_ext"),
+            Some(other)
+        );
+        let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+            panic!("expected match: {resolved:?}")
+        };
+        let ResolvedPattern::Tuple(items) = arms[0].pattern.unlocated() else {
+            panic!("expected tuple Pattern")
+        };
+        for item in items {
+            let ResolvedPattern::Extractor(head, pre_args, children) = item.unlocated() else {
+                panic!("expected selected named Extractor: {item:?}")
+            };
+            assert_eq!(head.unique_id, declared, "{import}");
+            assert_eq!(
+                head.qualified_name.as_deref().map(global_surface_name),
+                Some("ExtractorLeft::unique_ext")
+            );
+            assert_eq!(pre_args.len(), 1);
+            assert_eq!(children.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn extractor_import_conflicts_do_not_overload_by_type_or_preargument_count() {
+    let extractor = "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }";
+    for other in [
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        "def unique_ext(value: Int) -> Int { value }",
+    ] {
+        let environment = extractor_import_environment(extractor, other, false);
+        for (first, second) in [
+            ("ExtractorLeft", "ExtractorRight"),
+            ("ExtractorRight", "ExtractorLeft"),
+        ] {
+            for first_import in extractor_import_forms(first) {
+                for second_import in extractor_import_forms(second) {
+                    let source = format!("{first_import}\n{second_import}");
+                    let error =
+                        super::resolve(parse(&source).unwrap(), &environment).expect_err(&source);
+                    assert_eq!(
+                        error.diagnostic.reason,
+                        crate::error::ResolveErrorReason::Import,
+                        "{source}: {error:?}"
+                    );
+                    assert!(
+                        error.message.contains("Import conflict")
+                            && error.message.contains("unique_ext"),
+                        "{source}: {error:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn extractor_file_imports_keep_if_let_heads_and_success_binding_uids_independent() {
+    let providers = vec![
+        staged_module(
+            "ExtractorLeft",
+            parse_module_ast(
+                "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+                "ExtractorLeft",
+            ),
+        ),
+        staged_module(
+            "ExtractorRight",
+            parse_module_ast(
+                "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+                "ExtractorRight",
+            ),
+        ),
+    ];
+    let consumers = vec![
+        staged_module(
+            "ExtractorIntConsumer",
+            parse_module_ast(
+                "import ExtractorLeft::unique_ext\ndef run(value: Int) -> (Int, Int) { (if_let(value, unique_ext(10, selected), selected, 0), if_let(value, ExtractorLeft::unique_ext(20, selected), selected, 0)) }",
+                "ExtractorIntConsumer",
+            ),
+        ),
+        staged_module(
+            "ExtractorStringConsumer",
+            parse_module_ast(
+                "import ExtractorRight\ndef run(value: String) -> (String, String) { (if_let(value, unique_ext(selected), selected, \"failure\"), if_let(value, ExtractorRight::unique_ext(selected), selected, \"failure\")) }",
+                "ExtractorStringConsumer",
+            ),
+        ),
+    ];
+    for reverse in [false, true] {
+        let mut stages = standard_test_stages().clone();
+        stages.push(providers.clone());
+        let mut ordered_consumers = consumers.clone();
+        if reverse {
+            ordered_consumers.reverse();
+        }
+        stages.push(ordered_consumers);
+        let index = precollect_declaration_index(&stages).unwrap();
+        let resolved = resolve_staged_program(&stages, Vec::new(), &index, None)
+            .expect("file-local Extractor imports resolve in either module order");
+        let declarations = resolved
+            .iter()
+            .filter_map(|node| match node {
+                Resolved::ExtractorDef(_, id, ..) => Some((
+                    global_surface_name(id.qualified_name.as_deref().unwrap()).to_string(),
+                    id.unique_id,
+                )),
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let mut binding_ids = HashSet::new();
+        let mut consumer_count = 0;
+        for node in &resolved {
+            let Resolved::Def(_, id, _, _, _, _, body, _) = node else {
+                continue;
+            };
+            let Some(name) = id.qualified_name.as_deref().map(global_surface_name) else {
+                continue;
+            };
+            let (extractor_name, pre_arity) = match name {
+                "ExtractorIntConsumer::run" => ("ExtractorLeft::unique_ext", 1),
+                "ExtractorStringConsumer::run" => ("ExtractorRight::unique_ext", 0),
+                _ => continue,
+            };
+            consumer_count += 1;
+            let Resolved::Block(_, nodes) = body.as_ref() else {
+                panic!("expected consumer block")
+            };
+            let [Resolved::TupleLiteral(_, calls)] = nodes.as_slice() else {
+                panic!("expected consumer tuple")
+            };
+            assert_eq!(calls.len(), 2);
+            for call in calls {
+                let Resolved::IfLet(_, _, arms, false) = call else {
+                    panic!("expected if_let")
+                };
+                let ResolvedPattern::Extractor(head, pre_args, children) =
+                    arms[0].pattern.unlocated()
+                else {
+                    panic!("expected named Extractor")
+                };
+                assert_eq!(
+                    head.unique_id, declarations[extractor_name],
+                    "{name}, reverse={reverse}"
+                );
+                assert_eq!(pre_args.len(), pre_arity);
+                let [child] = children.as_slice() else {
+                    panic!("expected one payload binding")
+                };
+                let ResolvedPattern::Var(binding) = child.unlocated() else {
+                    panic!("expected success binding")
+                };
+                assert_eq!(binding.name, "selected");
+                let Resolved::Var(_, reference) = &arms[0].body else {
+                    panic!("expected success reference")
+                };
+                assert_eq!(
+                    reference.unique_id, binding.unique_id,
+                    "{name}, reverse={reverse}"
+                );
+                assert!(
+                    binding_ids.insert(binding.unique_id),
+                    "success bindings must be independent: {name}, reverse={reverse}"
+                );
+            }
+        }
+        assert_eq!(consumer_count, 2);
+        assert_eq!(binding_ids.len(), 4);
+    }
+}
+
+#[test]
+fn extractor_duplicate_imports_reject_every_module_member_list_pair() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "def unrelated() -> Int { 0 }",
+        false,
+    );
+    for first in extractor_import_forms("ExtractorLeft") {
+        for second in extractor_import_forms("ExtractorLeft") {
+            let source = format!("{first}\n{second}");
+            let error = super::resolve(parse(&source).unwrap(), &environment).expect_err(&source);
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Import,
+                "{source}: {error:?}"
+            );
+            assert!(
+                error.message.contains("Duplicate import")
+                    && error.message.contains("ExtractorLeft"),
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn extractor_autoimport_keeps_uid_and_rejects_explicit_duplicates_and_conflicts() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(limit: String, value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        true,
+    );
+    let declared = environment
+        .global_scope
+        .lookup("ExtractorLeft::unique_ext")
+        .unwrap();
+    let mut session =
+        SigilSession::from_environment(&environment, None, ResolveResumeState::default()).unwrap();
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+    let resolved = session
+        .resolve(parse("match 1 { unique_ext(value) => value, _ => 0 }").unwrap())
+        .unwrap();
+    let Resolved::Match(_, _, arms) = &resolved[0] else {
+        panic!("expected match")
+    };
+    let ResolvedPattern::Extractor(head, _, _) = arms[0].pattern.unlocated() else {
+        panic!("expected Extractor")
+    };
+    assert_eq!(head.unique_id, declared);
+    for (owner, message) in [
+        ("ExtractorLeft", "Duplicate import"),
+        ("ExtractorRight", "Import conflict"),
+    ] {
+        for import in extractor_import_forms(owner) {
+            let error = session.resolve(parse(&import).unwrap()).expect_err(&import);
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Import,
+                "{import}: {error:?}"
+            );
+            assert!(error.message.contains(message), "{import}: {error:?}");
+            assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+        }
+    }
+}
+
+#[test]
+fn extractor_duplicate_qualified_declarations_reject_extractors_and_functions() {
+    let extractor =
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }";
+    let other_extractor = "defextractor unique_ext(limit: String, value: String) -> MatchResult<String> { MatchResult::Ok(value) }";
+    let function = "def unique_ext(value: Int) -> Int { value }";
+    for (first, second) in [
+        (extractor, extractor),
+        (extractor, other_extractor),
+        (other_extractor, extractor),
+        (extractor, function),
+        (function, extractor),
+    ] {
+        let mut stages = standard_test_stages().clone();
+        stages.push(vec![
+            staged_module(
+                "ExtractorDuplicate",
+                parse_module_ast(first, "ExtractorDuplicate"),
+            ),
+            staged_module(
+                "ExtractorDuplicate",
+                parse_module_ast(second, "ExtractorDuplicate"),
+            ),
+        ]);
+        let error =
+            ResolveEnvironment::from_stages(&stages).expect_err("duplicate callable identity");
+        assert!(
+            error
+                .message
+                .contains("Duplicate fully-qualified declaration")
+                && error.message.contains("ExtractorDuplicate::unique_ext"),
+            "{first}\n{second}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn extractor_autoimport_conflicts_reject_type_prearity_and_function_overloads() {
+    let extractor = "defextractor unique_ext(limit: Int, value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }";
+    for other in [
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        "def unique_ext(value: Int) -> Int { value }",
+    ] {
+        for reverse in [false, true] {
+            let mut modules = vec![
+                staged_auto_import_module(
+                    "ExtractorLeft",
+                    parse_module_ast(extractor, "ExtractorLeft"),
+                ),
+                staged_auto_import_module(
+                    "ExtractorRight",
+                    parse_module_ast(other, "ExtractorRight"),
+                ),
+            ];
+            if reverse {
+                modules.reverse();
+            }
+            let mut stages = standard_test_stages().clone();
+            stages.push(modules);
+            let environment = ResolveEnvironment::from_stages(&stages).unwrap();
+            let error = super::resolve(parse("0").unwrap(), &environment)
+                .expect_err("conflicting autoimport declarations must fail before application");
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Import
+            );
+            assert!(
+                error.message.contains("Auto-import conflict")
+                    && error.message.contains("unique_ext")
+                    && error.message.contains("ExtractorLeft")
+                    && error.message.contains("ExtractorRight"),
+                "{other}, reverse={reverse}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn extractor_session_import_failures_and_rollback_preserve_identity() {
+    let environment = extractor_import_environment(
+        "defextractor unique_ext(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }",
+        "defextractor unique_ext(value: String) -> MatchResult<String> { MatchResult::Ok(value) }",
+        false,
+    );
+    let declared = environment
+        .global_scope
+        .lookup("ExtractorLeft::unique_ext")
+        .unwrap();
+    let mut session =
+        SigilSession::from_environment(&environment, None, ResolveResumeState::default()).unwrap();
+    for source in [
+        "import ExtractorLeft::unique_ext\nimport ExtractorRight::unique_ext",
+        "import ExtractorLeft::unique_ext\nmissing_after_extractor_import",
+        "import ExtractorLeft::unique_ext\nimport ExtractorLeft::unique_ext",
+    ] {
+        session.resolve(parse(source).unwrap()).expect_err(source);
+        assert_eq!(session.lookup_uid("unique_ext"), None, "{source}");
+        assert!(session.last_imports().success_labels.is_empty());
+    }
+    let before = session.checkpoint();
+    session
+        .resolve(parse("import ExtractorLeft::unique_ext").unwrap())
+        .unwrap();
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+    let labels = session.last_imports().success_labels.clone();
+    assert_eq!(labels, vec!["ExtractorLeft::unique_ext"]);
+    let error = session
+        .resolve(parse("import ExtractorRight::unique_ext").unwrap())
+        .expect_err("conflicting session import");
+    assert!(error.message.contains("Import conflict"));
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
+    assert_eq!(session.last_imports().success_labels, labels);
+    session.rollback(before);
+    assert_eq!(session.lookup_uid("unique_ext"), None);
+    assert!(session.last_imports().success_labels.is_empty());
+    session
+        .resolve(parse("import ExtractorLeft::{unique_ext}").unwrap())
+        .unwrap();
+    assert_eq!(session.lookup_uid("unique_ext"), Some(declared));
 }
 
 #[test]
@@ -6835,7 +7179,7 @@ defenum Light {
   Red,
   Green,
 }
-deferror Oops(reason: String) { reason }"#,
+deferror Oops(reason: String) { |reason: String| Self(message: reason, reason: reason) }"#,
     )
     .unwrap();
 
@@ -7600,6 +7944,58 @@ print(priv_fun(1))"#,
 }
 
 #[test]
+fn test_process_helpers_are_owner_local_and_generated_api_stays_public() {
+    let stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+  @get
+  def read(state: Int) -> Result<Int> { Ok(helper(state)) }
+  @set
+  def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+  defp helper(state: Int) -> Int { hidden(state) }
+  defp hidden(state: Int) -> Int { state }
+}"#,
+        "Counter",
+    ))]];
+    let external = crate::effective_visible_entries(&stages, &[], None, 0).unwrap();
+    assert!(external
+        .iter()
+        .all(|visible| !["helper", "hidden"].contains(&visible.entry.name.as_str())));
+    let internal =
+        crate::effective_visible_entries(&stages, &[], Some(&stages[0][0].module_path), 0).unwrap();
+    for name in ["helper", "hidden"] {
+        assert!(internal.iter().any(|visible| visible.entry.name == name));
+    }
+    resolve_user_with_modules("pid =? Counter::init(1)\nCounter::read(pid)", &stages)
+        .expect("handler calls may use local helpers and expose only their generated API");
+    for source in [
+        "Counter::helper(1)",
+        "f = &Counter::helper",
+        "f = Counter::helper",
+        "import Counter::helper",
+        "Counter::hidden(1)",
+        "f = &Counter::hidden",
+        "import Counter::hidden",
+    ] {
+        let error = resolve_user_with_modules(source, &stages)
+            .expect_err("helpers cannot be accessed outside the process owner");
+        if source.starts_with("import") || source.contains("(1)") {
+            assert_eq!(
+                error.diagnostic.reason,
+                crate::error::ResolveErrorReason::Visibility,
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_worker_process_init_surface_is_importable() {
     let module_stages = vec![vec![staged_process_module(parse_module_ast(
         r#"defagent FibWorker {
@@ -8019,11 +8415,11 @@ def pred(n: Int) -> Boolean {
   n > 0
 }
 
-checked = Ok(3) |>= ensure(&pred, GuardError)
+checked = Ok(3) |>= ensure(&pred, GuardError())
 flagged = True |> and(False)
-verified = Ok(True) |>= require(GuardError)
-replaced = Err(GuardError) |> map_err(GuardError)
-wrapped = Err(GuardError) |> cause(GuardError)"#,
+verified = Ok(True) |>= require(GuardError())
+replaced = Err(GuardError()) |> map_err(GuardError())
+wrapped = Err(GuardError()) |> cause(GuardError())"#,
         &[vec![
             staged_auto_import_module("Kernel", parse_module_ast(
                 "@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>\n@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>", "Kernel")),
@@ -8161,7 +8557,7 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
         match node {
             Resolved::Pipe(_, _, right) => Some(right.as_ref()),
             Resolved::Block(_, nodes) => nodes.iter().find_map(find_pipe_rhs),
-            Resolved::Bind(_, _, rhs) | Resolved::SafeBind(_, _, rhs) => find_pipe_rhs(rhs),
+            Resolved::Bind(_, _, rhs) | Resolved::SafeBind(_, _, rhs, _) => find_pipe_rhs(rhs),
             _ => None,
         }
     }
@@ -9621,4 +10017,346 @@ fn pattern_consumer_builtin_declarations_require_kernel_identity() {
     }
     precollect_declaration_index(&[vec![kernel_pattern_test_module()]])
         .expect("canonical consumer declarations remain available");
+}
+
+#[test]
+fn child_resolvers_share_read_only_declaration_metadata() {
+    let mut resolver = Resolver::new();
+    resolver.declaration_hidden_by_uid = HashMap::from([(17, true)]).into();
+    resolver.owner_registry = standard_test_environment().owner_registry.clone().into();
+    resolver.current_stage_impl_targets = Some(
+        HashMap::from([(
+            "Marker".to_string(),
+            declarations::ImplTargetResolution::Unique(DeclarationKind::Struct),
+        )])
+        .into(),
+    );
+    let hidden = std::ptr::from_ref(resolver.declaration_hidden_by_uid.get(&17).unwrap());
+    let owner = std::ptr::from_ref(resolver.owner_registry.get("Int").unwrap());
+    let target = std::ptr::from_ref(
+        resolver
+            .current_stage_impl_targets
+            .as_ref()
+            .unwrap()
+            .get("Marker")
+            .unwrap(),
+    );
+    resolver
+        .with_child_scope(|child| {
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_hidden_by_uid.get(&17).unwrap()),
+                hidden
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.owner_registry.get("Int").unwrap()),
+                owner
+            );
+            assert_eq!(
+                std::ptr::from_ref(
+                    child
+                        .current_stage_impl_targets
+                        .as_ref()
+                        .unwrap()
+                        .get("Marker")
+                        .unwrap()
+                ),
+                target
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn parallel_stage_resolution_preserves_order_visibility_and_unique_local_ids() {
+    let modules = (0..16).map(|index| {
+        let next = (index + 1) % 16;
+        let name = format!("Stage{index}");
+        let source = format!("import Stage{next}::item{next}\ndef item{index}() -> Int {{\n  local = item{next}()\n  local\n}}");
+        staged_module(&name, parse_module_ast(&source, &name))
+    }).collect::<Vec<_>>();
+    let resolved = resolve_user_with_modules("", &[modules.clone()]).unwrap();
+    let definitions = resolved
+        .iter()
+        .filter_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name.starts_with("item") => {
+                Some((id.name.clone(), first_bind_id(body).unwrap()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>(),
+        (0..16)
+            .map(|index| format!("item{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        definitions
+            .iter()
+            .map(|(_, id)| *id)
+            .collect::<HashSet<_>>()
+            .len(),
+        16
+    );
+
+    let error =
+        resolve_user_with_modules("", &[modules[..8].to_vec(), modules[8..].to_vec()]).unwrap_err();
+    assert!(error.message.contains("Stage8::item8"), "{error:?}");
+}
+
+#[test]
+fn child_scope_preserves_parent_bindings_and_id_commit_rules() {
+    let mut resolver = Resolver::new();
+    let span = Span { start: 0, end: 1 };
+    let outer_id = resolver.scope.define("outer", span.clone());
+    let initial_next = resolver.scope.next_id();
+    let error = resolver
+        .with_child_scope(|child| {
+            child.scope.define("outer", span.clone());
+            child.reserve_declaration_uid("Child::failed");
+            child.resolve_node(Ast::Var(span.clone(), "unknown_child_name".into()))
+        })
+        .unwrap_err();
+    assert!(error.message.contains("unknown_child_name"));
+    assert_eq!(resolver.scope.lookup("outer"), Some(outer_id));
+    assert_eq!(resolver.scope.next_id(), initial_next);
+    assert!(!resolver.declaration_uids.contains_key("Child::failed"));
+
+    let child_id = resolver
+        .with_child_scope(|child| {
+            let id = child.scope.define("outer", span.clone());
+            child.reserve_declaration_uid("Child::success");
+            assert_eq!(child.scope.lookup("outer"), Some(id));
+            Ok(id)
+        })
+        .unwrap();
+    assert_eq!(child_id, initial_next);
+    assert_eq!(resolver.scope.lookup("outer"), Some(outer_id));
+    assert_eq!(resolver.scope.next_id(), initial_next + 2);
+    assert!(!resolver.declaration_uids.contains_key("Child::success"));
+}
+
+#[test]
+fn child_resolvers_share_unchanged_declaration_metadata() {
+    let mut resolver = Resolver::new();
+    let entry = standard_test_environment()
+        .declaration_index
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    resolver.declaration_entries = HashMap::from([("Marker".into(), entry)]).into();
+    resolver.declaration_uids = HashMap::from([("Marker".into(), 17)]).into();
+    resolver.declaration_uid_kinds = HashMap::from([(17, DeclarationKind::Def)]).into();
+    resolver.trait_constructor_slots = HashMap::from([(17, vec!["A".into()])]).into();
+    let entry = std::ptr::from_ref(resolver.declaration_entries.get("Marker").unwrap());
+    let uid = std::ptr::from_ref(resolver.declaration_uids.get("Marker").unwrap());
+    let kind = std::ptr::from_ref(resolver.declaration_uid_kinds.get(&17).unwrap());
+    let slots = std::ptr::from_ref(resolver.trait_constructor_slots.get(&17).unwrap());
+    resolver
+        .with_child_scope(|child| {
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_entries.get("Marker").unwrap()),
+                entry
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_uids.get("Marker").unwrap()),
+                uid
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.declaration_uid_kinds.get(&17).unwrap()),
+                kind
+            );
+            assert_eq!(
+                std::ptr::from_ref(child.trait_constructor_slots.get(&17).unwrap()),
+                slots
+            );
+            child.reserve_declaration_uid("Child::new");
+            assert_eq!(child.declaration_uids.get("Marker"), Some(&17));
+            Ok(())
+        })
+        .unwrap();
+    assert!(!resolver.declaration_uids.contains_key("Child::new"));
+}
+
+#[test]
+fn test_deferror_self_resolves_to_its_declaration_identity() {
+    let resolved = parse_and_resolve(
+        r#"deferror Trouble(code: Int) { |input: Int| Self(message: "trouble", code: input) }"#,
+    )
+    .unwrap();
+    let Resolved::DeferrorDef(_, definition, _, block) = &resolved[0] else {
+        panic!("expected Error declaration")
+    };
+    let Resolved::Closure(_, _, _, body) = block.as_ref() else {
+        panic!("expected constructor block")
+    };
+    let constructor = match body.as_ref() {
+        Resolved::ConstructorCall(_, constructor, _) => constructor,
+        Resolved::Block(_, statements) => match statements.last().unwrap() {
+            Resolved::ConstructorCall(_, constructor, _) => constructor,
+            other => panic!("expected internal construction, got {other:?}"),
+        },
+        other => panic!("expected body, got {other:?}"),
+    };
+    assert_eq!(constructor.unique_id, definition.unique_id);
+    assert_eq!(constructor.qualified_name, definition.qualified_name);
+}
+
+#[test]
+fn inherent_impl_sibling_calls_share_script_and_module_scope() {
+    let source = r#"defstruct User { age: Int }
+impl User {
+  def first(self: Self) -> Int { second(self) }
+  def second(self: Self) -> Int { self.age }
+  def shadow(self: Self, second: (User -> Int)) -> Int { second(self) }
+}"#;
+    let nodes = resolve(parse(source).unwrap()).expect("script impl siblings resolve");
+    let first = nodes
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "Global::User::first" => {
+                Some(body)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let second_uid = nodes
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, ..) if id.name == "Global::User::second" => Some(id.unique_id),
+            _ => None,
+        })
+        .unwrap();
+    let Resolved::Block(_, body) = first.as_ref() else {
+        panic!("expected body block")
+    };
+    let Resolved::App(_, callee, _) = &body[0] else {
+        panic!("expected call: {first:?}")
+    };
+    let Resolved::Var(_, callee) = callee.as_ref() else {
+        panic!("expected function: {callee:?}")
+    };
+    assert_eq!(callee.unique_id, second_uid);
+    let module_stages = vec![staged_modules_from_source_ast(parse(source).unwrap(), None)];
+    resolve_user_with_modules("", &module_stages).expect("module impl siblings resolve");
+    let outside = format!("{source}\ndef outside(user: User) -> Int {{ second(user) }}");
+    assert!(resolve(parse(&outside).unwrap())
+        .unwrap_err()
+        .message
+        .contains("Undefined function second/1"));
+}
+
+#[test]
+fn hashmap_pattern_keys_keep_outer_binding_identity() {
+    let resolved = parse_and_resolve("key = \"a\"\nmap = hash![\"a\" => 1]\nmatch map { hash![\"a\" => key, key => x, ^key => _] => x, _ => 0 }").unwrap();
+    let Resolved::Bind(_, ResolvedPattern::Var(outer), _) = &resolved[0] else {
+        panic!("outer binding")
+    };
+    let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+        panic!("match")
+    };
+    let ResolvedPattern::HashMap(_, entries) = arms[0].pattern.unlocated() else {
+        panic!("HashMap")
+    };
+    let ResolvedPattern::Var(shadow) = &entries[0].1 else {
+        panic!("shadow binding")
+    };
+    assert_ne!(shadow.unique_id, outer.unique_id);
+    for (key, _) in &entries[1..] {
+        assert!(matches!(key, Resolved::Var(_, id) if id.unique_id == outer.unique_id));
+    }
+}
+
+#[test]
+fn hashmap_pattern_keys_cannot_reference_new_bindings() {
+    for key in ["key", "^key"] {
+        let source = format!(
+            "map = hash![\"a\" => 1]\nmatch map {{ hash![\"a\" => key, {key} => _] => 0, _ => 1 }}"
+        );
+        assert!(parse_and_resolve(&source).is_err());
+    }
+    let error = parse_and_resolve(
+        "map = hash![\"a\" => 1]\nmatch map { hash![\"a\" => x, \"b\" => x] => 0, _ => 1 }",
+    )
+    .unwrap_err();
+    assert!(error.message.contains("Duplicate"), "{}", error.message);
+}
+
+#[test]
+fn source_reflections_require_canonical_and_unique_builtin_declarations() {
+    let parse_std = |source| {
+        spire::parse_with_context(
+            source,
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .unwrap()
+    };
+    for (owner, source, expected) in [
+        (
+            "Other",
+            "@builtin def __FILE__() -> String",
+            "canonical Bootstrap",
+        ),
+        (
+            "Bootstrap",
+            "@builtin def __LINE__() -> Int\n@builtin def __LINE__() -> Int",
+            "Duplicate builtin reflection function",
+        ),
+    ] {
+        let stages = vec![vec![staged_module(owner, parse_std(source))]];
+        let error = precollect_declarations(&stages).expect_err("invalid builtin declaration");
+        assert!(error.message.contains(expected), "{}", error.message);
+    }
+    let error =
+        resolve(spire::parse("__LINE__").unwrap()).expect_err("source context must be supplied");
+    assert!(error.message.contains("not materialized"));
+}
+
+#[test]
+fn bare_deferror_is_a_kind_and_capture_stays_a_constructor_reference() {
+    let resolved = parse_and_resolve(
+        "deferror Trouble(code: Int) { |code: Int| Self(message: \"trouble\", code: code) }\nkind = Trouble\nerror = Trouble(1)\nfactory = &Trouble\npath = Trouble.code",
+    ).expect("canonical deferror roles should resolve");
+    assert!(
+        matches!(&resolved[1], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::ErrorKind(_, id) if id.qualified_name.as_deref() == Some("Global::Trouble")))
+    );
+    assert!(
+        matches!(&resolved[2], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::ConstructorCall(..)))
+    );
+    assert!(
+        matches!(&resolved[3], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::Capture(_, target, _) if matches!(target.as_ref(), Resolved::Var(..))))
+    );
+    assert!(
+        matches!(&resolved[4], Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::FieldAccess(_, target, _) if matches!(target.as_ref(), Resolved::Var(..))))
+    );
+}
+
+#[test]
+fn qualified_bare_deferror_is_a_kind_without_nullary_constructor_lowering() {
+    let modules = vec![vec![staged_module(
+        "Failures",
+        parse_module_ast(
+            "deferror Trouble(code: Int) { |code: Int| Self(message: \"trouble\", code: code) }",
+            "Failures",
+        ),
+    )]];
+    let resolved = resolve_user_with_modules(
+        "kind = Global::Trouble\nfactory = &Global::Trouble\npath = Global::Trouble.code",
+        &modules,
+    )
+    .expect("qualified deferror roles should resolve");
+    for node in &resolved {
+        if let Resolved::Bind(_, ResolvedPattern::Var(id), rhs) = node {
+            if id.name == "kind" {
+                assert!(
+                    matches!(rhs.as_ref(), Resolved::ErrorKind(_, id) if id.qualified_name.as_deref() == Some("Global::Trouble"))
+                );
+            }
+        }
+    }
 }

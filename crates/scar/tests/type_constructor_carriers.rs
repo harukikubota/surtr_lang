@@ -1,3 +1,56 @@
+#![deny(dead_code)]
+
+#[path = "support/case_registry.rs"]
+mod case_registry;
+
+case_registry::register_case_suite!(
+    "type_constructor_carriers.rs",
+    [
+        inheritance_connects_multiple_roots_into_one_family,
+        payload_changes_preserve_captured_argument,
+        different_direct_captured_arguments_are_independent,
+        unrelated_families_allow_distinct_carriers,
+        explicit_head_leaves_captured_arguments_to_expected_return,
+        separate_direct_parameters_do_not_share_mapped_slot_identity,
+        repeated_named_constructor_variable_requires_one_carrier,
+        repeated_direct_trait_name_shares_carrier,
+        shared_payload_variable_still_rejects_different_payload_types,
+        impl_body_self_application_uses_declared_slot_positions,
+        nested_direct_constructor_trait_application_is_rejected,
+        self_application_preserves_phantom_captured_arguments,
+        independent_direct_positions_keep_their_declared_capabilities,
+        unannotated_alias_preserves_constructor_capability,
+        generic_identity_result_preserves_constructor_capability,
+        explicitly_shared_constructor_rejects_unsupported_stronger_capability,
+        explicitly_shared_constructor_keeps_all_declared_parent_capabilities,
+        explicitly_shared_constructor_keeps_its_stronger_capability,
+        declared_capability_set_remains_distinct_from_an_unrestricted_value,
+        ordinary_callable_argument_checks_constructor_capability,
+        every_trait_method_constructor_argument_checks_capability,
+        bare_occurrences_keep_mapped_payloads_independent,
+        repeated_bare_trait_occurrences_keep_mapped_payloads_independent,
+        bare_occurrences_infer_captured_arguments_independently,
+        bare_direct_occurrences_do_not_compare_mapped_slots,
+        different_direct_trait_names_keep_result_independent,
+        different_direct_trait_parameters_do_not_depend_on_registration_order,
+        zero_argument_helper_checks_explicit_payload_against_expected_return,
+        helper_operator_and_capture_preserve_the_same_constructor_relation,
+        concrete_constructor_capability_requires_impl_constraints,
+        branch_and_block_results_preserve_constructor_capability,
+        nominal_annotation_cannot_choose_an_abstract_constructor,
+        provenance_intersection_proves_every_extracted_source,
+        specialized_return_views_survive_value_projections,
+        specialized_return_views_follow_generic_callable_dependencies,
+        specialized_return_views_survive_receiverless_and_joined_calls,
+        constructor_method_result_provenance_uses_the_declared_self_receiver,
+        captured_generic_callable_keeps_its_required_constructor_capability,
+        specialized_return_views_survive_extractor_payload_projections,
+        callback_output_dependencies_preserve_transitive_input_views,
+        independently_annotated_callbacks_do_not_wait_on_each_other,
+        nested_declared_constructor_requirements_survive_direct_and_captured_calls,
+    ]
+);
+
 #[allow(dead_code)]
 mod support;
 
@@ -6,7 +59,6 @@ fn check(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::error::TypeE
     support::typecheck(support::resolve_ast_with_builtin_prelude(ast).expect("resolve"))
 }
 
-#[test]
 fn inheritance_connects_multiple_roots_into_one_family() {
     check(
         r#"
@@ -27,7 +79,6 @@ impl FixtureMonad for FixtureEither<$L, $R> where $R: FixtureMonad.$A {}
 def accept(a: FixtureFunctor<Int>, b: FixtureMonad<Boolean>) -> Unit { () }
 "#;
 
-#[test]
 fn payload_changes_preserve_captured_argument() {
     check(&format!(
         "{FAMILY}\naccept(FixtureEither::Pair(\"left\", 1), FixtureEither::Pair(\"left\", True))"
@@ -35,7 +86,6 @@ fn payload_changes_preserve_captured_argument() {
     .expect("mapped payloads are independent");
 }
 
-#[test]
 fn different_direct_captured_arguments_are_independent() {
     check(&format!(
         "{FAMILY}\naccept(FixtureEither::Pair(\"left\", 1), FixtureEither::Pair(2, True))"
@@ -43,7 +93,6 @@ fn different_direct_captured_arguments_are_independent() {
     .expect("separate direct parameters have independent captured carrier arguments");
 }
 
-#[test]
 fn unrelated_families_allow_distinct_carriers() {
     check(
         r#"
@@ -59,7 +108,6 @@ accept([1], Box::Box(True))
     .expect("unrelated families carry independent constructors");
 }
 
-#[test]
 fn explicit_head_leaves_captured_arguments_to_expected_return() {
     for reverse in [false, true] {
         let implementations = [
@@ -82,7 +130,6 @@ value: Pair<String, Int> = make::<Pair>()
     }
 }
 
-#[test]
 fn separate_direct_parameters_do_not_share_mapped_slot_identity() {
     check(
         r#"
@@ -105,7 +152,6 @@ accept(Pair::Pair(1, "a"), Pair::Pair(2, "b"))
     .expect("separate direct parameters do not compare their mapped slot positions");
 }
 
-#[test]
 fn repeated_named_constructor_variable_requires_one_carrier() {
     let source = r#"
 deftrait Context where Self: Type<$A> {
@@ -156,7 +202,6 @@ accept(Left::Left(1), Right::Right("right"))
     assert!(diagnostic.related.iter().any(|fact| fact.span == left.span));
 }
 
-#[test]
 fn repeated_direct_trait_name_shares_carrier() {
     let error = check(
         r#"
@@ -176,7 +221,6 @@ accept(Carrier::Pair("left", 1), Carrier::Pair(True, 2))
     );
 }
 
-#[test]
 fn shared_payload_variable_still_rejects_different_payload_types() {
     let error = check(
         r#"
@@ -197,7 +241,6 @@ accept(Left::Left(1), Left::Left("different"))
     );
 }
 
-#[test]
 fn impl_body_self_application_uses_declared_slot_positions() {
     check(
         r#"
@@ -212,7 +255,6 @@ value: Pair<String, Int> = Factory::make::<Pair>()
     .expect("impl body uses the same constructor substitution as its contract");
 }
 
-#[test]
 fn nested_direct_constructor_trait_application_is_rejected() {
     let error = check(
         r#"
@@ -230,7 +272,6 @@ def invalid(value: FixtureFunctor<FixtureMonad<Int>>) -> Unit { () }
     );
 }
 
-#[test]
 fn self_application_preserves_phantom_captured_arguments() {
     let declarations = r#"
 deftrait Replace where Self: Type<$A> {
@@ -267,7 +308,6 @@ input: PhantomCarrier<Int, Int> = PhantomCarrier::new::<Int>(1)
     assert_eq!(data["actual_type"], "PhantomCarrier<Int, String>");
 }
 
-#[test]
 fn independent_direct_positions_keep_their_declared_capabilities() {
     let declarations = r#"
 deftrait FixtureFunctor where Self: Type<$A> {}
@@ -282,7 +322,6 @@ impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
         .expect_err("a concrete FixtureMonad value must not grant capability beyond the direct position's FixtureFunctor contract");
 }
 
-#[test]
 fn unannotated_alias_preserves_constructor_capability() {
     let error = check(
         r#"
@@ -309,7 +348,6 @@ use(Box::Box(1), Box::Box(2))
     assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
-#[test]
 fn generic_identity_result_preserves_constructor_capability() {
     let error = check(
         r#"
@@ -337,7 +375,6 @@ use(Box::Box(1))
     assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
-#[test]
 fn explicitly_shared_constructor_rejects_unsupported_stronger_capability() {
     let error = check(
         r#"
@@ -370,7 +407,6 @@ use(Box::Box(1), Box::Box(2))
     assert_eq!(data["required_capability"], "Stronger");
 }
 
-#[test]
 fn explicitly_shared_constructor_keeps_all_declared_parent_capabilities() {
     check(
         r#"
@@ -394,7 +430,6 @@ use(Box::Box(1), Box::Box(2))
     .expect("forwarding retains methods from every guaranteed common parent");
 }
 
-#[test]
 fn explicitly_shared_constructor_keeps_its_stronger_capability() {
     check(
         r#"
@@ -413,7 +448,6 @@ use(Box::Box(1), Box::Box(2))
     .expect("identical constrained sources retain their stronger capability");
 }
 
-#[test]
 fn declared_capability_set_remains_distinct_from_an_unrestricted_value() {
     check(
         r#"
@@ -462,7 +496,6 @@ use(Box::Box(1), Box::Box(2))"#
     assert_eq!(data["required_capability"], "Stronger");
 }
 
-#[test]
 fn ordinary_callable_argument_checks_constructor_capability() {
     let error = check(
         r#"
@@ -487,7 +520,6 @@ use(Box::Box(1))
     assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
-#[test]
 fn every_trait_method_constructor_argument_checks_capability() {
     let error = check(
         r#"
@@ -515,7 +547,6 @@ use(Box::Box(1), Box::Box(2))
     assert_eq!(data["required_capability"], "FixtureMonad");
 }
 
-#[test]
 fn bare_occurrences_keep_mapped_payloads_independent() {
     check(
         r#"
@@ -530,7 +561,6 @@ accept([1], [True])
     .expect("bare occurrences compare the carrier without equating mapped payloads");
 }
 
-#[test]
 fn repeated_bare_trait_occurrences_keep_mapped_payloads_independent() {
     check(
         r#"
@@ -543,7 +573,6 @@ accept([1], [True])
     .expect("repeated bare direct occurrences have independent witnesses and payloads");
 }
 
-#[test]
 fn bare_occurrences_infer_captured_arguments_independently() {
     check(
         r#"
@@ -559,7 +588,6 @@ accept(Carrier::Pair([True], 1), Carrier::Pair(["left"], 2))
     .expect("each bare occurrence determines its own captured argument");
 }
 
-#[test]
 fn bare_direct_occurrences_do_not_compare_mapped_slots() {
     check(
         r#"
@@ -582,7 +610,6 @@ accept(Pair::Pair(1, "a"), Pair::Pair(2, "b"))
     .expect("bare direct occurrences are independent even within one family");
 }
 
-#[test]
 fn different_direct_trait_names_keep_result_independent() {
     check(
         r#"
@@ -600,7 +627,6 @@ result: Box<String> = replace([1])
     .expect("a different direct Trait name chooses its carrier independently");
 }
 
-#[test]
 fn different_direct_trait_parameters_do_not_depend_on_registration_order() {
     for trait_definitions in [
         "deftrait Left where Self: Type<$A> {}\ndeftrait Right where Self: Type<$A> {}",
@@ -638,7 +664,6 @@ accept({arguments})
     }
 }
 
-#[test]
 fn zero_argument_helper_checks_explicit_payload_against_expected_return() {
     let error = check(
         r#"
@@ -655,7 +680,6 @@ value: List<String> = Factory::make::<List, Int>()
     );
 }
 
-#[test]
 fn helper_operator_and_capture_preserve_the_same_constructor_relation() {
     let declarations = r#"
 defenum Box<$Value> { Box($Value), }
@@ -693,7 +717,6 @@ value: Box<String> = mapper(Box::Box(1), {{|value: Int| "mapped"}})"#
     .expect_err("a qualified Trait method capture cannot change its Self carrier");
 }
 
-#[test]
 fn concrete_constructor_capability_requires_impl_constraints() {
     let declarations = r#"
 deftrait Marker { def mark(self: Self) -> Int }
@@ -718,7 +741,6 @@ def accept(value: Family<Int>) -> Unit { () }
     .expect_err("constructor projection must prove the captured argument constraint");
 }
 
-#[test]
 fn branch_and_block_results_preserve_constructor_capability() {
     for expression in [
         "if (True, a, a)",
@@ -752,7 +774,6 @@ use(Box::Box(1), Box::Box(2))
     }
 }
 
-#[test]
 fn nominal_annotation_cannot_choose_an_abstract_constructor() {
     let declarations = r#"
 deftrait FixtureFunctor where Self: Type<$A> {}
@@ -795,7 +816,6 @@ def use(a: FixtureFunctor<Int>) -> Int {{
     }
 }
 
-#[test]
 fn provenance_intersection_proves_every_extracted_source() {
     let declarations = r#"
 deftrait FixtureFunctor where Self: Type<$A> {}
@@ -840,7 +860,6 @@ stronger(if (True, Box::Box(1), retain(Box::Box(2))))
     .expect("a fresh concrete branch and a constrained return retain their common capability");
 }
 
-#[test]
 fn specialized_return_views_survive_value_projections() {
     let declarations = r#"
 deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
@@ -882,7 +901,6 @@ impl Holder { def new(value: $T) -> Holder<$T> { Holder { value: value } } }
     }
 }
 
-#[test]
 fn specialized_return_views_follow_generic_callable_dependencies() {
     let declarations = r#"
 deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
@@ -917,7 +935,6 @@ match wrapped { Box::Box(item) => stronger(item), }"#,
     }
 }
 
-#[test]
 fn specialized_return_views_survive_receiverless_and_joined_calls() {
     let declarations = r#"
 deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
@@ -965,7 +982,6 @@ stronger(identity(a))"#,
     }
 }
 
-#[test]
 fn constructor_method_result_provenance_uses_the_declared_self_receiver() {
     let declarations = r#"
 deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
@@ -1006,7 +1022,6 @@ def retain(value: $F<Int>) -> $F<Int> where $F: ProjectionFunctor { ProjectionFu
 def stronger(value: ProjectionMonad<Int>) -> Int { 1 }
 "#;
 
-#[test]
 fn captured_generic_callable_keeps_its_required_constructor_capability() {
     for capture in ["&stronger", "&stronger(&1)"] {
         check(&format!(
@@ -1029,7 +1044,6 @@ fn check_with_uncons(source: &str) -> Result<Vec<scar::typed::TypedNode>, scar::
     support::typecheck(support::resolve_with_builtin_prelude(source))
 }
 
-#[test]
 fn specialized_return_views_survive_extractor_payload_projections() {
     let declarations = format!(
         "{RESTRICTED_RETURN_PROJECTIONS}\nimpl Int {{ defextractor project(chosen: $T, value: Int) -> MatchResult<$T> {{ MatchResult::Ok(chosen) }} }}"
@@ -1054,7 +1068,6 @@ fn specialized_return_views_survive_extractor_payload_projections() {
     }
 }
 
-#[test]
 fn callback_output_dependencies_preserve_transitive_input_views() {
     let declarations = format!(
         r#"{RESTRICTED_RETURN_PROJECTIONS}
@@ -1084,7 +1097,6 @@ def independent_callbacks(value: $A, weaker: ($A -> $A), consume: ($A -> Int)) -
     }
 }
 
-#[test]
 fn independently_annotated_callbacks_do_not_wait_on_each_other() {
     check(
         r#"
@@ -1095,7 +1107,6 @@ accept({|value: Int| value}, {|value: Int| value})
     .expect("explicit callback contracts establish their input types independently");
 }
 
-#[test]
 fn nested_declared_constructor_requirements_survive_direct_and_captured_calls() {
     let declarations = format!(
         r#"{RESTRICTED_RETURN_PROJECTIONS}

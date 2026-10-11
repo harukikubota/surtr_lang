@@ -18,7 +18,7 @@ defagent Logger {
     OutHandler::write(ctx.out, message)
   }
 
-  def leak() -> PID<OutHandler> {
+  defp leak() -> PID<OutHandler> {
     ctx.out
   }
 }

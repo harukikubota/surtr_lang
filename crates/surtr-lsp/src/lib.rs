@@ -349,8 +349,12 @@ pub fn path_to_file_uri(path: &Path) -> String {
 
 pub fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
-    let path = rest.strip_prefix("localhost").unwrap_or(rest);
-    percent_decode(path).map(PathBuf::from)
+    let path_start = rest.find('/')?;
+    let authority = &rest[..path_start];
+    if !authority.is_empty() && authority != "localhost" {
+        return None;
+    }
+    percent_decode(&rest[path_start..]).map(PathBuf::from)
 }
 
 fn lsp_range(range: AnalysisRange) -> LspRange {

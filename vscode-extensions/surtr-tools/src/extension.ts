@@ -26,23 +26,53 @@ export function activate(context: vscode.ExtensionContext): void {
   status.name = "Surtr Diagnostics";
   status.text = "$(flame) Surtr";
   status.show();
+  const requests = new Map<string, symbol>();
+  const documentStatuses = new Map<string, { version: number; text: string }>();
+  const updateStatus = (): void => {
+    const document = vscode.window.activeTextEditor?.document;
+    if (!document || document.languageId !== "surtr" || document.uri.scheme !== "file" ||
+        document.isClosed ||
+        !vscode.workspace.getConfiguration().get<boolean>("surtr.diagnostics.onSave", true)) {
+      status.text = "$(flame) Surtr";
+      return;
+    }
+    const saved = documentStatuses.get(document.uri.toString());
+    status.text = saved?.version === document.version ? saved.text : "$(flame) Surtr";
+  };
 
   const refreshDiagnostics = async (document: vscode.TextDocument): Promise<void> => {
-    if (document.languageId !== "surtr" || document.uri.scheme !== "file") {
+    if (document.languageId !== "surtr" || document.uri.scheme !== "file" || document.isClosed) {
       return;
     }
 
+    const key = document.uri.toString();
     const diagnosticsEnabled = vscode.workspace
       .getConfiguration()
       .get<boolean>("surtr.diagnostics.onSave", true);
     if (!diagnosticsEnabled) {
+      requests.delete(key);
       diagnostics.delete(document.uri);
-      status.text = "$(flame) Surtr";
+      documentStatuses.delete(key);
+      updateStatus();
       return;
     }
 
+    const request = Symbol();
+    const version = document.version;
+    const compilerPath = configuredCompilerPath();
+    requests.set(key, request);
+    const isCurrent = (): boolean =>
+      requests.get(key) === request &&
+      !document.isClosed &&
+      document.version === version &&
+      vscode.workspace.getConfiguration().get<boolean>("surtr.diagnostics.onSave", true) &&
+      configuredCompilerPath() === compilerPath;
+
     try {
-      const report = await runCheck(document.uri.fsPath);
+      const report = await runCheck(document.uri.fsPath, compilerPath);
+      if (!isCurrent()) {
+        return;
+      }
       const nextDiagnostics = report.errors.map((error) => {
         const line = Math.max(0, error.line - 1);
         const column = Math.max(0, error.column - 1);
@@ -61,12 +91,19 @@ export function activate(context: vscode.ExtensionContext): void {
         return diagnostic;
       });
       diagnostics.set(document.uri, nextDiagnostics);
-      status.text =
-        nextDiagnostics.length === 0
+      documentStatuses.set(key, {
+        version,
+        text: nextDiagnostics.length === 0
           ? "$(pass) Surtr"
-          : `$(error) Surtr ${nextDiagnostics.length}`;
+          : `$(error) Surtr ${nextDiagnostics.length}`
+      });
+      updateStatus();
     } catch (error) {
-      status.text = "$(warning) Surtr";
+      if (!isCurrent()) {
+        return;
+      }
+      documentStatuses.set(key, { version, text: "$(warning) Surtr" });
+      updateStatus();
       void vscode.window.showWarningMessage(String(error));
     }
   };
@@ -74,13 +111,34 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     diagnostics,
     status,
+    { dispose: () => { requests.clear(); documentStatuses.clear(); } },
     vscode.workspace.onDidSaveTextDocument((document) => {
       void refreshDiagnostics(document);
     }),
     vscode.workspace.onDidOpenTextDocument((document) => {
       void refreshDiagnostics(document);
     }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      requests.delete(document.uri.toString());
+      diagnostics.delete(document.uri);
+      documentStatuses.delete(document.uri.toString());
+      updateStatus();
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("surtr.diagnostics.onSave") &&
+          !event.affectsConfiguration("surtr.compiler.path")) {
+        return;
+      }
+      requests.clear();
+      diagnostics.clear();
+      documentStatuses.clear();
+      updateStatus();
+      for (const document of vscode.workspace.textDocuments) {
+        void refreshDiagnostics(document);
+      }
+    }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
+      updateStatus();
       if (editor?.document) {
         void refreshDiagnostics(editor.document);
       }
@@ -108,9 +166,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {}
 
-async function runCheck(filePath: string): Promise<CheckReport> {
+async function runCheck(filePath: string, compilerPath: string): Promise<CheckReport> {
   try {
-    const { stdout } = await execSurtr(["check", filePath, "--format", "json"]);
+    const { stdout } = await execSurtr(["check", filePath, "--format", "json"], compilerPath);
     return JSON.parse(stdout) as CheckReport;
   } catch (error) {
     const stdout = stdoutFromError(error);
@@ -121,10 +179,16 @@ async function runCheck(filePath: string): Promise<CheckReport> {
   }
 }
 
-async function execSurtr(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const compilerPath = vscode.workspace
+function configuredCompilerPath(): string {
+  return vscode.workspace
     .getConfiguration()
     .get<string>("surtr.compiler.path", "surtr");
+}
+
+async function execSurtr(
+  args: string[],
+  compilerPath = configuredCompilerPath()
+): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(compilerPath, args, {
     cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
   });

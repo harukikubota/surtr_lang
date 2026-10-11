@@ -1,0 +1,2 @@
+phase: typecheck
+contains: only a Result RHS can be decomposed by `=?`.

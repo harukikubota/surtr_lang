@@ -256,6 +256,7 @@ pub enum Value {
     Tagged { tag: u32, fields: Vec<Value> },
     Callable(Callable),
     Error(Box<RichError>),
+    ErrorKind(String),
     Regex(RegexHandle),
     RegexCaptures(RegexCapturesHandle),
     RegexMatch(RegexMatchHandle),
@@ -326,10 +327,54 @@ pub enum InfiniteGeneratorProducer {
     Unfold { state: Value, step: Callable },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PidHandle {
+/// Immutable capability category; handler PIDs do not identify processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidKind {
+    Singleton,
+    Worker,
+    Handler,
+}
+
+/// Shared identity only. It must never retain process state or a VM context.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PidIdentity {
     pub id: u64,
     pub process_name: String,
+    pub kind: PidKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PidHandle {
+    identity: Rc<PidIdentity>,
+}
+
+impl PidHandle {
+    pub fn new(id: u64, process_name: String, kind: PidKind) -> Self {
+        Self {
+            identity: Rc::new(PidIdentity {
+                id,
+                process_name,
+                kind,
+            }),
+        }
+    }
+
+    pub fn identity(&self) -> &Rc<PidIdentity> {
+        &self.identity
+    }
+
+    /// Runtime authority is the shared identity, not a coincidentally equal ID.
+    pub fn same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+
+impl std::ops::Deref for PidHandle {
+    type Target = PidIdentity;
+
+    fn deref(&self) -> &Self::Target {
+        &self.identity
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -628,6 +673,7 @@ impl Value {
                 }
             },
             Value::Error(rich) => rich.to_display_string(),
+            Value::ErrorKind(kind) => format!("ErrorKind({kind})"),
             Value::Regex(handle) => format!("Regex({:?})", handle.pattern),
             Value::RegexCaptures(handle) => {
                 format!("RegexCaptures(groups: {})", handle.groups.len())
@@ -831,6 +877,22 @@ impl ListHandle {
     }
 }
 
+impl Drop for ListHandle {
+    fn drop(&mut self) {
+        let mut repr = std::mem::replace(&mut self.repr, ListRepr::Empty);
+        while let ListRepr::Cons(node) = repr {
+            // A shared tail remains owned by its other handles.
+            let Ok(mut node) = Rc::try_unwrap(node) else {
+                break;
+            };
+            // Keep the existing head-before-tail destruction order. Only the
+            // tail chain is iterative; nested Values use their own destructors.
+            drop(node.value);
+            repr = std::mem::replace(&mut node.tail.repr, ListRepr::Empty);
+        }
+    }
+}
+
 impl PartialEq for ListHandle {
     fn eq(&self, other: &Self) -> bool {
         self.len == other.len && self.iter().eq(other.iter())
@@ -921,6 +983,8 @@ pub struct RuntimeStackFrame {
 pub struct RichError {
     pub kind: String,
     pub message: String,
+    /// Declaration-ordered, heterogeneous Error payload; empty errors use the same representation.
+    pub payload: Vec<Value>,
     pub location: Location,
     pub cause: Option<Box<RichError>>,
     pub diagnostic: Option<RuntimeErrorDiagnostic>,
@@ -938,6 +1002,7 @@ impl RichError {
         Self {
             kind,
             message: message.into(),
+            payload: Vec::new(),
             location,
             cause,
             diagnostic: None,
@@ -1044,6 +1109,52 @@ pub struct Location {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn error_kind_display_preserves_canonical_identity_inside_containers() {
+        let value = super::Value::Tuple(vec![
+            super::Value::ErrorKind("One::Failure".into()),
+            super::Value::List(super::ListHandle::from_items(vec![
+                super::Value::ErrorKind("Two::Failure".into()),
+            ])),
+        ]);
+        assert_eq!(
+            value
+                .to_display_string(&super::TypeRegistry::new())
+                .unwrap(),
+            "(ErrorKind(One::Failure), [ErrorKind(Two::Failure)])"
+        );
+    }
+
+    #[test]
+    fn pid_copy_and_lease_share_identity_without_retaining_process_state() {
+        let pid = super::PidHandle::new(7, "Global::Worker".into(), super::PidKind::Worker);
+        let weak = std::rc::Rc::downgrade(pid.identity());
+        let copy = pid.clone();
+        let lease = super::WorkerLeaseHandle {
+            workers_id: 2,
+            pid: copy,
+        };
+        assert!(pid.same_identity(&lease.pid));
+        assert!(!pid.same_identity(&super::PidHandle::new(
+            7,
+            "Global::Worker".into(),
+            super::PidKind::Worker,
+        )));
+        drop(pid);
+        assert!(weak.upgrade().is_some());
+        drop(lease);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn pid_identity_distinguishes_process_and_handler_capabilities() {
+        let worker = super::PidHandle::new(1, "Global::OutHandler".into(), super::PidKind::Worker);
+        let handler =
+            super::PidHandle::new(1, "Global::OutHandler".into(), super::PidKind::Handler);
+        assert_ne!(worker.kind, handler.kind);
+        assert!(!worker.same_identity(&handler));
+    }
+
     use super::{
         quote_surtr_string_literal, Callable, CallableMetadata, CallableTarget, HashMapHandle,
         ListHandle, Location, RichError, RuntimeErrorDiagnostic, TypeEntry, TypeKind, TypeRegistry,
@@ -1269,6 +1380,7 @@ mod tests {
         let value = Value::Error(Box::new(RichError {
             kind: "TestError".into(),
             message: "boom".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1293,6 +1405,7 @@ mod tests {
         let mut value = RichError {
             kind: "Outer".into(),
             message: "outer".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1308,6 +1421,7 @@ mod tests {
         value.append_cause_tail(RichError {
             kind: "Inner".into(),
             message: "inner".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1323,6 +1437,7 @@ mod tests {
         value.append_cause_tail(RichError {
             kind: "Leaf".into(),
             message: "leaf".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1563,6 +1678,45 @@ mod tests {
     }
 
     #[test]
+    fn cons_drop_releases_unique_nodes_and_preserves_shared_storage() {
+        use std::rc::Rc;
+
+        let packed = ListHandle::from_items(vec![Value::Bool(true)]);
+        let super::ListRepr::Packed(storage) = &packed.repr else {
+            unreachable!()
+        };
+        let buffer = Rc::downgrade(&storage.items);
+        let shared_tail = ListHandle::cons(Value::Bool(false), &packed);
+        let super::ListRepr::Cons(node) = &shared_tail.repr else {
+            unreachable!()
+        };
+        let tail_node = Rc::downgrade(node);
+        let element_list = ListHandle::cons(Value::Unit, &ListHandle::empty());
+        let super::ListRepr::Cons(node) = &element_list.repr else {
+            unreachable!()
+        };
+        let element_node = Rc::downgrade(node);
+        let list = ListHandle::cons(Value::List(element_list), &shared_tail);
+        let super::ListRepr::Cons(node) = &list.repr else {
+            unreachable!()
+        };
+        let head_node = Rc::downgrade(node);
+        drop(packed);
+        drop(list);
+        assert!(head_node.upgrade().is_none());
+        assert!(element_node.upgrade().is_none());
+        assert!(tail_node.upgrade().is_some());
+        assert!(buffer.upgrade().is_some());
+        assert_eq!(
+            shared_tail.iter().collect::<Vec<_>>(),
+            vec![Value::Bool(false), Value::Bool(true)]
+        );
+        drop(shared_tail);
+        assert!(tail_node.upgrade().is_none());
+        assert!(buffer.upgrade().is_none());
+    }
+
+    #[test]
     fn mixed_list_iteration_is_ordered_and_persistent() {
         let packed = ListHandle::from_items(vec![Value::Bool(true), Value::Bool(false)]);
         let cons = ListHandle::cons(Value::Unit, &packed);
@@ -1718,6 +1872,7 @@ mod tests {
             fields: vec![Value::Error(Box::new(RichError {
                 kind: "NoneError".into(),
                 message: "null".into(),
+                payload: Vec::new(),
                 location: Location {
                     file: "<repl>".into(),
                     func: "f".into(),
@@ -1743,6 +1898,7 @@ mod tests {
         let mut rich = RichError {
             kind: "Higher".into(),
             message: "higher".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1758,6 +1914,7 @@ mod tests {
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
             message: "lower".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1786,6 +1943,7 @@ mod tests {
         let mut rich = RichError {
             kind: "Higher".into(),
             message: "higher".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1801,6 +1959,7 @@ mod tests {
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
             message: "lower".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1828,6 +1987,7 @@ mod tests {
         let rich = RichError {
             kind: "PatternMismatch".into(),
             message: "Pattern did not match.".into(),
+            payload: Vec::new(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),

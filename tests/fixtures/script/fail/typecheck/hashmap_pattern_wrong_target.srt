@@ -1,0 +1,1 @@
+is_match(1, hash![])

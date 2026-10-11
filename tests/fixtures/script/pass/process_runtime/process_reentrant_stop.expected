@@ -1,0 +1,22 @@
+ProcessStopped
+Ok(8)
+ProcessStopped
+ProcessStopped
+ProcessStopped
+True
+Ok(())
+ProcessStopped
+callback finished
+Ok(11)
+ProcessStopped
+ZeroDivisionError
+Ok(())
+Ok(())
+ProcessStopped
+SupervisorAdoptWorkerNotLive
+ProcessStopped
+13
+ProcessStopped
+ProcessStopped
+Ok(10)
+1

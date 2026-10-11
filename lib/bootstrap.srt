@@ -9,7 +9,8 @@ and `Bootstrap` is the first explicit example of that rule in the standard
 library.
 Cross-cutting builtin values live in `kernel.srt`, builtin type declarations
 live at the top level of their corresponding files, and the abstract `Error`
-type itself lives in `error.srt`.
+type itself lives in `types/error.srt`. Shared concrete errors live in
+`errors.srt` in the main standard stage.
 """
 
 @autoimport
@@ -36,7 +37,7 @@ defmod Bootstrap {
   @builtin def >>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)
 
   @doc """
-  Compose a contextual unary callable with a plain mapper. The result
+  Compose a contextual unary callable with a mapper. The result
   carrier must implement Functor. Fully supplied function calls may return
   the operands; composition does not inject missing arguments.
 
@@ -135,8 +136,8 @@ defmod Bootstrap {
 
   `=?` is a language-provided binding form for failure-aware destructuring.
   Outside `do`, it may be used only when the current evaluation returns
-  canonical `Result<T>` or a validated `@result_effect` carrier. Inside `do`,
-  the do-local carrier supplies either a Result-effect or Alternative target.
+  a carrier implementing MonadFail. Inside `do`,
+  the do-local carrier supplies either a MonadFail or Alternative target.
   The REPL accepts the syntax, reports the resulting error message, and keeps
   the session alive.
 
@@ -144,9 +145,9 @@ defmod Bootstrap {
   decomposed by one outer layer only, and its `Ok` payload is passed to the
   left-hand MatchBlock pattern. If it produces `Err(error)`, that value is
   propagated to the current failure target. Extractor `MatchResult::Err(error)`
-  preserves the original error. A general mismatch produces `PatternMismatch`; structural
-  patterns retain their existing errors such as `EmptyList` or
-  `IndexOutOfBounds`. A Result-effect target preserves that error; a do-local
+  preserves the original error. Each literal, pin, or variant mismatch produces its specific Error; structural
+  patterns return their specific errors such as `EmptyHeadTailListPattern` or
+  `ListPatternTooShort`. A MonadFail target preserves that error; a do-local
   Alternative target discards it and returns `empty`.
 
   `=?` is not a trait-dispatched operator.
@@ -175,11 +176,11 @@ defmod Bootstrap {
 
   ## Notes
   - `=?` returns `()`
-  - outside `do`, `=?` requires a canonical `Result<T>` or validated Result-effect return target
+  - outside `do`, `=?` requires a return type implementing MonadFail
   - inside `do`, the current carrier may instead provide an Alternative target
   - only a canonical `Result` RHS is decomposed, by one outer layer
   - RHS `Err(...)` is propagated to the current failure target
-  - Extractor `MatchResult::Err` preserves its Error; general mismatch becomes `PatternMismatch`; structural pattern errors keep their kind
+  - Extractor `MatchResult::Err` preserves its Error; each mismatch uses its specific Error; structural pattern errors keep their kind
   - a non-Result RHS requires a partial pattern that inspects the whole value
   """
   @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
@@ -290,9 +291,9 @@ defmod Bootstrap {
   or obtained from the expected block type.
   Inside `do`, SafeBind unwraps one outer Result layer only. Partial patterns may
   inspect other RHS values unchanged; total patterns reject non-Result RHS values.
-  Failure contexts resolve as ResultEffect, then Alternative, then Monad.
-  Canonical Result and validated Result-effect carriers preserve SafeBind and
-  failure-matcher errors. Carriers without Result effect use Alternative::empty;
+  Failure contexts resolve as MonadFail, then Alternative, then Monad.
+  MonadFail carriers preserve SafeBind and
+  failure-matcher errors. Carriers without MonadFail use Alternative::empty;
   Monad alone cannot provide a failure target. `guard` remains an ordinary
   Alternative call.
 
@@ -340,67 +341,27 @@ defmod Bootstrap {
   # loads declarations with no direct value output
   """
   @builtin def include(path: String) -> Unit
+
+  @doc """
+  File name, including its extension, of the source containing this reference.
+  This zero-argument function is called without parentheses. References in a
+  function use its definition source, not the caller.
+  Unavailable in REPL expressions.
+  """
+  @builtin def __FILE__() -> String
+
+  @doc """
+  Absolute parent directory of the source file containing this reference.
+  This zero-argument function is called without parentheses.
+  Unavailable in REPL expressions.
+  """
+  @builtin def __DIR__() -> String
+
+  @doc """
+  One-based line number at the start of this reference in its original source.
+  This zero-argument function is called without parentheses. Interpolations
+  retain their original source position.
+  Unavailable in REPL expressions.
+  """
+  @builtin def __LINE__() -> Int
 }
-
-# `deferror` introduces a concrete recoverable error declaration.
-# Bootstrap carries the most universally useful standard errors so they are
-# available from the first standard-library stage.
-
-@doc """
-Concrete bootstrap error for "no value" situations.
-`NoneError` is the standard failure used by optional-style sugar such as `T?`.
-`T?` now lowers to `Option<T>`.
-Use `Result<T>` with `Err(NoneError)` when "missing value" should participate in
-Result-style failure propagation. A function definition may document this contract
-with `Result<T, NoneError>` in its direct return position.
-"""
-deferror NoneError { "None Value." }
-
-@doc """
-Concrete bootstrap error for division or modulo by zero.
-The standard `Div` implementations for `Int` and `Float`, and `Mod` for `Int`,
-return this through `Err(...)` instead of trapping.
-The traits do not fix their error contract; user implementations may declare
-their own errors.
-"""
-deferror ZeroDivisionError { "division by zero" }
-
-@doc """
-Concrete bootstrap error for operations that require at least one list element.
-Use this when a list-specific operation cannot proceed because the input is
-empty.
-"""
-deferror EmptyList { "Empty List." }
-
-@doc """
-Concrete bootstrap error for placeholder code paths that are intentionally
-unfinished.
-Use this with `todo()` when a function should type-check before the final
-implementation is ready.
-"""
-deferror NotImplemented { "not implemented" }
-
-@doc """
-Concrete bootstrap error for index-based access outside the valid range.
-The `detail` field keeps the user-facing message flexible so the runtime can
-attach the relevant bounds information.
-"""
-deferror IndexOutOfBounds(detail: String) { detail }
-
-@doc """
-Concrete bootstrap error for Facet HashMap key access when the key is missing.
-`HashMap::map_get` keeps returning `NoneError`; Facet paths use this error so a
-missing path segment is visible in diagnostics.
-"""
-deferror KeyNotFound(key: String) { "key not found: #{key}" }
-
-@doc """
-Concrete bootstrap error for enum-variant selector mismatch in Facet access.
-`Facet::view` returns this when a variant segment does not match the runtime
-value's tag.
-"""
-deferror VariantMismatch(detail: String) { detail }
-
-type Mapper<$A, $B> = ($A -> $B)
-type Predicate<$A> = ($A -> Boolean)
-type Reducer<$Acc, $A> = ($Acc, $A -> $Acc)

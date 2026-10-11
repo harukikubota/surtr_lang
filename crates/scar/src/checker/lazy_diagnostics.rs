@@ -323,66 +323,6 @@ impl Checker {
         error.with_hint(format!("{} Lazy capture has generated signature {}. The annotation must match the actual normalized branch result; it cannot change which closure shell is consumed.", kind.name(), self.diagnostic_ty_name(signature)))
     }
 
-    pub(super) fn lazy_error_transport_error(
-        &self,
-        error: TypeError,
-        source: &Resolved,
-    ) -> TypeError {
-        let origin = self.lazy_binding_origin(source);
-        let kind = origin.as_ref().map(|origin| origin.kind).or_else(|| {
-            Self::lazy_source_parameters(source)
-                .and_then(|params| params[0].lazy_capture.as_ref())
-                .map(|param| param.kind)
-        });
-        let has_error_placeholder = if let Some(origin) = &origin {
-            origin.parameters.iter().any(|param| {
-                param.lazy_uses.iter().any(|(ordinal, _)| {
-                    *ordinal
-                        == if param.kind == LazyCaptureKind::Ensure {
-                            2
-                        } else {
-                            1
-                        }
-                })
-            })
-        } else {
-            Self::lazy_source_parameters(source).is_some_and(|params| {
-                params
-                    .iter()
-                    .filter_map(|param| param.lazy_capture.as_ref())
-                    .any(|param| {
-                        param.lazy_uses.iter().any(|(ordinal, _)| {
-                            *ordinal
-                                == if param.kind == LazyCaptureKind::Ensure {
-                                    2
-                                } else {
-                                    1
-                                }
-                        })
-                    })
-            })
-        };
-        if !has_error_placeholder {
-            return error;
-        }
-        let (kind, correction) = match kind {
-            Some(kind @ LazyCaptureKind::Require) => (kind, "Fix the error expression inside the capture, for example &require(&1, NoneError)."),
-            Some(kind @ LazyCaptureKind::Ensure) => (kind, "Fix the error expression inside the capture, for example `f: (Int -> Result<Int>) = &ensure(&1, {|value| True}, NoneError)`."),
-            Some(kind @ LazyCaptureKind::MapErr) => (kind, "Fix the replacement error inside the capture, for example `f: (Result<Int> -> Result<Int>) = &Result::map_err(&1, NoneError)`."),
-            Some(kind @ LazyCaptureKind::Cause) => (kind, "Fix the cause error inside the capture, for example `f: (Result<Int> -> Result<Int>) = &Result::cause(&1, NoneError)`."),
-            _ => return error,
-        };
-        let signature = origin
-            .map(|origin| {
-                format!(
-                    " Generated signature: {}.",
-                    self.diagnostic_ty_name(&self.resolve_ty(&origin.signature))
-                )
-            })
-            .unwrap_or_default();
-        error.with_hint(format!("{} captures its error placeholder as (-> Error).{} {} The existing Error transport restriction prevents using this generated function in an ordinary callable annotation or call. {}", kind.name(), signature, kind.explanation(if kind == LazyCaptureKind::Ensure { 2 } else { 1 }), correction))
-    }
-
     pub(super) fn lazy_call_error(
         &self,
         error: TypeError,

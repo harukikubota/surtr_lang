@@ -140,6 +140,12 @@ pub(crate) fn structured_parse_error_spec(
             );
             add_previous_line_label(source_id, source, &span, &mut spec);
         }
+        Some(ParseDiagnosticGuidance::MissingMetaInitPolicy) => {
+            spec.help = Some(
+                "Add an init policy inside `meta { ... }`: `init_policy: Eager` or `init_policy: Standby`.".into(),
+            );
+            add_previous_line_label(source_id, source, &span, &mut spec);
+        }
         Some(ParseDiagnosticGuidance::AnonymousCaptureIdentity) => {
             if let Some(rewrite) = rewrite_line_at_span(source, &span, "&id") {
                 spec.help = Some(format!(
@@ -266,6 +272,7 @@ fn map_guidance(guidance: &ParseErrorGuidance) -> ParseDiagnosticGuidance {
         ParseErrorGuidance::WhereClause => ParseDiagnosticGuidance::WhereClause,
         ParseErrorGuidance::MissingMetaState => ParseDiagnosticGuidance::MissingMetaState,
         ParseErrorGuidance::MissingMetaInstance => ParseDiagnosticGuidance::MissingMetaInstance,
+        ParseErrorGuidance::MissingMetaInitPolicy => ParseDiagnosticGuidance::MissingMetaInitPolicy,
         ParseErrorGuidance::AnonymousCaptureIdentity => {
             ParseDiagnosticGuidance::AnonymousCaptureIdentity
         }

@@ -158,12 +158,12 @@ impl SigilSession {
             self.shadowed_auto_import_bindings.clone(),
         )?;
         let mut resolver = Resolver::with_scope(import_build.scope);
-        resolver.declaration_entries = self.declaration_entries.clone();
-        resolver.declaration_uids = self.declaration_uids.clone();
-        resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-        resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
-        resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
-        resolver.owner_registry = owner_registry;
+        resolver.declaration_entries = Arc::new(self.declaration_entries.clone());
+        resolver.declaration_uids = Arc::new(self.declaration_uids.clone());
+        resolver.declaration_uid_kinds = Arc::new(self.declaration_uid_kinds.clone());
+        resolver.declaration_hidden_by_uid = Arc::new(self.declaration_hidden_by_uid.clone());
+        resolver.trait_constructor_slots = Arc::new(self.trait_constructor_slots.clone());
+        resolver.owner_registry = Arc::new(owner_registry);
         resolver.current_module_path = self.current_module_path.clone();
         resolver.allow_top_level_shadowing = true;
         let resolved = resolver.resolve_program(import_build.program)?;
@@ -171,12 +171,12 @@ impl SigilSession {
             &resolved,
             &import_build.explicit_function_imports,
         );
-        self.declaration_uids = resolver.declaration_uids.clone();
-        self.declaration_entries = resolver.declaration_entries.clone();
-        self.declaration_uid_kinds = resolver.declaration_uid_kinds.clone();
-        self.declaration_hidden_by_uid = resolver.declaration_hidden_by_uid.clone();
-        self.trait_constructor_slots = resolver.trait_constructor_slots.clone();
-        self.owner_registry = resolver.owner_registry.clone();
+        self.declaration_uids = resolver.declaration_uids.as_ref().clone();
+        self.declaration_entries = resolver.declaration_entries.as_ref().clone();
+        self.declaration_uid_kinds = resolver.declaration_uid_kinds.as_ref().clone();
+        self.declaration_hidden_by_uid = resolver.declaration_hidden_by_uid.as_ref().clone();
+        self.trait_constructor_slots = resolver.trait_constructor_slots.as_ref().clone();
+        self.owner_registry = resolver.owner_registry.as_ref().clone();
         self.scope = resolver.into_scope();
         self.import_state = import_build.import_state;
         self.explicit_function_imports

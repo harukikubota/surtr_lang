@@ -32,7 +32,7 @@ defagent MyWorker {
   @set
   def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 
-  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+  defp hidden_value(_state: Int) -> Result<Int> { Ok(99) }
 }
 
 defgenserver MyServer {
@@ -50,7 +50,7 @@ defgenserver MyServer {
     Ok(CallResult::Reply(state, state))
   }
 
-  def hidden_size(_state: Int) -> Result<Int> { Ok(0) }
+  defp hidden_size(_state: Int) -> Result<Int> { Ok(0) }
 }
 
 defsupervisor MySup {
@@ -186,6 +186,11 @@ macro_rules! repl_core_case {
 }
 
 const REPL_CORE_CASES: &[(&str, fn())] = &[
+    repl_core_case!(core_query_commands_report_invalid_input_diagnostics),
+    repl_core_case!(core_docs_do_not_borrow_same_named_or_shadowed_declarations),
+    repl_core_case!(core_trait_docs_resolve_only_authored_definition_docs),
+    repl_core_case!(core_captured_doc_identity_survives_shadowed_function_redeclaration),
+    repl_core_case!(core_generic_capture_docs_keep_declaration_origin_and_authored_signature),
     repl_core_case!(core_string_quote_preserves_controls_across_bindings_values_and_recall),
     repl_core_case!(core_string_quote_roundtrips_arbitrary_scalars_and_literal_syntax),
     repl_core_case!(lazy_capture_guidance_survives_repl_alias_and_failed_line),
@@ -220,7 +225,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_completion_shows_user_defined_module_owners),
     repl_core_case!(core_completion_shows_script_preload_owner_and_members_without_docs),
     repl_core_case!(core_script_top_level_defs_are_signature_and_completion_surfaces_without_docs),
-    repl_core_case!(core_typed_sig_query_uses_impl_signatures_without_docs),
+    repl_core_case!(core_sig_query_uses_trait_definition_without_docs),
     repl_core_case!(core_live_repl_top_level_defs_are_signature_and_completion_surfaces),
     repl_core_case!(core_completion_hides_global_noise_for_empty_constructor_call_arguments),
     repl_core_case!(core_completion_shows_script_preload_constructor_signature_without_docs),
@@ -293,7 +298,6 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_help_and_error_commands_return_structured_command_output),
     repl_core_case!(core_info_command_reports_queries_and_command_errors),
     repl_core_case!(core_repl_command_and_query_errors_use_diagnostics),
-    repl_core_case!(core_sig_queries_reject_contextual_markers_as_concrete_types),
     repl_core_case!(core_value_recall_uses_engine_history_and_prompt_index),
     repl_core_case!(core_session_listing_commands_render_current_state),
     repl_core_case!(core_clear_command_preserves_session_state),
@@ -304,21 +308,17 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_stacktrace_display_is_independent_from_error_display_mode),
     repl_core_case!(core_stacktrace_full_is_reserved_until_html_viewer_exists),
     repl_core_case!(core_immediate_anonymous_callable_calls_show_binding_hint),
-    repl_core_case!(core_doc_and_sig_commands_resolve_aliases_and_typed_queries),
+    repl_core_case!(core_doc_and_sig_commands_resolve_declarations_and_aliases),
     repl_core_case!(core_sig_monad_operator_lists_user_defined_box_impl),
     repl_core_case!(core_standard_monad_instances_construct_and_run),
     repl_core_case!(core_standard_monad_transformer_smoke),
     repl_core_case!(core_standard_state_get_rejects_ambiguity_and_keeps_session_alive),
     repl_core_case!(core_safebind_diagnostic_keeps_session_alive),
-    repl_core_case!(
-        core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing
-    ),
-    repl_core_case!(core_sig_type_owner_falls_back_to_constructor_signatures),
+    repl_core_case!(core_compare_definition_query_ignores_impl_override_selection),
+    repl_core_case!(core_sig_type_owner_uses_constructor_signatures),
     repl_core_case!(core_sig_record_owner_uses_record_constructor_surface),
-    repl_core_case!(
-        core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fallbacks
-    ),
-    repl_core_case!(core_sig_enum_rejects_extra_input_with_shared_message),
+    repl_core_case!(core_range_constructor_and_extractor_queries_use_named_declarations),
+    repl_core_case!(core_sig_resolves_enum_variant_names),
     repl_core_case!(core_doc_command_resolves_closure_type_and_callable_bindings),
     repl_core_case!(core_process_doc_and_sig_support_hidden_and_concrete_surfaces),
     repl_core_case!(core_process_public_surface_respects_annotations),
@@ -327,12 +327,8 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_process_sig_pid_binding_lists_available_messages),
     repl_core_case!(core_process_type_and_info_support_singletons_and_worker_pids),
     repl_core_case!(core_sig_expression_queries_support_operator_forms),
-    repl_core_case!(core_sig_expression_queries_reject_non_expressions),
-    repl_core_case!(
-        core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_legacy_forms
-    ),
-    repl_core_case!(core_sig_typed_call_queries_specialize_polymorphic_returns),
-    repl_core_case!(core_sig_supports_closure_bindings_recapture_and_application),
+    repl_core_case!(core_sig_preserves_polymorphic_declarations),
+    repl_core_case!(core_sig_supports_closure_bindings),
     repl_core_case!(core_extractor_closure_keeps_capture_signature_and_identity_across_chunks),
     repl_core_case!(core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries),
     repl_core_case!(core_extractor_module_queries_and_from_result_work_across_chunks),
@@ -354,10 +350,9 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_eldr_restore_reports_partial_semantic_restore_notice),
     repl_core_case!(core_quit_command_sets_exit_without_ui_work),
     repl_core_case!(core_dbg_docs_and_signatures_resolve_from_bootstrap_source),
-    repl_core_case!(core_dbg_typed_call_queries_use_special_form_pseudo_application),
     repl_core_case!(core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers),
-    repl_core_case!(core_doc_typed_call_supports_qualified_inherent_impl_methods),
-    repl_core_case!(core_sig_rejects_tuple_field_and_facet_expression_queries),
+    repl_core_case!(core_doc_supports_qualified_inherent_impl_method_names),
+    repl_core_case!(core_sig_guides_field_paths_to_info_or_facet),
     repl_core_case!(core_inspects_facet_roots_and_private_paths_without_exposing_them_to_source),
     repl_core_case!(core_operator_captures_display_trait_identity_and_execute),
     repl_core_case!(core_operator_partial_captures_preserve_origin_and_placeholder_order),
@@ -370,10 +365,45 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_error_generation_site_survives_static_diagnostic_rollback),
     repl_core_case!(core_eldr_restore_preserves_error_sources_when_new_chunks_are_added),
     repl_core_case!(core_script_preload_rejects_source_spans_outside_the_runtime_range),
-    repl_core_case!(core_do_result_effect_pattern_error_is_preserved_in_fresh_repl),
-    repl_core_case!(core_do_result_effect_pattern_error_is_preserved_across_chunks),
-    repl_core_case!(core_do_result_effect_safebind_and_alternative_boundaries),
+    repl_core_case!(core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl),
+    repl_core_case!(core_do_monad_fail_pattern_error_is_preserved_across_chunks),
+    repl_core_case!(core_do_monad_fail_safebind_and_alternative_boundaries),
+    repl_core_case!(core_error_kinds_survive_chunks_and_rollback),
 ];
+
+fn core_error_kinds_survive_chunks_and_rollback() {
+    let mut engine = ReplEngine::from_module_source(
+        "error_kind_preload.srt",
+        "deferror SavedKind { \"saved\" }",
+    )
+    .expect("ErrorKind declaration must preload");
+    let stored = engine.handle_line("saved_kind = SavedKind");
+    assert!(
+        matches!(stored.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&stored)
+    );
+    let checked = engine.handle_line("Error::is_kind(SavedKind(), saved_kind)");
+    assert_eq!(rendered_text(&checked), "True");
+    let rejected = engine.handle_line("error: Error = saved_kind");
+    assert!(
+        matches!(rejected.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&rejected)
+    );
+    assert!(rendered_text(&rejected).contains("ErrorKind"));
+    let recovered =
+        engine.handle_line("Result::recover_kind(Err(SavedKind()), saved_kind, {|_| Ok(6)})");
+    assert_eq!(rendered_text(&recovered), "Ok(6)");
+    let captured = engine.handle_line("maker: (-> Error) = &SavedKind");
+    assert!(
+        matches!(captured.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&captured)
+    );
+    let kept = engine.handle_line("Error::is_kind(maker(), saved_kind)");
+    assert_eq!(rendered_text(&kept), "True");
+}
 
 fn assert_repl_error_origin(result: &ReplResult, line: usize, column: usize, origin: &str) {
     assert!(
@@ -395,16 +425,16 @@ fn assert_repl_error_origin(result: &ReplResult, line: usize, column: usize, ori
 
 fn core_error_generation_site_uses_direct_input_and_unicode_pattern_spans() {
     let mut engine = engine();
-    let direct = engine.handle_line("Err(NoneError)");
-    assert_repl_error_origin(&direct, 1, 5, "Err(NoneError)");
+    let direct = engine.handle_line("Err(NoneError())");
+    assert_repl_error_origin(&direct, 1, 5, "Err(NoneError())");
 
     let multiline = engine.handle_line("def fail_unicode() -> Result<Int> {\n  (\"あ\", 11) =? (\"あ\", 2)\n  Ok(0)\n}\nfail_unicode()");
     assert_repl_error_origin(&multiline, 2, 9, "(\"あ\", 11) =? (\"あ\", 2)");
-    assert!(rendered_text(&multiline).contains("PatternMismatch"));
+    assert!(rendered_text(&multiline).contains("IntLiteralPatternMismatch"));
     assert_eq!(rendered_text(&engine.handle_line("2 + 3")), "5");
 }
 
-fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str) {
+fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str, expected: &str) {
     let result = engine.handle_line(source);
     assert!(!result.should_exit, "{source}: {}", rendered_text(&result));
     assert!(
@@ -412,31 +442,27 @@ fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str) {
         "{source}: {}",
         rendered_text(&result)
     );
-    assert_eq!(
-        rendered_text(&result),
-        "(\"PatternMismatch\", \"Pattern did not match.\")",
-        "{source}"
-    );
+    assert_eq!(rendered_text(&result), expected, "{source}");
 }
 
-fn core_do_result_effect_pattern_error_is_preserved_in_fresh_repl() {
+fn core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl() {
     for source in [
         "match do::<Result> { 2 <- Ok(1); Ok(3) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match OptionT::run(do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) }) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine(), source);
+        assert_repl_pattern_mismatch(&mut engine(), source, "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")");
     }
 }
 
-fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
+fn core_do_monad_fail_pattern_error_is_preserved_across_chunks() {
     let mut engine = engine();
     for source in [
         "def unrelated(value: Int) -> Int { value + 41 }",
         "saved_closure = {|value: Int| unrelated(value)}",
         "saved_text = \"relocation must preserve Error kind and message\"",
-        "saved_error: Result<Int> = Err(NoneError)",
+        "saved_error: Result<Int> = Err(NoneError())",
         "mismatch: Result<Int> = do::<Result> { 2 <- Ok(1); Ok(3) }",
-        "mismatch_t: OptionT<Result, Int> = do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) }",
+        "mismatch_t: ResultT<Identity, Int> = do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) }",
     ] {
         let result = engine.handle_line(source);
         assert!(
@@ -447,9 +473,9 @@ fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
     }
     for source in [
         "match mismatch { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match OptionT::run(mismatch_t) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(mismatch_t)) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine, source);
+        assert_repl_pattern_mismatch(&mut engine, source, "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")");
     }
     assert_eq!(rendered_text(&engine.handle_line("saved_closure(1)")), "42");
     assert_eq!(
@@ -458,21 +484,29 @@ fn core_do_result_effect_pattern_error_is_preserved_across_chunks() {
     );
 }
 
-fn core_do_result_effect_safebind_and_alternative_boundaries() {
+fn core_do_monad_fail_safebind_and_alternative_boundaries() {
     let mut engine = engine();
     for source in [
         "match do::<Result> { Option::Some(value) =? Option<Int>::None; Ok(value) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match OptionT::run(do::<OptionT<Result, _>> { Option::Some(value) =? Option<Int>::None; OptionT::some::<Result>(value) }) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { Option::Some(value) =? Option<Int>::None; ResultT::ok::<Identity>(value) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine, source);
+        assert_repl_pattern_mismatch(&mut engine, source, "(\"EnumVariantPatternMismatch\", \"Option pattern expected Some, got None\")");
     }
-    let blocked = engine.handle_line("blocked: OptionT<Result, Unit> = guard(False)");
+    let blocked = engine.handle_line("blocked: OptionT<Result, Unit> = Alternative::guard(False)");
     assert!(
         matches!(blocked.output, ReplOutput::EvalSuccess { .. }),
         "{}",
         rendered_text(&blocked)
     );
     for (source, expected) in [
+        (
+            "OptionT::run(do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) })",
+            "Ok(Option::None)",
+        ),
+        (
+            "OptionT::run(do::<OptionT<Result, _>> { Option::Some(value) =? Option<Int>::None; OptionT::some::<Result>(value) })",
+            "Ok(Option::None)",
+        ),
         (
             "OptionT::run(Alternative::empty::<OptionT<Result, Int>>())",
             "Ok(Option::None)",
@@ -496,7 +530,7 @@ fn core_do_result_effect_safebind_and_alternative_boundaries() {
 fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
     let mut engine = engine();
     for source in [
-        "def source_error() -> Result<Int> {\n  Err(NoneError)\n}",
+        "def source_error() -> Result<Int> {\n  Err(NoneError())\n}",
         "def relay_error() -> Result<Int> {\n  value =? source_error()\n  Ok(value)\n}",
         "def outer_error() -> Result<Int> { relay_error() }",
         "unrelated = \"あいう\"",
@@ -510,7 +544,7 @@ fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
     }
     let _ = engine.handle_line(":stacktrace verbose");
     let result = engine.handle_line("outer_error()");
-    assert_repl_error_origin(&result, 2, 7, "Err(NoneError)");
+    assert_repl_error_origin(&result, 2, 7, "Err(NoneError())");
     let text = rendered_text(&result);
     assert!(
         text.contains("NoneError") && text.contains("None Value."),
@@ -525,7 +559,7 @@ fn core_error_generation_site_survives_nested_function_calls_across_chunks() {
 fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
     let mut engine = ReplEngine::from_module_source(
         "extractor_origins.srt",
-        "deferror Inner { \"inner cause\" }\ndeferror Outer(message: String) { message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner), Outer(\"wrapped origin\"))\n  }\n  defextractor inner(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    inner(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}",
+        "deferror Inner { \"inner cause\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<Int> {\n    Result::cause(Err(Inner()), Outer(\"wrapped origin\"))\n  }\n  defextractor inner(value: Int) -> MatchResult<Int> {\n    found =? source()\n    MatchResult::Ok(found)\n  }\n  defextractor outer(value: Int) -> MatchResult<Int> {\n    inner(found) =? Ok(value)\n    MatchResult::Ok(found)\n  }\n}",
     ).expect("nested Extractor definitions must preload");
     let _ = engine.handle_line("unrelated = \"あ\"");
     for source in [
@@ -533,9 +567,9 @@ fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
         "do::<Result> {\n  E::outer(found) <- Ok(2)\n  Ok(found)\n}",
     ] {
         let result = engine.handle_line(source);
-        assert_repl_error_origin(&result, 5, 31, "Outer(\"wrapped origin\")");
+        assert_repl_error_origin(&result, 5, 33, "Outer(\"wrapped origin\")");
         let text = rendered_text(&result);
-        assert!(text.contains("extractor_origins.srt:5:31"), "{text}");
+        assert!(text.contains("extractor_origins.srt:5:33"), "{text}");
         assert!(
             text.contains("wrapped origin") && text.contains("inner cause"),
             "{text}"
@@ -546,7 +580,7 @@ fn core_error_generation_site_survives_nested_extractors_and_preserves_cause() {
 fn core_error_generation_site_survives_live_extractor_calls_across_chunks() {
     let mut engine = engine();
     for source in [
-        "def source_error(_value: Int) -> Result<Int> {\n  Err(NoneError)\n}",
+        "def source_error(_value: Int) -> Result<Int> {\n  Err(NoneError())\n}",
         "inner = Extractor::from_result(&source_error)",
         "outer = *{|value: Int|\n  inner(found) =? Ok(value)\n  MatchResult::Ok(found)\n}",
         "unrelated = \"あいう\"",
@@ -563,7 +597,7 @@ fn core_error_generation_site_survives_live_extractor_calls_across_chunks() {
         "do::<Result> {\n  outer(found) <- Ok(2)\n  Ok(found)\n}",
     ] {
         let result = engine.handle_line(source);
-        assert_repl_error_origin(&result, 2, 7, "Err(NoneError)");
+        assert_repl_error_origin(&result, 2, 7, "Err(NoneError())");
         assert!(rendered_text(&result).contains("None Value."));
     }
 }
@@ -612,14 +646,14 @@ fn core_error_generation_site_survives_static_diagnostic_rollback() {
             caption.contains(&format!("REPL:{chunk}:1:{column} ")),
             "{text}"
         );
-        let next = engine.handle_line("Err(NoneError)");
-        assert_repl_error_origin(&next, 1, 5, "Err(NoneError)");
+        let next = engine.handle_line("Err(NoneError())");
+        assert_repl_error_origin(&next, 1, 5, "Err(NoneError())");
     }
 }
 
 fn core_script_preload_rejects_source_spans_outside_the_runtime_range() {
     let source = format!(
-        "{}\ndef source_error() -> Result<Int> {{ Err(NoneError) }}\n",
+        "{}\ndef source_error() -> Result<Int> {{ Err(NoneError()) }}\n",
         "#".repeat(sindr::ir::MODULE_SPAN_STRIDE)
     );
     let Err(xldr::repl::logic::core::ReplLoadError::Diagnostic {
@@ -647,10 +681,11 @@ fn core_script_preload_rejects_source_spans_outside_the_runtime_range() {
 
 fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
     let mut engine = engine();
-    let definition = engine.handle_line("def saved_error() -> Result<Int> {\n  Err(NoneError)\n}");
+    let definition =
+        engine.handle_line("def saved_error() -> Result<Int> {\n  Err(NoneError())\n}");
     assert!(matches!(definition.output, ReplOutput::EvalSuccess { .. }));
     let original_error = engine.handle_line("saved_error()");
-    assert_repl_error_origin(&original_error, 2, 7, "Err(NoneError)");
+    assert_repl_error_origin(&original_error, 2, 7, "Err(NoneError())");
     let dir = tempfile_dir("xldr-repl-error-source-restore");
     let first_path = dir.join("before.eldr");
     let second_path = dir.join("after.eldr");
@@ -670,8 +705,8 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
         .expect("saved definition source must exist")
         .clone();
     let mut restored = ReplEngine::from_eldr(&bytes).expect("snapshot must restore");
-    let fresh = restored.handle_line("Err(EmptyList)");
-    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyList)");
+    let fresh = restored.handle_line("Err(EmptyHeadTailListPattern())");
+    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyHeadTailListPattern())");
     let saved = restored.handle_line(&format!(":save {}", second_path.display()));
     assert!(rendered_text(&saved).contains("saved to"));
     let updated =
@@ -684,7 +719,7 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
     let fresh_source = updated
         .sources
         .iter()
-        .find(|source| source.text.as_deref() == Some("Err(EmptyList)\n"))
+        .find(|source| source.text.as_deref() == Some("Err(EmptyHeadTailListPattern())\n"))
         .expect("new input source must exist");
     assert_ne!(fresh_source.source_id, saved_source.source_id);
     assert_ne!(fresh_source.path, saved_source.path);
@@ -753,7 +788,7 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
         &fields[0],
     ));
     assert!(
-        text.contains("Err(NoneError)") && text.contains(":2:7 "),
+        text.contains("Err(NoneError())") && text.contains(":2:7 "),
         "{text}"
     );
     let mut source_ids = HashSet::new();
@@ -771,6 +806,254 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
         }
     }
     fs::remove_dir_all(dir).expect("snapshot directory must be removable");
+}
+
+fn core_docs_do_not_borrow_same_named_or_shadowed_declarations() {
+    let dir = tempfile_dir("doc-identity");
+    fs::write(
+        dir.join("described.srt"),
+        r#"
+defmod Described {
+@doc """foreign sentinel"""
+def same() -> Int { 1 }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("undescribed.srt"),
+        "defmod Undescribed { def same() -> Int { 2 } }",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("preload.srt"),
+        r#"
+include "described.srt"
+include "undescribed.srt"
+@doc """preload sentinel"""
+def greet() -> String { "old" }
+"#,
+    )
+    .unwrap();
+    let mut engine = ReplEngine::from_script_file(dir.join("preload.srt").to_str().unwrap())
+        .expect("preload fixture");
+    let old = engine.handle_line("old_greet: (-> String) = &greet");
+    assert!(
+        !matches!(old.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&old)
+    );
+    let capture = engine.handle_line("captured: (-> Int) = &Undescribed::same");
+    assert!(
+        !matches!(capture.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&capture)
+    );
+    assert!(!doc_text(&engine.handle_line(":doc captured")).contains("foreign sentinel"));
+    let shadow = engine.handle_line("greet = {|| \"new\" }");
+    assert!(
+        !matches!(shadow.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&shadow)
+    );
+    assert!(!doc_text(&engine.handle_line(":doc greet")).contains("preload sentinel"));
+    assert!(doc_text(&engine.handle_line(":doc old_greet")).contains("preload sentinel"));
+    let shadow = engine.handle_line("greet: (-> Int) = &Undescribed::same");
+    assert!(
+        !matches!(shadow.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&shadow)
+    );
+    let missing = doc_text(&engine.handle_line(":doc greet"));
+    assert!(
+        !missing.contains("preload sentinel") && !missing.contains("foreign sentinel"),
+        "{missing}"
+    );
+    assert!(!doc_text(&engine.handle_line(":doc missing")).contains("foreign sentinel"));
+}
+
+fn core_trait_docs_resolve_only_authored_definition_docs() {
+    let mut engine = ReplEngine::from_script_source(
+        "trait_doc_identity.srt",
+        r#"
+@doc """trait sentinel"""
+deftrait DocBoth {
+  @doc """method sentinel"""
+  def describe(self: Self) -> Int
+}
+@doc """implementation sentinel"""
+impl DocBoth for Int {
+  @doc """implementation method sentinel"""
+  def describe(self: Self) -> Int { self }
+}
+@doc """root only sentinel"""
+deftrait DocRootOnly {
+  def rootless(self: Self) -> Int
+}
+deftrait DocMethodOnly {
+  @doc """method only sentinel"""
+  def method_only(self: Self) -> Int
+}
+"#,
+    )
+    .expect("trait doc fixture");
+    for (query, expected, excluded) in [
+        (":doc DocBoth", "trait sentinel", "method sentinel"),
+        (
+            ":doc DocBoth::describe",
+            "method sentinel",
+            "implementation",
+        ),
+        (
+            ":doc DocMethodOnly::method_only",
+            "method only sentinel",
+            "trait sentinel",
+        ),
+    ] {
+        let text = doc_text(&engine.handle_line(query));
+        assert!(text.contains(expected), "{query}: {text}");
+        assert!(!text.contains(excluded), "{query}: {text}");
+    }
+    let capture = engine.handle_line("trait_method: (Int -> Int) = &DocBoth::describe");
+    assert!(
+        !matches!(capture.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&capture)
+    );
+    let captured_doc = doc_text(&engine.handle_line(":doc trait_method"));
+    assert!(
+        captured_doc.contains("method sentinel") && !captured_doc.contains("implementation"),
+        "capture: {}\ndoc: {captured_doc}",
+        rendered_text(&capture)
+    );
+    let missing = doc_text(&engine.handle_line(":doc DocRootOnly::rootless"));
+    assert!(!missing.contains("root only sentinel"), "{missing}");
+    assert!(
+        missing.contains("undocumented") || missing.contains("No docs found"),
+        "{missing}"
+    );
+}
+
+fn core_captured_doc_identity_survives_shadowed_function_redeclaration() {
+    let mut engine = engine();
+    for source in [
+        r#"@doc """original sentinel""" def probe(x: Int) -> Int { x }"#,
+        "old: (Int -> Int) = &probe",
+        "probe = 1",
+        r#"@doc """replacement sentinel""" def probe(x: Int) -> Int { x + 1 }"#,
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            !matches!(result.output, ReplOutput::EvalError { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    let old_doc = doc_text(&engine.handle_line(":doc old"));
+    assert!(old_doc.contains("original sentinel"), "{old_doc}");
+    assert!(!old_doc.contains("replacement sentinel"), "{old_doc}");
+    for source in [
+        "def plain(x: Int) -> Int { x }",
+        "plain_old: (Int -> Int) = &plain",
+        "plain = 2",
+        r#"@doc """newly documented sentinel""" def plain(x: Int) -> Int { x + 1 }"#,
+    ] {
+        assert!(
+            !matches!(
+                engine.handle_line(source).output,
+                ReplOutput::EvalError { .. }
+            ),
+            "{source}"
+        );
+    }
+    let old_plain = doc_text(&engine.handle_line(":doc plain_old"));
+    assert!(
+        !old_plain.contains("newly documented sentinel"),
+        "{old_plain}"
+    );
+}
+
+fn core_generic_capture_docs_keep_declaration_origin_and_authored_signature() {
+    let mut engine = ReplEngine::from_script_source(
+        "capture_owner.srt",
+        r#"
+defstruct CaptureOwner { value: Int }
+impl CaptureOwner {
+  @doc """constructor sentinel"""
+  def new(value: Int) -> Self { CaptureOwner { value } }
+}
+"#,
+    )
+    .expect("capture owner fixture");
+    for source in [
+        r#"@doc """generic original sentinel""" def documented_identity(value: $A) -> $A { value }"#,
+        "number: (Int -> Int) = &documented_identity",
+        "text: (String -> String) = &documented_identity",
+        "partial = &number(&1)",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            !matches!(result.output, ReplOutput::EvalError { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    assert!(matches!(
+        engine.handle_line("broken = absent_symbol").output,
+        ReplOutput::EvalError { .. }
+    ));
+    for name in ["number", "text", "partial"] {
+        let doc = doc_text(&engine.handle_line(&format!(":doc {name}")));
+        assert!(doc.contains("generic original sentinel"), "{name}: {doc}");
+    }
+    for source in [
+        "documented_identity = 1",
+        r#"@doc """generic replacement sentinel""" def documented_identity(value: $A) -> $A { value }"#,
+    ] {
+        assert!(
+            !matches!(
+                engine.handle_line(source).output,
+                ReplOutput::EvalError { .. }
+            ),
+            "{source}"
+        );
+    }
+    let doc = doc_text(&engine.handle_line(":doc number"));
+    assert!(
+        doc.contains("generic original sentinel") && !doc.contains("generic replacement sentinel"),
+        "{doc}"
+    );
+    let capture =
+        engine.handle_line("fixture_constructor: (Int -> CaptureOwner) = &CaptureOwner::new");
+    assert!(
+        !matches!(capture.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&capture)
+    );
+    let doc = engine.handle_line(":doc fixture_constructor");
+    let (_, signature) = doc_target(&doc);
+    assert_eq!(
+        signature,
+        Some("CaptureOwner::new(value: Int) -> CaptureOwner")
+    );
+}
+
+fn core_query_commands_report_invalid_input_diagnostics() {
+    let mut engine = engine();
+    for command in [":doc", ":sig", ":info"] {
+        for query in ["print(1)"] {
+            let result = engine.handle_line(&format!("{command} {query}"));
+            assert!(
+                matches!(result.output, ReplOutput::Diagnostic { .. }),
+                "{command} {query}: expected rejection"
+            );
+            let text = strip_ansi(&rendered_text(&result));
+            assert!(
+                text.contains("ReplQueryParseError"),
+                "{command} {query}: {text}"
+            );
+        }
+    }
 }
 
 fn core_string_quote_preserves_controls_across_bindings_values_and_recall() {
@@ -845,9 +1128,15 @@ fn core_string_quote_roundtrips_arbitrary_scalars_and_literal_syntax() {
     }
 }
 
+const REPL_CORE_BUCKET_COUNT: usize = 16;
+
 fn run_repl_core_bucket(bucket: usize) {
+    assert!(
+        bucket < REPL_CORE_BUCKET_COUNT,
+        "invalid REPL core bucket: {bucket}"
+    );
     for (index, &(name, case)) in REPL_CORE_CASES.iter().enumerate() {
-        if index % 8 == bucket {
+        if index % REPL_CORE_BUCKET_COUNT == bucket {
             eprintln!("repl_core case: {name}");
             case();
         }
@@ -865,26 +1154,77 @@ fn repl_core_case_inventory_has_unique_names_and_functions() {
             functions.insert(case as usize),
             "duplicate REPL core case function: {name}"
         );
+        assert!(
+            !include_str!("repl_core.rs").contains(&format!("#[test]\nfn {name}(")),
+            "registered REPL core case must run only through a bucket: {name}"
+        );
+    }
+
+    let mut buckets = HashSet::new();
+    for &bucket in REPL_CORE_BUCKET_IDS {
+        assert!(
+            bucket < REPL_CORE_BUCKET_COUNT,
+            "invalid REPL core bucket: {bucket}"
+        );
+        assert!(
+            buckets.insert(bucket),
+            "duplicate REPL core bucket: {bucket}"
+        );
+        assert!(
+            REPL_CORE_CASES
+                .iter()
+                .enumerate()
+                .any(|(index, _)| index % REPL_CORE_BUCKET_COUNT == bucket),
+            "empty REPL core bucket: {bucket}"
+        );
+    }
+    assert_eq!(
+        buckets.len(),
+        REPL_CORE_BUCKET_COUNT,
+        "missing REPL core bucket"
+    );
+    for (index, &(name, _)) in REPL_CORE_CASES.iter().enumerate() {
+        assert_eq!(
+            REPL_CORE_BUCKET_IDS
+                .iter()
+                .filter(|&&bucket| index % REPL_CORE_BUCKET_COUNT == bucket)
+                .count(),
+            1,
+            "REPL core case must run exactly once: {name}"
+        );
     }
 }
 
-macro_rules! repl_core_bucket {
-    ($name:ident, $bucket:expr) => {
+macro_rules! repl_core_buckets {
+    ($($name:ident => $bucket:expr),+ $(,)?) => {
+        const REPL_CORE_BUCKET_IDS: &[usize] = &[$($bucket),+];
+        $(
         #[test]
         fn $name() {
             run_repl_core_bucket($bucket);
         }
+        )+
     };
 }
 
-repl_core_bucket!(repl_core_bucket_0, 0);
-repl_core_bucket!(repl_core_bucket_1, 1);
-repl_core_bucket!(repl_core_bucket_2, 2);
-repl_core_bucket!(repl_core_bucket_3, 3);
-repl_core_bucket!(repl_core_bucket_4, 4);
-repl_core_bucket!(repl_core_bucket_5, 5);
-repl_core_bucket!(repl_core_bucket_6, 6);
-repl_core_bucket!(repl_core_bucket_7, 7);
+repl_core_buckets! {
+    repl_core_bucket_0 => 0,
+    repl_core_bucket_1 => 1,
+    repl_core_bucket_2 => 2,
+    repl_core_bucket_3 => 3,
+    repl_core_bucket_4 => 4,
+    repl_core_bucket_5 => 5,
+    repl_core_bucket_6 => 6,
+    repl_core_bucket_7 => 7,
+    repl_core_bucket_8 => 8,
+    repl_core_bucket_9 => 9,
+    repl_core_bucket_10 => 10,
+    repl_core_bucket_11 => 11,
+    repl_core_bucket_12 => 12,
+    repl_core_bucket_13 => 13,
+    repl_core_bucket_14 => 14,
+    repl_core_bucket_15 => 15,
+}
 
 fn core_completion_returns_global_candidates_with_details() {
     let mut engine = engine();
@@ -1822,7 +2162,7 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
 
     assert_eq!(
         signature_text(&engine.handle_line(":sig at")).trim(),
-        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+        "List::at(values: List<$A>, index: Int) -> Result<$A, ListIndexOutOfBounds>"
     );
     assert_eq!(
         signature_text(&engine.handle_line(":sig then")).trim(),
@@ -1830,7 +2170,7 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
     );
     assert_eq!(
         signature_text(&engine.handle_line(":sig List::at")).trim(),
-        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+        "List::at(values: List<$A>, index: Int) -> Result<$A, ListIndexOutOfBounds>"
     );
     assert_eq!(
         signature_text(&engine.handle_line(":sig Result::then")).trim(),
@@ -1937,10 +2277,10 @@ fn core_completion_keeps_type_owners_ahead_of_members_for_pascal_case_prefix() {
         vec![
             "Int".to_string(),
             "IntBase".to_string(),
-            "Int::abs".to_string(),
-            "Int::bit_and".to_string(),
-            "Int::bit_not".to_string(),
-            "Int::bit_not_in".to_string(),
+            "IntLiteralEmpty".to_string(),
+            "IntLiteralInvalidDigit".to_string(),
+            "IntLiteralMissingDigits".to_string(),
+            "IntLiteralPatternMismatch".to_string(),
         ]
     );
 }
@@ -2089,7 +2429,7 @@ def greet(name: String) -> String { name }
     );
 }
 
-fn core_typed_sig_query_uses_impl_signatures_without_docs() {
+fn core_sig_query_uses_trait_definition_without_docs() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/no_doc_impl.srt",
         r#"
@@ -2116,21 +2456,13 @@ impl Pairwise for Duo {
     )
     .expect("script preload should bootstrap");
 
-    let doc = rendered_text(&engine.handle_line(":doc pair(Duo, Duo)"));
+    let doc = doc_text(&engine.handle_line(":doc Pairwise::pair"));
     assert!(
-        doc.contains("No docs found for pair(Duo, Duo)"),
-        "typed doc query should still require @doc: {doc}"
+        doc.contains("undocumented") || doc.contains("No docs found"),
+        "{doc}"
     );
-
-    let sig = signature_text(&engine.handle_line(":sig pair(Duo, Duo)"));
-    assert!(
-        sig.contains("defined:\n  impl Pairwise for Duo::pair(self: Duo, rhs: Duo) -> Duo"),
-        "{sig}"
-    );
-    assert!(
-        sig.contains("specialized:\n  pair(Duo, Duo) -> Duo"),
-        "{sig}"
-    );
+    let sig = signature_text(&engine.handle_line(":sig Pairwise::pair"));
+    assert!(sig.contains("pair(self: Self, rhs: Self) -> Self"), "{sig}");
 }
 
 fn core_live_repl_top_level_defs_are_signature_and_completion_surfaces() {
@@ -2295,6 +2627,7 @@ fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
         bool_labels,
         vec![
             "Boolean",
+            "BooleanLiteralPatternMismatch",
             "Boolean::eqv",
             "Boolean::implies",
             "Boolean::not",
@@ -3453,7 +3786,7 @@ fn core_routes_print_side_effects_into_repl_result_lines() {
 fn core_routes_eprint_side_effects_into_repl_stderr_lines() {
     let mut engine = engine();
 
-    let result = engine.handle_line("eprint(NoneError)");
+    let result = engine.handle_line("eprint(NoneError())");
 
     assert!(!result.should_exit);
     assert_eq!(rendered_text(&result), "");
@@ -3932,10 +4265,13 @@ fn core_range_generic_helpers_survive_sig_doc_interleaving() {
     assert!(!a.should_exit);
     assert!(rendered_text(&a).contains("a: Duration = 20ms"));
 
-    let sig = signature_text(&engine.handle_line(":sig compare(Duration, Duration)"));
-    assert!(sig.contains("compare(Duration, Duration)"), "{sig}");
+    let sig = signature_text(&engine.handle_line(":sig Compare::compare"));
+    assert!(
+        sig.contains("compare(self: Self, rhs: Self) -> Ordering"),
+        "{sig}"
+    );
 
-    let doc = doc_text(&engine.handle_line(":doc Range(Int, Int)"));
+    let doc = doc_text(&engine.handle_line(":doc Range::new"));
     assert!(!doc.contains("Unknown function index"), "{doc}");
     assert!(!doc.contains("Call arity mismatch"), "{doc}");
 
@@ -3998,6 +4334,116 @@ fn core_renders_top_level_facet_composition_expressions_without_codegen_leak() {
         helper.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
         "{helper}"
     );
+}
+
+#[test]
+fn facet_duration_root_inspection_matches_its_structural_path() {
+    let mut engine = engine();
+    for root in ["Duration", "Global::Duration"] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {root}")));
+        assert!(info.contains("kind: struct"), "{info}");
+        assert!(info.contains("- public readonly millis: Int"), "{info}");
+        assert_eq!(
+            info,
+            rendered_text(&engine.handle_line(&format!(":info {root}")))
+        );
+    }
+    let path = rendered_text(&engine.handle_line(":facet Duration.millis"));
+    assert!(path.contains("full path: Duration.millis"), "{path}");
+    assert!(path.contains("focus: Int"), "{path}");
+    let doc = doc_text(&engine.handle_line(":doc Facet.Duration"));
+    assert!(doc.contains("is a Facet path root"), "{doc}");
+}
+
+#[test]
+fn facet_root_inspection_lists_members_and_preserves_path_boundaries() {
+    let mut engine = ReplEngine::from_script_source(
+        "facet_roots.srt",
+        r#"
+defstruct Account {
+  private password: String,
+  readonly age: Int,
+  name: String
+}
+impl Account {
+  def new(password: String, age: Int, name: String) -> Self {
+    Account { password: password, age: age, name: name }
+  }
+}
+defrecord Profile(name: String, age: Int)
+defenum Choice { Empty, One(String), Pair(Int, String) }
+defenum MaybeItem<$T> { Nothing, Item($T) }
+deferror Trouble(code: Int) { |input: String| Self(message: input, code: 42) }
+"#,
+    )
+    .expect("facet roots should bootstrap");
+    let account = rendered_text(&engine.handle_line(":facet Account"));
+    assert!(
+        account.contains("private         password: String"),
+        "{account}"
+    );
+    assert!(account.contains("public readonly age"), "{account}");
+    assert_eq!(account, rendered_text(&engine.handle_line(":info Account")));
+    let profile = rendered_text(&engine.handle_line(":facet Profile"));
+    assert!(profile.contains("- age : Int"), "{profile}");
+    assert!(profile.contains("- name: String"), "{profile}");
+    assert!(!profile.contains("- public"), "{profile}");
+    assert_eq!(profile, rendered_text(&engine.handle_line(":info Profile")));
+    let maybe = rendered_text(&engine.handle_line(":facet MaybeItem"));
+    assert!(maybe.contains("- Item   : $T"), "{maybe}");
+    let choice = rendered_text(&engine.handle_line(":facet Choice"));
+    for row in ["- Empty: Unit", "- One  : String", "- Pair : (Int, String)"] {
+        assert!(choice.contains(row), "{choice}");
+    }
+    for (root, selector) in [
+        ("Tuple", "Tuple._N"),
+        ("List", "List.[index]"),
+        ("HashMap", "HashMap.[key]"),
+    ] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {root}")));
+        assert!(info.contains(selector), "{info}");
+    }
+    let error = rendered_text(&engine.handle_line(":facet Error"));
+    assert!(error.contains("- kind   : String"), "{error}");
+    assert!(error.contains("- message: String"), "{error}");
+    let trouble = rendered_text(&engine.handle_line(":facet Trouble"));
+    for row in ["- code   : Int", "- kind   : String", "- message: String"] {
+        assert!(trouble.contains(row), "{trouble}");
+    }
+    assert!(!trouble.contains("input:"), "{trouble}");
+    assert!(trouble.contains("readonly"), "{trouble}");
+    for (path, canonical) in [
+        ("Trouble.code", "Error.code"),
+        ("Trouble.message", "Error.message"),
+        ("Trouble.kind", "Error.kind"),
+        ("Account.name", "Account.name"),
+    ] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {path}")));
+        assert!(info.contains(&format!("full path: {canonical}")), "{info}");
+    }
+    for root in ["Int", "Result"] {
+        let info = rendered_text(&engine.handle_line(&format!(":facet {root}")));
+        assert!(info.contains("not a Facet path root"), "{info}");
+    }
+    let invalid = rendered_text(&engine.handle_line(":facet Account.missing"));
+    assert!(invalid.contains("No field"), "{invalid}");
+    let candidates = engine.completions(":facet ", 7).candidates;
+    for root in [
+        "Account", "Profile", "Choice", "Trouble", "Error", "Boolean", "Tuple", "List", "HashMap",
+    ] {
+        assert!(
+            candidates.iter().any(|candidate| candidate.label == root),
+            "missing {root}: {candidates:?}"
+        );
+    }
+    assert!(!candidates
+        .iter()
+        .any(|candidate| candidate.label == "Int" || candidate.label == "print"));
+    let boolean = rendered_text(&engine.handle_line(":facet Boolean"));
+    assert!(boolean.contains("- False: Unit"), "{boolean}");
+    assert!(boolean.contains("- True : Unit"), "{boolean}");
+    let function = rendered_text(&engine.handle_line(":facet print"));
+    assert!(!function.contains("fields:"), "{function}");
 }
 
 fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
@@ -4250,17 +4696,6 @@ fn core_type_command_looks_up_visible_bindings_only() {
             "{text}"
         );
     }
-
-    let legacy_type = engine.handle_line(":type $list");
-    let legacy_type = rendered_text(&legacy_type);
-    assert!(
-        legacy_type.contains("Invalid binding lookup target `$list`."),
-        "{legacy_type}"
-    );
-    assert!(
-        !legacy_type.contains("Use `list` instead."),
-        "{legacy_type}"
-    );
 }
 
 fn core_repl_surfaces_keep_generic_arguments_for_bindings() {
@@ -4319,9 +4754,8 @@ fn core_help_and_error_commands_return_structured_command_output() {
     let info_help = engine.handle_line(":help info");
     let info_help_text = rendered_text(&info_help);
     assert!(info_help_text.contains("Usage: :info <query>"));
-    assert!(info_help_text.contains(
-        "Accepts: symbol | type-definition | singleton-owner | typed-call | operator-target"
-    ));
+    assert!(info_help_text
+        .contains("Accepts: symbol | type-definition | singleton-owner | Facet-root | field-path"));
 
     let history_help = engine.handle_line(":help history");
     assert!(rendered_text(&history_help).contains("Usage: :history [selector]"));
@@ -4351,38 +4785,6 @@ fn core_info_command_reports_queries_and_command_errors() {
     assert!(print_info_text.contains("kind:"), "{print_info_text}");
     assert!(print_info_text.contains("origin:"), "{print_info_text}");
     assert!(print_info_text.contains("defined:"), "{print_info_text}");
-
-    let typed_info = engine.handle_line(":info |*> Option");
-    let typed_info_text = rendered_text(&typed_info);
-    assert!(typed_info_text.contains("defined:"), "{typed_info_text}");
-    assert!(
-        typed_info_text.contains("Option<$T>::fmap"),
-        "{typed_info_text}"
-    );
-    assert!(
-        typed_info_text.contains("kind: operator"),
-        "{typed_info_text}"
-    );
-
-    let legacy_info = engine.handle_line(":info num |> (Int -> Result<String, Error>)");
-    let legacy_info = rendered_text(&legacy_info);
-    assert!(
-        legacy_info.contains("Unsupported command query form")
-            || legacy_info.contains("query parse error")
-            || legacy_info.contains("Accepted forms: symbol, typed call, or operator target."),
-        "{legacy_info}"
-    );
-
-    let legacy_binding_info = engine.handle_line(":info $print");
-    let legacy_binding_info = rendered_text(&legacy_binding_info);
-    assert!(
-        legacy_binding_info.contains("Unsupported command query symbol `$print`."),
-        "{legacy_binding_info}"
-    );
-    assert!(
-        !legacy_binding_info.contains("Use `print` instead."),
-        "{legacy_binding_info}"
-    );
 }
 
 fn core_repl_command_and_query_errors_use_diagnostics() {
@@ -4408,20 +4810,6 @@ fn core_repl_command_and_query_errors_use_diagnostics() {
         info_type_error_text.contains("Error: ReplQueryParseError"),
         "{info_type_error_text}"
     );
-}
-
-fn core_sig_queries_reject_contextual_markers_as_concrete_types() {
-    let mut engine = engine();
-
-    for source in [":sig id(Self)", ":sig id(Type)", ":sig id(List<Self>)"] {
-        let result = engine.handle_line(source);
-        let text = strip_ansi(&rendered_text(&result));
-        assert!(
-            text.contains("Error: ReplQueryParseError"),
-            "{source}: {text}"
-        );
-        assert!(text.contains("concrete type"), "{source}: {text}");
-    }
 }
 
 fn core_value_recall_uses_engine_history_and_prompt_index() {
@@ -4541,7 +4929,7 @@ fn core_reload_defs_command_discards_live_defs() {
 fn core_result_error_reports_diagnostic_without_exiting() {
     let mut engine = engine();
 
-    let result_err = engine.handle_line("Err(NoneError)");
+    let result_err = engine.handle_line("Err(NoneError())");
     assert!(!result_err.should_exit);
     assert!(matches!(result_err.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&result_err).contains("None Value."));
@@ -4549,7 +4937,7 @@ fn core_result_error_reports_diagnostic_without_exiting() {
     let safe_mod = engine.handle_line("Mod::safe_mod(10, 0)");
     assert!(!safe_mod.should_exit);
     assert!(matches!(safe_mod.output, ReplOutput::EvalError { .. }));
-    assert!(rendered_text(&safe_mod).contains("division by zero"));
+    assert!(rendered_text(&safe_mod).contains("modulo by zero"));
 }
 
 fn core_stacktrace_command_controls_result_error_trace_display() {
@@ -4558,7 +4946,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
     let default_mode = engine.handle_line(":stacktrace");
     assert_eq!(rendered_text(&default_mode), "stacktrace display mode: off");
 
-    let hidden = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    let hidden = engine.handle_line("def fail() -> Result<Int> { Err(NoneError()) }\nfail()");
     assert!(matches!(hidden.output, ReplOutput::EvalError { .. }));
     let hidden_text = rendered_text(&hidden);
     assert!(hidden_text.contains("None Value."));
@@ -4573,7 +4961,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
         ReplOutput::EvalError { .. }
     ));
     let hidden_runtime_text = rendered_text(&hidden_runtime);
-    assert!(hidden_runtime_text.contains("division by zero"));
+    assert!(hidden_runtime_text.contains("modulo by zero"));
     assert!(
         !hidden_runtime_text.contains("Stack trace:"),
         "runtime stacktrace must default to off:\n{hidden_runtime_text}"
@@ -4601,7 +4989,7 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
     assert!(matches!(shown_runtime.output, ReplOutput::EvalError { .. }));
     let shown_runtime_text = rendered_text(&shown_runtime);
     let runtime_message_idx = shown_runtime_text
-        .find("division by zero")
+        .find("modulo by zero")
         .expect("runtime error message should render");
     let runtime_trace_idx = shown_runtime_text
         .find("Stack trace:")
@@ -4629,7 +5017,7 @@ fn core_stacktrace_display_is_independent_from_error_display_mode() {
         "stacktrace display mode: verbose"
     );
 
-    let result = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    let result = engine.handle_line("def fail() -> Result<Int> { Err(NoneError()) }\nfail()");
     assert!(matches!(result.output, ReplOutput::EvalError { .. }));
     let text = rendered_text(&result);
     let message_idx = text
@@ -4677,7 +5065,7 @@ fn core_immediate_anonymous_callable_calls_show_binding_hint() {
     }
 }
 
-fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
+fn core_doc_and_sig_commands_resolve_declarations_and_aliases() {
     let mut engine = engine();
 
     let builtin_doc = engine.handle_line(":doc print");
@@ -4689,9 +5077,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let qualified_add_doc = engine.handle_line(":doc Add::add");
     assert_eq!(doc_target(&alias_doc), doc_target(&qualified_add_doc));
     assert_eq!(doc_target(&alias_doc).0, "Add::add");
-
-    let typed_add_doc = doc_text(&engine.handle_line(":doc Add::add(Int, Int)"));
-    assert!(typed_add_doc.contains("Add::add(self: Self, rhs: Self) -> Self"));
 
     let and_doc = engine.handle_line(":doc &&");
     assert_eq!(doc_target(&and_doc).0, "Kernel::and");
@@ -4726,20 +5111,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let string_doc = engine.handle_line(":doc String");
     assert_eq!(doc_target(&string_doc).0, "String");
 
-    let compare_target_doc = doc_text(&engine.handle_line(":doc Compare(Int, Int)"));
-    assert!(
-        compare_target_doc.contains("target: Int, Int"),
-        "{compare_target_doc}"
-    );
-    assert!(
-        compare_target_doc.contains("impl docs are not synthesized"),
-        "{compare_target_doc}"
-    );
-
-    let typed_sig = engine.handle_line(":sig compare(Int, Int)");
-    let typed_sig = signature_text(&typed_sig);
-    assert!(typed_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
-
     let trait_family_sig = signature_text(&engine.handle_line(":sig Compare"));
     assert!(
         trait_family_sig.contains("trait Compare {"),
@@ -4765,21 +5136,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{helper_sig}"
     );
     assert!(helper_sig.contains("impl targets:"), "{helper_sig}");
-    assert!(
-        helper_sig.contains("try: :sig compare(Int, Int)"),
-        "{helper_sig}"
-    );
-
-    let trait_target_sig = signature_text(&engine.handle_line(":sig Compare(Int, Int)"));
-    assert!(
-        trait_target_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"),
-        "{trait_target_sig}"
-    );
-    assert!(
-        trait_target_sig.contains("impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
-        "{trait_target_sig}"
-    );
-
     let less_than_sig = engine.handle_line(":sig <");
     let less_than_sig = signature_text(&less_than_sig);
     assert_eq!(
@@ -4798,30 +5154,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let neq_helper_sig = signature_text(&neq_helper_sig);
     assert_eq!(
         neq_helper_sig.trim(),
-        "trait Eq { eq(self: Self, rhs: Self) -> Boolean, neq(self: Self, rhs: Self) -> Boolean }"
-    );
-
-    let typed_less_than_sig = engine.handle_line(":sig lt(Int, Int)");
-    let typed_less_than_sig = signature_text(&typed_less_than_sig);
-    assert!(
-        typed_less_than_sig
-            .contains("defined:\n  impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
-        "{typed_less_than_sig}"
-    );
-    assert!(
-        typed_less_than_sig.contains("specialized:\n  lt(Int, Int) -> Boolean"),
-        "{typed_less_than_sig}"
-    );
-
-    let typed_neq_sig = engine.handle_line(":sig neq(Int, Int)");
-    let typed_neq_sig = signature_text(&typed_neq_sig);
-    assert!(
-        typed_neq_sig.contains("defined:\n  Eq::neq(self: Self, rhs: Self) -> Boolean"),
-        "{typed_neq_sig}"
-    );
-    assert!(
-        typed_neq_sig.contains("specialized:\n  neq(Int, Int) -> Boolean"),
-        "{typed_neq_sig}"
+        "Eq::neq(self: Self, rhs: Self) -> Boolean"
     );
 
     let operator_sig = engine.handle_line(":sig |>");
@@ -4831,9 +5164,18 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{operator_sig}"
     );
     for (symbol, signature) in [
-        (">>", "Bootstrap::>>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)"),
-        (">*", "Bootstrap::>*(left: ($A -> Functor<$B>), mapper: ($B -> $C)) -> ($A -> Functor<$C>)"),
-        (">=>", "Bootstrap::>=>(left: ($A -> Monad<$B>), mapper: ($B -> Monad<$C>)) -> ($A -> Monad<$C>)"),
+        (
+            ">>",
+            "Bootstrap::>>(left: ($A -> $B), right: ($B -> $C)) -> ($A -> $C)",
+        ),
+        (
+            ">*",
+            "Bootstrap::>*(left: ($A -> Functor<$B>), mapper: ($B -> $C)) -> ($A -> Functor<$C>)",
+        ),
+        (
+            ">=>",
+            "Bootstrap::>=>(left: ($A -> Monad<$B>), mapper: ($B -> Monad<$C>)) -> ($A -> Monad<$C>)",
+        ),
     ] {
         let actual = signature_text(&engine.handle_line(&format!(":sig {symbol}")));
         assert!(actual.contains(signature), "{symbol}: {actual}");
@@ -4847,23 +5189,8 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let monad_sig = signature_text(&engine.handle_line(":sig |>="));
     assert!(
-        monad_sig.contains("impl Monad for Result<$T>::bind"),
+        monad_sig.contains("Monad::bind(self: Self<$A>"),
         "{monad_sig}"
-    );
-    assert!(
-        monad_sig.contains("impl Monad for Option<$T>::bind"),
-        "{monad_sig}"
-    );
-    assert!(
-        monad_sig.contains("impl Monad for List<$T>::bind"),
-        "{monad_sig}"
-    );
-    assert!(!monad_sig.contains("Monad::bind(self: Self"), "{monad_sig}");
-
-    let result_bind_sig = signature_text(&engine.handle_line(":sig |>= Result"));
-    assert_eq!(
-        result_bind_sig.trim(),
-        "impl Monad for Result<$T>::bind(self: Result<$A>, mapper: ($A -> Result<$B>)) -> Result<$B>"
     );
 
     let arrow_doc = engine.handle_line(":doc ->");
@@ -4898,16 +5225,12 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
     );
 
-    let typed_doc = engine.handle_line(":doc compare(Int, Int)");
-    let typed_doc = doc_text(&typed_doc);
-    assert!(typed_doc.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
-
     let helper_doc = engine.handle_line(":doc compare");
     let helper_doc = doc_text(&helper_doc);
     assert!(helper_doc.contains("Compare::compare"));
 
     let neq_helper_doc = engine.handle_line(":doc neq");
-    assert_eq!(doc_target(&neq_helper_doc).0, "Eq");
+    assert_eq!(doc_target(&neq_helper_doc).0, "Eq::neq");
 
     let operator_doc = engine.handle_line(":doc <");
     let operator_doc = doc_text(&operator_doc);
@@ -4922,61 +5245,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{default_less_than_doc}"
     );
 
-    let typed_less_than_doc = engine.handle_line(":doc lt(Int, Int)");
-    let typed_less_than_doc = doc_text(&typed_less_than_doc);
+    let constructor_doc = engine.handle_line(":doc Duration::new");
+    assert_eq!(doc_target(&constructor_doc).0, "Duration::new");
+    let extractor_doc = engine.handle_line(":doc Duration!");
+    assert_eq!(doc_target(&extractor_doc).0, "Duration::deconstruct");
+    let extractor_sig = signature_text(&engine.handle_line(":sig Duration!"));
     assert!(
-        typed_less_than_doc.contains("impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
-        "{typed_less_than_doc}"
-    );
-
-    let typed_neq_doc = engine.handle_line(":doc neq(Int, Int)");
-    let typed_neq_doc = doc_text(&typed_neq_doc);
-    assert!(
-        typed_neq_doc.contains("Eq::neq(self: Self, rhs: Self) -> Boolean"),
-        "{typed_neq_doc}"
-    );
-
-    let constructor_doc = engine.handle_line(":doc Duration(Int)");
-    let constructor_doc = doc_text(&constructor_doc);
-    assert!(
-        constructor_doc.contains("Duration::new(value: Int) -> Result<Duration, Error>"),
-        "{constructor_doc}"
-    );
-
-    let extractor_doc = engine.handle_line(":doc Duration!()");
-    let extractor_doc = doc_text(&extractor_doc);
-    assert!(
-        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int>"),
-        "{extractor_doc}"
-    );
-
-    let extractor_sig = engine.handle_line(":sig Duration!()");
-    let extractor_sig = signature_text(&extractor_sig);
-    assert!(
-        extractor_sig
-            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int>"),
+        extractor_sig.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int>"),
         "{extractor_sig}"
-    );
-    assert!(
-        extractor_sig.contains("specialized:\n  Duration!() -> MatchResult<Int>"),
-        "{extractor_sig}"
-    );
-
-    let extractor_sig_no_args = engine.handle_line(":sig Duration!");
-    let extractor_sig_no_args = signature_text(&extractor_sig_no_args);
-    assert_eq!(extractor_sig_no_args.trim(), extractor_sig.trim());
-
-    let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
-    let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
-    assert!(
-        extractor_sig_explicit_self
-            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int>"),
-        "{extractor_sig_explicit_self}"
-    );
-    assert!(
-        extractor_sig_explicit_self
-            .contains("specialized:\n  Duration!(Duration) -> MatchResult<Int>"),
-        "{extractor_sig_explicit_self}"
     );
 
     let duration_sig = engine.handle_line(":sig Duration");
@@ -4984,20 +5260,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     assert_eq!(
         duration_sig.trim(),
         "Duration::new(value: Int) -> Result<Duration, Error>"
-    );
-
-    let duration_empty_call_sig = engine.handle_line(":sig Duration()");
-    let duration_empty_call_sig = signature_text(&duration_empty_call_sig);
-    assert_eq!(
-        duration_empty_call_sig.trim(),
-        "Duration::new(value: Int) -> Result<Duration, Error>"
-    );
-
-    let unsupported = engine.handle_line(":doc compare(make_value(), Int)");
-    assert!(
-        rendered_text(&unsupported).contains("Unsupported command query argument `make_value()`"),
-        "{}",
-        rendered_text(&unsupported)
     );
 }
 
@@ -5043,18 +5305,13 @@ impl Monad for Box<$T> {
     )
     .expect("box preload should load");
 
-    let monad_sig = signature_text(&engine.handle_line(":sig |>="));
+    let monad_sig = signature_text(&engine.handle_line(":sig Monad"));
+    assert!(monad_sig.contains("impl targets:"), "{monad_sig}");
+    assert!(monad_sig.contains("Box"), "{monad_sig}");
+    let bind_sig = signature_text(&engine.handle_line(":sig |>="));
     assert!(
-        monad_sig.contains(
-            "impl Monad for Box<$T>::bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B>"
-        ),
-        "{monad_sig}"
-    );
-
-    let box_bind_sig = signature_text(&engine.handle_line(":sig |>= Box"));
-    assert_eq!(
-        box_bind_sig.trim(),
-        "impl Monad for Box<$T>::bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B>"
+        bind_sig.contains("Monad::bind(self: Self<$A>"),
+        "{bind_sig}"
     );
 }
 
@@ -5411,7 +5668,7 @@ fn core_safebind_diagnostic_keeps_session_alive() {
     assert!(rendered_text(&continued).contains("after_safebind_error: Int"));
 }
 
-fn core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing() {
+fn core_compare_definition_query_ignores_impl_override_selection() {
     let mut engine = ReplEngine::from_script_source(
         "compare_default.srt",
         r#"
@@ -5434,28 +5691,12 @@ impl Compare for Ranked {
     )
     .expect("compare default preload should bootstrap");
 
-    let sig = engine.handle_line(":sig lt(Ranked, Ranked)");
-    let sig = signature_text(&sig);
-    assert!(
-        sig.contains("defined:\n  Compare::lt(self: Self, rhs: Self) -> Boolean"),
-        "{sig}"
-    );
-    assert!(
-        sig.contains("specialized:\n  lt(Ranked, Ranked) -> Boolean"),
-        "{sig}"
-    );
-
-    let doc = engine.handle_line(":doc lt(Ranked, Ranked)");
-    let doc = doc_text(&doc);
-    assert!(
-        doc.contains("Compare::lt(self: Self, rhs: Self) -> Boolean"),
-        "{doc}"
-    );
-    assert!(doc.contains("Compare::lt"), "{doc}");
-    assert!(!doc.contains("trait Compare {"), "{doc}");
+    let sig = signature_text(&engine.handle_line(":sig Compare::lt"));
+    assert_eq!(sig.trim(), "Compare::lt(self: Self, rhs: Self) -> Boolean");
+    assert_eq!(doc_target(&engine.handle_line(":doc lt")).0, "Compare::lt");
 }
 
-fn core_sig_type_owner_falls_back_to_constructor_signatures() {
+fn core_sig_type_owner_uses_constructor_signatures() {
     let mut engine = engine();
 
     let option_sig = engine.handle_line(":sig Option");
@@ -5492,10 +5733,10 @@ defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
     );
 }
 
-fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fallbacks() {
+fn core_range_constructor_and_extractor_queries_use_named_declarations() {
     let mut engine = engine();
 
-    let constructor_doc = doc_text(&engine.handle_line(":doc Range(Int, Int)"));
+    let constructor_doc = doc_text(&engine.handle_line(":doc Range::new"));
     assert!(constructor_doc.contains("Range::new"), "{constructor_doc}");
     assert!(constructor_doc.contains("min: $A"), "{constructor_doc}");
     assert!(constructor_doc.contains("max: $A"), "{constructor_doc}");
@@ -5510,10 +5751,7 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
     assert!(range_sig.contains("max: $A"), "{range_sig}");
     assert!(range_sig.contains("-> Range<$A>"), "{range_sig}");
 
-    let range_empty_call_sig = signature_text(&engine.handle_line(":sig Range()"));
-    assert_eq!(range_empty_call_sig.trim(), range_sig.trim());
-
-    let extractor_doc = doc_text(&engine.handle_line(":doc Range!()"));
+    let extractor_doc = doc_text(&engine.handle_line(":doc Range!"));
     assert!(
         extractor_doc.contains("Range::deconstruct"),
         "{extractor_doc}"
@@ -5523,43 +5761,17 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
         "{extractor_doc}"
     );
 
-    let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
-    assert!(
-        extractor_sig
-            .contains("defined:\n  Range::deconstruct(self: Range<$A>) -> MatchResult<($A, $A)>"),
-        "{extractor_sig}"
+    let extractor_sig = signature_text(&engine.handle_line(":sig Range!"));
+    assert_eq!(
+        extractor_sig.trim(),
+        "Range::deconstruct(self: Range<$A>) -> MatchResult<($A, $A)>"
     );
-    assert!(
-        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A)>"),
-        "{extractor_sig}"
-    );
-
-    let extractor_sig_no_args = signature_text(&engine.handle_line(":sig Range!"));
-    assert_eq!(extractor_sig_no_args.trim(), extractor_sig.trim());
 }
 
-fn core_sig_enum_rejects_extra_input_with_shared_message() {
+fn core_sig_resolves_enum_variant_names() {
     let mut engine = engine();
-
-    let guided = rendered_text(&engine.handle_line(":sig Option(Int)"));
-    assert!(guided.contains(":sig Option"), "{guided}");
-
-    let bare_variant = rendered_text(&engine.handle_line(":sig Option::Some"));
-    assert!(bare_variant.contains(":sig Option"), "{bare_variant}");
-
-    let variant_call = rendered_text(&engine.handle_line(":sig Option::Some()"));
-    assert!(
-        variant_call.contains("expects 1 argument(s), got 0")
-            || variant_call.contains(":sig Option"),
-        "{variant_call}"
-    );
-
-    let variant_typed = rendered_text(&engine.handle_line(":sig Option::Some(Int)"));
-    assert!(
-        variant_typed.contains("Option::Some(Int) -> Option<Int>")
-            || variant_typed.contains(":sig Option"),
-        "{variant_typed}"
-    );
+    let bare_variant = signature_text(&engine.handle_line(":sig Option::Some"));
+    assert!(bare_variant.contains("Option::Some"), "{bare_variant}");
 }
 
 fn core_doc_command_resolves_closure_type_and_callable_bindings() {
@@ -5714,7 +5926,7 @@ fn core_process_public_surface_respects_annotations() {
 
     let annotation_query = rendered_text(&engine.handle_line(":sig @call"));
     assert!(
-        annotation_query.contains("No signature found"),
+        annotation_query.contains("ReplQueryParseError"),
         "{annotation_query}"
     );
 }
@@ -5840,103 +6052,17 @@ fn core_sig_expression_queries_support_operator_forms() {
     let mut engine = engine();
 
     for (operator, trait_name, method) in [("/", "Div", "safe_div"), ("%", "Mod", "safe_mod")] {
-        let doc = doc_text(&engine.handle_line(&format!(":doc {operator}")));
-        assert!(doc.contains(&format!("{trait_name}::{method}")), "{doc}");
-        let sig = signature_text(&engine.handle_line(&format!(":sig {operator} Int")));
-        assert!(
-            sig.contains(&format!("impl {trait_name} for Int::{method}")),
-            "{sig}"
-        );
-        assert!(sig.contains("ZeroDivisionError"), "{sig}");
-    }
-    let float_sig = signature_text(&engine.handle_line(":sig / Float"));
-    assert!(
-        float_sig.contains("impl Div for Float::safe_div"),
-        "{float_sig}"
-    );
-
-    let map_sig = engine.handle_line(":sig |*> Option");
-    let map_sig = signature_text(&map_sig);
-    assert!(map_sig.contains("Option<$T>::fmap"), "{map_sig}");
-    assert!(map_sig.contains("-> Option<$B>"), "{map_sig}");
-
-    let map_doc = engine.handle_line(":doc |*> Option");
-    let map_doc = doc_text(&map_doc);
-    assert!(map_doc.contains("Option<$T>::fmap"), "{map_doc}");
-
-    let legacy_doc = engine.handle_line(":doc num |> (Int -> Result<String, Error>)");
-    let legacy_doc = doc_text(&legacy_doc);
-    assert!(
-        legacy_doc.contains("Unsupported command query form")
-            || legacy_doc.contains("query parse error")
-            || legacy_doc.contains("Accepted forms: symbol, typed call, or operator target."),
-        "{legacy_doc}"
-    );
-
-    let legacy_binding_doc = engine.handle_line(":doc $formatter");
-    let legacy_binding_doc = rendered_text(&legacy_binding_doc);
-    assert!(
-        legacy_binding_doc.contains("Unsupported command query symbol `$formatter`."),
-        "{legacy_binding_doc}"
-    );
-    assert!(
-        !legacy_binding_doc.contains("Use `formatter` instead."),
-        "{legacy_binding_doc}"
-    );
-}
-
-fn core_sig_expression_queries_reject_non_expressions() {
-    let mut engine = engine();
-
-    for source in [":sig a = 1", ":sig import Kernel", ":sig 1\n2"] {
-        let result = engine.handle_line(source);
-        assert!(!result.should_exit);
-        let text = rendered_text(&result);
-        assert!(
-            text.contains("Unsupported command query form")
-                || text.contains("Unsupported command query argument"),
-            "{text}"
-        );
+        let doc = engine.handle_line(&format!(":doc {operator}"));
+        assert_eq!(doc_target(&doc).0, format!("{trait_name}::{method}"));
+        let sig = signature_text(&engine.handle_line(&format!(":sig {operator}")));
+        assert!(sig.contains(&format!("{trait_name}::{method}")), "{sig}");
     }
 }
 
-fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_legacy_forms() {
+fn core_sig_preserves_polymorphic_declarations() {
     let mut engine = engine();
-
-    let sig = engine.handle_line(":sig |*> Result<Int>");
-    let sig = signature_text(&sig);
-    assert!(sig.contains("Result<$T>::fmap"), "{sig}");
-    assert!(sig.contains("-> Result<$B>"), "{sig}");
-
-    let invalid = engine.handle_line(":sig ret |>= up");
-    let invalid = rendered_text(&invalid);
-    assert!(
-        invalid.contains("Unsupported command query form"),
-        "{invalid}"
-    );
-
-    let legacy_binding_sig = engine.handle_line(":sig $print");
-    let legacy_binding_sig = rendered_text(&legacy_binding_sig);
-    assert!(
-        legacy_binding_sig.contains("Unsupported command query symbol `$print`."),
-        "{legacy_binding_sig}"
-    );
-    assert!(
-        !legacy_binding_sig.contains("Use `print` instead."),
-        "{legacy_binding_sig}"
-    );
-}
-
-fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
-    let mut engine = engine();
-
-    let sig = engine.handle_line(":sig id(Int)");
-    let sig = signature_text(&sig);
-    assert!(
-        sig.contains("defined:\n  Function::id(value: $A) -> $A"),
-        "{sig}"
-    );
-    assert!(sig.contains("specialized:\n  id(Int) -> Int"), "{sig}");
+    let sig = signature_text(&engine.handle_line(":sig id"));
+    assert_eq!(sig.trim(), "Function::id(value: $A) -> $A");
 }
 
 fn core_operator_captures_display_trait_identity_and_execute() {
@@ -6078,7 +6204,7 @@ fn core_pair_captures_display_bootstrap_identity_and_concrete_types() {
     assert!(applied.trim() == "(2, \"tag\")", "{applied}");
 }
 
-fn core_sig_supports_closure_bindings_recapture_and_application() {
+fn core_sig_supports_closure_bindings() {
     let mut engine = engine();
 
     let closure = engine.handle_line("a = {|n: Int, m: Int| n + m}");
@@ -6093,20 +6219,6 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         signature_text(&closure_sig),
         "a: (Int, Int -> Int) :: Closure"
     );
-
-    let arity_error = engine.handle_line(":sig a(Int)");
-    let arity_text = rendered_text(&arity_error);
-    assert!(
-        arity_text.contains("function expects 2 argument(s), got 1"),
-        "{arity_text}"
-    );
-    assert!(
-        arity_text.contains("Callable type signature: (Int, Int -> Int)"),
-        "{arity_text}"
-    );
-
-    let applied = engine.handle_line(":sig a(Int, Int)");
-    assert_eq!(signature_text(&applied), "a(Int, Int) -> Int");
 
     let recaptured = engine.handle_line("b = &a(1, &1)");
     let recaptured_text = rendered_text(&recaptured);
@@ -6124,13 +6236,6 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
     assert!(
         recaptured_type.contains("identity: TypeIdentity::Closure"),
         "{recaptured_type}"
-    );
-
-    let recapture_query = engine.handle_line(":sig &a(Int, &1)");
-    let recapture_query = rendered_text(&recapture_query);
-    assert!(
-        recapture_query.contains("Invalid typed call query callee `&a`"),
-        "{recapture_query}"
     );
 }
 
@@ -6354,7 +6459,7 @@ fn core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive() {
     assert!(matches!(duplicate.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&duplicate).contains("Duplicate top-level definition: f"));
 
-    let err_value = engine.handle_line("Err(NoneError)");
+    let err_value = engine.handle_line("Err(NoneError())");
     assert!(!err_value.should_exit);
     assert!(matches!(err_value.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&err_value).contains("None Value."));
@@ -6466,20 +6571,26 @@ fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
 
     let mut restored = ReplEngine::from_eldr(&bytes).expect("restored engine should load");
 
-    let doc = rendered_text(&restored.handle_line(":doc compare(Int, Int)"));
+    let doc = doc_text(&restored.handle_line(":doc Compare::compare"));
     assert!(
-        doc.contains("No docs found for compare(Int, Int)"),
-        "doc query should read only Docs chunk: {doc}"
+        doc.contains("undocumented") || doc.contains("No docs found"),
+        "{doc}"
     );
-
-    let sig = signature_text(&restored.handle_line(":sig compare(Int, Int)"));
+    let sig = signature_text(&restored.handle_line(":sig Compare::compare"));
     assert!(
-        sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"),
+        sig.contains("Compare::compare(self: Self, rhs: Self) -> Ordering"),
         "{sig}"
     );
+    let capture = restored.handle_line("after_load: (Int -> Int) = &Function::id");
     assert!(
-        sig.contains("specialized:\n  compare(Int, Int) -> Ordering"),
-        "{sig}"
+        !matches!(capture.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&capture)
+    );
+    let capture_doc = restored.handle_line(":doc after_load");
+    assert!(
+        !matches!(capture_doc.output, ReplOutput::DocResolved { .. }),
+        "empty Docs chunk must not recover bootstrap body through capture"
     );
 }
 
@@ -6538,17 +6649,6 @@ fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
         rendered.contains("@intrinsic def dbg!(values: *$A) -> Unit"),
         "{rendered}"
     );
-}
-
-fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
-    let mut engine = engine();
-
-    let doc = engine.handle_line(":doc dbg!(Int)");
-    assert_eq!(doc_target(&doc).0, "Bootstrap::dbg!");
-
-    let sig = engine.handle_line(":sig dbg!(Int, String)");
-    let sig = signature_text(&sig);
-    assert_eq!(sig.trim(), "@intrinsic def dbg!(values: *$A) -> Unit");
 }
 
 fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
@@ -6620,15 +6720,15 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     assert_eq!(doc_target(&if_doc).0, "Kernel::if");
 }
 
-fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
+fn core_doc_supports_qualified_inherent_impl_method_names() {
     let mut engine = engine();
 
-    let doc = engine.handle_line(":doc Boolean::not(Boolean)");
+    let doc = engine.handle_line(":doc Boolean::not");
     let doc = doc_text(&doc);
     assert!(doc.contains("Boolean::not"), "{doc}");
 }
 
-fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
+fn core_sig_guides_field_paths_to_info_or_facet() {
     let mut engine = engine();
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
@@ -6638,51 +6738,8 @@ fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
     let field_sig = engine.handle_line(":sig pair._1");
     let field_sig = rendered_text(&field_sig);
     assert!(
-        field_sig.contains("No signature found for pair._1"),
+        field_sig.contains("Use `:info pair` or `:facet pair._1`"),
         "{field_sig}"
-    );
-
-    let view_sig = engine.handle_line(":sig pair._1");
-    let view_sig = rendered_text(&view_sig);
-    assert!(
-        view_sig.contains("No signature found for pair._1"),
-        "{view_sig}"
-    );
-
-    let result_pair = engine.handle_line("result_pair = (Ok(2), \"ok\")");
-    let result_pair_text = rendered_text(&result_pair);
-    assert!(
-        result_pair_text.contains("result_pair"),
-        "{result_pair_text}"
-    );
-
-    let compose_sig =
-        engine.handle_line(":sig Facet::compose(StyledDocSegment.style, StyledDocStyle.bold)");
-    let compose_sig = rendered_text(&compose_sig);
-    assert!(
-        compose_sig.contains("Unsupported command query argument `StyledDocSegment.style`")
-            || compose_sig.contains("No signature found for Facet::compose"),
-        "{compose_sig}"
-    );
-
-    let over_result_sig = engine.handle_line(
-        ":sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})",
-    );
-    let over_result_sig = rendered_text(&over_result_sig);
-    assert!(
-        over_result_sig.contains("Unsupported command query argument `Tuple._0`")
-            || over_result_sig
-                .contains("Unsupported command query argument `{|value: Result<Int>| Ok(value)}`")
-            || over_result_sig.contains("No signature found for Facet::over_result"),
-        "{over_result_sig}"
-    );
-
-    let arrow_sig = engine.handle_line(":sig StyledDocSegment.style -> StyledDocStyle.bold");
-    let arrow_sig = rendered_text(&arrow_sig);
-    assert!(
-        arrow_sig.contains("Unsupported command query form")
-            || arrow_sig.contains("Unsupported command query argument"),
-        "{arrow_sig}"
     );
 }
 
@@ -6716,9 +6773,9 @@ impl User {
     );
 
     let info = rendered_text(&engine.handle_line(":info User"));
-    assert!(info.contains("facet root: readonly"), "{info}");
-    assert!(info.contains("private         password: String"), "{info}");
-    assert!(info.contains("public readonly age"), "{info}");
+    assert!(info.contains("facet root: public"), "{info}");
+    assert!(info.contains("private readonly password: String"), "{info}");
+    assert!(info.contains("public readonly  age"), "{info}");
 
     let facet = rendered_text(&engine.handle_line(":facet User.password"));
     assert!(facet.contains("full path: User.password"), "{facet}");

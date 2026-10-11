@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::panic;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sindr::builtin::builtin_function_metas;
@@ -85,6 +86,7 @@ fn reject_special_variant_binding(name: &str, span: &Span) -> Result<(), Resolve
 }
 
 const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
+const MAX_STAGE_WORKERS: usize = 8;
 
 fn surface_module_name(module_path: &str) -> String {
     module_path
@@ -122,7 +124,7 @@ pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentity
                 .with_constructor_capture(ConstructorCapturePolicy::Ordinary)
         }
         OwnerKind::Error => SymbolCapabilities::new(true, false, false, None)
-            .with_constructor_capture(ConstructorCapturePolicy::Forbidden),
+            .with_constructor_capture(ConstructorCapturePolicy::Ordinary),
         OwnerKind::Trait => SymbolCapabilities::trait_owner(),
         OwnerKind::Sig => SymbolCapabilities::signature_owner(),
         OwnerKind::Const => SymbolCapabilities::const_owner(),
@@ -444,6 +446,8 @@ pub fn resolve_staged_program_from_state_with_warnings(
         let user_owner_registry = precollect_owner_registry(&[user_owner_modules])?;
         owner_registry.merge(&user_owner_registry)?;
     }
+    let owner_registry = Arc::new(owner_registry);
+    let declaration_hidden_by_uid = Arc::new(declaration_hidden_by_uid);
     let mut resolved = Vec::new();
     let mut explicit_function_imports = Vec::new();
     let mut process_specs = Vec::new();
@@ -458,7 +462,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
     next_local_id = next_local_id.max(resume_state.next_local_id);
 
     for (stage_index, stage) in module_stages.iter().enumerate().skip(start_stage_index) {
-        let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
+        let stage_impl_targets = Arc::new(collect_stage_impl_target_resolutions(stage));
         let stage_local_base = next_local_id;
         let stage_results = resolve_stage_modules_parallel(
             stage,
@@ -565,11 +569,12 @@ pub fn resolve_staged_program_from_state_with_warnings(
         let mut user_scope = user_scope_build.scope;
         user_scope.advance_next_id_to(next_local_id);
         let mut user_resolver = Resolver::with_scope(user_scope);
-        user_resolver.declaration_entries = declaration_index.clone().into_iter().collect();
-        user_resolver.declaration_uids = declaration_uids;
-        user_resolver.declaration_uid_kinds = declaration_uid_kinds;
+        user_resolver.declaration_entries =
+            Arc::new(declaration_index.clone().into_iter().collect());
+        user_resolver.declaration_uids = Arc::new(declaration_uids);
+        user_resolver.declaration_uid_kinds = Arc::new(declaration_uid_kinds);
         user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
-        user_resolver.trait_constructor_slots = trait_constructor_slots;
+        user_resolver.trait_constructor_slots = Arc::new(trait_constructor_slots);
         user_resolver.owner_registry = owner_registry;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
@@ -622,68 +627,76 @@ fn resolve_stage_modules_parallel(
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
-    declaration_hidden_by_uid: &HashMap<u32, bool>,
+    declaration_hidden_by_uid: &Arc<HashMap<u32, bool>>,
     trait_constructor_slots: &HashMap<u32, Vec<String>>,
-    owner_registry: &OwnerRegistry,
-    stage_impl_targets: &HashMap<String, declarations::ImplTargetResolution>,
+    owner_registry: &Arc<OwnerRegistry>,
+    stage_impl_targets: &Arc<HashMap<String, declarations::ImplTargetResolution>>,
 ) -> Vec<Result<StageModuleResolveResult, ResolveError>> {
-    std::thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(stage.len());
-        for module in stage {
-            let handle = std::thread::Builder::new()
-                .stack_size(STAGE_WORKER_STACK_SIZE)
-                .spawn_scoped(scope, move || {
-                    let module_scope_build = build_module_scope_with_imports(
-                        global_scope,
-                        auto_import_modules,
-                        declaration_index,
-                        declaration_uids,
-                        &module.ast,
-                        Some(module.module_path.as_str()),
-                        stage_index,
-                    )?;
-                    let mut module_scope = module_scope_build.scope;
-                    module_scope.advance_next_id_to(stage_local_base);
-                    let mut resolver = Resolver::with_scope(module_scope);
-                    resolver.current_module_path = Some(module.module_path.clone());
-                    resolver.declaration_entries = declaration_index.clone().into_iter().collect();
-                    resolver.declaration_uids = declaration_uids.clone();
-                    resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
-                    resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
-                    resolver.trait_constructor_slots = trait_constructor_slots.clone();
-                    resolver.owner_registry = owner_registry.clone();
-                    resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
-                    resolver.allow_top_level_shadowing = true;
-                    let resolved = resolver.resolve_program(module_scope_build.program)?;
-                    let local_id_count = resolver.scope.next_id().saturating_sub(stage_local_base);
-                    Ok(StageModuleResolveResult {
-                        resolved,
-                        local_id_count,
-                        explicit_function_imports: module_scope_build.explicit_function_imports,
-                    })
-                });
-            handles.push(handle.map_err(|err| ResolveError {
-                message: format!("failed to spawn stage resolver worker: {}", err),
-                span: Span { start: 0, end: 0 },
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            }));
-        }
+    let mut results = Vec::with_capacity(stage.len());
+    for batch in stage.chunks(MAX_STAGE_WORKERS) {
+        let batch_results = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(batch.len());
+            for module in batch {
+                let handle = std::thread::Builder::new()
+                    .stack_size(STAGE_WORKER_STACK_SIZE)
+                    .spawn_scoped(scope, move || {
+                        let module_scope_build = build_module_scope_with_imports(
+                            global_scope,
+                            auto_import_modules,
+                            declaration_index,
+                            declaration_uids,
+                            &module.ast,
+                            Some(module.module_path.as_str()),
+                            stage_index,
+                        )?;
+                        let mut module_scope = module_scope_build.scope;
+                        module_scope.advance_next_id_to(stage_local_base);
+                        let mut resolver = Resolver::with_scope(module_scope);
+                        resolver.current_module_path = Some(module.module_path.clone());
+                        resolver.declaration_entries =
+                            Arc::new(declaration_index.clone().into_iter().collect());
+                        resolver.declaration_uids = Arc::new(declaration_uids.clone());
+                        resolver.declaration_uid_kinds = Arc::new(declaration_uid_kinds.clone());
+                        resolver.declaration_hidden_by_uid = Arc::clone(declaration_hidden_by_uid);
+                        resolver.trait_constructor_slots =
+                            Arc::new(trait_constructor_slots.clone());
+                        resolver.owner_registry = Arc::clone(owner_registry);
+                        resolver.current_stage_impl_targets = Some(Arc::clone(stage_impl_targets));
+                        resolver.allow_top_level_shadowing = true;
+                        let resolved = resolver.resolve_program(module_scope_build.program)?;
+                        let local_id_count =
+                            resolver.scope.next_id().saturating_sub(stage_local_base);
+                        Ok(StageModuleResolveResult {
+                            resolved,
+                            local_id_count,
+                            explicit_function_imports: module_scope_build.explicit_function_imports,
+                        })
+                    });
+                handles.push(handle.map_err(|err| ResolveError {
+                    message: format!("failed to spawn stage resolver worker: {}", err),
+                    span: Span { start: 0, end: 0 },
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                        subject: None,
+                    },
+                    related_labels: Vec::new(),
+                }));
+            }
 
-        handles
-            .into_iter()
-            .map(|handle| match handle {
-                Ok(handle) => match handle.join() {
-                    Ok(result) => result,
-                    Err(payload) => panic::resume_unwind(payload),
-                },
-                Err(err) => Err(err),
-            })
-            .collect()
-    })
+            handles
+                .into_iter()
+                .map(|handle| match handle {
+                    Ok(handle) => match handle.join() {
+                        Ok(result) => result,
+                        Err(payload) => panic::resume_unwind(payload),
+                    },
+                    Err(err) => Err(err),
+                })
+                .collect::<Vec<_>>()
+        });
+        results.extend(batch_results);
+    }
+    results
 }
 
 fn rebase_resolved_id(id: &mut ResolvedId, base: u32, offset: u32) {
@@ -724,7 +737,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_pattern(pattern, base, offset);
         }
         Resolved::Lit(..) | Resolved::ListNil(_) => {}
-        Resolved::Var(_, id) => rebase_resolved_id(id, base, offset),
+        Resolved::Var(_, id) | Resolved::ErrorKind(_, id) => rebase_resolved_id(id, base, offset),
         Resolved::App(_, func, args) => {
             rebase_resolved_node(func, base, offset);
             for arg in args {
@@ -749,7 +762,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_resolved_node(start, base, offset);
             rebase_resolved_node(stop, base, offset);
         }
-        Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
+        Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs, _) => {
             rebase_pattern(pattern, base, offset);
             rebase_resolved_node(rhs, base, offset);
         }
@@ -824,17 +837,6 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
             rebase_resolved_node(value, base, offset);
             rebase_resolved_node(err, base, offset);
-        }
-        Resolved::AssertErrorKinds(_, markers, value) => {
-            for marker in markers.markers_mut() {
-                rebase_resolved_id(marker, base, offset);
-            }
-            rebase_resolved_node(value, base, offset);
-        }
-        Resolved::RecoverKind(_, value, marker, handler) => {
-            rebase_resolved_node(value, base, offset);
-            rebase_resolved_id(marker, base, offset);
-            rebase_resolved_node(handler, base, offset);
         }
         Resolved::Match(_, scrutinee, arms)
         | Resolved::IsMatch(_, scrutinee, arms)
@@ -1036,6 +1038,12 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
                 rebase_pattern(inner, base, offset);
             }
         }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                rebase_resolved_node(key, base, offset);
+                rebase_pattern(child, base, offset);
+            }
+        }
         ResolvedPattern::Record(id, fields) => {
             rebase_resolved_id(id, base, offset);
             for (_, inner) in fields {
@@ -1225,15 +1233,17 @@ struct Resolver {
     pattern_proxies: Option<HashMap<String, ResolvedId>>,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
-    declaration_entries: HashMap<String, DeclarationEntry>,
-    declaration_uids: HashMap<String, u32>,
-    declaration_uid_kinds: HashMap<u32, DeclarationKind>,
-    declaration_hidden_by_uid: HashMap<u32, bool>,
-    trait_constructor_slots: HashMap<u32, Vec<String>>,
-    owner_registry: OwnerRegistry,
+    /// Lexical member names for each lowered inherent impl declaration.
+    impl_member_scopes: HashMap<String, Vec<(String, String)>>,
+    declaration_entries: Arc<HashMap<String, DeclarationEntry>>,
+    declaration_uids: Arc<HashMap<String, u32>>,
+    declaration_uid_kinds: Arc<HashMap<u32, DeclarationKind>>,
+    declaration_hidden_by_uid: Arc<HashMap<u32, bool>>,
+    trait_constructor_slots: Arc<HashMap<u32, Vec<String>>>,
+    owner_registry: Arc<OwnerRegistry>,
     explicit_module_imports: HashSet<String>,
     current_module_path: Option<String>,
-    current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,
+    current_stage_impl_targets: Option<Arc<HashMap<String, declarations::ImplTargetResolution>>>,
     allow_top_level_shadowing: bool,
     forbidden_top_level_value_bindings: HashMap<u32, String>,
     current_top_level_def_name: Option<String>,

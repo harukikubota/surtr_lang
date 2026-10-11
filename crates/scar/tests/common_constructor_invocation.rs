@@ -12,11 +12,11 @@ macro_rules! constructor_case {
 }
 
 const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
+    constructor_case!(record_keyword_shorthand_checks_field_contract),
     constructor_case!(constructor_invocations_propagate_expected_return),
     constructor_case!(callable_result_context_is_shared_by_helpers_and_operators),
     constructor_case!(arrow_uses_fixed_facet_path_contract),
     constructor_case!(trait_result_conflict_preserves_expected_and_actual_direction),
-    constructor_case!(custom_functor_returns_follow_the_shared_plain_inference_policy),
     constructor_case!(registered_carriers_do_not_supply_constructor_inference_evidence),
     constructor_case!(generic_receiverless_family_helpers_use_expected_return),
     constructor_case!(generic_constructor_trait_wrappers_specialize_all_method_roles),
@@ -118,41 +118,6 @@ fn trait_result_conflict_preserves_expected_and_actual_direction() {
     assert_eq!(data["actual_type"], "String");
 }
 
-fn custom_functor_returns_follow_the_shared_plain_inference_policy() {
-    let definitions = r#"
-defenum Boxed<$T> { Box($T) }
-impl Functor for Boxed<$T> {
-    def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
-        match self { Boxed::Box(value) => Boxed::Box(mapper(value)) }
-    }
-}
-"#;
-    for (expression, expected_origin) in [
-        (
-            "Functor::fmap(Boxed::Box(1), {|x: Int| Boxed::Box(x)})",
-            diagnostics::DiagnosticOrigin::TraitCall,
-        ),
-        (
-            "Boxed::Box(1) |*> {|x: Int| Boxed::Box(x)}",
-            diagnostics::DiagnosticOrigin::Operator {
-                operator: "|*>".into(),
-            },
-        ),
-    ] {
-        let annotated = format!("{definitions}\nvalue: Boxed<Boxed<Int>> = {expression}");
-        support::typecheck(support::resolve_with_builtin_prelude(&annotated))
-            .expect("an explicit nested carrier context permits a contextual mapper result");
-        let inferred = format!("{definitions}\nvalue = {expression}");
-        let error = support::typecheck(support::resolve_with_builtin_prelude(&inferred))
-            .expect_err("plain mapper policy is independent of the constructor's name");
-        assert_eq!(
-            error.reason(),
-            Some(diagnostics::TypeDiagnosticReason::CallableShapeMismatch)
-        );
-        assert_eq!(error.structured.unwrap().origin, expected_origin);
-    }
-}
-
 fn registered_carriers_do_not_supply_constructor_inference_evidence() {
     let definitions = r#"
 defenum Boxed<$T> { Box($T) }
@@ -202,6 +167,49 @@ impl Monad for Boxed<$T> {
         .expect("the expected carrier determines both helper calls");
     check("value = Functor::fmap(Monad::return::<Boxed>(1), {|x: Int| x})")
         .expect("an explicit inner constructor head supplies source evidence");
+
+    for prefix in ["", definitions] {
+        for annotation in ["NotAType", "List<Int, String>", "DoBlock<Int>"] {
+            for callback in [
+                format!("{{|x: {annotation}| Ok(x)}}"),
+                format!("{{|x| annotated: {annotation} = x\n Ok(annotated)}}"),
+                format!("({{|x: {annotation}| Ok(x)}})"),
+                format!("{{|x| Monad::return(x) |>= {{|y: {annotation}| Ok(y)}}}}"),
+            ] {
+                // Keep both annotation offsets identical so the complete source facts
+                // can be compared, including nested structured annotation errors.
+                let direct = format!("{prefix}\nvalue = {:16} |>= {callback}", "Ok(1)");
+                let probed = format!("{prefix}\nvalue = Monad::return(1) |>= {callback}");
+                let direct_error =
+                    support::typecheck(support::resolve_with_builtin_prelude(&direct))
+                        .expect_err("invalid annotations must fail for a known carrier");
+                let probed_error =
+                    support::typecheck(support::resolve_with_builtin_prelude(&probed))
+                        .expect_err("invalid annotations must fail before carrier selection");
+                assert_eq!(probed_error, direct_error, "{probed}");
+            }
+        }
+        let source = format!("{prefix}\nvalue = Monad::return(1) |>= {{|x: String| Ok(x)}}");
+        let error = support::typecheck(support::resolve_with_builtin_prelude(&source))
+            .expect_err("valid annotations with incompatible input types still reject candidates");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+        );
+        let diagnostics::DiagnosticData::CandidateSelection(data) = error.structured.unwrap().data
+        else {
+            panic!("expected candidate failures for a type relation error");
+        };
+        assert!(!data.failures.is_empty());
+        assert!(data
+            .failures
+            .iter()
+            .all(|failure| !failure.detail.is_empty()));
+        support::typecheck(support::resolve_with_builtin_prelude(&format!(
+            "{prefix}\nvalue = Monad::return(1) |>= {{|x: Int| Ok(x)}}"
+        )))
+        .expect("a valid callback annotation and concrete result still supply carrier evidence");
+    }
 }
 
 fn generic_receiverless_family_helpers_use_expected_return() {
@@ -331,5 +339,59 @@ kept: List<Int> = keep_applicative([4])
             map_functor_specializations[0], map_functor_specializations[1],
             "mapped output type must participate in the specialization key"
         );
+    }
+}
+
+fn record_keyword_shorthand_checks_field_contract() {
+    let prefix = "defrecord User(name: String, age: Int)\nname = \"Ada\"\nage = 37\nyears = 38\n";
+    for expression in [
+        "User(name: name, age)",
+        "User(age: age, name)",
+        "User(name, age)",
+    ] {
+        let source = format!("{prefix}value = {expression}");
+        support::typecheck_with_rules(&source, sindr::policy::RuntimeSourcePolicy::script())
+            .unwrap_or_else(|error| panic!("{expression}: {error:?}"));
+    }
+    use diagnostics::TypeDiagnosticReason as Reason;
+    for (expression, reason) in [
+        ("User(name: name, 37)", Some(Reason::ArgumentModeMismatch)),
+        (
+            "User(name: name, age + 1)",
+            Some(Reason::ArgumentModeMismatch),
+        ),
+        (
+            "User(name: name, name.length)",
+            Some(Reason::ArgumentModeMismatch),
+        ),
+        (
+            "User(name: name, years)",
+            Some(Reason::UnknownNamedArgument),
+        ),
+        (
+            "User(name: name, age, age: 37)",
+            Some(Reason::DuplicateArgument),
+        ),
+        ("User(name: name)", Some(Reason::MissingArgument)),
+        (
+            "User(name: name, age: \"37\")",
+            Some(Reason::ArgumentTypeMismatch),
+        ),
+    ] {
+        let source = format!("{prefix}value = {expression}");
+        let error =
+            support::typecheck_with_rules(&source, sindr::policy::RuntimeSourcePolicy::script())
+                .expect_err(expression);
+        assert_eq!(error.reason(), reason, "{expression}: {error:?}");
+        if reason == Some(Reason::ArgumentModeMismatch) {
+            assert!(
+                error
+                    .hint
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("explicit field name or a bare variable shorthand"),
+                "{expression}: {error:?}"
+            );
+        }
     }
 }

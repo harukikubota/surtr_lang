@@ -1,6 +1,8 @@
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -17,7 +19,7 @@ use sindr::warning::{
 };
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
-use crate::env::{ResultEffectTypeInfo, TypeEnv, TypeKind};
+use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::{NominalType, Ty};
@@ -62,8 +64,8 @@ enum ProfileEvent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum ResultEffectResolution {
-    Preserve(ResultPreserveTarget),
+pub(super) enum MonadFailResolution {
+    Preserve(MonadFailTarget),
     Unavailable,
     Deferred,
     InvalidMetadata(&'static str),
@@ -96,7 +98,6 @@ mod process_boundary_policy_tests {
             ExitCodePolicy::EntryOnly
         );
         assert!(!context.enforce_builtin_type_contracts);
-        assert!(!context.allow_error_function_params);
     }
 }
 
@@ -423,6 +424,7 @@ enum TypeSyntaxContext {
     General,
     StdBuiltinParameter,
     BindingAnnotation,
+    ConcreteErrorLocal,
     FunctionReturn,
     HoleClosureParam,
     FacetDeferredSlot,
@@ -452,6 +454,9 @@ struct TraitInfo {
     id: ResolvedId,
     /// Set only while checking the trusted standard definition stage.
     compiler_owned_equality: bool,
+    compiler_owned_failure: bool,
+    /// Declaration authority persists across user impls and cached standard stages.
+    standard_lazy_contract: bool,
     type_params: Vec<ResolvedTypeParam>,
     where_clause: Option<TypedWhereClause>,
     constructor_slots: Vec<String>,
@@ -483,6 +488,7 @@ struct TraitImplMethodInfo {
     #[serde(default)]
     body_obligations: Vec<TraitObligation>,
     instantiation_contract: Option<ImplMethodInstantiationContract>,
+    resolved_signature: Option<ResolvedImplMethodSignature>,
 }
 
 #[allow(dead_code)]
@@ -506,6 +512,17 @@ struct TraitImplInfo {
     constructor_slot_vars: Vec<u32>,
     constructor_slot_positions: Vec<usize>,
     methods: HashMap<String, TraitImplMethodInfo>,
+}
+
+/// Declaration binders are allocated once and reused by the method body.
+/// Calls selected before body checking must reference this same namespace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResolvedImplMethodSignature {
+    params: Vec<Ty>,
+    result: Ty,
+    type_params: Vec<u32>,
+    return_type_arguments: Vec<Ty>,
+    environment: MethodTypeEnvironment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -545,21 +562,33 @@ pub(super) enum CandidateApplicability {
 enum ConstructorProjectionFailure {
     Canonicalization,
     MissingImplTargetMetadata,
+    #[serde(skip)]
+    PendingImplMapping,
     UnsatisfiedConstraints,
     NoApplicableImplementation,
     AmbiguousImplementation,
-    MissingConstructorSlotMapping { variable: u32 },
+    MissingConstructorSlotMapping {
+        variable: u32,
+    },
     MissingWitnessTrait,
-    SlotCountMismatch { expected: usize, actual: usize },
-    InvalidSlotPosition { position: usize },
+    SlotCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    InvalidSlotPosition {
+        position: usize,
+    },
     MissingNominalArguments,
     UnsupportedConstructor,
+    // A failed proof is terminal and must never be written into a successful checkpoint.
+    #[serde(skip)]
+    ProofError(Box<TypeError>),
 }
 
 #[derive(Debug, Clone)]
 enum ConstructorProjectionOutcome {
     Applicable {
-        info: TraitImplInfo,
+        info: Arc<TraitImplInfo>,
         mapping: HashMap<u32, Ty>,
     },
     Deferred {
@@ -613,6 +642,49 @@ enum ConstructorSlotsOutcome {
     Rejected {
         failures: Vec<ConstructorProjectionFailure>,
     },
+}
+
+impl ConstructorProjectionFailure {
+    fn proof_error(failures: &[Self]) -> Option<TypeError> {
+        failures.iter().find_map(|failure| match failure {
+            Self::ProofError(error) => Some((**error).clone()),
+            _ => None,
+        })
+    }
+}
+
+macro_rules! checked_constructor_outcome {
+    ($($outcome:ty),+ $(,)?) => {$(
+        impl $outcome {
+            fn into_checked(self) -> Result<Self, TypeError> {
+                if let Self::Rejected { failures } = &self {
+                    if let Some(error) = ConstructorProjectionFailure::proof_error(failures) {
+                        return Err(error);
+                    }
+                }
+                Ok(self)
+            }
+        }
+    )+};
+}
+checked_constructor_outcome!(
+    ConstructorProjectionOutcome,
+    ConstructorCarrierOutcome,
+    ConstructorCarrierRelation,
+    ConstructorApplicationOutcome,
+    ConstructorSlotsOutcome,
+);
+
+fn try_all<T>(
+    values: impl IntoIterator<Item = T>,
+    mut check: impl FnMut(T) -> Result<bool, TypeError>,
+) -> Result<bool, TypeError> {
+    for value in values {
+        if !check(value)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A trait requirement kept in inference state.  Keep the trait identity and
@@ -716,6 +788,8 @@ pub fn typecheck_staged_program_with_context_with_warnings(
     Ok(PhaseOutput::new(
         TypedProgram {
             nodes,
+            enum_definitions: checker.env.typed_enum_definitions(),
+            nominal_definitions: checker.env.typed_nominal_definitions(),
             process_specs,
             boot_plan: program.boot_plan,
         },
@@ -745,7 +819,8 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
         Ty::List(inner)
         | Ty::MatchResult(inner)
         | Ty::ExtractorClosure(inner)
-        | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
+        | Ty::Lazy(inner)
+        | Ty::Pid(inner) => type_contains_unresolved_vars(inner),
         Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
             items.iter().any(type_contains_unresolved_vars)
         }
@@ -770,9 +845,14 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
                     .iter()
                     .any(|(_, field_ty)| type_contains_unresolved_vars(field_ty))
         }
-        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
-            false
-        }
+        Ty::Int
+        | Ty::Float
+        | Ty::Str
+        | Ty::Bool
+        | Ty::Unit
+        | Ty::ProcessMarker(_)
+        | Ty::Hole
+        | Ty::Error => false,
     }
 }
 
@@ -780,7 +860,6 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
 pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
-    pub allow_error_function_params: bool,
     /// REPL `:facet` inspects structurally valid paths even when a private
     /// segment is not consumable from the current source scope.
     pub allow_private_facet_inspection: bool,
@@ -791,7 +870,6 @@ impl Default for TypecheckContext {
         Self {
             runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
-            allow_error_function_params: false,
             allow_private_facet_inspection: false,
         }
     }
@@ -802,7 +880,6 @@ impl TypecheckContext {
         Self {
             runtime_policy: policy.runtime_policy,
             enforce_builtin_type_contracts: false,
-            allow_error_function_params: false,
             allow_private_facet_inspection: false,
         }
     }
@@ -1070,7 +1147,16 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 let [inner] = args.as_slice() else {
                     return Err("PID requires exactly 1 type argument".into());
                 };
-                Ty::Pid(pid_marker_name_from_ty(inner))
+                Ty::Pid(Box::new(builtin_pid_marker_from_ty(inner)?))
+            }
+            "Workers" | "WorkerLease" => {
+                let [inner] = args.as_slice() else {
+                    return Err(format!("{ident} requires exactly 1 type argument"));
+                };
+                Ty::Enum(
+                    ident.to_string(),
+                    vec![Ty::Pid(Box::new(builtin_pid_marker_from_ty(inner)?))],
+                )
             }
             other => Self::builtin_special_enum_ty_for_query(other, &args)
                 .unwrap_or_else(|| Ty::Enum(other.to_string(), args)),
@@ -1131,19 +1217,15 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
     }
 }
 
-fn pid_marker_name_from_ty(ty: &Ty) -> String {
+fn builtin_pid_marker_from_ty(ty: &Ty) -> Result<Ty, String> {
     match ty {
-        Ty::Var(_) => "$Pid".to_string(),
-        Ty::Int => "Int".to_string(),
-        Ty::Float => "Float".to_string(),
-        Ty::Str => "String".to_string(),
-        Ty::Bool => "Boolean".to_string(),
-        Ty::Unit => "Unit".to_string(),
-        Ty::Error => "Error".to_string(),
-        Ty::Hole => "_".to_string(),
-        Ty::Pid(name) => name.clone(),
-        Ty::Enum(name, _) | Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
-        other => format!("{other:?}"),
+        Ty::Var(_) => Ok(ty.clone()),
+        Ty::Enum(name, args)
+            if args.is_empty() && matches!(name.as_str(), "OutHandler" | "InHandler") =>
+        {
+            Ok(Ty::ProcessMarker(format!("Global::{name}")))
+        }
+        _ => Err(format!("invalid builtin PID marker: {ty:?}")),
     }
 }
 
@@ -1179,6 +1261,12 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 
 type TraitImplKey = CanonicalTraitImplPatternKey;
 type TraitImplIndex = HashMap<u32, Vec<TraitImplKey>>;
+// Immutable definitions and declaration metadata are shared by snapshots.
+// Mutation must detach the affected value with Arc::make_mut.
+type SpecializableDefinitions = HashMap<u32, Arc<TypedNode>>;
+type TraitImplementations = HashMap<TraitImplKey, Arc<TraitImplInfo>>;
+type TraitDefinitions = HashMap<String, Arc<TraitInfo>>;
+type CallableSignatures = HashMap<u32, Arc<sindr::signature::CallableSignature<Ty>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CallableInstantiationKey {
@@ -1215,7 +1303,8 @@ enum CanonicalTyKey {
         update_source: Box<CanonicalTyKey>,
         update_focus: Box<CanonicalTyKey>,
     },
-    Pid(String),
+    Pid(Box<CanonicalTyKey>),
+    ProcessMarker(String),
     BuiltinFunc {
         name: String,
         params: Vec<CanonicalTyKey>,
@@ -1262,20 +1351,20 @@ struct PersistentCheckerState {
     consts: HashMap<u32, ConstMeta>,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
-    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     /// Canonical signature registry shared by ordinary and builtin callables.
-    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
+    callable_signatures: CallableSignatures,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
+    specializable_defs: SpecializableDefinitions,
     specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
+    traits: TraitDefinitions,
+    trait_impls: TraitImplementations,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     explicit_closure_parameters: HashMap<u32, Ty>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
@@ -1289,7 +1378,6 @@ impl PersistentCheckerState {
             consts: HashMap::new(),
             facet_bindings: HashMap::new(),
             lazy_capture_bindings: HashMap::new(),
-            error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
             callable_signatures: HashMap::new(),
             impl_method_uids: HashMap::new(),
@@ -1302,6 +1390,7 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
             constructor_witness_traits: HashMap::new(),
+            process_marker_tyvars: HashSet::new(),
             constructor_capabilities: HashMap::new(),
             explicit_closure_parameters: HashMap::new(),
             signature_aliases: HashMap::new(),
@@ -1315,7 +1404,6 @@ impl PersistentCheckerState {
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
-            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
@@ -1328,6 +1416,7 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            process_marker_tyvars: self.process_marker_tyvars.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             signature_aliases: self.signature_aliases.clone(),
@@ -1344,7 +1433,6 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             consts: checkpoint.consts,
             facet_bindings: checkpoint.facet_bindings,
             lazy_capture_bindings: checkpoint.lazy_capture_bindings,
-            error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
             callable_signatures: checkpoint.callable_signatures,
             impl_method_uids: checkpoint.impl_method_uids,
@@ -1357,6 +1445,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
             constructor_witness_traits: checkpoint.constructor_witness_traits,
+            process_marker_tyvars: checkpoint.process_marker_tyvars,
             constructor_capabilities: checkpoint.constructor_capabilities,
             explicit_closure_parameters: checkpoint.explicit_closure_parameters,
             signature_aliases: checkpoint.signature_aliases,
@@ -1373,22 +1462,22 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
     #[serde(default)]
-    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     #[serde(default)]
-    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
+    callable_signatures: CallableSignatures,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
+    specializable_defs: SpecializableDefinitions,
     #[serde(default)]
     specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
+    traits: TraitDefinitions,
+    trait_impls: TraitImplementations,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     #[serde(default)]
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     explicit_closure_parameters: HashMap<u32, Ty>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
@@ -1474,10 +1563,14 @@ impl ScarSession {
             }
         };
         let persisted_process_specs = checker.process_specs.clone();
+        let enum_definitions = checker.env.typed_enum_definitions();
+        let nominal_definitions = checker.env.typed_nominal_definitions();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
         Ok(TypedProgram {
             nodes,
+            enum_definitions,
+            nominal_definitions,
             process_specs,
             boot_plan: program.boot_plan,
         })
@@ -1499,11 +1592,15 @@ impl ScarSession {
         let nodes = checker.check_program(program.resolved)?;
         let persisted_process_specs = checker.process_specs.clone();
         let warnings = checker.warnings.take();
+        let enum_definitions = checker.env.typed_enum_definitions();
+        let nominal_definitions = checker.env.typed_nominal_definitions();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
         Ok(PhaseOutput::new(
             TypedProgram {
                 nodes,
+                enum_definitions,
+                nominal_definitions,
                 process_specs,
                 boot_plan: program.boot_plan,
             },
@@ -1658,8 +1755,11 @@ impl ScarSession {
             }
         }
         self.rekey_specializable_defs(specializable_rekeys);
-        for def in self.state.specializable_defs.values_mut() {
-            Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
+        fun_idx_rewrites.retain(|old, new| old != new);
+        if !fun_idx_rewrites.is_empty() {
+            for def in self.state.specializable_defs.values_mut() {
+                Self::rewrite_fun_indices_in_node(Arc::make_mut(def), &fun_idx_rewrites);
+            }
         }
         Self::rewrite_specialization_fun_indices(
             &mut self.state.specialization_fun_idxs,
@@ -1702,8 +1802,11 @@ impl ScarSession {
         }
 
         self.rekey_specializable_defs(specializable_rekeys);
-        for def in self.state.specializable_defs.values_mut() {
-            Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
+        fun_idx_rewrites.retain(|old, new| old != new);
+        if !fun_idx_rewrites.is_empty() {
+            for def in self.state.specializable_defs.values_mut() {
+                Self::rewrite_fun_indices_in_node(Arc::make_mut(def), &fun_idx_rewrites);
+            }
         }
         Self::rewrite_specialization_fun_indices(
             &mut self.state.specialization_fun_idxs,
@@ -1724,7 +1827,9 @@ impl ScarSession {
                     .specializable_defs
                     .remove(&old_fun_idx)
                     .map(|mut def| {
-                        Self::set_def_fun_idx(&mut def, new_fun_idx);
+                        if old_fun_idx != new_fun_idx {
+                            Self::set_def_fun_idx(Arc::make_mut(&mut def), new_fun_idx);
+                        }
                         (new_fun_idx, def)
                     })
             })
@@ -1769,7 +1874,8 @@ impl ScarSession {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
@@ -1829,7 +1935,7 @@ impl ScarSession {
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
-            | Ty::Pid(_)
+            | Ty::ProcessMarker(_)
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error => {}
@@ -1878,6 +1984,8 @@ impl ScarSession {
                 }
                 TypedFacetSegment::Field { .. }
                 | TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::ReadonlyBuiltin { .. }
+                | TypedFacetSegment::ErrorPayload { .. }
                 | TypedFacetSegment::Variant { .. } => {}
             }
         }
@@ -1920,18 +2028,58 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_ty(ty, rewrites);
             }
         }
-        match &mut node.node {
-            TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
-            TypedInner::ResultEffectFailure(target) => {
-                Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
-                Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
-            }
-            TypedInner::DeferredDoFailure(deferred) => {
-                Self::rewrite_fun_indices_in_ty(&mut deferred.carrier_ty, rewrites);
-                for error_ty in &mut deferred.propagated_error_tys {
+        if let TypedInner::SafeBind(_, _, projection, failure_target) = &mut node.node {
+            match projection {
+                SafeBindRhsProjection::CanonicalResultOnce {
+                    payload_ty,
+                    error_ty,
+                } => {
+                    Self::rewrite_fun_indices_in_ty(payload_ty, rewrites);
                     Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
                 }
+                SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
+                    Self::rewrite_fun_indices_in_ty(pattern_input_ty, rewrites);
+                }
             }
+            match failure_target {
+                SafeBindFailureTarget::EnclosingMonadFail(target)
+                | SafeBindFailureTarget::DoMonadFail(target) => {
+                    Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
+
+                    Self::rewrite_fun_indices_in_node(&mut target.call, rewrites);
+                }
+                SafeBindFailureTarget::DoAlternative { empty } => {
+                    Self::rewrite_fun_indices_in_node(empty, rewrites)
+                }
+                SafeBindFailureTarget::Deferred(deferred) => {
+                    Self::rewrite_fun_indices_in_ty(&mut deferred.carrier_ty, rewrites);
+                    for error_ty in &mut deferred.propagated_error_tys {
+                        Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                    }
+                }
+                SafeBindFailureTarget::TopLevel
+                | SafeBindFailureTarget::EnclosingMatchResultContext { .. } => {}
+            }
+        }
+        match &mut node.node {
+            TypedInner::ErrorConstruct {
+                message,
+                payload,
+                payload_fields,
+                ..
+            } => {
+                Self::rewrite_fun_indices_in_node(message, rewrites);
+                for value in payload {
+                    Self::rewrite_fun_indices_in_node(value, rewrites);
+                }
+                for (_, ty) in payload_fields {
+                    Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                }
+            }
+            TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil => {}
             TypedInner::SupervisorSpawn { init, .. } => {
                 Self::rewrite_fun_indices_in_node(init, rewrites);
             }
@@ -2020,9 +2168,10 @@ impl ScarSession {
                     }
                 }
                 match &mut control.failure_target {
-                    SafeBindFailureTarget::DoResultContext(target) => {
+                    SafeBindFailureTarget::DoMonadFail(target) => {
                         Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
-                        Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
+
+                        Self::rewrite_fun_indices_in_node(&mut target.call, rewrites);
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         Self::rewrite_fun_indices_in_node(empty, rewrites);
@@ -2033,9 +2182,10 @@ impl ScarSession {
                             Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
                         }
                     }
-                    SafeBindFailureTarget::EnclosingResultContext(target) => {
+                    SafeBindFailureTarget::EnclosingMonadFail(target) => {
                         Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
-                        Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
+
+                        Self::rewrite_fun_indices_in_node(&mut target.call, rewrites);
                     }
                     SafeBindFailureTarget::TopLevel
                     | SafeBindFailureTarget::EnclosingMatchResultContext { .. } => {}
@@ -2061,9 +2211,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(&mut arg.expr, rewrites);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                Self::rewrite_fun_indices_in_node(inner, rewrites)
-            }
+            TypedInner::EagerBoundary(inner) => Self::rewrite_fun_indices_in_node(inner, rewrites),
             TypedInner::If(cond, then_node, else_node) => {
                 Self::rewrite_fun_indices_in_node(cond, rewrites);
                 Self::rewrite_fun_indices_in_node(then_node, rewrites);
@@ -2083,10 +2231,6 @@ impl ScarSession {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
                 Self::rewrite_fun_indices_in_node(err, rewrites);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                Self::rewrite_fun_indices_in_node(value, rewrites);
-                Self::rewrite_fun_indices_in_node(handler, rewrites);
             }
             TypedInner::Match(scrutinee, arms) => {
                 Self::rewrite_fun_indices_in_node(scrutinee, rewrites);
@@ -2186,8 +2330,8 @@ impl ScarSession {
             | TypedInner::TraitDef(..)
             | TypedInner::TraitImplDef(..)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
-            | TypedInner::StructDef(_, _, _, _, _)
-            | TypedInner::RecordDef(_, _, _, _, _) => {}
+            | TypedInner::StructDef(_, _, _, _)
+            | TypedInner::RecordDef(_, _, _, _) => {}
         }
     }
 
@@ -2197,6 +2341,7 @@ impl ScarSession {
         }
         match pattern {
             TypedPattern::Located(_, _) => unreachable!("metadata handled before dispatch"),
+            TypedPattern::HashMap(ty, _) => Self::rewrite_fun_indices_in_ty(ty, rewrites),
             TypedPattern::Pin(ty, _, dispatch) => {
                 Self::rewrite_fun_indices_in_ty(ty, rewrites);
                 Self::rewrite_fun_indices_in_dispatch(dispatch, rewrites);
@@ -2232,6 +2377,12 @@ impl ScarSession {
         }
         match pattern {
             TypedPattern::Located(_, _) => unreachable!("metadata handled before dispatch"),
+            TypedPattern::HashMap(_, entries) => {
+                for entry in entries {
+                    Self::rewrite_fun_indices_in_node(&mut entry.key, rewrites);
+                    Self::rewrite_fun_indices_in_pattern(&mut entry.pattern, rewrites);
+                }
+            }
             TypedPattern::As(_, inner, _) => {
                 Self::rewrite_fun_indices_in_pattern(inner, rewrites);
             }
@@ -2270,12 +2421,19 @@ impl ScarSession {
         rewrites: &HashMap<u32, u32>,
     ) {
         match pattern {
+            TypedMatchPattern::HashMap(entries) => {
+                for entry in entries {
+                    Self::rewrite_fun_indices_in_node(&mut entry.key, rewrites);
+                    Self::rewrite_fun_indices_in_match_pattern(&mut entry.pattern, rewrites);
+                }
+            }
             TypedMatchPattern::As(inner, _) => {
                 Self::rewrite_fun_indices_in_match_pattern(inner, rewrites)
             }
             TypedMatchPattern::Or(items)
             | TypedMatchPattern::Tuple(items)
-            | TypedMatchPattern::Record(items) => {
+            | TypedMatchPattern::Record(items)
+            | TypedMatchPattern::ErrorPayload { fields: items, .. } => {
                 for item in items {
                     Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
                 }
@@ -2379,9 +2537,9 @@ mod specialization_state_tests {
         }
     }
 
-    fn specializable_def(fun_idx: u32, name: &str, uid: u32) -> TypedNode {
+    fn specializable_def(fun_idx: u32, name: &str, uid: u32) -> Arc<TypedNode> {
         let id = resolved_id(name, &format!("Global::{name}"), uid);
-        TypedNode {
+        Arc::new(TypedNode {
             ty: user_func_ty(fun_idx),
             span: test_span(),
             node: TypedInner::Def(
@@ -2403,6 +2561,13 @@ mod specialization_state_tests {
                 }),
                 spire::ast::Visibility::Public,
             ),
+        })
+    }
+
+    fn retained_fun_idx(definition: &TypedNode) -> Option<u32> {
+        match &definition.node {
+            TypedInner::Def(index, ..) => Some(*index),
+            _ => panic!("retained test definition must be an ordinary function"),
         }
     }
 
@@ -2458,13 +2623,36 @@ mod specialization_state_tests {
                     payload_ty: callable_ty.clone(),
                     error_ty: callable_ty.clone(),
                 },
-                failure_target: SafeBindFailureTarget::DoResultContext(Box::new(
-                    ResultPreserveTarget {
-                        carrier_ty: callable_ty.clone(),
-                        error_ty: callable_ty.clone(),
-                        construction: ResultPreserveConstruction::CanonicalResult,
+                failure_target: SafeBindFailureTarget::DoMonadFail(Box::new(MonadFailTarget {
+                    carrier_ty: callable_ty.clone(),
+                    error_id: sigil::resolved::ResolvedId {
+                        name: "error".into(),
+                        qualified_name: None,
+                        unique_id: 91999,
+                        compiler_generated: true,
+                        symbol_info: None,
+                        span: spire::ast::Span { start: 0, end: 0 },
                     },
-                )),
+                    call: Box::new(TypedNode {
+                        ty: Ty::Error,
+                        span: spire::ast::Span { start: 0, end: 0 },
+                        node: TypedInner::ConstructorCall(
+                            1,
+                            vec![TypedNode {
+                                ty: Ty::Error,
+                                span: spire::ast::Span { start: 0, end: 0 },
+                                node: TypedInner::Var(sigil::resolved::ResolvedId {
+                                    name: "error".into(),
+                                    qualified_name: None,
+                                    unique_id: 91999,
+                                    compiler_generated: true,
+                                    symbol_info: None,
+                                    span: spire::ast::Span { start: 0, end: 0 },
+                                }),
+                            }],
+                        ),
+                    }),
+                })),
                 continuation: Box::new(TypedNode {
                     ty: callable_ty,
                     span: test_span(),
@@ -2479,6 +2667,37 @@ mod specialization_state_tests {
                 },
             })),
         };
+
+        let TypedInner::DoSafeBind(control) = &node.node else {
+            unreachable!()
+        };
+        let mut failure_target = control.failure_target.clone();
+        if let SafeBindFailureTarget::DoMonadFail(target) = &mut failure_target {
+            target.call.ty = user_func_ty(40);
+        }
+        let mut ordinary = TypedNode {
+            ty: node.ty.clone(),
+            span: test_span(),
+            node: TypedInner::SafeBind(
+                control.pattern.clone(),
+                control.rhs.clone(),
+                control.projection.clone(),
+                failure_target,
+            ),
+        };
+        ScarSession::rewrite_fun_indices_in_node(&mut ordinary, &HashMap::from([(40, 140)]));
+        let TypedInner::SafeBind(_, _, projection, failure_target) = &ordinary.node else {
+            unreachable!()
+        };
+        assert!(matches!(
+            projection,
+            SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::UserFunc { fun_idx: 140, .. },
+                error_ty: Ty::UserFunc { fun_idx: 140, .. }
+            }
+        ));
+        let call = failure_target.monad_fail_call().expect("failure call");
+        assert!(matches!(call.ty, Ty::UserFunc { fun_idx: 140, .. }));
 
         ScarSession::rewrite_fun_indices_in_node(&mut node, &HashMap::from([(40, 140)]));
 
@@ -2508,11 +2727,9 @@ mod specialization_state_tests {
         ));
         assert!(matches!(
             &control.failure_target,
-            SafeBindFailureTarget::DoResultContext(target)
-                if matches!(target.as_ref(), ResultPreserveTarget {
-                carrier_ty: Ty::UserFunc { fun_idx: 140, .. },
-                error_ty: Ty::UserFunc { fun_idx: 140, .. },
-                construction: ResultPreserveConstruction::CanonicalResult,
+            SafeBindFailureTarget::DoMonadFail(target)
+                if matches!(target.as_ref(), MonadFailTarget {
+                carrier_ty: Ty::UserFunc { fun_idx: 140, .. }, ..
             })
         ));
     }
@@ -2786,13 +3003,120 @@ mod specialization_state_tests {
             });
         assert_eq!(helper_fun_idx, Some(512));
     }
+
+    #[test]
+    fn retained_definitions_isolate_reconciled_sessions_and_checkpoints() {
+        let mut original = session_with_cached_specialization(10, 40);
+        let mut definition = specializable_def(40, "helper", 10);
+        Arc::make_mut(&mut definition).span = Span {
+            start: 700,
+            end: 710,
+        };
+        original.state.specializable_defs.insert(40, definition);
+        let checkpoint = original.checkpoint();
+        let mut sibling = original.clone();
+        let saved_definition = &checkpoint.specializable_defs[&40];
+        assert!(Arc::ptr_eq(
+            saved_definition,
+            &sibling.state.specializable_defs[&40],
+        ));
+
+        // Reconciliation still updates the function floor and cache on a no-op,
+        // but must retain the shared definition when no index changes.
+        sibling.reconcile_visible_function_indices([(10, 40)]);
+        assert!(Arc::ptr_eq(
+            saved_definition,
+            &sibling.state.specializable_defs[&40],
+        ));
+        assert_eq!(sibling.state.env.next_fun_idx, 41);
+        assert_eq!(
+            sibling.state.specialization_fun_idxs[&specialization_key()],
+            40
+        );
+
+        sibling.reconcile_visible_function_indices([(10, 77)]);
+        assert!(!Arc::ptr_eq(
+            saved_definition,
+            &sibling.state.specializable_defs[&77],
+        ));
+        assert_eq!(retained_fun_idx(saved_definition), Some(40));
+        assert_eq!(
+            retained_fun_idx(&sibling.state.specializable_defs[&77]),
+            Some(77)
+        );
+        assert_eq!(
+            retained_fun_idx(&original.state.specializable_defs[&40]),
+            Some(40)
+        );
+        assert_eq!(
+            sibling.state.specializable_defs[&77].span,
+            saved_definition.span
+        );
+
+        let mut restored = ScarSession::new();
+        restored.rollback(checkpoint.clone());
+        assert!(Arc::ptr_eq(
+            saved_definition,
+            &restored.state.specializable_defs[&40],
+        ));
+        restored.reconcile_function_indices([("Global::helper", 90)]);
+        assert_eq!(retained_fun_idx(saved_definition), Some(40));
+        assert_eq!(
+            retained_fun_idx(&restored.state.specializable_defs[&91]),
+            Some(91)
+        );
+
+        sibling.rollback(checkpoint);
+        assert!(sibling.state.specializable_defs.contains_key(&40));
+        assert!(!sibling.state.specializable_defs.contains_key(&77));
+    }
+
+    #[test]
+    fn retained_definition_sharing_preserves_wire_and_checkpoint_restore() {
+        let mut original = session_with_cached_specialization(10, 40);
+        let definition = specializable_def(40, "helper", 10);
+        assert_eq!(
+            bincode::serialize(&definition).unwrap(),
+            bincode::serialize(definition.as_ref()).unwrap(),
+        );
+        original.state.specializable_defs.insert(40, definition);
+        let checkpoint = original.checkpoint();
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let decoded: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        let mut restored = ScarSession::new();
+        restored.rollback(decoded);
+        restored.reconcile_visible_function_indices([(10, 77)]);
+        assert_eq!(
+            retained_fun_idx(&checkpoint.specializable_defs[&40]),
+            Some(40)
+        );
+        assert_eq!(
+            retained_fun_idx(&restored.state.specializable_defs[&77]),
+            Some(77)
+        );
+    }
+}
+
+/// Declaration-only dependency discovery. A proof which requests unfinished
+/// metadata is rolled back and retried after those declarations are resolved.
+#[derive(Default)]
+struct ConstructorMappingResolution {
+    pending: HashSet<TraitImplKey>,
+    resolving: HashSet<TraitImplKey>,
+    requests: RefCell<Option<HashSet<TraitImplKey>>>,
 }
 
 struct Checker {
     active_lazy_capture: Option<ActiveLazyCapture>,
     env: TypeEnv,
     function_return_ty: Option<Ty>,
+    error_definition_uid: Option<u32>,
+    is_capture_closure: bool,
+    function_return_origin: Option<Span>,
     local_annotation_tyvars: HashMap<String, Ty>,
+    /// Active constructor probes retain errors produced while resolving source
+    /// type syntax. These failures do not depend on a carrier candidate.
+    type_syntax_probe_error: Option<Rc<RefCell<Option<TypeError>>>>,
     /// Declaration-owned generic variables are rigid while their body is
     /// checked. Inference variables may bind to them, but they never bind to a
     /// concrete type (or to a different signature generic) at the definition
@@ -2806,13 +3130,12 @@ struct Checker {
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     lazy_capture_bindings: HashMap<u32, LazyCaptureDiagnostic>,
-    error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
-    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
+    callable_signatures: CallableSignatures,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
+    specializable_defs: SpecializableDefinitions,
     /// Derived anew for each specialization pass; never persisted across sessions.
     direct_pattern_requirement_tyvars: HashMap<u32, Vec<u32>>,
     specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
@@ -2835,18 +3158,18 @@ struct Checker {
     explicit_closure_parameters: HashMap<u32, Ty>,
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
+    process_marker_tyvars: HashSet<u32>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
-    allow_error_function_params: bool,
     allow_private_facet_inspection: bool,
-    allow_error_observer_value_use: usize,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     facet_path_kind_decls: HashMap<String, Vec<String>>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
+    traits: TraitDefinitions,
+    trait_impls: TraitImplementations,
+    constructor_mapping_resolution: ConstructorMappingResolution,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     profiler: TypecheckProfiler,
@@ -2961,7 +3284,11 @@ impl Checker {
         Self {
             env: state.env,
             function_return_ty: None,
+            error_definition_uid: None,
+            is_capture_closure: false,
+            function_return_origin: None,
             local_annotation_tyvars: HashMap::new(),
+            type_syntax_probe_error: None,
             rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
@@ -2971,7 +3298,6 @@ impl Checker {
             facet_bindings: state.facet_bindings,
             lazy_capture_bindings: state.lazy_capture_bindings,
             active_lazy_capture: None,
-            error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
             callable_signatures: state.callable_signatures,
@@ -2987,18 +3313,18 @@ impl Checker {
             constructor_capabilities: state.constructor_capabilities,
             explicit_closure_parameters: state.explicit_closure_parameters,
             constructor_witness_traits: state.constructor_witness_traits,
+            process_marker_tyvars: state.process_marker_tyvars,
             signature_aliases: state.signature_aliases,
             pattern_binding_aliases: state.pattern_binding_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
-            allow_error_function_params: context.allow_error_function_params,
             allow_private_facet_inspection: context.allow_private_facet_inspection,
-            allow_error_observer_value_use: 0,
             seen_builtin_type_decls: HashMap::new(),
             facet_path_kind_decls: HashMap::new(),
             traits: state.traits,
             trait_impls: state.trait_impls,
+            constructor_mapping_resolution: ConstructorMappingResolution::default(),
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: state.trait_methods_by_qualified_name,
             profiler: TypecheckProfiler::new_from_env(),
@@ -3014,36 +3340,32 @@ impl Checker {
 
     fn spawn_child_checker(&self, env: TypeEnv) -> Self {
         let profile = self.profiler.start();
-        let mut state = self.persistent_state();
-        state.env = env;
+        let state = self.persistent_state_with_env(env);
         let mut checker = Checker::with_persistent_state(
             state,
             TypecheckContext {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
-                allow_error_function_params: self.allow_error_function_params,
                 allow_private_facet_inspection: self.allow_private_facet_inspection,
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
+        checker.error_definition_uid = self.error_definition_uid;
+        checker.is_capture_closure = self.is_capture_closure;
+        checker.function_return_origin = self.function_return_origin.clone();
         checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
+        checker.type_syntax_probe_error = self.type_syntax_probe_error.clone();
         checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
         checker.current_private_field_owner = self.current_private_field_owner.clone();
         checker.callable_context = self.callable_context;
         checker.closure_depth = self.closure_depth;
-        checker.facet_bindings = self.facet_bindings.clone();
         checker.safe_operator_results = self.safe_operator_results.clone();
-        checker.lazy_capture_bindings = self.lazy_capture_bindings.clone();
         checker.active_lazy_capture = self.active_lazy_capture.clone();
-        checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
         checker.active_capabilities = self.active_capabilities.clone();
-        checker.constructor_capabilities = self.constructor_capabilities.clone();
-        checker.explicit_closure_parameters = self.explicit_closure_parameters.clone();
-        checker.constructor_witness_traits = self.constructor_witness_traits.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -3439,6 +3761,14 @@ impl Checker {
             self.collect_unused_value_warnings_in_node(expr);
         }
         match &node.node {
+            TypedInner::ErrorConstruct {
+                message, payload, ..
+            } => {
+                self.collect_unused_value_warnings_in_node(message);
+                for value in payload {
+                    self.collect_unused_value_warnings_in_node(value);
+                }
+            }
             TypedInner::Block(stmts) => self.collect_unused_value_warnings_in_sequence(stmts),
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)
@@ -3488,9 +3818,7 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(&arg.expr);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                self.collect_unused_value_warnings_in_node(inner)
-            }
+            TypedInner::EagerBoundary(inner) => self.collect_unused_value_warnings_in_node(inner),
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(then_branch);
@@ -3503,10 +3831,6 @@ impl Checker {
             | TypedInner::Cause(cond, err) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(err);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                self.collect_unused_value_warnings_in_node(value);
-                self.collect_unused_value_warnings_in_node(handler);
             }
             TypedInner::Ensure(value, pred, err) => {
                 self.collect_unused_value_warnings_in_node(value);
@@ -3560,9 +3884,8 @@ impl Checker {
                 }
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
-            | TypedInner::ResultEffectFailure(_)
-            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -3572,8 +3895,8 @@ impl Checker {
             | TypedInner::TraitDef(..)
             | TypedInner::TraitImplDef(..)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
-            | TypedInner::StructDef(_, _, _, _, _)
-            | TypedInner::RecordDef(_, _, _, _, _) => {}
+            | TypedInner::StructDef(_, _, _, _)
+            | TypedInner::RecordDef(_, _, _, _) => {}
         }
     }
 
@@ -3603,7 +3926,8 @@ impl Checker {
             Ty::List(inner)
             | Ty::MatchResult(inner)
             | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
+            | Ty::Lazy(inner)
+            | Ty::Pid(inner) => self.ty_contains_process_init(&inner),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_process_init(item))
             }
@@ -3633,7 +3957,7 @@ impl Checker {
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
-            | Ty::Pid(_)
+            | Ty::ProcessMarker(_)
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error
@@ -3694,9 +4018,8 @@ impl Checker {
             Some(first)
                 if matches!(
                     self.resolve_ty(first),
-                    Ty::Pid(name)
-                        if Self::surface_name(&name)
-                            == Self::surface_name(&process.process_name)
+                    Ty::Pid(marker)
+                        if matches!(marker.as_ref(), Ty::ProcessMarker(name) if name == &process.process_name)
                 ) =>
             {
                 params.get(1)
@@ -4022,7 +4345,9 @@ impl Checker {
 
     fn ty_contains_handler_capability_pid(&self, ty: &Ty, slots: &HashMap<String, String>) -> bool {
         match self.resolve_ty(ty) {
-            Ty::Pid(name) => slots.values().any(|capability| capability == &name),
+            Ty::Pid(marker) => {
+                matches!(marker.as_ref(), Ty::ProcessMarker(name) if slots.values().any(|capability| Self::canonical_user_type_name(capability) == *name))
+            }
             Ty::Result(ok, err) => {
                 self.ty_contains_handler_capability_pid(&ok, slots)
                     || self.ty_contains_handler_capability_pid(&err, slots)
@@ -4065,7 +4390,8 @@ impl Checker {
             | Ty::Bool
             | Ty::Unit
             | Ty::Error
-            | Ty::Hole => false,
+            | Ty::Hole
+            | Ty::ProcessMarker(_) => false,
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.ty_contains_handler_capability_pid(&source, slots)
                     || self.ty_contains_handler_capability_pid(&focus, slots)
@@ -4079,6 +4405,7 @@ impl Checker {
         let profile = self.profiler.start();
         self.substitutions = child.substitutions.clone();
         self.tyvar_bounds = child.tyvar_bounds.clone();
+        self.process_marker_tyvars = child.process_marker_tyvars.clone();
         for (current, child_use) in self
             .active_capabilities
             .iter_mut()
@@ -4151,13 +4478,12 @@ impl Checker {
         variant
     }
 
-    fn persistent_state(&self) -> PersistentCheckerState {
+    fn persistent_state_with_env(&self, env: TypeEnv) -> PersistentCheckerState {
         PersistentCheckerState {
-            env: self.env.clone(),
+            env,
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
-            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
@@ -4170,6 +4496,7 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            process_marker_tyvars: self.process_marker_tyvars.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             signature_aliases: self.signature_aliases.clone(),
@@ -4183,7 +4510,6 @@ impl Checker {
             consts: self.consts,
             facet_bindings: self.facet_bindings,
             lazy_capture_bindings: self.lazy_capture_bindings,
-            error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
             callable_signatures: self.callable_signatures,
             impl_method_uids: self.impl_method_uids,
@@ -4196,6 +4522,7 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
             constructor_witness_traits: self.constructor_witness_traits,
+            process_marker_tyvars: self.process_marker_tyvars,
             constructor_capabilities: self.constructor_capabilities,
             explicit_closure_parameters: self.explicit_closure_parameters,
             signature_aliases: self.signature_aliases,
@@ -4469,6 +4796,12 @@ impl Checker {
                 self.validate_constructor_pattern(head, constructor_traits)?;
                 self.validate_constructor_pattern(tail, constructor_traits)?;
             }
+            ResolvedPattern::HashMap(_, entries) => {
+                for (key, child) in entries {
+                    self.validate_constructor_body_positions(key, constructor_traits)?;
+                    self.validate_constructor_pattern(child, constructor_traits)?;
+                }
+            }
             ResolvedPattern::Extractor(_, pre_args, items) => {
                 for arg in pre_args {
                     self.validate_constructor_body_positions(arg, constructor_traits)?;
@@ -4511,7 +4844,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         match node {
             Resolved::Bind(_, pattern, rhs)
-            | Resolved::SafeBind(_, pattern, rhs)
+            | Resolved::SafeBind(_, pattern, rhs, _)
             | Resolved::ApplyPattern(_, rhs, pattern) => {
                 self.validate_constructor_pattern(pattern, constructor_traits)?;
                 self.validate_constructor_body_positions(rhs, constructor_traits)?;
@@ -4591,13 +4924,6 @@ impl Checker {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
-            Resolved::AssertErrorKinds(_, _, value) => {
-                self.validate_constructor_body_positions(value, constructor_traits)?
-            }
-            Resolved::RecoverKind(_, a, _, c) => {
-                self.validate_constructor_body_positions(a, constructor_traits)?;
-                self.validate_constructor_body_positions(c, constructor_traits)?;
-            }
             Resolved::Ensure(_, a, b, c) => {
                 self.validate_constructor_body_positions(a, constructor_traits)?;
                 self.validate_constructor_body_positions(b, constructor_traits)?;
@@ -4667,6 +4993,7 @@ impl Checker {
             | Resolved::ReturnTypeArgumentApply(..)
             | Resolved::Lit(..)
             | Resolved::Var(..)
+            | Resolved::ErrorKind(..)
             | Resolved::ListNil(..)
             | Resolved::ProcessContextHandler(..)
             | Resolved::StructDef(..)
@@ -4854,8 +5181,6 @@ impl Checker {
                 predeclare_functions_dur = start.elapsed();
             }
 
-            self.validate_result_effect_annotations(&stmts)?;
-
             self.validate_process_state_contracts()?;
 
             let t = profile_enabled.then(Instant::now);
@@ -4964,7 +5289,10 @@ impl Checker {
                 .iter()
                 .find_map(|node| self.unresolved_executable_constructor_application(node))
             {
-                return match outcome {
+                return match outcome
+                    .into_checked()
+                    .map_err(|error| error.at_span(&span))?
+                {
                     ConstructorApplicationOutcome::Deferred { waiting_on } => {
                         let mut error =
                             self.ambiguous_constructor_result("constructor", "application", &span);
@@ -5070,8 +5398,6 @@ impl Checker {
             Resolved::Require(..) => "Require".to_string(),
             Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
-            Resolved::RecoverKind(..) => "RecoverKind".to_string(),
-            Resolved::AssertErrorKinds(..) => "AssertErrorKinds".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -5104,8 +5430,6 @@ impl Checker {
             Resolved::Require(..) => "Require",
             Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
-            Resolved::RecoverKind(..) => "RecoverKind",
-            Resolved::AssertErrorKinds(..) => "AssertErrorKinds",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

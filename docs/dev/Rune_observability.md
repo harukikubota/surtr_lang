@@ -119,6 +119,10 @@ TCO が効いた実行では `return_count` や `max_frame_depth` が非最適�
 
 process runtime snapshot の `worker_sets` は次の JSON 形状を持つ。
 
+process 一覧は本体の scheduler 状態と受付状態を分け、停止要求中かつ timer / future / I/O 待機中であることを表示する。停止要求中の本体数、未完了実行数、保持中の停止識別 entry 数は別の値として観測する。本体回収済みの個体を一覧や本体件数へ戻さず、診断用の無期限停止履歴を作らない。
+
+Workers の `member_pids` と `live_count` は停止要求中の所属個体も含み、停止完了時に減る。受付可能数ではない。通常 Stop の応答だけでは停止完了とみなさず、開始済み実行の終了と管理表の件数を合わせて回収を確認する。停止前の REPL checkpoint が本体の state / 継続を保持する場合は、active VM の本体件数と checkpoint 破棄後の物理解放を区別する。
+
 ```json
 {
   "id": 0,

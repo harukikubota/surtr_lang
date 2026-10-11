@@ -1,9 +1,9 @@
 use spire::ast::{Ast, AstPattern, AstTy, Span};
-use std::ops::{Deref, Range};
+use std::ops::Deref;
 
 const QUERY_OPERATORS: &[&str] = &[
     "|>=", "|*>", "|>", ">=>", ">*", ">>", "+", "-", "*", "&&", "||", "==", "!=", "<", "<=", ">",
-    ">=", "->", "/", "%", "++",
+    ">=", "->", "/", "%", "++", "=", "=?", "(,)", "|*|", "<|>",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -11,8 +11,6 @@ pub enum CommandQuery {
     Symbol(SymbolQuery),
     FacetRootDoc(SymbolQuery),
     FieldPath(SymbolQuery),
-    TypedCall(ParsedTypedCallQuery),
-    OperatorTarget(ParsedOperatorTargetQuery),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,61 +28,6 @@ impl Deref for SymbolQuery {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypedCallQuery {
-    pub callee: String,
-    pub args: Vec<QueryArg>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedTypedCallQuery {
-    pub query: TypedCallQuery,
-    pub callee_span: Span,
-    pub span: Span,
-}
-
-impl Deref for ParsedTypedCallQuery {
-    type Target = TypedCallQuery;
-
-    fn deref(&self) -> &Self::Target {
-        &self.query
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct OperatorTargetQuery {
-    pub operator: &'static str,
-    pub target: QueryArg,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedOperatorTargetQuery {
-    pub query: OperatorTargetQuery,
-    pub operator_span: Span,
-    pub span: Span,
-}
-
-impl Deref for ParsedOperatorTargetQuery {
-    type Target = OperatorTargetQuery;
-
-    fn deref(&self) -> &Self::Target {
-        &self.query
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct QueryArg {
-    pub source: String,
-    pub span: Span,
-    pub kind: QueryArgKind,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum QueryArgKind {
-    Binding(String),
-    TypeExpr(AstTy),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct CommandQueryParseError {
     reason: CommandQueryParseErrorReason,
     message: String,
@@ -96,14 +39,6 @@ pub enum CommandQueryParseErrorReason {
     Empty,
     UnsupportedSymbol,
     UnsupportedForm,
-    TypedCallMissingClosingParen,
-    TypedCallMissingCallee,
-    TypedCallInvalidCallee,
-    TypedCallEmptyArgument,
-    OperatorMissingTarget,
-    UnsupportedArgument,
-    UnterminatedArgumentList,
-    InvalidTypeArgument,
 }
 
 impl CommandQueryParseError {
@@ -147,21 +82,6 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
         base_char: input[..trim_start].chars().count(),
     };
 
-    if QUERY_OPERATORS.contains(&trimmed) || trimmed == "(,)" {
-        return Ok(CommandQuery::Symbol(SymbolQuery {
-            source: trimmed.to_string(),
-            span: ctx.full_span(),
-        }));
-    }
-
-    if let Some(operator_query) = parse_operator_target_query(&ctx)? {
-        return Ok(CommandQuery::OperatorTarget(operator_query));
-    }
-
-    if let Some(call_query) = parse_typed_call_query(&ctx)? {
-        return Ok(CommandQuery::TypedCall(call_query));
-    }
-
     if let Some(type_ref) = trimmed.strip_prefix("Facet.") {
         if is_type_ref(type_ref) {
             return Ok(CommandQuery::FacetRootDoc(SymbolQuery {
@@ -178,23 +98,25 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
         }));
     }
 
-    if trimmed.split_whitespace().count() == 1 {
-        if trimmed.starts_with('$') || trimmed.starts_with('&') || trimmed == "_1" {
-            return Err(CommandQueryParseError::new(
-                CommandQueryParseErrorReason::UnsupportedSymbol,
-                format!("Unsupported command query symbol `{trimmed}`."),
-                ctx.full_span(),
-            ));
-        }
+    if is_symbol_ref(trimmed) {
         return Ok(CommandQuery::Symbol(SymbolQuery {
             source: trimmed.to_string(),
             span: ctx.full_span(),
         }));
     }
 
+    let (reason, message) = if trimmed.chars().any(char::is_whitespace) {
+        (CommandQueryParseErrorReason::UnsupportedForm,
+         "Unsupported command query form. Use a name or a public symbol; arguments are not supported.".to_string())
+    } else {
+        (
+            CommandQueryParseErrorReason::UnsupportedSymbol,
+            format!("Unsupported command query symbol `{trimmed}`."),
+        )
+    };
     Err(CommandQueryParseError::new(
-        CommandQueryParseErrorReason::UnsupportedForm,
-        "Unsupported command query form. Use a symbol, typed call, or operator target.",
+        reason,
+        message,
         ctx.full_span(),
     ))
 }
@@ -216,247 +138,6 @@ impl ParseContext<'_> {
             end: self.base_char + self.source[..end].chars().count(),
         }
     }
-
-    fn point_span_for_local_byte(&self, byte: usize) -> Span {
-        let pos = self.base_char + self.source[..byte].chars().count();
-        Span {
-            start: pos,
-            end: pos,
-        }
-    }
-}
-
-fn parse_typed_call_query(
-    ctx: &ParseContext<'_>,
-) -> Result<Option<ParsedTypedCallQuery>, CommandQueryParseError> {
-    parse_typed_call_query_inner(ctx, 0..ctx.source.len())
-}
-
-fn parse_typed_call_query_inner(
-    ctx: &ParseContext<'_>,
-    range: Range<usize>,
-) -> Result<Option<ParsedTypedCallQuery>, CommandQueryParseError> {
-    let input = &ctx.source[range.clone()];
-    let Some(rel_open) = input.find('(') else {
-        return Ok(None);
-    };
-    let open = range.start + rel_open;
-    if !input.ends_with(')') {
-        return Err(CommandQueryParseError::new(
-            CommandQueryParseErrorReason::TypedCallMissingClosingParen,
-            "Invalid typed call query: missing closing `)`.",
-            ctx.span_for_local_bytes(open, range.end),
-        ));
-    }
-    let callee_range = trim_byte_range(ctx.source, range.start..open);
-    let callee = &ctx.source[callee_range.clone()];
-    if callee.is_empty() || callee.chars().any(char::is_whitespace) {
-        let span = if callee_range.is_empty() {
-            ctx.point_span_for_local_byte(open)
-        } else {
-            ctx.span_for_local_bytes(callee_range.start, callee_range.end)
-        };
-        return Err(CommandQueryParseError::new(
-            CommandQueryParseErrorReason::TypedCallMissingCallee,
-            "Invalid typed call query: missing callee.",
-            span,
-        ));
-    }
-    if !is_callable_ref(callee) {
-        return Err(CommandQueryParseError::new(
-            CommandQueryParseErrorReason::TypedCallInvalidCallee,
-            format!("Invalid typed call query callee `{callee}`."),
-            ctx.span_for_local_bytes(callee_range.start, callee_range.end),
-        ));
-    }
-
-    let close = range.end - 1;
-    let args = split_top_level_commas(ctx, open + 1, close)?;
-    let mut parsed_args = Vec::with_capacity(args.len());
-    for arg_range in args {
-        let trimmed_range = trim_byte_range(ctx.source, arg_range.clone());
-        if trimmed_range.is_empty() {
-            return Err(CommandQueryParseError::new(
-                CommandQueryParseErrorReason::TypedCallEmptyArgument,
-                "Invalid typed call query: empty argument.",
-                empty_argument_span(ctx, &arg_range, close),
-            ));
-        }
-        parsed_args.push(parse_query_arg(ctx, trimmed_range)?);
-    }
-    Ok(Some(ParsedTypedCallQuery {
-        query: TypedCallQuery {
-            callee: callee.to_string(),
-            args: parsed_args,
-        },
-        callee_span: ctx.span_for_local_bytes(callee_range.start, callee_range.end),
-        span: ctx.span_for_local_bytes(range.start, range.end),
-    }))
-}
-
-fn parse_operator_target_query(
-    ctx: &ParseContext<'_>,
-) -> Result<Option<ParsedOperatorTargetQuery>, CommandQueryParseError> {
-    let Some((operator, target_range, operator_range)) = split_operator_target_query(ctx.source)
-    else {
-        return Ok(None);
-    };
-    let target = trim_byte_range(ctx.source, target_range.clone());
-    if target.is_empty() {
-        return Err(CommandQueryParseError::new(
-            CommandQueryParseErrorReason::OperatorMissingTarget,
-            format!("Invalid operator target query: `{operator}` requires a target."),
-            ctx.point_span_for_local_byte(operator_range.end),
-        ));
-    }
-    let target = parse_query_arg(ctx, target)?;
-    Ok(Some(ParsedOperatorTargetQuery {
-        query: OperatorTargetQuery { operator, target },
-        operator_span: ctx.span_for_local_bytes(operator_range.start, operator_range.end),
-        span: ctx.full_span(),
-    }))
-}
-
-fn parse_query_arg(
-    ctx: &ParseContext<'_>,
-    range: Range<usize>,
-) -> Result<QueryArg, CommandQueryParseError> {
-    let input = &ctx.source[range.clone()];
-    let kind = if input.starts_with('$') || input.starts_with('&') || input == "_1" {
-        return Err(CommandQueryParseError::new(
-            CommandQueryParseErrorReason::UnsupportedArgument,
-            format!("Unsupported command query argument `{input}`."),
-            ctx.span_for_local_bytes(range.start, range.end),
-        ));
-    } else if looks_like_type_expr(input) {
-        if let Some(ty) = parse_user_query_type_loose_in_span(ctx, input, &range)? {
-            QueryArgKind::TypeExpr(ty)
-        } else {
-            return Err(CommandQueryParseError::new(
-                CommandQueryParseErrorReason::UnsupportedArgument,
-                format!("Unsupported command query argument `{input}`."),
-                ctx.span_for_local_bytes(range.start, range.end),
-            ));
-        }
-    } else if is_simple_name(input) {
-        QueryArgKind::Binding(input.to_string())
-    } else {
-        return Err(CommandQueryParseError::new(
-            CommandQueryParseErrorReason::UnsupportedArgument,
-            format!("Unsupported command query argument `{input}`."),
-            ctx.span_for_local_bytes(range.start, range.end),
-        ));
-    };
-
-    Ok(QueryArg {
-        source: input.to_string(),
-        span: ctx.span_for_local_bytes(range.start, range.end),
-        kind,
-    })
-}
-
-fn split_top_level_commas(
-    ctx: &ParseContext<'_>,
-    start: usize,
-    end: usize,
-) -> Result<Vec<Range<usize>>, CommandQueryParseError> {
-    let mut parts = Vec::new();
-    let mut part_start = start;
-    let mut paren_depth = 0usize;
-    let mut angle_depth = 0usize;
-    let mut paren_stack = Vec::new();
-    let mut angle_stack = Vec::new();
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut string_start = None;
-    let input = ctx.source;
-
-    for (rel_idx, ch) in input[start..end].char_indices() {
-        let idx = start + rel_idx;
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-                string_start = None;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => {
-                in_string = true;
-                string_start = Some(idx);
-            }
-            '(' => {
-                paren_depth += 1;
-                paren_stack.push(idx);
-            }
-            ')' => {
-                paren_depth = paren_depth.saturating_sub(1);
-                let _ = paren_stack.pop();
-            }
-            '<' => {
-                angle_depth += 1;
-                angle_stack.push(idx);
-            }
-            '>' => {
-                angle_depth = angle_depth.saturating_sub(1);
-                let _ = angle_stack.pop();
-            }
-            ',' if paren_depth == 0 && angle_depth == 0 => {
-                parts.push(part_start..idx);
-                part_start = idx + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-
-    if paren_depth != 0 || angle_depth != 0 || in_string {
-        let error_start = string_start
-            .or_else(|| paren_stack.last().copied())
-            .or_else(|| angle_stack.last().copied())
-            .unwrap_or(part_start);
-        return Err(CommandQueryParseError::new(
-            CommandQueryParseErrorReason::UnterminatedArgumentList,
-            "Invalid typed call query: unterminated argument list.",
-            ctx.span_for_local_bytes(error_start, end),
-        ));
-    }
-
-    if part_start != end || start != end {
-        parts.push(part_start..end);
-    }
-    Ok(parts)
-}
-
-fn split_operator_target_query(input: &str) -> Option<(&'static str, Range<usize>, Range<usize>)> {
-    let (operator, _rest) = input.split_once(char::is_whitespace)?;
-    let operator = QUERY_OPERATORS
-        .iter()
-        .find(|candidate| **candidate == operator)?;
-    let operator_end = operator.len();
-    let target_start = input[operator_end..]
-        .char_indices()
-        .find(|(_, ch)| !ch.is_whitespace())
-        .map(|(idx, _)| operator_end + idx)?;
-    Some((*operator, target_start..input.len(), 0..operator_end))
-}
-
-fn parse_user_query_type_loose_in_span(
-    ctx: &ParseContext<'_>,
-    input: &str,
-    range: &Range<usize>,
-) -> Result<Option<AstTy>, CommandQueryParseError> {
-    parse_user_query_type_loose(input).map_err(|message| {
-        CommandQueryParseError::new(
-            CommandQueryParseErrorReason::InvalidTypeArgument,
-            message,
-            ctx.span_for_local_bytes(range.start, range.end),
-        )
-    })
 }
 
 fn trimmed_byte_bounds(input: &str) -> Option<(usize, usize)> {
@@ -471,37 +152,6 @@ fn trimmed_byte_bounds(input: &str) -> Option<(usize, usize)> {
         .map(|(idx, ch)| idx + ch.len_utf8())
         .unwrap_or(start);
     Some((start, end))
-}
-
-fn trim_byte_range(input: &str, range: Range<usize>) -> Range<usize> {
-    let slice = &input[range.clone()];
-    let start = slice
-        .char_indices()
-        .find(|(_, ch)| !ch.is_whitespace())
-        .map(|(idx, _)| range.start + idx)
-        .unwrap_or(range.end);
-    let end = slice
-        .char_indices()
-        .rev()
-        .find(|(_, ch)| !ch.is_whitespace())
-        .map(|(idx, ch)| range.start + idx + ch.len_utf8())
-        .unwrap_or(start);
-    start..end
-}
-
-fn empty_argument_span(
-    ctx: &ParseContext<'_>,
-    arg_range: &Range<usize>,
-    close_paren: usize,
-) -> Span {
-    let point = if arg_range.start == arg_range.end
-        || trim_byte_range(ctx.source, arg_range.clone()).is_empty()
-    {
-        close_paren
-    } else {
-        arg_range.start
-    };
-    ctx.point_span_for_local_byte(point)
 }
 
 fn parse_query_type(input: &str) -> Option<AstTy> {
@@ -521,57 +171,8 @@ pub fn parse_signature_type(input: &str) -> Option<AstTy> {
     parse_query_type(input)
 }
 
-pub fn parse_user_query_type_loose(input: &str) -> Result<Option<AstTy>, String> {
-    if contains_contextual_type_marker(input) {
-        return Err(
-            "Command queries require a concrete type; `Self` and `Type` are contextual markers."
-                .to_string(),
-        );
-    }
-    let Some(ty) = parse_query_type(input) else {
-        return Ok(None);
-    };
-    validate_user_query_type(&ty)?;
-    Ok(Some(ty))
-}
-
-fn contains_contextual_type_marker(input: &str) -> bool {
-    input
-        .split(|ch: char| !(ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()))
-        .any(|segment| matches!(segment, "Self" | "Type"))
-}
-
 pub fn parse_binding_query_type(input: &str) -> Option<AstTy> {
     parse_query_type(input).map(|ty| normalize_binding_query_type(&ty))
-}
-
-fn validate_user_query_type(ty: &AstTy) -> Result<(), String> {
-    match ty {
-        AstTy::Named(_, name) if name.starts_with('$') => Err(
-            "Command queries do not accept generic type variables; use a concrete type."
-                .to_string(),
-        ),
-        AstTy::ImplTrait(_, _) => Err(
-            "Command queries require a concrete type; `impl Trait` is not supported."
-                .to_string(),
-        ),
-        AstTy::Generic(_, name, args) if matches!(name.as_str(), "Result" | "MatchResult") && args.len() == 2 => Err(
-            format!("Typed query `{name}` should be written as `{name}<T>`; do not specify the `Error` parameter."),
-        ),
-        AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
-            for arg in args {
-                validate_user_query_type(arg)?;
-            }
-            Ok(())
-        }
-        AstTy::Func(_, params, ret) => {
-            for param in params {
-                validate_user_query_type(param)?;
-            }
-            validate_user_query_type(ret)
-        }
-        _ => Ok(()),
-    }
 }
 
 fn normalize_binding_query_type(ty: &AstTy) -> AstTy {
@@ -693,20 +294,21 @@ pub fn format_query_ty(ty: &AstTy) -> String {
     }
 }
 
-pub fn ast_ty_from_query_arg(arg: &QueryArg) -> Option<AstTy> {
-    match &arg.kind {
-        QueryArgKind::TypeExpr(ty) => Some(ty.clone()),
-        QueryArgKind::Binding(_) => None,
-    }
-}
-
-fn is_simple_name(input: &str) -> bool {
+fn is_lexical_identifier(input: &str) -> bool {
     let mut chars = input.chars();
     let Some(first) = chars.next() else {
         return false;
     };
     (first == '_' || first.is_ascii_alphabetic())
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn is_simple_name(input: &str) -> bool {
+    is_lexical_identifier(input)
+        && input != "_"
+        && !input.strip_prefix('_').is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|ch| ch.is_ascii_digit())
+        })
 }
 
 fn is_type_ref(input: &str) -> bool {
@@ -723,61 +325,25 @@ fn is_field_path_ref(input: &str) -> bool {
     let Some((root, segments)) = input.split_once('.') else {
         return false;
     };
-    is_type_ref(root)
+    root.split("::").all(is_simple_name)
         && segments
             .split('.')
-            .all(|segment| !segment.is_empty() && is_simple_name(segment))
+            .all(|segment| !segment.is_empty() && is_lexical_identifier(segment))
 }
 
-fn looks_like_type_expr(input: &str) -> bool {
-    input.starts_with('(')
-        || input.starts_with("impl ")
-        || input.contains('<')
-        || input.contains("->")
-        || input
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_uppercase())
-}
-
-fn is_callable_ref(input: &str) -> bool {
-    if input.is_empty() || input.chars().any(char::is_whitespace) {
-        return false;
-    }
+fn is_symbol_ref(input: &str) -> bool {
     let mut segments = input.rsplit("::");
-    let member = segments.next().expect("nonempty callable reference");
-    let valid_member = match member.strip_suffix('?') {
-        Some(name) => is_simple_name(name),
-        None => is_callable_segment(member),
-    };
-    valid_member && segments.all(is_callable_segment)
-}
-
-fn is_callable_segment(segment: &str) -> bool {
-    if let Some(head) = segment.strip_suffix('!') {
-        return is_simple_name(head);
-    }
-    is_simple_name(segment)
+    let member = segments.next().expect("split yields at least one segment");
+    let valid_member = QUERY_OPERATORS.contains(&member)
+        || member
+            .strip_suffix(['?', '!'])
+            .map_or_else(|| is_simple_name(member), is_simple_name);
+    valid_member && segments.all(is_simple_name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn boolean_function_suffix_typed_queries_keep_binding_names_plain() {
-        for source in ["predicate?(Int)", "Predicates::predicate?(value)"] {
-            let query = parse_command_query(source).expect("suffix callable query");
-            assert!(matches!(query, CommandQuery::TypedCall(_)));
-        }
-        for source in [
-            "Predicates?::predicate(Int)",
-            "predicate??(Int)",
-            "predicate?(value?)",
-        ] {
-            assert!(parse_command_query(source).is_err(), "{source}");
-        }
-    }
 
     #[test]
     fn completion_signature_normalizes_nested_carriers_without_changing_declarations() {
@@ -790,186 +356,6 @@ mod tests {
         ] {
             assert_eq!(format_completion_signature(source), expected);
         }
-        for source in [
-            "Result<Int, Error>",
-            "ExtractorClosure<(Int -> MatchResult<Int, Error>)>",
-        ] {
-            assert!(parse_user_query_type_loose(source).is_err(), "{source}");
-        }
-    }
-
-    #[test]
-    fn parse_typed_call_query() {
-        let query = parse_command_query("compare(Int, Int)").expect("query should parse");
-        assert!(matches!(
-            query,
-            CommandQuery::TypedCall(ParsedTypedCallQuery {
-                query: TypedCallQuery { callee, args },
-                ..
-            })
-            if callee == "compare"
-                && matches!(args[0].kind, QueryArgKind::TypeExpr(_))
-                && matches!(args[1].kind, QueryArgKind::TypeExpr(_))
-        ));
-    }
-
-    #[test]
-    fn parse_typed_call_query_with_binding_identity_args() {
-        let query = parse_command_query("compare(left, right)").expect("query should parse");
-        assert!(matches!(
-            query,
-            CommandQuery::TypedCall(ParsedTypedCallQuery {
-                query: TypedCallQuery { callee, args },
-                ..
-            })
-            if callee == "compare"
-                && matches!(args[0].kind, QueryArgKind::Binding(ref name) if name == "left")
-                && matches!(args[1].kind, QueryArgKind::Binding(ref name) if name == "right")
-        ));
-    }
-
-    #[test]
-    fn parse_typed_call_query_with_deconstruct_callee() {
-        let query = parse_command_query("User!()").expect("query should parse");
-        assert!(matches!(
-            query,
-            CommandQuery::TypedCall(ParsedTypedCallQuery {
-                query: TypedCallQuery { callee, args },
-                ..
-            })
-            if callee == "User!" && args.is_empty()
-        ));
-    }
-
-    #[test]
-    fn safe_arithmetic_operator_queries_parse_as_trait_queries() {
-        for operator in ["/", "%"] {
-            assert!(parse_command_query(operator).is_ok(), "{operator}");
-            let query =
-                parse_command_query(&format!("{operator} Int")).expect("operator target query");
-            assert!(
-                matches!(query, CommandQuery::OperatorTarget(ParsedOperatorTargetQuery { ref query, .. }) if query.operator == operator)
-            );
-        }
-    }
-
-    #[test]
-    fn parse_operator_target_query_with_type_target() {
-        let query = parse_command_query("|*> Option").expect("query should parse");
-        assert!(matches!(
-            query,
-            CommandQuery::OperatorTarget(ParsedOperatorTargetQuery {
-                query: OperatorTargetQuery {
-                    operator: "|*>",
-                    target: QueryArg {
-                        kind: QueryArgKind::TypeExpr(_),
-                        ..
-                    },
-                    ..
-                },
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn reject_empty_argument() {
-        let err = parse_command_query("compare(Int, )").expect_err("query should fail");
-        assert_eq!(err.message(), "Invalid typed call query: empty argument.");
-    }
-
-    #[test]
-    fn reject_missing_closing_paren() {
-        let err = parse_command_query("compare(Int, Int").expect_err("query should fail");
-        assert_eq!(
-            err.message(),
-            "Invalid typed call query: missing closing `)`."
-        );
-    }
-
-    #[test]
-    fn reject_literal_typed_query_args() {
-        let err = parse_command_query("compare(1, 2)").expect_err("query should fail");
-        assert!(
-            err.message()
-                .contains("Unsupported command query argument `1`"),
-            "{}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn reject_expression_typed_query_args() {
-        let err = parse_command_query("compare(left + 1, right)").expect_err("query should fail");
-        assert!(
-            err.message()
-                .contains("Unsupported command query argument `left + 1`"),
-            "{}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn reject_generic_type_variables() {
-        let err = parse_command_query("compare(List<$T>, value)").expect_err("query should fail");
-        assert!(
-            err.message().contains("generic type variables"),
-            "{}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn reject_contextual_markers_as_concrete_query_types() {
-        for marker in ["Self", "Type", "List<Self>", "(Type -> Int)"] {
-            let source = format!("id({marker})");
-            let err =
-                parse_command_query(&source).expect_err("context marker must not be concrete");
-            assert!(err.message().contains("concrete type"), "{source}: {err:?}");
-        }
-    }
-
-    #[test]
-    fn reject_impl_trait_query_types() {
-        let err = parse_command_query("show(impl Show)").expect_err("query should fail");
-        assert!(
-            err.message()
-                .contains("Unsupported command query argument `impl Show`"),
-            "{}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn reject_forced_binding_query_args() {
-        let err = parse_command_query("compare($left, Int)").expect_err("query should fail");
-        assert!(err.message().contains("`$left`"), "{}", err.message());
-    }
-
-    #[test]
-    fn reject_forced_binding_query_symbol() {
-        let err = parse_command_query("$left").expect_err("query should fail");
-        assert_eq!(err.message(), "Unsupported command query symbol `$left`.");
-    }
-
-    #[test]
-    fn reject_legacy_operator_query_shapes() {
-        let err = parse_command_query("ret |>= up").expect_err("query should fail");
-        assert!(
-            err.message().contains("Unsupported command query form"),
-            "{}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn reject_capture_query_shapes() {
-        let err = parse_command_query("map(&add(Int, &1))").expect_err("query should fail");
-        assert!(
-            err.message().contains("`&add(Int, &1)`"),
-            "{}",
-            err.message()
-        );
     }
 
     #[test]
@@ -1000,61 +386,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_typed_call_query_tracks_argument_spans_in_char_offsets() {
-        let query = parse_command_query("compare(x, Int)").expect("query should parse");
-        assert!(matches!(
-            query,
-            CommandQuery::TypedCall(ParsedTypedCallQuery {
-                query: TypedCallQuery {
-                    ref callee,
-                    ref args,
-                },
-                callee_span,
-                span,
-            })
-            if callee == "compare"
-                && callee_span == Span { start: 0, end: 7 }
-                && span == Span { start: 0, end: 15 }
-                && args.len() == 2
-                && args[0].span == Span { start: 8, end: 9 }
-                && args[1].span == Span { start: 11, end: 14 }
-        ));
-    }
-
-    #[test]
-    fn parse_operator_target_query_tracks_operator_span_in_char_offsets() {
-        let query = parse_command_query("|*> Option").expect("query should parse");
-        assert!(matches!(
-            query,
-            CommandQuery::OperatorTarget(ParsedOperatorTargetQuery {
-                query: OperatorTargetQuery {
-                    operator: "|*>",
-                    ref target,
-                    ..
-                },
-                operator_span,
-                span,
-            })
-            if operator_span == Span { start: 0, end: 3 }
-                && span == Span { start: 0, end: 10 }
-                && target.span == Span { start: 4, end: 10 }
-        ));
-    }
-
-    #[test]
-    fn missing_closing_paren_reports_precise_span() {
-        let err = parse_command_query("compare(x, Int").expect_err("query should fail");
-        assert_eq!(
-            err.message(),
-            "Invalid typed call query: missing closing `)`."
-        );
-        assert_eq!(err.span(), Span { start: 7, end: 14 });
-    }
-
-    #[test]
-    fn empty_argument_reports_precise_span() {
-        let err = parse_command_query("compare(Int, )").expect_err("query should fail");
-        assert_eq!(err.message(), "Invalid typed call query: empty argument.");
-        assert_eq!(err.span(), Span { start: 13, end: 13 });
+    fn signature_type_helpers_remain_independent_from_command_query_syntax() {
+        let signature = parse_signature_type("Result<Int, Error>").expect("declaration type");
+        assert_eq!(format_query_ty(&signature), "Result<Int, Error>");
+        let binding = parse_binding_query_type("Result<Int, Error>").expect("binding type");
+        assert_eq!(format_query_ty(&binding), "Result<Int>");
+        assert!(parse_command_query("Result<Int, Error>").is_err());
     }
 }

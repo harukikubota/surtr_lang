@@ -1,0 +1,18 @@
+defrecord User(name: String, age: Int)
+defrecord Pair(first: Int, second: Int)
+defrecord Wrapper(user: User, marker: Int)
+def make_user(name: String) -> User { User(age: 20, name) }
+def name_value() -> String { print("name"); "Ada" }
+def age_value() -> Int { print("age"); 37 }
+
+name = "Ada"
+age = 37
+first = 1
+second = 2
+print(inspect(User(name: "Ada", age)))
+print(inspect(User(age: 37, name)))
+print(inspect(User(name, age)))
+print(inspect(Pair(second, first)))
+print(inspect(Wrapper(User(age: 37, name), 9)))
+print(inspect(User(age: age_value(), name: name_value())))
+print(inspect(make_user("Lin")))

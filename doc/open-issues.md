@@ -81,9 +81,12 @@
 ### OI-027 Cleanup handoff backlog after 2026-05-16 batches
 
 - 背景:
-  - 2026-05-16 の cleanup batches で CLI validation、std JSON docs、parser policy、source map、VM verifier の一部は処理済み。
   - ただし、process runtime / REPL 深部は今回の対象外とし、さらに大きめの panic-safe 化は個別設計が必要なため残す。
   - この issue は実装方針が固まった機能仕様ではなく、次回 cleanup の入力台帳として扱う。
+- 2026-10-10 の対応範囲:
+  - [Process Runtime の停止契約](../docs/dev/ProcessRuntime_spec.md#3102-stop受付拒否停止完了) に基づき、通常 Stop の受付閉鎖、開始済み wrapper / ReplyLater の終了追跡、本体と不要な参照の回収、旧 PID への ProcessStopped、Weak 停止識別表の管理を実装した。caller timeout は callee を取り消さず、一度だけ結果を配送する。
+  - state 読取・handler・後処理の段階を Handling / Postprocessing / Callback に分け、store / Stop / ReplyLater は生成 wrapper の後処理段階だけに制限する。停止前・停止要求中 checkpoint の復元と ID 非再利用、Workers / supervisor の完了時整理も対象とした。最終検証結果は[実行時の継続調査書](runtime_audit_followup_20261010.md#2026-10-10-停止回収修正の最終検証)に記録した。
+  - この対応は process cleanup 全体、Lazy 初期化、未開始 FIFO、fairness、生成 call / capture 一般化、一般の restart / shutdown driver の完了を意味しない。
 - 残タスク:
   - Spire:
     - process-owner pattern rewriting を `Annotated` / `Pin` / `Or` / `As` へ拡張する。これは process surface に触れるため後回し。
@@ -94,9 +97,8 @@
   - Forge:
     - top-level failure path、error-result construction、variant payload extraction、result-error transform の重複 emission helper 化を検討する。
   - Eldr:
-    - process runtime の残 cleanup は、process surface / VM scheduling への影響範囲を分けてから扱う。
+    - 停止・終了・回収と caller timeout の改修を除く process runtime の残 cleanup は、process surface / VM scheduling への影響範囲を分けてから扱う。Lazy / FIFO / fairness は OI-030 に残す。
   - Xldr / REPL:
-    - stage parser worker spawn の `expect` を diagnostic 化する。
     - `:save .eldr` / directory-ish names の validation、`:help` topic coverage、`:history` header/row format、command query pipe duplicate placeholder validationを整理する。
 - 受け入れ条件:
   - process / REPL 領域は仕様・表示・integration の影響範囲を分けてから着手する。
@@ -129,49 +131,6 @@
 
 ### OI-029 `surtr-lsp` 実装ドラフト
 
-- 背景:
-  - editor 用 LSP、REPL semantic service、REPL 補完の LSP 共有化は大きな未解決領域として残っている。
-  - `doc/lsp_analysis_context_spec_v0.md` では、active file を単体ではなく script / project / stdlib の `AnalysisContext` で解析する方針を整理した。
-  - `doc/project_runner_pseudo_di_draft.md` では、project runner の profile selection、pseudo DI、operational script、REPL preload、LSP cache key を同じ runner context へ寄せる方針を整理した。
-  - `docs/dev/Surtr_LSP_spec.md` では、`surtr-lsp` を protocol adapter とし、REPL と LSP が shared semantic service を直接使う実装方針を開発者向け正本として固定した。
-  - `crates/surtr-analysis` を追加し、`LineIndex`、source-kind aware parse entry、`AnalysisContextRequest`、deterministic `AnalysisCacheKey`、semantic completion DTO の初期実装を置いた。
-  - `resolve_context`、`RunnerContext`、context / runner diagnostics DTO、`AnalysisService` の最小 snapshot / diagnostics / completion API を追加し、LSP adapter が active file 単体ではなく context 経由で呼べる境界を作った。
-  - 正規化済み runner 入力から literal / glob path を deterministic に展開して `RunnerContext` へ変換する `resolve_project_runner` を追加した。
-  - `project.srt` の AST から現行 `Project::entrypoint(..., "profile", {|c| ...})` / `Config::add_path(...)` surface を抽出し、`resolve_context` から `RunnerContext` へ接続する最小経路を追加した。
-  - active file が project profile の `Config::add_path` literal / glob 展開結果に含まれるかを `active_file_profiles` として固定し、複数 profile membership を保持する。
-  - `crates/surtr-lsp` を追加し、file URI / UTF-16 position / diagnostics / completion text edit を `surtr-analysis` DTO へ写像する protocol adapter 境界を置いた。
-  - `SourceKind` は `sindr::policy`、parse rule 導出は `spire` に置き、`surtr-analysis` は Xldr に依存しない構成にした。
-  - project runner source は `SourceKind::ProjectConfigSource` として専用化し、CLI / host が project context として選択した場合だけ runner として機能する方針を固定した。
-  - REPL command query parser は `surtr-analysis::query` に移し、Xldr は同じ parser 実装を呼ぶ。
-  - VM 実行 runner result へ差し替えられる受け口として `ProjectRunnerResult` / `ProjectRunnerProfile` / `ProjectRunnerPath` DTO を追加し、現行 AST extractor は `Project::entrypoint` / `Config::entry_fun` / `Config::add_path` からこの形を生成する。
-  - Eldr の `last_value()` / `TypeRegistry` から標準 `Project` / `Config` runtime value を `ProjectRunnerResult` へ decode する入口を追加した。
-  - project runner の `Config::add_path` glob は deterministic order で展開し、`./src/**/*.srt` の recursive glob を `** = 0 個以上の directory segment` として扱う。
-  - `AnalysisService` project mode は `RunnerContext.module_stages` を使い、active file 単体ではなく project profile の module stage として parse / resolve / typecheck できるようにした。
-  - project stage の `DeclarationIndex` から補完候補を生成し、別 module の public declaration を LSP/analysis completion の初期候補へ流せるようにした。
-  - completion item の `detail` / `documentation` / `sortText` と、metadata / declaration 由来情報を `surtr-analysis` の `SemanticIndex` で保持するようにした。
-  - token 位置から semantic symbol を引く `lookup_symbol_at_cursor` を追加し、LSP hover は completion と同じ semantic index から detail / documentation を返す。
-  - call context から active parameter を算出する signature help を `SemanticIndex` ベースで追加し、LSP DTO へ写像する最小経路を追加した。
-  - active document / project stage source の declaration span を `SemanticIndex` に保持し、LSP definition DTO へ写像する最小経路を追加した。
-  - active document の documentSymbol は `AnalysisService` snapshot から生成し、LSP DTO へ写像する最小経路を追加した。
-  - Xldr `ReplEngine` から `surtr-analysis::SemanticIndex` を取り出せる API を追加し、REPL binding / stdlib doc / signature / declaration を shared semantic lookup へ渡せる入口を作った。
-  - REPL completion の call argument 文脈では、expected type と合わない binding を除外せず、合う binding を先に出す順位付けへ変更した。
-  - REPL completion の expected type 順位付けを `surtr-analysis` の shared ranking helper へ移し、Xldr は session-local binding 候補を同 helper へ渡す形にした。
-  - `load_project("./project.srt", profile: "dev")` を `AnalysisService` 側で literal-only operational script directive として読み、project runner source から `RunnerContext` を script context へ添付し、LSP completion が project stage declaration を参照できるようにした。
-  - `load_project` 付き operational script の body は directive を除外した上で project module stages の user program として resolve/typecheck し、script diagnostics も project context に載せるようにした。
-  - `xldr::execute_project_runner_source` を追加し、Project/Config 標準定義を含む project runner source を VM 実行して runtime value から `ProjectRunnerResult` を decode できる境界を作った。
-  - `RunnerSelection` は VM 実行済みの `ProjectRunnerResult` を保持できるようにし、`surtr-lsp` は source 付き選択を受けた場合に `xldr` 実行器で result を詰めてから analysis へ渡す。
-  - Xldr REPL は project runner source から module input stages を作れるようにし、project runner profile の定義を preload した REPL context を構築できるようにした。
-  - `surtr repl --project <project.srt> --profile <name>` を CLI 入口として追加し、project runner profile を preload した REPL session を起動できるようにした。`--profile` 省略時は `"main"` を使い、`--project` は `--script` / `--module` と同時指定しない。
-  - REPL non-call completion は既存の REPL presentation / visibility を保ったまま、`surtr-analysis::complete_prefix` の shared semantic metadata を合流し、stdlib `@doc` を completion candidate API へ載せるようにした。
-- 固定済み仕様:
-  - shared analysis は `crates/surtr-analysis` として crate 新設で進める。既存 Xldr helper の段階移行は、この crate へ利用側を寄せる形で行う。
-  - command query parser は `surtr-analysis::query` に留め、現時点では `surtr-query` crate へ分離しない。
-  - project runner source は `SourceKind::ProjectConfigSource` として扱う。script として実行された場合は値を作るだけで、runner としては機能しない。
-  - project runner source の抽出は、標準定義拡張を取り込めるよう最終的に Surtr VM 実行で行う。restricted evaluator は採用しない。
-  - project context 付き script の `supervisor_init` merge は `process 定義 default < project runner boot config < script-local supervisor_init` の優先順位とする。
-  - completion の型文脈利用は候補除外ではなく順位付けに留める。
-  - script の `load_project` は `load_project("./project.srt", profile: "dev")` を正本形とし、第 2 positional string も互換入力として受ける。profile 省略時は `"main"` を選択する。
-  - REPL の project context は `surtr repl --project <project.srt> --profile <name>` で明示し、`--profile` 省略時は `"main"` を選択する。project preload と standalone `--script` / `--module` preload は同時指定しない。
 - 未確定点:
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
   - VM 実行で抽出する project runner result DTO は `ProjectRunnerResult` / `ProjectRunnerProfile` / `ProjectRunnerPath` を baseline とするが、boot config / external input facts の詳細 field は追加設計が必要。
@@ -188,22 +147,12 @@
   - completion の型文脈順位付けで使う score / sortText 規則。
   - iOS / wasm adapter が JSON-RPC LSP を使うか、editor UI から direct API を呼ぶか。
 - 受け入れ条件:
-  - `surtr-lsp` は active file を単体推測せず、必ず `AnalysisContext` 経由で parse / resolve / typecheck / completion / diagnostics を行う。
-  - command query parser は `spire` へ入れず、REPL / LSP editor command から使える tooling query wrapper として配置される。
-  - script entry を選択すると、script include 先 definition source が同じ compile unit 文脈で解析される。
   - project mode では selected profile、normalized runner args、module stage、project path 展開、boot / external input summary が cache key と diagnostics に反映される。
-  - `AnalysisService` は parse / resolve / typecheck diagnostics、completion、hover、signatureHelp、definition、documentSymbol の protocol 非依存 DTO を返す。
-  - REPL は内部で LSP JSON-RPC と通信せず、Xldr と `surtr-lsp` が同じ semantic service を別 adapter として利用できる。
   - LSP / analysis core は single-thread wasm host でも動作でき、multi-thread availability に意味論を依存させない。
 - テスト方針:
-  - `surtr-analysis` 導入時は context resolver、include graph、cache key、LineIndex の byte / character / UTF-16 変換を unit test で固定する。
-  - `AnalysisService` の snapshot / parse diagnostics / completion と、project runner literal / glob 展開は `surtr-analysis` unit test で固定する。
-  - command query parser は `surtr-analysis::query` の unit test と `cargo nextest run -p xldr` の既存 REPL command tests で固定する。
-  - `surtr-lsp` 導入時は diagnostics / completion / hover / signatureHelp / definition / documentSymbol の protocol DTO 変換を unit test で固定する。
   - `tests/fixtures/script/**`、`tests/fixtures/modules/**`、`lib/**/*.srt` を LSP analysis context の integration fixture として流用する。
   - project runner 実装後は profile 切り替え、glob 展開、active file profile membership の fixture を追加する。external input diagnostics は boot / external summary 実装時に追加する。
   - REPL 共有化時は `cargo nextest run -p xldr` で既存 REPL completion / command query 表示を回帰基準にする。
-  - REPL project preload は `cargo nextest run -p xldr core_from_project_runner_source_exposes_selected_profile_definitions` と `cargo nextest run -p rune parse_repl_options` で CLI option と preload context を固定する。
 
 ### OI-030 Process runtime scheduler / Lazy init convergence
 
@@ -211,10 +160,14 @@
   - Process Runtime v2 の public surface は `docs/dev/ProcessRuntime_spec.md` へ整理済みだが、Lazy init、Ready 前 call、`Pending` / resume、init timeout、runtime status 表現はまだ VM 内部契約として完全に畳み切れていない。
   - `Process::sleep`、Task timeout、ReplyLater timeout、worker call timeout は deadline / future / waiting table を共有し始めており、今後の cleanup は surface 追加ではなく scheduler 内部契約の収束として扱う。
   - Worker wait API、generic receive、Task supervision は v2 public surface ではないため、この issue の対象外とする。
+- 2026-10-10 の対応範囲:
+  - 通常 Stop は新規受付を閉じ、開始済み wrapper / ReplyLater callback の future / timer 待機からの再開と cleanup を終了まで追跡する。caller timeout は先に結果を配送し、callee を取り消さず、遅延 reply で結果を上書きしない。Task / init 自身の timeout 取消は別契約として維持する。
+  - 停止完了時の本体、不要な waiting / reply / deadline / task / owner 参照と Workers / supervisor 所属の整理、回収後の ProcessStopped、Weak 停止識別の掃除、checkpoint 復元と ID 非再利用を実装した。scheduler 状態と受付状態、停止要求中の本体数・未完了実行数・停止識別 entry 数を観測で分ける。確定 future の結果は caller 用に保持する。
+  - 現在の mailbox は未使用で、非空状態は RuntimeError とする。新たな未開始 queue を実装済みとはしない。Lazy 初期化全体、Ready 前 FIFO、fairness は残件であり、停止改修の最終検証件数・結果は既存監査に追記する。
 - 未確定点:
   - Lazy `@init` の `Pending` / `PendingAfter` retry と `init_waiters` を、通常の future / deadline queue とどこまで共通化するか
   - Ready 前 call を FIFO 待機にする場合の caller timeout、init timeout、init failure の優先順位
-  - runtime process status を `Allocated` / `Initializing` / `Ready` / `Waiting` / `Failed` のどこまで VM snapshot / diagnostics に出すか
+  - PID 割当前の init flight、Lazy retry と Ready 前待機を VM snapshot / diagnostics へどう出すか。生存本体の scheduler 状態と停止受付状態の分離は確定済みとする
   - heavy process の fairness を step budget / scheduler quantum で扱うか、現行の pending point だけで十分とするか
 - 受け入れ条件:
   - Lazy init、sleep、Task、ReplyLater、runtime-managed call timeout が同じ deadline / waiting cleanup 規則で説明できる。
@@ -268,7 +221,6 @@
 ### OI-033 Compiler warning public surface follow-up
 
 - 背景:
-  - Phase1 では `sindr::warning`、Sigil / Scar の `_with_warnings` API、`UnusedVariable` / `UnusedImportFunction` / `UnusedValue` / `UnusedTypeParameter` の検出を追加した。
   - ただし、現時点では warning buffer は compiler 内部 API のみに留め、Rune CLI / JSON / REPL / LSP 表示には接続していない。
   - 利用者向けの現状説明は `docs/site/warnings.md` にまとめたが、表示・抑制・厳格化の policy は未確定である。
 - 未確定点:
@@ -345,22 +297,17 @@
   - 仕様確定後、Spireでrecord grammar、Sigilでowner / parameter scope、Scarでwell-formednessとFacet destination、Forge / Eldrで値表現を責務ごとに固定する。
   - parserだけを先行して`defstruct`のgeneric surfaceへ合わせるテストは追加しない。
 
-### OI-036 Facet capture callable identity
+### OI-036 Facet capture の残る検証範囲
 
-- 背景:
-  - [`callable-display-origin-spec.md`](./callable-display-origin-spec.md) で、callable の Capture / Closure origin と capture-site signature を値ごとの runtime metadata に保持する契約を整理した。
-  - Facet path capture は Scar が synthetic closure wrapper へ lower するため、source-level Capture origin と `FnCapture(module, name)` に出す canonical identity が失われうる。
-- 未確定点:
-  - Facet capture の表示名を `Facet` helper (`view` など) として出すか、Facet path の owner/segment を identity とするか。
-  - optional / fallible segment capture、複数 segment path、field update が identity にどう反映されるか。
-  - Facet capture の partial application / variable re-capture で identity を維持する canonical representation。
-- 受け入れ条件:
-  - Facet capture の source origin は closure literal と混同しない。
-  - canonical identity は path shape や lexical capture 順に依存せず決定的である。
-  - ordinary Closure display、type acceptance、Facet dispatch、privacy checks は変化しない。
-- テスト方針:
-  - identity 規約を要件定義へ確定してから、`scar` / `forge` / `eldr` に direct・optional・fallible path と partial/re-capture 境界を置く。
-  - Xldr では direct binding と struct / Result 等の nested field display が同じ metadata を使うことを確認する。
+- 確定済みの契約:
+  - [Eldr VM 仕様](../docs/dev/EldrVM_spec.md)はFacet API captureを `Facet` / API名で表示し、`&Type.path`・`&p`・`_.path` の読み取りを `Facet` / `view` とする。path ownerを表示identityにする案は未確定事項として残さない。
+  - 通常のclosure literalとの区別、capture位置で確定したsignature、partial applicationと変数経由の再captureによる由来の保持も同仕様に従う。
+- 未確認点:
+  - optional / fallibleな複数segment、Facet由来のpartial application・変数経由の再capture、REPLの直接bindingとnested field表示について、契約を覆うテストの対応表がまだ揃っていない。
+  - 既存fixtureの実行成功だけでは、すべての経路で表示metadataまで検証したことにはならない。
+- 受け入れ条件と次の作業:
+  - 上記の残る経路を既存テストと照合し、不足する境界だけを追加する。type acceptance、Facet dispatch、privacy checksは変えない。
+  - 確定済みのidentity契約に沿った検証が揃った時点で、この項目を削除する。
 
 ## 更新ルール
 

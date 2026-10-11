@@ -138,120 +138,6 @@ impl Resolver {
         Ok(Resolved::Cause(span, Box::new(value), Box::new(err)))
     }
 
-    pub(super) fn resolve_recover_kind(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [value_expr, marker_expr, handler_expr] =
-            collect_fixed_positional_args(span.clone(), args, "recover_kind", 3)?;
-        let value = self.resolve_node(value_expr)?;
-        let marker = self.resolve_error_kind_name(marker_expr, "recover_kind")?;
-        let handler = self.resolve_node(handler_expr)?;
-        Ok(Resolved::RecoverKind(
-            span,
-            Box::new(value),
-            marker,
-            Box::new(handler),
-        ))
-    }
-
-    pub(super) fn resolve_assert_err_kind(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [marker_expr, value_expr] =
-            collect_fixed_positional_args(span.clone(), args, "assert_err_kind", 2)?;
-        let marker = self.resolve_error_kind_name(marker_expr, "assert_err_kind")?;
-        let value = self.resolve_node(value_expr)?;
-        Ok(Resolved::AssertErrorKinds(
-            span,
-            crate::resolved::ErrorKindAssertion::Root(marker),
-            Box::new(value),
-        ))
-    }
-
-    pub(super) fn resolve_assert_cause_chain(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [expected, value] =
-            collect_fixed_positional_args(span.clone(), args, "assert_cause_chain", 2)?;
-        let markers = match expected {
-            Ast::ListLiteral(_, markers) => markers,
-            Ast::ListNil(_) => Vec::new(),
-            other => return Err(ResolveError {
-                message: "assert_cause_chain expected must be a direct List literal of concrete deferror type names".into(),
-                span: other.span().clone(),
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::SpecialForm,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            }),
-        };
-        let markers = markers
-            .into_iter()
-            .map(|marker| self.resolve_error_kind_name(marker, "assert_cause_chain"))
-            .collect::<Result<Vec<_>, _>>()?;
-        let value = self.resolve_node(value)?;
-        Ok(Resolved::AssertErrorKinds(
-            span,
-            crate::resolved::ErrorKindAssertion::Chain(markers),
-            Box::new(value),
-        ))
-    }
-
-    fn resolve_error_kind_name(
-        &mut self,
-        expr: Ast,
-        api: &str,
-    ) -> Result<ResolvedId, ResolveError> {
-        let span = expr.span().clone();
-        let invalid = || ResolveError {
-            message: format!("{api} marker must be a concrete deferror type name"),
-            span: span.clone(),
-            diagnostic: crate::error::ResolveErrorDiagnostic {
-                reason: crate::error::ResolveErrorReason::SpecialForm,
-                subject: None,
-            },
-            related_labels: Vec::new(),
-        };
-        if matches!(&expr, Ast::Var(_, name) if name == "Error")
-            || !matches!(expr, Ast::Var(..) | Ast::Path(..))
-        {
-            return Err(invalid());
-        }
-        // A qualified name in this position is a declaration reference,
-        // not the ordinary value expression's nullary constructor lowering.
-        let name_expr = match expr {
-            Ast::Path(path_span, path) => Ast::Var(path_span, path.segments.join("::")),
-            other => other,
-        };
-        let Resolved::Var(_, mut id) = self.resolve_node(name_expr)? else {
-            return Err(invalid());
-        };
-        // Declaration identity excludes the abstract Error head and all
-        // runtime values, regardless of their name or constructor layout.
-        if self.declaration_uid_kinds.get(&id.unique_id) != Some(&DeclarationKind::Deferror) {
-            return Err(invalid());
-        }
-        id.qualified_name = Some(self.declaration_fq_name_for_uid(id.unique_id).ok_or_else(
-            || ResolveError {
-                message: format!("{api} ErrorKind identity has no canonical declaration name"),
-                span,
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
-                    subject: Some(id.name.clone()),
-                },
-                related_labels: Vec::new(),
-            },
-        )?);
-        Ok(id)
-    }
-
     pub(super) fn resolve_logic_call(
         &mut self,
         span: Span,
@@ -359,6 +245,9 @@ pub(super) fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
         AstPattern::Constructor(_, _, inners)
         | AstPattern::Tuple(_, inners)
         | AstPattern::Or(_, inners) => inners.iter().any(pattern_has_binding_vars),
+        AstPattern::HashMap(_, entries) => entries
+            .iter()
+            .any(|(_, child)| pattern_has_binding_vars(child)),
         AstPattern::Call(_, _, args) => args
             .iter()
             .filter_map(|arg| arg.pattern.as_deref())
@@ -382,6 +271,7 @@ pub(super) fn ast_pattern_span(pattern: &AstPattern) -> &Span {
         | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
         | AstPattern::AnnotatedWildcard(span, _)
+        | AstPattern::HashMap(span, _)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
         | AstPattern::IntLit(span, _)

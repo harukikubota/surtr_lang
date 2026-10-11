@@ -140,6 +140,37 @@ print(to_string(add(y: 2, x: 1)))
 - 関数本体は式として評価される
 - 前方参照は許可される。後で同じコンパイル単位に定義が現れればよい
 
+短い関数は `=` の後に単一行の式を書けます。末尾の `;` は結果を Unit にします。
+
+```surtr
+def add(x: Int, y: Int) -> Int = x + y
+def say(message: String) -> Unit = print(message);
+def positive?(value: Int) -> Boolean = value > 0
+```
+
+`do`、`match`、`cond` を本体として直接書く場合は、複数行を使えます。
+
+```surtr
+def main() -> Result<()> = do {
+  num <- Ok(1)
+  print(to_string(num))
+  Ok(())
+}
+
+def tag(num: Int) -> Int = cond {
+  num > 0 => 1,
+  num < 0 => -1,
+  True => 0
+}
+
+def option_tag(value: Option<Int>) -> Int = match value {
+  Option::Some(_) => 1,
+  Option::None => 0
+}
+```
+
+その他の式は括弧や closure の内部も含めて一行に収めます。二択は `= if(flag, a, b)`、複数の条件は `= cond { ... }`、パターンによる分岐は `= match ... { ... }` と書けます。本体末尾の `;` の後へ同じ行で別の式は続けられません。詳しい制約は[言語リファレンスの関数](./language-reference.md#関数)を参照してください。
+
 ### 5.1 関数はどこに属するか
 
 Surtr では、関数は必ず何らかの namespace に属します。
@@ -426,9 +457,9 @@ right: Either<Int, String> = Either<Int, _>::Right("value")
 
 型引数の個数は enum 宣言と一致させます。この構文は enum variant の値生成専用で、
 `Enum<...>::method`、struct constructor、型注釈中の `_` には広がりません。
-TypeConstructor trait や abstract `Error` など、通常の値型位置で禁止される型も明示できません。
+TypeConstructor trait など、通常の値型位置で禁止される型も明示できません。
 
-`Err(NoneError)` の成功型を固定したい場合は、`failed: Result<Int> = Err(NoneError)` のように
+`Err(NoneError())` の成功型を固定したい場合は、`failed: Result<Int> = Err(NoneError())` のように
 型注釈を付けます。
 
 補足:
@@ -456,7 +487,7 @@ deferror Boom {
 }
 
 ok: Result<Int> = Ok(7)
-er: Result<Int> = Err(Boom)
+er: Result<Int> = Err(Boom())
 ```
 
 `match` で扱うのが基本形です。これは `Either` の左右を分岐するのと同じ感覚です。
@@ -471,7 +502,7 @@ print(match ok {
 標準で提供される具体 error もあります。たとえば `NoneError` は最初から使えます。
 
 ```surtr
-ret: Result<Int> = Err(NoneError)
+ret: Result<Int> = Err(NoneError())
 match ret {
   Ok(val) => print("ok"),
   Err(e)  => print("none"),
@@ -493,8 +524,8 @@ def pick() -> Result<Int> {
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
 `=?` は「Result-style の失敗を伝播しながら pattern を適用する束縛」の入口です。
-通常の user code では `Result<T>` または有効な `@result_effect` carrier を返す関数の
-中で使います。canonical `Result` RHSだけを外側一段分解し、`Err`を failure target
+通常の関数では、返り型がMonadFailを実装しているときに使えます。
+canonical `Result` RHSだけを外側一段分解し、`Err`を failure target
 へ伝播します。Result以外のRHSは、値全体を明示検査するpartial patternにだけ渡されます。
 Monadのpayloadを暗黙に取り出す規則はありません。
 
@@ -540,19 +571,15 @@ result: Option<Int> = do::<Option> {
 print(inspect(result)) # => Option::Some(42)
 ```
 
-通常のMonad処理には`Monad` capabilityが必要です。部分patternで値を取り出す場合、Result effect がなければ
-失敗先として同じcarrierの`Alternative`も必要です。ResultContext の能力判定は `Result effect > Alternative > Monad`
-ですが、SafeBind / failureMatcher となる partial `<-` は Result effect または
-`Alternative` がなければ capability error になります。total `<-` の sequencing は
-`Monad` のみを要求します。Transformerも通常のMonad carrierとして使えますが、base carrier
-の値を自動でliftしません。必要な値には`MonadT::lift`を明示してください。
+通常の逐次処理とtotal `<-`にはMonadが必要です。SafeBindやpartial `<-`の失敗は、
+carrierがMonadFailを実装していれば`fail(error)`へ渡します。MonadFailがなければ
+Alternativeの`empty()`を使い、どちらもなければコンパイルエラーになります。
+Transformerも同じ規則に従います。baseの値を接続するときは`MonadT::lift`を明示します。
 
-`@result_effect` は `Monad` と `MonadT<$M>` を実装する単一 public field の struct に
-だけ指定でき、field の最外 constructor は captured base `$M` と一致しなければなりません。
-具体化された base が canonical `Result` に直接一致するときだけ有効です。たとえば
-`OptionT<Result, A>` は SafeBind と failureMatcher となる partial `<-` の Error を保持し、
-`OptionT<List, A>` は `Alternative::empty()` を使います。`guard` は常に通常の
-`Alternative` semantics で、`OptionT<Result, A>` の `guard(False)` は `Ok(None)` です。
+ResultTと`EitherT<Error, M, A>`は内側の失敗にErrorを保持します。ReaderTとStateTは、
+baseがMonadFailを実装するときにその`fail`を使います。OptionTにはMonadFail実装がないため、
+do内のPattern不一致はAlternativeの`empty()`になります。Result baseでは`Ok(None)`です。
+`guard`も常にAlternativeを使います。baseのErrをbindが短絡する動作は変わりません。
 
 `Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
 あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。
@@ -588,9 +615,9 @@ chars = ["a".."c"]     # => Ok([a, b, c])
 ```
 
 `Int` range はそのまま `List<Int>` になり、`String` range は char validation を伴うので `Result<List<String>, Error>` になります。
-constant literal は compile-time に畳まれますが、surface 契約は変わりません。`String` endpoint が不正な場合は literal でも変数でも `Generator::range_char` と同じ `InvalidCharRange` が runtime に返ります。
+constant literal は compile-time に畳まれますが、surface 契約は変わりません。`String` endpoint が不正な場合は literal でも変数でも `Generator::range_char` と同じ endpoint 固有の Error が runtime に返ります。
 
-有限の range helper は `Generator<Item>` を返し、整数は `Generator::range` → `Generator::to_list`、文字は `Generator::range_char` の入力検証 → `Generator::to_list` で List 化します。構築時に全件生成せず、文字 endpoint の検証エラーは従来どおり `InvalidCharRange` です。
+有限の range helper は `Generator<Item>` を返し、整数は `Generator::range` → `Generator::to_list`、文字は `Generator::range_char` の入力検証 → `Generator::to_list` で List 化します。構築時に全件生成せず、文字 endpoint の検証エラーは start / stop、文字数 / 非 ASCII の条件ごとに分かれます。
 
 ここでの単位元は `[]` です。  
 Surtr は一般化された `pure` を置かず、`[]` と `List::cons` / `[x]` をはっきり分けています。
@@ -673,16 +700,13 @@ Ok(1) |*> add(2)
 - `Ok(1) |*> add(2)` は `Ok(add(1, 2))`
 - `[1, 2, 3] |*> add(10)` は各要素へ `add(elem, 10)`
 
-右辺は plain function である必要があります。  
-`A -> Result<B>` や `A -> List<B>` を渡したいときは `|>=` を使います。
-
 ### 10.3 `|>=` は次の文脈段階へ進む
 
 `|>=` は bind です。
 
 ```surtr
 def require_at_least(x: Int, floor: Int) -> Result<Int, TooSmall> {
-  if(x >= floor, Ok(x), Err(TooSmall))
+  if(x >= floor, Ok(x), Err(TooSmall()))
 }
 
 value: Result<Int> = Ok(11)
@@ -816,7 +840,7 @@ not_fn = &`Boolean::not`
 - `eprint(Error) -> Unit`
 - `set_exit_code(Int) -> Unit`
 
-`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` を呼び、`Result` を返します。標準数値実装のゼロ除算は `Err(ZeroDivisionError)` です。ユーザー型の実装は独自のエラー契約を持てます。
+`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` を呼び、`Result` を返します。標準数値実装のゼロ除算は `Err(ZeroDivisionError())` です。ユーザー型の実装は独自のエラー契約を持てます。
 `+`, `-`, `*` は内部では `Add` / `Sub` / `Mul` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
 ## 12. 標準定義ソースの前提
@@ -828,8 +852,9 @@ stage、user source の順で読み込みます。完全なモジュール inven
 
 - `Bootstrap`
   - auto-import の起点になる安定アンカー
-  - `NoneError` などの bootstrap concrete error
-- `SpecialTypes`
+- `errors.srt`
+  - `NoneError` などの共通 concrete error と Pattern / Extractor の失敗
+- `special_types.srt`
   - `Unit`, `Hole` の canonical builtin type 宣言
 - `Kernel`
   - auto import される最小の標準 API

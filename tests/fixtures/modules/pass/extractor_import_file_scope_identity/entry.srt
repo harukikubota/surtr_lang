@@ -1,0 +1,10 @@
+import SelectedInts::{select}
+
+IntConsumer::run(1)
+StringConsumer::run("text")
+print(to_string(if_let(1, select(30, selected), selected, 0)))
+
+select = *{|value: Int| MatchResult::Ok(value + 100)}
+print(to_string(if_let(1, select(selected), selected, 0)))
+print(to_string(if_let(1, SelectedInts::select(40, selected), selected, 0)))
+print(if_let("qualified", SelectedStrings::select(selected), selected, "failure"))

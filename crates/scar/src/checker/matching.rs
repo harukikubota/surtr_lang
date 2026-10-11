@@ -17,6 +17,7 @@ impl Checker {
             | ResolvedPattern::Constructor(head, _)
             | ResolvedPattern::Extractor(head, _, _)
             | ResolvedPattern::Record(head, _) => head.span.clone(),
+            ResolvedPattern::HashMap(span, _) => span.clone(),
             ResolvedPattern::Wildcard(span)
             | ResolvedPattern::AnnotatedWildcard(span, _)
             | ResolvedPattern::ListNil(span)
@@ -45,7 +46,7 @@ impl Checker {
         expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
         // A polymorphic constructor used as the scrutinee (for example
-        // `Err(NoneError)`) cannot be inferred in isolation: without an
+        // `Err(NoneError())`) cannot be inferred in isolation: without an
         // expected type its payload type defaults to `Unit`.  Match patterns
         // are an equally valid source of constraints, so seed the scrutinee
         // from the first informative pattern and let arm bindings/body
@@ -92,15 +93,17 @@ impl Checker {
                 let coerce = self.with_type_relation_probe(
                     &[rt, &typed_arm.body.ty, &typed_scrut.ty],
                     |checker| {
-                        !checker.types_compatible(rt, &typed_arm.body.ty)
-                            && checker.can_coerce_err_only_result_self_arm(
-                                &typed_scrut,
-                                &typed_arms,
-                                &typed_arm,
-                                rt,
-                            )
+                        Ok::<_, TypeError>(
+                            !checker.types_compatible(rt, &typed_arm.body.ty)?
+                                && checker.can_coerce_err_only_result_self_arm(
+                                    &typed_scrut,
+                                    &typed_arms,
+                                    &typed_arm,
+                                    rt,
+                                )?,
+                        )
                     },
-                );
+                )?;
                 if coerce {
                     typed_arm.body.ty = self.resolve_ty(rt);
                 }
@@ -126,7 +129,7 @@ impl Checker {
                 }
             }
             if let Some(expected) = expected {
-                let relation = self.assert_value_type_relation(
+                let relation = self.assert_type_relation(
                     expected,
                     &body_node.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
@@ -210,6 +213,9 @@ impl Checker {
                 "Duration".into(),
                 NominalType::monomorphic(Vec::new()),
             )),
+            ResolvedPattern::HashMap(_, _) => {
+                Some(Ty::Enum("HashMap".into(), vec![self.env.fresh_tyvar()]))
+            }
             ResolvedPattern::Tuple(items) => Some(Ty::Tuple(
                 items
                     .iter()
@@ -230,6 +236,9 @@ impl Checker {
                 .lookup_enum_variant_by_constructor_id(id.unique_id)
                 .map(|variant| self.instantiate_enum_variant(&variant).enum_ty),
             ResolvedPattern::Record(id, _) => self.env.lookup_type_def(&id.name).map(|def| {
+                if def.kind == crate::env::TypeKind::ConcreteError {
+                    return Ty::Error;
+                }
                 Ty::Record(
                     def.name.clone(),
                     crate::types::NominalType::monomorphic(def.fields.clone()),
@@ -247,44 +256,44 @@ impl Checker {
         previous_arms: &[TypedMatchArm],
         arm: &TypedMatchArm,
         expected_ty: &Ty,
-    ) -> bool {
+    ) -> Result<bool, TypeError> {
         if arm.guard.is_some() || !matches!(arm.pattern, TypedMatchPattern::Wildcard) {
-            return false;
+            return Ok(false);
         }
 
         let (scrut_ok, scrut_err) = match self.resolve_ty(&scrutinee.ty) {
             Ty::Result(ok, err) => (ok, err),
-            _ => return false,
+            _ => return Ok(false),
         };
         let (expected_ok, expected_err) = match self.resolve_ty(expected_ty) {
             Ty::Result(ok, err) => (ok, err),
-            _ => return false,
+            _ => return Ok(false),
         };
 
-        if !self.types_compatible(scrut_err.as_ref(), expected_err.as_ref()) {
-            return false;
+        if !self.types_compatible(scrut_err.as_ref(), expected_err.as_ref())? {
+            return Ok(false);
         }
 
-        if self.types_compatible(scrut_ok.as_ref(), expected_ok.as_ref()) {
-            return false;
+        if self.types_compatible(scrut_ok.as_ref(), expected_ok.as_ref())? {
+            return Ok(false);
         }
 
         let (scrut_id, body_id) = match (&scrutinee.node, &arm.body.node) {
             (TypedInner::Var(scrut_id), TypedInner::Var(body_id)) => {
                 (scrut_id.unique_id, body_id.unique_id)
             }
-            _ => return false,
+            _ => return Ok(false),
         };
         if scrut_id != body_id {
-            return false;
+            return Ok(false);
         }
 
-        previous_arms.iter().any(|prev_arm| {
+        Ok(previous_arms.iter().any(|prev_arm| {
             prev_arm.guard.is_none()
                 && Self::match_or_alternative_matches(&prev_arm.pattern, &|pattern| {
                     matches!(pattern, TypedMatchPattern::Constructor { tag: 0, .. })
                 })
-        })
+        }))
     }
 
     pub(super) fn check_match_exhaustive(
@@ -341,6 +350,19 @@ impl Checker {
                     ))
                 }
             }
+            // HashMap keys form an open set. Nonempty subsets never establish
+            // coverage; an unguarded empty Pattern was handled as catch-all above.
+            Ty::Enum(enum_name, _) if enum_name == "HashMap" => Err(self.pattern_error(
+                TypeDiagnosticReason::NonExhaustiveMatch,
+                PatternKind::Match,
+                None,
+                None,
+                Some(scrut_ty),
+                None,
+                None,
+                vec!["_".into()],
+                span,
+            )),
             Ty::Enum(enum_name, _) => {
                 self.check_enum_like_match_exhaustive(span, enum_name, scrut_ty, arms)
             }
@@ -528,7 +550,7 @@ impl Checker {
             );
             let typed_guard = if let Some(guard) = &arm.guard {
                 let typed_guard = self.check_node(guard)?;
-                if !self.types_compatible(&Ty::Bool, &typed_guard.ty) {
+                if !self.types_compatible(&Ty::Bool, &typed_guard.ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::MatchGuardTypeMismatch,
                         PatternKind::Match,
@@ -630,7 +652,7 @@ impl Checker {
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                if !self.types_compatible(&expected, expected_ty) {
+                if !self.types_compatible(&expected, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -656,7 +678,7 @@ impl Checker {
                 })?;
                 let expected_ty = self.resolve_ty(expected_ty);
                 let pinned_ty = self.resolve_ty(&pinned_ty);
-                if !self.types_compatible(&pinned_ty, &expected_ty) {
+                if !self.types_compatible(&pinned_ty, &expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Pin,
@@ -678,10 +700,29 @@ impl Checker {
             }
             ResolvedPattern::As(inner, alias, alias_ty) => {
                 let typed_inner = self.check_match_subpattern(inner, expected_ty)?;
+                let narrowed_kind =
+                    Self::single_error_pattern_identity(&typed_inner).map(str::to_string);
+                if let Some(annotation) = alias_ty {
+                    let annotation_kind = self.concrete_error_annotation_identity(annotation);
+                    if annotation_kind != narrowed_kind
+                        && (annotation_kind.is_some() || narrowed_kind.is_some())
+                    {
+                        return Err(TypeError::new(
+                            "Error Pattern alias annotation must match its narrowed declaration",
+                            alias.span.clone(),
+                        ));
+                    }
+                }
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
-                    let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    if !self.types_compatible(&expected, expected_ty) {
+                    let expected = self.resolve_ast_ty_in_context(
+                        ast_ty,
+                        if narrowed_kind.is_some() {
+                            TypeSyntaxContext::ConcreteErrorLocal
+                        } else {
+                            self.local_type_syntax_context()
+                        },
+                    )?;
+                    if !self.types_compatible(&expected, expected_ty)? {
                         return Err(self.pattern_error(
                             TypeDiagnosticReason::PatternTypeMismatch,
                             PatternKind::Other,
@@ -699,6 +740,11 @@ impl Checker {
                     self.resolve_ty(expected_ty)
                 };
                 self.env.bind_var(alias.unique_id, alias_bind_ty);
+                if let Some(kind) = Self::single_error_pattern_identity(&typed_inner) {
+                    self.env
+                        .concrete_error_bindings
+                        .insert(alias.unique_id, kind.to_string());
+                }
                 Ok(TypedMatchPattern::As(Box::new(typed_inner), alias.clone()))
             }
             ResolvedPattern::Wildcard(_) => Ok(TypedMatchPattern::Wildcard),
@@ -737,7 +783,25 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::Tuple(typed_items))
             }
+            ResolvedPattern::HashMap(span, entries) => {
+                let value_ty = self.hash_map_pattern_value_ty(expected_ty, span)?;
+                let mut typed = Vec::with_capacity(entries.len());
+                for (key, pattern) in entries {
+                    let key = self.check_hash_map_pattern_key(key)?;
+                    let key_span = key.span.clone();
+                    let pattern = self.check_match_subpattern(pattern, &value_ty)?;
+                    typed.push(TypedHashMapMatchPatternEntry {
+                        key,
+                        pattern,
+                        key_span,
+                    });
+                }
+                Ok(TypedMatchPattern::HashMap(typed))
+            }
             ResolvedPattern::Record(id, fields) => {
+                if self.env.is_error_constructor(id.unique_id) {
+                    return self.check_error_payload_pattern(id, fields, expected_ty, false);
+                }
                 let (_, ordered) = self.ordered_record_pattern_fields(id, fields, &expected_ty)?;
                 let mut typed = Vec::with_capacity(ordered.len());
                 for (item, field_ty) in ordered {
@@ -746,7 +810,7 @@ impl Checker {
                 Ok(TypedMatchPattern::Record(typed))
             }
             ResolvedPattern::BoolLit(span, b) => {
-                if !self.types_compatible(&Ty::Bool, expected_ty) {
+                if !self.types_compatible(&Ty::Bool, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -762,7 +826,7 @@ impl Checker {
                 Ok(TypedMatchPattern::BoolLit(*b))
             }
             ResolvedPattern::IntLit(span, n) => {
-                if !self.types_compatible(&Ty::Int, expected_ty) {
+                if !self.types_compatible(&Ty::Int, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -778,7 +842,7 @@ impl Checker {
                 Ok(TypedMatchPattern::IntLit(n.clone()))
             }
             ResolvedPattern::StrLit(span, s) => {
-                if !self.types_compatible(&Ty::Str, expected_ty) {
+                if !self.types_compatible(&Ty::Str, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Other,
@@ -867,14 +931,17 @@ impl Checker {
                                 diagnostics::ResolveDiagnosticReason::Pattern,
                             ));
                         }
-                        for ((expected_id, expected_ty), (id, actual_ty)) in
-                            common.iter().zip(bindings.iter())
-                        {
-                            if expected_id.unique_id != id.unique_id || expected_id.name != id.name
-                            {
-                                return Err(Self::deferred_pattern_error("Pattern alternatives must bind the same variables in the same order", id, diagnostics::ResolveDiagnosticReason::Pattern));
-                            }
-                            if !self.types_compatible(expected_ty, actual_ty)
+                        for (expected_id, expected_ty) in common {
+                            let Some((id, actual_ty)) =
+                                bindings.iter().find(|(id, _)| id.name == expected_id.name)
+                            else {
+                                return Err(Self::deferred_pattern_error(
+                                    "Pattern alternatives must bind the same variables",
+                                    expected_id,
+                                    diagnostics::ResolveDiagnosticReason::Pattern,
+                                ));
+                            };
+                            if !self.types_compatible(expected_ty, actual_ty)?
                                 || self.resolve_ty(expected_ty) != self.resolve_ty(actual_ty)
                             {
                                 return Err(self.pattern_error(
@@ -928,22 +995,12 @@ impl Checker {
                 if matches!(expected_ty, Ty::Error)
                     && self.env.is_error_constructor(ctor_id.unique_id)
                 {
-                    if !inner_pats.is_empty() {
-                        return Err(self
-                            .pattern_error(
-                                TypeDiagnosticReason::PatternShapeMismatch,
-                                PatternKind::Constructor,
-                                Some("Error kind".into()),
-                                Some("a payload-free pattern".into()),
-                                Some(expected_ty),
-                                Some(0),
-                                Some(inner_pats.len()),
-                                Vec::new(),
-                                &ctor_id.span,
-                            )
-                            .with_hint("Use `Kind @ err: Error` and inspect the Error value."));
-                    }
-                    return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
+                    let fields = inner_pats
+                        .iter()
+                        .cloned()
+                        .map(|pattern| (None, pattern))
+                        .collect::<Vec<_>>();
+                    return self.check_error_payload_pattern(ctor_id, &fields, expected_ty, true);
                 }
                 if matches!(expected_ty, Ty::Bool) {
                     let variant = self
@@ -1094,7 +1151,7 @@ impl Checker {
                         &ctor_id.span,
                     ));
                 }
-                if !self.types_compatible(&variant.enum_ty, expected_ty) {
+                if !self.types_compatible(&variant.enum_ty, expected_ty)? {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Constructor,
@@ -1203,7 +1260,7 @@ impl Checker {
                         pre_args,
                         &extractor_id.span,
                     )?;
-                if !self.types_compatible(&input_ty, &expected_ty) {
+                if !self.types_compatible(&input_ty, &expected_ty)? {
                     return Err(self
                         .pattern_error(
                             TypeDiagnosticReason::ExtractorInputTypeMismatch,
@@ -1271,6 +1328,7 @@ impl Checker {
             TypedMatchPattern::Tuple(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
+            TypedMatchPattern::HashMap(entries) => entries.is_empty(),
             TypedMatchPattern::Record(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
@@ -1290,6 +1348,7 @@ impl Checker {
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::DurationLit(_)
             | TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::ErrorPayload { .. }
             | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
             | TypedMatchPattern::ListCons(_, _)
@@ -1297,8 +1356,122 @@ impl Checker {
         }
     }
 
+    fn single_error_pattern_identity(pattern: &TypedMatchPattern) -> Option<&str> {
+        match pattern {
+            TypedMatchPattern::ErrorKind(kind) | TypedMatchPattern::ErrorPayload { kind, .. } => {
+                Some(kind)
+            }
+            TypedMatchPattern::As(inner, _) => Self::single_error_pattern_identity(inner),
+            TypedMatchPattern::Or(items) => {
+                let first = Self::single_error_pattern_identity(items.first()?)?;
+                items
+                    .iter()
+                    .all(|item| Self::single_error_pattern_identity(item) == Some(first))
+                    .then_some(first)
+            }
+            _ => None,
+        }
+    }
+
+    fn check_error_payload_pattern(
+        &mut self,
+        id: &ResolvedId,
+        fields: &[(Option<String>, ResolvedPattern)],
+        expected: &Ty,
+        kind_only: bool,
+    ) -> Result<TypedMatchPattern, TypeError> {
+        if !matches!(self.resolve_ty(expected), Ty::Error) {
+            return Err(TypeError::new(
+                "Error definition Pattern requires an Error value",
+                id.span.clone(),
+            ));
+        }
+        let kind = id.qualified_name.clone().ok_or_else(|| {
+            TypeError::new(
+                "Error Pattern is missing declaration identity",
+                id.span.clone(),
+            )
+        })?;
+        if kind_only && fields.is_empty() {
+            return Ok(TypedMatchPattern::ErrorKind(kind));
+        }
+        let schema = self
+            .env
+            .lookup_type_def(&id.name)
+            .ok_or_else(|| TypeError::new("Error Payload schema is missing", id.span.clone()))?
+            .fields
+            .clone();
+        if schema.is_empty() && fields.is_empty() {
+            return Ok(TypedMatchPattern::ErrorKind(kind));
+        }
+        if fields.len() != schema.len() {
+            return Err(TypeError::new(
+                format!(
+                    "Error Payload Pattern expects {} fields, got {}",
+                    schema.len(),
+                    fields.len()
+                ),
+                id.span.clone(),
+            ));
+        }
+        let named = fields.iter().any(|(name, _)| name.is_some());
+        let mut ordered: Vec<Option<&ResolvedPattern>> = vec![None; schema.len()];
+        for (position, (name, pattern)) in fields.iter().enumerate() {
+            let index = if named {
+                let name = match name {
+                    Some(name) => name.as_str(),
+                    None => match pattern {
+                        ResolvedPattern::Var(binding) => binding.name.as_str(),
+                        ResolvedPattern::Located(_, inner) => match inner.as_ref() {
+                            ResolvedPattern::Var(binding) => binding.name.as_str(),
+                            _ => return Err(TypeError::new("Error named Payload Pattern requires an explicit field name or bare binding", id.span.clone())),
+                        },
+                        _ => return Err(TypeError::new("Error named Payload Pattern requires an explicit field name or bare binding", id.span.clone())),
+                    },
+                };
+                schema
+                    .iter()
+                    .position(|(field, _)| field == name)
+                    .ok_or_else(|| {
+                        TypeError::new(
+                            format!("Unknown Error Payload field: {}", name),
+                            id.span.clone(),
+                        )
+                    })?
+            } else {
+                position
+            };
+            if ordered[index].is_some() {
+                return Err(TypeError::new(
+                    format!("Duplicate Error Payload field: {}", schema[index].0),
+                    id.span.clone(),
+                ));
+            }
+            ordered[index] = Some(pattern);
+        }
+        let mut typed = Vec::new();
+        for ((name, ty), pattern) in schema.iter().zip(ordered) {
+            let pattern = pattern.ok_or_else(|| {
+                TypeError::new(
+                    format!("Missing Error Payload field: {}", name),
+                    id.span.clone(),
+                )
+            })?;
+            typed.push(self.check_match_subpattern(pattern, ty)?);
+        }
+        Ok(TypedMatchPattern::ErrorPayload {
+            kind,
+            fields: typed,
+        })
+    }
+
     fn collect_or_binding_ids(pat: &TypedMatchPattern, out: &mut Vec<ResolvedId>) {
         match pat {
+            TypedMatchPattern::HashMap(entries) => {
+                for entry in entries {
+                    Self::collect_or_binding_ids(&entry.pattern, out);
+                }
+            }
             TypedMatchPattern::Binding(id) => out.push(id.clone()),
             TypedMatchPattern::As(inner, alias) => {
                 Self::collect_or_binding_ids(inner, out);
@@ -1311,6 +1484,7 @@ impl Checker {
             }
             TypedMatchPattern::Tuple(items)
             | TypedMatchPattern::Record(items)
+            | TypedMatchPattern::ErrorPayload { fields: items, .. }
             | TypedMatchPattern::Constructor { fields: items, .. }
             | TypedMatchPattern::Extractor { items, .. } => {
                 for item in items {
@@ -1468,7 +1642,7 @@ impl Checker {
         };
         if let Some(expected) = &callable_expected {
             for (ordinal, branch) in [&then, &otherwise].into_iter().enumerate() {
-                self.assert_value_type_relation(
+                self.assert_type_relation(
                     expected,
                     &branch.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
@@ -1507,7 +1681,7 @@ impl Checker {
         self.record_lazy_capture_signature(span, &ty);
         let required = if then_only { Some(&Ty::Unit) } else { expected };
         if let Some(required) = required {
-            self.assert_value_type_relation(
+            self.assert_type_relation(
                 required,
                 &then.ty,
                 self.type_fact(SourceRole::Expected, span, required),

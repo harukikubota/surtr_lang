@@ -100,11 +100,13 @@ defrecord NormalizedHand14(raw: String, tiles: List<Tile>)
 defrecord ValidHand14(raw: String, tiles: List<Tile>)
 
 deferror ParseHandError(detail: String) {
-  detail
+  |detail: String|
+  Self(message: detail, detail)
 }
 
 deferror HandValidationError(detail: String) {
-  detail
+  |detail: String|
+  Self(message: detail, detail)
 }
 
 defmod MahjongTypes {

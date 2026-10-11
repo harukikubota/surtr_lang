@@ -128,7 +128,6 @@ combines their results.
 impl Applicative for ReaderT<$E, $M, $T>
 where
   $M: Monad
-  $T: Applicative.$A
 {
   @doc """
   Return a payload independently of the environment.
@@ -183,7 +182,6 @@ ReaderT selected by the mapper.
 impl Monad for ReaderT<$E, $M, $T>
 where
   $M: Monad
-  $T: Monad.$A
 {
   @doc """
   Return a payload independently of the environment.
@@ -226,7 +224,6 @@ Lifting stores a base computation in an environment-independent ReaderT.
 impl MonadT<$M> for ReaderT<$R, $M, $T>
 where
   $M: Monad
-  $T: MonadT.$A
 {
   @doc """
   Lift a base computation; the environment is ignored.
@@ -253,7 +250,6 @@ impl Alternative for ReaderT<$E, $M, $T>
 where
   $M: Monad
   $M: Alternative
-  $T: Alternative.$A
 {
   @doc """
   Create an empty ReaderT when the base has Alternative.
@@ -289,5 +285,15 @@ where
       right_result = apply(right.run_reader, environment)
       Alternative::choose(left_result, right_result)
     })
+  }
+}
+
+# Retain the original Error; bind must not produce a successful payload.
+impl MonadFail for ReaderT<$R, $M, $T>
+where
+  $M: MonadFail
+{
+  def fail::<ReaderT<$R, $M, $T>>(error: Error) -> ReaderT<$R, $M, $T> {
+    ReaderT::new({|_environment| MonadFail::fail(error)})
   }
 }

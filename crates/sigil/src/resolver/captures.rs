@@ -61,7 +61,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(value, bound, free);
             collect_pattern_captures(pattern, bound, free);
         }
-        Resolved::Lit(_, _) => {}
+        Resolved::Lit(_, _) | Resolved::ErrorKind(..) => {}
         Resolved::Var(_, id) => {
             free.reference(id, bound);
         }
@@ -84,7 +84,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             for stmt in stmts {
                 collect_captures_inner(stmt, &mut local_bound, free);
                 match stmt {
-                    Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _) => {
+                    Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _, _) => {
                         collect_bind_pattern_bindings(pat, &mut local_bound);
                     }
                     Resolved::Def(_, id, _, params, _, _, _, _) => {
@@ -132,7 +132,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_pattern_captures(pat, bound, free);
             collect_bind_pattern_bindings(pat, bound);
         }
-        Resolved::SafeBind(_, pat, rhs) => {
+        Resolved::SafeBind(_, pat, rhs, _) => {
             collect_captures_inner(rhs, bound, free);
             collect_pattern_captures(pat, bound, free);
             collect_bind_pattern_bindings(pat, bound);
@@ -230,11 +230,6 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
             collect_captures_inner(value, bound, free);
             collect_captures_inner(err, bound, free);
-        }
-        Resolved::AssertErrorKinds(_, _, value) => collect_captures_inner(value, bound, free),
-        Resolved::RecoverKind(_, value, _, handler) => {
-            collect_captures_inner(value, bound, free);
-            collect_captures_inner(handler, bound, free);
         }
         Resolved::Match(_, scrutinee, arms)
         | Resolved::IsMatch(_, scrutinee, arms)
@@ -383,6 +378,12 @@ fn collect_pattern_captures(
                 collect_pattern_captures(inner, bound, free);
             }
         }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (key, child) in entries {
+                collect_captures_inner(key, &mut bound.clone(), free);
+                collect_pattern_captures(child, bound, free);
+            }
+        }
         ResolvedPattern::Record(_, fields) => {
             for (_, inner) in fields {
                 collect_pattern_captures(inner, bound, free);
@@ -425,6 +426,11 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         ResolvedPattern::Constructor(_, inners) => {
             for inner in inners {
                 collect_bind_pattern_bindings(inner, bound);
+            }
+        }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (_, child) in entries {
+                collect_bind_pattern_bindings(child, bound);
             }
         }
         ResolvedPattern::Record(_, fields) => {

@@ -1,0 +1,93 @@
+import Test;
+
+deferror ResultTFailure { "preserved" }
+
+def observed(value: Result<Int>) -> String {
+  match value {
+    Ok(item) => to_string(item),
+    Err(error) => Error::message(error),
+  }
+}
+
+test("ResultT") {
+  it("wraps, maps, binds and lifts successful payloads") {
+    do {
+      value = ResultT::ok::<Identity>(2)
+      mapped = Functor::fmap(value, {|item| item + 1})
+      bound = Monad::bind(mapped, {|item| ResultT::ok::<Identity>(item * 2)})
+      lifted: ResultT<Identity, Int> = MonadT::lift(Identity::new(7))
+      assert_eq("6", observed(Identity::run(ResultT::run(bound))))
+      assert_eq("7", observed(Identity::run(ResultT::run(lifted))))
+    }
+  }
+  it("applies a successful mapper and supports pure and return") {
+    do {
+      mapper: ResultT<Identity, (Int -> Int)> = Applicative::pure({|item| item + 2})
+      value: ResultT<Identity, Int> = Monad::return(3)
+      applied = Applicative::ap(mapper, value)
+      assert_eq("5", observed(Identity::run(ResultT::run(applied))))
+      either: Either<Error, Int> = to(Ok(6))
+      restored: Result<Int> = to(either)
+      assert_eq("6", observed(restored))
+    }
+  }
+  it("preserves an inner Error without calling the continuation") {
+    do {
+      value = ResultT::err::<Identity, Int>(ResultTFailure())
+      bound = Monad::bind(value, {|item| ResultT::ok::<Identity>(item + 1)})
+      assert_eq("preserved", observed(Identity::run(ResultT::run(bound))))
+    }
+  }
+  it("keeps MonadFail in the inner failure layer") {
+    do {
+      value: ResultT<Result, Int> = MonadFail::fail(ResultTFailure())
+      inner =? ResultT::run(value)
+      assert_eq("preserved", observed(inner))
+    }
+  }
+  it("converts both value and transformer representations") {
+    do {
+      either: Either<Error, Int> = to(Err(ResultTFailure()))
+      result: Result<Int> = to(either)
+      original = ResultT::from_result::<Identity>(result)
+      transformed: EitherT<Error, Identity, Int> = to(original)
+      restored: ResultT<Identity, Int> = to(transformed)
+      assert_eq("preserved", observed(Identity::run(ResultT::run(restored))))
+    }
+  }
+  it("preserves the base Error independently of the inner Result") {
+    do {
+      base: Result<Result<Int>> = Err(ResultTFailure())
+      value = ResultT::new(base)
+      mapped = Functor::fmap(value, {|item| item + 1})
+      match ResultT::run(mapped) {
+        Err(error) => assert_eq("preserved", Error::message(error)),
+        Ok(_) => fail("expected base failure"),
+      }
+    }
+  }
+  it("sequences the mapper before the value and skips it after an inner Err") {
+    do {
+      base_mapper: State<Int, Result<(Int -> Int)>> = State::new({|state| (Err(ResultTFailure()), state + 1)})
+      mapper = ResultT::new(base_mapper)
+      base_value: State<Int, Result<Int>> = State::new({|state| (Ok(4), state + 100)})
+      value = ResultT::new(base_value)
+      applied = Applicative::ap(mapper, value)
+      (result, state) = State::run(ResultT::run(applied), 0)
+      assert_eq("preserved", observed(result))
+      assert_eq(1, state)
+    }
+  }
+  it("keeps a converted State computation deferred until run") {
+    do {
+      base: State<Int, Result<Int>> = State::new({|state| (Ok(state), state + 1)})
+      original = ResultT::new(base)
+      either = to::<EitherT>(original)
+      restored = to::<ResultT>(either)
+      (result, state) = State::run(ResultT::run(restored), 8)
+      assert_eq("8", observed(result))
+      assert_eq(9, state)
+    }
+  }
+
+}

@@ -7,15 +7,16 @@ use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
 use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
 
+use crate::parse_cache::{DocumentParseCache, ParseInput};
 use crate::{
     complete_prefix, extract_project_runner_input, lookup_symbol_at_cursor, parse_document,
-    parse_document_tolerant, repl_assist_at_cursor, resolve_context, resolve_project_runner_with,
-    signature_help_at_cursor, AnalysisContextRequest, AnalysisContextStatus, AnalysisMode,
-    AnalysisSpan, CompletionKind, CompletionRequest, CompletionResponse, CompletionSymbol,
-    DocumentSnapshot, DocumentStore, LineIndex, ProjectRunnerInput, ProjectRunnerSourceInput,
-    ReplAssist, ReplCompletionUseSite, ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic,
-    RunnerDiagnosticKind, ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation,
-    TextPosition, Utf16Position,
+    repl_assist_at_cursor, resolve_context, resolve_project_runner_with, signature_help_at_cursor,
+    AnalysisContextRequest, AnalysisContextStatus, AnalysisMode, AnalysisSpan, CompletionKind,
+    CompletionRequest, CompletionResponse, CompletionSymbol, DocumentSnapshot, DocumentStore,
+    LineIndex, ProjectRunnerInput, ProjectRunnerSourceInput, ReplAssist, ReplCompletionUseSite,
+    ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic, RunnerDiagnosticKind,
+    ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation, TextPosition,
+    Utf16Position,
 };
 
 pub trait AnalysisHost: std::fmt::Debug + Send + Sync {
@@ -120,6 +121,7 @@ pub struct AnalysisService {
     documents: DocumentStore,
     semantic_index: SemanticIndex,
     host: Arc<dyn AnalysisHost>,
+    parse_cache: DocumentParseCache,
 }
 
 impl AnalysisService {
@@ -132,6 +134,7 @@ impl AnalysisService {
             documents: DocumentStore::default(),
             semantic_index: SemanticIndex::default(),
             host,
+            parse_cache: DocumentParseCache::default(),
         }
     }
 
@@ -145,6 +148,7 @@ impl AnalysisService {
     }
 
     pub fn remove_document(&mut self, path: &Path) -> Option<DocumentSnapshot> {
+        self.parse_cache.remove(path);
         self.documents.remove(path)
     }
 
@@ -179,30 +183,24 @@ impl AnalysisService {
         let ast = if let Some(document) = active_document.as_ref() {
             let module_path = if context.context.source_kind == SourceKind::StdDefinitionSource {
                 standard_module_spec_for_path(&context, &context.context.active_file)
-                    .filter(|spec| spec.module_path == "Facet")
-                    .map(|spec| spec.module_path.to_string())
+                    .filter(|spec| spec.module_path == Some("Facet"))
+                    .and_then(|spec| spec.module_path.map(str::to_owned))
             } else {
                 module_path_for_document(context.context.mode.clone(), &context.context.active_file)
             };
             let compile_unit_kind = compile_unit_kind_for_active_context(&context);
-            let tolerant = parse_document_tolerant(
-                &document.text,
-                0,
-                context.context.source_kind,
+            let parse_input = ParseInput {
+                source: &document.text,
+                source_id: 0,
+                source_kind: context.context.source_kind,
                 compile_unit_kind,
-                module_path.clone(),
-                None,
-            );
+                module_path: module_path.as_deref(),
+            };
+            let tolerant = self.parse_cache.tolerant(&document.path, parse_input, None);
             editor_ast = Some(tolerant.ast.clone());
             syntax_outline = tolerant.outline.clone();
 
-            match parse_document(
-                &document.text,
-                0,
-                context.context.source_kind,
-                compile_unit_kind,
-                module_path,
-            ) {
+            match self.parse_cache.strict(&document.path, parse_input) {
                 Ok(ast) => {
                     semantic_index =
                         semantic_index_with_source_locations(&semantic_index, &document.path, &ast);
@@ -449,7 +447,17 @@ impl AnalysisService {
         };
 
         let script_source = self.source_for_path(&script_file)?;
-        let directive = match extract_load_project_directive(&script_source) {
+        let script_ast = self.parse_cache.strict(
+            &script_file,
+            ParseInput {
+                source: &script_source,
+                source_id: 0,
+                source_kind: SourceKind::Script,
+                compile_unit_kind: CompileUnitKind::Script,
+                module_path: None,
+            },
+        );
+        let directive = match extract_load_project_directive(script_ast) {
             Ok(Some(directive)) => directive,
             Ok(None) => return None,
             Err(diagnostic) => {
@@ -538,18 +546,17 @@ struct LoadProjectDirective {
 }
 
 fn extract_load_project_directive(
-    source: &str,
+    parsed: Result<Vec<Ast>, spire::error::ParseError>,
 ) -> Result<Option<LoadProjectDirective>, RunnerDiagnostic> {
-    let ast = parse_document(source, 0, SourceKind::Script, CompileUnitKind::Script, None)
-        .map_err(|error| {
-            let span = error.span();
-            RunnerDiagnostic {
-                kind: RunnerDiagnosticKind::LoadProjectUnsupported,
-                path: None,
-                span: Some(analysis_span(span)),
-                message: error.message(),
-            }
-        })?;
+    let ast = parsed.map_err(|error| {
+        let span = error.span();
+        RunnerDiagnostic {
+            kind: RunnerDiagnosticKind::LoadProjectUnsupported,
+            path: None,
+            span: Some(analysis_span(span)),
+            message: error.message(),
+        }
+    })?;
 
     let Some(first_non_include) = ast.iter().find(|node| !matches!(node, Ast::Include(_, _)))
     else {
@@ -963,17 +970,22 @@ fn qualify_symbol(owner: Option<&str>, name: &str) -> String {
     sindr::names::surface_rendered_name(&qualified)
 }
 
-struct AnalysisStandardEnvironment {
+struct PreparedStandardSources {
     module_stages: Vec<Vec<sigil::StagedModuleAst>>,
     source_asts: Vec<(PathBuf, Vec<Ast>)>,
+    semantics: OnceLock<Result<AnalysisStandardEnvironment, String>>,
+}
+
+struct AnalysisStandardEnvironment {
+    stage_count: usize,
     resolved: Vec<sigil::resolved::Resolved>,
     typed: Vec<scar::typed::TypedNode>,
     resolve_state: sigil::ResolveResumeState,
     scar_checkpoint: scar::ScarCheckpoint,
 }
 
-fn standard_environment() -> Result<&'static AnalysisStandardEnvironment, &'static String> {
-    static STANDARD: OnceLock<Result<AnalysisStandardEnvironment, String>> = OnceLock::new();
+fn standard_sources() -> Result<&'static PreparedStandardSources, &'static String> {
+    static STANDARD: OnceLock<Result<PreparedStandardSources, String>> = OnceLock::new();
     STANDARD
         .get_or_init(|| {
             let mut module_stages = vec![Vec::new(), Vec::new()];
@@ -986,10 +998,12 @@ fn standard_environment() -> Result<&'static AnalysisStandardEnvironment, &'stat
                     0,
                     SourceKind::StdDefinitionSource,
                     CompileUnitKind::DefinitionCheck,
-                    (spec.module_path == "Facet").then(|| spec.module_path.to_string()),
+                    spec.module_path
+                        .filter(|path| *path == "Facet")
+                        .map(str::to_owned),
                 )
                 .map_err(|error| format!("{}: {}", spec.file_name, error.message()))?;
-                let fallback = sigil::const_only_fallback_module_path(&ast, Some(spec.module_path));
+                let fallback = sigil::const_only_fallback_module_path(&ast, spec.module_path);
                 let modules = sigil::staged_modules_from_source_ast(ast.clone(), fallback);
                 for mut module in modules {
                     module.source_index = source_indices[stage];
@@ -998,10 +1012,25 @@ fn standard_environment() -> Result<&'static AnalysisStandardEnvironment, &'stat
                 source_indices[stage] += 1;
                 source_asts.push((PathBuf::from("<stdlib>").join(spec.file_name), ast));
             }
-            let declarations =
-                sigil::precollect_declarations(&module_stages).map_err(|error| error.message)?;
+            Ok(PreparedStandardSources {
+                module_stages,
+                source_asts,
+                semantics: OnceLock::new(),
+            })
+        })
+        .as_ref()
+}
+
+fn standard_environment(
+    sources: &PreparedStandardSources,
+) -> Result<&AnalysisStandardEnvironment, &String> {
+    sources
+        .semantics
+        .get_or_init(|| {
+            let declarations = sigil::precollect_declarations(&sources.module_stages)
+                .map_err(|error| error.message)?;
             let program = sigil::resolve_staged_program_with_state(
-                &module_stages,
+                &sources.module_stages,
                 Vec::new(),
                 &declarations.declaration_index,
                 None,
@@ -1013,16 +1042,12 @@ fn standard_environment() -> Result<&'static AnalysisStandardEnvironment, &'stat
             let typed = scar
                 .typecheck_staged_program_in_place_with_context(
                     program,
-                    scar::TypecheckContext::from_source_policy(
-                        SourceKind::StdDefinitionSource
-                            .policy(CompileUnitKind::DefinitionCheck, None),
-                    ),
+                    standard_typecheck_context(),
                 )
                 .map_err(|error| error.message)?
                 .nodes;
             Ok(AnalysisStandardEnvironment {
-                module_stages,
-                source_asts,
+                stage_count: sources.module_stages.len(),
                 resolved,
                 typed,
                 resolve_state,
@@ -1043,16 +1068,13 @@ fn analyze_stages(
     semantic_index: &mut SemanticIndex,
 ) {
     let source_stages = analysis_source_stages(context);
-    // A cached prefix's local IDs begin after its complete declaration index.
-    // Additional stages extend that index, so they must resolve and typecheck
-    // the standard prefix together with the project to keep IDs disjoint.
-    let standard = if context.context.source_kind == SourceKind::StdDefinitionSource
-        || source_stages.len() != 2
-    {
+    // Bundled syntax is independent of the project's declaration UID space.
+    // Standard editing must instead parse the current document sources.
+    let prepared_standard = if context.context.source_kind == SourceKind::StdDefinitionSource {
         None
     } else {
-        match standard_environment() {
-            Ok(standard) => Some(standard),
+        match standard_sources() {
+            Ok(sources) => Some(sources),
             Err(message) => {
                 diagnostics.push(AnalysisDiagnostic {
                     kind: AnalysisDiagnosticKind::Typecheck,
@@ -1066,11 +1088,31 @@ fn analyze_stages(
             }
         }
     };
+    // Additional stages extend the declaration index. Rebuild semantics against
+    // that complete index so standard local IDs remain disjoint from project IDs.
+    let standard = if source_stages.len() == 2 {
+        match prepared_standard.map(standard_environment).transpose() {
+            Ok(standard) => standard,
+            Err(message) => {
+                diagnostics.push(AnalysisDiagnostic {
+                    kind: AnalysisDiagnosticKind::Typecheck,
+                    severity: AnalysisSeverity::Error,
+                    path: PathBuf::from("<stdlib>"),
+                    range: None,
+                    message: message.clone(),
+                    related: Vec::new(),
+                });
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let Some(module_stages) = build_staged_modules(
         service,
         context,
         &source_stages,
-        standard,
+        prepared_standard,
         active_document,
         diagnostics,
         semantic_index,
@@ -1118,19 +1160,25 @@ fn analyze_stages(
             return;
         }
     };
-    let semantic_declarations =
-        match precollect_declarations_with_active_ast(&module_stages, &user_ast, None) {
-            Ok(precollected) => precollected,
-            Err(error) => {
-                diagnostics.push(diagnostic_from_project_resolve_error(
-                    service,
-                    &source_stages,
-                    active_document,
-                    &error,
-                ));
-                return;
-            }
-        };
+    let active_declarations;
+    let semantic_declarations = if user_ast.is_empty() {
+        &prefix_declarations
+    } else {
+        active_declarations =
+            match precollect_declarations_with_active_ast(&module_stages, &user_ast, None) {
+                Ok(precollected) => precollected,
+                Err(error) => {
+                    diagnostics.push(diagnostic_from_project_resolve_error(
+                        service,
+                        &source_stages,
+                        active_document,
+                        &error,
+                    ));
+                    return;
+                }
+            };
+        &active_declarations
+    };
     *semantic_index = semantic_index_with_declarations(
         semantic_index,
         &semantic_declarations.owner_registry,
@@ -1143,12 +1191,77 @@ fn analyze_stages(
         active_stage_index_for_document(&source_stages, active_document),
     );
 
+    // Project declarations extend the global UID space. Rebuild the standard
+    // prefix against that complete index, but check it with its own declaration
+    // authority before entering any user stage.
+    let rebuilt_standard = if standard.is_none() {
+        let standard_stage_count = source_stages
+            .iter()
+            .take_while(|stage| {
+                !stage.files.is_empty()
+                    && stage
+                        .files
+                        .iter()
+                        .all(|file| file.source_kind == SourceKind::StdDefinitionSource)
+            })
+            .count();
+        let prefix_stages = module_stages[..standard_stage_count].to_vec();
+        let program = match sigil::resolve_staged_program_with_state(
+            &prefix_stages,
+            Vec::new(),
+            &prefix_declarations.declaration_index,
+            None,
+        ) {
+            Ok(program) => program,
+            Err(error) => {
+                diagnostics.push(diagnostic_from_span(
+                    AnalysisDiagnosticKind::Resolve,
+                    AnalysisSeverity::Error,
+                    active_document,
+                    error.span.start,
+                    error.span.end,
+                    error.message,
+                ));
+                return;
+            }
+        };
+        let resolved = program.resolved.clone();
+        let resolve_state = program.resume_state;
+        let mut scar = scar::ScarSession::new();
+        let typed = match scar
+            .typecheck_staged_program_in_place_with_context(program, standard_typecheck_context())
+        {
+            Ok(program) => program.nodes,
+            Err(error) => {
+                diagnostics.push(diagnostic_from_span(
+                    AnalysisDiagnosticKind::Typecheck,
+                    AnalysisSeverity::Error,
+                    active_document,
+                    error.span.start,
+                    error.span.end,
+                    error.message,
+                ));
+                return;
+            }
+        };
+        Some(AnalysisStandardEnvironment {
+            stage_count: prefix_stages.len(),
+            resolved,
+            typed,
+            resolve_state,
+            scar_checkpoint: scar.checkpoint(),
+        })
+    } else {
+        None
+    };
+    let standard = standard.or(rebuilt_standard.as_ref());
+
     match sigil::resolve_staged_program_from_state(
         &module_stages,
         user_ast,
         &prefix_declarations.declaration_index,
         None,
-        standard.map_or(0, |prefix| prefix.module_stages.len()),
+        standard.map_or(0, |prefix| prefix.stage_count),
         standard.map_or_else(sigil::ResolveResumeState::default, |prefix| {
             prefix.resolve_state
         }),
@@ -1197,10 +1310,6 @@ fn precollect_declarations_with_active_ast(
     active_ast: &[Ast],
     user_module_path: Option<&str>,
 ) -> Result<sigil::PrecollectedDeclarations, sigil::error::ResolveError> {
-    if active_ast.is_empty() {
-        return sigil::precollect_declarations(module_stages);
-    }
-
     let active_owner_modules = active_ast
         .iter()
         .cloned()
@@ -1367,7 +1476,7 @@ fn build_staged_modules(
     service: &AnalysisService,
     context: &ResolvedAnalysisContext,
     source_stages: &[crate::ModuleStage],
-    standard: Option<&AnalysisStandardEnvironment>,
+    standard: Option<&PreparedStandardSources>,
     active_document: &DocumentSnapshot,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
     semantic_index: &mut SemanticIndex,
@@ -1387,31 +1496,28 @@ fn build_staged_modules(
             };
             let standard_module = standard_module_spec_for_path(context, &file.path);
             let parser_module_path = standard_module
-                .filter(|spec| spec.module_path == "Facet")
-                .map(|spec| spec.module_path.to_string());
-            let ast = if file.path == active_document.path {
-                parse_document(
-                    &active_document.text,
-                    0,
-                    file.source_kind,
+                .filter(|spec| spec.module_path == Some("Facet"))
+                .and_then(|spec| spec.module_path.map(str::to_owned));
+            let ast = service.parse_cache.strict(
+                &file.path,
+                ParseInput {
+                    source: if file.path == active_document.path {
+                        &active_document.text
+                    } else {
+                        &source
+                    },
+                    source_id: 0,
+                    source_kind: file.source_kind,
                     compile_unit_kind,
-                    parser_module_path.clone(),
-                )
-            } else {
-                parse_document(
-                    &source,
-                    0,
-                    file.source_kind,
-                    compile_unit_kind,
-                    parser_module_path.clone(),
-                )
-            };
+                    module_path: parser_module_path.as_deref(),
+                },
+            );
             match ast {
                 Ok(ast) => {
                     *semantic_index =
                         semantic_index_with_source_locations(semantic_index, &file.path, &ast);
                     let fallback_module_path = if let Some(spec) = standard_module {
-                        sigil::const_only_fallback_module_path(&ast, Some(spec.module_path))
+                        sigil::const_only_fallback_module_path(&ast, spec.module_path)
                             .map(str::to_string)
                     } else {
                         fallback_module_path_for_const_only_project_file(&file.path, &ast)
@@ -1777,6 +1883,16 @@ fn should_analyze_project_stages(context: &ResolvedAnalysisContext) -> bool {
             .is_some_and(|entry| entry == &context.context.active_file)
 }
 
+fn standard_typecheck_context() -> scar::TypecheckContext {
+    scar::TypecheckContext {
+        runtime_policy: SourceKind::StdDefinitionSource
+            .policy(CompileUnitKind::DefinitionCheck, None)
+            .runtime_policy,
+        enforce_builtin_type_contracts: true,
+        allow_private_facet_inspection: false,
+    }
+}
+
 fn typecheck_context_for_analysis(context: &ResolvedAnalysisContext) -> scar::TypecheckContext {
     let compile_unit_kind = compile_unit_kind_for_mode(&context.context.mode);
     let entrypoint = context
@@ -1810,6 +1926,193 @@ fn _text_position_for_byte(line_index: &LineIndex, byte_offset: usize) -> TextPo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn standalone_context(path: &Path) -> ResolvedAnalysisContext {
+        resolve_context(AnalysisContextRequest {
+            workspace_root: PathBuf::from("/repo"),
+            active_file: path.to_path_buf(),
+            selected_context: Some(SelectedContext::DefinitionStandalone),
+            runner_selection: None,
+            open_documents: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn active_document_parse_reuse_preserves_strict_failure_and_tolerant_outline() {
+        let mut service = AnalysisService::new();
+        let path = PathBuf::from("/repo/main.srt");
+        service.update_document(
+            path.clone(),
+            Some(1),
+            "defmod Good { def good() -> Int { 1 } }\ndefmod Bad { def bad(".into(),
+        );
+        let first = service.analyze(standalone_context(&path));
+        let second = service.analyze(standalone_context(&path));
+        assert!(first.ast.is_none());
+        assert!(!first.diagnostics.is_empty());
+        assert!(!first.syntax_outline.is_empty());
+        assert_eq!(first.diagnostics, second.diagnostics);
+        assert_eq!(first.editor_ast, second.editor_ast);
+        assert_eq!(first.syntax_outline, second.syntax_outline);
+        assert_eq!(service.parse_cache.stats().strict_calls, 1);
+        assert_eq!(service.parse_cache.stats().tolerant_calls, 1);
+
+        service.update_document(
+            path.clone(),
+            Some(1),
+            "defmod Better { def good() -> Int { 2 } }\ndefmod Bad { def bad(".into(),
+        );
+        let changed = service.analyze(standalone_context(&path));
+        assert_ne!(first.syntax_outline, changed.syntax_outline);
+        assert_eq!(service.parse_cache.stats().strict_calls, 2);
+        assert_eq!(service.parse_cache.stats().tolerant_calls, 2);
+    }
+
+    #[test]
+    fn service_clones_parse_their_own_document_contents() {
+        let path = PathBuf::from("/repo/shared.srt");
+        let mut first = AnalysisService::new();
+        first.update_document(path.clone(), Some(1), "defmod First { def bad(".into());
+        let mut second = first.clone();
+        second.update_document(path.clone(), Some(1), "defmod Second { def bad(".into());
+
+        let first_result = first.analyze(standalone_context(&path));
+        let second_result = second.analyze(standalone_context(&path));
+        assert_ne!(first_result.syntax_outline, second_result.syntax_outline);
+        assert_eq!(
+            first.analyze(standalone_context(&path)).syntax_outline,
+            first_result.syntax_outline
+        );
+        assert_eq!(
+            second.analyze(standalone_context(&path)).syntax_outline,
+            second_result.syntax_outline
+        );
+        assert_eq!(first.parse_cache.stats().strict_calls, 4);
+        assert_eq!(second.parse_cache.stats().tolerant_calls, 4);
+    }
+
+    #[test]
+    fn module_parse_reuse_reads_current_host_and_unsaved_document_sources() {
+        #[derive(Debug)]
+        struct ChangingHost(std::sync::Mutex<String>);
+        impl AnalysisHost for ChangingHost {
+            fn read_to_string(&self, _path: &Path) -> Option<String> {
+                Some(self.0.lock().unwrap().clone())
+            }
+        }
+
+        let host = Arc::new(ChangingHost(std::sync::Mutex::new(
+            "defmod Helper { def value() -> Int { 1 } }".into(),
+        )));
+        let mut service = AnalysisService::with_host(host.clone());
+        let active =
+            service.update_document(PathBuf::from("/repo/main.srt"), Some(1), String::new());
+        let context = standalone_context(&active.path);
+        let module = PathBuf::from("/repo/module.srt");
+        let stages = vec![crate::ModuleStage {
+            files: vec![crate::ModuleFileFingerprint {
+                path: module.clone(),
+                source_kind: SourceKind::DefinitionSource,
+                content_hash: "unchanged-runner-fingerprint".into(),
+            }],
+        }];
+        let parse = |service: &AnalysisService| {
+            let mut diagnostics = Vec::new();
+            let parsed = build_staged_modules(
+                service,
+                &context,
+                &stages,
+                None,
+                &active,
+                &mut diagnostics,
+                &mut SemanticIndex::default(),
+            );
+            (parsed, diagnostics)
+        };
+
+        let (first, diagnostics) = parse(&service);
+        assert!(diagnostics.is_empty());
+        assert!(first.is_some());
+        assert!(parse(&service).0.is_some());
+        assert_eq!(service.parse_cache.stats().strict_calls, 1);
+
+        service.update_document(
+            module.clone(),
+            Some(1),
+            "defmod Helper { def value() -> Int { 2 } }".into(),
+        );
+        let (overlay, diagnostics) = parse(&service);
+        assert!(diagnostics.is_empty());
+        assert_ne!(
+            first.as_ref().unwrap()[0][0].ast,
+            overlay.as_ref().unwrap()[0][0].ast
+        );
+        assert!(parse(&service).0.is_some());
+        assert_eq!(service.parse_cache.stats().strict_calls, 2);
+
+        service.remove_document(&module);
+        *host.0.lock().unwrap() = "defmod Helper { def value(".into();
+        let (broken, diagnostics) = parse(&service);
+        assert!(broken.is_none());
+        assert!(!diagnostics.is_empty());
+        assert_eq!(diagnostics, parse(&service).1);
+        assert_eq!(service.parse_cache.stats().strict_calls, 3);
+    }
+
+    #[test]
+    fn project_standard_syntax_reuse_leaves_parse_cache_for_current_documents() {
+        let mut service = AnalysisService::new();
+        let path = PathBuf::from("/repo/helper.srt");
+        let active = service.update_document(
+            path.clone(),
+            Some(1),
+            "defmod Helper { def value() -> Int { 1 } }".into(),
+        );
+        let mut context = standalone_context(&path);
+        let mut stages = analysis_source_stages(&context);
+        context.context.mode = AnalysisMode::Project;
+        stages.push(crate::ModuleStage {
+            files: vec![crate::ModuleFileFingerprint {
+                path: path.clone(),
+                source_kind: SourceKind::DefinitionSource,
+                content_hash: "unchanged-runner-fingerprint".into(),
+            }],
+        });
+        let standard = standard_sources().expect("bundled standard syntax");
+        let parse = |service: &AnalysisService, active: &DocumentSnapshot| {
+            let mut diagnostics = Vec::new();
+            let parsed = build_staged_modules(
+                service,
+                &context,
+                &stages,
+                Some(standard),
+                active,
+                &mut diagnostics,
+                &mut SemanticIndex::default(),
+            )
+            .expect("project stages should parse");
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(&parsed[..2], standard.module_stages.as_slice());
+            parsed
+        };
+
+        let first = parse(&service, &active);
+        assert_eq!(first.len(), 3);
+        assert_eq!(service.parse_cache.stats().strict_calls, 1);
+        assert_eq!(parse(&service, &active), first);
+        assert_eq!(service.parse_cache.stats().strict_calls, 1);
+
+        let changed = service.update_document(
+            path,
+            Some(1),
+            "defmod Helper { def value() -> Int { 2 } }".into(),
+        );
+        let second = parse(&service, &changed);
+        assert_ne!(first[2][0].ast, second[2][0].ast);
+        assert_eq!(service.parse_cache.stats().strict_calls, 2);
+        assert_eq!(parse(&service, &changed), second);
+        assert_eq!(service.parse_cache.stats().strict_calls, 2);
+    }
 
     #[test]
     fn canonical_enum_variant_source_locations_link_aliases_to_the_same_declaration() {

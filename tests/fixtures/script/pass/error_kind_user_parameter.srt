@@ -1,0 +1,2 @@
+def exposed(kind: ErrorKind) -> Int { 1 }
+print(inspect(exposed(NoneError)))

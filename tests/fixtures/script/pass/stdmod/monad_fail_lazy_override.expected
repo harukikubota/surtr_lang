@@ -1,0 +1,16 @@
+error
+Either::Left("stop")
+success
+Either::Right(3)
+error
+success
+Either::Right(3)
+success
+error
+Either::Left("stop")
+success
+Either::Right(3)
+error
+True
+result-success
+Ok(5)

@@ -36,7 +36,7 @@ impl ReplMode {
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// One evaluation unit in the results pane.
-/// `source` is preserved so `:v idx` can restore it to the input buffer.
+/// `source` is preserved for the result card; `:v` uses the engine value history.
 #[derive(Debug, Clone)]
 pub(super) struct ResultEntry {
     pub(super) idx: usize,
@@ -151,6 +151,7 @@ impl InputBuffer {
         self.cursor_byte = 0;
     }
 
+    #[cfg(test)]
     pub(super) fn set(&mut self, text: String) {
         self.cursor_byte = text.len();
         self.text = text;

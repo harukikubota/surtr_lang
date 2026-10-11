@@ -29,12 +29,16 @@ impl Resolver {
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
                             | DeclarationKind::Record
+                            | DeclarationKind::Deferror
                     )
                 ) || args
                     .iter()
                     .filter_map(|arg| arg.pattern.as_deref())
                     .any(|item| self.pattern_has_deferred_application(item))
             }
+            AstPattern::HashMap(_, entries) => entries
+                .iter()
+                .any(|(_, child)| self.pattern_has_deferred_application(child)),
             AstPattern::Constructor(_, _, items)
             | AstPattern::Tuple(_, items)
             | AstPattern::Or(_, items) => items
@@ -71,6 +75,7 @@ impl Resolver {
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
                             | DeclarationKind::Record
+                            | DeclarationKind::Deferror
                     )
                 ) {
                     return Ok(pattern);
@@ -105,7 +110,10 @@ impl Resolver {
                     ));
                 }
                 for (index, argument) in args.iter_mut().enumerate() {
-                    if matches!(kind, Some(DeclarationKind::Record)) {
+                    if matches!(
+                        kind,
+                        Some(DeclarationKind::Record | DeclarationKind::Deferror)
+                    ) {
                         if let Some((_, named_child)) = argument.named_pattern.as_mut() {
                             **named_child =
                                 self.select_pattern_argument_roles(*named_child.clone())?;
@@ -135,6 +143,11 @@ impl Resolver {
                             Some(Box::new(self.select_pattern_argument_roles(*child)?));
                         argument.expression = None;
                     }
+                }
+            }
+            AstPattern::HashMap(_, entries) => {
+                for (_, child) in entries {
+                    *child = self.select_pattern_argument_roles(child.clone())?;
                 }
             }
             AstPattern::Constructor(_, _, items)
@@ -276,6 +289,22 @@ impl Resolver {
                     annotation,
                 })
             }
+            AstPattern::HashMap(span, entries) => {
+                let mut resolved = Vec::with_capacity(entries.len());
+                for (key, child_pattern) in entries {
+                    // Keys share the pre-pattern scope even after earlier values bind names.
+                    let next_id = self.scope.next_id();
+                    let key = self.with_child_scope(|child| {
+                        child.scope = outer.clone();
+                        child.scope.advance_next_id_to(next_id);
+                        child.pattern_proxies = None;
+                        child.resolve_node(key)
+                    })?;
+                    let child_pattern = self.resolve_pattern_inner(child_pattern, seen, outer)?;
+                    resolved.push((key, child_pattern));
+                }
+                Ok(ResolvedPattern::HashMap(span, resolved))
+            }
             AstPattern::Var(span, name) => Ok(ResolvedPattern::Var(
                 self.define_pattern_binding(name, span, seen)?,
             )),
@@ -363,6 +392,7 @@ impl Resolver {
                             | DeclarationKind::Struct
                             | DeclarationKind::EnumVariant
                             | DeclarationKind::Record
+                            | DeclarationKind::Deferror
                     )
                 ) {
                     let head = self.pattern_id(head_name, head_uid, span);
@@ -429,23 +459,36 @@ impl Resolver {
                     symbol_info: self.symbol_info_for_uid(&head_name, head_uid),
                     span: span.clone(),
                 };
-                if matches!(head_kind, DeclarationKind::Record) {
+                if matches!(
+                    head_kind,
+                    DeclarationKind::Record | DeclarationKind::Deferror
+                ) {
+                    let named_record = matches!(head_kind, DeclarationKind::Record)
+                        && inners
+                            .iter()
+                            .any(|argument| argument.named_pattern.is_some());
                     let mut fields = Vec::with_capacity(inners.len());
                     for argument in inners {
                         let (name, pattern) = if let Some((name, pattern)) = argument.named_pattern
                         {
                             (Some(name), pattern)
                         } else {
-                            (
-                                None,
-                                argument.pattern.ok_or_else(|| {
-                                    deferred_pattern_parse_error(
-                                        argument.pattern_error,
-                                        "Record field argument must be a Pattern",
-                                        argument.span,
-                                    )
-                                })?,
-                            )
+                            let pattern = argument.pattern.ok_or_else(|| {
+                                deferred_pattern_parse_error(
+                                    argument.pattern_error,
+                                    "Record field argument must be a Pattern",
+                                    argument.span,
+                                )
+                            })?;
+                            let name = if named_record {
+                                match pattern.as_ref() {
+                                    AstPattern::Var(_, name) => Some(name.clone()),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+                            (name, pattern)
                         };
                         let pattern = self.select_pattern_argument_roles(*pattern)?;
                         fields.push((name, self.resolve_pattern_inner(pattern, seen, outer)?));
@@ -719,6 +762,11 @@ fn remap_or_pattern_bindings(
                 remap_or_pattern_bindings(item, common_ids)?;
             }
         }
+        ResolvedPattern::HashMap(_, entries) => {
+            for (_, child) in entries {
+                remap_or_pattern_bindings(child, common_ids)?;
+            }
+        }
         ResolvedPattern::Record(_, fields) => {
             for (_, inner) in fields {
                 remap_or_pattern_bindings(inner, common_ids)?;
@@ -742,6 +790,11 @@ fn remap_or_pattern_bindings(
 
 fn collect_candidate_binding_names(pattern: &AstPattern, out: &mut Vec<(String, Span)>) {
     match pattern {
+        AstPattern::HashMap(_, entries) => {
+            for (_, child) in entries {
+                collect_candidate_binding_names(child, out);
+            }
+        }
         AstPattern::Projection { inner, .. } => collect_candidate_binding_names(inner, out),
         AstPattern::Var(span, name) | AstPattern::Annotated(span, name, _) => {
             out.push((name.clone(), span.clone()))
@@ -817,6 +870,11 @@ fn collect_pattern_bindings_preorder(
     out: &mut Vec<(String, Span)>,
 ) -> Result<(), ResolveError> {
     match pat {
+        AstPattern::HashMap(_, entries) => {
+            for (_, child) in entries {
+                collect_pattern_bindings_preorder(child, out)?;
+            }
+        }
         AstPattern::Projection { inner, .. } => collect_pattern_bindings_preorder(inner, out)?,
         AstPattern::Var(span, name) | AstPattern::Annotated(span, name, _) => {
             out.push((name.clone(), span.clone()));
@@ -852,12 +910,18 @@ fn collect_pattern_bindings_preorder(
                     return Err(error);
                 }
                 if let Some(expected) = &common {
-                    let expected_names = expected.iter().map(|(name, _)| name).collect::<Vec<_>>();
-                    let actual_names = bindings.iter().map(|(name, _)| name).collect::<Vec<_>>();
+                    let expected_names = expected
+                        .iter()
+                        .map(|(name, _)| name)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    let actual_names = bindings
+                        .iter()
+                        .map(|(name, _)| name)
+                        .collect::<std::collections::BTreeSet<_>>();
                     if expected_names != actual_names {
                         return Err(ResolveError {
                             message: format!(
-                                "OR pattern alternatives must bind the same binding names in the same order: expected {:?}, got {:?}",
+                                "OR pattern alternatives must bind the same binding names: expected {:?}, got {:?}",
                                 expected_names, actual_names
                             ),
                             span: span.clone(),
@@ -928,6 +992,7 @@ fn collect_as_sequence_bindings(
 
 fn pattern_sequence_items(pattern: &AstPattern) -> Option<Vec<&AstPattern>> {
     match pattern {
+        AstPattern::HashMap(_, entries) => Some(entries.iter().map(|(_, child)| child).collect()),
         AstPattern::Tuple(_, items) | AstPattern::Constructor(_, _, items) => {
             Some(items.iter().collect())
         }

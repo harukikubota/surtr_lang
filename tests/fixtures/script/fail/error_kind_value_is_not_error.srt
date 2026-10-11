@@ -1,0 +1,2 @@
+kind = NoneError
+error: Error = kind

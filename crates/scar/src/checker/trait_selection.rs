@@ -8,6 +8,7 @@ use diagnostics::{
 use sindr::names::TypeName;
 use std::rc::Rc;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct MethodTypeEnvironment {
     pub bindings: HashMap<String, Ty>,
     pub head_bindings: HashMap<String, Ty>,
@@ -475,7 +476,10 @@ impl Checker {
                     .map(|ty| recurse(ty))
                     .collect::<Result<_, _>>()?,
             ),
-            Ty::Pid(name) => CanonicalTy::new(CanonicalTypeHead::Pid(name.clone()), vec![]),
+            Ty::Pid(marker) => CanonicalTy::new(CanonicalTypeHead::Pid, vec![recurse(marker)?]),
+            Ty::ProcessMarker(name) => {
+                CanonicalTy::new(CanonicalTypeHead::ProcessMarker(name.clone()), vec![])
+            }
             Ty::Enum(name, args) => CanonicalTy::new(
                 self.canonical_nominal_head(name)?,
                 args.iter().map(recurse).collect::<Result<_, _>>()?,
@@ -508,7 +512,8 @@ impl Checker {
         }
         match sindr::names::builtin_type_name(name) {
             Some(
-                kind @ (TypeName::Regex
+                kind @ (TypeName::ErrorKind
+                | TypeName::Regex
                 | TypeName::RegexCaptures
                 | TypeName::RegexMatch
                 | TypeName::RandomGenerator
@@ -606,15 +611,51 @@ impl Checker {
             }
         }
         match (ast, resolved) {
+            (AstTy::Generic(_, _, args), Ty::Pid(marker)) if args.len() == 1 => {
+                Ok(CanonicalTy::new(
+                    CanonicalTypeHead::Pid,
+                    vec![self.canonical_ast_type(&args[0], marker, raw, environment)?],
+                ))
+            }
+            (AstTy::Generic(_, name, args), Ty::Enum(owner, resolved_args))
+                if matches!(Self::surface_name(name), "Workers" | "WorkerLease")
+                    && args.len() == 1 =>
+            {
+                let [Ty::Pid(marker)] = resolved_args.as_slice() else {
+                    return Err(TypeError::new(
+                        "Invalid worker handle marker type",
+                        Self::ast_ty_span(ast).clone(),
+                    ));
+                };
+                let inner = self.canonical_ast_type(&args[0], marker, raw, environment)?;
+                Ok(CanonicalTy::new(
+                    self.canonical_nominal_head(owner)?,
+                    vec![CanonicalTy::new(CanonicalTypeHead::Pid, vec![inner])],
+                ))
+            }
             (
                 AstTy::Generic(_, _, args),
                 Ty::Struct(owner, _) | Ty::Record(owner, _) | Ty::Enum(owner, _),
-            ) => Ok(CanonicalTy::new(
-                self.canonical_nominal_head(owner)?,
-                args.iter()
-                    .map(|arg| self.resolve_canonical_ast_type(arg, raw, environment))
-                    .collect::<Result<_, _>>()?,
-            )),
+            ) => {
+                let arguments = match resolved {
+                    Ty::Struct(_, nominal) | Ty::Record(_, nominal) => &nominal.arguments,
+                    Ty::Enum(_, arguments) => arguments,
+                    _ => unreachable!("nominal type guard"),
+                };
+                if args.len() != arguments.len() {
+                    return Err(TypeError::new(
+                        "Internal error: resolved nominal argument arity mismatch",
+                        Self::ast_ty_span(ast).clone(),
+                    ));
+                }
+                Ok(CanonicalTy::new(
+                    self.canonical_nominal_head(owner)?,
+                    args.iter()
+                        .zip(arguments)
+                        .map(|(arg, ty)| self.canonical_ast_type(arg, ty, raw, environment))
+                        .collect::<Result<_, _>>()?,
+                ))
+            }
             (AstTy::Tuple(_, args), Ty::Tuple(types)) => Ok(CanonicalTy::new(
                 CanonicalTypeHead::Tuple,
                 args.iter()
@@ -622,6 +663,15 @@ impl Checker {
                     .map(|(arg, ty)| self.canonical_ast_type(arg, ty, raw, environment))
                     .collect::<Result<_, _>>()?,
             )),
+            (ast, Ty::Func(parameters, result))
+                if parameters.is_empty() && Self::lazy_parameter_inner(ast).is_some() =>
+            {
+                let inner = Self::lazy_parameter_inner(ast).expect("matched Lazy parameter");
+                Ok(CanonicalTy::new(
+                    CanonicalTypeHead::Function,
+                    vec![self.canonical_ast_type(inner, result, raw, environment)?],
+                ))
+            }
             (AstTy::Func(_, params, ret), Ty::Func(types, result)) => {
                 let mut args = params
                     .iter()
@@ -1080,9 +1130,8 @@ impl Checker {
                 CanonicalTypeHead::Facet(kind) => {
                     return format!("Facet<{}, {}>", kind.as_str(), args.join(", "));
                 }
-                CanonicalTypeHead::Pid(name) => {
-                    return format!("PID<{}>", Checker::surface_name(name));
-                }
+                CanonicalTypeHead::Pid => "PID".into(),
+                CanonicalTypeHead::ProcessMarker(name) => Checker::surface_name(name).to_string(),
                 CanonicalTypeHead::Hole => return "_".into(),
             };
             if args.is_empty() {
@@ -1205,7 +1254,6 @@ impl CanonicalTraitImplPatternKey {
 #[derive(Default)]
 struct CanonicalUnifier {
     bindings: HashMap<u32, Rc<CanonicalTy>>,
-    allow_ignored_callable_inputs: bool,
     rigid_variables: HashSet<u32>,
 }
 // A bound root stays alive while recursive comparisons add new bindings.
@@ -1278,28 +1326,10 @@ impl CanonicalUnifier {
         if left.head != right.head || left.arguments.len() != right.arguments.len() {
             return false;
         }
-        // Preserve the input contract at entry to this function comparison.
-        // An earlier input may bind a variable to Hole, but that must not make
-        // a later input ignored retroactively.
-        let ignored_inputs =
-            if self.allow_ignored_callable_inputs && left.head == CanonicalTypeHead::Function {
-                right
-                    .arguments
-                    .iter()
-                    .enumerate()
-                    .map(|(ordinal, ty)| {
-                        ordinal + 1 < right.arguments.len()
-                            && self.resolve_root(ty).head == CanonicalTypeHead::Hole
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
         left.arguments
             .iter()
             .zip(&right.arguments)
-            .enumerate()
-            .all(|(ordinal, (a, b))| ignored_inputs.get(ordinal) == Some(&true) || self.unify(a, b))
+            .all(|(a, b)| self.unify(a, b))
     }
 
     /// Compare a constructor witness with an observed application.  `Hole`
@@ -1372,6 +1402,254 @@ mod applicability_tests {
         );
         checker.check_program(resolved).unwrap();
         checker
+    }
+
+    #[test]
+    fn checked_method_obligations_detach_only_the_child_implementation() {
+        let source = "deftrait Needed { def need(self: Self) -> Int }\nimpl Needed for Int { def need(self: Self) -> Int { self } }\ndeftrait Carrier { def carry(self: Self) -> Int }\nimpl Carrier for Int { def carry(self: Self) -> Int { Needed::need(self) } }";
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut parent = checker(source);
+        let key = parent.trait_impl_candidate_keys("Carrier").pop().unwrap();
+        let initial = &parent.trait_impls[&key];
+        assert!(!initial.methods["carry"].body_obligations.is_empty());
+        assert_eq!(
+            bincode::serialize(initial).unwrap(),
+            bincode::serialize(initial.as_ref()).unwrap(),
+        );
+        // Recheck a registered method whose body obligations have not yet been
+        // recorded in this branch, as during declaration/body checking.
+        Arc::make_mut(parent.trait_impls.get_mut(&key).unwrap())
+            .methods
+            .get_mut("carry")
+            .unwrap()
+            .body_obligations
+            .clear();
+        let checkpoint = parent
+            .persistent_state_with_env(parent.env.clone())
+            .checkpoint(Vec::new());
+        let sibling = parent.spawn_child_checker(parent.env.clone());
+        let mut child = parent.spawn_child_checker(parent.env.clone());
+        let untouched_key = parent
+            .trait_impls
+            .keys()
+            .find(|candidate| *candidate != &key)
+            .unwrap()
+            .clone();
+        assert!(Arc::ptr_eq(
+            &parent.trait_impls[&key],
+            &child.trait_impls[&key]
+        ));
+
+        let Resolved::TraitImplDef(span, declaration, trait_id, arguments, target, constraints, methods) = resolved
+            .iter()
+            .find(|node| matches!(node, Resolved::TraitImplDef(_, _, trait_id, ..) if trait_id.name == "Carrier"))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        child
+            .check_trait_impl_items(
+                span,
+                *declaration,
+                trait_id,
+                arguments,
+                target,
+                constraints.as_ref(),
+                methods,
+            )
+            .unwrap();
+        assert!(!child.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(parent.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(sibling.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(checkpoint.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(!Arc::ptr_eq(
+            &parent.trait_impls[&key],
+            &child.trait_impls[&key]
+        ));
+        assert!(Arc::ptr_eq(
+            &parent.trait_impls[&untouched_key],
+            &child.trait_impls[&untouched_key]
+        ));
+
+        parent.absorb_child_progress(&child);
+        assert!(Arc::ptr_eq(
+            &parent.trait_impls[&key],
+            &child.trait_impls[&key]
+        ));
+        assert!(!parent.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        assert!(sibling.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+        let bytes = bincode::serialize(&checkpoint).unwrap();
+        let restored: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
+        assert!(restored.trait_impls[&key].methods["carry"]
+            .body_obligations
+            .is_empty());
+    }
+
+    #[test]
+    fn required_constructor_cycle_restores_relation_state_and_cannot_be_serialized() {
+        let mut checker = checker(
+            r#"
+deftrait First where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+deftrait Second where Self: Type<$A> { def use(self: Self<Int>) -> Int }
+impl First for List<$A> where Self: Second {
+  def use(self: List<Int>) -> Int { Second::use(self) }
+}
+impl Second for List<$A> where Self: First {
+  def use(self: List<Int>) -> Int { First::use(self) }
+}
+"#,
+        );
+        let trait_key = checker.trait_key_by_short_name("First").unwrap();
+        let variable = checker.env.fresh_tyvar();
+        let Ty::Var(witness) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        checker
+            .constructor_witness_traits
+            .insert(witness, trait_key.clone());
+        let expected = Ty::Tuple(vec![
+            variable.clone(),
+            Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness), Ty::Int]),
+        ]);
+        let actual = Ty::Tuple(vec![Ty::Bool, Ty::List(Box::new(Ty::Int))]);
+        let span = Span { start: 10, end: 20 };
+        let substitutions = checker.substitutions.clone();
+        let bounds = checker.tyvar_bounds.clone();
+        let obligations = checker.pending_trait_obligations.clone();
+        let error = checker
+            .assert_type_relation(
+                &expected,
+                &actual,
+                checker.type_fact(diagnostics::SourceRole::Expected, &span, &expected),
+                checker.type_fact(diagnostics::SourceRole::Value, &span, &actual),
+                diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch,
+                diagnostics::DiagnosticOrigin::Call,
+                "accept",
+                0,
+            )
+            .expect_err("the second tuple element requires the cyclic proof");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+        );
+        assert_eq!(error.span, span);
+        assert_eq!(checker.substitutions, substitutions);
+        assert_eq!(checker.tyvar_bounds, bounds);
+        assert_eq!(checker.pending_trait_obligations, obligations);
+        let left = TypedNode {
+            ty: expected.clone(),
+            span: span.clone(),
+            node: TypedInner::Lit(spire::ast::Lit::Unit),
+        };
+        let right = TypedNode {
+            ty: actual.clone(),
+            span: span.clone(),
+            node: TypedInner::Lit(spire::ast::Lit::Unit),
+        };
+        for payload in [false, true] {
+            let error = if payload {
+                checker.assert_operand_relation(
+                    &expected,
+                    &actual,
+                    &left,
+                    &right,
+                    diagnostics::TypeDiagnosticReason::TypePayloadMismatch,
+                    "bind",
+                    "|>=",
+                    Some(&trait_key),
+                    diagnostics::SourceRole::LeftValue,
+                )
+            } else {
+                checker.assert_carrier_relation(
+                    &expected,
+                    &actual,
+                    &left,
+                    &right,
+                    &trait_key,
+                    "|>=",
+                    diagnostics::SourceRole::LeftValue,
+                )
+            }
+            .expect_err("operator decoration must retain the proof failure");
+            assert_eq!(
+                error.reason(),
+                Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+            );
+            assert!(matches!(
+                &error.structured.as_ref().unwrap().data,
+                diagnostics::DiagnosticData::TraitDispatch(_)
+            ));
+            let completed =
+                checker.complete_branch_error(error.clone(), &[&left, &right], &[None, None]);
+            assert_eq!(completed, error);
+            assert_eq!(checker.substitutions, substitutions);
+        }
+        checker.profiler.enabled = true;
+        let before = checker.profiler.snapshot();
+        let Ty::Var(bounded) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        checker
+            .tyvar_bounds
+            .insert(bounded, vec![trait_key.clone()]);
+        checker
+            .types_compatible(&Ty::Var(bounded), &Ty::List(Box::new(Ty::Int)))
+            .expect_err("bounded variable requires the cyclic proof");
+        let after = checker.profiler.snapshot();
+        assert_eq!(
+            after.types_compatible_calls,
+            before.types_compatible_calls + 1
+        );
+        assert_eq!(after.bind_tyvar_calls, before.bind_tyvar_calls + 1);
+        let Ty::Var(pending) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        checker.pending_trait_obligations.insert(
+            pending,
+            vec![PendingTraitObligation {
+                trait_id: trait_key.clone(),
+                args: vec![],
+                receiver: Ty::Var(pending),
+            }],
+        );
+        let error = checker
+            .bind_tyvar(pending, &Ty::List(Box::new(Ty::Int)))
+            .expect_err("pending required proof must not become false");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::CyclicTraitObligation)
+        );
+        assert_eq!(checker.resolve_ty(&Ty::Var(pending)), Ty::Var(pending));
+        assert!(checker.pending_trait_obligations.contains_key(&pending));
+        let ConstructorProjectionOutcome::Rejected { failures } =
+            checker.constructor_projection(&trait_key, &Ty::List(Box::new(Ty::Int)))
+        else {
+            panic!("cyclic proof must be rejected")
+        };
+        let failed = ConstructorApplicationOutcome::Rejected { failures };
+        assert!(
+            bincode::serialize(&failed).is_err(),
+            "failed proof cannot enter a successful checkpoint"
+        );
+        let applied = ConstructorApplicationOutcome::Applied(Ty::Int);
+        let bytes = bincode::serialize(&applied).unwrap();
+        assert_eq!(
+            bincode::deserialize::<ConstructorApplicationOutcome>(&bytes).unwrap(),
+            applied
+        );
     }
 
     #[test]
@@ -1572,7 +1850,7 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
             .cloned()
             .expect("original retained as specialization source");
         let generated_idx = checker.env.next_fun_idx + 10;
-        let TypedInner::Def(fun_idx, ..) = &mut generated.node else {
+        let TypedInner::Def(fun_idx, ..) = &mut Arc::make_mut(&mut generated).node else {
             unreachable!()
         };
         *fun_idx = generated_idx;
@@ -1682,10 +1960,7 @@ impl Context for Box<$A> {}
 
         let (mut checker, trait_key) = context_checker();
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .head_type_list
             .entries
             .retain(|entry| entry.role != TypeListRole::ImplTarget);
@@ -1697,10 +1972,7 @@ impl Context for Box<$A> {}
 
         let (mut checker, trait_key) = context_checker();
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .constructor_slot_vars
             .clear();
         assert!(matches!(
@@ -1714,10 +1986,7 @@ impl Context for Box<$A> {}
 
         let (mut checker, trait_key) = context_checker();
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .constructor_slot_vars[0] = u32::MAX;
         assert!(matches!(
             checker.constructor_application_slots_for_trait(
@@ -1749,10 +2018,7 @@ impl Context for Box<$A> {}
         ));
 
         let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
-        checker
-            .trait_impls
-            .get_mut(&implementation_key)
-            .unwrap()
+        Arc::make_mut(checker.trait_impls.get_mut(&implementation_key).unwrap())
             .constructor_slot_positions[0] = 4;
         assert!(matches!(
             checker.apply_constructor_application(&witness_source, &witness, &[Ty::Str]),
@@ -1829,7 +2095,7 @@ impl Context for Box<$A> {}
                 ),
             }],
         );
-        assert!(checker.bind_tyvar(source, &Ty::Var(alias)));
+        assert!(checker.bind_tyvar(source, &Ty::Var(alias)).unwrap());
         assert!(!checker.pending_trait_obligations.contains_key(&source));
         assert_eq!(
             checker.pending_trait_obligations[&alias],
@@ -1843,11 +2109,11 @@ impl Context for Box<$A> {}
             }]
         );
         assert!(
-            !checker.bind_tyvar(alias, &Ty::Bool),
+            !checker.bind_tyvar(alias, &Ty::Bool).unwrap(),
             "aliased nested obligation must still reject a mismatched concrete binding"
         );
         assert_eq!(checker.resolve_ty(&Ty::Var(alias)), Ty::Var(alias));
-        assert!(checker.bind_tyvar(alias, &Ty::Int));
+        assert!(checker.bind_tyvar(alias, &Ty::Int).unwrap());
         assert_eq!(checker.resolve_ty(&Ty::Var(source)), Ty::Int);
     }
 
@@ -1923,71 +2189,6 @@ impl Rel<String,Int> for Box<$T> { def apply(self: Self, a: String, b: Int) -> I
 }
 
 impl Checker {
-    pub(super) fn impl_method_instantiation_contract(
-        &mut self,
-        _pattern: &CanonicalTraitImplPatternKey,
-        trait_info: &TraitInfo,
-        trait_args: &[AstTy],
-        target: &AstTy,
-        method: &TraitImplMethodInfo,
-        fallback_ret: &AstTy,
-        params: &[Ty],
-        ret: &Ty,
-        rtas: &[Ty],
-        raw: &MethodTypeEnvironment,
-        impl_clause: Option<&TypedWhereClause>,
-        slots: &[usize],
-    ) -> Result<ImplMethodInstantiationContract, TypeError> {
-        let (head, mut environment) =
-            self.canonical_impl_head(trait_args, target, raw, &method.span)?;
-        environment.slot_positions = slots.to_vec();
-        if method.display_name_override.is_some() {
-            environment = self.canonical_contract_environment(raw, trait_info, &head, slots)?;
-        }
-        let return_environment = if method.ret_ty.is_none() {
-            Some(self.canonical_contract_environment(raw, trait_info, &head, slots)?)
-        } else {
-            None
-        };
-        let signature = self.canonical_method_list(
-            rtas,
-            params,
-            ret,
-            &method.return_type_arguments,
-            &method.value_parameters,
-            method
-                .ret_ty
-                .as_ref()
-                .map(|ty| ty.syntax())
-                .unwrap_or(fallback_ret),
-            method.where_clause.as_ref(),
-            raw,
-            &environment,
-            return_environment.as_ref(),
-            true,
-        )?;
-        let impl_constraints = self
-            .canonical_method_list(
-                &[],
-                &[],
-                &Ty::Unit,
-                &[],
-                &[],
-                &AstTy::Named(method.span.clone(), "Unit".into()),
-                impl_clause,
-                raw,
-                &environment,
-                None,
-                false,
-            )?
-            .where_constraints;
-        Ok(ImplMethodInstantiationContract {
-            head,
-            signature,
-            impl_constraints,
-        })
-    }
-
     pub(super) fn canonical_to_ty(&self, ty: &CanonicalTy) -> Result<Ty, TypeError> {
         let args = ty
             .arguments
@@ -2045,7 +2246,8 @@ impl Checker {
                 Ty::Result(Box::new(args[0].clone()), Box::new(args[1].clone()))
             }
             CanonicalTypeHead::Builtin(
-                name @ (TypeName::Regex
+                name @ (TypeName::ErrorKind
+                | TypeName::Regex
                 | TypeName::RegexCaptures
                 | TypeName::RegexMatch
                 | TypeName::RandomGenerator
@@ -2085,7 +2287,10 @@ impl Checker {
                 Box::new(args[2].clone()),
                 Box::new(args[3].clone()),
             ),
-            CanonicalTypeHead::Pid(name) => Ty::Pid(name.clone()),
+            CanonicalTypeHead::Pid if args.len() == 1 => Ty::Pid(Box::new(args[0].clone())),
+            CanonicalTypeHead::ProcessMarker(name) if args.is_empty() => {
+                Ty::ProcessMarker(name.clone())
+            }
             CanonicalTypeHead::Hole => Ty::Hole,
             _ => return Err(invalid()),
         })
@@ -2100,6 +2305,35 @@ pub(super) enum ApplicabilityProof {
 }
 
 impl Checker {
+    pub(super) fn parent_head_substitution(
+        &self,
+        parent: &Ty,
+        child: &Ty,
+        fresh: &HashMap<u32, Ty>,
+    ) -> Result<Option<HashMap<u32, Ty>>, TypeError> {
+        let mut unifier = CanonicalUnifier {
+            rigid_variables: self.rigid_tyvars.clone(),
+            ..Default::default()
+        };
+        if !unifier.unify(
+            &self.canonical_request(parent)?,
+            &self.canonical_request(child)?,
+        ) {
+            return Ok(None);
+        }
+        let mut mapping = HashMap::new();
+        for ty in fresh.values() {
+            if let Ty::Var(var) = ty {
+                let resolved =
+                    self.canonical_to_ty(&unifier.resolve(&CanonicalTy::variable(*var)))?;
+                if resolved != Ty::Var(*var) {
+                    mapping.insert(*var, resolved);
+                }
+            }
+        }
+        Ok(Some(mapping))
+    }
+
     pub(super) fn canonical_request(&self, ty: &Ty) -> Result<CanonicalTy, TypeError> {
         let ty = self.resolve_ty(ty);
         let ty = match ty {
@@ -2248,6 +2482,23 @@ impl Checker {
         trait_name: &str,
     ) -> Option<Vec<usize>> {
         let receiver = self.canonical_to_ty(subject).ok()?;
+        // Applying a declared constructor witness retains its capability. This
+        // also proves obligations recorded by a default method calling another
+        // method on its generic base carrier.
+        if let Ty::SelfApp(items) = &receiver {
+            if let Some((Ty::Var(witness), slots)) = Self::constructor_application_parts(items) {
+                if self.rigid_tyvars.contains(witness)
+                    && self.traits.get(trait_name).is_some_and(|info| {
+                        !info.constructor_slots.is_empty()
+                            && info.constructor_slots.len() == slots.len()
+                    })
+                {
+                    if let Some(evidence) = self.rigid_capability_evidence(*witness, trait_name) {
+                        return Some(evidence);
+                    }
+                }
+            }
+        }
         self.active_capabilities
             .iter()
             .position(|capability| {
@@ -2347,13 +2598,28 @@ impl Checker {
         }
         let proof_key = (trait_id, subject.clone());
         if !visiting.insert(proof_key.clone()) {
-            return Err(TypeError::new(
-                format!(
-                    "CyclicTraitObligation: {} for {}",
-                    self.trait_display_name(&trait_key),
-                    self.canonical_type_name(subject)
-                ),
-                Span { start: 0, end: 0 },
+            return Err(TypeError::from_structured(
+                diagnostics::StructuredDiagnostic {
+                    reason: diagnostics::TypeDiagnosticReason::CyclicTraitObligation.into(),
+                    origin: diagnostics::DiagnosticOrigin::TraitCall,
+                    data: diagnostics::DiagnosticData::TraitDispatch(
+                        diagnostics::TraitDispatchData {
+                            impl_declaration: None,
+                            trait_name: self.trait_display_name(&trait_key),
+                            trait_arguments: Vec::new(),
+                            method: None,
+                            subject_type: Some(self.canonical_type_name(subject)),
+                            dependency: None,
+                        },
+                    ),
+                    primary: diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::CallTarget,
+                        diagnostics::SourceId(0),
+                        Span { start: 0, end: 0 },
+                    ),
+                    related: Vec::new(),
+                    remediation: None,
+                },
             ));
         }
         let candidates = self.trait_impl_candidate_keys(&trait_key);
@@ -2549,7 +2815,7 @@ impl Checker {
         if let Ok(CandidateApplicability::Applicable(instantiation)) = &result {
             if !instantiation.caller_substitution.is_empty() {
                 for (var, ty) in &instantiation.caller_substitution {
-                    if !self.types_compatible(&Ty::Var(*var), ty) {
+                    if !self.types_compatible(&Ty::Var(*var), ty)? {
                         return Err(TypeError::new(
                             "SelectedTraitMethodInferenceConflict",
                             Span { start: 0, end: 0 },
@@ -2658,7 +2924,6 @@ impl Checker {
             let mut fresh = HashMap::new();
             let mut unifier = CanonicalUnifier {
                 rigid_variables: self.rigid_tyvars.clone(),
-                allow_ignored_callable_inputs: true,
                 ..Default::default()
             };
             let head_args = contract
@@ -3161,7 +3426,6 @@ impl Checker {
             let mut fresh = HashMap::new();
             let mut unifier = CanonicalUnifier {
                 rigid_variables: self.rigid_tyvars.clone(),
-                allow_ignored_callable_inputs: true,
                 ..Default::default()
             };
             let args = info
@@ -3334,14 +3598,6 @@ impl Checker {
         let mut failures = Vec::new();
         for key in self.trait_impl_candidate_keys(trait_name) {
             let info = &self.trait_impls[&key];
-            if info.constructor_slot_vars.is_empty() {
-                return ConstructorProjectionOutcome::Rejected {
-                    failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
-                        expected: info.constructor_slot_positions.len(),
-                        actual: 0,
-                    }],
-                };
-            }
             let Some(target) = info
                 .head_type_list
                 .entries
@@ -3362,6 +3618,29 @@ impl Checker {
             };
             if !unifier.unify(&target, &requested) {
                 continue;
+            }
+            if self.constructor_mapping_resolution.pending.contains(&key) {
+                let mut requests = self.constructor_mapping_resolution.requests.borrow_mut();
+                let Some(requests) = requests.as_mut() else {
+                    return ConstructorProjectionOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::ProofError(Box::new(TypeError::new(
+                            "Internal error: unfinished constructor mapping outside declaration proof",
+                            info.trait_id.span.clone(),
+                        )))],
+                    };
+                };
+                requests.insert(key.clone());
+                return ConstructorProjectionOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::PendingImplMapping],
+                };
+            }
+            if info.constructor_slot_vars.is_empty() {
+                return ConstructorProjectionOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                        expected: info.constructor_slot_positions.len(),
+                        actual: 0,
+                    }],
+                };
             }
             let unresolved_inputs = request_variables
                 .iter()
@@ -3410,9 +3689,11 @@ impl Checker {
                         failures.push(ConstructorProjectionFailure::UnsatisfiedConstraints);
                         continue;
                     }
-                    Err(_) => {
+                    Err(error) => {
                         return ConstructorProjectionOutcome::Rejected {
-                            failures: vec![ConstructorProjectionFailure::Canonicalization],
+                            failures: vec![ConstructorProjectionFailure::ProofError(Box::new(
+                                error,
+                            ))],
                         };
                     }
                 }
@@ -3489,6 +3770,33 @@ impl Checker {
 #[cfg(test)]
 mod extractor_type_contract_tests {
     use super::*;
+
+    #[test]
+    fn canonical_error_kind_types_round_trip() {
+        let checker = Checker::new(TypecheckContext::default());
+        let kind = Ty::Enum("ErrorKind".into(), Vec::new());
+        for ty in [
+            kind.clone(),
+            Ty::List(Box::new(kind.clone())),
+            Ty::Func(vec![kind.clone()], Box::new(kind)),
+        ] {
+            let canonical = checker
+                .canonical_resolved_type(&ty)
+                .expect("ErrorKind canonical declaration type");
+            assert_eq!(
+                checker
+                    .canonical_to_ty(&canonical)
+                    .expect("ErrorKind inverse type"),
+                ty
+            );
+        }
+        assert!(checker
+            .canonical_to_ty(&CanonicalTy::builtin(
+                TypeName::ErrorKind,
+                vec![CanonicalTy::builtin(TypeName::Int, vec![])]
+            ))
+            .is_err());
+    }
 
     #[test]
     fn canonical_extractor_types_round_trip() {

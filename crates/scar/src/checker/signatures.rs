@@ -48,14 +48,14 @@ pub(super) struct SignatureOccurrences {
     pub(super) declared_return_type_arguments: BTreeMap<TypeInputId, SourceOrigin>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct DirectConstructorInputs {
     // A direct Trait name is the anonymous spelling of one constructor
     // variable with that single capability inside a signature.
     witnesses: BTreeMap<String, DirectConstructorInput>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct DirectConstructorInput {
     pub(super) witness: Ty,
     pub(super) trait_id: sigil::resolved::ResolvedId,
@@ -704,6 +704,9 @@ pub(super) fn coalesce_direct_constructor_inputs(
             checker, *inner, inputs,
         ))),
         Ty::List(inner) => Ty::List(Box::new(coalesce_direct_constructor_inputs(
+            checker, *inner, inputs,
+        ))),
+        Ty::Pid(inner) => Ty::Pid(Box::new(coalesce_direct_constructor_inputs(
             checker, *inner, inputs,
         ))),
         Ty::Tuple(items) => Ty::Tuple(
@@ -1439,7 +1442,10 @@ fn builtin_runtime_type_matches(
                     expected_variables,
                 )
         }
-        (Ty::Pid(expected), Ty::Pid(actual)) => expected == actual,
+        (Ty::Pid(expected), Ty::Pid(actual)) => {
+            builtin_runtime_type_matches(checker, &expected, &actual, expected_variables)
+        }
+        (Ty::ProcessMarker(expected), Ty::ProcessMarker(actual)) => expected == actual,
         (Ty::Struct(expected_name, expected_fields), Ty::Struct(actual_name, actual_fields))
         | (Ty::Record(expected_name, expected_fields), Ty::Record(actual_name, actual_fields)) => {
             Checker::surface_name(&expected_name) == Checker::surface_name(&actual_name)

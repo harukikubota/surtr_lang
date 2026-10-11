@@ -1,3 +1,4 @@
+# Structural HashMap patterns lower through map_get; keep the missing key as Payload.
 @doc """
 Standard `HashMap` type declaration.
 `HashMap<$V>` is an immutable map with `String` keys and
@@ -6,6 +7,24 @@ The canonical builtin head is fixed to this shape.
 Use `hash![key => value, ...]` for generated literals. Literal keys may be
 any expression whose type is `String`, and inspect/to_string render the same
 literal form in deterministic key-sorted order.
+
+Structural patterns:
+
+- `hash![key => child, ...]` in a pattern checks the named keys and their values.
+- Keys are String expressions or `^name` pins resolved before the pattern bindings.
+- Extra keys are allowed; repeated keys check each child in written order.
+- Evaluation stops at the first missing key or failed child.
+- A non-empty pattern is partial; `hash![]` matches every map, including non-empty maps.
+- SafeBind unwraps only the outer Result RHS, never Result values stored in the map.
+
+## REPL
+xldr(1)> scores = hash!["alice" => 10, "bob" => 20]
+xldr(2)> is_match(scores, hash!["alice" => _])
+True
+xldr(3)> apply_pattern(scores, hash!["bob" => _1])
+Ok(20)
+xldr(4)> is_match(scores, hash![])
+True
 
 Facet path note:
 
@@ -21,15 +40,6 @@ Examples:
 - `Facet::over(User.score_by_kind.[kind], user, {|n| Ok(n + 1)})`
 """
 @builtin type HashMap<$V>
-
-impl Eq for HashMap<$V>
-where
-  $V: Eq
-{
-  def eq(self: Self, rhs: Self) -> Boolean {
-    Eq::eq(HashMap::entries(self), HashMap::entries(rhs))
-  }
-}
 
 impl HashMap {
   @doc """
@@ -68,12 +78,14 @@ impl HashMap {
   @builtin def map_contains_key(map: HashMap<$V>, key: String) -> Boolean
 
   @doc """
-  Return `Ok(value)` when the key exists, otherwise `Err(NoneError)`.
+  Return `Ok(value)` when the key exists, otherwise `Err(HashMapKeyMissing(key))`.
+  Structural HashMap patterns use the same lookup error, with the missing key's
+  pattern position. Failed value patterns preserve their own original Error.
   ## REPL
   xldr(1)> HashMap::map_get(HashMap::map_from_entries([("a", 1)]), "a")
   Ok(1)
   """
-  @builtin def map_get(map: HashMap<$V>, key: String) -> Result<$V, NoneError>
+  @builtin def map_get(map: HashMap<$V>, key: String) -> Result<$V, HashMapKeyMissing>
 
   @doc """
   Return a new map with `key` set to `value`.
@@ -128,4 +140,18 @@ impl HashMap {
   hash!["a" => 2, "b" => 3]
   """
   @builtin def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B>
+}
+
+impl Eq for HashMap<$V>
+where
+  $V: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(HashMap::entries(self), HashMap::entries(rhs))
+  }
+}
+
+deferror HashMapKeyMissing(key: String) {
+  |key: String|
+  Self(message: "hash map key not found: #{key}", key)
 }

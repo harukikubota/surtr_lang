@@ -21,9 +21,13 @@ defrecord User(name: String, age: Int)
 ```surtr
 ada = User("Ada", 37)
 grace = User(age: 40, name: "Grace")
+age = 37
+another_ada = User(name: "Ada", age)  # age: age の省略記法
 ```
 
-位置指定と名前指定を混在させることはできません。field の省略・重複・存在しない名前の指定もエラーになります。また `name: name` のような省略記法（`name` とだけ書く書き方）もサポートしていません。
+`name: expr` のような名前指定が一つもなければ、すべて位置指定として宣言順に対応します。`User(name, age)` も位置指定です。名前指定が一つ以上あれば、裸の変数 `age` を `age: age` として使えます。値はその位置で見える同名の変数から取ります。入れ子の構築にある名前指定は、外側の分類には影響しません。
+
+名前指定の中では、数値や演算などの式には field 名が必要です。たとえば `User(name: "Ada", 37)` や `User(name: "Ada", age + 1)` は使えず、`age: 37` や `age: age + 1` と書きます。field の省略・重複・存在しない名前、未束縛の変数、型の不一致もエラーになります。値の型から field 名を推測することはありません。記述順にかかわらず、値は field の宣言順に評価・配置されます。
 
 constructor を関数値として使う場合は capture します。
 
@@ -43,6 +47,7 @@ named argument や `&User("Ada", 20)` は拒否されます。詳細は
 ```surtr
 User(name, age) = ada
 User(age: selected_age, name: selected_name) = ada
+User(name: selected_name, age) = ada  # age: age の省略記法
 
 label = match ada {
   User(name: "Ada", age: _) => "Ada",
@@ -50,7 +55,9 @@ label = match ada {
 }
 ```
 
-`User(name, age)` は宣言順に変数を束縛する書き方です。名前指定では書く順序は自由ですが、実際の照合・束縛は宣言順で行われます。field の省略・重複・存在しない名前の指定、位置指定との混在はいずれもエラーです。
+名前指定が一つもなければ位置指定です。`User(name, age)` は宣言順に変数を束縛します。名前指定が一つ以上あれば、裸の束縛名 `age` を `age: age` として使えます。この `age` は既存変数の参照ではなく、新しい束縛です。名前指定の記述順は自由ですが、照合・束縛は宣言順で行われます。入れ子の Pattern にある名前指定は、外側の分類には影響しません。
+
+名前指定の中では、literal、`_`、型注釈付き Pattern、入れ子の Pattern、Extractor などには field 名が必要です。`User(name: selected_name, _)` は使えず、`User(name: selected_name, age: _)` と書きます。field の省略・重複・存在しない名前、子 Pattern の型不一致、束縛名の重複はいずれもエラーです。
 
 Record の分解は必ず成功するため、子 Pattern が変数束縛や `_` だけであれば通常の `=` を使えます。一方、literal や一般的な Extractor など失敗しうる子 Pattern を含む場合、Pattern 全体が partial になるため `=` は使えず、上の `match` のように照合結果を扱う必要があります。
 

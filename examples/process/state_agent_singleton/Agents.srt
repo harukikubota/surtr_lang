@@ -17,6 +17,6 @@ defagent Counter {
 
   @set
   def set(state: Int, next: Int) -> Result<Int> {
-    if(next >= 0, Ok(next), Err(NoneError))
+    if(next >= 0, Ok(next), Err(NoneError()))
   }
 }

@@ -346,10 +346,10 @@ fn test_command_assertion_captions_follow_captures_and_included_helpers() {
     assert!(stdout.contains("assert_gte failed:"), "{stdout}");
 
     // A function with the same short name is not a standard assertion. Keep
-    // the Error's construction site, even for TestAssertionFailed itself.
+    // the Error's construction site, even for TestExplicitFailure itself.
     write_source(
         &temp.join("lib/tests/local/helper.srt"),
-        "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestAssertionFailed(\"custom failure\"))\n  }\n}\n",
+        "defmod Helper {\n  def assert_true() -> Result<()> {\n    Err(TestExplicitFailure(\"custom failure\"))\n  }\n}\n",
     );
     write_math_test(
         &temp,
@@ -372,9 +372,9 @@ fn test_command_assertion_captions_use_the_executed_call_site() {
         ("assert_false(True)", "assert_false"),
         ("assert_eq(1, 2)", "assert_eq"),
         ("assert_ok_eq(1, Ok(2))", "assert_ok_eq"),
-        ("assert_ok_eq(1, Err(NoneError))", "assert_ok_eq"),
+        ("assert_ok_eq(1, Err(NoneError()))", "assert_ok_eq"),
         (
-            "assert_err_contains(\"missing\", Err(NoneError))",
+            "assert_err_contains(\"missing\", Err(NoneError()))",
             "assert_err_contains",
         ),
         (
@@ -408,7 +408,7 @@ fn test_command_validation_assertions_report_public_call_sites() {
         ("assert_gt(1, 2)", "assert_gt"),
         ("assert_gte(1, 2)", "assert_gte"),
         (
-            "assert_err_message_eq(\"other\", Err(NoneError))",
+            "assert_err_message_eq(\"other\", Err(NoneError()))",
             "assert_err_message_eq",
         ),
         ("assert_starts_with(\"a\", \"b\")", "assert_starts_with"),
@@ -419,43 +419,86 @@ fn test_command_validation_assertions_report_public_call_sites() {
 
 fn check_assertion_call_sites(cases: &[(&str, &str)]) {
     let temp = unique_temp_dir("surtr_test_assertion_captions");
-    for &(assertion, name) in cases {
-        for (before, after) in [
+    let mut source = "import Test;\ntest(\"キャプション\") {\n".to_string();
+    let mut expected = Vec::new();
+    for (case_index, &(assertion, name)) in cases.iter().enumerate() {
+        for (wrap_index, (before, after)) in [
             ("", ""),
             (
                 "do::<Result> { assert_eq(\"prior\", \"prior\")\n        ",
                 " }",
             ),
             ("assert_true(True)?\n      ", "?\n      Ok(())"),
-        ] {
-            let source = format!(
-                "import Test;\ntest(\"キャプション\") {{\n  describe(\"nested\") {{\n    it(\"same name\") {{\n      {before}{assertion}{after}\n    }}\n    it(\"same name\") {{ assert_eq(\"later\", \"later\") }}\n  }}\n}}\n",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let group = format!("nested {case_index}-{wrap_index}");
+            let fragment = format!(
+                "  describe(\"{group}\") {{\n    it(\"same name\") {{\n      {before}{assertion}{after}\n    }}\n    it(\"same name\") {{ assert_eq(\"later\", \"later\") }}\n  }}\n",
             );
-            write_math_test(&temp, &source);
-            let byte_start = source.find(assertion).unwrap();
-            let prefix = &source[..byte_start];
+            let byte_start = fragment.find(assertion).unwrap();
+            let prefix = format!("{}{}", source, &fragment[..byte_start]);
             let line = prefix.chars().filter(|ch| *ch == '\n').count() + 1;
             let column = prefix.rsplit('\n').next().unwrap().chars().count() + 1;
-            let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
-            let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert_eq!(
-                output.status.code(),
-                Some(1),
-                "{source}\n{stdout}\n{stderr}"
-            );
-            assert!(
-                stdout.contains(&format!("lib/tests/local/math.srt:{line}:{column}")),
-                "wrong caption for {assertion}:\n{stdout}\n{stderr}"
-            );
-            assert!(stdout.contains(&format!("{name} failed:")), "{stdout}");
-            assert!(!stdout.contains("LHS term: \"later\""), "{stdout}");
-            assert!(
-                stdout.contains("test result: passed=1, failed=1, total=2"),
-                "{stdout}"
-            );
+            expected.push((assertion, name, group, line, column));
+            source.push_str(&fragment);
         }
     }
+    source.push_str("}\n");
+    write_math_test(&temp, &source);
+    let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt"]);
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{source}\n{stdout}\n{stderr}"
+    );
+    assert!(stderr.is_empty(), "{source}\n{stdout}\n{stderr}");
+    assert!(!stdout.contains("LHS term: \"later\""), "{stdout}");
+
+    // Match each diagnostic only inside its own failed case's output block.
+    // The next event has the same case name, so scope identity must distinguish it.
+    let mut event_starts = Vec::new();
+    let mut offset = 0;
+    for line in stdout.split_inclusive('\n') {
+        if line.starts_with("[FAIL] ") || line.starts_with("[PASS] ") {
+            event_starts.push(offset);
+        }
+        offset += line.len();
+    }
+    assert_eq!(event_starts.len(), expected.len() * 2, "{source}\n{stdout}");
+    for (pair, (assertion, name, group, line, column)) in
+        event_starts.chunks_exact(2).zip(&expected)
+    {
+        let failed = &stdout[pair[0]..pair[1]];
+        let passed = &stdout[pair[1]..];
+        assert!(
+            failed.starts_with(&format!(
+                "[FAIL] キャプション > {group} > same name (lib/tests/local/math.srt)\n"
+            )),
+            "{assertion}: {failed}"
+        );
+        assert!(
+            passed.starts_with(&format!("[PASS] キャプション > {group} > same name\n")),
+            "{assertion}: {passed}"
+        );
+        assert!(
+            failed.contains(&format!("lib/tests/local/math.srt:{line}:{column}")),
+            "wrong caption for {assertion}:\n{failed}"
+        );
+        assert!(failed.contains(&format!("{name} failed:")), "{failed}");
+        assert!(!failed.contains("LHS term: \"later\""), "{failed}");
+    }
+    let count = expected.len();
+    assert!(
+        stdout.contains(&format!(
+            "test result: passed={count}, failed={count}, total={}",
+            count * 2
+        )),
+        "{stdout}"
+    );
     let _ = fs::remove_dir_all(temp);
 }
 
@@ -489,7 +532,7 @@ test("String") {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("[FAIL] String > repeat > bad (lib/tests/local/math.srt)"));
-    assert!(stdout.contains("TestAssertionFailed: expected \"tes\", got \"bad\""));
+    assert!(stdout.contains("TestEqualityMismatch: expected \"tes\", got \"bad\""));
     assert!(stdout.contains("assert_eq(\"tes\", \"bad\")"));
     assert!(stdout.contains("LHS term: \"tes\""));
     assert!(stdout.contains("RHS term: \"bad\""));
@@ -513,7 +556,7 @@ fn test_command_runs_range_library_tests_with_polymorphic_constructor_calls() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[PASS] Range > construction helpers > keeps constructor polymorphism across different endpoint types in one scope"));
-    assert!(stdout.contains("test result: passed=6, failed=0, total=6"));
+    assert!(stdout.contains("test result: passed=7, failed=0, total=7"));
 }
 
 #[test]
@@ -790,7 +833,7 @@ test("Stdin") {
 
 test("Capture stderr") {
   it("asserts captured eprint fallback lines") {
-    value: Result<Int> = Err(NoneError)
+    value: Result<Int> = Err(NoneError())
     match value {
       Ok(_) => (),
       Err(err) => eprint(err),
@@ -808,7 +851,7 @@ import Test;
 test("IO isolation") {
   it("leaves unread io behind") {
     print("stdout-leak")
-    value: Result<Int> = Err(NoneError)
+    value: Result<Int> = Err(NoneError())
     match value {
       Ok(_) => (),
       Err(err) => eprint(err),
@@ -1212,7 +1255,7 @@ it("not reached") { assert_true(True) }
 
     write_math_test(
         &temp,
-        "import Test;\ntest(\"broken scope\") { Err(NoneError) }\n",
+        "import Test;\ntest(\"broken scope\") { Err(NoneError()) }\n",
     );
     let output = run_surtr(
         &temp,
@@ -1318,113 +1361,22 @@ fn test_command_extension_scan_and_declaration_failures_are_not_filtered() {
 #[test]
 fn test_command_extension_assertion_type_boundaries() {
     let temp = unique_temp_dir("surtr_test_extension_assertion_types");
-    for (source, expected) in [
-        (
-            "assert_cause_chain([\"NoneError\"], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_cause_chain([PayloadFailure(\"x\")], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_cause_chain([Error], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_cause_chain([Int], Err(NoneError))",
-            "Undefined variable: Int",
-        ),
-        (
-            "marker = NoneError\nassert_cause_chain([marker], Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "markers = [NoneError]\nassert_cause_chain(markers, Err(NoneError))",
-            "direct List literal",
-        ),
-        (
-            "assert_cause_chain([NoneError, ..[]], Err(NoneError))",
-            "direct List literal",
-        ),
-        (
-            "&Test::assert_cause_chain(&1, Err(NoneError))",
-            "direct List literal",
-        ),
-        (
-            "&Test::assert_cause_chain([&1], Err(NoneError))",
-            "concrete deferror",
-        ),
-        ("assert_cause_chain([NoneError], 3)", "Result"),
-        (
-            "def forward(kinds: List<ErrorKind>) -> Result<()> { Ok(()) }\nOk(())",
-            "ErrorKind is reserved",
-        ),
-        (
-            "kinds: List<ErrorKind> = []\nOk(())",
-            "ErrorKind is reserved",
-        ),
-        ("assert_ne({|x: Int| x}, {|x: Int| x})", "Eq"),
-        (
-            "assert_some_eq({|x: Int| x}, Option::Some({|x: Int| x}))",
-            "Eq",
-        ),
-        ("assert_approx(1, 1.0, 0.0)", "Float"),
-        ("assert(1, \"message\")", "Boolean"),
-        ("assert_satisfies(1, \"message\", {|n| n + 1})", "Boolean"),
-        ("assert_lt(1, 2.0)", "Int"),
-        ("assert_gt({|x: Int| x}, {|x: Int| x})", "Compare"),
-        ("assert_some(Ok(1))", "Option"),
-        (
-            "assert_err_kind(\"NoneError\", Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_err_kind(PayloadFailure(\"x\"), Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_err_kind(Int, Err(NoneError))",
-            "Undefined variable: Int",
-        ),
-        (
-            "&Test::assert_err_kind(&1, Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "assert_err_kind(Error, Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "marker = NoneError\nassert_err_kind(marker, Err(NoneError))",
-            "concrete deferror",
-        ),
-        (
-            "def forward(marker: ErrorKind) -> Result<()> { Ok(()) }\nOk(())",
-            "ErrorKind is reserved",
-        ),
-    ] {
-        write_math_test(
-            &temp,
-            &format!(
-                "import Test;\ndeferror PayloadFailure(detail: String) {{ detail }}\n{source}\n"
-            ),
-        );
-        let output = run_surtr(
-            &temp,
-            &["test", "lib/tests/local/math.srt", "--format=json"],
-        );
-        let report = test_json(&output);
-        assert_eq!(output.status.code(), Some(1), "{source}: {report}");
-        assert_eq!(report["summary"]["script_errors"], 1);
-        assert!(
-            report["errors"][0]["message"]
-                .as_str()
-                .unwrap()
-                .contains(expected),
-            "{source}: {report}"
-        );
-    }
+    let source = "import Test;\ndeferror PayloadFailure(detail: String) { |detail: String| Self(message: detail, detail) }\nassert_cause_chain([\"NoneError\"], Err(NoneError()))\n";
+    write_math_test(&temp, source);
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{source}: {report}");
+    assert_eq!(report["summary"]["script_errors"], 1);
+    assert!(
+        report["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ErrorKind"),
+        "{source}: {report}"
+    );
     let _ = fs::remove_dir_all(temp);
 }
 
@@ -1490,10 +1442,7 @@ defmod UserAssertions {
                 "{label}/{name}: {body} => {actual}"
             );
             assert!(
-                actual["detail"]
-                    .as_str()
-                    .unwrap()
-                    .contains("TestAssertionFailed"),
+                actual["detail"].as_str().unwrap().contains("Test"),
                 "{label}/{name}: {actual}"
             );
         }
@@ -1511,10 +1460,10 @@ fn test_command_extended_assertions_return_expected_results() {
             ("ne passes", "assert_ne(1, 2)", None),
             ("ne fails", "assert_ne(1, 1)", Some("expected unequal")),
             ("ok needs no Eq", "assert_ok(Ok({|x: Int| x}))", None),
-            ("err passes", "assert_err(Err(NoneError))", None),
+            ("err passes", "assert_err(Err(NoneError()))", None),
             (
                 "ok rejects Err",
-                "assert_ok(Err(NoneError))",
+                "assert_ok(Err(NoneError()))",
                 Some("expected Ok"),
             ),
             ("err rejects Ok", "assert_err(Ok(1))", Some("expected Err")),
@@ -1563,7 +1512,7 @@ fn test_command_extended_assertions_return_expected_results() {
 fn test_command_validation_assertions_and_composition() {
     check_assertion_cases(
         "surtr_test_validation_assertions",
-        "deferror MessageFailure(detail: String) { detail }",
+        "deferror MessageFailure(detail: String) { |detail: String| Self(message: detail, detail) }",
         &[
             ("assert pass", "assert(True, \"yes\")", None),
             (
@@ -1731,21 +1680,29 @@ fn test_command_approx_assertion_finite_boundaries() {
 }
 
 const ERROR_KIND_DECLARATIONS: &str = r#"
-deferror PayloadFailure(detail: String) { detail }
+deferror PayloadFailure(detail: String) { |detail: String| Self(message: detail, detail) }
 deferror OtherFailure { "PayloadFailure" }
-namespace First { deferror Same(detail: String) { detail } }
-namespace Second { deferror Same(detail: String) { detail } }
+namespace First { deferror Same(detail: String) { |detail: String| Self(message: detail, detail) } }
+namespace Second { deferror Same(detail: String) { |detail: String| Self(message: detail, detail) } }
 def check_payload(result: Result<$A>) -> Result<()> { Test::assert_err_kind(PayloadFailure, result) }
 def check_chain(result: Result<$A>) -> Result<()> { Test::assert_cause_chain([PayloadFailure, NoneError], result) }
+def choose_kind() -> ErrorKind {
+  print("kind evaluated")
+  PayloadFailure
+}
+def choose_chain() -> List<ErrorKind> {
+  print("kinds evaluated")
+  [PayloadFailure, NoneError]
+}
 def make_failure() -> Result<Int> {
   print("evaluated")
-  Err(NoneError)
+  Err(NoneError())
 }
 "#;
 
 #[test]
 fn test_command_error_kind_assertion_uses_declaration_identity() {
-    check_assertion_cases(
+    let report = check_assertion_cases(
         "surtr_test_error_kind",
         ERROR_KIND_DECLARATIONS,
         &[
@@ -1756,7 +1713,7 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
             ),
             (
                 "nullary",
-                "assert_err_kind(NoneError, Err(NoneError))",
+                "assert_err_kind(NoneError, Err(NoneError()))",
                 None,
             ),
             (
@@ -1771,6 +1728,24 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
                 None,
             ),
             (
+                "dynamic kind",
+                r#"kind = choose_kind()
+ assert_err_kind(kind, Err(PayloadFailure("dynamic")))"#,
+                None,
+            ),
+            (
+                "dynamic kind mismatch",
+                r#"kind = First::Same
+ assert_err_kind(kind, Err(Second::Same("same")))"#,
+                Some("expected Err kind First::Same, got Second::Same"),
+            ),
+            (
+                "capture kind placeholder",
+                r#"captured: (ErrorKind, Result<Int> -> Result<()>) = &Test::assert_err_kind(&1, &2)
+ captured(PayloadFailure, Err(PayloadFailure("placeholder")))"#,
+                None,
+            ),
+            (
                 "qualified",
                 r#"assert_err_kind(First::Same, Err(First::Same("same")))"#,
                 None,
@@ -1778,7 +1753,7 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
             (
                 "different namespace",
                 r#"assert_err_kind(First::Same, Err(Second::Same("same")))"#,
-                Some("expected error kind First::Same, got Second::Same"),
+                Some("expected Err kind First::Same, got Second::Same"),
             ),
             (
                 "user function",
@@ -1792,15 +1767,26 @@ fn test_command_error_kind_assertion_uses_declaration_identity() {
             ),
             (
                 "different kind",
-                "assert_err_kind(PayloadFailure, Err(OtherFailure))",
-                Some("expected error kind"),
+                "assert_err_kind(PayloadFailure, Err(OtherFailure()))",
+                Some("expected Err kind Global::PayloadFailure, got Global::OtherFailure"),
             ),
             (
                 "root ignores cause",
-                r#"assert_err_kind(PayloadFailure, Result::cause(Err(NoneError), PayloadFailure("outer")))"#,
+                r#"assert_err_kind(PayloadFailure, Result::cause(Err(NoneError()), PayloadFailure("outer")))"#,
                 None,
             ),
         ],
+    );
+    let dynamic = report["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "dynamic kind")
+        .unwrap();
+    assert_eq!(
+        dynamic["io"]["stdout"],
+        serde_json::json!(["kind evaluated"]),
+        "{dynamic}"
     );
 }
 
@@ -1812,18 +1798,42 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
         &[
             (
                 "outer first",
-                r#"assert_cause_chain([PayloadFailure, NoneError], Result::cause(Err(NoneError), PayloadFailure("outer")))"#,
+                r#"assert_cause_chain([PayloadFailure, NoneError], Result::cause(Err(NoneError()), PayloadFailure("outer")))"#,
                 None,
             ),
             (
                 "singleton",
-                "assert_cause_chain([NoneError], Err(NoneError))",
+                "assert_cause_chain([NoneError], Err(NoneError()))",
                 None,
             ),
             (
                 "repeated kind",
-                "assert_cause_chain([NoneError, NoneError], Result::cause(Err(NoneError), NoneError))",
+                "assert_cause_chain([NoneError, NoneError], Result::cause(Err(NoneError()), NoneError()))",
                 None,
+            ),
+            (
+                "dynamic chain",
+                r#"kinds = choose_chain()
+ assert_cause_chain(kinds, Result::cause(Err(NoneError()), PayloadFailure("dynamic")))"#,
+                None,
+            ),
+            (
+                "spread tail",
+                r#"tail = [NoneError]
+ assert_cause_chain([PayloadFailure, ..tail], Result::cause(Err(NoneError()), PayloadFailure("spread")))"#,
+                None,
+            ),
+            (
+                "capture list placeholder",
+                r#"captured: (List<ErrorKind>, Result<Int> -> Result<()>) = &Test::assert_cause_chain(&1, &2)
+ kinds = [PayloadFailure, NoneError]
+ captured(kinds, Result::cause(Err(NoneError()), PayloadFailure("placeholder")))"#,
+                None,
+            ),
+            (
+                "dynamic empty Err",
+                "kinds: List<ErrorKind> = []\nassert_cause_chain(kinds, Err(NoneError()))",
+                Some("cause chain length mismatch: expected 0, got 1"),
             ),
             (
                 "qualified",
@@ -1833,27 +1843,27 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             (
                 "reversed names",
                 r#"assert_cause_chain([Second::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#,
-                Some("first mismatch at index 0"),
+                Some("cause chain mismatch at index 0: expected Second::Same, got First::Same"),
             ),
             (
                 "inner mismatch",
                 r#"assert_cause_chain([First::Same, First::Same], Result::cause(Err(Second::Same("inner")), First::Same("outer")))"#,
-                Some("first mismatch at index 1"),
+                Some("cause chain mismatch at index 1: expected First::Same, got Second::Same"),
             ),
             (
                 "missing cause",
-                "assert_cause_chain([NoneError], Result::cause(Err(NoneError), NoneError))",
+                "assert_cause_chain([NoneError], Result::cause(Err(NoneError()), NoneError()))",
                 Some("length mismatch: expected 1, got 2"),
             ),
             (
                 "extra cause",
-                "assert_cause_chain([NoneError, NoneError], Err(NoneError))",
+                "assert_cause_chain([NoneError, NoneError], Err(NoneError()))",
                 Some("length mismatch: expected 2, got 1"),
             ),
             (
                 "empty Err",
-                "assert_cause_chain([], Err(NoneError))",
-                Some("expected cause chain [], got [Global::NoneError]"),
+                "assert_cause_chain([], Err(NoneError()))",
+                Some("cause chain length mismatch: expected 0, got 1"),
             ),
             ("empty Ok", "assert_cause_chain([], Ok(1))", Some("got Ok")),
             (
@@ -1869,18 +1879,18 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             (
                 "capture",
                 r#"captured: (Result<Int> -> Result<()>) = &Test::assert_cause_chain([PayloadFailure, NoneError], &1)
- captured(Result::cause(Err(NoneError), PayloadFailure("capture")))"#,
+ captured(Result::cause(Err(NoneError()), PayloadFailure("capture")))"#,
                 None,
             ),
             (
                 "generic Int",
-                r#"value: Result<Int> = Result::cause(Err(NoneError), PayloadFailure("int"))
+                r#"value: Result<Int> = Result::cause(Err(NoneError()), PayloadFailure("int"))
  check_chain(value)"#,
                 None,
             ),
             (
                 "generic String",
-                r#"value: Result<String> = Result::cause(Err(NoneError), PayloadFailure("string"))
+                r#"value: Result<String> = Result::cause(Err(NoneError()), PayloadFailure("string"))
  check_chain(value)"#,
                 None,
             ),
@@ -1896,10 +1906,21 @@ fn test_command_cause_chain_assertion_matches_complete_outer_first_sequence() {
             ),
             (
                 "three entries",
-                r#"assert_cause_chain([PayloadFailure, PayloadFailure, NoneError], Result::cause(Result::cause(Err(NoneError), PayloadFailure("inner")), PayloadFailure("outer")))"#,
+                r#"assert_cause_chain([PayloadFailure, PayloadFailure, NoneError], Result::cause(Result::cause(Err(NoneError()), PayloadFailure("inner")), PayloadFailure("outer")))"#,
                 None,
             ),
         ],
+    );
+    let dynamic = report["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "dynamic chain")
+        .unwrap();
+    assert_eq!(
+        dynamic["io"]["stdout"],
+        serde_json::json!(["kinds evaluated"]),
+        "{dynamic}"
     );
     let evaluated = report["cases"]
         .as_array()
@@ -1949,7 +1970,7 @@ fn test_command_long_do_preserves_order_and_short_circuit_without_stack_overflow
     assert!(report["cases"][1]["detail"]
         .as_str()
         .unwrap()
-        .contains("TestAssertionFailed"));
+        .contains("TestExpectedTrue"));
     let _ = fs::remove_dir_all(temp);
 }
 
@@ -2145,7 +2166,7 @@ fn test_command_preserves_existing_backslash_names_and_relative_includes() {
 
 #[cfg(unix)]
 #[test]
-fn test_command_all_reports_broken_file_links_and_continues() {
+fn test_command_all_reports_broken_file_links_and_compiles_remaining_files_without_execution() {
     let temp = unique_temp_dir("surtr_test_broken_file_link");
     write_source(
         &temp.join("lib/tests/local/z_good.srt"),
@@ -2157,12 +2178,358 @@ fn test_command_all_reports_broken_file_links_and_continues() {
     let report = test_json(&output);
     assert_eq!(output.status.code(), Some(1), "{report}");
     assert_eq!(report["summary"]["script_errors"], 2);
-    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["summary"]["passed"], 0);
+    assert_eq!(report["summary"]["executed"], 0);
     assert_eq!(report["scripts"][0]["file"], "lib/tests/local/a_broken.srt");
     assert_eq!(
         report["scripts"][1]["file"],
         "lib/tests/local/b_directory.srt"
     );
     assert_eq!(report["scripts"][2]["file"], "lib/tests/local/z_good.srt");
+    assert_eq!(report["scripts"][2]["status"], "not_run");
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_shared_include_prefix_keeps_entries_independent() {
+    let temp = unique_temp_dir("surtr_test_shared_include_prefix");
+    write_source(
+        &temp.join("lib/tests/local/support/shared.srt"),
+        "defmod Shared {\n  def value() -> Int { 42 }\n  def check() -> Result<()> {\n    Test::assert_gte(1, 2)\n  }\n}\n",
+    );
+    for (file, body) in [
+        ("a", "expected = 42; it(\"first\") { assert_eq(Shared::value(), expected) }"),
+        ("b", "expected = \"second\"; it(\"second\") { assert_eq(Shared::value(), 42); assert_eq(expected, \"second\") }\nit(\"entry failure\") { assert_eq(42, 0) }\nit(\"dependency failure\") { Shared::check() }"),
+    ] {
+        write_source(
+            &temp.join(format!("lib/tests/local/{file}.srt")),
+            &format!("include \"./support/shared.srt\"\nimport Test;\n{body}\n"),
+        );
+    }
+    let output = run_surtr(&temp, &["test", "--all", "--quiet", "--format=json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = test_json(&output);
+    assert_eq!(report["summary"]["passed"], 2);
+    assert_eq!(report["summary"]["failed"], 2);
+    let cases = report["cases"].as_array().unwrap();
+    assert!(cases[0]["file"].as_str().unwrap().ends_with("b.srt"));
+    assert!(cases[0]["diagnostic"]["file"]
+        .as_str()
+        .unwrap()
+        .ends_with("b.srt"));
+    assert!(cases[1]["diagnostic"]["file"]
+        .as_str()
+        .unwrap()
+        .ends_with("support/shared.srt"));
+    assert_eq!(cases[1]["diagnostic"]["line"], 4);
+    let prefixes = fs::read_dir(temp.join("target/surtr-test-cache/prefix"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "semantic"))
+        .count();
+    assert_eq!(prefixes, 1, "same include environment must compile once");
+    let _ = fs::remove_dir_all(temp);
+}
+
+fn write_compile_barrier_inputs(temp: &Path) {
+    for file in ["a_good", "z_good"] {
+        write_source(
+            &temp.join(format!("lib/tests/local/{file}.srt")),
+            &format!(
+                "import File;\nimport Test;\ntop_write = File::append(\"executed.log\", \"{file} top\\n\")\nit(\"{file}\") {{ assert_ok(top_write); assert_ok(File::append(\"executed.log\", \"{file} case\\n\")) }}\n",
+            ),
+        );
+    }
+    for file in ["b_bad", "c_bad"] {
+        write_source(
+            &temp.join(format!("lib/tests/local/{file}.srt")),
+            &format!(
+                "import Test;\nfirst = missing_first_{file}\nsecond = missing_second_{file}\nit(\"{file}\") {{ assert_true(True) }}\n",
+            ),
+        );
+    }
+}
+
+#[test]
+fn test_command_all_compile_errors_report_one_per_file_and_prevent_all_execution() {
+    let temp = unique_temp_dir("surtr_test_all_compile_barrier");
+    write_compile_barrier_inputs(&temp);
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert!(
+        !temp.join("executed.log").exists(),
+        "neither top-level effects nor case bodies may run if any target fails compilation: {report}",
+    );
+    assert_eq!(report["summary"]["script_errors"], 2, "{report}");
+    assert_eq!(report["summary"]["discovered"], 0, "{report}");
+    assert_eq!(report["summary"]["executed"], 0, "{report}");
+    assert!(report["cases"].as_array().unwrap().is_empty());
+    let errors = report["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{report}");
+    for (error, file) in errors.iter().zip(["b_bad", "c_bad"]) {
+        assert_eq!(error["kind"], "script");
+        let diagnostics = error["diagnostic"]["errors"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("missing_first_{file}")),
+            "{error}"
+        );
+        assert!(!message.contains("missing_second"), "{error}");
+    }
+    let scripts = report["scripts"].as_array().unwrap();
+    assert_eq!(scripts.len(), 4);
+    for (script, (file, status)) in scripts.iter().zip([
+        ("a_good", "not_run"),
+        ("b_bad", "aborted"),
+        ("c_bad", "aborted"),
+        ("z_good", "not_run"),
+    ]) {
+        assert_eq!(script["file"], format!("lib/tests/local/{file}.srt"));
+        assert_eq!(script["status"], status);
+        assert_eq!(
+            script["io"],
+            serde_json::json!({"stdout": [], "stderr": []})
+        );
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_all_resumes_from_cached_successes_after_compile_errors_are_fixed() {
+    let temp = unique_temp_dir("surtr_test_all_compile_cache_resume");
+    write_compile_barrier_inputs(&temp);
+    let output = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert!(!temp.join("executed.log").exists(), "{report}");
+    let cache_dir = temp.join("target/surtr-test-cache/eldr");
+    let mut cached: Vec<_> = fs::read_dir(cache_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "eldr"))
+        .map(|path| {
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            let bytes = fs::read(&path).unwrap();
+            (path, modified, bytes)
+        })
+        .collect();
+    cached.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        cached.len(),
+        2,
+        "all valid targets, including the one after both errors, must be cached"
+    );
+    for file in ["b_bad", "c_bad"] {
+        write_source(
+            &temp.join(format!("lib/tests/local/{file}.srt")),
+            &format!("import Test;\nit(\"{file}\") {{ assert_true(True) }}\n"),
+        );
+    }
+    let resumed = run_surtr(&temp, &["test", "--all", "--format=json"]);
+    let report = test_json(&resumed);
+    assert!(resumed.status.success(), "{report}");
+    assert_eq!(report["summary"]["passed"], 4, "{report}");
+    assert_eq!(report["summary"]["script_errors"], 0, "{report}");
+    assert_eq!(
+        fs::read_to_string(temp.join("executed.log")).unwrap(),
+        "a_good top\na_good case\nz_good top\nz_good case\n",
+    );
+    for (path, modified, bytes) in cached {
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            modified,
+            "cached successful bytecode must be reused: {}",
+            path.display()
+        );
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_case_stdin_is_empty_without_consuming_open_host_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let temp = unique_temp_dir("surtr_test_case_empty_stdin");
+    write_source(
+        &temp.join("lib/tests/local/stdin.srt"),
+        r#"import IO;
+import Test;
+
+it("empty case line input") {
+  assert_err_kind(InputLineEnd, IO::get_line(""))
+}
+it("empty case character input") {
+  assert_err_kind(InputCharacterEnd, IO::get(""))
+}
+host_input = IO::get_line("")
+match host_input {
+  Ok(text) => print(text),
+  Err(error) => eprint(error),
+}
+"#,
+    );
+    let mut child = surtr_command()
+        .args(["test", "lib/tests/local/stdin.srt", "--format=json"])
+        .current_dir(&temp)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("test command should start");
+    let mut host_stdin = child.stdin.take().expect("host stdin pipe should exist");
+    // Keep the writer open throughout execution: EOF must come from the case
+    // buffer, not from a closed host pipe. Spare lines let the old runner fail
+    // both assertions and finish instead of blocking after consuming sentinel.
+    let input = format!("sentinel\n{}", "spare\n".repeat(32));
+    if let Err(error) = host_stdin.write_all(input.as_bytes()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("failed to populate open host stdin: {error}");
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            status => {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .expect("killed child should be reaped");
+                drop(host_stdin);
+                panic!(
+                    "test command did not finish with host stdin open: {status:?}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .expect("finished child should be reaped");
+    drop(host_stdin);
+    let report = test_json(&output);
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["summary"]["passed"], 2, "{report}");
+    assert_eq!(report["summary"]["failed"], 0, "{report}");
+    assert_eq!(
+        report["scripts"][0]["io"]["stdout"],
+        serde_json::json!(["sentinel"]),
+        "case reads must preserve host input for the top-level read: {report}",
+    );
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[cfg(unix)]
+fn run_surtr_with_terminal_stderr(temp: &Path, args: &[&str]) -> (Output, String) {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    use std::process::Stdio;
+    let mut master = -1;
+    let mut slave = -1;
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let result = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    assert_eq!(result, 0, "terminal should open");
+    let mut master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            match master.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                Err(error) => panic!("terminal read failed: {error}"),
+            }
+        }
+        String::from_utf8(bytes).expect("terminal progress should be UTF-8")
+    });
+    let mut command = surtr_command();
+    command
+        .args(args)
+        .current_dir(temp)
+        .stderr(Stdio::from(slave));
+    let output = command.output().expect("test command should run");
+    drop(command);
+    (output, reader.join().unwrap())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_quiet_terminal_progress_preserves_json_and_clears() {
+    let temp = unique_temp_dir("surtr_test_terminal_progress");
+    write_source(
+        &temp.join("lib/tests/local/a.srt"),
+        "import Test;\nit(\"first\") { assert_eq(1, 1) }\n",
+    );
+    write_source(
+        &temp.join("lib/tests/local/b.srt"),
+        "import Test;\nit(\"second\") { assert_eq(2, 2) }\n",
+    );
+    let (output, progress) =
+        run_surtr_with_terminal_stderr(&temp, &["test", "--all", "--quiet", "--format=json"]);
+    assert!(
+        output.status.success(),
+        "{}\n{progress}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report = test_json(&output);
+    assert_eq!(report["summary"]["passed"], 2);
+    assert_eq!(
+        progress.matches("Preparing standard environment").count(),
+        1
+    );
+    for index in [1, 2] {
+        assert!(
+            progress.contains(&format!("Compiling [{index}/2]")),
+            "{progress}"
+        );
+        assert!(
+            progress.contains(&format!("Running [{index}/2]")),
+            "{progress}"
+        );
+    }
+    assert!(progress.find("Compiling [2/2]").unwrap() < progress.find("Running [1/2]").unwrap());
+    assert!(progress.ends_with("\r\x1b[2K"), "{progress:?}");
+    assert!(!progress.contains('\n'), "{progress:?}");
+    let (warm, progress) = run_surtr_with_terminal_stderr(&temp, &["test", "--all", "--quiet"]);
+    assert!(warm.status.success());
+    assert!(warm.stdout.is_empty());
+    assert!(
+        !progress.contains("Preparing"),
+        "warm bytecode should skip standard preparation"
+    );
+    assert!(progress.ends_with("\r\x1b[2K"));
+    let piped = run_surtr(&temp, &["test", "--all", "--quiet"]);
+    assert!(piped.status.success());
+    assert!(piped.stdout.is_empty() && piped.stderr.is_empty());
     let _ = fs::remove_dir_all(temp);
 }

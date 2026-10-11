@@ -1,5 +1,5 @@
 defmod Matchers {
   defextractor bad(self: Int) -> MatchResult<Seq<Int, String>> {
-    MatchResult::Err(NoneError)
+    MatchResult::Err(NoneError())
   }
 }

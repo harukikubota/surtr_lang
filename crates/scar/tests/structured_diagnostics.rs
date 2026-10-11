@@ -217,7 +217,6 @@ fn callable_shape_reasons_are_structured() {
     for (source, expected) in [
         ("value = 1\nvalue(2)", Reason::NotCallable),
         ("[1] |*> {|a: Int, b: Int| a + b}", Reason::CallableShapeMismatch),
-        ("[1] |*> {|x: Int| Option::Some(x)}", Reason::CallableShapeMismatch),
         ("def left(x: Int) -> List<Int> { [x] }\ndef right(x: String) -> String { x }\n&left >* &right", Reason::NoApplicableTraitImplementation),
         ("def left(x: Int) -> List<Int> { [x] }\ndef right(x: String) -> List<String> { [x] }\n&left >=> &right", Reason::NoApplicableTraitImplementation),
     ] {

@@ -1,0 +1,31 @@
+def key(label: String, value: String) -> String { print(label); value }
+def input() -> HashMap<Int> { print("input"); hash!["a" => 2, "b" => 3] }
+def select(source: Result<HashMap<Int>>) -> Result<Int> {
+  hash![key("safe-key", "a") => n] =? source
+  print("safe-body")
+  Ok(n)
+}
+def direct(source: HashMap<Int>) -> Result<Int> {
+  hash!["a" => n] =? source
+  Ok(n)
+}
+def empty(source: Result<HashMap<Int>>) -> Result<Int> {
+  hash![] =? source
+  Ok(7)
+}
+probe = *{|n: Int| print("child:#{n}"); MatchResult::Ok(n)}
+print(inspect(match input() {
+  hash![key("key-a", "a") => probe(n), key("key-b", "b") => probe(m)] when n < m => { print("guard-body"); n + m },
+  _ => 0,
+}))
+print(inspect(is_match(hash!["a" => 2], hash![key("first", "a") => 3, key("skipped", "b") => _])))
+print(inspect(is_match(hash!["a" => 2], hash![key("missing", "b") => probe(_), key("skipped", "a") => _])))
+print(inspect(select(Err(NoneError()))))
+print(inspect(select(Ok(hash!["a" => 2]))))
+print(inspect(direct(hash!["a" => 4])))
+print(inspect(empty(Ok(hash!["a" => 4]))))
+print(inspect(do::<Result> { hash!["a" => n] <- Ok(hash!["a" => 6]); Ok(n) }))
+print(inspect(do::<Option> { hash!["a" => n] <- Option::Some(hash!["b" => 6]); print("skipped-do"); Option::Some(n) }))
+print(inspect(do::<List> { hash!["a" => n] <- [hash!["a" => 8], hash!["b" => 9]]; [n] }))
+ext = *{|map: HashMap<Int>| hash!["a" => n] =? map; MatchResult::Ok(n)}
+print(inspect(apply_pattern(hash!["a" => 9], ext(_1))))

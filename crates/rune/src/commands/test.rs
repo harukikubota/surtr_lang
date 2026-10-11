@@ -9,9 +9,10 @@ use serde_json::{json, Value as JsonValue};
 use spire::ast::Span;
 use std::time::Instant;
 
+use super::test_progress::TestProgress;
 use crate::compile::{
-    collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
-    script_plan_error_as_rune_error,
+    collect_default_script_compile_sources, compile_source, load_default_stdlib_snapshot,
+    prepare_script_compile_plan, script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
@@ -289,14 +290,62 @@ struct TestReport {
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     let started = options.timings.then(Instant::now);
     let mut report = TestReport::default();
+    let mut compile_context = TestCompileContext::default();
+    let stderr = std::io::stderr();
+    let terminal = stderr.is_terminal();
+    let mut progress = TestProgress::new(stderr, terminal);
     let paths = match &options.mode {
         TestMode::One(file_path) => Ok(vec![file_path.clone()]),
         TestMode::All => collect_all_test_paths(),
     };
     match paths {
         Ok(paths) => {
-            for file_path in paths {
-                execute_test_script(&file_path, env, &options, &mut report);
+            let total = paths.len();
+            let mut compiled = Vec::with_capacity(total);
+            for (index, file_path) in paths.into_iter().enumerate() {
+                let position = TestFilePosition {
+                    index: index + 1,
+                    total,
+                };
+                let result = prepare_test_script(
+                    &file_path,
+                    env,
+                    position,
+                    &mut progress,
+                    &mut compile_context,
+                );
+                let result = match result {
+                    Ok(script) => Ok(script),
+                    Err(TestCompileError::Compile(error)) => Err(error),
+                    Err(TestCompileError::Progress(error)) => return Err(progress_error(error)),
+                };
+                compiled.push((file_path, result));
+            }
+            let compilation_failed = compiled.iter().any(|(_, result)| result.is_err());
+            for (index, (file_path, result)) in compiled.into_iter().enumerate() {
+                match result {
+                    Err(error) => {
+                        report.scripts.push(json!({
+                            "file": file_path, "status": "aborted",
+                            "io": {"stdout": [], "stderr": []},
+                        }));
+                        report.script_error(error);
+                    }
+                    Ok(_) if compilation_failed => report.scripts.push(json!({
+                        "file": file_path, "status": "not_run",
+                        "io": {"stdout": [], "stderr": []},
+                    })),
+                    Ok(compiled) => execute_test_script(
+                        compiled,
+                        &options,
+                        &mut report,
+                        TestFilePosition {
+                            index: index + 1,
+                            total,
+                        },
+                        &mut progress,
+                    )?,
+                }
             }
         }
         Err(error) => report.script_error(error),
@@ -308,6 +357,7 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     {
         report.policy_error("test: no cases matched the specified filters".into());
     }
+    progress.clear().map_err(progress_error)?;
     let duration_ns = started.map(|time| time.elapsed().as_nanos());
     let failed = report.summary.failed
         + report.summary.scope_failures
@@ -387,30 +437,35 @@ impl TestReport {
         });
     }
 }
-fn execute_test_script(
+struct CompiledTestScript {
+    script: TestScript,
+    bytecode: Bytecode,
+}
+
+fn prepare_test_script(
     file_path: &str,
     env: ExecutionEnv,
+    position: TestFilePosition,
+    progress: &mut TestProgress<std::io::Stderr>,
+    compile_context: &mut TestCompileContext,
+) -> Result<CompiledTestScript, TestCompileError> {
+    progress.compiling(position.index, position.total, file_path)?;
+    let script = load_test_script(file_path)?;
+    let bytecode = compile_test_script(&script, env, position, progress, compile_context)?;
+    Ok(CompiledTestScript { script, bytecode })
+}
+
+fn execute_test_script(
+    compiled: CompiledTestScript,
     options: &TestOptions,
     report: &mut TestReport,
-) {
-    let script = match load_test_script(file_path) {
-        Ok(script) => script,
-        Err(error) => {
-            report.scripts.push(
-                json!({"file": file_path, "status": "aborted", "io": {"stdout": [], "stderr": []}}),
-            );
-            report.script_error(error);
-            return;
-        }
-    };
-    let bytecode = match compile_test_script(&script, env) {
-        Ok(bytecode) => bytecode,
-        Err(error) => {
-            report.scripts.push(json!({"file": script.file_path, "status": "aborted", "io": {"stdout": [], "stderr": []}}));
-            report.script_error(error);
-            return;
-        }
-    };
+    position: TestFilePosition,
+    progress: &mut TestProgress<std::io::Stderr>,
+) -> RuneResult<()> {
+    let CompiledTestScript { script, bytecode } = compiled;
+    progress
+        .running(position.index, position.total, &script.file_path)
+        .map_err(progress_error)?;
     let mut vm = eldr::VM::new(bytecode)
         .with_source(script.source.clone(), script.file_path.clone())
         .with_output_capture()
@@ -486,6 +541,10 @@ fn execute_test_script(
             .expect("recorded runtime error")
             .diagnostic = Some(diagnostic);
     }
+    Ok(())
+}
+fn progress_error(error: std::io::Error) -> RuneError {
+    RuneError::message(1, format!("test: failed to write progress: {error}"))
 }
 fn visible_case(event: &VmTestEvent, options: &TestOptions) -> bool {
     !options.quiet
@@ -672,14 +731,70 @@ fn read_test_directory(dir: &Path) -> RuneResult<Vec<PathBuf>> {
         .collect()
 }
 
-fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Bytecode> {
+#[derive(Clone, Copy)]
+struct TestFilePosition {
+    index: usize,
+    total: usize,
+}
+
+#[derive(Default)]
+struct TestCompileContext {
+    fingerprints: Option<TestCacheFingerprints>,
+    standard_prepared: bool,
+}
+
+struct TestCacheFingerprints {
+    binary: String,
+    library: String,
+}
+
+enum TestCompileError {
+    Compile(RuneError),
+    Progress(std::io::Error),
+}
+
+impl From<RuneError> for TestCompileError {
+    fn from(error: RuneError) -> Self {
+        Self::Compile(error)
+    }
+}
+
+impl From<std::io::Error> for TestCompileError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Progress(error)
+    }
+}
+
+fn compile_test_script(
+    script: &TestScript,
+    env: ExecutionEnv,
+    position: TestFilePosition,
+    progress: &mut TestProgress<std::io::Stderr>,
+    context: &mut TestCompileContext,
+) -> Result<Bytecode, TestCompileError> {
     let compile_plan = prepare_script_compile_plan(&script.file_path, &script.source, None)
         .map_err(|e| script_plan_error_as_rune_error(&script.file_path, &script.source, e))?;
-    let cache_path = cached_eldr_path(script, &compile_plan.include_directives)?;
+    if context.fingerprints.is_none() {
+        context.fingerprints = Some(TestCacheFingerprints {
+            binary: binary_fingerprint()?,
+            library: library_sources_fingerprint()?,
+        });
+    }
+    let cache_path = cached_eldr_path(
+        script,
+        &compile_plan.include_directives,
+        context
+            .fingerprints
+            .as_ref()
+            .expect("test cache fingerprints prepared"),
+    )?;
     if let Some(bytecode) = load_cached_bytecode(&cache_path)? {
         return Ok(bytecode);
     }
 
+    if !context.standard_prepared {
+        progress.preparing()?;
+    }
     let compile_sources = collect_default_script_compile_sources(
         env,
         &script.file_path,
@@ -687,6 +802,11 @@ fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Byt
         &compile_plan.include_modules,
         xldr::StdlibVariant::TestEnabled,
     )?;
+    if !context.standard_prepared {
+        load_default_stdlib_snapshot(env, &compile_sources)?;
+        context.standard_prepared = true;
+    }
+    progress.compiling(position.index, position.total, &script.file_path)?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     store_cached_bytecode(&cache_path, &bytecode)?;
     Ok(bytecode)
@@ -714,7 +834,7 @@ fn library_sources_fingerprint() -> Result<String, RuneError> {
     for module in modules {
         payload.push_str(&module.file_name);
         payload.push('\x1f');
-        payload.push_str(&module.module_path);
+        payload.push_str(&format!("{:?}", module.module_path));
         payload.push('\x1f');
         payload.push_str(&stable_hash_hex(&module.source));
         payload.push('\x1e');
@@ -725,13 +845,14 @@ fn library_sources_fingerprint() -> Result<String, RuneError> {
 fn cached_eldr_path(
     script: &TestScript,
     include_directives: &[xldr::ScriptIncludeDirective],
+    fingerprints: &TestCacheFingerprints,
 ) -> Result<PathBuf, RuneError> {
     let mut key = String::new();
     key.push_str(TEST_CACHE_VERSION);
     key.push('\x1f');
-    key.push_str(&binary_fingerprint()?);
+    key.push_str(&fingerprints.binary);
     key.push('\x1f');
-    key.push_str(&library_sources_fingerprint()?);
+    key.push_str(&fingerprints.library);
     key.push('\x1f');
     key.push_str(&script.file_path);
     key.push('\x1f');
@@ -1079,7 +1200,6 @@ mod tests {
         colorize_text, note_line, parse_test_options, summary_color, summary_line,
         test_color_enabled, test_event_line, TestMode, TestOutputColor, TestRunSummary,
     };
-    use std::path::Path;
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1100,9 +1220,9 @@ mod tests {
             kind: eldr::vm::VmTestEventKind::Failed,
             io: None,
             diagnostic: Some(eldr::vm::VmTestDiagnostic {
-                kind: "Global::TestAssertionFailed".to_string(),
+                kind: "Global::TestExpectedTrue".to_string(),
                 message: "expected True, got False".to_string(),
-                assertion: Some("assert_eq".to_string()),
+                assertion: Some("assert_true".to_string()),
                 assertion_call_kind: Some(sindr::runtime::RuntimeCallKind::DirectFunction),
                 file: "helper.srt".to_string(),
                 line: 4,
@@ -1116,7 +1236,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             rendered,
-            "Error: Global::TestAssertionFailed: expected True, got False\n  at helper.srt:4:3\n"
+            "Error: Global::TestExpectedTrue: expected True, got False\n  at helper.srt:4:3\n"
         );
     }
 

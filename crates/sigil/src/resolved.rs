@@ -10,7 +10,6 @@ pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
     pub derives: Vec<String>,
-    pub result_effect: Option<ResolvedResultEffect>,
     pub facet_path_kind: Option<Vec<String>>,
     pub hidden: bool,
     pub readonly: bool,
@@ -19,26 +18,12 @@ pub struct ResolvedDeclAttrs {
     pub user_callable: bool,
 }
 
-/// Compiler-owned metadata attached to an `@result_effect` declaration.
-///
-/// The annotation span is retained for diagnostics.  The two Trait ids are
-/// resolved by Sigil from the canonical standard declarations; later phases
-/// must not rediscover them from display names.  `None` is representable so a
-/// malformed or incomplete resolved node fails closed in Scar.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResolvedResultEffect {
-    pub annotation_span: Span,
-    pub monad_trait: Option<ResolvedId>,
-    pub monad_t_trait: Option<ResolvedId>,
-}
-
 impl Default for ResolvedDeclAttrs {
     fn default() -> Self {
         Self {
             doc: None,
             builtin: false,
             derives: Vec::new(),
-            result_effect: None,
             facet_path_kind: None,
             hidden: false,
             readonly: false,
@@ -79,6 +64,9 @@ pub struct ResolvedSignatureTy {
 /// instead of rediscovering canonical Traits from display names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDoContract {
+    /// Source origin of this do expression, also retained by synthetic continuations.
+    pub keyword_span: Span,
+    pub monad_fail_trait: Option<ResolvedId>,
     pub monad_trait: Option<ResolvedId>,
     pub alternative_trait: Option<ResolvedId>,
 }
@@ -171,7 +159,8 @@ pub enum Resolved {
     Bind(Span, ResolvedPattern, Box<Resolved>),
 
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
-    SafeBind(Span, ResolvedPattern, Box<Resolved>),
+    /// The final span is the producer-owned failure operator origin.
+    SafeBind(Span, ResolvedPattern, Box<Resolved>, Span),
 
     /// Statement-only `expr?`, retaining its Unit-success constraint for Scar.
     StatementQuestion(Span, Box<Resolved>),
@@ -251,10 +240,8 @@ pub enum Resolved {
     /// `Result::cause(value, err)` special form
     Cause(Span, Box<Resolved>, Box<Resolved>),
 
-    /// `Result::recover_kind(value, ErrorKind, handler)` special form.
-    /// The kind is a concrete deferror declaration identity, never an evaluated expression.
-    RecoverKind(Span, Box<Resolved>, ResolvedId, Box<Resolved>),
-    AssertErrorKinds(Span, ErrorKindAssertion<ResolvedId>, Box<Resolved>),
+    /// Bare canonical deferror declaration used as an ordinary opaque value.
+    ErrorKind(Span, ResolvedId),
 
     /// Match expression
     Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
@@ -496,6 +483,8 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     DurationLit(Span, SurtrInt),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
+    /// Ordered lookups with expression keys resolved before pattern bindings.
+    HashMap(Span, Vec<(Resolved, ResolvedPattern)>),
     /// Compiler-owned structural Record pattern. Named fields are normalized by Scar.
     Record(ResolvedId, Vec<(Option<Symbol>, ResolvedPattern)>),
     Extractor(ResolvedId, Vec<Resolved>, Vec<ResolvedPattern>),
@@ -678,36 +667,6 @@ impl ResolvedPattern {
         match self {
             Self::Located(_, inner) => inner.unlocated(),
             other => other,
-        }
-    }
-}
-
-/// Static declaration metadata, never a surface ErrorKind value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ErrorKindAssertion<T> {
-    Root(T),
-    Chain(Vec<T>),
-}
-
-impl<T> ErrorKindAssertion<T> {
-    pub fn markers(&self) -> &[T] {
-        match self {
-            Self::Root(marker) => std::slice::from_ref(marker),
-            Self::Chain(markers) => markers,
-        }
-    }
-
-    pub fn markers_mut(&mut self) -> &mut [T] {
-        match self {
-            Self::Root(marker) => std::slice::from_mut(marker),
-            Self::Chain(markers) => markers,
-        }
-    }
-
-    pub fn api(&self) -> &'static str {
-        match self {
-            Self::Root(_) => "assert_err_kind",
-            Self::Chain(_) => "assert_cause_chain",
         }
     }
 }

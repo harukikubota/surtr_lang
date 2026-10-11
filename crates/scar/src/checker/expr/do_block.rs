@@ -1,17 +1,6 @@
 use super::*;
 
 impl Checker {
-    fn do_failure_carrier_is_rigid_variable(&self, carrier: &Ty) -> bool {
-        match self.resolve_ty(carrier) {
-            Ty::Var(variable) => self.rigid_tyvars.contains(&variable),
-            Ty::SelfApp(items) => Self::constructor_application_parts(&items)
-                .is_some_and(|(constructor, _)| {
-                    matches!(constructor, Ty::Var(variable) if self.rigid_tyvars.contains(variable))
-                }),
-            _ => false,
-        }
-    }
-
     fn canonical_do_trait_key(
         &self,
         contract: &sigil::resolved::ResolvedDoContract,
@@ -22,6 +11,7 @@ impl Checker {
         let resolved_id = match identity {
             sindr::intrinsic::CanonicalTraitIdentity::Monad => &contract.monad_trait,
             sindr::intrinsic::CanonicalTraitIdentity::Alternative => &contract.alternative_trait,
+            sindr::intrinsic::CanonicalTraitIdentity::MonadFail => &contract.monad_fail_trait,
         }
         .as_ref()
         .ok_or_else(|| {
@@ -70,69 +60,47 @@ impl Checker {
         Ok(key)
     }
 
-    fn partial_do_failure_method(
-        &self,
+    fn resolve_do_pattern_failure_target(
+        &mut self,
+        contract: &sigil::resolved::ResolvedDoContract,
+        carrier: &Ty,
+        propagated: &[Ty],
         span: &Span,
-    ) -> Result<sindr::intrinsic::CanonicalTraitMethodIdentity, TypeError> {
-        let contract = sindr::intrinsic::do_intrinsic_contract();
-        let route = contract.routes.iter().find(|route| {
-            route.predicate == sindr::intrinsic::DoCapabilityPredicate::HasPartialExtractPattern
-                && route.same_carrier == contract.do_local_carrier
-        });
-        let Some(route) = route else {
+    ) -> Result<SafeBindFailureTarget, TypeError> {
+        use sindr::intrinsic::{CanonicalTraitIdentity, CanonicalTraitMethodIdentity};
+        let fail_key =
+            self.canonical_do_trait_key(contract, CanonicalTraitIdentity::MonadFail, span)?;
+        if !self
+            .traits
+            .get(&fail_key)
+            .is_some_and(|info| info.compiler_owned_failure)
+        {
             return Err(self.policy_error(
                 TypeDiagnosticReason::TypecheckInvariantViolation,
                 diagnostics::TypePolicy::ProducerContract,
-                Some("do partial-extract capability and lowering contract".into()),
+                Some("do failure contract does not reference canonical MonadFail".into()),
                 None,
-                None,
-                None,
-                None,
-                span,
-                None,
-            ));
-        };
-        let sindr::intrinsic::DoRouteLowering::FailureEffect(failure) = route.lowering else {
-            return Err(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("do partial-extract lowering route".into()),
-                None,
-                None,
-                None,
-                None,
-                span,
-                None,
-            ));
-        };
-        let sindr::intrinsic::FailureEffectAction::OverrideWith(method) = failure.fallback_action
-        else {
-            return Err(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("do partial-extract fallback action".into()),
-                None,
-                None,
-                None,
-                None,
-                span,
-                None,
-            ));
-        };
-        if failure.fallback_capability != method.trait_identity() {
-            return Err(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("do partial-extract capability route".into()),
-                None,
-                None,
+                Some(carrier),
                 None,
                 None,
                 span,
                 None,
             ));
         }
-        Ok(method)
+        let empty = CanonicalTraitMethodIdentity::AlternativeEmpty;
+        let alternative_key =
+            self.canonical_do_trait_key(contract, empty.trait_identity(), span)?;
+        self.resolve_pattern_failure_target(
+            carrier,
+            propagated,
+            span,
+            Some((
+                &alternative_key,
+                empty.method_name(),
+                &contract.keyword_span,
+            )),
+            true,
+        )
     }
 
     pub(super) fn check_do(
@@ -444,7 +412,7 @@ impl Checker {
                 sindr::intrinsic::CanonicalTraitIdentity::Monad,
                 do_span,
             )?;
-            let compatible = self.types_compatible(expected, &typed.ty);
+            let compatible = self.types_compatible(expected, &typed.ty)?;
             let carrier_classification = if compatible {
                 None
             } else {
@@ -548,7 +516,11 @@ impl Checker {
                 )
             })?;
         let monad = self.canonical_do_trait_key(resolved_contract, monad_identity, do_span)?;
-        match self.constructor_slot_type_for(&monad, &carrier) {
+        match self
+            .constructor_slot_type_for(&monad, &carrier)
+            .into_checked()
+            .map_err(|error| error.at_span(&typed.span))?
+        {
             ConstructorApplicationOutcome::Applied(_) => {
                 self.consume_matching_capability(&carrier, &monad);
                 Ok(typed)
@@ -763,98 +735,12 @@ impl Checker {
             return Ok(checked);
         };
         let carrier_ty = self.resolve_ty(&checked.ty);
-        let replacement = match self.resolve_result_effect(&carrier_ty) {
-            ResultEffectResolution::Preserve(target) => {
-                if !self.types_compatible(&target.error_ty, &Ty::Error) {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::SafeBindErrorTypeMismatch,
-                        diagnostics::TypePolicy::SafeBindFailureTarget,
-                        Some("do partial pattern".into()),
-                        Some(&target.error_ty),
-                        Some(&Ty::Error),
-                        None,
-                        None,
-                        pattern_span,
-                        None,
-                    ));
-                }
-                TypedNode {
-                    ty: target.carrier_ty.clone(),
-                    span: pattern_span.clone(),
-                    node: TypedInner::ResultEffectFailure(Box::new(target)),
-                }
-            }
-            ResultEffectResolution::Unavailable => {
-                let failure = self.partial_do_failure_method(pattern_span)?;
-                let trait_key = self.canonical_do_trait_key(
-                    resolved_contract,
-                    failure.trait_identity(),
-                    pattern_span,
-                )?;
-                self.check_trait_invocation(
-                    pattern_span,
-                    &trait_key,
-                    failure.method_name(),
-                    &[],
-                    None,
-                    Some(&carrier_ty),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?
-            }
-            ResultEffectResolution::Deferred => {
-                let failure = self.partial_do_failure_method(pattern_span)?;
-                let trait_key = self.canonical_do_trait_key(
-                    resolved_contract,
-                    failure.trait_identity(),
-                    pattern_span,
-                )?;
-                if self.do_failure_carrier_is_rigid_variable(&carrier_ty) {
-                    let _ = self.check_trait_invocation(
-                        pattern_span,
-                        &trait_key,
-                        failure.method_name(),
-                        &[],
-                        None,
-                        Some(&carrier_ty),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )?;
-                }
-                TypedNode {
-                    ty: carrier_ty.clone(),
-                    span: pattern_span.clone(),
-                    node: TypedInner::DeferredDoFailure(Box::new(DeferredDoFailureTarget {
-                        carrier_ty: carrier_ty.clone(),
-                        alternative_trait_key: trait_key,
-                        alternative_method_name: failure.method_name().into(),
-                        propagated_error_tys: vec![Ty::Error],
-                        failure_span: pattern_span.clone(),
-                    })),
-                }
-            }
-            ResultEffectResolution::InvalidMetadata(subject) => {
-                return Err(self.policy_error(
-                    TypeDiagnosticReason::TypecheckInvariantViolation,
-                    diagnostics::TypePolicy::ProducerContract,
-                    Some(subject.into()),
-                    None,
-                    Some(&carrier_ty),
-                    None,
-                    None,
-                    pattern_span,
-                    None,
-                ));
-            }
-        };
+        let failure_target = self.resolve_do_pattern_failure_target(
+            resolved_contract,
+            &carrier_ty,
+            &[Ty::Error],
+            pattern_span,
+        )?;
         let TypedInner::TraitCall { args, .. } = &mut checked.node else {
             return Err(self.policy_error(
                 TypeDiagnosticReason::TypecheckInvariantViolation,
@@ -935,15 +821,6 @@ impl Checker {
                 None,
             ));
         }
-        let failure_target = match replacement.node {
-            TypedInner::ResultEffectFailure(target) => {
-                SafeBindFailureTarget::DoResultContext(target)
-            }
-            TypedInner::DeferredDoFailure(target) => SafeBindFailureTarget::Deferred(target),
-            _ => SafeBindFailureTarget::DoAlternative {
-                empty: Box::new(replacement),
-            },
-        };
         let TypedInner::Match(value, arms) = &mut body.node else {
             unreachable!("partial mapper Match was validated above");
         };
@@ -966,68 +843,6 @@ impl Checker {
             },
         }));
         Ok(*self.resolve_typed_node(checked))
-    }
-
-    fn do_safebind_failure_method(
-        &self,
-        span: &Span,
-    ) -> Result<sindr::intrinsic::CanonicalTraitMethodIdentity, TypeError> {
-        let contract = sindr::intrinsic::do_intrinsic_contract();
-        let failure = contract
-            .routes
-            .iter()
-            .find_map(|route| match route.lowering {
-                sindr::intrinsic::DoRouteLowering::FailureEffect(failure)
-                    if route.predicate
-                        == sindr::intrinsic::DoCapabilityPredicate::HasLegalSafeBind
-                        && route.same_carrier == contract.do_local_carrier =>
-                {
-                    Some(failure)
-                }
-                _ => None,
-            })
-            .ok_or_else(|| {
-                self.policy_error(
-                    TypeDiagnosticReason::TypecheckInvariantViolation,
-                    diagnostics::TypePolicy::ProducerContract,
-                    Some("do SafeBind failure route".into()),
-                    None,
-                    None,
-                    None,
-                    None,
-                    span,
-                    None,
-                )
-            })?;
-        let sindr::intrinsic::FailureEffectAction::OverrideWith(method) = failure.fallback_action
-        else {
-            return Err(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("do SafeBind non-Result failure action".into()),
-                None,
-                None,
-                None,
-                None,
-                span,
-                None,
-            ));
-        };
-        if failure.fallback_capability == method.trait_identity() {
-            Ok(method)
-        } else {
-            Err(self.policy_error(
-                TypeDiagnosticReason::TypecheckInvariantViolation,
-                diagnostics::TypePolicy::ProducerContract,
-                Some("do SafeBind capability and lowering contract".into()),
-                None,
-                None,
-                None,
-                None,
-                span,
-                None,
-            ))
-        }
     }
 
     fn statement_question_parts(statement: &Resolved) -> Option<(&Span, &Resolved)> {
@@ -1096,103 +911,16 @@ impl Checker {
             carrier_relation,
         )?;
         let continuation_ty = self.resolve_ty(&continuation.ty);
-        let failure_target = match self.resolve_result_effect(&continuation_ty) {
-            ResultEffectResolution::Preserve(target) => {
-                self.collect_pattern_result_error_types(
-                    &checked.typed_pattern,
-                    &mut checked.propagated_error_tys,
-                );
-                for propagated in &checked.propagated_error_tys {
-                    if !self.types_compatible(&target.error_ty, propagated) {
-                        return Err(self.policy_error(
-                            TypeDiagnosticReason::SafeBindErrorTypeMismatch,
-                            diagnostics::TypePolicy::SafeBindFailureTarget,
-                            Some("=?".into()),
-                            Some(&target.error_ty),
-                            Some(propagated),
-                            None,
-                            None,
-                            &checked.typed_rhs.span,
-                            None,
-                        ));
-                    }
-                }
-                SafeBindFailureTarget::DoResultContext(Box::new(target))
-            }
-            ResultEffectResolution::Unavailable => {
-                let failure = self.do_safebind_failure_method(operator_span)?;
-                let trait_key = self.canonical_do_trait_key(
-                    resolved_contract,
-                    failure.trait_identity(),
-                    operator_span,
-                )?;
-                let empty = self.check_trait_invocation(
-                    operator_span,
-                    &trait_key,
-                    failure.method_name(),
-                    &[],
-                    None,
-                    Some(&continuation_ty),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
-                SafeBindFailureTarget::DoAlternative {
-                    empty: Box::new(empty),
-                }
-            }
-            ResultEffectResolution::Deferred => {
-                self.collect_pattern_result_error_types(
-                    &checked.typed_pattern,
-                    &mut checked.propagated_error_tys,
-                );
-                let failure = self.do_safebind_failure_method(operator_span)?;
-                let trait_key = self.canonical_do_trait_key(
-                    resolved_contract,
-                    failure.trait_identity(),
-                    operator_span,
-                )?;
-                if self.do_failure_carrier_is_rigid_variable(&continuation_ty) {
-                    let _ = self.check_trait_invocation(
-                        operator_span,
-                        &trait_key,
-                        failure.method_name(),
-                        &[],
-                        None,
-                        Some(&continuation_ty),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )?;
-                }
-                SafeBindFailureTarget::Deferred(Box::new(DeferredDoFailureTarget {
-                    carrier_ty: continuation_ty.clone(),
-                    alternative_trait_key: trait_key,
-                    alternative_method_name: failure.method_name().into(),
-                    propagated_error_tys: checked.propagated_error_tys.clone(),
-                    failure_span: operator_span.clone(),
-                }))
-            }
-            ResultEffectResolution::InvalidMetadata(subject) => {
-                return Err(self.policy_error(
-                    TypeDiagnosticReason::TypecheckInvariantViolation,
-                    diagnostics::TypePolicy::ProducerContract,
-                    Some(subject.into()),
-                    None,
-                    Some(&continuation_ty),
-                    None,
-                    None,
-                    operator_span,
-                    None,
-                ));
-            }
-        };
+        self.collect_pattern_result_error_types(
+            &checked.typed_pattern,
+            &mut checked.propagated_error_tys,
+        );
+        let failure_target = self.resolve_do_pattern_failure_target(
+            resolved_contract,
+            &continuation_ty,
+            &checked.propagated_error_tys,
+            operator_span,
+        )?;
         let rhs_span = checked.typed_rhs.span.clone();
         Ok(TypedNode {
             ty: continuation_ty,
@@ -1311,16 +1039,18 @@ mod tests {
         }
     }
 
-    fn constructor_trait(id: ResolvedId) -> TraitInfo {
-        TraitInfo {
+    fn constructor_trait(id: ResolvedId) -> Arc<TraitInfo> {
+        Arc::new(TraitInfo {
             id,
             compiler_owned_equality: false,
+            compiler_owned_failure: false,
+            standard_lazy_contract: false,
             type_params: Vec::new(),
             where_clause: None,
             constructor_slots: vec!["$A".into()],
             parents: Vec::new(),
             methods: HashMap::new(),
-        }
+        })
     }
 
     #[test]
@@ -1335,6 +1065,8 @@ mod tests {
             .traits
             .insert("Shadow::Monad".into(), constructor_trait(shadow));
         let contract = sigil::resolved::ResolvedDoContract {
+            keyword_span: Span { start: 0, end: 2 },
+            monad_fail_trait: None,
             monad_trait: Some(canonical),
             alternative_trait: None,
         };

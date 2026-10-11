@@ -1,0 +1,5 @@
+phase: typecheck
+contains: returns 2 value(s), but pattern expects 1
+json: /reason = "ExtractorArityMismatch"
+json: /data/expected_count = 2
+json: /data/actual_count = 1

@@ -19,7 +19,7 @@ def allow(user: User) -> Result<User, HiddenUser> {
     ),
   )
 
-  if(visible, Ok(user), Err(HiddenUser))
+  if(visible, Ok(user), Err(HiddenUser()))
 }
 
 def age_band(user: User) -> String {

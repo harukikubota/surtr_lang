@@ -20,14 +20,14 @@ defagent FibWorker {
     Ok([item, ..cache])
   }
 
-  def find_cached(cache: List<(Int, Int)>, n: Int) -> Result<Int> {
+  defp find_cached(cache: List<(Int, Int)>, n: Int) -> Result<Int> {
     match cache {
-      [] => Err(NoneError),
+      [] => Err(NoneError()),
       [entry, ..tail] => if(entry._0 == n, Ok(entry._1), find_cached(tail, n)),
     }
   }
 
-  def slow_fib(n: Int) -> Int {
+  defp slow_fib(n: Int) -> Int {
     if(n <= 1, n, slow_fib(n - 1) + slow_fib(n - 2))
   }
 }
@@ -61,12 +61,12 @@ defgenserver FibManager {
     }
   }
 
-  def select_worker(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<(String, PID<FibWorker>)> {
+  defp select_worker(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<(String, PID<FibWorker>)> {
     rem =? Mod::safe_mod(n, 2)
     if(rem == 0, Ok(("even", state._0)), Ok(("odd", state._1)))
   }
 
-  def slow_fib(n: Int) -> Int {
+  defp slow_fib(n: Int) -> Int {
     if(n <= 1, n, slow_fib(n - 1) + slow_fib(n - 2))
   }
 }

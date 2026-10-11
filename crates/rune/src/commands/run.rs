@@ -292,7 +292,7 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
         i += 1;
     }
 
-    if vm_dump_path.is_none() && vm_dump_mode != VmDumpMode::Error {
+    if vm_dump_path.is_none() && vm_dump_mode_seen {
         return Err(RuneError::message(
             1,
             "run: --vm-dump-on requires --vm-dump",
@@ -1003,6 +1003,9 @@ fn build_vm_dump_json(
                 "process_spec_count": process_runtime.counters.process_spec_count,
                 "singleton_slot_count": process_runtime.counters.singleton_slot_count,
                 "process_count": process_runtime.counters.process_count,
+                "stopping_process_count": process_runtime.counters.stopping_process_count,
+                "active_process_execution_count": process_runtime.counters.active_process_execution_count,
+                "stopped_identity_count": process_runtime.counters.stopped_identity_count,
                 "runnable_process_count": process_runtime.counters.runnable_process_count,
                 "waiting_process_count": process_runtime.counters.waiting_process_count,
                 "completed_process_count": process_runtime.counters.completed_process_count,
@@ -1022,6 +1025,9 @@ fn build_vm_dump_json(
                 "process_spec_count": process_runtime.counters.process_spec_count,
                 "singleton_slot_count": process_runtime.counters.singleton_slot_count,
                 "process_count": process_runtime.counters.process_count,
+                "stopping_process_count": process_runtime.counters.stopping_process_count,
+                "active_process_execution_count": process_runtime.counters.active_process_execution_count,
+                "stopped_identity_count": process_runtime.counters.stopped_identity_count,
                 "runnable_process_count": process_runtime.counters.runnable_process_count,
                 "waiting_process_count": process_runtime.counters.waiting_process_count,
                 "completed_process_count": process_runtime.counters.completed_process_count,
@@ -1052,6 +1058,8 @@ fn build_vm_dump_json(
                 "process_name": process.process_name,
                 "spec_id": process.spec_id,
                 "status": process.status,
+                "acceptance": process.acceptance,
+                "active_executions": process.active_executions,
                 "mailbox_len": process.mailbox_len,
                 "owner": process.owner,
                 "standby_state_pending": process.standby_state_pending,
@@ -1258,18 +1266,20 @@ mod tests {
 
     #[test]
     fn run_options_parse_vm_dump_options() {
-        let opts = parse_run_options(&[
-            "main.srt".to_string(),
-            "--vm-dump".to_string(),
-            "artifacts/vm.json".to_string(),
-            "--vm-dump-on".to_string(),
-            "always".to_string(),
-        ])
-        .expect("run options must parse vm dump");
-        let vm_dump = opts.vm_dump.expect("vm dump options must exist");
-        assert_eq!(vm_dump.path, "artifacts/vm.json");
-        assert_eq!(vm_dump.mode, VmDumpMode::Always);
-        assert!(opts.cli_args.is_empty());
+        for (mode, expected) in [("always", VmDumpMode::Always), ("error", VmDumpMode::Error)] {
+            let opts = parse_run_options(&[
+                "main.srt".to_string(),
+                "--vm-dump".to_string(),
+                "artifacts/vm.json".to_string(),
+                "--vm-dump-on".to_string(),
+                mode.to_string(),
+            ])
+            .expect("run options must parse vm dump");
+            let vm_dump = opts.vm_dump.expect("vm dump options must exist");
+            assert_eq!(vm_dump.path, "artifacts/vm.json");
+            assert_eq!(vm_dump.mode, expected);
+            assert!(opts.cli_args.is_empty());
+        }
     }
 
     #[test]
@@ -1286,13 +1296,15 @@ mod tests {
 
     #[test]
     fn run_options_reject_vm_dump_on_without_vm_dump() {
-        let err = parse_run_options(&[
-            "main.srt".to_string(),
-            "--vm-dump-on".to_string(),
-            "always".to_string(),
-        ])
-        .expect_err("vm dump on without vm dump must fail");
-        assert_eq!(err.summary(), "run: --vm-dump-on requires --vm-dump");
+        for mode in ["always", "error"] {
+            let err = parse_run_options(&[
+                "main.srt".to_string(),
+                "--vm-dump-on".to_string(),
+                mode.to_string(),
+            ])
+            .expect_err("vm dump on without vm dump must fail");
+            assert_eq!(err.summary(), "run: --vm-dump-on requires --vm-dump");
+        }
     }
 
     #[test]

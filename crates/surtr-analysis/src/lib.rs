@@ -1,5 +1,6 @@
 pub mod context;
 pub mod document;
+mod parse_cache;
 pub mod project_runner;
 pub mod query;
 pub mod semantic;

@@ -34,7 +34,13 @@ impl Parser<'_> {
                     source,
                     span: expr_span,
                 } => {
-                    let parsed = super::parse(&source).map_err(|error| {
+                    let parsed = super::parse_with_context(
+                        &source,
+                        self.context
+                            .clone()
+                            .with_rules(super::ParseRules::permissive_for_tests()),
+                    )
+                    .map_err(|error| {
                         error.map_spans(|span| Span {
                             start: expr_span.start + span.start,
                             end: expr_span.start + span.end,
@@ -60,12 +66,12 @@ impl Parser<'_> {
     pub(super) fn parse_triple_string_or_interpolated(
         &mut self,
         span: Span,
-        raw: String,
+        raw: crate::token::RawStringLiteral,
     ) -> Result<Ast, ParseError> {
         // Raw text keeps its existing decoding and dedent contract.
-        let parts = self.parse_raw_interpolated_parts(&raw, &span, 3)?;
+        let parts = self.parse_raw_interpolated_parts(&raw, &span)?;
         if parts.is_empty() {
-            Ok(Ast::Lit(span, Lit::Str(raw)))
+            Ok(Ast::Lit(span, Lit::Str(raw.text)))
         } else if let [InterpolatedPart::Text(_)] = parts.as_slice() {
             let [part] = <[InterpolatedPart; 1]>::try_from(parts).map_err(|parts| {
                 ParseError::syntax(
@@ -88,11 +94,10 @@ impl Parser<'_> {
 
     fn parse_raw_interpolated_parts(
         &mut self,
-        raw: &str,
+        raw: &crate::token::RawStringLiteral,
         base_span: &Span,
-        content_offset: usize,
     ) -> Result<Vec<InterpolatedPart>, ParseError> {
-        let chars: Vec<char> = raw.chars().collect();
+        let chars: Vec<char> = raw.text.chars().collect();
         let mut parts = Vec::new();
         let mut text = String::new();
         let mut i = 0;
@@ -191,17 +196,26 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("}", base_span.clone()));
             }
 
-            let parsed = super::parse(&expr_src).map_err(|e| {
-                let expr_offset = base_span.start + content_offset + expr_start;
-                let mapped = Span {
-                    start: expr_offset + e.span().start,
-                    end: expr_offset + e.span().end,
-                };
-                ParseError::syntax(
-                    crate::error::ParseErrorReason::InterpolationSyntax,
-                    format!("Invalid interpolation expression: {}", e.message()),
-                    mapped,
-                )
+            let map = |span: Span| {
+                raw.source_span(Span {
+                    start: expr_start + span.start,
+                    end: expr_start + span.end,
+                })
+            };
+            let parsed = super::parse_with_context(
+                &expr_src,
+                self.context
+                    .clone()
+                    .with_rules(super::ParseRules::permissive_for_tests()),
+            )
+            .map_err(|error| ParseError::SyntaxError {
+                message: format!("Invalid interpolation expression: {}", error.message()),
+                span: map(error.span().clone()),
+                reason: crate::error::ParseErrorReason::InterpolationSyntax,
+                expected_tokens: error.expected_tokens().to_vec(),
+                cursor_span: map(error.cursor_span().clone()),
+                guidance: error.guidance().cloned(),
+                token_kind: error.token_kind().map(str::to_owned),
             })?;
             if parsed.len() != 1 {
                 return Err(ParseError::syntax(
@@ -220,8 +234,7 @@ impl Parser<'_> {
                     base_span.clone(),
                 )
             })?;
-            let expr_offset = base_span.start + content_offset + expr_start;
-            let expr = super::shift_ast_span(expr, expr_offset);
+            let expr = super::map_ast_span(expr, &map);
             parts.push(InterpolatedPart::Expr(Box::new(expr)));
         }
 

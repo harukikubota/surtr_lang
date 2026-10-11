@@ -1,12 +1,4 @@
 @doc """
-Concrete IO error for standard-input operations.
-The detail string describes host read failures or end-of-input conditions.
-"""
-deferror InputError(detail: String) {
-  detail
-}
-
-@doc """
 Standard input helpers.
 
 `IO` is intentionally not auto-imported; call helpers with qualified names such
@@ -18,24 +10,85 @@ defmod IO {
   Prompt and read one character from standard input.
 
   On an interactive terminal this returns after a single key/character without
-  waiting for Enter. End of input or host read failure returns `Err(InputError)`.
+  waiting for Enter. End of input returns `Err(InputCharacterEnd())`. Host read,
+  encoding, and terminal failures return the error for that condition.
 
   ## REPL
   xldr(1)> IO::get("key> ")
   Ok("a")
   """
-  @builtin def get(prompt: String) -> Result<String, InputError>
+  @builtin def get(prompt: String) -> Result<String>
 
   @doc """
   Prompt and read one line from standard input.
 
   The returned string excludes the trailing newline, and also excludes a
   preceding carriage return for CRLF input. End of input or host read failure
-  returns `Err(InputError)`.
+  returns `Err(InputLineEnd())` or `Err(InputLineReadFailed(...))`.
 
   ## REPL
   xldr(1)> IO::get_line("name> ")
   Ok("surtr")
   """
-  @builtin def get_line(prompt: String) -> Result<String, InputError>
+  @builtin def get_line(prompt: String) -> Result<String>
+}
+
+@doc """
+Errors for standard-input operations.
+EOF, host I/O, UTF-8 decoding, and terminal failures have separate declarations.
+"""
+deferror InputCharacterEnd() {
+  Self(message: "end of character input")
+}
+
+deferror InputLineEnd() {
+  Self(message: "end of line input")
+}
+
+deferror InputPromptWriteFailed(prompt: String, detail: String) {
+  |prompt: String, detail: String|
+  Self(message: "input prompt write failed: #{detail}", prompt, detail)
+}
+
+deferror InputCharacterReadFailed(detail: String) {
+  |detail: String|
+  Self(message: "character input read failed: #{detail}", detail)
+}
+
+deferror InputLineReadFailed(detail: String) {
+  |detail: String|
+  Self(message: "line input read failed: #{detail}", detail)
+}
+
+deferror InputCharacterEncodingError(detail: String) {
+  |detail: String|
+  Self(message: "invalid UTF-8 character input: #{detail}", detail)
+}
+
+deferror InputCharacterIncomplete() {
+  Self(message: "incomplete UTF-8 input before EOF")
+}
+
+deferror TerminalInputModeStartFailed(detail: String) {
+  |detail: String|
+  Self(message: "terminal input raw mode start failed: #{detail}", detail)
+}
+
+deferror TerminalInputReadFailed(detail: String) {
+  |detail: String|
+  Self(message: "terminal input read failed: #{detail}", detail)
+}
+
+deferror TerminalInputModeRestoreFailed(detail: String) {
+  |detail: String|
+  Self(message: "terminal input raw mode restore failed: #{detail}", detail)
+}
+
+deferror TerminalInputKeyUnsupported(key: String) {
+  |key: String|
+  Self(message: "unsupported key input: #{key}", key)
+}
+
+deferror TerminalInputUnavailable() {
+  Self(message: "terminal key input is unavailable in this Eldr build")
 }

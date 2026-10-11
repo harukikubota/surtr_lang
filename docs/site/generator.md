@@ -4,7 +4,7 @@
  
 | 欲しいもの | 使うもの | 1 件取り出すと |
 |---|---|---|
-| 終端のある有限列 | `Generator<Item>` | `Result<(Item, Generator<Item>), NoneError>` |
+| 終端のある有限列 | `Generator<Item>` | `Result<(Item, Generator<Item>), GeneratorExhausted>` |
 | 終端のない無限列 | `InfiniteGenerator<Item>` | `(Item, InfiniteGenerator<Item>)` |
  
 構築しただけでは値を生成せず、取り出したときに step が評価されます。
@@ -21,7 +21,7 @@ gen = Generator::unfold(1, {|n|
 print(inspect(Generator::to_list(gen)))  # [1, 2, 3]
 ```
  
-- `Generator::next(gen)` は `Ok((値, rest))` か、終端なら `Err(NoneError)` を返します。step の終端検出に使う `Option` とは別の契約です。
+- `Generator::next(gen)` は `Ok((値, rest))` か、終端なら `Err(GeneratorExhausted())` を返します。step の終端検出に使う `Option` とは別の契約です。
 - `Generator::to_list(gen)` は終端まで生成して list を返します。
 ```surtr
 match Generator::next(Generator::range(10, 12)) {
@@ -77,7 +77,7 @@ print(inspect(Generator::to_list(rest)))  # [3, 4, 5]
  
 `take_exact` は次の場合に `Err` を返します。
  
-- `count <= 0`: `InvalidGeneratorCount` (生成前に検査)
+- `count <= 0`: 有限列は `InvalidGeneratorCount`、無限列は `InvalidInfiniteGeneratorCount`（生成前に検査）
 - 有限列が `count` 件に満たない: `GeneratorShortage`
 ```surtr
 match Generator::take_exact(Generator::range(1, 2), 3) {

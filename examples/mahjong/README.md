@@ -15,10 +15,11 @@ CLI 入口は `examples/mahjong/src/6_cli.srt` にあります。
 ## Test
 
 ```bash
+cargo run -p rune -- run examples/mahjong/test/normalize.srt
 cargo run -p rune -- run examples/mahjong/test/yaku_pure.srt
 ```
 
-役判定と面子分解の代表ケースを Surtr のコードだけで確認します。
+手牌の枚数・同牌の上限と、役判定・面子分解の代表ケースを Surtr のコードだけで確認します。
 
 ## What To Read
 

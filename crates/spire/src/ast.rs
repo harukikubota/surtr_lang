@@ -30,10 +30,6 @@ pub struct DeclAttrs {
     pub compiler_generated: bool,
     /// Traits requested by a single `@derive` annotation.
     pub derives: Vec<Symbol>,
-    /// Compiler-owned marker for MonadT declarations that transparently
-    /// preserve failures when their direct base carrier is canonical Result.
-    /// The annotation span is retained for declaration diagnostics.
-    pub result_effect: Option<Span>,
     /// Compiler declaration for a Facet path kind. These declarations are
     /// accepted only from the canonical standard-library Facet source.
     pub facet_path_kind: Option<Vec<Symbol>>,
@@ -54,7 +50,6 @@ impl Default for DeclAttrs {
             builtin: false,
             compiler_generated: false,
             derives: Vec::new(),
-            result_effect: None,
             facet_path_kind: None,
             auto_import: false,
             hidden: false,
@@ -332,6 +327,8 @@ pub enum AstPattern {
     ListNil(Span),
     /// `[head, ..tail]`
     ListCons(Span, Box<AstPattern>, Box<AstPattern>),
+    /// `hash![key => child, ...]`; keys are expressions in the outer scope.
+    HashMap(Span, Vec<(Ast, AstPattern)>),
     /// Integer literal in pattern position.
     IntLit(Span, SurtrInt),
     /// String literal in pattern position.
@@ -668,13 +665,15 @@ pub enum Ast {
     Bind(Span, AstPattern, Box<Ast>),
 
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
-    SafeBind(Span, AstPattern, Box<Ast>),
+    /// The final span retains the operator token (or the generation origin for synthetic binds).
+    SafeBind(Span, AstPattern, Box<Ast>, Span),
 
     /// Statement-only `expr?`; the terminal success type must be Unit.
     StatementQuestion(Span, Box<Ast>),
 
     /// Compiler-owned monadic sequencing expression.
-    Do(Span, Vec<ReturnTypeArgument>, Vec<AstDoStatement>),
+    /// The final span retains the `do` keyword token.
+    Do(Span, Vec<ReturnTypeArgument>, Vec<AstDoStatement>, Span),
 
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),
@@ -808,6 +807,12 @@ pub enum Ast {
     /// Compiler-owned intrinsic declaration. Its raw source is display-only;
     /// phases validate the structured signature against canonical metadata.
     IntrinsicDecl(Span, Symbol, IntrinsicSignature, DeclAttrs),
+
+    /// Standard-only declaration of a compiler-owned source reflection function.
+    BuiltinReflectionDecl(Span, sindr::reflection::Reflection, DeclAttrs),
+
+    /// Source atom, materialized before resolution using its original span.
+    Reflection(Span, sindr::reflection::Reflection),
 
     BuiltinExtractorDecl(Span, Symbol, Vec<ExtractorParam>, AstTy, DeclAttrs),
 

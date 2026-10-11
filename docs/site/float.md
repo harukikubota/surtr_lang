@@ -8,7 +8,7 @@ language surface に持ち込むことではありません。
 ## 契約
 
 - `Float` literal は有限値だけを受け入れます
-- `Div::safe_div(left, right)` は `right == 0.0` のとき `Err(ZeroDivisionError)` を返します
+- `Div::safe_div(left, right)` は `right == 0.0` のとき `Err(ZeroDivisionError())` を返します
 - builtin constant と runtime arithmetic も non-finite value を返しません
 - 表示は通常の `f64` 表示を基礎にし、整数値に見える場合は `.0` を補います
 

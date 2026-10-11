@@ -3,7 +3,7 @@ deferror ExtractorContextError { "extractor context" }
 
 defmod PatternProbe {
   def source(value: Int) -> Result<Int> {
-    if(value > 0, Ok(value), Result::cause(Err(ExtractorSourceError), ExtractorContextError))
+    if(value > 0, Ok(value), Result::cause(Err(ExtractorSourceError()), ExtractorContextError()))
   }
 
   defextractor result_checked(value: Int) -> MatchResult<Int, Error> {
@@ -19,7 +19,7 @@ defmod PatternProbe {
   }
 
   defextractor positive(value: Int) -> MatchResult<Unit, Error> {
-    if(value > 0, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError))
+    if(value > 0, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError()))
   }
 
   def run_result(value: Int) -> Result<Int> {
@@ -45,7 +45,7 @@ defmod PatternProbe {
   }
 
   defextractor supply(payload: $A, value: Int) -> MatchResult<$A, Error> {
-    if(value > 0, MatchResult::Ok(payload), MatchResult::Err(ExtractorSourceError))
+    if(value > 0, MatchResult::Ok(payload), MatchResult::Err(ExtractorSourceError()))
   }
 
   defextractor with_unit(unit: Unit, value: Int) -> MatchResult<Int, Error> {
@@ -74,7 +74,7 @@ defmod PatternProbe {
   }
 
   defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
-    if(and(value >= min, value <= max), MatchResult::Ok(value), MatchResult::Err(ExtractorSourceError))
+    if(and(value >= min, value <= max), MatchResult::Ok(value), MatchResult::Err(ExtractorSourceError()))
   }
 
   defextractor observed_between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
@@ -84,7 +84,7 @@ defmod PatternProbe {
   }
 
   defextractor at_least(min: Int, value: Int) -> MatchResult<Unit, Error> {
-    if(value >= min, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError))
+    if(value >= min, MatchResult::Ok(()), MatchResult::Err(ExtractorSourceError()))
   }
 
 

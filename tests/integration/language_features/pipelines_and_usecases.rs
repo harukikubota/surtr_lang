@@ -169,8 +169,8 @@ fn flow_and_compose_operators_ignore_local_helper_names() {
     assert_output(
         r#"def pipe_apply(value: Int, f: (Int -> Int)) -> Int { 999 }
 def compose(left: (Int -> Int), right: (Int -> Int)) -> String { "wrong compose" }
-def map(value: Result<Int>, f: (Int -> Int)) -> Result<Int> { Err(NoneError) }
-def chain(value: Result<Int>, f: (Int -> Result<Int>)) -> Result<Int> { Err(NoneError) }
+def map(value: Result<Int>, f: (Int -> Int)) -> Result<Int> { Err(NoneError()) }
+def chain(value: Result<Int>, f: (Int -> Result<Int>)) -> Result<Int> { Err(NoneError()) }
 def lift_compose(left: (Int -> Result<Int>), right: (Int -> String)) -> String { "wrong lift" }
 def kleisli_compose(left: (Int -> Result<Int>), right: (Int -> Result<String>)) -> String { "wrong kleisli" }
 
@@ -227,7 +227,7 @@ fn flow_bind_closure_safebind_receives_result_context() {
 }
 
 def gen(x: Int) -> Result<Int, Oops> {
-  if(x > 0, Ok(x), Err(Oops))
+  if(x > 0, Ok(x), Err(Oops()))
 }
 
 bound: Result<Int> = Ok(2) |>= {|x|
@@ -253,7 +253,7 @@ fn flow_kleisli_closures_safebind_use_nearest_callable() {
 }
 
 def gen(x: Int) -> Result<Int, Oops> {
-  if(x > 0, Ok(x), Err(Oops))
+  if(x > 0, Ok(x), Err(Oops()))
 }
 
 pipeline: (Int -> Result<String>) = {|x|
@@ -281,7 +281,7 @@ def add(x: Int, y: Int) -> Int {
 }
 
 def require_at_least(x: Int, floor: Int) -> Result<Int, TooSmall> {
-  if(x >= floor, Ok(x), Err(TooSmall))
+  if(x >= floor, Ok(x), Err(TooSmall()))
 }
 
 mapped: Result<Int> = Ok(1) |*> add(2)
@@ -303,7 +303,7 @@ match bound {
 fn pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping() {
     assert_output(
         r#"deferror ParseHandError(detail: String) {
-  detail
+  |detail: String| Self(message: detail, detail)
 }
 
 def is_digit_rank(n: Int) -> Boolean {
@@ -398,12 +398,13 @@ match lifted("x") {
 
 fn compose_chains_accept_prior_compose_expressions_and_function_value_variables() {
     assert_output(
-        r#"def parse(text: String) -> Result<Int> {
-  if(eq(text, "7"), Ok(7), Err(IndexOutOfBounds("bad")))
+        r#"deferror InvalidCount { |detail: String| detail }
+def parse(text: String) -> Result<Int> {
+  if(eq(text, "7"), Ok(7), Err(InvalidCount("bad")))
 }
 
 def require_small(n: Int) -> Result<Int> {
-  if(n < 10, Ok(n), Err(IndexOutOfBounds("too large")))
+  if(n < 10, Ok(n), Err(InvalidCount("too large")))
 }
 
 def double(n: Int) -> Int {
@@ -499,17 +500,7 @@ print(to_string(plain(3)))"#,
     );
 }
 
-fn flow_operators_reject_context_mismatch_and_monadic_map_rhs() {
-    assert_compile_error(
-        r#"def lift(x: Int) -> Result<Int> {
-  Ok(x + 1)
-}
-
-value: Result<Int> = Ok(1)
-bad = value |*> lift()"#,
-        "expects a plain function return",
-    );
-
+fn flow_bind_rejects_context_mismatch() {
     assert_compile_error(
         r#"def expand(x: Int) -> List<Int> {
   [x]
@@ -528,25 +519,6 @@ bad = value |>= expand()"#,
 value: Result<Int> = Ok(1)
 bad = value |>= maybe_inc()"#,
         "Type constructor family mismatch:",
-    );
-
-    assert_compile_error(
-        r#"value: Option<Int> = Option::Some(1)
-bad = value |*> {|value| Option::Some(value + 1)}"#,
-        "expects a plain function return",
-    );
-
-    assert_compile_error(
-        r#"def parse(text: String) -> Result<Int> {
-  Ok(1)
-}
-
-def render(x: Int) -> Result<String> {
-  Ok(to_string(x))
-}
-
-pipeline = &parse >* &render"#,
-        "expects a plain function return",
     );
 }
 
@@ -629,7 +601,7 @@ def allow(user: User) -> Result<User, HiddenUser> {
     ),
   )
 
-  if(visible, Ok(user), Err(HiddenUser))
+  if(visible, Ok(user), Err(HiddenUser()))
 }
 
 def age_band(user: User) -> String {
@@ -723,7 +695,7 @@ fn lens_result_helpers_support_set_over_and_over_result() {
     assert_output(
         r#"defrecord User(score: Result<Int>)
 
-user1 = User(Err(NoneError))
+user1 = User(Err(NoneError()))
 user2 =? Facet::set(User.score, user1, Ok(3))
 print("set:" ++ inspect(user2.score))
 
@@ -778,7 +750,7 @@ print("score:" ++ inspect(account2.score))
 print("pair:" ++ inspect(account2.pair))
 print("zip:" ++ to_string(account2.user.address.zip))
 
-account_err = Account(user, Err(NoneError), ("hold", 9))
+account_err = Account(user, Err(NoneError()), ("hold", 9))
 account_err2 =? Facet::bulk_update(account_err) {
   score <- over({|value| Ok(value + 1)})
 }
@@ -917,9 +889,9 @@ print(inspect(Facet::view(List.[-2], values)))
 print(inspect(Facet::view(List.[1..2], values)))
 print(inspect(Facet::view(List.[0..-2], values)))"#,
         &[
-            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
-            "Err(IndexOutOfBounds(\"index 1 out of bounds for len 1\"))",
-            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
+            "Err(FacetListIndexOutOfBounds(\"facet list index -2 out of bounds for length 1\"))",
+            "Err(FacetListIndexOutOfBounds(\"facet list index 1 out of bounds for length 1\"))",
+            "Err(FacetListIndexOutOfBounds(\"facet list index -2 out of bounds for length 1\"))",
         ],
     );
 }
@@ -1060,8 +1032,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             compose_accepts_closure_returning_calls_without_parentheses as fn(),
         ),
         (
-            "flow_operators_reject_context_mismatch_and_monadic_map_rhs",
-            flow_operators_reject_context_mismatch_and_monadic_map_rhs as fn(),
+            "flow_bind_rejects_context_mismatch",
+            flow_bind_rejects_context_mismatch as fn(),
         ),
         (
             "result_pipeline_usecase_user_lookup_and_render",

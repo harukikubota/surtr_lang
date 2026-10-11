@@ -155,13 +155,6 @@ pub enum Opcode {
     },
     StringLen,
     ListLen,
-    SafeModInt,
-    ShlInt,
-    ShrInt,
-    TestBitInt,
-    SetBitInt,
-    ClearBitInt,
-    ToggleBitInt,
     StringContains,
     StringStartsWith,
     StringEndsWith,
@@ -194,6 +187,21 @@ pub enum Opcode {
     /// Compare process PID identity using its registered process instance policy.
     /// Appended to preserve the bincode tags of existing opcodes.
     EqPid,
+    IsErrorKind {
+        kind: String,
+    },
+    GetErrorPayload {
+        kind: String,
+        field_index: u32,
+        payload_len: u32,
+    },
+    /// Attach compiler-produced diagnostic facts to an already constructed Error.
+    AnnotateError {
+        diagnostic: RuntimeErrorDiagnosticTemplate,
+    },
+    RuntimeContractViolation {
+        message: String,
+    },
 }
 
 fn reject_reserved_opcode<'de, D: serde::Deserializer<'de>>(_: D) -> Result<(), D::Error> {
@@ -213,13 +221,6 @@ impl Opcode {
             Self::EqLocalTag { .. } => "EqLocalTag",
             Self::StringLen => "StringLen",
             Self::ListLen => "ListLen",
-            Self::SafeModInt => "SafeModInt",
-            Self::ShlInt => "ShlInt",
-            Self::ShrInt => "ShrInt",
-            Self::TestBitInt => "TestBitInt",
-            Self::SetBitInt => "SetBitInt",
-            Self::ClearBitInt => "ClearBitInt",
-            Self::ToggleBitInt => "ToggleBitInt",
             Self::StringContains => "StringContains",
             Self::StringStartsWith => "StringStartsWith",
             Self::StringEndsWith => "StringEndsWith",
@@ -284,6 +285,10 @@ impl Opcode {
             Self::Call { .. } => "Call",
             Self::CaptureClosure(..) => "CaptureClosure",
             Self::MakeError { .. } => "MakeError",
+            Self::IsErrorKind { .. } => "IsErrorKind",
+            Self::GetErrorPayload { .. } => "GetErrorPayload",
+            Self::AnnotateError { .. } => "AnnotateError",
+            Self::RuntimeContractViolation { .. } => "RuntimeContractViolation",
             Self::Reserved56 => "Reserved56",
             Self::CallClosure { .. } => "CallClosure",
             Self::Jump(..) => "Jump",
@@ -406,6 +411,7 @@ pub enum LiteralKind {
     Str,
     Bool,
     Unit,
+    ErrorKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1147,9 +1153,314 @@ pub enum Constant {
     Str(String),
     Bool(bool),
     Unit,
+    ErrorKind(String),
 }
 
-/// Error template — baked location info for `deferror` values.
+/// Checked runtime shape of an Error constructor input or payload field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorValueSchema {
+    Int,
+    Float,
+    String,
+    Boolean,
+    Unit,
+    Error,
+    Callable {
+        parameters: Vec<ErrorValueSchema>,
+        result: Box<ErrorValueSchema>,
+    },
+    TypeParameter(u32),
+    List(Box<ErrorValueSchema>),
+    Tuple(Vec<ErrorValueSchema>),
+    Result(Box<ErrorValueSchema>),
+    MatchResult(Box<ErrorValueSchema>),
+    Pid(Box<ErrorValueSchema>),
+    ProcessMarker(String),
+    Named {
+        name: String,
+        arguments: Vec<ErrorValueSchema>,
+    },
+    Struct {
+        name: String,
+        arguments: Vec<ErrorValueSchema>,
+        fields: Vec<ErrorValueSchema>,
+    },
+    Enum {
+        name: String,
+        arguments: Vec<ErrorValueSchema>,
+        variants: Vec<ErrorVariantSchema>,
+    },
+    HashMap(Box<ErrorValueSchema>),
+    Recursive {
+        name: String,
+        arguments: Vec<ErrorValueSchema>,
+    },
+    ErrorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErrorVariantSchema {
+    pub name: String,
+    pub tag: u32,
+    pub discriminant: SurtrInt,
+    pub fields: Vec<ErrorValueSchema>,
+}
+
+impl ErrorValueSchema {
+    pub fn accepts(&self, value: &crate::runtime::Value, registry: &TypeRegistry) -> bool {
+        self.accepts_inner(value, registry, &mut Vec::new(), &mut Vec::new())
+    }
+
+    fn substitute(&self, arguments: &[Self]) -> Option<Self> {
+        let convert = |schema: &Self| schema.substitute(arguments);
+        Some(match self {
+            Self::TypeParameter(index) => arguments.get(*index as usize)?.clone(),
+            Self::List(item) => Self::List(Box::new(convert(item)?)),
+            Self::Tuple(items) => Self::Tuple(items.iter().map(convert).collect::<Option<_>>()?),
+            Self::Result(item) => Self::Result(Box::new(convert(item)?)),
+            Self::MatchResult(item) => Self::MatchResult(Box::new(convert(item)?)),
+            Self::HashMap(item) => Self::HashMap(Box::new(convert(item)?)),
+            Self::Pid(marker) => Self::Pid(Box::new(convert(marker)?)),
+            Self::Callable { parameters, result } => Self::Callable {
+                parameters: parameters.iter().map(convert).collect::<Option<_>>()?,
+                result: Box::new(convert(result)?),
+            },
+            Self::Named {
+                name,
+                arguments: args,
+            } => Self::Named {
+                name: name.clone(),
+                arguments: args.iter().map(convert).collect::<Option<_>>()?,
+            },
+            Self::Recursive {
+                name,
+                arguments: args,
+            } => Self::Recursive {
+                name: name.clone(),
+                arguments: args.iter().map(convert).collect::<Option<_>>()?,
+            },
+            Self::Enum {
+                name,
+                arguments: args,
+                variants,
+            } => Self::Enum {
+                name: name.clone(),
+                arguments: args.iter().map(convert).collect::<Option<_>>()?,
+                variants: variants.clone(),
+            },
+            Self::Struct {
+                name,
+                arguments: args,
+                fields,
+            } => Self::Struct {
+                name: name.clone(),
+                arguments: args.iter().map(convert).collect::<Option<_>>()?,
+                fields: fields.clone(),
+            },
+            other => other.clone(),
+        })
+    }
+
+    fn accepts_inner(
+        &self,
+        value: &crate::runtime::Value,
+        registry: &TypeRegistry,
+        ancestors: &mut Vec<Self>,
+        bindings: &mut Vec<Vec<Self>>,
+    ) -> bool {
+        use crate::runtime::Value;
+        match (self, value) {
+            (Self::Int, Value::Int(_))
+            | (Self::Float, Value::Float(_))
+            | (Self::String, Value::Str(_))
+            | (Self::Boolean, Value::Bool(_))
+            | (Self::Unit, Value::Unit)
+            | (Self::Error, Value::Error(_))
+            | (Self::ErrorKind, Value::ErrorKind(_))
+            | (Self::Callable { .. }, Value::Callable(_)) => true,
+            (Self::TypeParameter(index), _) => bindings
+                .last()
+                .and_then(|args| args.get(*index as usize))
+                .cloned()
+                .is_some_and(|schema| schema.accepts_inner(value, registry, ancestors, bindings)),
+            (Self::List(item), Value::List(values)) => values
+                .iter()
+                .all(|v| item.accepts_inner(&v, registry, ancestors, bindings)),
+            (Self::Tuple(types), Value::Tuple(values)) => {
+                types.len() == values.len()
+                    && types
+                        .iter()
+                        .zip(values)
+                        .all(|(t, v)| t.accepts_inner(v, registry, ancestors, bindings))
+            }
+            (Self::Result(ok), Value::Tagged { tag: 0, fields }) => {
+                fields.len() == 1 && ok.accepts_inner(&fields[0], registry, ancestors, bindings)
+            }
+            (Self::Result(_), Value::Tagged { tag: 1, fields }) => {
+                fields.len() == 1 && matches!(fields[0], Value::Error(_))
+            }
+            (Self::MatchResult(ok), Value::Tagged { tag, fields }) => {
+                let Some(entry) = registry.lookup(*tag) else {
+                    return false;
+                };
+                let Some(variant) = crate::builtin::match_result_variant_meta(&entry.name) else {
+                    return false;
+                };
+                if fields.len() != 2
+                    || fields.first() != Some(&Value::Int(variant.discriminant.into()))
+                {
+                    return false;
+                }
+                if variant == crate::builtin::MATCH_RESULT_OK_VARIANT {
+                    ok.accepts_inner(&fields[1], registry, ancestors, bindings)
+                } else {
+                    matches!(fields[1], Value::Error(_))
+                }
+            }
+            (Self::Pid(marker), Value::Pid(pid)) => {
+                let outer = bindings.last().cloned().unwrap_or_default();
+                matches!(marker.substitute(&outer), Some(Self::ProcessMarker(name)) if name == pid.process_name)
+            }
+            (
+                Self::Struct {
+                    name,
+                    arguments,
+                    fields: types,
+                },
+                Value::Tagged { tag, fields },
+            ) => {
+                if !registry
+                    .lookup(*tag)
+                    .is_some_and(|entry| entry.name == *name)
+                    || types.len() != fields.len()
+                {
+                    return false;
+                }
+                let outer = bindings.last().cloned().unwrap_or_default();
+                let Some(arguments) = arguments
+                    .iter()
+                    .map(|arg| arg.substitute(&outer))
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return false;
+                };
+                ancestors.push(self.clone());
+                bindings.push(arguments);
+                let valid = types.iter().zip(fields).all(|(schema, value)| {
+                    schema.accepts_inner(value, registry, ancestors, bindings)
+                });
+                bindings.pop();
+                ancestors.pop();
+                valid
+            }
+            (
+                Self::Enum {
+                    arguments,
+                    variants,
+                    ..
+                },
+                Value::Tagged { tag, fields },
+            ) => {
+                let Some(variant) = variants.iter().find(|variant| variant.tag == *tag) else {
+                    return false;
+                };
+                if !registry
+                    .lookup(*tag)
+                    .is_some_and(|entry| entry.name == variant.name)
+                    || fields.first() != Some(&Value::Int(variant.discriminant.clone()))
+                    || fields.len() != variant.fields.len() + 1
+                {
+                    return false;
+                }
+                let outer = bindings.last().cloned().unwrap_or_default();
+                let Some(arguments) = arguments
+                    .iter()
+                    .map(|arg| arg.substitute(&outer))
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return false;
+                };
+                ancestors.push(self.clone());
+                bindings.push(arguments);
+                let valid = variant
+                    .fields
+                    .iter()
+                    .zip(&fields[1..])
+                    .all(|(schema, value)| {
+                        schema.accepts_inner(value, registry, ancestors, bindings)
+                    });
+                bindings.pop();
+                ancestors.pop();
+                valid
+            }
+            (Self::Recursive { name, arguments }, _) => {
+                let Some(schema)=ancestors.iter().rev().find(|schema|matches!(schema,Self::Enum{name:n,..}|Self::Struct{name:n,..} if n==name)).cloned() else{return false;};
+                match schema {
+                    Self::Enum { variants, .. } => Self::Enum {
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                        variants,
+                    }
+                    .accepts_inner(value, registry, ancestors, bindings),
+                    Self::Struct { fields, .. } => Self::Struct {
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                        fields,
+                    }
+                    .accepts_inner(value, registry, ancestors, bindings),
+                    _ => false,
+                }
+            }
+            (Self::HashMap(item), Value::HashMap(map)) => map
+                .sorted_entries()
+                .iter()
+                .all(|(_, value)| item.accepts_inner(value, registry, ancestors, bindings)),
+            (Self::Named { name, arguments }, value) => {
+                let actual = match value {
+                    Value::Regex(_) => "Regex",
+                    Value::RegexCaptures(_) => "RegexCaptures",
+                    Value::RegexMatch(_) => "RegexMatch",
+                    Value::RandomGenerator(_) => "RandomGenerator",
+                    Value::Generator(_) => "Generator",
+                    Value::InfiniteGenerator(_) => "InfiniteGenerator",
+                    Value::FileHandle(_) => "FileHandle",
+                    Value::Workers(_) => "Workers",
+                    Value::WorkerLease(_) => "WorkerLease",
+                    Value::TaskHandle(_) => "TaskHandle",
+                    _ => return false,
+                };
+                if name != &crate::names::compiler_global_error_kind(actual) {
+                    return false;
+                }
+                let process = match value {
+                    Value::Workers(handle) => Some(&handle.process_name),
+                    Value::WorkerLease(handle) => Some(&handle.pid.process_name),
+                    _ => None,
+                };
+                if let Some(process) = process {
+                    let outer = bindings.last().cloned().unwrap_or_default();
+                    let Some(arguments) = arguments
+                        .iter()
+                        .map(|argument| argument.substitute(&outer))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        return false;
+                    };
+                    return match arguments.as_slice() {
+                        [Self::Pid(marker)] => {
+                            matches!(marker.as_ref(), Self::ProcessMarker(expected) if expected == process)
+                        }
+                        _ => false,
+                    };
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Structured diagnostic facts attached by the pattern consumer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeErrorDiagnosticTemplate {
     LiteralPatternMismatch {
@@ -1161,28 +1472,17 @@ pub enum RuntimeErrorDiagnosticTemplate {
     },
 }
 
-/// The source operand of an Error construction instruction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ErrorLocationSource {
-    /// A `deferror` constructor uses the span of its constructor invocation.
-    ConstructorCallSite,
-    /// An inline compiler-generated Error uses its checked source span.
-    SourceSpan,
-}
-
+/// Checked declaration schema and executable constructor identity.
+/// Inputs and saved payload fields are separate contracts: the resolved `.srt`
+/// constructor computes the message and payload. This metadata carries neither
+/// an independent message template nor a fallback construction path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ErrTemplate {
     pub id: u32,
     pub kind: String,
-    pub location_source: ErrorLocationSource,
-    pub span_start: u32,
-    pub span_end: u32,
-    pub line: u32,
-    pub column: u32,
-    pub format: String,
-    pub num_params: u8,
-    #[serde(default)]
-    pub diagnostic: Option<RuntimeErrorDiagnosticTemplate>,
+    pub constructor_fun_idx: u32,
+    pub input_types: Vec<ErrorValueSchema>,
+    pub payload_fields: Vec<(String, ErrorValueSchema)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1200,14 +1500,6 @@ pub struct DbgTemplate {
     #[serde(default)]
     pub source_name: Option<String>,
     pub args: Vec<DbgArgTemplate>,
-}
-
-pub fn populate_error_template_lines(error_templates: &mut [ErrTemplate], source: &str) {
-    for template in error_templates {
-        let (line, column) = line_column_for_offset(source, template.span_start as usize);
-        template.line = line;
-        template.column = column;
-    }
 }
 
 pub fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
@@ -1834,6 +2126,7 @@ fn derive_literals(constants: &[Constant]) -> Vec<LiteralEntry> {
                 Constant::Str(value) => (LiteralKind::Str, value.clone()),
                 Constant::Bool(value) => (LiteralKind::Bool, value.to_string()),
                 Constant::Unit => (LiteralKind::Unit, "Unit".to_string()),
+                Constant::ErrorKind(value) => (LiteralKind::ErrorKind, value.clone()),
             };
             LiteralEntry {
                 const_idx: idx as u32,
@@ -1953,7 +2246,7 @@ fn rebuild_source_map(spans: &[SpanEntry], pc_spans: &[PcSpanEntry]) -> Option<S
 fn opcode_span(
     opcode: &Opcode,
     functions: &[FunctionEntry],
-    error_templates: &[ErrTemplate],
+    _error_templates: &[ErrTemplate],
     dbg_templates: &[DbgTemplate],
     opcode_index: u32,
 ) -> Option<(u32, u32)> {
@@ -1978,15 +2271,6 @@ fn opcode_span(
             span_end,
             ..
         } => Some((*span_start, (*span_end).max(*span_start + 1))),
-        Opcode::MakeError { template_id } => error_templates
-            .iter()
-            .find(|template| template.id == *template_id)
-            .map(|template| {
-                (
-                    template.span_start,
-                    template.span_end.max(template.span_start + 1),
-                )
-            }),
         Opcode::Dbg { template_id, .. } => dbg_templates
             .iter()
             .find(|template| template.id == *template_id)
@@ -2020,16 +2304,542 @@ fn checked_payload_len(len: usize) -> Result<u32, BytecodeFormatError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn error_runtime_schema_checks_nominal_fields_and_generic_arguments() {
+        use super::{ErrorValueSchema as S, ErrorVariantSchema};
+        use crate::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 2,
+            name: "Global::Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        registry.register(TypeEntry {
+            tag: 3,
+            name: "Global::Option::Some".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec!["discriminant".into(), "value".into()],
+            private_flags: vec![false, false],
+        });
+        let duration = S::Struct {
+            name: "Global::Duration".into(),
+            arguments: vec![],
+            fields: vec![S::Int],
+        };
+        assert!(duration.accepts(
+            &Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(1.into())]
+            },
+            &registry
+        ));
+        assert!(!duration.accepts(
+            &Value::Tagged {
+                tag: 2,
+                fields: vec![]
+            },
+            &registry
+        ));
+        assert!(!duration.accepts(
+            &Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Str("bad".into())]
+            },
+            &registry
+        ));
+        let option = |item: S| S::Enum {
+            name: "Global::Option".into(),
+            arguments: vec![item.clone()],
+            variants: vec![ErrorVariantSchema {
+                name: "Global::Option::Some".into(),
+                tag: 3,
+                discriminant: 1.into(),
+                fields: vec![item],
+            }],
+        };
+        assert_ne!(option(S::Int), option(S::String));
+        let value = Value::Tagged {
+            tag: 3,
+            fields: vec![Value::Int(1.into()), Value::Int(7.into())],
+        };
+        assert!(option(S::Int).accepts(&value, &registry));
+        assert!(!option(S::String).accepts(&value, &registry));
+        assert!(!option(S::Int).accepts(
+            &Value::Tagged {
+                tag: 3,
+                fields: vec![Value::Int(0.into()), Value::Int(7.into())]
+            },
+            &registry
+        ));
+    }
+
+    #[test]
+    fn opaque_error_schema_checks_all_builtin_value_kinds() {
+        use super::ErrorValueSchema as S;
+        use crate::runtime::*;
+        use std::sync::Arc;
+        let values = vec![
+            (
+                "Regex",
+                vec![],
+                Value::Regex(RegexHandle {
+                    pattern: "x".into(),
+                }),
+            ),
+            (
+                "RegexCaptures",
+                vec![],
+                Value::RegexCaptures(RegexCapturesHandle {
+                    input: "x".into(),
+                    groups: vec![],
+                    name_to_index: Default::default(),
+                }),
+            ),
+            (
+                "RegexMatch",
+                vec![],
+                Value::RegexMatch(RegexMatchHandle {
+                    input: "x".into(),
+                    start: 0,
+                    end: 1,
+                }),
+            ),
+            (
+                "RandomGenerator",
+                vec![],
+                Value::RandomGenerator(RandomGeneratorHandle { state: 1 }),
+            ),
+            (
+                "FileHandle",
+                vec![],
+                Value::FileHandle(FileHandleValue { id: 1 }),
+            ),
+            (
+                "Generator",
+                vec![S::Int],
+                Value::Generator(GeneratorHandle(Arc::new(GeneratorProducer::Terminal))),
+            ),
+            (
+                "InfiniteGenerator",
+                vec![S::Int],
+                Value::InfiniteGenerator(InfiniteGeneratorHandle(Arc::new(
+                    InfiniteGeneratorProducer::Unfold {
+                        state: Value::Unit,
+                        step: Callable {
+                            target: CallableTarget::Function(0),
+                            lexical_captures: vec![],
+                            metadata: Default::default(),
+                        },
+                    },
+                ))),
+            ),
+            ("TaskHandle", vec![S::Int], Value::TaskHandle(1)),
+            (
+                "Workers",
+                vec![S::Pid(Box::new(S::ProcessMarker("Global::Worker".into())))],
+                Value::Workers(WorkersHandle {
+                    id: 1,
+                    process_name: "Global::Worker".into(),
+                }),
+            ),
+            (
+                "WorkerLease",
+                vec![S::Pid(Box::new(S::ProcessMarker("Global::Worker".into())))],
+                Value::WorkerLease(WorkerLeaseHandle {
+                    workers_id: 1,
+                    pid: PidHandle::new(
+                        2,
+                        "Global::Worker".into(),
+                        crate::runtime::PidKind::Worker,
+                    ),
+                }),
+            ),
+        ];
+        let registry = TypeRegistry::new();
+        for (name, arguments, value) in &values {
+            let schema = S::Named {
+                name: format!("Global::{name}"),
+                arguments: arguments.clone(),
+            };
+            assert!(schema.accepts(value, &registry), "{name}");
+            for (other_name, _, other_value) in &values {
+                if other_name != name {
+                    assert!(
+                        !schema.accepts(other_value, &registry),
+                        "{name} accepted {other_name}"
+                    );
+                }
+            }
+        }
+        let map = Value::HashMap(HashMapHandle::from_entries(vec![(
+            "key".into(),
+            Value::Int(1.into()),
+        )]));
+        assert!(S::HashMap(Box::new(S::Int)).accepts(&map, &registry));
+        assert!(!S::HashMap(Box::new(S::String)).accepts(&map, &registry));
+        assert!(!S::Named {
+            name: "Global::File".into(),
+            arguments: vec![]
+        }
+        .accepts(&Value::FileHandle(FileHandleValue { id: 1 }), &registry));
+    }
+
+    #[test]
+    fn workers_error_payload_schema_checks_process_capability_identity() {
+        use super::ErrorValueSchema as S;
+        use crate::runtime::{TypeRegistry, Value, WorkersHandle};
+        let value = Value::Workers(WorkersHandle {
+            id: 7,
+            process_name: "Global::Worker".into(),
+        });
+        let schema = |process: &str| S::Named {
+            name: "Global::Workers".into(),
+            arguments: vec![S::Pid(Box::new(S::ProcessMarker(process.into())))],
+        };
+        assert!(schema("Global::Worker").accepts(&value, &TypeRegistry::new()));
+        assert!(!schema("Global::OtherWorker").accepts(&value, &TypeRegistry::new()));
+        assert!(!S::Named {
+            name: "Global::Workers".into(),
+            arguments: vec![]
+        }
+        .accepts(&value, &TypeRegistry::new()));
+    }
+
+    #[test]
+    fn generic_pid_error_schema_preserves_marker_identity_and_rejects_nonmarkers() {
+        use super::ErrorValueSchema as S;
+        use crate::runtime::{PidHandle, PidKind, TypeEntry, TypeKind, TypeRegistry, Value};
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 7,
+            name: "Global::PidBox".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["pid".into()],
+            private_flags: vec![false],
+        });
+        let value = Value::Tagged {
+            tag: 7,
+            fields: vec![Value::Pid(PidHandle::new(
+                1,
+                "Global::Worker".into(),
+                PidKind::Worker,
+            ))],
+        };
+        let schema = |arguments| S::Struct {
+            name: "Global::PidBox".into(),
+            arguments,
+            fields: vec![S::Pid(Box::new(S::TypeParameter(0)))],
+        };
+        assert!(schema(vec![S::ProcessMarker("Global::Worker".into())]).accepts(&value, &registry));
+        assert!(!schema(vec![S::ProcessMarker("Global::Other".into())]).accepts(&value, &registry));
+        assert!(!schema(vec![S::Int]).accepts(&value, &registry));
+        assert!(!schema(vec![]).accepts(&value, &registry));
+        assert!(
+            !S::ProcessMarker("Global::Worker".into()).accepts(&Value::Int(1.into()), &registry)
+        );
+    }
+
+    #[test]
+    fn recursive_error_schema_validates_finite_values_and_missing_fields() {
+        use super::{ErrorValueSchema as S, ErrorVariantSchema};
+        use crate::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 2,
+            name: "Global::Tree::Leaf".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+            private_flags: vec![],
+        });
+        registry.register(TypeEntry {
+            tag: 3,
+            name: "Global::Tree::Node".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec!["children".into()],
+            private_flags: vec![false],
+        });
+        let schema = S::Enum {
+            name: "Global::Tree".into(),
+            arguments: vec![],
+            variants: vec![
+                ErrorVariantSchema {
+                    name: "Global::Tree::Leaf".into(),
+                    tag: 2,
+                    discriminant: 0.into(),
+                    fields: vec![],
+                },
+                ErrorVariantSchema {
+                    name: "Global::Tree::Node".into(),
+                    tag: 3,
+                    discriminant: 1.into(),
+                    fields: vec![S::List(Box::new(S::Recursive {
+                        name: "Global::Tree".into(),
+                        arguments: vec![],
+                    }))],
+                },
+            ],
+        };
+        let leaf = Value::Tagged {
+            tag: 2,
+            fields: vec![Value::Int(0.into())],
+        };
+        let node = Value::Tagged {
+            tag: 3,
+            fields: vec![
+                Value::Int(1.into()),
+                Value::List(crate::runtime::ListHandle::from_items(vec![leaf.clone()])),
+            ],
+        };
+        assert!(schema.accepts(&leaf, &registry));
+        assert!(schema.accepts(&node, &registry));
+        assert!(!schema.accepts(
+            &Value::Tagged {
+                tag: 3,
+                fields: vec![Value::Int(1.into())]
+            },
+            &registry
+        ));
+    }
+
+    #[test]
+    fn growing_recursive_error_schema_substitutes_arguments_per_value() {
+        use super::{ErrorValueSchema as S, ErrorVariantSchema};
+        use crate::runtime::{ListHandle, TypeEntry, TypeKind, TypeRegistry, Value};
+        let mut registry = TypeRegistry::new();
+        for (tag, name) in [(2, "Global::Nest::Value"), (3, "Global::Nest::More")] {
+            registry.register(TypeEntry {
+                tag,
+                name: name.into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            });
+        }
+        let schema = S::Enum {
+            name: "Global::Nest".into(),
+            arguments: vec![S::Int],
+            variants: vec![
+                ErrorVariantSchema {
+                    name: "Global::Nest::Value".into(),
+                    tag: 2,
+                    discriminant: 0.into(),
+                    fields: vec![S::TypeParameter(0)],
+                },
+                ErrorVariantSchema {
+                    name: "Global::Nest::More".into(),
+                    tag: 3,
+                    discriminant: 1.into(),
+                    fields: vec![S::Recursive {
+                        name: "Global::Nest".into(),
+                        arguments: vec![S::List(Box::new(S::TypeParameter(0)))],
+                    }],
+                },
+            ],
+        };
+        let value = |item| Value::Tagged {
+            tag: 3,
+            fields: vec![
+                Value::Int(1.into()),
+                Value::Tagged {
+                    tag: 2,
+                    fields: vec![
+                        Value::Int(0.into()),
+                        Value::List(ListHandle::from_items(vec![item])),
+                    ],
+                },
+            ],
+        };
+        assert!(schema.accepts(&value(Value::Int(7.into())), &registry));
+        assert!(!schema.accepts(&value(Value::Str("wrong".into())), &registry));
+        assert_ne!(
+            S::Callable {
+                parameters: vec![S::Int],
+                result: Box::new(S::String)
+            },
+            S::Callable {
+                parameters: vec![S::String],
+                result: Box::new(S::String)
+            }
+        );
+        assert_ne!(
+            S::Named {
+                name: "Global::Generator".into(),
+                arguments: vec![S::Int]
+            },
+            S::Named {
+                name: "Global::Generator".into(),
+                arguments: vec![S::String]
+            }
+        );
+    }
+
+    #[test]
+    fn mutual_struct_enum_error_schema_accepts_finite_shape() {
+        use super::{ErrorValueSchema as S, ErrorVariantSchema};
+        use crate::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 2,
+            name: "Global::Node".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["next".into()],
+            private_flags: vec![false],
+        });
+        registry.register(TypeEntry {
+            tag: 3,
+            name: "Global::Link::End".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+            private_flags: vec![],
+        });
+        registry.register(TypeEntry {
+            tag: 4,
+            name: "Global::Link::More".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec!["node".into()],
+            private_flags: vec![false],
+        });
+        let schema = S::Struct {
+            name: "Global::Node".into(),
+            arguments: vec![],
+            fields: vec![S::Enum {
+                name: "Global::Link".into(),
+                arguments: vec![],
+                variants: vec![
+                    ErrorVariantSchema {
+                        name: "Global::Link::End".into(),
+                        tag: 3,
+                        discriminant: 0.into(),
+                        fields: vec![],
+                    },
+                    ErrorVariantSchema {
+                        name: "Global::Link::More".into(),
+                        tag: 4,
+                        discriminant: 1.into(),
+                        fields: vec![S::Recursive {
+                            name: "Global::Node".into(),
+                            arguments: vec![],
+                        }],
+                    },
+                ],
+            }],
+        };
+        let end = Value::Tagged {
+            tag: 3,
+            fields: vec![Value::Int(0.into())],
+        };
+        let node = Value::Tagged {
+            tag: 2,
+            fields: vec![end],
+        };
+        let more = Value::Tagged {
+            tag: 2,
+            fields: vec![Value::Tagged {
+                tag: 4,
+                fields: vec![Value::Int(1.into()), node],
+            }],
+        };
+        assert!(schema.accepts(&more, &registry));
+        assert!(!schema.accepts(
+            &Value::Tagged {
+                tag: 2,
+                fields: vec![]
+            },
+            &registry
+        ));
+    }
+
+    #[test]
+    fn growing_recursive_struct_schema_keeps_formal_fields() {
+        use super::{ErrorValueSchema as S, ErrorVariantSchema};
+        use crate::runtime::{ListHandle, TypeEntry, TypeKind, TypeRegistry, Value};
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 2,
+            name: "Global::Node".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["value".into(), "next".into()],
+            private_flags: vec![false, false],
+        });
+        registry.register(TypeEntry {
+            tag: 3,
+            name: "Global::Link::End".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+            private_flags: vec![],
+        });
+        registry.register(TypeEntry {
+            tag: 4,
+            name: "Global::Link::More".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec!["node".into()],
+            private_flags: vec![false],
+        });
+        let schema = S::Struct {
+            name: "Global::Node".into(),
+            arguments: vec![S::Int],
+            fields: vec![
+                S::TypeParameter(0),
+                S::Enum {
+                    name: "Global::Link".into(),
+                    arguments: vec![S::List(Box::new(S::TypeParameter(0)))],
+                    variants: vec![
+                        ErrorVariantSchema {
+                            name: "Global::Link::End".into(),
+                            tag: 3,
+                            discriminant: 0.into(),
+                            fields: vec![],
+                        },
+                        ErrorVariantSchema {
+                            name: "Global::Link::More".into(),
+                            tag: 4,
+                            discriminant: 1.into(),
+                            fields: vec![S::Recursive {
+                                name: "Global::Node".into(),
+                                arguments: vec![S::TypeParameter(0)],
+                            }],
+                        },
+                    ],
+                },
+            ],
+        };
+        let value = |item| Value::Tagged {
+            tag: 2,
+            fields: vec![
+                Value::Int(1.into()),
+                Value::Tagged {
+                    tag: 4,
+                    fields: vec![
+                        Value::Int(1.into()),
+                        Value::Tagged {
+                            tag: 2,
+                            fields: vec![
+                                Value::List(ListHandle::from_items(vec![item])),
+                                Value::Tagged {
+                                    tag: 3,
+                                    fields: vec![Value::Int(0.into())],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        };
+        assert!(schema.accepts(&value(Value::Int(7.into())), &registry));
+        assert!(!schema.accepts(&value(Value::Str("wrong".into())), &registry));
+    }
+
     use super::{
-        checked_payload_len, line_column_for_offset, populate_error_template_lines,
-        stable_hash_hex, Bytecode, BytecodeFormatError, CallableTemplate, CallableTemplateArg,
-        CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind,
-        CallableTemplateMetadata, CompileInfo, Constant, DocEntry, DocKind, ErrTemplate,
-        FunctionEntry, FunctionFlags, Opcode, OpcodeSource, RuntimeBootPlan, RuntimeCallableRef,
-        RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
-        RuntimeProcessDependencies, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
-        RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef,
-        SourceFileEntry, SourceMap,
+        checked_payload_len, line_column_for_offset, stable_hash_hex, Bytecode,
+        BytecodeFormatError, CallableTemplate, CallableTemplateArg, CallableTemplateComposeFlavor,
+        CallableTemplateDirectTarget, CallableTemplateKind, CallableTemplateMetadata, CompileInfo,
+        Constant, DocEntry, DocKind, ErrTemplate, FunctionEntry, FunctionFlags, Opcode,
+        OpcodeSource, RuntimeBootPlan, RuntimeCallableRef, RuntimeInitPolicy,
+        RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec, RuntimeProcessDependencies,
+        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
+        RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef, SourceFileEntry, SourceMap,
     };
     use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
@@ -2086,14 +2896,9 @@ mod tests {
             error_templates: vec![ErrTemplate {
                 id: 1,
                 kind: "ValidationError".to_string(),
-                location_source: crate::ir::ErrorLocationSource::SourceSpan,
-                span_start: 3,
-                span_end: 8,
-                line: 1,
-                column: 4,
-                format: "bad".to_string(),
-                num_params: 0,
-                diagnostic: None,
+                constructor_fun_idx: 0,
+                input_types: Vec::new(),
+                payload_fields: Vec::new(),
             }],
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
@@ -2378,9 +3183,40 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_encode_decode_safe_mod_int_opcode() {
+    fn roundtrip_encode_decode_error_kind_constant_and_payload_schema() {
         let mut bytecode = sample_bytecode(None);
-        bytecode.opcodes = vec![Opcode::SafeModInt, Opcode::Halt];
+        bytecode.constants = vec![Constant::ErrorKind("ValidationError".into())];
+        bytecode.error_templates[0].input_types = vec![super::ErrorValueSchema::ErrorKind];
+        bytecode.error_templates[0].payload_fields =
+            vec![("kind".into(), super::ErrorValueSchema::ErrorKind)];
+        bytecode.refresh_viewer_metadata();
+        let decoded = Bytecode::decode(&bytecode.encode().unwrap()).unwrap();
+        assert_eq!(decoded, bytecode);
+        assert_eq!(decoded.literals[0].kind, super::LiteralKind::ErrorKind);
+        let schema = super::ErrorValueSchema::List(Box::new(super::ErrorValueSchema::ErrorKind));
+        assert!(schema.accepts(
+            &crate::runtime::Value::List(crate::runtime::ListHandle::from_items(vec![
+                crate::runtime::Value::ErrorKind("ValidationError".into()),
+            ])),
+            &sample_registry()
+        ));
+        assert!(!schema.accepts(
+            &crate::runtime::Value::List(crate::runtime::ListHandle::from_items(vec![
+                crate::runtime::Value::Str("ValidationError".into()),
+            ])),
+            &sample_registry()
+        ));
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_error_kind_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::IsErrorKind {
+                kind: "Global::RoundTripProbe".into(),
+            },
+            Opcode::Halt,
+        ];
 
         let bytes = bytecode.encode().expect("encode should succeed");
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
@@ -2609,28 +3445,6 @@ mod tests {
         let source = "あい\nうえお";
         assert_eq!(line_column_for_offset(source, 1), (1, 2));
         assert_eq!(line_column_for_offset(source, 4), (2, 2));
-    }
-
-    #[test]
-    fn populate_error_template_lines_uses_span_start() {
-        let source = "deferror Boom {\n  \"boom\"\n}\n";
-        let mut templates = vec![ErrTemplate {
-            id: 0,
-            kind: "Boom".into(),
-            location_source: crate::ir::ErrorLocationSource::SourceSpan,
-            span_start: 16,
-            span_end: 24,
-            line: 0,
-            column: 0,
-            format: "{}".into(),
-            num_params: 1,
-            diagnostic: None,
-        }];
-
-        populate_error_template_lines(&mut templates, source);
-
-        assert_eq!(templates[0].line, 2);
-        assert_eq!(templates[0].column, 1);
     }
 
     #[test]

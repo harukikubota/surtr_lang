@@ -14,7 +14,9 @@ test("terminal commands pass compiler and file paths as literal process argument
       workspaceFolders: [{ uri: { fsPath: "/work" } }],
       getConfiguration: () => ({ get: (key) => key === "surtr.compiler.path" ? compilerPath : true }),
       onDidSaveTextDocument: () => ({}),
-      onDidOpenTextDocument: () => ({})
+      onDidOpenTextDocument: () => ({}),
+      onDidCloseTextDocument: () => ({}),
+      onDidChangeConfiguration: () => ({})
     },
     window: {
       activeTextEditor: {

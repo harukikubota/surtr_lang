@@ -38,9 +38,9 @@ test("InfiniteGenerator") {
 
     it("treats Result items as data") {
       do {
-        gen = InfiniteGenerator::unfold(0, {|n| (if(n == 0, Err(NoneError), Ok(n)), n + 1)})
+        gen = InfiniteGenerator::unfold(0, {|n| (if(n == 0, Err(NoneError()), Ok(n)), n + 1)})
 
-        assert_eq([Err(NoneError), Ok(1), Ok(2)], InfiniteGenerator::take(gen, 3)._0)
+        assert_eq([Err(NoneError()), Ok(1), Ok(2)], InfiniteGenerator::take(gen, 3)._0)
       }
     }
 
@@ -128,8 +128,8 @@ test("InfiniteGenerator") {
       do {
         result = InfiniteGenerator::take_exact(observed_sequence(), -1)
 
-        assert_err_kind(InvalidGeneratorCount, result)
-        assert_err_message_eq("count must be positive: -1", result)
+        assert_err_kind(InvalidInfiniteGeneratorCount, result)
+        assert_err_message_eq("infinite generator count must be positive: -1", result)
         assert_stdout_eq([])
       }
     }

@@ -150,7 +150,7 @@ constructor capture の引数は位置指定だけです。通常の Record / St
 固定した引数式は capture 作成時ではなく、生成された callable を呼ぶたびに、通常の constructor
 引数と同じ左から右の順序で評価されます。
 
-`deferror` などコンパイラが構築を管理する型は constructor capture できません。List、HashMap、
+抽象 `Error` と専用 protocol の `MatchResult` は constructor capture できません。List、HashMap、
 3 要素以上の tuple は literal で構築するため、nominal constructor capture の対象外です。2-tuple は
 既存の ``&`(,)` `` を使います。
 
@@ -165,19 +165,57 @@ yes: (-> Boolean) = &True
 no: (-> Boolean) = &False
 ```
 
-成功型は payload や期待型から推論されます。`err = Err(NoneError)` の成功型は
+成功型は payload や期待型から推論されます。`err = Err(NoneError())` の成功型は
 多相のまま保持できますが、capture の callable binding には具体的な signature が必要です。
 
-`Err` の payload は具象 `deferror` に限られます。`&Err` や `&Err(&1)` は
-通常 callable の引数へ `Error` を公開するため拒否されます。具象 error を生成する式を
-capture 内に固定し、通常の値だけを入力へ公開することはできます。
+`Err` は既存の Error を包みます。具象 `deferror` constructor も、外部入力を受けて共通 `Error` を返す constructor callable として capture できます。
 
 ```surtr
-deferror InvalidValue(value: Int) { to_string(value) }
+deferror InvalidValue(value: Int) {
+  |value: Int|
+  Self(message: to_string(value), value)
+}
+factory: (Int -> Error) = &InvalidValue
+wrap: (Error -> Result<Int>) = &Err
+wrap_placeholder: (Error -> Result<Int>) = &Result::Err(&1)
 fail: (Int -> Result<Int>) = &Err(InvalidValue(&1))
 ```
 
-`Result<T>` の失敗枝に収まる Error は、通常 callable の Error 入出力公開には該当しません。
+抽象 `Error` 自体は生成できないため、`&Error` は使えません。共通情報を読む FacetPath の `&Error.message` や `&Error.kind` は使えます。
+
+```surtr
+message: (Error -> String) = &Error.message
+message(InvalidValue(3)) # "3"
+```
+
+次の capture はコンパイルエラーになります。
+
+```surtr
+&InvalidValue.message # compile error: 具象 Error を root にした path capture
+&InvalidValue.value   # compile error: 保存フィールドの path capture
+```
+
+具象 Error を root にしたパスは、共通情報の `message` を指す場合も capture できません。共通情報を読む callable は `&Error.message` を使ってください。
+
+Error 値の `err.message` は種類の照合なしで読めます。保存フィールドの `err.value` は、その種類との照合が成功した局所束縛からだけ読めます。通常クロージャなら、その束縛を捕捉できます。
+
+```surtr
+err: Error = InvalidValue(3)
+err.message # "3"
+
+reader = match err {
+  InvalidValue @ concrete => {|| concrete.value},
+  _ => {|| 0},
+}
+reader() # 3
+```
+
+```surtr
+err: Error = InvalidValue(3)
+err.value # compile error: 共通 Error からは保存フィールドを読めない
+```
+
+この `reader` は捕捉した Error のフィールドをクロージャの中で読み、`Int` を返します。照合の有効範囲は [Pattern Matching](./pattern-matching.md#error-の照合とダウンキャスト) を参照してください。
 
 ## operator capture
 
@@ -247,8 +285,9 @@ placeholder の規則は次です。
 &add(&17, 10)  # index の上限を超える
 ```
 
-## FacetPath　capture
-`{|user: User| Facet::view(User.name, user) }` の糖衣構文として `&User.name` が使用できます。
+## FacetPath capture
+
+`{|user: User| Facet::view(User.name, user) }` の糖衣構文として `&User.name` が使用できます。共通 Error 情報には `&Error.message` / `&Error.kind` を使います。具象 Error を root にしたパスは、共通情報・保存フィールドのどちらも capture できません。
 
 ## Lazy・Pattern・ErrorKind・Facet引数
 
@@ -305,8 +344,7 @@ Pattern 内の事前 Expr にある既存プレースホルダ、projection の 
 
 Lazy位置を直接プレースホルダにすると、通常の呼び出しで渡せる値と、生成された関数が受け取る型は異なります。
 たとえば `and(True, False)` は有効ですが、上の `both`には `both(True, {|| False})` と渡します。
-`Lazy<Error>`の正規化型は `(-> Error)` ですが、Errorを通常の関数型へ公開する制約は解除されません。
-`require`・`ensure`・`Result::map_err`・`Result::cause`を通常の関数値として使うキャプチャでは、error式を呼び出し内へ固定してください。
+`Lazy<Error>` の正規化型は `(-> Error)` です。error placeholder には、この型の通常の closure を渡せます。
 引数の並べ替えも型に反映され、`&and(&2, &1)` の型は `((-> Boolean), Boolean -> Boolean)` です。
 
 FacetPath 自体をプレースホルダ仮引数で受け取ることは禁止します。直接の置換や、合成の path 部分の置換もできません。

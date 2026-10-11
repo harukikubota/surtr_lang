@@ -2,8 +2,7 @@
 
 更新日: 2026-10-03。状態: 未解決事項の調査・設計用。
 
-共通の予算付き driver、builtin continuation、Packed List、`List::flat_map` の builtin 化は実装済み。
-以下には追加の性能改善と、実装中に確認した既存のコンパイル問題を残す。
+以下には追加の性能改善を残す。
 最適化の採用方式や実時間の目標値は、各項目の調査後に決める。
 
 ## 現行の契約と参照先
@@ -20,14 +19,6 @@
 待機・取消・rollback を維持する。通常の実行切替えでは Builder を移動し、checkpoint は独立した保存状態を持つ。
 
 ## Runtime の追加調査・最適化
-
-### RT-1 長い Cons の解放
-
-- 現状: `from_items` は Packed を作るが、`cons` や source-level の List 操作は長い Cons の鎖を作り得る。Cons の反復的な解放は未実装。
-- 記録: [release audit](v0.1_release_codebase_audit.md) には変更前の同形の鎖を10万要素解放した Rust probe で、stack overflow / exit 134 を確認した記録がある。Packed 導入後の再現条件と Surtr 実行時の閾値は未測定。
-- 次の作業: Cons の反復構築、共有 tail、Cons-over-Packed を分けて再現し、最後の所有者が解放する範囲を確認する。共有を維持した反復解放の方法を設計する。
-- 受け入れ条件: 大きい正常な List の生成・解放で abort せず、別の handle が参照する tail の値を保つ。入れ子の Value の解放も検証範囲に明記する。
-- 検証: Sindr の所有権・共有テストと、abort を隔離して確認できる subprocess の回帰テスト。
 
 ### RT-2 Packed の使用済み先頭部分の保持
 
@@ -51,20 +42,12 @@
 - 受け入れ条件: 移行した処理が完了前に他の runnable task へ切り替わり、副作用・結果配送を重複させない。CPU yield と Future 待機を区別し、batch / REPL / Task / process の通常入口から確認する。
 - 制限: 処理を分割した範囲を明示する。未移行の処理、Value の物理操作、allocator を含む VM 全体の実時間上限は、別途根拠が必要。
 
-### RT-5 REPL checkpoint のコピー量
+### RT-5 REPL checkpoint の残るコピー量
 
-- 現状: 通常の実行切替えで Builder は複製されない。checkpoint では復元用に Builder と runtime の状態を独立して保存する。
-- 未確定点: process / future / continuation の保存を差分化するか、immutable 部分の共有を広げるか。
-- 次の作業: process 数、future 数、Builder の長さ、chunk 数を別々に増やして、入力ごとのコピー量とピークメモリを測る。[release audit](v0.1_release_codebase_audit.md) の checkpoint 項目と同じ作業として扱う。
-- 受け入れ条件: 失敗した chunk の進捗を破棄して保存位置から再開し、その位置より前の callback を呼び直さず、復帰先へ一度だけ結果を渡す。実行中の mutable Builder と保存状態を共有しない。失敗した chunk の外部 I/O は巻き戻さない。
-- 検証: 途中の出力追加・mapper 待機を含む VM / REPL の rollback テストと、成功 chunk の継続実行。
-
-### RT-6 追加の List 最適化
-
-- 現状: `map` / `filter` / `reverse` / `append` / `concat` は今回の一括 builtin 化の対象にしていない。各 bind は完成した List を返すため、多段の kM が残る。
-- 未確定点: 個別操作の Builder 化、pipeline の融合、中間 List の省略のうち、どれに効果があるか。一般の nested do は B / E で評価し、常に E = kM と仮定しない。
-- 次の作業: RT-3 の測定を基に対象を選び、generic do と通常の Monad dispatch を基準に評価順・失敗・待機を比較する仕様を作る。
-- 受け入れ条件: 副作用を持つ mapper、空結果、部分 pattern、SafeBind、nested do で値・順序・呼出し回数・失敗後の未評価が一致する。未完成 Builder を公開型、process payload、完成結果へ出さない。
+- 現状: process・future・detached taskの3表とentryをcheckpointで共有し、変更時に表のindexと対象entryを複製する方式へ移行した。可変Builderはそのentryの初回変更時に独立させる。通常の実行切替えでは引き続き複製しない。
+- 残る範囲: metadata、singleton/worker表、waiting/reply表、queueの複製と、変更時の表indexの複製が残る。これらの共有を広げるかは未決定で、runtime全体の定数時間保存を保証しない。
+- 次の作業: metadataやqueueの件数、future数、Builderの長さ、chunk数を分け、実chunk全体の時間とピークメモリを測る。停止済みPIDの回収契約は別に確定する。
+- 受け入れ条件: 失敗したchunkの進捗を破棄して保存位置から再開し、その位置より前のcallbackを呼び直さず、復帰先へ一度だけ結果を渡す。実行中に変更する可変Builderは保存状態から独立させる。失敗したchunkの外部I/Oは巻き戻さない。
 
 ## 今後の検証と文書更新
 

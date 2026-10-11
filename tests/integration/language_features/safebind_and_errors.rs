@@ -66,7 +66,10 @@ fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
 print("after")"#,
     )
     .expect("Pipeline failed");
-    assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    assert_eq!(
+        stderr,
+        vec!["Error: EmptyHeadTailListPattern: head-tail list pattern requires a non-empty List"]
+    );
 }
 
 fn safebind_string_pattern_empty_propagates_pattern_mismatch() {
@@ -78,7 +81,7 @@ print("after")"#,
     .expect("Pipeline failed");
     assert_eq!(
         stderr,
-        vec!["Error: PatternMismatch: Pattern did not match."]
+        vec!["Error: UnconsEmptyString: cannot uncons empty string"]
     );
 }
 
@@ -90,7 +93,7 @@ fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs() {
     .expect("Pipeline failed");
     assert_eq!(
         stderr,
-        vec!["Error: IndexOutOfBounds: LHS.len(1) < RHS.len(2)"]
+        vec!["Error: ListPatternTooLong: LHS.len(1) < RHS.len(2)"]
     );
 }
 
@@ -102,7 +105,7 @@ fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs() {
     .expect("Pipeline failed");
     assert_eq!(
         stderr,
-        vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]
+        vec!["Error: ListPatternTooShort: LHS.len(2) > RHS.len(1)"]
     );
 }
 
@@ -206,7 +209,7 @@ fn safebind_nested_result_err_is_a_normal_pattern_mismatch() {
   "oops"
 }
 
-value: Result<Result<Int>> = Ok(Err(Oops))
+value: Result<Result<Int>> = Ok(Err(Oops()))
 Ok(num) =? value
 print("after")"#,
     )
@@ -214,7 +217,7 @@ print("after")"#,
     assert_eq!(stdout, Vec::<String>::new());
     assert_eq!(
         stderr,
-        vec!["Error: PatternMismatch: Pattern did not match."]
+        vec!["Error: ResultVariantPatternMismatch: Result pattern expected Ok, got Err"]
     );
 }
 
@@ -233,7 +236,10 @@ match ret {
 }"#,
     )
     .expect("program should run");
-    assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    assert_eq!(
+        stderr,
+        vec!["Error: EmptyHeadTailListPattern: head-tail list pattern requires a non-empty List"]
+    );
 }
 
 fn safebind_function_early_return_on_err() {
@@ -243,7 +249,7 @@ fn safebind_function_early_return_on_err() {
 }
 
 def gen(flag: Boolean) -> Result<Int> {
-  if(flag, Ok(10), Err(Oops))
+  if(flag, Ok(10), Err(Oops()))
 }
 
 def fun(flag: Boolean) -> Result<Int> {
@@ -275,7 +281,7 @@ fn safebind_closure_returns_ok_and_propagates_err() {
 }
 
 def gen(flag: Boolean) -> Result<Int, Oops> {
-  if(flag, Ok(10), Err(Oops))
+  if(flag, Ok(10), Err(Oops()))
 }
 
 handler: (Boolean -> Result<Int>) = {|flag|
@@ -295,7 +301,7 @@ fn safebind_closure_rejects_non_result_return() {
   value =? Ok(x)
   value
 }"#,
-        "requires an enclosing ResultContext return type",
+        "MonadFail is not implemented.",
     );
 }
 
@@ -307,7 +313,7 @@ fn safebind_nested_closure_stops_at_nearest_callable() {
 
 def outer() -> Result<String, Inner> {
   handler: (Int -> Result<Int>) = {|x|
-    value =? Err(Inner)
+    value =? Err(Inner())
     Ok(value + x)
   }
 
@@ -334,7 +340,7 @@ ok_handler: (Int -> Result<Int>) = {|x|
 }
 
 checked: (Int -> Result<Int>) = {|x|
-  value =? if(x > 0, Ok(x), Err(BadInput))
+  value =? if(x > 0, Ok(x), Err(BadInput()))
   Ok(value + 10)
 }
 
@@ -357,7 +363,7 @@ fn safebind_nested_closure_propagates_to_nearest_callable() {
 
 def outer() -> Result<String> {
   inner: (Int -> Result<Int>) = {|x|
-    value =? if(x > 0, Ok(x), Err(InnerStop))
+    value =? if(x > 0, Ok(x), Err(InnerStop()))
     Ok(value + 1)
   }
 
@@ -385,7 +391,7 @@ fn safebind_script_error_eprints() {
   "oops"
 }
 
-value: Result<Int> = Err(Oops)
+value: Result<Int> = Err(Oops())
 num =? value
 print("after")"#,
     )
@@ -402,7 +408,7 @@ fn do_safebind_result_preserves_err_and_skips_continuation() {
 
 def source() -> Result<Int, Oops> {
   print("rhs")
-  Err(Oops)
+  Err(Oops())
 }
 
 result: Result<Int> = do::<Result> {
@@ -424,7 +430,7 @@ fn do_safebind_option_overrides_result_err_with_none() {
 
 def source() -> Result<Int, Oops> {
   print("rhs")
-  Err(Oops)
+  Err(Oops())
 }
 
 result: Option<Int> = do::<Option> {
@@ -469,34 +475,34 @@ print(inspect(result))"#,
     );
 }
 
-fn safebind_option_t_result_preserves_existing_error() {
+fn safebind_result_t_preserves_existing_error() {
     assert_output(
         r#"deferror Oops {
   "oops"
 }
 
 def source() -> Result<Int, Oops> {
-  Err(Oops)
+  Err(Oops())
 }
 
-def wrapped() -> OptionT<Result, Int> {
+def wrapped() -> ResultT<Identity, Int> {
   value =? source()
-  OptionT::some::<Result>(value + 1)
+  ResultT::ok::<Identity>(value + 1)
 }
 
-print(inspect(OptionT::run(wrapped())))"#,
+print(inspect(Identity::run(ResultT::run(wrapped()))))"#,
         &["Err(Oops(\"oops\"))"],
     );
 }
 
-fn do_safebind_option_t_result_preserves_existing_error() {
+fn do_safebind_option_t_result_uses_alternative() {
     assert_output(
         r#"deferror Oops {
   "oops"
 }
 
 def source() -> Result<Int, Oops> {
-  Err(Oops)
+  Err(Oops())
 }
 
 result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
@@ -505,11 +511,11 @@ result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
 }
 
 print(inspect(OptionT::run(result)))"#,
-        &["Err(Oops(\"oops\"))"],
+        &["Ok(Option::None)"],
     );
 }
 
-fn do_partial_bind_prefers_option_t_result_effect_over_alternative() {
+fn do_partial_bind_option_t_result_uses_alternative() {
     assert_output(
         r#"result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
   2 <- OptionT::some::<Result>(1)
@@ -517,7 +523,7 @@ fn do_partial_bind_prefers_option_t_result_effect_over_alternative() {
 }
 
 print(inspect(OptionT::run(result)))"#,
-        &["Err(PatternMismatch(\"Pattern did not match.\"))"],
+        &["Ok(Option::None)"],
     );
 }
 
@@ -533,7 +539,7 @@ print(inspect(OptionT::run(result)))"#,
     );
 }
 
-fn deferred_partial_bind_selects_result_effect_after_specialization() {
+fn deferred_partial_bind_preserves_declared_alternative() {
     assert_output(
         r#"def deferred_partial(value: $M<Int>) -> $M<Int>
 where
@@ -553,14 +559,11 @@ print(inspect(OptionT::run(result)))
 list_source: OptionT<List, Int> = OptionT::some::<List>(1)
 list_result: OptionT<List, Int> = deferred_partial(list_source)
 print(inspect(OptionT::run(list_result)))"#,
-        &[
-            "Err(PatternMismatch(\"Pattern did not match.\"))",
-            "[Option::None]",
-        ],
+        &["Ok(Option::None)", "[Option::None]"],
     );
 }
 
-fn deferred_safebind_selects_result_effect_after_specialization() {
+fn deferred_safebind_preserves_declared_alternative() {
     assert_output(
         r#"def deferred_safebind(value: $M<Int>) -> $M<Int>
 where
@@ -576,27 +579,27 @@ where
 source: OptionT<Result, Int> = OptionT::some::<Result>(3)
 result: OptionT<Result, Int> = deferred_safebind(source)
 print(inspect(OptionT::run(result)))"#,
-        &["Err(PatternMismatch(\"Pattern did not match.\"))"],
+        &["Ok(Option::None)"],
     );
 }
 
 fn do_guard_keeps_option_t_result_alternative_semantics() {
     assert_output(
-        r#"blocked: OptionT<Result, Unit> = guard(False)
+        r#"blocked: OptionT<Result, Unit> = Alternative::guard(False)
 print(inspect(OptionT::run(blocked)))"#,
         &["Ok(Option::None)"],
     );
 }
 
-fn do_extractor_error_is_preserved_in_result_effect() {
+fn do_extractor_error_is_preserved_in_monad_fail() {
     assert_output(
-        r#"result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
-  uncons(head, tail) <- OptionT::some::<Result>([])
-  OptionT::some::<Result>(head)
+        r#"result: ResultT<Identity, Int> = do::<ResultT<Identity, _>> {
+  uncons(head, tail) <- ResultT::ok::<Identity>([])
+  ResultT::ok::<Identity>(head)
 }
 
-print(inspect(OptionT::run(result)))"#,
-        &["Err(PatternMismatch(\"Pattern did not match.\"))"],
+print(inspect(Identity::run(ResultT::run(result))))"#,
+        &["Err(UnconsEmptyList(\"cannot uncons empty list\"))"],
     );
 }
 
@@ -648,7 +651,7 @@ print("after")"#,
     assert_eq!(stdout, Vec::<String>::new());
     assert_eq!(
         stderr,
-        vec!["Error: PatternMismatch: Pattern did not match."]
+        vec!["Error: EnumVariantPatternMismatch: Option pattern expected Some, got None"]
     );
 }
 
@@ -658,7 +661,7 @@ fn safebind_nested_err_constructor_binds_instead_of_propagating() {
   "oops"
 }
 
-value: Result<Result<Int>> = Ok(Err(Oops))
+value: Result<Result<Int>> = Ok(Err(Oops()))
 Err(error) =? value
 print(Error::kind(error))"#,
         &["Oops"],
@@ -671,21 +674,20 @@ fn safebind_requires_result_return_function() {
   num =? Ok(1)
   num
 }"#,
-        "requires an enclosing ResultContext return type",
+        "MonadFail is not implemented.",
     );
 }
 
-fn safebind_does_not_infer_result_effect_from_reader_t_representation() {
-    assert_compile_error(
-        r#"def source() -> Result<Int> {
-  Err(NoneError)
-}
-
-def invalid() -> ReaderT<Int, Result, Int> {
+fn safebind_reader_t_uses_base_monad_fail() {
+    assert_output(
+        r#"deferror Stop { "stop" }
+def source() -> Result<Int> { Err(Stop()) }
+def wrapped() -> ReaderT<Int, Result, Int> {
   value =? source()
   ReaderT::new({|_| Ok(value)})
-}"#,
-        "requires an enclosing ResultContext return type",
+}
+print(inspect(ReaderT::run(wrapped(), 3)))"#,
+        &["Err(Stop(\"stop\"))"],
     );
 }
 
@@ -716,7 +718,7 @@ fn deferror_no_args_basic() {
   "Validation failed"
 }
 
-err1: Result<Int> = Err(ValidationError)
+err1: Result<Int> = Err(ValidationError())
 match err1 {
   Ok(val)  => print("ok"),
   Err(e)   => print("got error"),
@@ -737,7 +739,7 @@ def load() -> Result<Int, NotFound> {
 }
 
 deferror NotFound(path: String) {
-  "Not Found: #{path}"
+  |path: String| Self(message: "Not Found: #{path}", path)
 }"#,
         &["err"],
     );
@@ -745,7 +747,7 @@ deferror NotFound(path: String) {
 
 fn builtin_prelude_provides_none_error() {
     let (stdout, stderr) = run_surtr_with_stderr(
-        r#"ret: Result<Int> = Err(NoneError)
+        r#"ret: Result<Int> = Err(NoneError())
 match ret {
   Ok(val) => print(to_string(val)),
   Err(e)  => eprint(e),
@@ -774,7 +776,7 @@ match Mod::safe_mod(1, 0) {
         stderr,
         vec![
             "Error: ZeroDivisionError: division by zero",
-            "Error: ZeroDivisionError: division by zero",
+            "Error: ZeroModuloError: modulo by zero",
         ]
     );
 }
@@ -782,7 +784,7 @@ match Mod::safe_mod(1, 0) {
 fn deferror_interpolated_message_display() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
+  |html: String| Self(message: "Page Not Found. #{html}", html)
 }
 
 err_result: Result<Int> = Err(PageNotFound("404"))
@@ -802,7 +804,7 @@ fn match_err_eprint_with_wildcard_arm() {
   "hoge"
 }
 
-ret: Result<Int> = Err(MyE)
+ret: Result<Int> = Err(MyE())
 match ret {
   Err(e) => eprint(e),
   _ => print("")
@@ -813,14 +815,14 @@ match ret {
     assert_eq!(stderr, vec!["Error: MyE: hoge"]);
 }
 
-fn deferror_rejects_raw_error_binding() {
-    assert_compile_error(
+fn deferror_accepts_raw_error_binding() {
+    assert_output(
         r#"deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
+  |html: String| Self(message: "Page Not Found. #{html}", html)
 }
-
-bad = PageNotFound("404")"#,
-        "Error values must be wrapped with Err(...)",
+error = PageNotFound("404")
+print(error.message)"#,
+        &["Page Not Found. 404"],
     );
 }
 
@@ -849,8 +851,8 @@ deferror Tail {
   "tail"
 }
 
-print(inspect(Result::cause(Err(Lower), Higher)))
-print(inspect(Result::chain(Err(Lower), Result::cause(Err(Tail), Higher))))"#,
+print(inspect(Result::cause(Err(Lower()), Higher())))
+print(inspect(Result::chain(Err(Lower()), Result::cause(Err(Tail()), Higher()))))"#,
         &[
             "Err(Higher(\"higher\"))\n|_ Lower(\"lower\")",
             "Err(Higher(\"higher\"))\n|_ Tail(\"tail\")\n   |_ Lower(\"lower\")",
@@ -872,12 +874,12 @@ deferror Tail {
   "tail"
 }
 
-match Result::cause(Err(Lower), Higher) {
+match Result::cause(Err(Lower()), Higher()) {
   Ok(_) => (),
   Err(e) => eprint(e),
 }
 
-match Result::chain(Err(Lower), Result::cause(Err(Tail), Higher)) {
+match Result::chain(Err(Lower()), Result::cause(Err(Tail()), Higher())) {
   Ok(_) => (),
   Err(e) => eprint(e),
 }"#,
@@ -894,6 +896,56 @@ match Result::chain(Err(Lower), Result::cause(Err(Tail), Higher)) {
             "Caused by: Lower: lower",
         ]
     );
+}
+
+fn apply_pattern_inside_non_result_do_keeps_its_result_value() {
+    let source = r#"print(inspect(do::<Option> {
+  1 <- Option::Some(1)
+  Option::Some(apply_pattern(2, 11))
+}))
+"#;
+    let output = crate::support::run_project_script("pattern_result_in_option_do.srt", source)
+        .expect("apply_pattern must return its own Result inside the do body");
+    assert_eq!(
+        output,
+        ["Option::Some(Err(IntLiteralPatternMismatch(\"Int literal pattern 11 did not match 2\")))"]
+    );
+}
+
+fn partial_bind_matches_result_payload_without_unwrapping() {
+    let source = r#"print(inspect(do::<List> {
+  Ok(x) <- [Ok(1), Err(NoneError())]
+  [x]
+}))
+print(inspect(do::<Option> {
+  Ok(x) <- Option::Some(Ok(1))
+  Option::Some(x)
+}))
+print(inspect(do::<Result> {
+  Ok(x) <- Ok(Ok(1))
+  Ok(x)
+}))
+"#;
+    let output = crate::support::run_project_script("result_payload_partial_bind.srt", source)
+        .expect("partial bind must match the complete carrier payload");
+    assert_eq!(output, ["[1]", "Option::Some(1)", "Ok(1)"]);
+}
+
+fn partial_bind_uses_alternative_for_non_result_extractor_failures() {
+    let source = r#"deferror Rejected { "discarded extractor error" }
+ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected())}
+print(inspect(do::<Option> {
+  ext(found) <- Option::Some(2)
+  Option::Some(found)
+}))
+print(inspect(do::<List> {
+  ext(found) <- [2, 3]
+  [found]
+}))
+"#;
+    let output = crate::support::run_project_script("non_result_partial_bind.srt", source)
+        .expect("non-Result failures must keep Alternative semantics");
+    assert_eq!(output, ["Option::None", "[]"]);
 }
 
 pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
@@ -1025,36 +1077,36 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             do_safebind_success_evaluates_rhs_once as fn(),
         ),
         (
-            "safebind_option_t_result_preserves_existing_error",
-            safebind_option_t_result_preserves_existing_error as fn(),
+            "safebind_result_t_preserves_existing_error",
+            safebind_result_t_preserves_existing_error as fn(),
         ),
         (
-            "do_safebind_option_t_result_preserves_existing_error",
-            do_safebind_option_t_result_preserves_existing_error as fn(),
+            "do_safebind_option_t_result_uses_alternative",
+            do_safebind_option_t_result_uses_alternative as fn(),
         ),
         (
-            "do_partial_bind_prefers_option_t_result_effect_over_alternative",
-            do_partial_bind_prefers_option_t_result_effect_over_alternative as fn(),
+            "do_partial_bind_option_t_result_uses_alternative",
+            do_partial_bind_option_t_result_uses_alternative as fn(),
         ),
         (
             "do_partial_bind_option_t_list_falls_back_to_alternative",
             do_partial_bind_option_t_list_falls_back_to_alternative as fn(),
         ),
         (
-            "deferred_partial_bind_selects_result_effect_after_specialization",
-            deferred_partial_bind_selects_result_effect_after_specialization as fn(),
+            "deferred_partial_bind_preserves_declared_alternative",
+            deferred_partial_bind_preserves_declared_alternative as fn(),
         ),
         (
-            "deferred_safebind_selects_result_effect_after_specialization",
-            deferred_safebind_selects_result_effect_after_specialization as fn(),
+            "deferred_safebind_preserves_declared_alternative",
+            deferred_safebind_preserves_declared_alternative as fn(),
         ),
         (
             "do_guard_keeps_option_t_result_alternative_semantics",
             do_guard_keeps_option_t_result_alternative_semantics as fn(),
         ),
         (
-            "do_extractor_error_is_preserved_in_result_effect",
-            do_extractor_error_is_preserved_in_result_effect as fn(),
+            "do_extractor_error_is_preserved_in_monad_fail",
+            do_extractor_error_is_preserved_in_monad_fail as fn(),
         ),
         (
             "safebind_rejects_total_plain_rhs",
@@ -1085,8 +1137,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             safebind_requires_result_return_function as fn(),
         ),
         (
-            "safebind_does_not_infer_result_effect_from_reader_t_representation",
-            safebind_does_not_infer_result_effect_from_reader_t_representation as fn(),
+            "safebind_reader_t_uses_base_monad_fail",
+            safebind_reader_t_uses_base_monad_fail as fn(),
         ),
         (
             "safebind_rejects_compile_time_facet_values",
@@ -1122,8 +1174,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             match_err_eprint_with_wildcard_arm as fn(),
         ),
         (
-            "deferror_rejects_raw_error_binding",
-            deferror_rejects_raw_error_binding as fn(),
+            "deferror_accepts_raw_error_binding",
+            deferror_accepts_raw_error_binding as fn(),
         ),
         (
             "result_ok_case_prints_value",
@@ -1136,6 +1188,18 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "eprint_renders_linear_cause_chain_lines",
             eprint_renders_linear_cause_chain_lines as fn(),
+        ),
+        (
+            "apply_pattern_inside_non_result_do_keeps_its_result_value",
+            apply_pattern_inside_non_result_do_keeps_its_result_value as fn(),
+        ),
+        (
+            "partial_bind_matches_result_payload_without_unwrapping",
+            partial_bind_matches_result_payload_without_unwrapping as fn(),
+        ),
+        (
+            "partial_bind_uses_alternative_for_non_result_extractor_failures",
+            partial_bind_uses_alternative_for_non_result_extractor_failures as fn(),
         ),
     ];
     super::run_bucket_cases("safebind_and_errors", cases, bucket, bucket_count)

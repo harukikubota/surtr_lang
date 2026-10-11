@@ -14,5 +14,5 @@ defagent Counter {
   @doc """
   Internal helper docs.
   """
-  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+  defp hidden_value(_state: Int) -> Result<Int> { Ok(99) }
 }
