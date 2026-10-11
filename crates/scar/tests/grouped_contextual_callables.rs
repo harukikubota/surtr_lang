@@ -103,19 +103,53 @@ fn contextual_branch_join_preserves_concrete_input_and_grouping_boundary() {
     let rhs = program
         .iter()
         .find_map(|node| match &node.node {
-            TypedInner::Bind(_, rhs) if matches!(rhs.node, TypedInner::If(..)) => {
-                Some(rhs.as_ref())
-            }
+            TypedInner::Bind(pattern, rhs)
+                if matches!(pattern.unlocated(), scar::typed::TypedPattern::Var(_, id) if id.name == "mapper") => Some(rhs.as_ref()),
             _ => None,
         })
         .expect("contextual if binding");
-    assert_eq!(rhs.ty, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
-    let TypedInner::If(_, first, Some(second)) = &rhs.node else {
-        panic!("if branches")
+    let result_type = Ty::Func(vec![Ty::Int], Box::new(Ty::Int));
+    assert_eq!(rhs.ty, result_type);
+    let TypedInner::Block(statements) = &rhs.node else {
+        panic!("normalized ordinary call with eager inputs")
     };
-    assert_eq!(first.ty, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
-    assert!(matches!(first.node, TypedInner::EagerBoundary(_)));
-    assert_eq!(second.ty, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
+    let TypedInner::App(function, args) = &statements.last().expect("call tail").node else {
+        panic!("ordinary if call")
+    };
+    assert!(matches!(function.ty, Ty::UserFunc { .. }));
+    for (ordinal, argument) in args[1..].iter().enumerate() {
+        assert_eq!(argument.ty, Ty::Func(vec![], Box::new(result_type.clone())));
+        let TypedInner::Closure(parameters, captures, body) = &argument.node else {
+            panic!("branch callable")
+        };
+        assert!(parameters.is_empty());
+        assert_eq!(body.ty, result_type);
+        let TypedInner::Var(reference) = &body.node else {
+            panic!("branch returns its evaluated input without calling it")
+        };
+        let (bound, eager) = statements
+            .iter()
+            .find_map(|statement| match &statement.node {
+                TypedInner::Bind(pattern, value) => match pattern.unlocated() {
+                    scar::typed::TypedPattern::Var(_, id)
+                        if id.unique_id == reference.unique_id =>
+                    {
+                        Some((id, value))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("eager input binding before ordinary call");
+        assert_eq!(eager.ty, result_type);
+        assert!(captures.iter().any(|id| id.unique_id == bound.unique_id));
+        if ordinal == 0 {
+            assert!(
+                matches!(eager.node, TypedInner::EagerBoundary(_)),
+                "nested grouping boundary remains in evaluated input"
+            );
+        }
+    }
 }
 
 #[test]

@@ -4,6 +4,9 @@ defmod PreArgMatchers {
   }
 
   defextractor guard(min: Int, value: Int) -> MatchResult<Unit, Error> {
-    if(value >= min, MatchResult::Ok(()), MatchResult::Err(NoneError()))
+    match (value >= min) {
+      True => MatchResult::Ok(()),
+      False => MatchResult::Err(NoneError()),
+    }
   }
 }

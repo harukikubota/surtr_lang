@@ -642,10 +642,13 @@ pub fn assert_compile_error_matches(
             .type_error
             .as_ref()
             .expect("structured fixture requires a retained type error");
-        let structured = error
-            .structured
-            .as_ref()
-            .expect("structured fixture producer has no diagnostic payload");
+        let structured = error.structured.as_ref().unwrap_or_else(|| {
+            panic!(
+                "structured fixture producer has no diagnostic payload for {}: {:?}",
+                display_path.display(),
+                error
+            )
+        });
         let (sources, fallback_source_id) = match &actual.source_context {
             Some((sources, source_id)) => (sources.clone(), *source_id),
             None => {

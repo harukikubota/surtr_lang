@@ -327,22 +327,42 @@ fn dump_peephole_candidates_omits_fully_lowered_result_helpers_patterns() {
         .as_array()
         .expect("peephole items should be an array");
     assert!(
-        items
-            .iter()
-            .all(|item| item["kind"].as_str() == Some("tail_call_closure")),
-        "expected only tail-call closure candidates in result_helpers dump: {json}"
-    );
-    assert!(
         json["peephole_candidates"]["summary"]["tail_call_closure"]
             .as_u64()
             .unwrap_or(0)
             == 0,
         "expected no remaining tail-call closure candidates in result_helpers dump: {json}"
     );
-    assert!(
-        items.is_empty(),
-        "expected no peephole candidates once result_helpers lowering is complete: {json}"
-    );
+    let branch_targets: std::collections::BTreeSet<u64> = json["bytecode"]["opcodes"]
+        .as_array()
+        .expect("bytecode opcodes should be an array")
+        .iter()
+        .filter_map(|opcode| {
+            opcode["Jump"]
+                .as_u64()
+                .or_else(|| opcode["JumpIfFalse"].as_u64())
+                .or_else(|| opcode["JumpIfTrue"].as_u64())
+                .or_else(|| opcode["JumpIfLocalTagEq"]["target_pc"].as_u64())
+                .or_else(|| opcode["JumpIfLocalTagNe"]["target_pc"].as_u64())
+        })
+        .collect();
+    for item in items {
+        // Ordinary if calls add a branch join to derived Eq implementations.
+        // A jump into StoreLocal prevents fusion with the preceding LoadConst.
+        assert_eq!(item["kind"].as_str(), Some("load_const_store_local"));
+        assert!(
+            item["function"].as_str().is_some_and(|function| function
+                .starts_with("__traitimpl__::Eq::Global::FileSystemPermissions::neq::")),
+            "expected remaining candidate to belong to the derived stdlib Eq branch join: {item}"
+        );
+        let pc = item["pc"]
+            .as_u64()
+            .expect("candidate pc must be an integer");
+        assert!(
+            branch_targets.contains(&(pc + 1)),
+            "expected every remaining candidate to be blocked by a branch entry: {item}"
+        );
+    }
 }
 
 #[test]

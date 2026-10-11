@@ -56,3 +56,23 @@ fn lazy_trait_capture_preserves_eager_and_bare_capture_boundaries() {
         assert!(error.message.contains("Lazy"), "{error:?}");
     }
 }
+
+#[test]
+fn standard_ordinary_function_can_declare_lazy_contract() {
+    let source = format!(
+        "{}\n def lazy_probe(value: Lazy<$A>) -> $A {{ value() }}\n def lazy_probe_relay() -> Int {{ lazy_probe(3) }}\n}}",
+        include_str!("../../../lib/kernel.srt").trim_end().strip_suffix('}').expect("Kernel owner")
+    );
+    support::typecheck_std_modules_with_overrides(&[("Kernel", &source)])
+        .expect("standard ordinary functions can own Lazy contracts");
+}
+
+#[test]
+fn user_ordinary_function_cannot_declare_lazy_contract() {
+    let error = support::typecheck_with_rules(
+        "def lazy_probe(value: Lazy<Int>) -> Int { value() }",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("user ordinary functions cannot create Lazy contracts");
+    assert!(error.message.contains("Lazy"), "{error:?}");
+}
