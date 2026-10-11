@@ -124,6 +124,7 @@ concrete 静的契約を選択済みとし、Eldr が generic target や Union �
 - `policy = ReplAppendOnly` のとき、`InteractiveVm` は公開 REPL 境界として append-only function table を強制し、`fun_idx < current_function_len` の `FunctionEntry` を含む chunk を拒否する
 - `policy = ReplAppendOnly` のとき、`type_entries`、`runtime_process_specs`、`runtime_boot_plan` の追加を拒否する
 - `policy = Preload` のとき、Xldr が構築した preload/bootstrap chunk を live REPL 開始前に適用できる
+- `Preload` の実行失敗では、boot plan に追加した singleton / standard override / handler override も保存時の長さへ戻し、次の chunk へ残さない
 - `fun_idx` は VM 内の物理 slot であり、言語上の安定 identity ではない。Forge/Eldr は shared verifier により function table prefix 不変、dense append、function ref 範囲を検査する
 - rollback 対象は bytecode append 分、function overwrite、locals、operand stack、call frames、pc、process runtime、exit code、標準 I/O / REPL host I/O / test event cursor、`last_result` とする
 

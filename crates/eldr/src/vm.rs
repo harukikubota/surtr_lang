@@ -31,6 +31,8 @@ use std::rc::{Rc, Weak};
 
 use crate::builtin::{call_builtin, BuiltinContinuation, BuiltinOutcome};
 #[cfg(test)]
+mod checkpoint_boot_plan_tests;
+#[cfg(test)]
 mod checkpoint_collections_tests;
 #[cfg(test)]
 mod checkpoint_metadata_tests;
@@ -267,6 +269,9 @@ struct VmCheckpoint {
     function_len: usize,
     doc_len: usize,
     process_spec_len: usize,
+    boot_singleton_len: usize,
+    boot_standard_override_len: usize,
+    boot_handler_override_len: usize,
     source_map_len: Option<usize>,
     overwritten_functions: Vec<(usize, FunctionEntry)>,
     open_files: HashMap<u64, VmOpenFile>,
@@ -4018,6 +4023,9 @@ impl VM {
             function_len: self.bytecode.functions.len(),
             doc_len: self.bytecode.docs.len(),
             process_spec_len: self.bytecode.runtime_process_specs.entries.len(),
+            boot_singleton_len: self.bytecode.runtime_boot_plan.singletons.len(),
+            boot_standard_override_len: self.bytecode.runtime_boot_plan.standard_overrides.len(),
+            boot_handler_override_len: self.bytecode.runtime_boot_plan.handler_overrides.len(),
             source_map_len: self
                 .bytecode
                 .source_map
@@ -4081,6 +4089,18 @@ impl VM {
             .runtime_process_specs
             .entries
             .truncate(checkpoint.process_spec_len);
+        self.bytecode
+            .runtime_boot_plan
+            .singletons
+            .truncate(checkpoint.boot_singleton_len);
+        self.bytecode
+            .runtime_boot_plan
+            .standard_overrides
+            .truncate(checkpoint.boot_standard_override_len);
+        self.bytecode
+            .runtime_boot_plan
+            .handler_overrides
+            .truncate(checkpoint.boot_handler_override_len);
         for (idx, entry) in checkpoint.overwritten_functions {
             if idx < self.bytecode.functions.len() {
                 self.bytecode.functions[idx] = entry;
