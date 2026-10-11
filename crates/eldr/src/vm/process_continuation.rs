@@ -33,6 +33,7 @@ pub(super) struct SingletonFlight {
     waiters: usize,
 }
 
+
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeContinuation {
     ErrorConstruction {
@@ -1482,6 +1483,7 @@ impl VM {
     ) -> Result<BuiltinOutcome, RuntimeError> {
         let supervisor = self
             .process_runtime
+            .spec_registry
             .specs_by_name
             .get(&process_name)
             .filter(|spec| spec.instance == RuntimeProcessInstance::Worker)

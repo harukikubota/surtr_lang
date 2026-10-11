@@ -28,6 +28,8 @@ use std::fs::{File, OpenOptions};
 use std::rc::{Rc, Weak};
 
 use crate::builtin::{call_builtin, BuiltinContinuation, BuiltinOutcome};
+#[cfg(test)]
+mod checkpoint_metadata_tests;
 mod continuation;
 #[cfg(test)]
 mod future_stack_tests;
@@ -559,9 +561,7 @@ struct ProcessRuntime {
     next_future_id: FutureId,
     next_correlation_id: CorrelationId,
     next_detached_task_id: u64,
-    specs_by_id: Vec<RuntimeProcessSpec>,
-    spec_id_by_name: BTreeMap<String, u32>,
-    specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
+    spec_registry: Rc<ProcessSpecRegistry>,
     handler_contexts: BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>,
     singleton_by_name: BTreeMap<String, u64>,
     singleton_inits: BTreeMap<String, SingletonFlight>,
@@ -579,6 +579,15 @@ struct ProcessRuntime {
     detached_tasks: RuntimeTable<DetachedTask>,
     root_supervisor: RootSupervisorState,
     worker_sets: BTreeMap<u64, WorkerSetState>,
+}
+
+/// Registered definitions stay immutable across checkpoints and VM clones.
+/// Registration builds a new registry rather than mutating saved definitions.
+#[derive(Debug, Default)]
+struct ProcessSpecRegistry {
+    specs_by_id: Vec<RuntimeProcessSpec>,
+    spec_id_by_name: BTreeMap<String, u32>,
+    specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -912,7 +921,7 @@ impl ProcessRuntime {
 
     fn counters(&self) -> VmProcessCounters {
         let mut counters = VmProcessCounters {
-            process_spec_count: self.specs_by_id.len(),
+            process_spec_count: self.spec_registry.specs_by_id.len(),
             singleton_slot_count: self.singleton_by_name.len(),
             process_count: self.processes.len(),
             stopping_process_count: self
@@ -2008,7 +2017,12 @@ impl VM {
         let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
             for entry in &self.bytecode.runtime_boot_plan.singletons {
-                let Some(spec) = self.process_runtime.specs_by_name.get(&entry.process_name) else {
+                let Some(spec) = self
+                    .process_runtime
+                    .spec_registry
+                    .specs_by_name
+                    .get(&entry.process_name)
+                else {
                     return Err(self.boot_failure_error(
                         &entry.process_name,
                         "singleton process is not defined or not visible",
@@ -2039,6 +2053,7 @@ impl VM {
                 .iter()
                 .filter_map(|entry| {
                     self.process_runtime
+                        .spec_registry
                         .specs_by_name
                         .get(&entry.process_name)
                         .cloned()
@@ -2129,6 +2144,7 @@ impl VM {
             if override_entry.process_name == "Global::DynamicSupervisor"
                 && self
                     .process_runtime
+                    .spec_registry
                     .specs_by_name
                     .get(&override_entry.process_name)
                     .is_some_and(|spec| spec.kind == RuntimeProcessKind::DynamicSupervisor)
@@ -3185,7 +3201,13 @@ impl VM {
         owner: Option<u64>,
         lifecycle_sink: Option<LifecycleSink>,
     ) -> Result<u64, RuntimeError> {
-        let Some(spec_id) = self.process_runtime.spec_id_by_name.get(&name).copied() else {
+        let Some(spec_id) = self
+            .process_runtime
+            .spec_registry
+            .spec_id_by_name
+            .get(&name)
+            .copied()
+        else {
             return Err(RuntimeError::new(format!(
                 "unknown process spec `{name}` during allocation"
             )));
@@ -3550,6 +3572,7 @@ impl VM {
     pub fn process_runtime_snapshot(&self) -> Result<VmProcessRuntimeSnapshot, RuntimeError> {
         let specs = self
             .process_runtime
+            .spec_registry
             .specs_by_id
             .iter()
             .enumerate()
@@ -6747,19 +6770,21 @@ impl ProcessRuntime {
     }
 
     fn register_spec_table(&mut self, spec_table: &RuntimeProcessSpecTable) {
-        self.specs_by_id = spec_table.entries.clone();
-        self.spec_id_by_name = spec_table
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(idx, spec)| (spec.type_name.clone(), idx as u32))
-            .collect();
-        self.specs_by_name = spec_table
-            .entries
-            .iter()
-            .cloned()
-            .map(|spec| (spec.type_name.clone(), spec))
-            .collect();
+        self.spec_registry = Rc::new(ProcessSpecRegistry {
+            specs_by_id: spec_table.entries.clone(),
+            spec_id_by_name: spec_table
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(idx, spec)| (spec.type_name.clone(), idx as u32))
+                .collect(),
+            specs_by_name: spec_table
+                .entries
+                .iter()
+                .cloned()
+                .map(|spec| (spec.type_name.clone(), spec))
+                .collect(),
+        });
         let mut effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy> = spec_table
             .entries
             .iter()
@@ -6796,17 +6821,22 @@ impl ProcessRuntime {
     }
 
     fn canonical_process_name<'a>(&'a self, process_name: &'a str) -> Option<&'a str> {
-        if self.specs_by_name.contains_key(process_name) {
+        if self.spec_registry.specs_by_name.contains_key(process_name) {
             return Some(process_name);
         }
         if let Some(surface_name) = process_name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX) {
-            if self.specs_by_name.contains_key(surface_name) {
+            if self.spec_registry.specs_by_name.contains_key(surface_name) {
                 return Some(surface_name);
             }
         } else {
             let canonical_name = format!("{IMPLICIT_ROOT_NAMESPACE_PREFIX}{process_name}");
-            if self.specs_by_name.contains_key(&canonical_name) {
+            if self
+                .spec_registry
+                .specs_by_name
+                .contains_key(&canonical_name)
+            {
                 return self
+                    .spec_registry
                     .specs_by_name
                     .get_key_value(&canonical_name)
                     .map(|(name, _)| name.as_str());
@@ -6817,7 +6847,7 @@ impl ProcessRuntime {
 
     fn spec_by_process_name(&self, process_name: &str) -> Option<&RuntimeProcessSpec> {
         self.canonical_process_name(process_name)
-            .and_then(|canonical_name| self.specs_by_name.get(canonical_name))
+            .and_then(|canonical_name| self.spec_registry.specs_by_name.get(canonical_name))
     }
 
     fn singleton_pid_by_process_name(&self, process_name: &str) -> Option<u64> {
@@ -6836,7 +6866,7 @@ impl ProcessRuntime {
     }
 
     fn spec_for_id(&self, spec_id: u32) -> Option<&RuntimeProcessSpec> {
-        self.specs_by_id.get(spec_id as usize)
+        self.spec_registry.specs_by_id.get(spec_id as usize)
     }
 
     fn allocate_future(
@@ -8769,6 +8799,7 @@ mod tests {
         let vm = VM::new(bytecode);
         let spec = vm
             .process_runtime
+            .spec_registry
             .specs_by_name
             .get("Counter")
             .expect("process spec should be registered");
@@ -8776,7 +8807,13 @@ mod tests {
         assert_eq!(spec.init.callable.fun_idx, 0);
         assert_eq!(spec.handlers[1].fun_idx, 1);
         assert_eq!(spec.handlers[2].fun_idx, 2);
-        assert_eq!(vm.process_runtime.spec_id_by_name.get("Counter"), Some(&0));
+        assert_eq!(
+            vm.process_runtime
+                .spec_registry
+                .spec_id_by_name
+                .get("Counter"),
+            Some(&0)
+        );
         assert_eq!(
             vm.process_runtime
                 .spec_for_id(0)

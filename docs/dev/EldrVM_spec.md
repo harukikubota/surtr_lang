@@ -380,7 +380,10 @@ Packed の tail は参照中の buffer 全体を保持し、処理済みの先�
 反復解放し、共有 tail に到達したらその参照だけを減らす。各 head は tail より先に解放する。
 固定深さの List / Tuple / Tagged / Callable に含まれる長い Cons も同じ処理を使う。
 任意の深さに入れ子になったValue木全体の反復解放は未実装である。
-checkpoint は process・future・detached task に加え、停止識別表と実行 record を整合した状態で保存する。metadata や queue などの複製は残る。
+checkpoint は process・future・detached task に加え、停止識別表と実行 record を整合した状態で保存する。
+process 定義の ID・名前・名前から ID を引く3表は、一つの不変 registry として checkpoint / VM clone 間で共有する。
+定義登録は新しい registry への置換とし、保存側の定義を変更しない。rollback は保存位置の registry を復元する。
+handler override の適用先、supervisor policy、その他の metadata や queue などの複製は残る。
 
 ---
 
