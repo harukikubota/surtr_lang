@@ -1,0 +1,36 @@
+[
+  {
+    "variant": "baseline",
+    "binary_sha256": "64fffe4cb24d01c80b0dac12800cf2b102eae4d0715ae259cc728284d80576a6",
+    "args": [
+      "singleton",
+      "1",
+      "int",
+      "1"
+    ],
+    "environment": {
+      "MallocReportConfig": "1",
+      "MallocDebugReport": "stderr"
+    },
+    "purpose": "allocator configuration diagnostic, excluded from performance samples",
+    "stderr": "list-value-cost-probe(94949,0x1f7b02180) malloc: Internal Security Policy: 0\nlist-value-cost-probe(94949,0x1f7b02180) malloc: Malloc Config Outputs:\n\tProcess Identity: 0\n\tEnable Xzone Malloc: 1\n\tEnable Nano On Xzone: 0\n\tXzone Enablement Reason: default\nlist-value-cost-probe(94949,0x1f7b02180) malloc: XZM Config:\n\tData Only: 0\n\tAllocation Fronts: 2\n\tGuard Pages: 0 (Tiny: 0, 0/256; Small: 0, 0/256)\n\tGuard Objects: (Large: 0 [0+0/0; max 0, quarantine 0, reinit 0])\n\tScribble: 0\n\tTiny/Small Batch Max: 10\n\tDefer Tiny: 1\n\tDefer Small: 1\n\tDefer Large: 1\n\tHuge Cache Size: 64\n\tHuge Cache Max Entry Bytes: 4294967295\n\tReclaim Buffer Count: 1016/4195320 (DISABLED)\n\tSmall Freelist: 1\n\tData Range: 0x0/0\n\tPointer Range 1: 0x0/8573157376\n\tPointer Range 2: 0x0/8606711808\n\tEarly Allocator: enabled\n\tSegment Deallocate: 0\n\tMTE (enabled/data/max size): 0/0/0\n\tInitial Slot Config: CLUSTER/CPU (Chunk, Size Thresholds: 1, 128)\n\tInitial List Config: SINGLE/CPU\n\tList Upgrade Thresholds: 32/512, 128/512\n\tSlot Upgrade Thresholds: 64/1024, 256/1024\n\tTiny Thrash Threshold: 1 ms\n\tSmall Thrash Threshold: 0 ms, 16384 bytes\n\tData Thrash Threshold: 0 ms\n\tThread Caching: disabled (16384 allocs, 256 contentions, 1000 ms)\n\tPointer Bucket Count: 4\n",
+    "exit_code": 0
+  },
+  {
+    "variant": "optimized",
+    "binary_sha256": "e0be2b9678704c68c1c936b0fcc26f865c7fba1bd9b9f49e0860ab3956579d69",
+    "args": [
+      "singleton",
+      "1",
+      "int",
+      "1"
+    ],
+    "environment": {
+      "MallocReportConfig": "1",
+      "MallocDebugReport": "stderr"
+    },
+    "purpose": "allocator configuration diagnostic, excluded from performance samples",
+    "stderr": "list-value-cost-probe(94950,0x1f7b02180) malloc: Internal Security Policy: 0\nlist-value-cost-probe(94950,0x1f7b02180) malloc: Malloc Config Outputs:\n\tProcess Identity: 0\n\tEnable Xzone Malloc: 1\n\tEnable Nano On Xzone: 0\n\tXzone Enablement Reason: default\nlist-value-cost-probe(94950,0x1f7b02180) malloc: XZM Config:\n\tData Only: 0\n\tAllocation Fronts: 2\n\tGuard Pages: 0 (Tiny: 0, 0/256; Small: 0, 0/256)\n\tGuard Objects: (Large: 0 [0+0/0; max 0, quarantine 0, reinit 0])\n\tScribble: 0\n\tTiny/Small Batch Max: 10\n\tDefer Tiny: 1\n\tDefer Small: 1\n\tDefer Large: 1\n\tHuge Cache Size: 64\n\tHuge Cache Max Entry Bytes: 4294967295\n\tReclaim Buffer Count: 1016/4195320 (DISABLED)\n\tSmall Freelist: 1\n\tData Range: 0x0/0\n\tPointer Range 1: 0x0/8573157376\n\tPointer Range 2: 0x0/8606711808\n\tEarly Allocator: enabled\n\tSegment Deallocate: 0\n\tMTE (enabled/data/max size): 0/0/0\n\tInitial Slot Config: CLUSTER/CPU (Chunk, Size Thresholds: 1, 128)\n\tInitial List Config: SINGLE/CPU\n\tList Upgrade Thresholds: 32/512, 128/512\n\tSlot Upgrade Thresholds: 64/1024, 256/1024\n\tTiny Thrash Threshold: 1 ms\n\tSmall Thrash Threshold: 0 ms, 16384 bytes\n\tData Thrash Threshold: 0 ms\n\tThread Caching: disabled (16384 allocs, 256 contentions, 1000 ms)\n\tPointer Bucket Count: 4\n",
+    "exit_code": 0
+  }
+]

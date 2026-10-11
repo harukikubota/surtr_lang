@@ -1,0 +1,23 @@
+[package]
+name = "list-value-cost-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+default-run = "list-value-cost-probe"
+
+# Manual measurements are deliberately outside the workspace test gate.
+[workspace]
+
+[features]
+default = ["count-alloc"]
+count-alloc = []
+
+[dependencies]
+sindr = { path = "../../../crates/sindr" }
+eldr = { path = "../../../crates/eldr" }
+forge = { path = "../../../crates/forge" }
+spire = { path = "../../../crates/spire" }
+sigil = { path = "../../../crates/sigil" }
+scar = { path = "../../../crates/scar" }
+xldr = { path = "../../../crates/xldr" }
+serde_json = "1"
