@@ -17,7 +17,7 @@ impl MapValuesContinuation {
         mut self,
         result: Result<Value, RuntimeError>,
     ) -> Result<BuiltinOutcome, RuntimeError> {
-        self.output = self.output.insert(self.pending_key, result?);
+        self.output.entries.insert(self.pending_key, result?);
         match self.remaining.next() {
             Some((key, value)) => {
                 self.pending_key = key;
@@ -77,6 +77,69 @@ mod tests {
             ],
         )
         .expect("valid map and callback")
+    }
+
+    #[test]
+    fn map_values_keeps_callback_result_buffer_when_adding_the_next_value() {
+        let BuiltinOutcome::Call { continuation, .. } =
+            start(vec![("a".into(), Value::Unit), ("b".into(), Value::Unit)])
+        else {
+            panic!("expected first callback")
+        };
+        let value = "callback result".repeat(32);
+        let buffer = value.as_ptr();
+        let mut vm = VM::new(Bytecode::default());
+        let BuiltinOutcome::Call { continuation, .. } =
+            continuation.resume(&mut vm, Ok(Value::Str(value))).unwrap()
+        else {
+            panic!("expected second callback")
+        };
+        let BuiltinOutcome::Complete(Value::HashMap(output)) =
+            continuation.resume(&mut vm, Ok(Value::Unit)).unwrap()
+        else {
+            panic!("expected complete map")
+        };
+        let Value::Str(value) = &output.entries["a"] else {
+            panic!("expected String")
+        };
+        assert_eq!(
+            value.as_ptr(),
+            buffer,
+            "later output must not clone earlier callback results"
+        );
+    }
+
+    #[test]
+    fn map_values_cloned_partial_output_resumes_independently() {
+        let BuiltinOutcome::Call { continuation, .. } =
+            start(vec![("a".into(), Value::Unit), ("b".into(), Value::Unit)])
+        else {
+            panic!("expected first callback")
+        };
+        let mut vm = VM::new(Bytecode::default());
+        let BuiltinOutcome::Call { continuation, .. } = continuation
+            .resume(&mut vm, Ok(Value::Str("first".into())))
+            .unwrap()
+        else {
+            panic!("expected second callback")
+        };
+        let saved = continuation.clone();
+        let BuiltinOutcome::Complete(Value::HashMap(live)) = continuation
+            .resume(&mut vm, Ok(Value::Str("live".into())))
+            .unwrap()
+        else {
+            panic!("expected live complete")
+        };
+        let BuiltinOutcome::Complete(Value::HashMap(saved)) = saved
+            .resume(&mut vm, Ok(Value::Str("saved".into())))
+            .unwrap()
+        else {
+            panic!("expected saved complete")
+        };
+        assert_eq!(live.get("a"), Some(Value::Str("first".into())));
+        assert_eq!(saved.get("a"), Some(Value::Str("first".into())));
+        assert_eq!(live.get("b"), Some(Value::Str("live".into())));
+        assert_eq!(saved.get("b"), Some(Value::Str("saved".into())));
     }
 
     #[test]

@@ -36,6 +36,8 @@ mod generator_tests;
 #[cfg(test)]
 mod list_flat_map_tests;
 #[cfg(test)]
+mod map_values_tests;
+#[cfg(test)]
 mod process_identity_tests;
 #[cfg(test)]
 mod process_stop_tests;

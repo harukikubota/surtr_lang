@@ -330,6 +330,22 @@
   - 同じ入力と所有条件、baseline / optimized binaryのSHAを保持し、counter有効・無効とOS allocatorの構成を分ける。元の前後測定原本を上書きしない。
   - baseline / optimizedを交互に実行して同一binary内とbinary間の分布を比較する。requested量だけでRSS差の原因を断定しない。
 
+### OI-038 HashMapコピー削減後のprocess RSS差
+
+- 背景:
+  - [HashMapコピー削減](hashmap_runtime_optimization_2026_10_11.md)で、反復追加時の既存entry全cloneを除いた。String 1,024件のVM構築の累積requestedは269.502 → 3.770 MiB、構築＋map_valuesは537.619 → 6.154 MiBとなった。
+  - time-onlyの旧・新binaryを交互に各10回実行した追試で、VM distinct Stringのprocess peak RSS中央値は6.180 → 6.430 MiB、範囲は旧6.156〜6.219 / 新6.422〜6.453 MiBとなり、0.250 MiBの増加が再現した。構築＋map_valuesの中央値も6.352 → 6.562 MiBだった。
+  - VMの最終論理liveと破棄bytesは一致し、区間peakは低下したが、RSS差を否定する根拠にはならない。原因は未確定であり、OI-037と同じ原因だと判断する根拠はない。Astraへ相談し、今回のコピー削減受入とは分けて記録した。
+- 未確定点:
+  - 同じ最終論理保持量でもRSSが増える原因と、allocatorやbinary配置の寄与。
+  - 手組みVM以外の通常入口での再現範囲。Rust Intの元buffer容量保持による測定済みの増分は別の所有条件であり、このVM RSS差と同一視しない。
+- 受け入れ条件:
+  - 旧・新binaryと入力・所有条件を固定してRSS差の原因を特定し、改善対象と残る保持条件を明示する。
+  - 公開mapの永続性、duplicate後勝ち、callback順序、待機・取消・checkpointを保つ。コピーを復活させてRSS差だけを隠さない。
+- テスト方針:
+  - [前後測定と交互追試原本](hashmap_runtime_optimization_2026_10_11.md#同一キーの保持量とrss)を保持し、count有効・無効、allocator構成、同一binary内とbinary間の分布を分ける。
+  - 時間・RSSの閾値をcorrectness testに追加せず、原因を固定する決定的な検証と手動測定を組み合わせる。
+
 ## 更新ルール
 
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。
