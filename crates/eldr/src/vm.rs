@@ -4788,9 +4788,31 @@ impl VM {
         Ok(())
     }
 
+    fn verify_error_kind_constants(
+        constants: &[Constant],
+        prefix: &[sindr::ir::ErrTemplate],
+        suffix: &[sindr::ir::ErrTemplate],
+    ) -> Result<(), RuntimeError> {
+        for constant in constants {
+            if let Constant::ErrorKind(kind) = constant {
+                if !prefix
+                    .iter()
+                    .chain(suffix)
+                    .any(|template| template.kind == *kind)
+                {
+                    return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: unknown ErrorKind identity {kind}"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
         validate_type_registry_append_entries(&[], bytecode.type_registry.entries())
             .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
+        Self::verify_error_kind_constants(&bytecode.constants, &bytecode.error_templates, &[])?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
         validate_program_function_table(
             &bytecode.opcodes,
@@ -4924,6 +4946,11 @@ impl VM {
             &chunk.type_entries,
         )
         .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
+        Self::verify_error_kind_constants(
+            &chunk.constants,
+            &self.bytecode.error_templates,
+            &chunk.error_templates,
+        )?;
         Self::verify_source_map_entries(chunk.source_map.as_ref(), chunk.opcodes.len(), "chunk")?;
 
         let const_base = self.bytecode.constants.len();
@@ -6493,6 +6520,19 @@ impl VM {
             Constant::Str(s) => Value::Str(s.clone()),
             Constant::Bool(b) => Value::Bool(*b),
             Constant::Unit => Value::Unit,
+            Constant::ErrorKind(kind) => {
+                if !self
+                    .bytecode
+                    .error_templates
+                    .iter()
+                    .any(|template| template.kind == *kind)
+                {
+                    return Err(RuntimeError::new(format!(
+                        "LoadConst: unknown ErrorKind identity {kind}"
+                    )));
+                }
+                Value::ErrorKind(kind.clone())
+            }
         })
     }
 
@@ -7104,6 +7144,69 @@ mod tests {
             input_types: Vec::new(),
             payload_fields: Vec::new(),
         }
+    }
+
+    #[test]
+    fn error_kind_constants_require_registered_canonical_identity() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]));
+        vm.install_test_error_constructor("Failure", vec![], "failure");
+        vm.bytecode.constants[0] = Constant::ErrorKind("Global::Failure".into());
+        vm.run().unwrap();
+        assert_eq!(
+            vm.last_value(),
+            Some(&Value::ErrorKind("Global::Failure".into()))
+        );
+        vm.bytecode.constants[0] = Constant::ErrorKind("Other::Failure".into());
+        assert!(VM::verify_program(&vm.bytecode)
+            .unwrap_err()
+            .message
+            .contains("unknown ErrorKind identity"));
+        assert!(vm
+            .constant_value(0)
+            .unwrap_err()
+            .message
+            .contains("unknown ErrorKind identity"));
+    }
+
+    #[test]
+    fn error_kind_chunk_constants_resolve_prefix_and_suffix_without_name_fallback() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        vm.install_test_error_constructor("PrefixFailure", vec![], "prefix");
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
+            source_map: None,
+            const_base: vm.bytecode.constants.len() as u32,
+            constants: vec![Constant::ErrorKind("Global::PrefixFailure".into())],
+            new_locals: 0,
+            type_registry_base: 0,
+            type_entries: Vec::new(),
+            error_template_base: vm.bytecode.error_templates.len() as u32,
+            error_templates: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            signatures: Vec::new(),
+            runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
+        };
+        vm.verify_chunk(&chunk).unwrap();
+        let mut suffix = chunk.clone();
+        suffix.constants = vec![Constant::ErrorKind("Global::SuffixFailure".into())];
+        suffix.error_templates = vec![test_source_error_template("Global::SuffixFailure")];
+        vm.verify_chunk(&suffix).unwrap();
+        let mut invalid = chunk.clone();
+        invalid.constants = vec![Constant::ErrorKind("PrefixFailure".into())];
+        assert!(vm
+            .verify_chunk(&invalid)
+            .unwrap_err()
+            .message
+            .contains("unknown ErrorKind identity"));
+        assert_eq!(
+            vm.push_atomic(chunk).unwrap(),
+            Value::ErrorKind("Global::PrefixFailure".into())
+        );
     }
 
     fn replace_inline_error_fixture_with_constructor_call(vm: &mut VM, kind: &str) {
@@ -10684,7 +10787,7 @@ mod tests {
             path: "REPL:1".into(),
             normalized_path: Some("REPL:1".into()),
             content_hash: None,
-            text: Some("Err(NoneError)\n".into()),
+            text: Some("Err(NoneError())\n".into()),
         };
         vm.register_source(original.clone())
             .expect("new source must register");
@@ -12445,84 +12548,6 @@ mod tests {
         assert!(error.message.contains("unresolved future"));
         assert_eq!(vm.open_file_count(), 0);
         fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn recover_callback_wait_resumes_once_and_validates_result_with_source_trace() {
-        for valid in [true, false] {
-            let mut bytecode = base_bytecode(vec![
-                Opcode::LoadConst(0),
-                Opcode::CallBuiltin {
-                    builtin_id: builtin_id("print"),
-                    arity: 1,
-                    span_start: 0,
-                    span_end: 1,
-                },
-                Opcode::Pop,
-                Opcode::LoadLocal(0),
-                Opcode::Return,
-            ]);
-            bytecode.constants = vec![Constant::Str("called".into())];
-            bytecode.functions = vec![function_entry(0, 0, 2, 2, Some("Main::handler"))];
-            let mut vm = VM::new(bytecode)
-                .with_output_capture()
-                .with_source("recover".into(), "recover.srt".into());
-            vm.frames[0].call_site = Some((0, 7));
-            vm.frames[0].trace_frame = Some(vm.trace_frame_for_builtin("__recover_kind", 0, 7));
-            let future = vm.process_runtime.allocate_future(None, None, false);
-            let mut handler = vm.callable_for_function(0);
-            handler.lexical_captures.push(Value::PendingFuture(future));
-            let error = vm.process_error("Retry", "retry");
-            let kind = error.kind.clone();
-            let callable = Callable {
-                target: CallableTarget::Builtin(builtin_id("__recover_kind")),
-                lexical_captures: Vec::new(),
-                metadata: Default::default(),
-            };
-            let mut context = vm
-                .prepare_callable_context(
-                    callable,
-                    vec![
-                        super::err_vm_result(error),
-                        Value::Str(kind.into()),
-                        Value::Callable(handler),
-                    ],
-                )
-                .unwrap();
-            assert!(
-                matches!(vm.run_quantum(&mut context,&mut Budget::new(64)),ProcessRunOutcome::Pending(id) if id==future)
-            );
-            assert_eq!(vm.output.as_ref().unwrap(), &["called".to_string()]);
-            vm.process_runtime.resolve_future(
-                future,
-                if valid {
-                    ok_vm_result(Value::Int(int(42)))
-                } else {
-                    Value::Int(int(42))
-                },
-            );
-            let result = vm.run_quantum(&mut context, &mut Budget::new(64));
-            if valid {
-                assert!(
-                    matches!(result,ProcessRunOutcome::Halted(value) if value==ok_vm_result(Value::Int(int(42))))
-                );
-            } else {
-                match result {
-                    ProcessRunOutcome::Failed(error) => {
-                        assert!(error.message.contains("handler result"));
-                        assert!(error.context.call_site.is_some());
-                        assert!(error
-                            .context
-                            .stack_trace
-                            .iter()
-                            .any(|f| f.function.as_deref() == Some("__recover_kind")));
-                    }
-                    other => panic!("expected invalid handler result error, got {other:?}"),
-                }
-            }
-            assert_eq!(vm.output.as_ref().unwrap(), &["called".to_string()]);
-            assert!(context.continuations.is_empty());
-        }
     }
 
     #[test]

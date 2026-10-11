@@ -54,7 +54,7 @@ where
   implements MonadFail. The original Error is retained.
 
   ## REPL
-  xldr(1)> value: Result<Int> = MonadFail::fail(NoneError)
+  xldr(1)> value: Result<Int> = MonadFail::fail(NoneError())
   xldr(2)> match value { Err(error) => Error::kind(error), Ok(_) => "success" }
   "NoneError"
   xldr(3)> Result::is_err(MonadFail::fail::<Result<Int>>(NoneError))
@@ -67,7 +67,7 @@ where
   argument runs, exactly once. Parentheses retain the ordinary eager boundary.
 
   ## REPL
-  xldr(1)> MonadFail::fail_if(False, NoneError, Ok(3))
+  xldr(1)> MonadFail::fail_if(False, NoneError(), Ok(3))
   Ok(3)
   """
   def fail_if(condition: Boolean, err: Lazy<Error>, then: Lazy<Self>) -> Self {

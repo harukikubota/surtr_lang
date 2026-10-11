@@ -36,9 +36,20 @@ xldr(1)> match List::at([1], 2) { Err(ListIndexOutOfBounds(index, length) @ e) =
 
 impl Error {
   @doc """
+  Compare an Error with an opaque declaration kind. The comparison does not
+  grant access to concrete Payload fields.
+
+  ## REPL
+  xldr(1)> kind = NoneError
+  xldr(2)> Error::is_kind(NoneError(), kind)
+  True
+  """
+  @builtin def is_kind(err: Error, kind: ErrorKind) -> Boolean
+
+  @doc """
   Return the concrete `deferror` kind name stored in an `Error` value.
   ## REPL
-  xldr(1)> Error::kind(NoneError)
+  xldr(1)> Error::kind(NoneError())
   "NoneError"
   """
   @builtin def kind(err: Error) -> String
@@ -52,7 +63,7 @@ impl Error {
   @doc """
   Return the human message stored in an `Error` value.
   ## REPL
-  xldr(1)> Error::message(NoneError)
+  xldr(1)> Error::message(NoneError())
   "None Value."
   """
   @builtin def message(err: Error) -> String
@@ -60,7 +71,7 @@ impl Error {
   @doc """
   Render an `Error` into the same human-oriented multiline text used by `eprint`.
   ## REPL
-  xldr(1)> Error::format(NoneError)
+  xldr(1)> Error::format(NoneError())
   "Error: NoneError: None Value."
   """
   @builtin def format(err: Error) -> String

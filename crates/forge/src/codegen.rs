@@ -336,6 +336,7 @@ fn collect_missing_singleton_calls(
 
     match &node.node {
         TypedInner::Lit(_)
+        | TypedInner::ErrorKind(_)
         | TypedInner::Var(_)
         | TypedInner::ListNil
         | TypedInner::ProcessContextHandler { .. }
@@ -367,15 +368,13 @@ fn collect_missing_singleton_calls(
                 );
             }
         }
-        TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-            collect_missing_singleton_calls(
-                inner,
-                surface_to_process,
-                available_singletons,
-                available_supervisors,
-                first_missing,
-            )
-        }
+        TypedInner::EagerBoundary(inner) => collect_missing_singleton_calls(
+            inner,
+            surface_to_process,
+            available_singletons,
+            available_supervisors,
+            first_missing,
+        ),
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -604,22 +603,6 @@ fn collect_missing_singleton_calls(
                     first_missing,
                 );
             }
-        }
-        TypedInner::RecoverKind(value, _, handler) => {
-            collect_missing_singleton_calls(
-                value,
-                surface_to_process,
-                available_singletons,
-                available_supervisors,
-                first_missing,
-            );
-            collect_missing_singleton_calls(
-                handler,
-                surface_to_process,
-                available_singletons,
-                available_supervisors,
-                first_missing,
-            );
         }
         TypedInner::Require(left, right) | TypedInner::Ensure(left, right, _) => {
             collect_missing_singleton_calls(
@@ -4524,86 +4507,6 @@ mod tests {
     }
 
     #[test]
-    fn emit_recover_kind_checks_error_kind_and_calls_handler() {
-        let mut gene = Codegen::new();
-        gene.state.slot_map.insert(30, 0);
-        gene.state
-            .callable_names
-            .insert("MyError".into(), super::DirectCallableTarget::User(11));
-        gene.state.callable_names.insert(
-            "Global::MyError".into(),
-            super::DirectCallableTarget::User(11),
-        );
-        gene.state.next_slot = 1;
-
-        let handler = TypedNode {
-            ty: Ty::Func(
-                vec![Ty::Error],
-                Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
-            ),
-            span: span(10, 20),
-            node: TypedInner::Capture(
-                Box::new(TypedNode {
-                    ty: Ty::UserFunc {
-                        fun_idx: 7,
-                        type_params: vec![],
-                        call_substitution: vec![],
-                        params: vec![Ty::Error],
-                        ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
-                    },
-                    span: span(10, 20),
-                    node: TypedInner::Var(resolved_id("handler", None, 31)),
-                }),
-                vec![],
-            ),
-        };
-
-        let node = TypedNode {
-            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
-            span: span(1, 30),
-            node: TypedInner::RecoverKind(
-                Box::new(local_var(
-                    "value",
-                    30,
-                    Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
-                )),
-                "Global::MyError".into(),
-                Box::new(handler),
-            ),
-        };
-
-        gene.emit_node(&node)
-            .expect("recover_kind emission should succeed");
-        let (opcodes, _) = gene.finalize().expect("labels should resolve");
-        let recover_kind_id =
-            Codegen::builtin_id("__recover_kind").expect("__recover_kind builtin must exist");
-
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::CallBuiltin {
-                builtin_id,
-                arity: 3,
-                ..
-            } if *builtin_id == recover_kind_id
-        )));
-        assert!(opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::LoadFunctionRef(7))));
-        assert!(!opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::CallBuiltin {
-                builtin_id,
-                arity: 1,
-                ..
-            } if *builtin_id == Codegen::builtin_id("kind").expect("kind builtin must exist")
-        )));
-        assert!(!opcodes.iter().any(|opcode| matches!(opcode, Opcode::EqStr)));
-        assert!(!opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
-    }
-
-    #[test]
     fn emit_list_flat_map_uses_the_existing_builtin_call_and_template_paths() {
         let list_ty = Ty::List(Box::new(Ty::Int));
         let mapper_ty = Ty::Func(vec![Ty::Int], Box::new(list_ty.clone()));
@@ -6991,6 +6894,7 @@ fn error_value_schema(
             Ty::Bool => S::Boolean,
             Ty::Unit => S::Unit,
             Ty::Error => S::Error,
+            Ty::Enum(name, args) if name == "ErrorKind" && args.is_empty() => S::ErrorKind,
             Ty::List(item) => S::List(Box::new(nested(item, active)?)),
             Ty::Tuple(items) => S::Tuple(
                 items
@@ -8917,6 +8821,11 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(idx));
             }
 
+            TypedInner::ErrorKind(kind) => {
+                let idx = self.add_constant(Constant::ErrorKind(kind.clone()));
+                self.emit(Opcode::LoadConst(idx));
+            }
+
             TypedInner::Var(id) => {
                 if matches!(node.ty, Ty::BuiltinFunc { .. } | Ty::UserFunc { .. }) {
                     return Err(CodegenError {
@@ -9339,36 +9248,6 @@ impl Codegen {
             }
             TypedInner::Cause(value, err) => {
                 self.emit_result_error_transform(node, value, err, "cause")?;
-            }
-            TypedInner::AssertErrorKinds(kinds, value) => {
-                use sigil::resolved::ErrorKindAssertion;
-                for kind in kinds.markers() {
-                    let constant = self.add_constant(Constant::Str(kind.clone()));
-                    self.emit(Opcode::LoadConst(constant));
-                }
-                let builtin = match kinds {
-                    ErrorKindAssertion::Root(_) => "__test_assert_err_kind",
-                    ErrorKindAssertion::Chain(markers) => {
-                        self.emit(Opcode::ListFromItems {
-                            len: markers.len() as u32,
-                        });
-                        "__test_assert_cause_chain"
-                    }
-                };
-                self.emit_node(value)?;
-                let builtin_id = Self::builtin_id(builtin).ok_or_else(|| CodegenError {
-                    message: format!("Unknown builtin: {builtin}"),
-                    span: node.span.clone(),
-                })?;
-                self.emit(Opcode::CallBuiltin {
-                    builtin_id,
-                    arity: 2,
-                    span_start: node.span.start as u32,
-                    span_end: node.span.end as u32,
-                });
-            }
-            TypedInner::RecoverKind(value, marker, handler) => {
-                self.emit_recover_kind(node, value, marker, handler)?;
             }
 
             TypedInner::Match(scrutinee, arms) => {
@@ -13082,51 +12961,6 @@ impl Codegen {
         self.patch_label(fail_label);
         self.emit_lazy_argument(err, err_eager)?;
         self.emit(Opcode::MakeErr);
-
-        self.patch_label(end_label);
-        Ok(())
-    }
-
-    fn emit_recover_kind(
-        &mut self,
-        node: &TypedNode,
-        value: &TypedNode,
-        kind: &str,
-        handler: &TypedNode,
-    ) -> Result<(), CodegenError> {
-        self.emit_node(value)?;
-        let result_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        self.emit(Opcode::StoreLocal(result_slot));
-
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetTag);
-        let err_tag = self.add_constant(Constant::Tag(1));
-        self.emit(Opcode::LoadConst(err_tag));
-        self.emit(Opcode::EqTag);
-
-        let err_path = self.fresh_label();
-        let end_label = self.fresh_label();
-        self.emit_jump_if_true(err_path);
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit_jump(end_label);
-
-        self.patch_label(err_path);
-        self.emit(Opcode::LoadLocal(result_slot));
-        let kind_constant = self.add_constant(Constant::Str(kind.to_string()));
-        self.emit(Opcode::LoadConst(kind_constant));
-        self.emit_callable_ref(handler)?;
-        let builtin_id = Self::builtin_id("__recover_kind").ok_or_else(|| CodegenError {
-            message: "Unknown builtin: __recover_kind".into(),
-            span: node.span.clone(),
-        })?;
-        self.emit(Opcode::CallBuiltin {
-            builtin_id,
-            arity: 3,
-            span_start: node.span.start as u32,
-            span_end: node.span.end as u32,
-        });
-        self.emit_jump(end_label);
 
         self.patch_label(end_label);
         Ok(())

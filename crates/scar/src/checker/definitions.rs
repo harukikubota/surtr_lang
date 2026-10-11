@@ -159,43 +159,6 @@ fn special_form_shape_map_err_or_cause(
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
 }
 
-fn special_form_shape_recover_kind(
-    params: &[ResolvedValueParameter],
-    ret_ty: &Option<AstTy>,
-) -> bool {
-    params.len() == 3
-        && Checker::is_result_of_named(&params[0].ty, "$A")
-        && Checker::is_named_type(&params[1].ty, "ErrorKind")
-        && Checker::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
-        && ret_ty
-            .as_ref()
-            .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
-}
-
-fn special_form_shape_assert_err_kind(
-    params: &[ResolvedValueParameter],
-    ret_ty: &Option<AstTy>,
-) -> bool {
-    params.len() == 2
-        && Checker::is_named_type(&params[0].ty, "ErrorKind")
-        && Checker::is_result_of_named(&params[1].ty, "$A")
-        && ret_ty
-            .as_ref()
-            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
-}
-
-fn special_form_shape_assert_cause_chain(
-    params: &[ResolvedValueParameter],
-    ret_ty: &Option<AstTy>,
-) -> bool {
-    params.len() == 2
-        && matches!(&*params[0].ty, AstTy::Generic(_, name, args) if name == "List" && args.len() == 1 && Checker::is_named_type(&args[0], "ErrorKind"))
-        && Checker::is_result_of_named(&params[1].ty, "$A")
-        && ret_ty
-            .as_ref()
-            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
-}
-
 fn special_form_shape_and_or(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -381,17 +344,6 @@ impl Checker {
         })
     }
 
-    pub(super) fn is_cause_chain_marker_parameter(
-        id: &ResolvedId,
-        index: usize,
-        ty: &AstTy,
-    ) -> bool {
-        index == 0
-            && Self::surface_qualified_name(id.qualified_name.as_deref())
-                == Some("Test::assert_cause_chain")
-            && matches!(ty, AstTy::Generic(_, name, args) if name == "List" && args.len() == 1 && Self::is_named_type(&args[0], "ErrorKind"))
-    }
-
     pub(super) fn check_special_form_builtin_decl(
         &mut self,
         span: &Span,
@@ -431,14 +383,7 @@ impl Checker {
         let param_tys = params
             .iter()
             .enumerate()
-            .map(|(index, param)| {
-                // Only this validated canonical signature admits a static marker list.
-                if Self::is_cause_chain_marker_parameter(id, index, &param.ty) {
-                    Ok(Ty::List(Box::new(Ty::Enum("ErrorKind".into(), Vec::new()))))
-                } else {
-                    self.resolve_builtin_ast_ty(&param.ty, &mut tyvars)
-                }
-            })
+            .map(|(_index, param)| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match ret_ty {
             Some(ty) => self.resolve_builtin_ast_ty_in_context(
@@ -723,20 +668,6 @@ impl Checker {
         )
     }
 
-    pub(super) fn is_unary_func_from_named_to_result(
-        ast_ty: &AstTy,
-        expected_param_name: &str,
-        expected_result_name: &str,
-    ) -> bool {
-        matches!(
-            ast_ty,
-            AstTy::Func(_, params, ret)
-                if params.len() == 1
-                    && matches!(&params[0], AstTy::Named(_, name) if name == expected_param_name)
-                    && Self::is_result_of_named(ret.as_ref(), expected_result_name)
-        )
-    }
-
     pub(super) fn is_special_form_builtin_decl_name(name: &str) -> bool {
         matches!(
             name,
@@ -749,9 +680,6 @@ impl Checker {
                 | "ensure"
                 | "map_err"
                 | "cause"
-                | "recover_kind"
-                | "assert_err_kind"
-                | "assert_cause_chain"
                 | "and"
                 | "or"
                 | "eq"
@@ -818,21 +746,6 @@ impl Checker {
                 expected_qname: "Result::cause",
                 expected_signature: "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
-            },
-            "assert_err_kind" => SpecialFormContract {
-                expected_qname: "Test::assert_err_kind",
-                expected_signature: "@builtin def assert_err_kind(marker: ErrorKind, result: Result<$A>) -> Result<()>",
-                shape_ok: special_form_shape_assert_err_kind,
-            },
-            "assert_cause_chain" => SpecialFormContract {
-                expected_qname: "Test::assert_cause_chain",
-                expected_signature: "@builtin def assert_cause_chain(expected: List<ErrorKind>, result: Result<$A>) -> Result<()>",
-                shape_ok: special_form_shape_assert_cause_chain,
-            },
-            "recover_kind" => SpecialFormContract {
-                expected_qname: "Result::recover_kind",
-                expected_signature: "@builtin def recover_kind(value: Result<$A>, marker: ErrorKind, handler: (Error -> Result<$A>)) -> Result<$A>",
-                shape_ok: special_form_shape_recover_kind,
             },
             "and" => SpecialFormContract {
                 expected_qname: "Kernel::and",
@@ -3245,10 +3158,14 @@ impl Checker {
                     "Ok" => inner.ty.clone(),
                     "Err" => {
                         if !self.types_compatible(&inner.ty, &Ty::Error)? {
-                            return Err(TypeError::new(
+                            let mut error = TypeError::new(
                                 "MatchResult::Err requires an Error value",
                                 inner.span.clone(),
-                            ));
+                            );
+                            if let Some(hint) = self.error_kind_error_hint(&inner) {
+                                error = error.with_hint(hint);
+                            }
+                            return Err(error);
                         }
                         expected_payload.unwrap_or_else(|| self.env.fresh_tyvar())
                     }
@@ -3347,7 +3264,7 @@ impl Checker {
                     if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
                         return Err(TypeError {
                             structured: None,
-                            message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
+                            message: "Nested Result errors are not allowed: use Err(error) for the outer failure, or Ok(Err(error)) for an inner failure.".into(),
                             span: inner.span.clone(),
                             hint: Some(
                                 "Err(...) is lifted to the expected Result nesting; do not write Err(Err(...)).".into(),
@@ -3359,10 +3276,9 @@ impl Checker {
                             structured: None,
                             message: "Err(...) requires an Error value.".into(),
                             span: inner.span.clone(),
-                            hint: Some(
-                                "Use an existing Error or a deferror constructor in Err(...)."
-                                    .into(),
-                            ),
+                            hint: self.error_kind_error_hint(&inner).or_else(|| Some(
+                                "Use an existing Error or an explicit deferror constructor call in Err(...).".into(),
+                            )),
                         });
                     }
                     if self.is_abstract_error_marker_value(&inner) {
@@ -4184,24 +4100,22 @@ impl Checker {
         Ok(values)
     }
 
-    pub(super) fn is_concrete_error_value(&self, node: &TypedNode) -> bool {
-        match &node.node {
-            TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
-            TypedInner::App(func, args) if args.is_empty() => match &func.node {
-                TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
-                TypedInner::Closure(_, _, body)
-                | TypedInner::ExtractorClosure(_, _, body)
-                | TypedInner::CaptureClosure(_, _, body) => self.is_concrete_error_value(body),
-                TypedInner::CaptureConstructorClosure(_, _, _, body) => {
-                    self.is_concrete_error_value(body)
-                }
-                _ => false,
-            },
-            TypedInner::App(func, _) => {
-                matches!(&func.node, TypedInner::Var(id) if self.env.is_error_constructor(id.unique_id))
-            }
-            _ => false,
+    pub(super) fn error_kind_error_hint(&self, node: &TypedNode) -> Option<String> {
+        if !matches!(self.resolve_ty(&node.ty), Ty::Enum(name, args) if name == "ErrorKind" && args.is_empty())
+        {
+            return None;
         }
+        if let TypedInner::ErrorKind(kind) = &node.node {
+            let id = self.function_ids_by_name.get(kind)?;
+            let inputs = self.env.error_constructor_inputs.get(&id.unique_id)?;
+            let name = kind.strip_prefix("Global::").unwrap_or(kind);
+            return Some(if inputs.is_empty() {
+                format!("Call `{name}()` to construct an Error; the bare name is an ErrorKind.")
+            } else {
+                format!("Call `{name}(...)` with the declared constructor inputs to construct an Error; the bare name is an ErrorKind.")
+            });
+        }
+        Some("ErrorKind identifies a deferror declaration. Pass an Error value or call a concrete deferror constructor explicitly.".into())
     }
 
     pub(super) fn is_abstract_error_marker_value(&self, node: &TypedNode) -> bool {
@@ -4222,7 +4136,7 @@ impl Checker {
                     self.ty_name(&node.ty)
                 ),
                 span: node.span.clone(),
-                hint: None,
+                hint: self.error_kind_error_hint(node),
             });
         }
         Ok(())
@@ -4242,7 +4156,7 @@ impl Checker {
                     self.ty_name(&node.ty)
                 ),
                 span: node.span.clone(),
-                hint: None,
+                hint: self.error_kind_error_hint(node),
             });
         }
         Ok(())

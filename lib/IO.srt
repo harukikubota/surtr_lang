@@ -10,7 +10,7 @@ defmod IO {
   Prompt and read one character from standard input.
 
   On an interactive terminal this returns after a single key/character without
-  waiting for Enter. End of input returns `Err(InputCharacterEnd)`. Host read,
+  waiting for Enter. End of input returns `Err(InputCharacterEnd())`. Host read,
   encoding, and terminal failures return the error for that condition.
 
   ## REPL
@@ -24,7 +24,7 @@ defmod IO {
 
   The returned string excludes the trailing newline, and also excludes a
   preceding carriage return for CRLF input. End of input or host read failure
-  returns `Err(InputLineEnd)` or `Err(InputLineReadFailed(...))`.
+  returns `Err(InputLineEnd())` or `Err(InputLineReadFailed(...))`.
 
   ## REPL
   xldr(1)> IO::get_line("name> ")

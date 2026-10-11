@@ -46,7 +46,7 @@ impl Checker {
         expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
         // A polymorphic constructor used as the scrutinee (for example
-        // `Err(NoneError)`) cannot be inferred in isolation: without an
+        // `Err(NoneError())`) cannot be inferred in isolation: without an
         // expected type its payload type defaults to `Unit`.  Match patterns
         // are an equally valid source of constraints, so seed the scrutinee
         // from the first informative pattern and let arm bindings/body

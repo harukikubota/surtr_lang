@@ -256,6 +256,7 @@ pub enum Value {
     Tagged { tag: u32, fields: Vec<Value> },
     Callable(Callable),
     Error(Box<RichError>),
+    ErrorKind(String),
     Regex(RegexHandle),
     RegexCaptures(RegexCapturesHandle),
     RegexMatch(RegexMatchHandle),
@@ -672,6 +673,7 @@ impl Value {
                 }
             },
             Value::Error(rich) => rich.to_display_string(),
+            Value::ErrorKind(kind) => format!("ErrorKind({kind})"),
             Value::Regex(handle) => format!("Regex({:?})", handle.pattern),
             Value::RegexCaptures(handle) => {
                 format!("RegexCaptures(groups: {})", handle.groups.len())
@@ -1107,6 +1109,22 @@ pub struct Location {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn error_kind_display_preserves_canonical_identity_inside_containers() {
+        let value = super::Value::Tuple(vec![
+            super::Value::ErrorKind("One::Failure".into()),
+            super::Value::List(super::ListHandle::from_items(vec![
+                super::Value::ErrorKind("Two::Failure".into()),
+            ])),
+        ]);
+        assert_eq!(
+            value
+                .to_display_string(&super::TypeRegistry::new())
+                .unwrap(),
+            "(ErrorKind(One::Failure), [ErrorKind(Two::Failure)])"
+        );
+    }
+
     #[test]
     fn pid_copy_and_lease_share_identity_without_retaining_process_state() {
         let pid = super::PidHandle::new(7, "Global::Worker".into(), super::PidKind::Worker);

@@ -52,7 +52,6 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, ..)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs) => children.push(rhs),
             TypedInner::DoSafeBind(control) => {
                 children.push(&control.rhs);
@@ -75,10 +74,6 @@ impl Checker {
                 children.push(cond);
                 children.push(then_branch);
                 children.extend(else_branch.as_deref());
-            }
-            TypedInner::RecoverKind(a, _, c) => {
-                children.push(a);
-                children.push(c);
             }
             TypedInner::Ensure(a, b, c) => {
                 children.push(a);
@@ -154,6 +149,7 @@ impl Checker {
             | TypedInner::CaptureConstructorClosure(..)
             | TypedInner::ExtractorClosure(..)
             | TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }

@@ -2076,7 +2076,10 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_ty(ty, rewrites);
                 }
             }
-            TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
+            TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil => {}
             TypedInner::SupervisorSpawn { init, .. } => {
                 Self::rewrite_fun_indices_in_node(init, rewrites);
             }
@@ -2208,9 +2211,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(&mut arg.expr, rewrites);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                Self::rewrite_fun_indices_in_node(inner, rewrites)
-            }
+            TypedInner::EagerBoundary(inner) => Self::rewrite_fun_indices_in_node(inner, rewrites),
             TypedInner::If(cond, then_node, else_node) => {
                 Self::rewrite_fun_indices_in_node(cond, rewrites);
                 Self::rewrite_fun_indices_in_node(then_node, rewrites);
@@ -2230,10 +2231,6 @@ impl ScarSession {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
                 Self::rewrite_fun_indices_in_node(err, rewrites);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                Self::rewrite_fun_indices_in_node(value, rewrites);
-                Self::rewrite_fun_indices_in_node(handler, rewrites);
             }
             TypedInner::Match(scrutinee, arms) => {
                 Self::rewrite_fun_indices_in_node(scrutinee, rewrites);
@@ -3821,9 +3818,7 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(&arg.expr);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                self.collect_unused_value_warnings_in_node(inner)
-            }
+            TypedInner::EagerBoundary(inner) => self.collect_unused_value_warnings_in_node(inner),
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(then_branch);
@@ -3836,10 +3831,6 @@ impl Checker {
             | TypedInner::Cause(cond, err) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(err);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                self.collect_unused_value_warnings_in_node(value);
-                self.collect_unused_value_warnings_in_node(handler);
             }
             TypedInner::Ensure(value, pred, err) => {
                 self.collect_unused_value_warnings_in_node(value);
@@ -3893,6 +3884,7 @@ impl Checker {
                 }
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
@@ -4932,13 +4924,6 @@ impl Checker {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
-            Resolved::AssertErrorKinds(_, _, value) => {
-                self.validate_constructor_body_positions(value, constructor_traits)?
-            }
-            Resolved::RecoverKind(_, a, _, c) => {
-                self.validate_constructor_body_positions(a, constructor_traits)?;
-                self.validate_constructor_body_positions(c, constructor_traits)?;
-            }
             Resolved::Ensure(_, a, b, c) => {
                 self.validate_constructor_body_positions(a, constructor_traits)?;
                 self.validate_constructor_body_positions(b, constructor_traits)?;
@@ -5008,6 +4993,7 @@ impl Checker {
             | Resolved::ReturnTypeArgumentApply(..)
             | Resolved::Lit(..)
             | Resolved::Var(..)
+            | Resolved::ErrorKind(..)
             | Resolved::ListNil(..)
             | Resolved::ProcessContextHandler(..)
             | Resolved::StructDef(..)
@@ -5412,8 +5398,6 @@ impl Checker {
             Resolved::Require(..) => "Require".to_string(),
             Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
-            Resolved::RecoverKind(..) => "RecoverKind".to_string(),
-            Resolved::AssertErrorKinds(..) => "AssertErrorKinds".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -5446,8 +5430,6 @@ impl Checker {
             Resolved::Require(..) => "Require",
             Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
-            Resolved::RecoverKind(..) => "RecoverKind",
-            Resolved::AssertErrorKinds(..) => "AssertErrorKinds",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

@@ -564,7 +564,6 @@ impl Checker {
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
-            | TypedInner::AssertErrorKinds(_, rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _) => visit(rhs),
             TypedInner::DoSafeBind(control) => visit(&control.rhs)
@@ -583,7 +582,6 @@ impl Checker {
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
-            TypedInner::RecoverKind(first, _, third) => visit(first).or_else(|| visit(third)),
             TypedInner::Ensure(first, second, third) => visit(first)
                 .or_else(|| visit(second))
                 .or_else(|| visit(third)),
@@ -687,6 +685,7 @@ impl Checker {
                 )
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
@@ -939,6 +938,7 @@ impl Checker {
                     generated_defs,
                 ),
             TypedInner::Lit(..)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(..)
             | TypedInner::SupervisorSpawn { .. }
             | TypedInner::SupervisorAdopt { .. }
@@ -961,13 +961,11 @@ impl Checker {
             | TypedInner::InterpolatedStr(..)
             | TypedInner::Dbg(..)
             | TypedInner::EagerBoundary(..)
-            | TypedInner::AssertErrorKinds(..)
             | TypedInner::If(..)
             | TypedInner::Require(..)
             | TypedInner::Ensure(..)
             | TypedInner::MapErr(..)
             | TypedInner::Cause(..)
-            | TypedInner::RecoverKind(..)
             | TypedInner::FieldAccess(..)
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::FacetPath(..)
@@ -1381,6 +1379,7 @@ impl Checker {
         let mut ty = node.ty.clone();
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
+            TypedInner::ErrorKind(kind) => TypedInner::ErrorKind(kind),
             TypedInner::Var(id) => TypedInner::Var(id),
             TypedInner::SupervisorSpawn {
                 supervisor_process,
@@ -1887,17 +1886,6 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
-            TypedInner::AssertErrorKinds(marker, inner) => TypedInner::AssertErrorKinds(
-                marker,
-                self.rewrite_specializations_in_node(
-                    *inner,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
             TypedInner::EagerBoundary(inner) => {
                 TypedInner::EagerBoundary(self.rewrite_specializations_in_node(
                     *inner,
@@ -2011,25 +1999,6 @@ impl Checker {
                 )?,
                 self.rewrite_specializations_in_node(
                     *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                self.rewrite_specializations_in_node(
-                    *value,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                marker,
-                self.rewrite_specializations_in_node(
-                    *handler,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
@@ -3247,7 +3216,6 @@ impl Checker {
                 }
             }
             TypedInner::EagerBoundary(inner)
-            | TypedInner::AssertErrorKinds(_, inner)
             | TypedInner::FieldAccess(inner, _)
             | TypedInner::SupervisorSpawn { init: inner, .. }
             | TypedInner::SupervisorAdopt { pid: inner, .. }
@@ -3273,10 +3241,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(handler, ordered, seen);
             }
             TypedInner::Match(scrutinee, arms) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(scrutinee, ordered, seen);
@@ -3320,6 +3284,7 @@ impl Checker {
                 self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
@@ -3431,7 +3396,7 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(&arg.expr, ordered, seen);
                 }
             }
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
+            TypedInner::EagerBoundary(inner) => {
                 self.collect_bound_tyvars_in_node(inner, ordered, seen)
             }
             TypedInner::If(cond, then_branch, else_branch) => {
@@ -3453,10 +3418,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                self.collect_bound_tyvars_in_node(value, ordered, seen);
-                self.collect_bound_tyvars_in_node(handler, ordered, seen);
             }
             TypedInner::Match(scrutinee, arms) => {
                 self.collect_bound_tyvars_in_node(scrutinee, ordered, seen);
@@ -3537,6 +3498,7 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(body, ordered, seen);
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)
@@ -3636,6 +3598,7 @@ impl Checker {
         let ty = self.substitute_ty_with_mapping(&node.ty, mapping);
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
+            TypedInner::ErrorKind(kind) => TypedInner::ErrorKind(kind),
             TypedInner::Var(id) => TypedInner::Var(id),
             TypedInner::SupervisorSpawn {
                 supervisor_process,
@@ -3929,10 +3892,6 @@ impl Checker {
                     })
                     .collect(),
             ),
-            TypedInner::AssertErrorKinds(marker, inner) => TypedInner::AssertErrorKinds(
-                marker,
-                Box::new(self.substitute_typed_node_with_mapping(*inner, mapping)),
-            ),
             TypedInner::EagerBoundary(inner) => TypedInner::EagerBoundary(Box::new(
                 self.substitute_typed_node_with_mapping(*inner, mapping),
             )),
@@ -3959,11 +3918,6 @@ impl Checker {
             TypedInner::Cause(value, err) => TypedInner::Cause(
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
-            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                marker,
-                Box::new(self.substitute_typed_node_with_mapping(*handler, mapping)),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.substitute_typed_node_with_mapping(*scrutinee, mapping)),
@@ -5405,9 +5359,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .any(|arg| Self::typed_node_has_pending_trait_call(&arg.expr)),
-            TypedInner::EagerBoundary(inner) | TypedInner::AssertErrorKinds(_, inner) => {
-                Self::typed_node_has_pending_trait_call(inner)
-            }
+            TypedInner::EagerBoundary(inner) => Self::typed_node_has_pending_trait_call(inner),
             TypedInner::If(cond, then_branch, else_branch) => {
                 Self::typed_node_has_pending_trait_call(cond)
                     || Self::typed_node_has_pending_trait_call(then_branch)
@@ -5427,10 +5379,6 @@ impl Checker {
             TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
-            }
-            TypedInner::RecoverKind(value, _, handler) => {
-                Self::typed_node_has_pending_trait_call(value)
-                    || Self::typed_node_has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)
@@ -5499,6 +5447,7 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(body)
             }
             TypedInner::Lit(_)
+            | TypedInner::ErrorKind(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
             | TypedInner::BuiltinExtractorDecl(..)

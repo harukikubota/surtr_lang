@@ -72,6 +72,7 @@ pub enum ConstantView {
     Str { idx: u32, value: String },
     Bool { idx: u32, value: bool },
     Unit { idx: u32 },
+    ErrorKind { idx: u32, value: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -482,6 +483,10 @@ fn constant_view(idx: u32, constant: &Constant) -> ConstantView {
         },
         Constant::Bool(value) => ConstantView::Bool { idx, value: *value },
         Constant::Unit => ConstantView::Unit { idx },
+        Constant::ErrorKind(value) => ConstantView::ErrorKind {
+            idx,
+            value: value.clone(),
+        },
     }
 }
 

@@ -57,7 +57,7 @@ impl ResultT {
   Preserve an Error in the inner Result with the base pure.
 
   ## REPL
-  xldr(1)> value = ResultT::err::<Identity, Int>(NoneError)
+  xldr(1)> value = ResultT::err::<Identity, Int>(NoneError())
   xldr(2)> Result::is_err(Identity::run(ResultT::run(value)))
   True
   """

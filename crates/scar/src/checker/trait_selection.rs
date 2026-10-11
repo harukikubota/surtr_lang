@@ -512,7 +512,8 @@ impl Checker {
         }
         match sindr::names::builtin_type_name(name) {
             Some(
-                kind @ (TypeName::Regex
+                kind @ (TypeName::ErrorKind
+                | TypeName::Regex
                 | TypeName::RegexCaptures
                 | TypeName::RegexMatch
                 | TypeName::RandomGenerator
@@ -2245,7 +2246,8 @@ impl Checker {
                 Ty::Result(Box::new(args[0].clone()), Box::new(args[1].clone()))
             }
             CanonicalTypeHead::Builtin(
-                name @ (TypeName::Regex
+                name @ (TypeName::ErrorKind
+                | TypeName::Regex
                 | TypeName::RegexCaptures
                 | TypeName::RegexMatch
                 | TypeName::RandomGenerator
@@ -3768,6 +3770,33 @@ impl Checker {
 #[cfg(test)]
 mod extractor_type_contract_tests {
     use super::*;
+
+    #[test]
+    fn canonical_error_kind_types_round_trip() {
+        let checker = Checker::new(TypecheckContext::default());
+        let kind = Ty::Enum("ErrorKind".into(), Vec::new());
+        for ty in [
+            kind.clone(),
+            Ty::List(Box::new(kind.clone())),
+            Ty::Func(vec![kind.clone()], Box::new(kind)),
+        ] {
+            let canonical = checker
+                .canonical_resolved_type(&ty)
+                .expect("ErrorKind canonical declaration type");
+            assert_eq!(
+                checker
+                    .canonical_to_ty(&canonical)
+                    .expect("ErrorKind inverse type"),
+                ty
+            );
+        }
+        assert!(checker
+            .canonical_to_ty(&CanonicalTy::builtin(
+                TypeName::ErrorKind,
+                vec![CanonicalTy::builtin(TypeName::Int, vec![])]
+            ))
+            .is_err());
+    }
 
     #[test]
     fn canonical_extractor_types_round_trip() {
