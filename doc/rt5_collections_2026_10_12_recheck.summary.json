@@ -1,0 +1,935 @@
+{
+  "metadata": {
+    "builds": {
+      "before": {
+        "source_commit": "1dc1aa3a00a239320aad439ba0217af5437ab7af",
+        "source_snapshot_at": "2026-10-11T22:19:08.998114+00:00",
+        "root": "/Users/haruca/.codex/worktrees/a427/surtr",
+        "git_status_porcelain": " M crates/eldr/src/vm.rs\n M crates/eldr/src/vm/process_continuation.rs\n M doc/list_runtime_followups.md\n M docs/dev/EldrVM_spec.md\n M docs/dev/ProcessRuntime_spec.md\n?? crates/eldr/src/vm/checkpoint_collections_tests.rs\n?? crates/eldr/src/vm/checkpoint_metadata_tests.rs\n?? doc/list_runtime_rt5_metadata_optimization_2026_10_12.md\n?? doc/list_runtime_rt5_remaining_optimization_2026_10_12.md\n?? doc/rt5_metadata_2026_10_12_after.jsonl\n?? doc/rt5_metadata_2026_10_12_after.summary.json\n?? doc/rt5_metadata_2026_10_12_after_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_after_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_before.jsonl\n?? doc/rt5_metadata_2026_10_12_before.summary.json\n?? doc/rt5_metadata_2026_10_12_before_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_before_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_recheck.jsonl\n?? doc/rt5_metadata_2026_10_12_recheck.summary.json\n?? tests/profile/checkpoint_collections/\n?? tests/profile/checkpoint_metadata/\n",
+        "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64",
+        "build_profile": "release unit-test binary",
+        "test_name": "vm::checkpoint_collections_tests::checkpoint_collections_profile",
+        "binary": "/private/tmp/surtr-a427-rt5-rest/before-eldr",
+        "binary_sha256": "1ad67342bbdbda0d1a15bf574dea78775f0c6dcfd26b9fa62e673c635104b117",
+        "runner_sha256": "487ff33f164e4a5d12dad3b562d33f67219f43a128b75cb40756f30ceb66b8c9",
+        "sizes": [
+          16,
+          128,
+          1024
+        ],
+        "samples": 5,
+        "repeats": 32,
+        "allocator_counting": false,
+        "rss_measured": true,
+        "rss_scope": "whole fresh test process high-water mark; not a per-phase peak or live bytes",
+        "rss_command": "/usr/bin/time -l",
+        "rss_unit": "bytes (macOS)",
+        "probe_source_sha256": "2a1f7dac1bcc830ecfac0ed6860d82dda086a8cc11bce6a8476e83d5a8298fc8",
+        "production_sources_sha256": {
+          "crates/eldr/src/builtin/generator.rs": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f",
+          "crates/eldr/src/builtin/list_builder.rs": "4b422d3c9c5302f2aedb9bc704df4dc1f3dd9edd3e6acbbda7122c398354c926",
+          "crates/eldr/src/builtin/list_flat_map.rs": "a010fc7d9151b3bc39cc2213868e7528c97d495e6161ceee486fd4d7ba2ab97e",
+          "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+          "crates/eldr/src/builtin.rs": "12fb42e9d7edb18fda3fedcac8e1a656751e01a824db2d5eef5672cfd2da893f",
+          "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+          "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+          "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+          "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+          "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+          "crates/eldr/src/vm/continuation.rs": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc",
+          "crates/eldr/src/vm/process_continuation.rs": "9b05092e78f0bbc04214c9b936eec468bf90051c22e451043e42dea5ccc360f0",
+          "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+          "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+          "crates/eldr/src/vm.rs": "e02a04a3e04dfe0db18420c0618233b014699fb3cf46ef5e6b50e64e3cda0ec5"
+        },
+        "lock_sha256": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+        "manifest_sha256": {
+          "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+          "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407"
+        },
+        "git_diff_head_sha256": "3684df65dd1ab7129c7e762b6875b71f7f47d6b71cc24fd9a08c960ec0054e18"
+      },
+      "after": {
+        "source_commit": "1dc1aa3a00a239320aad439ba0217af5437ab7af",
+        "source_snapshot_at": "2026-10-11T22:28:41.181964+00:00",
+        "root": "/Users/haruca/.codex/worktrees/a427/surtr",
+        "git_status_porcelain": " M crates/eldr/src/vm.rs\n M crates/eldr/src/vm/process_continuation.rs\n M doc/list_runtime_followups.md\n M docs/dev/EldrVM_spec.md\n M docs/dev/ProcessRuntime_spec.md\n?? crates/eldr/src/vm/checkpoint_boot_plan_tests.rs\n?? crates/eldr/src/vm/checkpoint_collections_tests.rs\n?? crates/eldr/src/vm/checkpoint_metadata_tests.rs\n?? crates/eldr/src/vm/checkpoint_value.rs\n?? doc/list_runtime_rt5_metadata_optimization_2026_10_12.md\n?? doc/list_runtime_rt5_remaining_optimization_2026_10_12.md\n?? doc/rt5_collections_2026_10_12_before.jsonl\n?? doc/rt5_collections_2026_10_12_before.summary.json\n?? doc/rt5_metadata_2026_10_12_after.jsonl\n?? doc/rt5_metadata_2026_10_12_after.summary.json\n?? doc/rt5_metadata_2026_10_12_after_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_after_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_before.jsonl\n?? doc/rt5_metadata_2026_10_12_before.summary.json\n?? doc/rt5_metadata_2026_10_12_before_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_before_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_recheck.jsonl\n?? doc/rt5_metadata_2026_10_12_recheck.summary.json\n?? tests/profile/checkpoint_collections/\n?? tests/profile/checkpoint_metadata/\n",
+        "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64",
+        "build_profile": "release unit-test binary",
+        "test_name": "vm::checkpoint_collections_tests::checkpoint_collections_profile",
+        "binary": "/private/tmp/surtr-a427-rt5-rest/after-eldr",
+        "binary_sha256": "8fedada0e669f9e2fc20093b0a1ac5dfa596adf5c4f577fadb14202f466088db",
+        "runner_sha256": "487ff33f164e4a5d12dad3b562d33f67219f43a128b75cb40756f30ceb66b8c9",
+        "sizes": [
+          16,
+          128,
+          1024
+        ],
+        "samples": 5,
+        "repeats": 32,
+        "allocator_counting": false,
+        "rss_measured": true,
+        "rss_scope": "whole fresh test process high-water mark; not a per-phase peak or live bytes",
+        "rss_command": "/usr/bin/time -l",
+        "rss_unit": "bytes (macOS)",
+        "probe_source_sha256": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+        "production_sources_sha256": {
+          "crates/eldr/src/builtin/generator.rs": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f",
+          "crates/eldr/src/builtin/list_builder.rs": "4b422d3c9c5302f2aedb9bc704df4dc1f3dd9edd3e6acbbda7122c398354c926",
+          "crates/eldr/src/builtin/list_flat_map.rs": "a010fc7d9151b3bc39cc2213868e7528c97d495e6161ceee486fd4d7ba2ab97e",
+          "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+          "crates/eldr/src/builtin.rs": "12fb42e9d7edb18fda3fedcac8e1a656751e01a824db2d5eef5672cfd2da893f",
+          "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+          "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+          "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+          "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+          "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+          "crates/eldr/src/vm/checkpoint_value.rs": "a8c4c0b881805d85fa9265f24c8c7d13a23a31e8d2487bcc010d6433a38000d2",
+          "crates/eldr/src/vm/continuation.rs": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc",
+          "crates/eldr/src/vm/process_continuation.rs": "352d25c26ad31b7afc8975501f1e68d0dac4aca9fa097c7762f517dc8786064e",
+          "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+          "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+          "crates/eldr/src/vm.rs": "9e80708145e52ff5654e8135eed2203ce3dc9c085183dad6d2b53f135545e52d"
+        },
+        "lock_sha256": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+        "manifest_sha256": {
+          "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+          "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407"
+        },
+        "git_diff_head_sha256": "faf30fb17f1467848b02fc89c6a0bf6c8a781c0b3da0dd83d6e07ec8ae480576"
+      }
+    },
+    "samples": 10,
+    "measurement_at": "2026-10-11T22:28:49.676066+00:00",
+    "execution_order": "AB on even sample, BA on odd sample",
+    "current_environment": {
+      "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64"
+    },
+    "runner_sha256": "c34b4ac0e35e72cd404ebe0c594ab00fbd05393085bc4109e39a657c6eff16b5",
+    "probe_parser_sha256": "487ff33f164e4a5d12dad3b562d33f67219f43a128b75cb40756f30ceb66b8c9"
+  },
+  "summaries": [
+    {
+      "n": 16,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 42480.0,
+        "min": 37916,
+        "max": 56169
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 1013354.0,
+        "min": 990874,
+        "max": 1099126
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 16,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 33769.0,
+        "min": 31377,
+        "max": 35291
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 1176832.5,
+        "min": 1163041,
+        "max": 1203704
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 16,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 3729.5,
+        "min": 3457,
+        "max": 4168
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 143978.5,
+        "min": 141040,
+        "max": 147459
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 16,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 237311.5,
+        "min": 225211,
+        "max": 295834
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 24837.0,
+        "min": 22623,
+        "max": 26747
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 16,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 815103.5,
+        "min": 793170,
+        "max": 962293
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 794207.0,
+        "min": 782207,
+        "max": 815166
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 16,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 142290.5,
+        "min": 139919,
+        "max": 150873
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 151396.5,
+        "min": 147709,
+        "max": 189794
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 16,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 9563.5,
+        "min": 8746,
+        "max": 10666
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 236665.5,
+        "min": 231168,
+        "max": 265250
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 16,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 7812.5,
+        "min": 7460,
+        "max": 8664
+      },
+      "process_peak_rss_bytes": {
+        "median": 5251072.0,
+        "min": 5160960,
+        "max": 5308416
+      },
+      "variant": "after"
+    },
+    {
+      "n": 16,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 5021.0,
+        "min": 4751,
+        "max": 5374
+      },
+      "process_peak_rss_bytes": {
+        "median": 5234688.0,
+        "min": 5193728,
+        "max": 5308416
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 57123.0,
+        "min": 53624,
+        "max": 62417
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 7544792.5,
+        "min": 7478916,
+        "max": 7723249
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 50564.0,
+        "min": 47377,
+        "max": 57627
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 8821956.5,
+        "min": 8764416,
+        "max": 9108207
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 4125.5,
+        "min": 3834,
+        "max": 4833
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 1065293.0,
+        "min": 1045291,
+        "max": 1106536
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 1374646.5,
+        "min": 1338540,
+        "max": 1427208
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 40415.5,
+        "min": 37631,
+        "max": 44164
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 3889643.5,
+        "min": 3845166,
+        "max": 3961412
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 3904522.0,
+        "min": 3853835,
+        "max": 3933420
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 888024.0,
+        "min": 877127,
+        "max": 908125
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 1064374.5,
+        "min": 1052376,
+        "max": 1090750
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 13019.5,
+        "min": 11084,
+        "max": 13791
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 1716811.0,
+        "min": 1695958,
+        "max": 1760918
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 128,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 11085.5,
+        "min": 9710,
+        "max": 13293
+      },
+      "process_peak_rss_bytes": {
+        "median": 7806976.0,
+        "min": 7766016,
+        "max": 7864320
+      },
+      "variant": "after"
+    },
+    {
+      "n": 128,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 6504.5,
+        "min": 6168,
+        "max": 7206
+      },
+      "process_peak_rss_bytes": {
+        "median": 8568832.0,
+        "min": 8519680,
+        "max": 8765440
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 193226.5,
+        "min": 181794,
+        "max": 211288
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 63326375.5,
+        "min": 61712126,
+        "max": 67047832
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 169105.0,
+        "min": 158833,
+        "max": 204500
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 73336812.0,
+        "min": 69993751,
+        "max": 76982545
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 5854.5,
+        "min": 4876,
+        "max": 7832
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 8697958.5,
+        "min": 8400921,
+        "max": 9292206
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 12000167.5,
+        "min": 11129210,
+        "max": 14368626
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 131686.5,
+        "min": 104958,
+        "max": 160129
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 28599772.5,
+        "min": 28066916,
+        "max": 30850501
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 29209479.5,
+        "min": 28648128,
+        "max": 29688459
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 7103021.5,
+        "min": 6988291,
+        "max": 7701210
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 8639208.0,
+        "min": 8401752,
+        "max": 8879542
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 22478.5,
+        "min": 18753,
+        "max": 28794
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 15165355.5,
+        "min": 14112629,
+        "max": 16900625
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    },
+    {
+      "n": 1024,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 20731.0,
+        "min": 18623,
+        "max": 29460
+      },
+      "process_peak_rss_bytes": {
+        "median": 26894336.0,
+        "min": 26771456,
+        "max": 27443200
+      },
+      "variant": "after"
+    },
+    {
+      "n": 1024,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 10,
+      "ns": {
+        "median": 14124.0,
+        "min": 10210,
+        "max": 17956
+      },
+      "process_peak_rss_bytes": {
+        "median": 34136064.0,
+        "min": 33685504,
+        "max": 36044800
+      },
+      "variant": "before"
+    }
+  ]
+}

@@ -124,6 +124,7 @@ concrete 静的契約を選択済みとし、Eldr が generic target や Union �
 - `policy = ReplAppendOnly` のとき、`InteractiveVm` は公開 REPL 境界として append-only function table を強制し、`fun_idx < current_function_len` の `FunctionEntry` を含む chunk を拒否する
 - `policy = ReplAppendOnly` のとき、`type_entries`、`runtime_process_specs`、`runtime_boot_plan` の追加を拒否する
 - `policy = Preload` のとき、Xldr が構築した preload/bootstrap chunk を live REPL 開始前に適用できる
+- `Preload` の実行失敗では、boot plan に追加した singleton / standard override / handler override も保存時の長さへ戻し、次の chunk へ残さない
 - `fun_idx` は VM 内の物理 slot であり、言語上の安定 identity ではない。Forge/Eldr は shared verifier により function table prefix 不変、dense append、function ref 範囲を検査する
 - rollback 対象は bytecode append 分、function overwrite、locals、operand stack、call frames、pc、process runtime、exit code、標準 I/O / REPL host I/O / test event cursor、`last_result` とする
 
@@ -380,7 +381,13 @@ Packed の tail は参照中の buffer 全体を保持し、処理済みの先�
 反復解放し、共有 tail に到達したらその参照だけを減らす。各 head は tail より先に解放する。
 固定深さの List / Tuple / Tagged / Callable に含まれる長い Cons も同じ処理を使う。
 任意の深さに入れ子になったValue木全体の反復解放は未実装である。
-checkpoint は process・future・detached task に加え、停止識別表と実行 record を整合した状態で保存する。metadata や queue などの複製は残る。
+checkpoint は process・future・detached task に加え、停止識別表と実行 record を整合した状態で保存する。
+process 定義の ID・名前・名前から ID を引く3表と handler / supervisor の既定値は、一つの不変 registry として checkpoint / VM clone 間で共有する。
+新定義の登録は新しい registry への置換とし、保存側の定義を変更しない。新定義がない chunk では registry を再構築しない。
+handler / supervisor の可変設定は毎 chunk で既定値へ戻し、既存の override を適用する。既定値と保存側を変更しない。
+handler 設定、singleton / flight / refilling / reply / waiting の表、deadline / runnable / output queue、supervisor の failure / policy / child 表も checkpoint で共有する。
+保存中の最初の可変アクセスでは対象の容器を複製する。不在キーの `get_mut` / `remove`、空 queue の `pop_front`、期限未到達の確認だけでは容器を分離しない。
+worker set は表 index と entry を共有し、変更対象 entry だけを独立させる。表 index と変更する entry / Builder のコピーは残り、runtime 全体の定数時間保存・変更や実時間上限を保証しない。
 
 ---
 

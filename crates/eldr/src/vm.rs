@@ -1,8 +1,10 @@
 mod test_runner;
 use test_runner::VmTestRunner;
 pub use test_runner::{VmTestCase, VmTestDeclaration, VmTestPolicy, VmTestScope, VmTestScopeKind};
+mod checkpoint_value;
 mod process_continuation;
 mod runtime_table;
+use checkpoint_value::CheckpointValue;
 pub(crate) use process_continuation::RuntimeContinuation;
 use process_continuation::{DetachedTask, SingletonFlight};
 use runtime_table::RuntimeTable;
@@ -28,6 +30,12 @@ use std::fs::{File, OpenOptions};
 use std::rc::{Rc, Weak};
 
 use crate::builtin::{call_builtin, BuiltinContinuation, BuiltinOutcome};
+#[cfg(test)]
+mod checkpoint_boot_plan_tests;
+#[cfg(test)]
+mod checkpoint_collections_tests;
+#[cfg(test)]
+mod checkpoint_metadata_tests;
 mod continuation;
 #[cfg(test)]
 mod future_stack_tests;
@@ -261,6 +269,9 @@ struct VmCheckpoint {
     function_len: usize,
     doc_len: usize,
     process_spec_len: usize,
+    boot_singleton_len: usize,
+    boot_standard_override_len: usize,
+    boot_handler_override_len: usize,
     source_map_len: Option<usize>,
     overwritten_functions: Vec<(usize, FunctionEntry)>,
     open_files: HashMap<u64, VmOpenFile>,
@@ -559,26 +570,35 @@ struct ProcessRuntime {
     next_future_id: FutureId,
     next_correlation_id: CorrelationId,
     next_detached_task_id: u64,
-    specs_by_id: Vec<RuntimeProcessSpec>,
-    spec_id_by_name: BTreeMap<String, u32>,
-    specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
-    handler_contexts: BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>,
-    singleton_by_name: BTreeMap<String, u64>,
-    singleton_inits: BTreeMap<String, SingletonFlight>,
-    refilling_worker_sets: BTreeSet<u64>,
+    spec_registry: Rc<ProcessSpecRegistry>,
+    handler_contexts: CheckpointValue<BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>>,
+    singleton_by_name: CheckpointValue<BTreeMap<String, u64>>,
+    singleton_inits: CheckpointValue<BTreeMap<String, SingletonFlight>>,
+    refilling_worker_sets: CheckpointValue<BTreeSet<u64>>,
     processes: RuntimeTable<ProcessInstance>,
     stopped_identities: RuntimeTable<Weak<PidIdentity>>,
     executions: RuntimeTable<ProcessExecutionRecord>,
     next_execution_id: u64,
     futures: RuntimeTable<FutureRecord>,
-    reply_table: BTreeMap<CorrelationId, FutureId>,
-    waiting_table: BTreeMap<u64, ProcessWaitReason>,
-    deadline_queue: VecDeque<DeadlineEntry>,
-    run_queue: VecDeque<u64>,
-    output_events: VecDeque<RuntimeOutputEvent>,
+    reply_table: CheckpointValue<BTreeMap<CorrelationId, FutureId>>,
+    waiting_table: CheckpointValue<BTreeMap<u64, ProcessWaitReason>>,
+    deadline_queue: CheckpointValue<VecDeque<DeadlineEntry>>,
+    run_queue: CheckpointValue<VecDeque<u64>>,
+    output_events: CheckpointValue<VecDeque<RuntimeOutputEvent>>,
     detached_tasks: RuntimeTable<DetachedTask>,
     root_supervisor: RootSupervisorState,
-    worker_sets: BTreeMap<u64, WorkerSetState>,
+    worker_sets: RuntimeTable<WorkerSetState>,
+}
+
+/// Registered definitions stay immutable across checkpoints and VM clones.
+/// Registration builds a new registry rather than mutating saved definitions.
+#[derive(Debug, Default)]
+struct ProcessSpecRegistry {
+    specs_by_id: Vec<RuntimeProcessSpec>,
+    spec_id_by_name: BTreeMap<String, u32>,
+    specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
+    handler_defaults: CheckpointValue<BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>>,
+    supervisor_defaults: CheckpointValue<BTreeMap<String, RuntimeSupervisorPolicy>>,
 }
 
 #[derive(Debug, Clone)]
@@ -881,9 +901,9 @@ struct DeadlineEntry {
 #[derive(Debug, Clone, Default)]
 struct RootSupervisorState {
     boot_completed: bool,
-    boot_failures: BTreeMap<String, String>,
-    effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy>,
-    child_table: BTreeMap<String, Vec<u64>>,
+    boot_failures: CheckpointValue<BTreeMap<String, String>>,
+    effective_supervisors: CheckpointValue<BTreeMap<String, RuntimeSupervisorPolicy>>,
+    child_table: CheckpointValue<BTreeMap<String, Vec<u64>>>,
 }
 
 impl ProcessRuntime {
@@ -912,7 +932,7 @@ impl ProcessRuntime {
 
     fn counters(&self) -> VmProcessCounters {
         let mut counters = VmProcessCounters {
-            process_spec_count: self.specs_by_id.len(),
+            process_spec_count: self.spec_registry.specs_by_id.len(),
             singleton_slot_count: self.singleton_by_name.len(),
             process_count: self.processes.len(),
             stopping_process_count: self
@@ -2008,7 +2028,12 @@ impl VM {
         let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
             for entry in &self.bytecode.runtime_boot_plan.singletons {
-                let Some(spec) = self.process_runtime.specs_by_name.get(&entry.process_name) else {
+                let Some(spec) = self
+                    .process_runtime
+                    .spec_registry
+                    .specs_by_name
+                    .get(&entry.process_name)
+                else {
                     return Err(self.boot_failure_error(
                         &entry.process_name,
                         "singleton process is not defined or not visible",
@@ -2039,6 +2064,7 @@ impl VM {
                 .iter()
                 .filter_map(|entry| {
                     self.process_runtime
+                        .spec_registry
                         .specs_by_name
                         .get(&entry.process_name)
                         .cloned()
@@ -2129,6 +2155,7 @@ impl VM {
             if override_entry.process_name == "Global::DynamicSupervisor"
                 && self
                     .process_runtime
+                    .spec_registry
                     .specs_by_name
                     .get(&override_entry.process_name)
                     .is_some_and(|spec| spec.kind == RuntimeProcessKind::DynamicSupervisor)
@@ -2758,15 +2785,30 @@ impl VM {
     }
 
     fn remove_worker_from_sets(&mut self, pid: u64) {
+        let changed_ids = self
+            .process_runtime
+            .worker_sets
+            .iter()
+            .filter_map(|(id, state)| {
+                (state.members.contains(&pid)
+                    || (state.next_index != 0 && state.next_index >= state.members.len()))
+                .then_some(*id)
+            })
+            .collect::<Vec<_>>();
         let mut refill_ids = Vec::new();
-        for (workers_id, state) in &mut self.process_runtime.worker_sets {
+        for workers_id in changed_ids {
+            let state = self
+                .process_runtime
+                .worker_sets
+                .get_mut(&workers_id)
+                .expect("selected worker set must remain present");
             let before = state.members.len();
             state.members.retain(|member| *member != pid);
             if state.next_index >= state.members.len() {
                 state.next_index = 0;
             }
             if state.members.len() != before && state.members.len() < state.target as usize {
-                refill_ids.push(*workers_id);
+                refill_ids.push(workers_id);
             }
         }
         for workers_id in refill_ids {
@@ -3185,7 +3227,13 @@ impl VM {
         owner: Option<u64>,
         lifecycle_sink: Option<LifecycleSink>,
     ) -> Result<u64, RuntimeError> {
-        let Some(spec_id) = self.process_runtime.spec_id_by_name.get(&name).copied() else {
+        let Some(spec_id) = self
+            .process_runtime
+            .spec_registry
+            .spec_id_by_name
+            .get(&name)
+            .copied()
+        else {
             return Err(RuntimeError::new(format!(
                 "unknown process spec `{name}` during allocation"
             )));
@@ -3550,6 +3598,7 @@ impl VM {
     pub fn process_runtime_snapshot(&self) -> Result<VmProcessRuntimeSnapshot, RuntimeError> {
         let specs = self
             .process_runtime
+            .spec_registry
             .specs_by_id
             .iter()
             .enumerate()
@@ -3697,7 +3746,7 @@ impl VM {
         Ok(VmProcessRuntimeSnapshot {
             counters: self.process_runtime.counters(),
             specs,
-            singleton_slots: self.process_runtime.singleton_by_name.clone(),
+            singleton_slots: (*self.process_runtime.singleton_by_name).clone(),
             processes,
             worker_sets,
             waiting,
@@ -3831,6 +3880,7 @@ impl VM {
         self.bytecode.dbg_templates.extend(dbg_templates);
         self.bytecode.callable_templates.extend(callable_templates);
         self.extend_docs_unique(docs);
+        let specs_changed = !runtime_process_specs.is_empty();
         self.bytecode
             .runtime_process_specs
             .entries
@@ -3847,8 +3897,12 @@ impl VM {
             .runtime_boot_plan
             .handler_overrides
             .extend(runtime_boot_plan.handler_overrides);
-        self.process_runtime
-            .register_spec_table(&self.bytecode.runtime_process_specs);
+        if specs_changed {
+            self.process_runtime
+                .register_spec_table(&self.bytecode.runtime_process_specs);
+        } else {
+            self.process_runtime.reset_spec_overlays();
+        }
         self.apply_runtime_supervisor_overrides();
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
@@ -3969,6 +4023,9 @@ impl VM {
             function_len: self.bytecode.functions.len(),
             doc_len: self.bytecode.docs.len(),
             process_spec_len: self.bytecode.runtime_process_specs.entries.len(),
+            boot_singleton_len: self.bytecode.runtime_boot_plan.singletons.len(),
+            boot_standard_override_len: self.bytecode.runtime_boot_plan.standard_overrides.len(),
+            boot_handler_override_len: self.bytecode.runtime_boot_plan.handler_overrides.len(),
             source_map_len: self
                 .bytecode
                 .source_map
@@ -4032,6 +4089,18 @@ impl VM {
             .runtime_process_specs
             .entries
             .truncate(checkpoint.process_spec_len);
+        self.bytecode
+            .runtime_boot_plan
+            .singletons
+            .truncate(checkpoint.boot_singleton_len);
+        self.bytecode
+            .runtime_boot_plan
+            .standard_overrides
+            .truncate(checkpoint.boot_standard_override_len);
+        self.bytecode
+            .runtime_boot_plan
+            .handler_overrides
+            .truncate(checkpoint.boot_handler_override_len);
         for (idx, entry) in checkpoint.overwritten_functions {
             if idx < self.bytecode.functions.len() {
                 self.bytecode.functions[idx] = entry;
@@ -6747,19 +6816,6 @@ impl ProcessRuntime {
     }
 
     fn register_spec_table(&mut self, spec_table: &RuntimeProcessSpecTable) {
-        self.specs_by_id = spec_table.entries.clone();
-        self.spec_id_by_name = spec_table
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(idx, spec)| (spec.type_name.clone(), idx as u32))
-            .collect();
-        self.specs_by_name = spec_table
-            .entries
-            .iter()
-            .cloned()
-            .map(|spec| (spec.type_name.clone(), spec))
-            .collect();
         let mut effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy> = spec_table
             .entries
             .iter()
@@ -6779,8 +6835,7 @@ impl ProcessRuntime {
                 }
             }
         }
-        self.root_supervisor.effective_supervisors = effective_supervisors;
-        self.handler_contexts = spec_table
+        let handler_defaults = spec_table
             .entries
             .iter()
             .map(|spec| {
@@ -6792,21 +6847,49 @@ impl ProcessRuntime {
                     .collect::<BTreeMap<_, _>>();
                 (spec.type_name.clone(), slots)
             })
-            .collect();
+            .collect::<BTreeMap<_, _>>();
+        self.spec_registry = Rc::new(ProcessSpecRegistry {
+            specs_by_id: spec_table.entries.clone(),
+            spec_id_by_name: spec_table
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(idx, spec)| (spec.type_name.clone(), idx as u32))
+                .collect(),
+            specs_by_name: spec_table
+                .entries
+                .iter()
+                .cloned()
+                .map(|spec| (spec.type_name.clone(), spec))
+                .collect(),
+            handler_defaults: handler_defaults.into(),
+            supervisor_defaults: effective_supervisors.into(),
+        });
+        self.reset_spec_overlays();
+    }
+
+    fn reset_spec_overlays(&mut self) {
+        self.handler_contexts = self.spec_registry.handler_defaults.clone();
+        self.root_supervisor.effective_supervisors = self.spec_registry.supervisor_defaults.clone();
     }
 
     fn canonical_process_name<'a>(&'a self, process_name: &'a str) -> Option<&'a str> {
-        if self.specs_by_name.contains_key(process_name) {
+        if self.spec_registry.specs_by_name.contains_key(process_name) {
             return Some(process_name);
         }
         if let Some(surface_name) = process_name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX) {
-            if self.specs_by_name.contains_key(surface_name) {
+            if self.spec_registry.specs_by_name.contains_key(surface_name) {
                 return Some(surface_name);
             }
         } else {
             let canonical_name = format!("{IMPLICIT_ROOT_NAMESPACE_PREFIX}{process_name}");
-            if self.specs_by_name.contains_key(&canonical_name) {
+            if self
+                .spec_registry
+                .specs_by_name
+                .contains_key(&canonical_name)
+            {
                 return self
+                    .spec_registry
                     .specs_by_name
                     .get_key_value(&canonical_name)
                     .map(|(name, _)| name.as_str());
@@ -6817,7 +6900,7 @@ impl ProcessRuntime {
 
     fn spec_by_process_name(&self, process_name: &str) -> Option<&RuntimeProcessSpec> {
         self.canonical_process_name(process_name)
-            .and_then(|canonical_name| self.specs_by_name.get(canonical_name))
+            .and_then(|canonical_name| self.spec_registry.specs_by_name.get(canonical_name))
     }
 
     fn singleton_pid_by_process_name(&self, process_name: &str) -> Option<u64> {
@@ -6836,7 +6919,7 @@ impl ProcessRuntime {
     }
 
     fn spec_for_id(&self, spec_id: u32) -> Option<&RuntimeProcessSpec> {
-        self.specs_by_id.get(spec_id as usize)
+        self.spec_registry.specs_by_id.get(spec_id as usize)
     }
 
     fn allocate_future(
@@ -6969,9 +7052,16 @@ impl ProcessRuntime {
     }
 
     fn collect_expired_futures(&mut self, now_tick: u64) -> Vec<FutureId> {
+        if !self
+            .deadline_queue
+            .iter()
+            .any(|entry| entry.deadline_tick <= now_tick)
+        {
+            return Vec::new();
+        }
         let mut expired = Vec::new();
         let mut retained = VecDeque::with_capacity(self.deadline_queue.len());
-        while let Some(entry) = self.deadline_queue.pop_front() {
+        for entry in self.deadline_queue.iter().copied() {
             if entry.deadline_tick <= now_tick {
                 let is_running = self
                     .futures
@@ -6989,7 +7079,7 @@ impl ProcessRuntime {
                 retained.push_back(entry);
             }
         }
-        self.deadline_queue = retained;
+        self.deadline_queue = retained.into();
         expired
     }
 
@@ -8769,6 +8859,7 @@ mod tests {
         let vm = VM::new(bytecode);
         let spec = vm
             .process_runtime
+            .spec_registry
             .specs_by_name
             .get("Counter")
             .expect("process spec should be registered");
@@ -8776,7 +8867,13 @@ mod tests {
         assert_eq!(spec.init.callable.fun_idx, 0);
         assert_eq!(spec.handlers[1].fun_idx, 1);
         assert_eq!(spec.handlers[2].fun_idx, 2);
-        assert_eq!(vm.process_runtime.spec_id_by_name.get("Counter"), Some(&0));
+        assert_eq!(
+            vm.process_runtime
+                .spec_registry
+                .spec_id_by_name
+                .get("Counter"),
+            Some(&0)
+        );
         assert_eq!(
             vm.process_runtime
                 .spec_for_id(0)

@@ -1,6 +1,6 @@
 # List / VM の残課題
 
-更新日: 2026-10-11。状態: 未解決事項の調査・設計用。
+更新日: 2026-10-12。状態: 未解決事項の調査・設計用。
 
 以下には追加の性能改善を残す。
 最適化の採用方式や実時間の目標値は、各項目の調査後に決める。
@@ -44,8 +44,10 @@ Future表が非空の場合の読取り走査は [OI-036](open-issues.md#oi-036-
 ### RT-5 REPL checkpoint の残るコピー量
 
 - 現状: process・future・detached taskの3表とentryをcheckpointで共有し、変更時に表のindexと対象entryを複製する方式へ移行した。可変Builderはそのentryの初回変更時に独立させる。通常の実行切替えでは引き続き複製しない。
-- 残る範囲: metadata、singleton/worker表、waiting/reply表、queueの複製と、変更時の表indexの複製が残る。これらの共有を広げるかは未決定で、runtime全体の定数時間保存を保証しない。
-- 次の作業: metadataやqueueの件数、future数、Builderの長さ、chunk数を分け、実chunk全体の時間とピークメモリを測る。停止済みPIDの回収契約は別に確定する。
+- 改善済み: process 定義の3表を不変 registry にまとめ、checkpoint / VM clone で共有する。[metadata コピー削減](list_runtime_rt5_metadata_optimization_2026_10_12.md)に実装・測定・検証を記録した。
+- 改善済み: [残る管理表・queueの共有化](list_runtime_rt5_remaining_optimization_2026_10_12.md)で、handler/supervisor metadata、singleton/flight/refilling/reply/waiting表、deadline/run/output queueを共有し、worker setは表とentryの共有方式へ移行した。新定義なしchunkのregistry再構築を除き、boot plan追加分のrollback漏れも修復した。
+- 残る範囲: 保存中に変更する容器・表index・entry・Builderの複製、新定義登録時のregistry構築と、共有化後の反復更新の追加費用が残る。runtime全体の定数時間保存・変更を保証しない。
+- 次の作業: 未変更容器の共有化は実装・測定を完了した。稼働process・future・長いBuilder・override・chunk数を分け、必要な初回変更のコピー量と実利用の時間/メモリを測る。反復更新の各費用の寄与も未分離。
 - 受け入れ条件: 失敗したchunkの進捗を破棄して保存位置から再開し、その位置より前のcallbackを呼び直さず、復帰先へ一度だけ結果を渡す。実行中に変更する可変Builderは保存状態から独立させる。失敗したchunkの外部I/Oは巻き戻さない。
 
 ## 今後の検証と文書更新

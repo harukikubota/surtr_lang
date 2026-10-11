@@ -1568,6 +1568,14 @@ VM は少なくとも次の queue / table を持つ。
 `RuntimeBootPlan`、`effective_supervisors`、singleton slot、`DynamicSupervisor` の既定 policy は
 runtime global state であり、process-local `ExecutionContext` には入れない。
 
+process 定義の ID・名前・名前から ID を引く3表と handler / supervisor の既定値は不変 registry にまとめ、checkpoint と VM clone で共有する。
+新定義の登録時は新しい registry を構築して置き換え、新定義がない chunk では再構築しない。
+handler / supervisor の可変 overlay は毎 chunk で既定値へ戻して override を適用し、registry の既定値へ変更を漏らさない。
+その他の管理表と queue は checkpoint で容器を共有し、最初の可変アクセス時に独立させる。
+不在キーへの更新要求、空 queue の取り出し、期限未到達の確認だけでは分離しない。
+worker set は既存の表・entry の共有方式を使い、member 除去や index 補正の対象 entry だけを変更する。
+容器・表 index・変更する entry の複製は残るため、任意の変更の定数時間化は保証しない。
+
 通常の batch / REPL chunk、process handler、Task::async / launch と detached task の再開は、
 共通の予算付き driver を通す。callback の開始や builtin の再開によって予算を補充せず、
 scheduler が runnable な実行を選び直したときに次の quantum を与える。

@@ -1,0 +1,439 @@
+{
+  "metadata": {
+    "source_commit": "1dc1aa3a00a239320aad439ba0217af5437ab7af",
+    "source_snapshot_at": "2026-10-11T22:31:58.184992+00:00",
+    "root": "/Users/haruca/.codex/worktrees/a427/surtr",
+    "git_status_porcelain": " M crates/eldr/src/vm.rs\n M crates/eldr/src/vm/process_continuation.rs\n M doc/list_runtime_followups.md\n M docs/dev/EldrVM_spec.md\n M docs/dev/ProcessRuntime_spec.md\n?? crates/eldr/src/vm/checkpoint_boot_plan_tests.rs\n?? crates/eldr/src/vm/checkpoint_collections_tests.rs\n?? crates/eldr/src/vm/checkpoint_metadata_tests.rs\n?? crates/eldr/src/vm/checkpoint_value.rs\n?? doc/list_runtime_rt5_metadata_optimization_2026_10_12.md\n?? doc/list_runtime_rt5_remaining_optimization_2026_10_12.md\n?? doc/rt5_collections_2026_10_12_after.jsonl\n?? doc/rt5_collections_2026_10_12_after.summary.json\n?? doc/rt5_collections_2026_10_12_before.jsonl\n?? doc/rt5_collections_2026_10_12_before.summary.json\n?? doc/rt5_collections_2026_10_12_recheck.jsonl\n?? doc/rt5_collections_2026_10_12_recheck.summary.json\n?? doc/rt5_metadata_2026_10_12_after.jsonl\n?? doc/rt5_metadata_2026_10_12_after.summary.json\n?? doc/rt5_metadata_2026_10_12_after_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_after_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_before.jsonl\n?? doc/rt5_metadata_2026_10_12_before.summary.json\n?? doc/rt5_metadata_2026_10_12_before_v2.jsonl\n?? doc/rt5_metadata_2026_10_12_before_v2.summary.json\n?? doc/rt5_metadata_2026_10_12_recheck.jsonl\n?? doc/rt5_metadata_2026_10_12_recheck.summary.json\n?? tests/profile/checkpoint_collections/\n?? tests/profile/checkpoint_metadata/\n",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "build_profile": "release unit-test binary",
+    "test_name": "vm::checkpoint_collections_tests::checkpoint_collections_profile",
+    "binary": "/private/tmp/surtr-a427-rt5-rest/after-final-eldr",
+    "binary_sha256": "2ca0f05d7addec18163373eb3b61e1a7b311f668ca0bdca7e81a2b7c50aa8038",
+    "runner_sha256": "487ff33f164e4a5d12dad3b562d33f67219f43a128b75cb40756f30ceb66b8c9",
+    "sizes": [
+      16,
+      128,
+      1024
+    ],
+    "samples": 5,
+    "repeats": 32,
+    "allocator_counting": false,
+    "rss_measured": true,
+    "rss_scope": "whole fresh test process high-water mark; not a per-phase peak or live bytes",
+    "rss_command": "/usr/bin/time -l",
+    "rss_unit": "bytes (macOS)",
+    "probe_source_sha256": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+    "production_sources_sha256": {
+      "crates/eldr/src/builtin/generator.rs": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f",
+      "crates/eldr/src/builtin/list_builder.rs": "4b422d3c9c5302f2aedb9bc704df4dc1f3dd9edd3e6acbbda7122c398354c926",
+      "crates/eldr/src/builtin/list_flat_map.rs": "a010fc7d9151b3bc39cc2213868e7528c97d495e6161ceee486fd4d7ba2ab97e",
+      "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+      "crates/eldr/src/builtin.rs": "12fb42e9d7edb18fda3fedcac8e1a656751e01a824db2d5eef5672cfd2da893f",
+      "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+      "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+      "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+      "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+      "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+      "crates/eldr/src/vm/checkpoint_value.rs": "504d0024b6cffbcc8a4c8cdacd12e949e963da58d3f0f28d71b5b4fa3bb926ae",
+      "crates/eldr/src/vm/continuation.rs": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc",
+      "crates/eldr/src/vm/process_continuation.rs": "352d25c26ad31b7afc8975501f1e68d0dac4aca9fa097c7762f517dc8786064e",
+      "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+      "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+      "crates/eldr/src/vm.rs": "9e80708145e52ff5654e8135eed2203ce3dc9c085183dad6d2b53f135545e52d"
+    },
+    "lock_sha256": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+    "manifest_sha256": {
+      "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+      "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407"
+    },
+    "git_diff_head_sha256": "4835128b8c57b9177f7f35c81a46bb7e4ee2189d6d18f1eb6428340a002752c5"
+  },
+  "summaries": [
+    {
+      "n": 16,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 60581,
+        "min": 38960,
+        "max": 274791
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 16,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 64048,
+        "min": 33624,
+        "max": 107998
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 16,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 5290,
+        "min": 3751,
+        "max": 11291
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 16,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 307827,
+        "min": 227999,
+        "max": 980004
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 16,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1058665,
+        "min": 808500,
+        "max": 2179583
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 16,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 179712,
+        "min": 143001,
+        "max": 655998
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 16,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 15245,
+        "min": 9798,
+        "max": 92417
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 16,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 9538,
+        "min": 6832,
+        "max": 24417
+      },
+      "process_peak_rss_bytes": {
+        "median": 5341184,
+        "min": 5275648,
+        "max": 5357568
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 60129,
+        "min": 54333,
+        "max": 77166
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 128,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 52584,
+        "min": 48083,
+        "max": 57706
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 128,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4670,
+        "min": 3790,
+        "max": 4877
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 128,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 1480959,
+        "min": 1390749,
+        "max": 1538418
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 128,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 4090960,
+        "min": 3937709,
+        "max": 4187500
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 128,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 935747,
+        "min": 894663,
+        "max": 956501
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 128,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 14211,
+        "min": 12787,
+        "max": 19337
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 128,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 9248,
+        "min": 8915,
+        "max": 14376
+      },
+      "process_peak_rss_bytes": {
+        "median": 7815168,
+        "min": 7798784,
+        "max": 7815168
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_shared",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 210956,
+        "min": 200545,
+        "max": 254170
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "chunk_unique",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 187876,
+        "min": 171834,
+        "max": 223998
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "drop",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 6290,
+        "min": 5500,
+        "max": 9415
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "first_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 13878666,
+        "min": 13379836,
+        "max": 15287874
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "init",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 29206038,
+        "min": 29087584,
+        "max": 31106754
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "rollback",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 7562627,
+        "min": 7331749,
+        "max": 7911250
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "save",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 27583,
+        "min": 19081,
+        "max": 35838
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    },
+    {
+      "n": 1024,
+      "phase": "second_write",
+      "repeats": 32,
+      "samples": 5,
+      "ns": {
+        "median": 23746,
+        "min": 17295,
+        "max": 29333
+      },
+      "process_peak_rss_bytes": {
+        "median": 27213824,
+        "min": 26935296,
+        "max": 27394048
+      }
+    }
+  ]
+}

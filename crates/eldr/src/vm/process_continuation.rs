@@ -33,6 +33,14 @@ pub(super) struct SingletonFlight {
     waiters: usize,
 }
 
+#[cfg(test)]
+pub(super) fn test_singleton_flight(future_id: FutureId) -> SingletonFlight {
+    SingletonFlight {
+        future_id,
+        waiters: 1,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeContinuation {
     ErrorConstruction {
@@ -1482,6 +1490,7 @@ impl VM {
     ) -> Result<BuiltinOutcome, RuntimeError> {
         let supervisor = self
             .process_runtime
+            .spec_registry
             .specs_by_name
             .get(&process_name)
             .filter(|spec| spec.instance == RuntimeProcessInstance::Worker)
