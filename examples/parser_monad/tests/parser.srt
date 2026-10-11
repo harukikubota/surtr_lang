@@ -1,108 +1,556 @@
 include '../src/parser.srt'
 import Test
 
+deferror ParserTestError(code: Int, detail: String) {
+  |code: Int, detail: String|
+  Self(message: detail, code, detail)
+}
+
+# Observe Payload explicitly: Result Err equality compares declaration kind only.
+def expect_mismatch(offset: Int, expected: String, actual: Result<$A>) -> Result<()> {
+  match actual {
+    Err(ParseMismatch(position, expectation)) => do {
+      assert_eq(offset, position)
+      assert_eq(expected, expectation)
+    },
+    _ => Test::fail("expected ParseMismatch with saved position and expectation"),
+  }
+}
+
+def expect_progress(offset: Int, actual: Result<$A>) -> Result<()> {
+  match actual {
+    Err(ParserProgressError(position)) => assert_eq(offset, position),
+    _ => Test::fail("expected ParserProgressError with saved position"),
+  }
+}
+
+def expect_state_error(actual: Result<$A>) -> Result<()> {
+  match actual {
+    Err(ParserStateError(reason)) => assert_false(reason == ""),
+    _ => Test::fail("expected ParserStateError"),
+  }
+}
+
+def expect_configuration(actual: Result<$A>) -> Result<()> {
+  match actual {
+    Err(ParserConfigurationError(reason)) => assert_eq("char requires one Unicode scalar", reason),
+    _ => Test::fail("expected ParserConfigurationError"),
+  }
+}
+
+def expect_test_error(original: Error, code: Int, detail: String, actual: Result<$A>) -> Result<()> {
+  match actual {
+    Err(ParserTestError(saved_code, saved_detail) @ retained) => do {
+      assert_eq(code, saved_code)
+      assert_eq(detail, saved_detail)
+      assert_eq(detail, retained.message)
+      assert_eq(Error::format(original), Error::format(retained))
+    },
+    _ => Test::fail("expected the original ParserTestError"),
+  }
+}
+
+def expect_original_mismatch(original: Error, offset: Int, expected: String, actual: Result<$A>) -> Result<()> {
+  expect_mismatch(offset, expected, actual)?
+  match actual {
+    Err(retained) => assert_eq(Error::format(original), Error::format(retained)),
+    _ => Test::fail("expected retained mismatch"),
+  }
+}
+
+def retained_error(actual: Result<$A>) -> Result<Error> {
+  match actual {
+    Err(error) => Ok(error),
+    _ => Err(TestExplicitFailure("expected an Error to retain")),
+  }
+}
+
+def parser_test_kind() -> ErrorKind {
+  print("kind-created")
+  ParserTestError
+}
+
+def parser_test_handler() -> (Error -> Parser<Int>) {
+  print("handler-created")
+  {|_| print("handler-called"); Parser::pure(0)}
+}
+
+def parser_test_build(label: String) -> Parser<String> {
+  print("build #{label}")
+  Parser::new({|input| print("run #{label}"); Ok((label, input))})
+}
+
 test("ParserMonad") {
   it("consumes one Unicode scalar and preserves remaining input") {
-    assert_eq(
-      ParseReply::Success("猫", ParseInput::new("ab", 1)),
-      Parser::parse(Parser::item(), "猫ab"),
-    )
+    assert_eq(Ok(("猫", ParseInput::new("ab", 1))), Parser::parse(Parser::item(), "猫ab"))
   }
 
-  it("pure and eof preserve input; full parsing rejects trailing text") {
-    assert_eq(ParseReply::Success(7, ParseInput::new("x", 0)), Parser::parse(Parser::pure(7), "x"))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(1, "end of input", False)), Parser::parse_all(Parser::item(), "ab"))?
-    assert_eq(ParseReply::Success((), ParseInput::new("", 0)), Parser::parse(Parser::eof(), ""))
+  it("pure and eof preserve input; parse_all returns a value and rejects trailing text") {
+    do {
+      assert_eq(Ok((7, ParseInput::new("x", 0))), Parser::parse(Parser::pure(7), "x"))
+      assert_eq(Ok(((), ParseInput::new("", 5))), Parser::run(Parser::eof(), ParseInput::new("", 5)))
+      assert_ok_eq("猫", Parser::parse_all(Parser::item(), "猫"))
+      expect_mismatch(1, "end of input", Parser::parse_all(Parser::item(), "ab"))
+    }
   }
-  it("item and satisfy fail at the current position") {
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "character", False)), Parser::parse(Parser::item(), ""))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "a", False)), Parser::parse(Parser::char("a"), "b"))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "char requires one Unicode scalar", True)), Parser::parse(Parser::char("ab"), "ab"))
+
+  it("item and satisfy fail at the current position; char validates its configuration") {
+    do {
+      expect_mismatch(0, "character", Parser::parse(Parser::item(), ""))
+      expect_mismatch(4, "a", Parser::run(Parser::char("a"), ParseInput::new("b", 4)))
+      expect_configuration(Parser::parse(Parser::char("ab"), "ab"))
+      expect_configuration(Parser::parse(Parser::char(""), ""))
+    }
   }
-  it("literal reports the mismatching scalar position") {
-    assert_eq(ParseReply::Success("猫犬", ParseInput::new("!", 2)), Parser::parse(Parser::literal("猫犬"), "猫犬!"))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(1, "犬", False)), Parser::parse(Parser::literal("猫犬"), "猫鳥"))
+
+  it("literal reports the mismatching Unicode scalar position") {
+    do {
+      assert_eq(Ok(("猫犬", ParseInput::new("!", 2))), Parser::parse(Parser::literal("猫犬"), "猫犬!"))
+      assert_eq(Ok(("e\u{301}", ParseInput::new("!", 2))), Parser::parse(Parser::literal("e\u{301}"), "e\u{301}!"))
+      expect_mismatch(1, "犬", Parser::parse(Parser::literal("猫犬"), "猫鳥"))
+      expect_mismatch(1, "犬", Parser::parse(Parser::literal("猫犬"), "猫"))
+    }
   }
+
   it("bind changes payload type and threads input through do") {
     action: Parser<(String, Int)> = do::<Parser> {
       first <- Parser::item()
       second <- Parser::item()
       Parser::pure((first ++ second, 2))
     }
-    assert_eq(ParseReply::Success(("ab", 2), ParseInput::new("c", 2)), Parser::parse(action, "abc"))
-  }
-  it("fmap and applicative operators sequence functions before arguments") {
-    function: Parser<(String -> String)> = Parser::char("a") |*> {|prefix| {|suffix| prefix ++ suffix}}
-    action = function |*| Parser::char("b")
-    assert_eq(ParseReply::Success("ab", ParseInput::new("!", 2)), Parser::parse(action, "ab!"))?
-    value: Parser<Int> = Applicative::pure(9)
-    assert_eq(Parser::parse(Parser::pure(9), "x"), Parser::parse(value, "x"))
-  }
-  it("choice backtracks consumed failure and keeps the left success") {
-    action = Parser::choice(Parser::literal("ab"), Parser::literal("ac"))
-    assert_eq(ParseReply::Success("ac", ParseInput::new("!", 2)), Parser::parse(action, "ac!"))?
-    preferred = Parser::choice(Parser::literal("a"), Parser::literal("ab"))
-    assert_eq(ParseReply::Success("a", ParseInput::new("b", 1)), Parser::parse(preferred, "ab"))
-  }
-  it("choice keeps the furthest failure and the left diagnostic on ties") {
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(2, "c", False)), Parser::parse(Parser::choice(Parser::literal("abc"), Parser::literal("ax")), "ab!"))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(1, "b", False)), Parser::parse(Parser::choice(Parser::literal("ab"), Parser::literal("ac")), "a!"))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(2, "c", False)), Parser::parse(Parser::choice(Parser::literal("ax"), Parser::literal("abc")), "ab!"))
-  }
-  it("many and some preserve order and require progress") {
-    assert_eq(ParseReply::Success(["a", "a"], ParseInput::new("!", 2)), Parser::parse(Parser::many(Parser::char("a")), "aa!"))?
-    assert_eq(ParseReply<List<String>>::Success([], ParseInput::new("!", 0)), Parser::parse(Parser::many(Parser::char("a")), "!"))?
-    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(0, "a", False)), Parser::parse(Parser::some(Parser::char("a")), "!"))?
-    assert_eq(ParseReply<List<Int>>::Failure(ParseIssue::new(0, "repeated parser must consume input", True)), Parser::parse(Parser::many(Parser::pure(1)), ""))
-  }
-  it("many propagates partial matches and fatal errors through choice") {
-    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(3, "b", False)), Parser::parse(Parser::many(Parser::literal("ab")), "aba!"))?
-    broken = Parser::many(Parser::literal(""))
-    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(0, "repeated parser must consume input", True)), Parser::parse(Parser::choice(broken, Parser::pure([])), "x"))?
-    assert_eq(ParseReply<List<Option<String>>>::Failure(ParseIssue::new(0, "repeated parser must consume input", True)), Parser::parse(Parser::many(Parser::optional(Parser::item())), ""))
-  }
-  it("optional backtracks while keeping present payloads") {
-    assert_eq(ParseReply::Success(Option::Some("ab"), ParseInput::new("!", 2)), Parser::parse(Parser::optional(Parser::literal("ab")), "ab!"))?
-    assert_eq(ParseReply::Success(Option<String>::None, ParseInput::new("ac", 0)), Parser::parse(Parser::optional(Parser::literal("ab")), "ac"))
-  }
-  it("pair and delimiters compose values of different types") {
-    action = Parser::between(Parser::char("("), Parser::pair(Parser::item(), Parser::pure(7)), Parser::char(")"))
-    assert_eq(ParseReply::Success(("x", 7), ParseInput::new("!", 3)), Parser::parse(action, "(x)!"))?
-    assert_eq(ParseReply<(String, Int)>::Failure(ParseIssue::new(2, ")", False)), Parser::parse(action, "(x!"))
-  }
-  it("separated lists reject missing items after separators") {
-    action = Parser::sep_by(Parser::char("a"), Parser::char(","))
-    assert_eq(ParseReply::Success(["a", "a"], ParseInput::new("!", 3)), Parser::parse(action, "a,a!"))?
-    assert_eq(ParseReply<List<String>>::Success([], ParseInput::new("!", 0)), Parser::parse(action, "!"))?
-    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(2, "a", False)), Parser::parse(action, "a,!"))?
-    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(0, "a", False)), Parser::parse(Parser::sep_by1(Parser::char("a"), Parser::char(",")), "!"))?
-    partial = Parser::sep_by(Parser::literal("ab"), Parser::char(","))
-    assert_eq(ParseReply<List<String>>::Failure(ParseIssue::new(1, "b", False)), Parser::parse(partial, "a!"))
-  }
-  it("Monad laws hold for consuming parsers on success and failure") {
-    f = {|text: String| Functor::fmap(Parser::item(), {|next| text ++ next})}
-    g = {|text: String| Parser::before(Parser::pure(text ++ "!"), Parser::char("c"))}
-    initial: Parser<String> = Monad::return("a")
-    assert_eq(Parser::parse(f("a"), "bc"), Parser::parse(Monad::bind(initial, f), "bc"))?
-    action = Parser::item()
-    assert_eq(Parser::parse(action, "abc"), Parser::parse(Monad::bind(action, {|v| Parser::pure(v)}), "abc"))?
-    assert_eq(Parser::parse(action, ""), Parser::parse(Monad::bind(action, {|v| Parser::pure(v)}), ""))?
-    left = Monad::bind(Monad::bind(action, f), g)
-    right = Monad::bind(action, {|v| Monad::bind(f(v), g)})
-    assert_eq(Parser::parse(left, "abc"), Parser::parse(right, "abc"))?
-    assert_eq(Parser::parse(left, "ab!"), Parser::parse(right, "ab!"))
+    assert_eq(Ok((("ab", 2), ParseInput::new("c", 2))), Parser::parse(action, "abc"))
   }
 
-  it("map can build contextual payloads without consuming extra input") {
-    action = Parser::map(Parser::item(), {|ch| [ch]})
-    assert_eq(ParseReply::Success(["猫"], ParseInput::new("!", 1)), Parser::parse(action, "猫!"))
+  it("map can produce Tuple List and Option as ordinary successful values") {
+    do {
+      assert_eq(Ok((("猫", 7), ParseInput::new("!", 1))), Parser::parse(Parser::map(Parser::item(), {|ch| (ch, 7)}), "猫!"))
+      assert_eq(Ok((["猫"], ParseInput::new("!", 1))), Parser::parse(Parser::map(Parser::item(), {|ch| [ch]}), "猫!"))
+      assert_eq(Ok((Option::Some("猫"), ParseInput::new("!", 1))), Parser::parse(Parser::map(Parser::item(), {|ch| Option::Some(ch)}), "猫!"))
+    }
   }
-  it("failure skips mapper and continuation; right choice preserves fatal errors") {
-    failed = Parser::fail::<String>("custom")
-    mapped = Parser::map(failed, {|text| text ++ "!"})
-    bound = Parser::and_then(failed, {|_| Parser::item()})
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "custom", False)), Parser::parse(mapped, "x"))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "custom", False)), Parser::parse(bound, "x"))?
-    assert_eq(ParseReply<String>::Failure(ParseIssue::new(0, "char requires one Unicode scalar", True)), Parser::parse(Parser::choice(failed, Parser::char("")), "x"))
+
+  it("fmap and applicative operators run the function before its argument") {
+    do {
+      function: Parser<(String -> String)> = Parser::char("a") |*> {|prefix| {|suffix| prefix ++ suffix}}
+      action = function |*| Parser::char("b")
+      assert_eq(Ok(("ab", ParseInput::new("!", 2))), Parser::parse(action, "ab!"))
+      value: Parser<Int> = Applicative::pure(9)
+      assert_eq(Ok((9, ParseInput::new("x", 0))), Parser::parse(value, "x"))
+      mapper: Parser<(Int -> Int)> = Parser::new({|input| print("function"); Ok(({|value| value + 1}, input))})
+      argument = Parser::new({|input| print("argument"); Ok((2, input))})
+      assert_ok_eq(3, Parser::parse_all(Applicative::ap(mapper, argument), ""))
+      assert_stdout_eq(["function", "argument"])
+    }
+  }
+
+  it("failure skips map bind and applicative argument execution") {
+    do {
+      original = ParserTestError(8, "stop")
+      failed: Parser<String> = MonadFail::fail(original)
+      mapped = Parser::map(failed, {|text| print("mapper"); text ++ "!"})
+      bound = Parser::and_then(failed, {|_| print("continuation"); Parser::item()})
+      function: Parser<(Int -> Int)> = MonadFail::fail(original)
+      argument = Parser::new({|input| print("argument"); Ok((2, input))})
+      expect_test_error(original, 8, "stop", Parser::parse(mapped, "x"))
+      expect_test_error(original, 8, "stop", Parser::parse(bound, "x"))
+      expect_test_error(original, 8, "stop", Parser::parse(Applicative::ap(function, argument), "x"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("MonadFail retains hand-made Error Payload message and out-of-range mismatch") {
+    do {
+      original = ParserTestError(23, "custom detail")
+      failed: Parser<Int> = MonadFail::fail(original)
+      expect_test_error(original, 23, "custom detail", Parser::parse(failed, ""))
+      mismatch = ParseMismatch(9, "outside")
+      expect_original_mismatch(mismatch, 9, "outside", Parser::parse(Parser::fail::<Int>(mismatch), ""))
+    }
+  }
+
+  it("partial do preserves generic Pattern errors and skips its continuation") {
+    do {
+      action: Parser<Int> = do::<Parser> {
+        2 <- Parser::pure(1)
+        traced = print("continued")
+        Parser::pure(3)
+      }
+      match Parser::parse(action, "x") {
+        Err(IntLiteralPatternMismatch(expected, actual)) => do {
+          assert_eq(2, expected)
+          assert_eq(1, actual)
+        },
+        _ => Test::fail("expected original integer Pattern error"),
+      }
+      right = Parser::new({|input| print("right"); Ok((9, input))})
+      match Parser::parse(Parser::choice(action, right), "x") {
+        Err(IntLiteralPatternMismatch(expected, actual)) => do {
+          assert_eq(2, expected)
+          assert_eq(1, actual)
+        },
+        _ => Test::fail("choice must preserve the generic Pattern error"),
+      }
+      assert_stdout_eq([])
+    }
+  }
+
+  it("Result RHS SafeBind transports its original Error into Parser") {
+    do {
+      original = ParserTestError(17, "rhs failure")
+      action: Parser<Int> = do::<Parser> {
+        _ <- Parser::item()
+        value =? Err(original)
+        traced = print("continued")
+        Parser::pure(value)
+      }
+      expect_test_error(original, 17, "rhs failure", Parser::parse(action, "ab"))
+      successful: Parser<Int> = do::<Parser> {
+        _ <- Parser::item()
+        value =? Ok(7)
+        Parser::pure(value)
+      }
+      assert_eq(Ok((7, ParseInput::new("b", 1))), Parser::parse(successful, "ab"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("recover preserves success without calling the handler body") {
+    do {
+      action = MonadRecover::recover(Parser::item(), {|_| print("handler"); Parser::pure("fallback")})
+      assert_eq(Ok(("a", ParseInput::new("b", 1))), Parser::parse(action, "ab"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("recover calls its handler once and restores the boundary input") {
+    do {
+      action = MonadRecover::recover(Parser::literal("ab"), {|error|
+        print("handler #{error.message}")
+        Parser::item()
+      })
+      assert_eq(Ok(("a", ParseInput::new("c", 1))), Parser::parse(action, "ac"))
+      assert_stdout_eq(["handler at 1: expected b"])
+    }
+  }
+
+  it("recover outside and inside bind use different boundary inputs") {
+    do {
+      failing = {|_: String| Parser::reject::<String>("stop")}
+      outer = MonadRecover::recover(Parser::and_then(Parser::item(), failing), {|_| Parser::item()})
+      inner = Parser::and_then(Parser::item(), {|_| MonadRecover::recover(Parser::reject::<String>("stop"), {|_| Parser::item()})})
+      assert_eq(Ok(("a", ParseInput::new("b", 1))), Parser::parse(outer, "ab"))
+      assert_eq(Ok(("b", ParseInput::new("", 2))), Parser::parse(inner, "ab"))
+    }
+  }
+
+  it("recover propagates the handler failure without another attempt") {
+    do {
+      replacement = ParserTestError(5, "handler failure")
+      action = MonadRecover::recover(Parser::reject::<Int>("first"), {|_| print("handler"); Parser::fail::<Int>(replacement)})
+      expect_test_error(replacement, 5, "handler failure", Parser::parse(action, "x"))
+      assert_stdout_eq(["handler"])
+    }
+  }
+
+  it("recover fail retains original Payload message and cause") {
+    do {
+      cause = ParserTestError(41, "cause")
+      source: Result<Int> = Result::cause(Err(cause), ParserTestError(42, "outer"))
+      original =? retained_error(source)
+      failed: Parser<Int> = Parser::fail(original)
+      restored = MonadRecover::recover(failed, {|error| MonadFail::fail(error)})
+      actual = Parser::parse(restored, "x")
+      expect_test_error(original, 42, "outer", actual)
+      assert_cause_chain([ParserTestError, ParserTestError], actual)
+      succeeded = MonadRecover::recover(Parser::item(), {|error| MonadFail::fail(error)})
+      assert_eq(Ok(("a", ParseInput::new("b", 1))), Parser::parse(succeeded, "ab"))
+    }
+  }
+
+  it("recover_kind matches canonical kind and permits Payload matching in its handler") {
+    do {
+      original = ParserTestError(12, "kind payload")
+      failed: Parser<Int> = Parser::fail(original)
+      restored = MonadRecover::recover_kind(failed, ParserTestError, {|error|
+        match error {
+          ParserTestError(code, _) => Parser::pure(code),
+          _ => Parser::fail(error),
+        }
+      })
+      assert_eq(Ok((12, ParseInput::new("x", 0))), Parser::parse(restored, "x"))
+      unmatched = MonadRecover::recover_kind(failed, ParseMismatch, {|_| print("handler"); Parser::pure(0)})
+      expect_test_error(original, 12, "kind payload", Parser::parse(unmatched, "x"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("recover_kind preserves unmatched cause and evaluates argument generation eagerly") {
+    do {
+      source: Result<Int> = Result::cause(Err(NoneError()), ParserTestError(91, "outer"))
+      original =? retained_error(source)
+      failed: Parser<Int> = Parser::fail(original)
+      unmatched = MonadRecover::recover_kind(failed, ParseMismatch, {|_| Parser::pure(0)})
+      actual = Parser::parse(unmatched, "")
+      expect_test_error(original, 91, "outer", actual)
+      assert_cause_chain([ParserTestError, NoneError], actual)
+      action = MonadRecover::recover_kind(Parser::pure(7), parser_test_kind(), parser_test_handler())
+      assert_stdout_eq(["kind-created", "handler-created"])
+      assert_eq(Ok((7, ParseInput::new("x", 0))), Parser::parse(action, "x"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("choice backtracks consumed failure and skips the right after a left success") {
+    do {
+      action = Parser::choice(Parser::literal("ab"), Parser::literal("ac"))
+      assert_eq(Ok(("ac", ParseInput::new("!", 2))), Parser::parse(action, "ac!"))
+      right = Parser::new({|input| print("right"); Ok(("right", input))})
+      preferred = Parser::choice(Parser::literal("a"), right)
+      assert_eq(Ok(("a", ParseInput::new("b", 1))), Parser::parse(preferred, "ab"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("choice retains the original furthest Error and left Error on ties") {
+    do {
+      source: Result<Int> = Result::cause(Err(ParserTestError(61, "diagnostic cause")), ParseMismatch(2, "left far"))
+      left =? retained_error(source)
+      right = ParseMismatch(1, "right near")
+      actual = Parser::parse(Parser::choice(Parser::fail::<Int>(left), Parser::fail::<Int>(right)), "ab!")
+      expect_original_mismatch(left, 2, "left far", actual)
+      assert_cause_chain([ParseMismatch, ParserTestError], actual)
+      expect_original_mismatch(left, 2, "left far", Parser::parse(Parser::choice(Parser::fail::<Int>(right), Parser::fail::<Int>(left)), "ab!"))
+      tie = ParseMismatch(2, "right tie")
+      expect_original_mismatch(left, 2, "left far", Parser::parse(Parser::choice(Parser::fail::<Int>(left), Parser::fail::<Int>(tie)), "ab!"))
+    }
+  }
+
+  it("choice propagates other Error kinds from either side and preserves their cause") {
+    do {
+      source: Result<String> = Result::cause(Err(NoneError()), ParserTestError(6, "choice"))
+      original =? retained_error(source)
+      failed: Parser<String> = Parser::fail(original)
+      right = Parser::new({|input| print("right"); Ok(("right", input))})
+      actual = Parser::parse(Parser::choice(failed, right), "x")
+      expect_test_error(original, 6, "choice", actual)
+      assert_cause_chain([ParserTestError, NoneError], actual)
+      expect_test_error(original, 6, "choice", Parser::parse(Parser::choice(Parser::reject::<String>("left"), failed), "x"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("choice propagates before-entry and after-end mismatches from either side") {
+    do {
+      input = ParseInput::new("x", 3)
+      before = ParseMismatch(2, "before")
+      after = ParseMismatch(5, "after")
+      right = Parser::new({|state| print("right"); Ok((7, state))})
+      expect_original_mismatch(before, 2, "before", Parser::run(Parser::choice(Parser::fail::<Int>(before), right), input))
+      expect_original_mismatch(after, 5, "after", Parser::run(Parser::choice(Parser::fail::<Int>(after), right), input))
+      expect_original_mismatch(before, 2, "before", Parser::run(Parser::choice(Parser::reject::<Int>("left"), Parser::fail::<Int>(before)), input))
+      expect_original_mismatch(after, 5, "after", Parser::run(Parser::choice(Parser::reject::<Int>("left"), Parser::fail::<Int>(after)), input))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("many and some preserve order and terminate only on entry mismatch") {
+    do {
+      empty: List<String> = []
+      assert_eq(Ok((["a", "a"], ParseInput::new("!", 2))), Parser::parse(Parser::many(Parser::char("a")), "aa!"))
+      assert_eq(Ok((["猫", "a", "b"], ParseInput::new("", 3))), Parser::parse(Parser::many(Parser::item()), "猫ab"))
+      assert_eq(Ok((empty, ParseInput::new("!", 0))), Parser::parse(Parser::many(Parser::char("a")), "!"))
+      expect_mismatch(0, "a", Parser::parse(Parser::some(Parser::char("a")), "!"))
+      expect_mismatch(3, "b", Parser::parse(Parser::many(Parser::literal("ab")), "aba!"))
+    }
+  }
+
+  it("unconsumed repeated success is a progress Error which choice and optional cannot hide") {
+    do {
+      expect_progress(4, Parser::run(Parser::many(Parser::pure(1)), ParseInput::new("", 4)))
+      broken = Parser::many(Parser::literal(""))
+      expect_progress(0, Parser::parse(Parser::choice(broken, Parser::pure([])), "x"))
+      expect_progress(0, Parser::parse(Parser::optional(broken), "x"))
+      expect_progress(0, Parser::parse(Parser::many(Parser::optional(Parser::item())), ""))
+    }
+  }
+
+  it("configuration Error is not hidden by choice optional or repetition") {
+    do {
+      broken = Parser::char("")
+      expect_configuration(Parser::parse(Parser::choice(broken, Parser::pure("fallback")), "x"))
+      expect_configuration(Parser::parse(Parser::optional(broken), "x"))
+      expect_configuration(Parser::parse(Parser::many(broken), "x"))
+    }
+  }
+
+  it("optional many and sep_by transport other Errors with their original diagnostics") {
+    do {
+      source: Result<String> = Result::cause(Err(NoneError()), ParserTestError(35, "element failure"))
+      original =? retained_error(source)
+      failed: Parser<String> = Parser::fail(original)
+      optional = Parser::parse(Parser::optional(failed), "x")
+      repeated = Parser::parse(Parser::many(failed), "x")
+      separated = Parser::parse(Parser::sep_by(failed, Parser::char(",")), "x")
+      expect_test_error(original, 35, "element failure", optional)
+      expect_test_error(original, 35, "element failure", repeated)
+      expect_test_error(original, 35, "element failure", separated)
+      assert_cause_chain([ParserTestError, NoneError], optional)
+      assert_cause_chain([ParserTestError, NoneError], repeated)
+      assert_cause_chain([ParserTestError, NoneError], separated)
+    }
+  }
+
+  it("optional backtracks a partial mismatch and preserves present values") {
+    do {
+      assert_eq(Ok((Option::Some("ab"), ParseInput::new("!", 2))), Parser::parse(Parser::optional(Parser::literal("ab")), "ab!"))
+      assert_eq(Ok((Option<String>::None, ParseInput::new("ac", 0))), Parser::parse(Parser::optional(Parser::literal("ab")), "ac"))
+    }
+  }
+
+  it("optional many and sep_by preserve out-of-range mismatches") {
+    do {
+      input = ParseInput::new("x", 3)
+      before = ParseMismatch(2, "before")
+      after = ParseMismatch(5, "after")
+      early: Parser<String> = Parser::fail(before)
+      late: Parser<String> = Parser::fail(after)
+      expect_original_mismatch(before, 2, "before", Parser::run(Parser::optional(early), input))
+      expect_original_mismatch(after, 5, "after", Parser::run(Parser::optional(late), input))
+      expect_original_mismatch(before, 2, "before", Parser::run(Parser::many(early), input))
+      expect_original_mismatch(after, 5, "after", Parser::run(Parser::many(late), input))
+      expect_original_mismatch(before, 2, "before", Parser::run(Parser::sep_by(early, Parser::char(",")), input))
+      expect_original_mismatch(after, 5, "after", Parser::run(Parser::sep_by(late, Parser::char(",")), input))
+      previous = ParseMismatch(0, "previous trial")
+      trial = Parser::new({|state: ParseInput|
+        if(state.offset == 0, Parser::run(Parser::item(), state), Err(previous))
+      })
+      expect_original_mismatch(previous, 0, "previous trial", Parser::parse(Parser::many(trial), "ab"))
+    }
+  }
+
+  it("pair and delimiters compose values of different types") {
+    do {
+      action = Parser::between(Parser::char("("), Parser::pair(Parser::item(), Parser::pure(7)), Parser::char(")"))
+      assert_eq(Ok((("x", 7), ParseInput::new("!", 3))), Parser::parse(action, "(x)!"))
+      expect_mismatch(2, ")", Parser::parse(action, "(x!"))
+    }
+  }
+
+  it("separated lists allow an entry empty list and reject missing items after separators") {
+    do {
+      empty: List<String> = []
+      action = Parser::sep_by(Parser::char("a"), Parser::char(","))
+      assert_eq(Ok((["a", "a"], ParseInput::new("!", 3))), Parser::parse(action, "a,a!"))
+      assert_eq(Ok((empty, ParseInput::new("!", 0))), Parser::parse(action, "!"))
+      expect_mismatch(2, "a", Parser::parse(action, "a,!"))
+      expect_mismatch(0, "a", Parser::parse(Parser::sep_by1(Parser::char("a"), Parser::char(",")), "!"))
+      expect_mismatch(1, "b", Parser::parse(Parser::sep_by(Parser::literal("ab"), Parser::char(",")), "a!"))
+    }
+  }
+
+  it("negative entry offset is rejected before any transition or handler runs") {
+    do {
+      parser = Parser::new({|input| print("transition"); Ok((7, input))})
+      action = MonadRecover::recover(parser, {|_| print("handler"); Parser::pure(0)})
+      expect_state_error(Parser::run(action, ParseInput::new("x", -1)))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("successful custom transitions must return a suffix and exactly matching offset") {
+    do {
+      offset_only = Parser::new({|input| Ok((7, ParseInput::new(input.rest, input.offset + 1)))})
+      not_suffix = Parser::new({|input| Ok((7, ParseInput::new("a", input.offset + 1)))})
+      wrong_offset = Parser::new({|input| Ok((7, ParseInput::new("b", input.offset)))})
+      expect_state_error(Parser::parse(offset_only, "ab"))
+      expect_state_error(Parser::parse(not_suffix, "ab"))
+      expect_state_error(Parser::parse(wrong_offset, "ab"))
+    }
+  }
+
+  it("constructor stored and Facet replaced transitions are checked before bind continuations") {
+    do {
+      transition: StateT<ParseInput, Result, Int> = StateT::new({|input| Ok((7, ParseInput::new(input.rest, input.offset + 1)))})
+      stored = Parser::new({|state| StateT::run(transition, state)})
+      replaced =? Facet::set(Parser.transition, Parser::pure(7), transition)
+      expect_state_error(Parser::parse(stored, "x"))
+      expect_state_error(Parser::parse(replaced, "x"))
+      stored_bound = Parser::and_then(stored, {|_| print("constructor mapper"); Parser::pure(0)})
+      facet_bound = Parser::and_then(replaced, {|_| print("facet mapper"); Parser::pure(0)})
+      expect_state_error(Parser::parse(stored_bound, "x"))
+      expect_state_error(Parser::parse(facet_bound, "x"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("invalid intermediate applicative success skips the argument transition") {
+    do {
+      transition: StateT<ParseInput, Result, (Int -> Int)> = StateT::new({|input|
+        Ok(({|value| value + 1}, ParseInput::new(input.rest, input.offset + 1)))
+      })
+      mapper = Parser::new({|state| StateT::run(transition, state)})
+      replaced =? Facet::set(Parser.transition, Parser::pure({|value: Int| value + 1}), transition)
+      argument = Parser::new({|input| print("argument"); Ok((2, input))})
+      expect_state_error(Parser::parse(Applicative::ap(mapper, argument), "x"))
+      expect_state_error(Parser::parse(Applicative::ap(replaced, argument), "x"))
+      assert_stdout_eq([])
+    }
+  }
+
+  it("Parser construction is eager but execution and conditional recovery are deferred") {
+    do {
+      left = parser_test_build("left")
+      right = parser_test_build("right")
+      action = Parser::choice(left, right)
+      assert_stdout_eq(["build left", "build right"])
+      assert_eq(Ok(("left", ParseInput::new("x", 0))), Parser::parse(action, "x"))
+      assert_stdout_eq(["run left"])
+    }
+  }
+
+  it("input recovery preserves external effects from the failed attempt") {
+    do {
+      left = Parser::and_then(Parser::item(), {|_|
+        print("left effect")
+        Parser::reject::<String>("stop")
+      })
+      right = Parser::map(Parser::item(), {|value| print("right effect"); value})
+      assert_eq(Ok(("a", ParseInput::new("b", 1))), Parser::parse(Parser::choice(left, right), "ab"))
+      assert_stdout_eq(["left effect", "right effect"])
+    }
+  }
+
+  it("Monad left and right identities preserve successful values and mismatch Payloads") {
+    do {
+      f = {|text: String| Parser::map(Parser::item(), {|next| text ++ next})}
+      initial: Parser<String> = Monad::return("a")
+      assert_eq(Parser::parse(f("a"), "bc"), Parser::parse(Monad::bind(initial, f), "bc"))
+      expect_mismatch(0, "character", Parser::parse(f("a"), ""))
+      expect_mismatch(0, "character", Parser::parse(Monad::bind(initial, f), ""))
+      action = Parser::item()
+      identity = Monad::bind(action, {|value| Parser::pure(value)})
+      assert_eq(Parser::parse(action, "abc"), Parser::parse(identity, "abc"))
+      expect_mismatch(0, "character", Parser::parse(action, ""))
+      expect_mismatch(0, "character", Parser::parse(identity, ""))
+    }
+  }
+
+  it("Monad associativity preserves success and the original failing Error") {
+    do {
+      original = ParserTestError(77, "law failure")
+      action = Parser::item()
+      f = {|text: String| Parser::map(Parser::item(), {|next| text ++ next})}
+      g = {|text: String| Parser::before(Parser::pure(text ++ "!"), Parser::char("c"))}
+      left = Monad::bind(Monad::bind(action, f), g)
+      right = Monad::bind(action, {|value| Monad::bind(f(value), g)})
+      assert_eq(Parser::parse(left, "abc"), Parser::parse(right, "abc"))
+      expect_mismatch(2, "c", Parser::parse(left, "ab!"))
+      expect_mismatch(2, "c", Parser::parse(right, "ab!"))
+      failed: Parser<String> = Parser::fail(original)
+      left_failed = Monad::bind(Monad::bind(failed, f), g)
+      right_failed = Monad::bind(failed, {|value| Monad::bind(f(value), g)})
+      expect_test_error(original, 77, "law failure", Parser::parse(left_failed, "abc"))
+      expect_test_error(original, 77, "law failure", Parser::parse(right_failed, "abc"))
+    }
   }
 }

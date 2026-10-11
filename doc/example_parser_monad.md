@@ -1,38 +1,74 @@
 # ParserMonad サンプルの仕様と実装方針
 
-既存の Surtr 機能だけを使う level1 のサンプル。コンパイラと標準ライブラリは変更しない。
-`Parser<A>` は入力状態から成功値と残りの入力、または位置付き失敗を返す関数を保持する。
-文字位置は Unicode スカラー値の個数で数え、0から始める。
+既存の Surtr 機能だけを使う level1 のサンプル。
+再設計の入力仕様は [StateT と Result の比較・採用方針](parser_monad_state_t_comparison.md)。
+コンパイラと標準ライブラリは変更しない。
 
-Functor、Applicative、Monadを実装し、順次処理では残りの入力を次へ渡す。
-選択は左を優先し、通常の失敗時には元の入力から右を試す。両方失敗したら
-遠い位置の失敗を返す。同位置なら左の診断を使う。
-反復は未消費の通常失敗で終了し、消費後の失敗を伝播する。
-未消費の成功は反復の不正な構成として致命的失敗にし、選択でも隠さない。
+## 構成と API
 
-基本APIは pure、fail、item、satisfy、char、literal、eof、parse、parse_all。
-コンビネータは fmap、bind、ap、choice、many、some、optional、pair、before、after、
-between、sep_by、sep_by1、lazy。入力状態は不変で、左再帰は扱わない。
+`Parser<A>` は `StateT<ParseInput, Result, A>` を保持する独立した型とする。
+成功は `Ok((value, next_input))`、失敗は元 Error を保持した `Err(error)`。
+`parse` は残余入力を含む Result、`parse_all` は全入力消費を要求した `Result<A>` を返す。
+文字位置は0始まりの Unicode スカラー位置で、バイト位置や書記素位置ではない。
 
-受入条件はUnicodeの消費、残余、失敗位置、バックトラック、反復の進捗検査、
-区切り後の拒否、型の異なるbind、Monad則、do構文をSurtrテストで確認すること。
-BNF付き四則演算例で優先順位、左結合、括弧、空白、全入力消費を確認する。
+入力検査は private `_checked_transition` に集約する。
+負の入口 offset は実行前に拒否する。成功時は rest が入口入力の suffix であり、
+offset が消費したスカラー数だけ進んでいることを要求する。
+run / bind / ap / recover は検査付き遷移を取り出し、中間の不正状態を次へ渡さない。
+StateT の保存 helper は検査 wrapper を追加せず、保存だけを行う。
 
-最初に item の契約テストを失敗させ、基本型とMonad、コンビネータ、四則演算例の順に実装する。
-検証は対象テストと使用例、続いて `cargo run -- test --quiet --all`。
-Rust変更はないためnextestは実行しない。
+Functor、Applicative、Monad、MonadFail、MonadRecover を実装する。
+pure / bind / ap / fail は標準 StateT に委譲する。
+通常の map は and_then と pure の合成で List / Option / Tuple を成功値にできる。
+Functor の contextual mapper 制約は現行仕様のままとする。
+recover は Result の回復に接続し、元 Error を受けたハンドラの Parser を境界入口から一度実行する。
+外側の recover は全体の入口、bind 内の recover は後続 Parser の入口へ戻る。
+recover_kind の kind 判定は標準 Trait のデフォルト実装を継承する。
 
-## 実装結果
+構文不一致は `ParseMismatch(offset, expected)`。
+構成・反復進捗・状態契約の違反はそれぞれ `ParserConfigurationError`、
+`ParserProgressError`、`ParserStateError` とする。
+独自の ParseReply / ParseIssue / fatal と ExampleSyntaxError の変換は廃止する。
 
-`examples/parser_monad/` に実装。通常の `map` / `and_then` に処理を置き、
-標準Traitはそれらへ委譲する。ListやOptionをpayloadにする合成にも対応する。
-`Functor::fmap` のcontextual mapper制約は現行仕様どおりなので、該当する変換は
-通常メソッドを使う。全入力消費は `parse_all` が末尾の結果を明示的に確認する。
+## 構文コンビネータ
 
-使用例は `run.srt` と `entry.srt --entry main` の両方で実行できる。
-明示entryの戻り値は現行契約の `Result<()>` とする。
-READMEと `src/arithmetic.srt` に同じBNFを掲載した。
+choice は範囲内の ParseMismatch だけを入口入力へ戻して回復する。
+両方の不一致は遠い位置の元 Error を返し、同位置なら左を返す。
+optional も消費後の構文不一致を入口へ戻すが、many は試行入口位置の不一致だけで正常終了する。
+消費後の不一致、範囲外の不一致、他の Error は元値を伝播する。
+未消費の反復成功は ParserProgressError とし、空列にしない。
+sep_by は入口不一致なら空列を返し、区切りの後の要素欠落は拒否する。
 
-検証結果はParser 16件、四則演算6件が全件成功（skipped=0）。
-使用例と明示entryも成功。標準テストの `cargo run --quiet -p rune -- test --quiet --all`
-は終了コード0。Rust・標準定義の変更はなく、nextestは対象外とした。
+基本 API は new、run、parse、parse_all、pure、reject、fail、recover、item、satisfy、char、literal、eof。
+合成は map、and_then、ap、choice、many、some、optional、pair、before、after、between、sep_by、sep_by1、lazy。
+構文選択に標準 Alternative を使わず、Parser に Alternative を追加しない。
+入力は不変だが、外部副作用は回復で巻き戻らない。左再帰は対象外。
+
+## 四則演算と受入条件
+
+BNF、優先順位、左結合、括弧、ASCII 空白、BigInt 評価を維持する。
+README と `src/arithmetic.srt` の BNF を同じ記述に揃える。
+parse_all の成功値を SafeBind で受けて evaluate へ接続する。
+数字列の変換失敗と評価失敗を、別の構文 Error に作り直さない。
+使用例は `run.srt` と `entry.srt --entry main` を残す。明示 entry の戻り値は `Result<()>`。
+
+対象テストは成功値と残余入力、失敗の具象 Pattern による Payload 観測、
+Error の message / format / cause 保持、回復境界、選択の評価順、反復進捗、
+範囲外診断の伝播、owner / Facet で保存した不正遷移、Monad 則を検証する。
+Result の Err の Eq だけで Payload の等価性を判断しない。
+
+## 2026-10-11 の実装結果
+
+main の `ee13e448` を取り込み、StateT の generic 呼出しの型解決修正後に実装を完成させた。
+Parser 本体、対象テスト、四則演算例、README は新契約へ移行し、旧 API の実行経路は削除した。
+停止時の最小再現と取り込みの詳細は、入力仕様の第13節に記録している。
+
+- Parser テスト38件と四則演算テスト7件はすべて成功。
+- `run.srt` と `entry.srt --entry main` は終了コード0。
+- CLI の `--vm-dump` で、fail / recover / kind 不一致の recover_kind / choice を通った元 Error の生成位置と cause の保持を6経路で確認。
+
+保存経路のテストは `Parser::new → _store_transition` の owner struct literal と Facet 差替えを通る。
+テストから別ステージの owner impl を追加する方法は使わない。
+`cargo run --quiet -p rune -- test --quiet --all` は終了コード0。
+サブエージェントによるコード・テストの独立レビューで指摘はなかった。
+このサンプルの差分に Rust / 標準定義の修正はなく、level1 のため nextest は実行していない。

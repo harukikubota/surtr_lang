@@ -21,6 +21,27 @@ defenum ArithmeticExpr {
 }
 
 defmod Arithmetic {
+  def parser() -> Parser<ArithmeticExpr> {
+    Parser::after(_spaces(), _expression())
+  }
+
+  # Evaluation errors remain Result errors; they do not trigger backtracking.
+  def evaluate(tree: ArithmeticExpr) -> Result<Int> {
+    match tree {
+      ArithmeticExpr::Number(value) => Ok(value),
+      ArithmeticExpr::Binary(operator, left, right) => {
+        lhs =? evaluate(left)
+        rhs =? evaluate(right)
+        match operator {
+          ArithmeticOp::Add => Ok(lhs + rhs),
+          ArithmeticOp::Subtract => Ok(lhs - rhs),
+          ArithmeticOp::Multiply => Ok(lhs * rhs),
+          ArithmeticOp::Divide => lhs / rhs,
+        }
+      },
+    }
+  }
+
   defp _spaces() -> Parser<List<String>> {
     Parser::many(Parser::satisfy({|ch| String::contains(" \t\n\u{d}", ch)}, "whitespace"))
   }
@@ -35,7 +56,7 @@ defmod Arithmetic {
       # This conversion is checked even though the parser accepts only digits.
       match String::try_to_int(String::join(parts, "")) {
         Ok(value) => Parser::pure(ArithmeticExpr::Number(value)),
-        Err(_) => Parser::fail::<ArithmeticExpr>("integer"),
+        Err(error) => MonadFail::fail(error),
       }
     })
   }
@@ -77,27 +98,6 @@ defmod Arithmetic {
       first <- _term()
       tail <- Parser::many(Parser::pair(operator, _term()))
       Parser::pure(_fold(first, tail))
-    }
-  }
-
-  def parser() -> Parser<ArithmeticExpr> {
-    Parser::after(_spaces(), _expression())
-  }
-
-  # Evaluation errors remain Result errors; they do not trigger backtracking.
-  def evaluate(tree: ArithmeticExpr) -> Result<Int> {
-    match tree {
-      ArithmeticExpr::Number(value) => Ok(value),
-      ArithmeticExpr::Binary(operator, left, right) => {
-        lhs =? evaluate(left)
-        rhs =? evaluate(right)
-        match operator {
-          ArithmeticOp::Add => Ok(lhs + rhs),
-          ArithmeticOp::Subtract => Ok(lhs - rhs),
-          ArithmeticOp::Multiply => Ok(lhs * rhs),
-          ArithmeticOp::Divide => lhs / rhs,
-        }
-      },
     }
   }
 }

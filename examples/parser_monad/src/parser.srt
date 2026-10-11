@@ -4,55 +4,52 @@ defstruct ParseInput {
   rest: String,
   offset: Int,
 }
-@derive Eq
-defstruct ParseIssue {
-  offset: Int,
-  expected: String,
-  fatal: Boolean,
-}
-@derive Eq
-defenum ParseReply<$A> {
-  Success($A, ParseInput),
-  Failure(ParseIssue),
-}
 
-# Construct parsers with the combinators below. A successful custom parser must
-# advance offset by exactly the number of scalar values removed from rest.
+# A nominal wrapper keeps Parser recovery local to this carrier.
 defstruct Parser<$A> {
-  run_parser: (ParseInput -> ParseReply<$A>),
+  transition: StateT<ParseInput, Result, $A>,
 }
 
 impl Parser {
-  def new(run_parser: (ParseInput -> ParseReply<$A>)) -> Parser<$A> {
-    Parser { run_parser }
+  def new(transition: (ParseInput -> Result<($A, ParseInput)>)) -> Parser<$A> {
+    Parser::_store_transition(StateT::new(transition))
   }
 
-  def run(self: Parser<$A>, input: ParseInput) -> ParseReply<$A> {
-    apply(self.run_parser, input)
+  def run(self: Parser<$A>, input: ParseInput) -> Result<($A, ParseInput)> {
+    StateT::run(Parser::_checked_transition(self), input)
   }
 
-  def parse(self: Parser<$A>, text: String) -> ParseReply<$A> {
+  def parse(self: Parser<$A>, text: String) -> Result<($A, ParseInput)> {
     Parser::run(self, ParseInput::new(text, 0))
   }
 
-  def parse_all(self: Parser<$A>, text: String) -> ParseReply<$A> {
-    match Parser::parse(self, text) {
-      ParseReply::Success(value, next) => {
-        match Parser::run(Parser::eof(), next) {
-          ParseReply::Success(_, final_input) => ParseReply::Success(value, final_input),
-          ParseReply::Failure(issue) => ParseReply::Failure(issue),
-        }
-      },
-      ParseReply::Failure(issue) => ParseReply::Failure(issue),
+  def parse_all(self: Parser<$A>, text: String) -> Result<$A> {
+    match Parser::parse(Parser::before(self, Parser::eof()), text) {
+      Ok((value, _)) => Ok(value),
+      Err(error) => Err(error),
     }
   }
 
   def pure(value: $A) -> Parser<$A> {
-    Parser::new({|input: ParseInput| ParseReply::Success(value, input)})
+    transition = Applicative::pure::<StateT<ParseInput, Result, $A>>(value)
+    Parser::_store_transition(transition)
   }
 
-  def fail::<$A>(expected: String) -> Parser<$A> {
-    Parser::new({|input: ParseInput| ParseReply::Failure(ParseIssue::new(input.offset, expected, False))})
+  def fail::<$A>(error: Error) -> Parser<$A> {
+    transition = MonadFail::fail::<StateT<ParseInput, Result, $A>>(error)
+    Parser::_store_transition(transition)
+  }
+
+  def reject::<$A>(expected: String) -> Parser<$A> {
+    Parser::new({|input: ParseInput| Err(ParseMismatch(input.offset, expected))})
+  }
+
+  def recover(self: Parser<$A>, handler: (Error -> Parser<$A>)) -> Parser<$A> {
+    Parser::new({|input: ParseInput|
+      Result::recover(StateT::run(Parser::_checked_transition(self), input), {|error|
+        StateT::run(Parser::_checked_transition(handler(error)), input)
+      })
+    })
   }
 
   def item() -> Parser<String> {
@@ -64,12 +61,10 @@ impl Parser {
       match input.rest {
         [head, ..tail] => {
           if(predicate(head), {
-            ParseReply::Success(head, ParseInput::new(tail, input.offset + 1))
-          }, {
-            ParseReply::Failure(ParseIssue::new(input.offset, expected, False))
-          })
+            Ok((head, ParseInput::new(tail, input.offset + 1)))
+          }, { Err(ParseMismatch(input.offset, expected)) })
         },
-        "" => ParseReply::Failure(ParseIssue::new(input.offset, expected, False)),
+        "" => Err(ParseMismatch(input.offset, expected)),
       }
     })
   }
@@ -77,77 +72,45 @@ impl Parser {
   def char(text: String) -> Parser<String> {
     match String::chars(text) {
       [_] => Parser::satisfy({|value| value == text}, text),
-      _ => Parser::new({|input: ParseInput| ParseReply::Failure(ParseIssue::new(input.offset, "char requires one Unicode scalar", True))}),
-    }
-  }
-
-  defp _literal(text: String, input: ParseInput) -> ParseReply<Unit> {
-    match text {
-      "" => ParseReply::Success((), input),
-      [head, ..tail] => {
-        match Parser::run(Parser::char(head), input) {
-          ParseReply::Success(_, next) => Parser::_literal(tail, next),
-          ParseReply::Failure(issue) => ParseReply::Failure(issue),
-        }
-      },
+      _ => Parser::fail(ParserConfigurationError("char requires one Unicode scalar")),
     }
   }
 
   def literal(text: String) -> Parser<String> {
     Parser::new({|input: ParseInput|
       match Parser::_literal(text, input) {
-        ParseReply::Success(_, next) => ParseReply::Success(text, next),
-        ParseReply::Failure(issue) => ParseReply::Failure(issue),
+        Ok((_, next)) => Ok((text, next)),
+        Err(error) => Err(error),
       }
     })
   }
 
   def eof() -> Parser<Unit> {
     Parser::new({|input: ParseInput|
-      if(input.rest == "", {
-        ParseReply::Success((), input)
-      }, {
-        ParseReply::Failure(ParseIssue::new(input.offset, "end of input", False))
-      })
+      if(input.rest == "", { Ok(((), input)) }, { Err(ParseMismatch(input.offset, "end of input")) })
     })
   }
 
-  # Backtrack ordinary failures; preserve parser-construction errors.
   def choice(left: Parser<$A>, right: Parser<$A>) -> Parser<$A> {
     Parser::new({|input: ParseInput|
       match Parser::run(left, input) {
-        ParseReply::Success(value, next) => ParseReply::Success(value, next),
-        ParseReply::Failure(first) => {
-          if(first.fatal, { ParseReply::Failure(first) }, {
+        Ok(pair) => Ok(pair),
+        Err(ParseMismatch(first_offset, _) @ first) => {
+          if(Parser::_recoverable_mismatch(input, first), {
             match Parser::run(right, input) {
-              ParseReply::Success(value, next) => ParseReply::Success(value, next),
-              ParseReply::Failure(second) => {
-                if(second.fatal || second.offset > first.offset, {
-                  ParseReply::Failure(second)
-                }, { ParseReply::Failure(first) })
+              Ok(pair) => Ok(pair),
+              Err(ParseMismatch(second_offset, _) @ second) => {
+                if(Parser::_recoverable_mismatch(input, second), {
+                  if(second_offset > first_offset, { Err(second) }, { Err(first) })
+                }, { Err(second) })
               },
+              Err(error) => Err(error),
             }
-          })
+          }, { Err(first) })
         },
+        Err(error) => Err(error),
       }
     })
-  }
-
-  defp _many(self: Parser<$A>, input: ParseInput, acc: List<$A>) -> ParseReply<List<$A>> {
-    match Parser::run(self, input) {
-      ParseReply::Success(value, next) => {
-        if(next.offset <= input.offset, {
-          ParseReply::Failure(ParseIssue::new(input.offset, "repeated parser must consume input", True))
-        }, { Parser::_many(self, next, [value, ..acc]) })
-      },
-      ParseReply::Failure(issue) => {
-        if(issue.fatal || issue.offset > input.offset, {
-          ParseReply::Failure(issue)
-        }, {
-          ParseReply::Success(List::reverse(acc), input)
-        })
-      },
-    }
   }
 
   def many(self: Parser<$A>) -> Parser<List<$A>> {
@@ -161,7 +124,16 @@ impl Parser {
   }
 
   def optional(self: Parser<$A>) -> Parser<Option<$A>> {
-    Parser::choice(Parser::and_then(self, {|value| Parser::pure(Option::Some(value))}), Parser::pure(Option<$A>::None))
+    Parser::new({|input: ParseInput|
+      match Parser::run(self, input) {
+        Ok((value, next)) => Ok((Option::Some(value), next)),
+        Err(error) => {
+          if(Parser::_recoverable_mismatch(input, error), {
+            Ok((Option<$A>::None, input))
+          }, { Err(error) })
+        },
+      }
+    })
   }
 
   def pair(left: Parser<$A>, right: Parser<$B>) -> Parser<($A, $B)> {
@@ -187,17 +159,15 @@ impl Parser {
   }
 
   def sep_by(self: Parser<$A>, separator: Parser<$S>) -> Parser<List<$A>> {
-    # Only a failure at the initial position means an empty list.
     Parser::new({|input: ParseInput|
       match Parser::run(Parser::sep_by1(self, separator), input) {
-        ParseReply::Failure(issue) => {
-          if(issue.fatal || issue.offset > input.offset, {
-            ParseReply::Failure(issue)
-          }, {
-            ParseReply::Success([], input)
-          })
+        Ok(pair) => Ok(pair),
+        Err(ParseMismatch(position, _) @ original) => {
+          if(Parser::_recoverable_mismatch(input, original) && position == input.offset, {
+            Ok(([], input))
+          }, { Err(original) })
         },
-        ParseReply::Success(value, next) => ParseReply::Success(value, next),
+        Err(error) => Err(error),
       }
     })
   }
@@ -207,22 +177,91 @@ impl Parser {
   }
 
   def map(self: Parser<$A>, mapper: ($A -> $B)) -> Parser<$B> {
-    Parser::new({|input: ParseInput|
-      match Parser::run(self, input) {
-        ParseReply::Success(value, next) => ParseReply::Success(mapper(value), next),
-        ParseReply::Failure(issue) => ParseReply::Failure(issue),
-      }
-    })
+    Parser::and_then(self, {|value| Parser::pure(mapper(value))})
   }
 
   def and_then(self: Parser<$A>, mapper: ($A -> Parser<$B>)) -> Parser<$B> {
-    Parser::new({|input: ParseInput|
-      match Parser::run(self, input) {
-        ParseReply::Success(value, next) => Parser::run(mapper(value), next),
-        ParseReply::Failure(issue) => ParseReply::Failure(issue),
-      }
+    left: StateT<ParseInput, Result, $A> = Parser::_checked_transition(self)
+    continuation: ($A -> StateT<ParseInput, Result, $B>) = {|value|
+      Parser::_checked_transition(mapper(value))
+    }
+    bound: StateT<ParseInput, Result, $B> = Monad::bind(left, continuation)
+    Parser::_store_transition(bound)
+  }
+
+  def ap(mapper: Parser<($A -> $B)>, value: Parser<$A>) -> Parser<$B> {
+    Parser::_store_transition(Applicative::ap(Parser::_checked_transition(mapper), Parser::_checked_transition(value)))
+  }
+
+  # Saving a transition does not add another checking wrapper.
+  defp _store_transition(transition: StateT<ParseInput, Result, $A>) -> Parser<$A> {
+    Parser { transition }
+  }
+
+  # All execution and sequencing pass through this single state-contract check.
+  defp _checked_transition(self: Parser<$A>) -> StateT<ParseInput, Result, $A> {
+    StateT::new({|input: ParseInput|
+      if(input.offset < 0, {
+        Err(ParserStateError("input offset must be nonnegative"))
+      }, {
+        match StateT::run(self.transition, input) {
+          Err(error) => Err(error),
+          Ok((value, next)) => {
+            if(!String::ends_with(input.rest, next.rest), {
+              Err(ParserStateError("successful parser must return a suffix of its input"))
+            }, {
+              consumed = String::len(input.rest) - String::len(next.rest)
+              if(next.offset < 0 || next.offset != input.offset + consumed, {
+                Err(ParserStateError("successful parser offset must match consumed input"))
+              }, { Ok((value, next)) })
+            })
+          },
+        }
+      })
     })
   }
+
+  defp _literal(text: String, input: ParseInput) -> Result<(Unit, ParseInput)> {
+    match text {
+      "" => Ok(((), input)),
+      [head, ..tail] => {
+        match Parser::run(Parser::char(head), input) {
+          Ok((_, next)) => Parser::_literal(tail, next),
+          Err(error) => Err(error),
+        }
+      },
+    }
+  }
+
+  # Only diagnostics inside this attempt's input range permit automatic recovery.
+  defp _recoverable_mismatch(input: ParseInput, error: Error) -> Boolean {
+    match error {
+      ParseMismatch(position, _) => {
+        position >= input.offset && position <= input.offset + String::len(input.rest)
+      },
+      _ => False,
+    }
+  }
+
+  defp _many(self: Parser<$A>, input: ParseInput, acc: List<$A>) -> Result<(List<$A>, ParseInput)> {
+    match Parser::run(self, input) {
+      Ok((value, next)) => {
+        if(next.offset == input.offset, {
+          Err(ParserProgressError(input.offset))
+        }, { Parser::_many(self, next, [value, ..acc]) })
+      },
+      Err(ParseMismatch(position, _) @ original) => {
+        if(Parser::_recoverable_mismatch(input, original) && position == input.offset, {
+          Ok((List::reverse(acc), input))
+        }, { Err(original) })
+      },
+      Err(error) => Err(error),
+    }
+  }
+}
+
+impl ParseInput {
+  def new(rest: String, offset: Int) -> ParseInput { ParseInput { rest, offset } }
 }
 
 impl Functor for Parser<$T> where $T: Functor.$A {
@@ -234,7 +273,7 @@ impl Functor for Parser<$T> where $T: Functor.$A {
 impl Applicative for Parser<$T> where $T: Applicative.$A {
   def pure::<Parser<$T>>(value: $A) -> Parser<$A> { Parser::pure(value) }
   def ap(mapper: Parser<($A -> $B)>, value: Parser<$A>) -> Parser<$B> {
-    Parser::and_then(mapper, {|function| Parser::map(value, function)})
+    Parser::ap(mapper, value)
   }
 }
 
@@ -245,12 +284,32 @@ impl Monad for Parser<$T> where $T: Monad.$A {
   }
 }
 
-impl ParseInput {
-  def new(rest: String, offset: Int) -> ParseInput { ParseInput { rest, offset } }
+impl MonadFail for Parser<$T> {
+  def fail::<Parser<$T>>(error: Error) -> Parser<$T> { Parser::fail(error) }
 }
 
-impl ParseIssue {
-  def new(offset: Int, expected: String, fatal: Boolean) -> ParseIssue {
-    ParseIssue { offset, expected, fatal }
+impl MonadRecover for Parser<$T> {
+  def recover(self: Parser<$T>, handler: (Error -> Parser<$T>)) -> Parser<$T> {
+    Parser::recover(self, handler)
   }
+}
+
+deferror ParseMismatch(offset: Int, expected: String) {
+  |position: Int, expectation: String|
+  Self(message: "at #{position}: expected #{expectation}", offset: position, expected: expectation)
+}
+
+deferror ParserConfigurationError(reason: String) {
+  |detail: String|
+  Self(message: detail, reason: detail)
+}
+
+deferror ParserProgressError(offset: Int) {
+  |position: Int|
+  Self(message: "repeated parser must consume input", offset: position)
+}
+
+deferror ParserStateError(reason: String) {
+  |detail: String|
+  Self(message: detail, reason: detail)
 }

@@ -3,13 +3,22 @@ include '../src/arithmetic.srt'
 import Test
 
 def evaluate_example(text: String) -> Result<Int> {
-  match Parser::parse_all(Arithmetic::parser(), text) {
-    ParseReply::Success(tree, _) => Arithmetic::evaluate(tree),
-    ParseReply::Failure(issue) => Err(ExampleSyntaxError(issue.offset, issue.expected)),
-  }
+  evaluate_parsed(Parser::parse_all(Arithmetic::parser(), text))
 }
-deferror ExampleSyntaxError(offset: Int, expected: String) {
-  "at #{offset}: expected #{expected}"
+
+def evaluate_parsed(parsed: Result<ArithmeticExpr>) -> Result<Int> {
+  tree =? parsed
+  Arithmetic::evaluate(tree)
+}
+
+def assert_syntax(offset: Int, expected: String, result: Result<$A>) -> Result<()> {
+  match result {
+    Err(ParseMismatch(position, expectation)) => {
+      assert_eq(offset, position)?
+      assert_eq(expected, expectation)
+    },
+    _ => assert(False, "expected ParseMismatch with matching Payload"),
+  }
 }
 
 test("Arithmetic grammar") {
@@ -27,19 +36,39 @@ test("Arithmetic grammar") {
   }
   it("builds an AST and consumes the complete input") {
     expected = ArithmeticExpr::Binary(ArithmeticOp::Add, ArithmeticExpr::Number(2), ArithmeticExpr::Binary(ArithmeticOp::Multiply, ArithmeticExpr::Number(3), ArithmeticExpr::Number(4)))
-    assert_eq(ParseReply::Success(expected, ParseInput::new("", 5)), Parser::parse_all(Arithmetic::parser(), "2+3*4"))
+    assert_ok_eq(expected, Parser::parse_all(Arithmetic::parser(), "2+3*4"))
   }
   it("rejects empty input and missing operands") {
-    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(0, "digit", False)), Parser::parse_all(Arithmetic::parser(), ""))?
-    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "digit", False)), Parser::parse_all(Arithmetic::parser(), "1+"))?
-    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "digit", False)), Parser::parse_all(Arithmetic::parser(), "2**3"))
+    assert_syntax(0, "digit", Parser::parse_all(Arithmetic::parser(), ""))?
+    assert_syntax(2, "digit", Parser::parse_all(Arithmetic::parser(), "1+"))?
+    assert_syntax(2, "digit", Parser::parse_all(Arithmetic::parser(), "2**3"))
   }
   it("rejects missing parentheses and trailing text") {
-    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(4, ")", False)), Parser::parse_all(Arithmetic::parser(), "(1+2"))?
-    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "end of input", False)), Parser::parse_all(Arithmetic::parser(), "1 x"))?
-    assert_eq(ParseReply<ArithmeticExpr>::Failure(ParseIssue::new(2, "end of input", False)), Parser::parse_all(Arithmetic::parser(), "1 2"))
+    assert_syntax(4, ")", Parser::parse_all(Arithmetic::parser(), "(1+2"))?
+    assert_syntax(2, "end of input", Parser::parse_all(Arithmetic::parser(), "1 x"))?
+    assert_syntax(2, "end of input", Parser::parse_all(Arithmetic::parser(), "1 2"))
   }
   it("reports division by zero during evaluation") {
-    assert_eq(True, Result::is_err(evaluate_example("1 / (2 - 2)")))
+    assert_err_kind(ZeroDivisionError, evaluate_example("1 / (2 - 2)"))
+  }
+  it("forwards a parsed failure and preserves the division Error kind and message") {
+    parsed = Parser::parse_all(Arithmetic::parser(), "1 +")
+    evaluated = evaluate_parsed(parsed)
+    match (parsed, evaluated) {
+      (Err(ParseMismatch(position, expectation) @ original), Err(ParseMismatch(after_position, after_expectation) @ after)) => {
+        assert_eq(position, after_position)?
+        assert_eq(expectation, after_expectation)?
+        assert_eq(Error::format(original), Error::format(after))
+      },
+      _ => assert(False, "expected retained parse Error"),
+    }?
+    tree =? Parser::parse_all(Arithmetic::parser(), "1 / 0")
+    match (Arithmetic::evaluate(tree), evaluate_example("1 / 0")) {
+      (Err(original), Err(after)) => {
+        assert_true(Error::same_kind(original, after))?
+        assert_eq(Error::format(original), Error::format(after))
+      },
+      _ => assert(False, "expected retained division Error"),
+    }
   }
 }

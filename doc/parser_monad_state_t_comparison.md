@@ -1,7 +1,7 @@
 # ParserMonad の再設計方針 — StateT と Result
 
 作成日: 2026-10-11。対象ブランチ: `parser-monad-example`。
-対象: `examples/parser_monad/`。この文書は旧実装の構造を前提にせず、入力の遷移と Error の回復から組み直した設計案である。今回は仕様作成までとし、サンプルの実装・テスト・README は変更していない。
+対象: `examples/parser_monad/`。この文書は旧実装の構造を前提にせず、入力の遷移と Error の回復から組み直した実装の入力仕様である。設計時点の確認事実と、実装後の検証結果を分けて記載する。
 
 ## 1. 採用する構成
 
@@ -32,7 +32,7 @@ s0 -- left --> Ok((a, s1)) -- continuation(a) --> s2
 `Result` の失敗には更新後の入力状態がない。構文不一致の発生位置は Error の Payload に保持する。
 入力の復元と診断位置の保持を、それぞれ状態遷移と Error の責務にする。
 
-## 2. 前提と現在の状態
+## 2. 前提と設計時点の状態
 
 確認したサンプルの HEAD は `b70f0775`。`doc/example_parser_monad.md` と `examples/parser_monad/` は旧構成の仕様・実装として読む。
 サンプルブランチには、この案が必要とする最新の標準拡張がまだ揃っていない。
@@ -47,7 +47,7 @@ s0 -- left --> Ok((a, s1)) -- continuation(a) --> s2
 入力として指定されたレビュー文書は、削除された a8a3 から
 `/Users/haruca/.codex/worktrees/monad-recover-errorkind/surtr/doc/monad_recover_errorkind_review.md`
 へ引き継がれている。この文書の過去の調査結果と、進行中コードの状態は区別する。
-本案の例は拡張完了後の受入例であり、現在のサンプルブランチで実行済みの例ではない。
+この設計調査では、本案の例を拡張完了後の受入例として記載した。実装後の状態と検証結果は第13節を参照。
 
 Parser の実装範囲は既存の言語機能・標準 Trait を使う **level1**。コンパイラ、標準 Trait の契約、標準 Transformer の実装は変更しない。
 前提の ErrorKind / MonadRecover 拡張の level4 検証は、その拡張側で完了させる。
@@ -387,9 +387,70 @@ rtk proxy cargo run -- test --quiet --all
 Rust に変更がなければ、このサンプルのための nextest は不要。
 前提の拡張に不備が見つかった場合は、サンプルに互換処理を足さず、拡張側の修正範囲・level・検証を改めて定める。
 
-## 12. 今回の検証範囲
+## 12. 設計時点の検証範囲
 
 2名のサブエージェントで既存 Parser と標準 Error / Transformer の読み取り調査を分担し、別の1名が設計文書を独立にレビューした。
 指摘された MonadFail の元 Error 保持と入力範囲検査の衝突、遷移差替えによる検査の迂回、回復境界と中間遷移の受入条件を修正した。
-今回の成果はこの変更方針だけである。実装、実行可能なテストの変更、サンプル実行、全標準テスト、全体 CI は行っていない。
-前提の拡張の実行成功も、この設計調査で確認したとは扱わない。
+設計段階の成果はこの変更方針だけである。その段階では実装、実行可能なテストの変更、サンプル実行、全標準テスト、全体 CI は行っていない。
+前提の拡張の実行成功も、この設計調査で確認したとは扱わない。実装後の確認は次節に記録する。
+
+
+## 13. 実装結果と検証（2026-10-11）
+
+### 型解決の阻害と main の取り込み
+
+最初の実装は `4f4396ac` から開始した。ErrorKind / MonadRecover の統合コミット
+`02674c74` は履歴に含まれていたが、新実装は StateT の generic Trait 呼出しの型検査で停止した。
+ユーザーの指定により、サンプルの差分と阻害条件を残し、コンパイラ修正には進まず停止した。
+旧実装へ新しい Unicode 成功結果を要求したテストは、
+`expected Result<(String, ParseInput)>, got ParseReply<$A>` で失敗しており、結果契約の変更を確認した。
+
+停止時には、Parser を含まない次の最小例でも、未呼出しの map_value の定義だけで
+`Monad::bind requires a concrete method instantiation` を再現した。
+
+```surtr
+def lift_value(value: $A) -> StateT<Int, Result, $A> {
+  Applicative::pure(value)
+}
+def sequence_value(source: StateT<Int, Result, $A>, next: ($A -> StateT<Int, Result, $B>)) -> StateT<Int, Result, $B> {
+  Monad::bind(source, next)
+}
+def map_value(source: StateT<Int, Result, $A>, mapper: ($A -> $B)) -> StateT<Int, Result, $B> {
+  sequence_value(source, {|value| lift_value(mapper(value))})
+}
+state: StateT<Int, Result, Int> = lift_value(7)
+print(inspect(StateT::run(state, 0)))
+```
+
+ユーザーによる型解決修正後、main の `ee13e448` をサンプルブランチへ取り込んだ
+（merge commit `faca25af`）。main は generic callable specialization の修正
+`3299e703`（統合 `43efc2f1`）を含む。上の最小例は終了コード0で `Ok((7, 0))` を返した。
+このサンプルの作業ではコンパイラや標準 Trait / Transformer を変更せず、level1 の範囲で再開した。
+
+### 完成した実装
+
+Parser は `StateT<ParseInput, Result, A>` を保持し、pure / bind / ap / fail を標準 StateT に委譲する。
+入力検査は `_checked_transition` に集約した。recover は Result の回復へ接続し、
+choice / many / optional / sep_by は本書の位置と入力復元の契約に従う。
+旧 ParseReply / ParseIssue / fatal と ExampleSyntaxError の経路は削除した。
+四則演算、使用例、README、`doc/example_parser_monad.md` も Result API へ移行した。
+
+テスト用の別ステージの owner impl は現行の宣言境界で拒否されるため追加しない。
+`Parser::new` が `_store_transition` の owner struct literal を通ることを利用し、
+この保存経路と Facet 差替えの両方で不正な遷移を検査する。
+
+### 検証結果
+
+- Parser テスト: 38件成功、失敗・skipなし。
+- 四則演算テスト: 7件成功、失敗・skipなし。
+- `run.srt` と `entry.srt --entry main`: 終了コード0。優先順位、左結合、構文エラー、ゼロ除算を表示。
+- CLI の `--vm-dump` 観測: fail、recover による再失敗、kind 不一致の recover_kind、choice の左右の最遠位置と同位置左優先の6経路で、元の kind / message / 生成位置 / cause を保持。
+
+CLI 観測には、位置付き ParseMismatch に ParserConfigurationError の cause を付けた入力を用いた。
+最終の `result.error.location` の file / line / column / span が元の constructor 呼出しを指すことと、
+表示値に元の cause が残ることを確認した。Error::format の一致だけを位置保持の証拠にはしていない。
+
+`cargo run --quiet -p rune -- test --quiet --all` は終了コード0。
+サブエージェントによるコード・テストの独立レビューで指摘はなかった。
+Rust / 標準定義への追加修正はないため、この level1 作業では nextest は実行していない。
+前提のコンパイラ拡張の workspace CI を今回再実行したとは扱わない。
