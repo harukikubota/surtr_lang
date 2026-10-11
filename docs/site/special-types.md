@@ -29,23 +29,24 @@ contract を持っています。
 field / parameter / return / annotation、inherent / Trait impl targetでの利用は拒否されます。
 Monadの逐次処理には[do式](./do.md)を書いてください。
 
-## 標準引数専用の`Lazy`と`ErrorKind`
+## 標準引数専用の `Lazy`
 
-`Lazy<T>` は special form の遅延引数を表すマーカーです。コンパイラが0引数関数へ正規化し、選ばれた branch だけを一回呼び出します。
-利用者の関数で遅延処理を受け取るときは、通常の `(-> T)` を使います。
+`Lazy<T>` は special form の遅延引数を表すマーカーです。コンパイラが0引数関数へ正規化し、選ばれた branch だけを一回呼び出します。利用者の関数で遅延処理を受け取るときは、通常の `(-> T)` を使います。
 詳細は [Lazy evaluation](./lazy-evaluation.md) を参照してください。
 
-`ErrorKind` は `Result::recover_kind` と `Test::assert_err_kind` に具体的な `deferror` 型名を渡すためのマーカーです。
-`Test::assert_cause_chain([OuterError, InnerError], result)` では、型名を直接リストに並べて cause の全体を検証できます。この引数以外で `List<ErrorKind>` を宣言したり、リストを変数経由で渡したりはできません。
-修飾名も使え、constructor の payload 数に依存しません。Error の生成や constructor の実行は行いません。
+## 種類を運搬する `ErrorKind`
 
-両マーカーとも標準引数専用で、利用者の引数・戻り値・型注釈や通常の変数には使えません。
-`ErrorKind` の値を作る API はなく、Error 値・constructor call・文字列・抽象 `Error`・非エラー型は marker として渡せません。
-キャプチャでも型名を固定し、markerを直接プレースホルダで置き換えることはできません。
+裸の具体的な `deferror` 名は ErrorKind 値を作ります。明示的な constructor call は Error を作り、ErrorKind とは型が異なります。種類の取得では constructor を実行しないため、その入力数に依存しません。
 
 ```surtr
-Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)}) # Ok(1)
+kind = NoneError
+kinds: List<ErrorKind> = [kind, ZeroDivisionError]
+Result::recover_kind(Err(NoneError()), kind, {|_| Ok(1)}) # Ok(1)
 ```
+
+ErrorKind は変数・引数・戻り値・field・container・capture で運搬できます。`Test::assert_err_kind` と `Test::assert_cause_chain` にも、計算した種類や List を渡せます。
+
+ErrorKind の constructor・field・Eq/Show・利用者 Trait impl・文字列からの変換はありません。Error instance、constructor call、文字列、抽象 Error、非エラー型は種類の代わりに渡せません。ErrorKind から Error を動的に作ることもできません。`inspect` は `ErrorKind(宣言の修飾名)` と表示します。
 
 ## `Unit`
 

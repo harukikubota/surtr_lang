@@ -459,7 +459,7 @@ right: Either<Int, String> = Either<Int, _>::Right("value")
 `Enum<...>::method`、struct constructor、型注釈中の `_` には広がりません。
 TypeConstructor trait など、通常の値型位置で禁止される型も明示できません。
 
-`Err(NoneError)` の成功型を固定したい場合は、`failed: Result<Int> = Err(NoneError)` のように
+`Err(NoneError())` の成功型を固定したい場合は、`failed: Result<Int> = Err(NoneError())` のように
 型注釈を付けます。
 
 補足:
@@ -487,7 +487,7 @@ deferror Boom {
 }
 
 ok: Result<Int> = Ok(7)
-er: Result<Int> = Err(Boom)
+er: Result<Int> = Err(Boom())
 ```
 
 `match` で扱うのが基本形です。これは `Either` の左右を分岐するのと同じ感覚です。
@@ -502,7 +502,7 @@ print(match ok {
 標準で提供される具体 error もあります。たとえば `NoneError` は最初から使えます。
 
 ```surtr
-ret: Result<Int> = Err(NoneError)
+ret: Result<Int> = Err(NoneError())
 match ret {
   Ok(val) => print("ok"),
   Err(e)  => print("none"),
@@ -706,7 +706,7 @@ Ok(1) |*> add(2)
 
 ```surtr
 def require_at_least(x: Int, floor: Int) -> Result<Int, TooSmall> {
-  if(x >= floor, Ok(x), Err(TooSmall))
+  if(x >= floor, Ok(x), Err(TooSmall()))
 }
 
 value: Result<Int> = Ok(11)
@@ -840,7 +840,7 @@ not_fn = &`Boolean::not`
 - `eprint(Error) -> Unit`
 - `set_exit_code(Int) -> Unit`
 
-`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` を呼び、`Result` を返します。標準数値実装のゼロ除算は `Err(ZeroDivisionError)` です。ユーザー型の実装は独自のエラー契約を持てます。
+`/` と `%` はそれぞれ `Div::safe_div` と `Mod::safe_mod` を呼び、`Result` を返します。標準数値実装のゼロ除算は `Err(ZeroDivisionError())` です。ユーザー型の実装は独自のエラー契約を持てます。
 `+`, `-`, `*` は内部では `Add` / `Sub` / `Mul` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
 ## 12. 標準定義ソースの前提

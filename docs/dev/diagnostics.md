@@ -84,10 +84,8 @@ REPLの保存・復元と候補検査のrollbackにはこの状態も含め、�
 placeholderの競合では、その正規化で確定した要求型をまとめて使う。未確定型を含むsignatureを完成済みとして表示しない。
 追加の案内はhuman表示と構造化remediationへ同じ内容を渡し、通常のreason・primary spanを保持する。
 
-`ErrorKind` には具体的な `deferror` の解決済み型 identity だけを渡す。
-未定義型名、非エラー型、抽象 `Error`、runtime Error 値、constructor call、文字列、直接 placeholder を静的に拒否する。
-標準引数以外の marker 使用も拒否し、旧 Lazy marker や任意文字列へ fallback しない。
-表示名の比較で ErrorKind の許可を判定せず、Sigil が確定した canonical identity を使う。
+裸の canonical `deferror` 名は期待型によらず ErrorKind を生成する。Error 期待位置でも旧自動構築に戻さず、通常の型不一致として診断し、ErrorKind と Error の違いを Help で説明する。直接の裸宣言なら明示 constructor call を案内し、入力を持つ宣言には必要入力を示す。既存 ErrorKind 変数に `kind()` は勧めない。ErrorKind 期待位置に String・Error instance・constructor call を渡した場合も通常の型不一致にする。抽象 Error、未定義参照、非エラー型名はそれぞれ通常の名前解決規則で拒否する。
+値・戻り値・field・container・placeholder での ErrorKind 運搬は許可する。生成元の判定は Sigil が最初に選択した canonical declaration identity に従い、表示名や外側の同名宣言へ fallback しない。
 
 ## stable reason と typed data
 

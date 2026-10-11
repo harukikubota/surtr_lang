@@ -197,7 +197,7 @@ builtin の内部結果は、完了、継続可能、callback 要求、Future �
 - callback 要求では親の復帰先を保存し、子を通常の VM engine で進める。子の完了結果は親へ一度だけ渡す。引数評価や callback を再開時にやり直さない。
 - 予算切れは Runnable として保存し、Future 待機は Waiting として保存する。CPU の yield に Future を作らず、待機中の再実行や queue の二重登録を許さない。
 - 実行中の状態は切替え時に移動する。REPL checkpoint は独立した保存状態を持ち、rollback はその位置へ戻す。新規継続や失敗した chunk の進捗を破棄し、保存状態を二重実行しない。外部 I/O の巻き戻しは保証しない。
-- `__recover_kind` や `file_with_open` など、callback 後に処理がある wrapper は後処理も継続状態に保持する。ファイルは中断中も開いたまま保持し、完了・失敗時に所定の flush / close を一度だけ行う。
+- `file_with_open` など、callback 後に処理がある wrapper は後処理も継続状態に保持する。ファイルは中断中も開いたまま保持し、完了・失敗時に所定の flush / close を一度だけ行う。
 - ファイルの所有権を含む継続は、開始直後の中断や timeout による取消でも後処理を失わない。取消中に後処理が Result のエラーを返しても、利用者 callback の後続命令は再開しない。
 - REPL checkpoint は開いているファイル資源も保持する。失敗した chunk が既存 handle を閉じた場合、rollback は保存した資源から handle の対応を復元する。パスを開き直したり、ファイルを切り詰めたり、OS の読み書き位置を巻き戻したりしない。
 - batch のトップレベルが完了しても background task が残る間はファイル資源を保持し、background task の終了後に shutdown を行う。
@@ -294,11 +294,12 @@ Error の宣言・構築・生成責務・情報保持・生成位置は [Error 
 
 `cause` は runtime 管理の線形 chain とする。コンストラクタ実行へ生成元の source ID / span を渡し、`location` と既存の cause / diagnostic / stack trace を共通の生成処理で統合する。`stack_trace` は呼出し経路用であり、先頭 frame で `location` を上書きしない。型・局所具象情報・readonly の静的制約は Scar の検査結果に従う。
 
-API と内部 ABI の対応は次のとおり。共通の identity と ErrorKind の制約は [Error spec](Error_spec.md)、API ごとの marker 構文は [Lazy spec](Lazy_spec.md) に従う。
+API と runtime の対応は次のとおり。canonical identity と通常値の制約は [Error spec](Error_spec.md) に従う。
 
-- `Result::recover_kind` では、Sigil が確定した canonical identity の `fq_name` を Forge が静的 metadata から hidden builtin `__recover_kind` へ渡す。Eldr は内部 ABI の kind 文字列を照合して handler を呼び出す。marker 自体は Error を生成せず、コンストラクタも呼び出さない。
-- `Test::assert_err_kind(marker, result)` も同じ ErrorKind の宣言 identity 解決・検証を使う。Err の kind が一致すれば `Ok(())`、異種の Err は `TestErrorKindMismatch`、Ok は `TestExpectedErrorKind`。payload や表示文字列は比較しない。marker を一般の値として束縛・転送する能力は追加しない。
-- `Test::assert_cause_chain(expected, result)` は最外側の Err から cause へ辿る kind の列を、静的な宣言 identity の列と比較する。順序・長さ・重複を含め完全一致なら `Ok(())`、不一致は `TestCauseChainMismatch`、Ok は `TestExpectedCauseChain`。payload・message・位置は比較せず、result は一度だけ評価する。診断は期待列・実際列と、最初の不一致位置（0始まり）または長さの違いを含める。Forge は列を hidden builtin の `List<String>` metadata へ lower する。
+- ErrorKind は canonical qualified name を保持する専用 Value / Constant である。定数を読み込む際は検査済み Error template に同じ identity があることを要求する。増分 chunk では prefix と suffix の定義を参照できる。生成時には Error constructor を実行しない。Error の入力・Payload schema でも ErrorKind を区別する。
+- `Error::is_kind(error, kind)` は専用 builtin で canonical identity を比較し Boolean を返す。`Result::recover_kind` は MonadRecover の通常関数による合成であり、専用 IR・lowering・hidden recovery builtin・継続状態を持たない。
+- `Test::assert_err_kind(marker, result)` は通常の ErrorKind 値を受ける。Err の kind が一致すれば `Ok(())`、異種の Err は `TestErrorKindMismatch`、Ok は `TestExpectedErrorKind`。Payload や表示文字列は比較しない。
+- `Test::assert_cause_chain(expected, result)` は通常の `List<ErrorKind>` を受け、最外側の Err から cause へ辿る kind の列と比較する。順序・長さ・重複を含め完全一致なら `Ok(())`、不一致は `TestCauseChainMismatch`、Ok は `TestExpectedCauseChain`。Payload・message・位置は比較せず、result は一度だけ評価する。診断には期待列・実際列と最初の不一致位置（0始まり）または長さの違いを含める。
 - Lazyの正規化とeager入力の評価順は[Lazy spec](Lazy_spec.md)に従う。VMへLazy markerは渡さず、確定した分岐と通常call命令を実行する。branchをruntime callableとして表す場合も呼び出しは一回とし、戻り値がcallableでも追加で実行しない。
 
 - `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける
@@ -376,10 +377,10 @@ checkpoint は process・future・detached task に加え、停止識別表と�
 無限の producer は `Unfold { state, step }` を持つ。両方とも生成と List の取得を担当し、取得後の変換・選別・集計は List モジュールに任せる。
 
 - 有限の unfold step は `State -> Option<(Item, State)>`。`None` だけが正常終端で、item 自体の `Result` / `Option` はデータとして保つ。
-- private な有限 pull builtin `gen_step` は `Option<(Item, Generator<Item>)>` を返す。公開 `Generator::next` は標準定義でこれを `Ok((item, rest))` / `Err(GeneratorExhausted)` に変換する。step の終端 protocol と公開 API の戻り値は別の契約とする。
+- private な有限 pull builtin `gen_step` は `Option<(Item, Generator<Item>)>` を返す。公開 `Generator::next` は標準定義でこれを `Ok((item, rest))` / `Err(GeneratorExhausted())` に変換する。step の終端 protocol と公開 API の戻り値は別の契約とする。
 - 無限の unfold step は `State -> (Item, State)`。`InfiniteGenerator::next` は `(Item, InfiniteGenerator<Item>)` を直接返す。
 - handle は不変で、構築や opaque 表示では step を呼ばない。進行は返された rest を使う。同じ handle を新しい呼出しで再利用すると、保存 state から再評価する。
-- take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `Err(GeneratorExhausted)` を返す。
+- take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `Err(GeneratorExhausted())` を返す。
 - 条件停止した item は List に含めず、その生成前の handle を rest とする。再利用ではその位置を再評価する。step の RuntimeError や不正 carrier を終端や途中までの成功 List に変換しない。
 - callback、条件判定、List への一件追加は共通の builtin continuation と VM 予算で進める。一回の取得の中断・再開で callback を重複実行しない。通常の切替えでは状態を移動し、checkpoint は独立した状態を保持する。
 - materialize は flat_map と同じ private `ListBuilder` を使い、完了時だけ buffer を ListHandle に移す。非空は既存の Packed、空は Empty になる。巨大な count の初期予約容量を制限しても、BigInt の要求件数と結果は切り詰めない。
@@ -468,7 +469,7 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list index miss は `FacetListIndexOutOfBounds`、逆順 range は `FacetListRangeReversed`、map miss は `FacetKeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値は `inspect` 経由で標準エラー出力へ書き出す
 - `Error::kind` / `Error::message` / `Error::format` / `Error::same_kind` は `Error` 値を introspection / 表示文字列化・kind 比較する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
-- `Result::recover` は標準定義の通常関数である。`match` で Ok をそのまま返し、Err の場合だけ nullary handler を呼び出す。通常の関数呼出し・分岐として実行し、専用 lowering や runtime builtin は持たない。`ErrorKind` の canonical identity を hidden ABI に渡す `Result::recover_kind` の専用処理とは区別する
+- `Result::recover` は標準定義の通常関数である。`match` で Ok をそのまま返し、Err の場合だけ元 Error を handler に渡す。`recover_kind` も通常関数の合成として実行する。両方とも専用 lowering や recovery builtin を持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は `HashMap<String, Value>` の immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。

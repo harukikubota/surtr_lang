@@ -249,7 +249,7 @@ def parse_int(text: String) -> Result<Int> {
 }
 
 def require_small(x: Int) -> Result<Int> {
-  if(x < 100, Ok(x), Err(NoneError))
+  if(x < 100, Ok(x), Err(NoneError()))
 }
 
 pipeline = &parse_int >=> &require_small
@@ -301,7 +301,7 @@ def parse_int(text: String) -> Result<Int> {
 }
 
 def require_small(x: Int) -> Result<Int> {
-  if(x < 100, Ok(x), Err(NoneError))
+  if(x < 100, Ok(x), Err(NoneError()))
 }
 
 def render(x: Int) -> String {

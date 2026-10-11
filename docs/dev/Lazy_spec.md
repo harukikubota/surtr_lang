@@ -15,7 +15,7 @@ builtin の signature は `crates/sindr/src/builtin.rs` の `BUILTIN_METAS` と�
 | Sigil | canonical callee・Pattern binding・deferrorのidentityとlexical scopeを確定する。builtin の裸 Lazy capture を拒否し、診断用の由来を生成parameterへ保持する |
 | Scar | Lazy入力の型とclosure shellを正規化し、生成parameterの要求型・callの戻り値型を確定する。Trait の宣言権限・override の対応と裸 capture を検査し、通常の型関係を維持する |
 | Forge | 照合・branch選択前のeager入力を一回評価し、選択されたbranchの正規化済みshellを一回consumeする。tail位置でも同じ順序を守る |
-| Eldr | 通常のcall frame・closureと、静的に確定したError kindの内部ABIを実行する。Lazy値やErrorKind値を利用者へ公開しない |
+| Eldr | 通常のcall frame・closureを実行する。Lazy値は公開しない。ErrorKindは独立した通常値として運搬する |
 
 概念上のwrapとruntime closure allocationは別である。Forgeは確定した評価順と型を実行し、すべてのbranchにclosure allocationを要求しない。
 実行式のbranchへLazyマーカーを残したり、正規化済みparameterへ再びLazy処理を適用したりしない。
@@ -91,11 +91,8 @@ Pattern consumerの完全call capture、固定Pattern、bindingを伴う成功br
 Pattern自体・DirectExpressionBlock自体をplaceholderで置き換えず、特殊ブロック内への新しいplaceholder許可やpipeの引数注入規則を追加しない。
 `&N`、projectionの`_N`、pipeの`_N`はそれぞれの構文・役割を維持する。
 
-`Result::recover_kind` と `Test::assert_err_kind` の `ErrorKind` は Lazy 入力ではない。標準builtinの直接parameterだけに許可し、利用者の型注釈や入れ子の型・container・field・returnへ公開しない。
-`Test::assert_cause_chain(expected: List<ErrorKind>, result)` の expected だけは具体的な `deferror` 名を並べた直接 List literal（空列を含む）を受ける。各要素は同じ宣言 identity 規則で解決し、実行時の List 値として評価しない。動的 List、spread、要素や列全体の placeholder は拒否する。この署名は一般の `List<ErrorKind>` の束縛・転送を許可しない。
-Sigilは修飾名を含む具体的な`deferror`型名を解決する。constructor call、runtime Error、文字列、抽象`Error`、直接placeholderは拒否する。
-コンストラクタ入力 arity と保存 Payload arity は marker 解決に関係しない。Forgeはcanonical identityを静的kind metadataへ消去し、Eldrはhidden ABIでkindを照合する。
-利用者向けのkind値・constructor・Error生成能力や、旧Lazy marker／任意文字列へのfallbackを設けない。内部ABIの詳細は[EldrVM spec](EldrVM_spec.md)に従う。
+`Result::recover_kind`、`Test::assert_err_kind`、`Test::assert_cause_chain` の ErrorKind 入力は通常値であり、Lazy 入力ではない。動的な値・List・spread・capture placeholder は通常の型規則で扱う。値生成と Error 構築の境界は [Error spec](Error_spec.md) に従う。回復関数の handler 生成式は通常どおり eager に評価し、handler 本体は失敗時（kind 指定なら一致時）だけ呼び出す。
+Sigil は修飾名を含む裸の canonical `deferror` 参照を ErrorKind 値生成へ解決する。入力 arity と保存 Payload arity は値生成に関係しない。Forge は ErrorKind 定数を生成し、Eldr は専用の通常値として運搬する。constructor call と Error instance は Error 型、文字列は String 型であり、ErrorKind とは通常の型検査で区別する。値表現と検証の詳細は [EldrVM spec](EldrVM_spec.md) に従う。
 
 ## 診断と検証
 

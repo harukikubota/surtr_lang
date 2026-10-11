@@ -308,7 +308,7 @@ defagent Counter {
     next = state.value + delta
     if(next >= 0,
       Ok(CounterState::new(next)),
-      Err(NoneError)
+      Err(NoneError())
     )
   }
 }
@@ -432,7 +432,7 @@ defgenserver CounterServer {
     next = state.value + delta
     if(next >= 0,
       Ok(CastResult::Next(CounterServerState::new(next))),
-      Err(NoneError)
+      Err(NoneError())
     )
   }
 

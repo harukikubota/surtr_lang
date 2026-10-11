@@ -132,7 +132,11 @@ OS・外部 parser の原文 detail、利用者の説明、任意型の `inspect
 
 ParseError、ResolveError、TypeError、CodegenError と VM 内部不整合は、recoverable な言語 Error へ変換しない。型検査済み表現の破損、未知 tag、欠損 metadata、未知 MatchResult tag 等は内部契約違反として扱い、利用者の通常の失敗値と区別する。
 
-`ErrorKind` を受け取る標準 API は具象 `deferror` の宣言 identity を使う。一般の runtime 値や任意の文字列による kind 指定は公開しない。API ごとの marker 位置、静的な種類列、capture と評価規則は [Lazy spec](Lazy_spec.md) と標準宣言に従う。
+`ErrorKind` は具象 `deferror` の canonical declaration identity を保持する不透明な通常値である。値式での裸名は、期待型によらず ErrorKind を生成する。`NoneError` と `(NoneError)` は ErrorKind、`NoneError()` は Error であり、Error 期待位置でも裸名を暗黙に呼び出さない。入力を持つ宣言の裸名も ErrorKind となり、コンストラクタの入力 arity に依存しない。最初に選ばれた参照が通常値なら、同名の外側 deferror へ再解決しない。
+
+ErrorKind は変数・引数・戻り値・Tuple・List・field・closure で運搬できる。公開 field、constructor、Eq / Show、利用者 Trait impl、String や Error からの変換、ErrorKind からの動的 Error 構築は提供しない。`inspect` は `ErrorKind(canonical qualified name)` と表示し、container 内も同じ規則に従う。`Error::is_kind(error, kind)` は canonical identity の一致を Boolean で返し、局所具象情報を付けない。Pattern head、型位置、readonly Facet root、`&NoneError` の constructor capture はそれぞれの既存規則を維持する。
+
+`MonadRecover: MonadFail` は保持した Error による回復を表す。`recover(self: Self, handler: (Error -> Self)) -> Self` は失敗時だけ handler 本体を呼び、成功値と handler の再失敗をそのまま返す。`recover_kind` は recover、is_kind、fail の合成であり、不一致時は元 Error を再構築せず伝播する。初回の標準実装は Result のみ。引数の kind / handler を生成する式は通常の eager 評価であり、SafeBind の failure target と Result 専用 RHS アンラップは変更しない。
 
 ## 7. 生成位置と情報の保持
 

@@ -230,7 +230,7 @@ deftrait Mod {
 }
 ```
 
-標準では `Div for Int`、`Div for Float`、`Mod for Int` を提供します。各標準実装は `Result<Self, ZeroDivisionError>` と注釈し、ゼロ除算は `Err(ZeroDivisionError)` です。エラー名の注釈はドキュメント用で、返すエラーの種類を静的に制限するものではありません。整数除算・剰余の符号規則と Float の有限値制約は、各標準実装に従います。標準の `Mod for Float` はありません。
+標準では `Div for Int`、`Div for Float`、`Mod for Int` を提供します。各標準実装は `Result<Self, ZeroDivisionError>` と注釈し、ゼロ除算は `Err(ZeroDivisionError())` です。エラー名の注釈はドキュメント用で、返すエラーの種類を静的に制限するものではありません。整数除算・剰余の符号規則と Float の有限値制約は、各標準実装に従います。標準の `Mod for Float` はありません。
 
 通常のトレイト実装規則に従い、ユーザー型も `Div` / `Mod` を実装できます。型変数に `where $A: Div` や `where $A: Mod` を付ければ、その型の演算子とトレイトメソッドを使えます。異種数値の暗黙変換や `Result` の自動 unwrap は行いません。
 

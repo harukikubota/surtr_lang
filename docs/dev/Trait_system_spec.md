@@ -842,4 +842,8 @@ generalization である。
 
 トレイトメソッドは `(Self, Self) -> Result<Self>` と宣言し、エラー位置を指定しない。実装の `Result<Self, E>` は値の型として `Result<Self>` と照合し、`E` はドキュメント用の metadata として保持する。指定したエラー名の存在と記述位置は検査するが、返却 kind の静的制限・網羅検査は行わず、別の kind を返すことだけでは拒否しない。トレイト定義の省略を実装のエラー指定禁止として扱わない。ユーザー実装は具体的な `deferror`、抽象 `Error`、エラー位置の省略を指定できる。引数・成功型・通常の impl 制約の照合は緩めない。
 
-標準実装は `Div for Int`、`Div for Float`、`Mod for Int` で、ドキュメント用のエラー名には `ZeroDivisionError` を指定する。ゼロ除算時は `Err(ZeroDivisionError)` を返す。標準の `Mod for Float` は提供しない。runtime の整数除算・符号・Float finite-only 制約は既存 builtin の契約を維持する。Facet の `->` は固定構文であり、このユーザー拡張経路に接続しない。
+標準実装は `Div for Int`、`Div for Float`、`Mod for Int` で、ドキュメント用のエラー名には `ZeroDivisionError` を指定する。ゼロ除算時は `Err(ZeroDivisionError())` を返す。標準の `Mod for Float` は提供しない。runtime の整数除算・符号・Float finite-only 制約は既存 builtin の契約を維持する。Facet の `->` は固定構文であり、このユーザー拡張経路に接続しない。
+
+## MonadRecover
+
+`MonadRecover` は `Self: MonadFail` を親制約に持ち、完成した `Self` に対する `recover(self: Self, handler: (Error -> Self)) -> Self` を必須操作とする。`recover_kind` は Error::is_kind と MonadFail::fail を用いたデフォルト実装である。標準の初回実装は Result のみで、MonadFail の実装だけでは回復能力を付与しない。kind 不一致は元 Error を保持し、handler の再失敗は handler が返した失敗をそのまま返す。成功値は変えない。handler 生成式は通常の eager 評価に従う。状態復元は各実装の契約であり、この Trait では保証しない。SafeBind と do の failure target 選択は変更しない。

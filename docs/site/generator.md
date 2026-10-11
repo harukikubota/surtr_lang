@@ -21,7 +21,7 @@ gen = Generator::unfold(1, {|n|
 print(inspect(Generator::to_list(gen)))  # [1, 2, 3]
 ```
  
-- `Generator::next(gen)` は `Ok((値, rest))` か、終端なら `Err(GeneratorExhausted)` を返します。step の終端検出に使う `Option` とは別の契約です。
+- `Generator::next(gen)` は `Ok((値, rest))` か、終端なら `Err(GeneratorExhausted())` を返します。step の終端検出に使う `Option` とは別の契約です。
 - `Generator::to_list(gen)` は終端まで生成して list を返します。
 ```surtr
 match Generator::next(Generator::range(10, 12)) {

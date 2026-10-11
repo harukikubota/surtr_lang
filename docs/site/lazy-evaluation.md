@@ -255,7 +255,7 @@ errorのプレースホルダの正規化型は `(-> Error)` です。
 `&require(&1, &2)` は `(Boolean, (-> Error) -> Result<Unit>)` として使えます。error 式を固定したキャプチャも作れます。
 
 ```surtr
-require(True, NoneError) # Ok(())
+require(True, NoneError()) # Ok(())
 check = &require(&1, NoneError())
 # (Boolean -> Result<Unit>)
 check(True) # Ok(())
@@ -268,7 +268,7 @@ predicateは通常の1引数関数です。errorのプレースホルダの正�
 error式を固定すると、入力データだけを受け取る関数を作れます。
 
 ```surtr
-ensure(3, {|n| n > 0}, NoneError) # Ok(3)
+ensure(3, {|n| n > 0}, NoneError()) # Ok(3)
 positive: (Int -> Result<Int>) = &ensure(&1, {|n| n > 0}, NoneError())
 positive(3) # Ok(3)
 ```
@@ -279,7 +279,7 @@ positive(3) # Ok(3)
 errorのプレースホルダの正規化型は `(-> Error)` です。error式を固定したキャプチャも作れます。
 
 ```surtr
-Result::map_err(Ok(1), NotImplemented) # Ok(1)
+Result::map_err(Ok(1), NotImplemented()) # Ok(1)
 replace_error: (Result<Int> -> Result<Int>) = &Result::map_err(&1, NotImplemented())
 replace_error(Ok(1)) # Ok(1)
 ```
@@ -290,7 +290,7 @@ replace_error(Ok(1)) # Ok(1)
 errorのプレースホルダの正規化型は `(-> Error)` です。`map_err`と同じく、error を返す関数を渡すか、error 式を固定できます。
 
 ```surtr
-Result::cause(Ok(1), NotImplemented) # Ok(1)
+Result::cause(Ok(1), NotImplemented()) # Ok(1)
 add_cause: (Result<Int> -> Result<Int>) = &Result::cause(&1, NotImplemented())
 add_cause(Ok(1)) # Ok(1)
 ```
@@ -298,21 +298,19 @@ add_cause(Ok(1)) # Ok(1)
 errorを受け取る各関数でも、通常の呼び出しでerror式を括弧で囲むと、判定前に一度評価します。
 Error は通常の値として保持・受け渡しできます。遅延引数であることによって Error の情報は変わりません。
 
-## `recover_kind`のErrorKind
+## `recover_kind` の ErrorKind
 
-`Result::recover_kind` と `Test::assert_err_kind` の marker は `ErrorKind` です。Lazy 入力ではありません。
-具体的な `deferror` 型名を直接書きます。修飾名も使えます。
-constructor の payload 数にかかわらず、Error の生成や constructor の実行は行いません。
+`Result::recover_kind` と Test の種類検査は通常の `ErrorKind` 値を受け取ります。裸の `deferror` 名は種類を表し、明示的な呼出しは Error を作ります。
 
 ```surtr
-Result::recover_kind(result, NetworkError, {|err| recover(err)})
-&Result::recover_kind(&1, NetworkError, &2)
+kind = NoneError
+Result::recover_kind(Err(NoneError()), kind, {|_| Ok(1)})
+recover: (Result<Int>, ErrorKind -> Result<Int>) = &Result::recover_kind(&1, &2, {|_| Ok(1)})
 ```
 
-runtime Error 値、constructor call、文字列、抽象 `Error`、存在しない型名、非エラー型は拒否します。
-`Test::assert_cause_chain` の期待列も Lazy 入力ではなく、具体的な型名の直接リストに限ります。列全体や各要素をプレースホルダで置き換えることはできません。
-`ErrorKind` は標準引数専用で、利用者の引数・戻り値・型注釈や変数には使えません。
-キャプチャでも marker を直接プレースホルダへ置き換えることはできません。
+ErrorKind は引数・戻り値・変数・field・container で使えます。Test の期待列も通常の `List<ErrorKind>` で、計算した列や capture を渡せます。Error instance や String は ErrorKind の代わりに渡せません。
+
+`recover` と `recover_kind` の引数式は通常どおり呼出し前に評価します。ハンドラ本体は失敗時だけ、`recover_kind` では種類が一致したときだけ呼び出します。
 
 ## pipe RHS の括弧は別の規則
 

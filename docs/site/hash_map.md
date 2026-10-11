@@ -89,7 +89,7 @@ SafeBind は RHS の canonical Result の外側一段だけを分解します。
 map 内の Result 値は自動で分解しません。変数に束縛すれば Result 全体を受け取り、`Ok(child)` を書けば成功値を照合します。指定していないキーの Err は照合に影響しません。
 
 ```surtr
-values: HashMap<Result<Int>> = hash!["a" => Ok(2), "extra" => Err(NoneError)]
+values: HashMap<Result<Int>> = hash!["a" => Ok(2), "extra" => Err(NoneError())]
 apply_pattern(values, hash!["a" => _1])     # Ok(Ok(2))
 apply_pattern(values, hash!["a" => Ok(_1)]) # Ok(2)
 ```
