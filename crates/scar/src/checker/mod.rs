@@ -1354,6 +1354,7 @@ struct PersistentCheckerState {
     user_func_params: HashMap<u32, Vec<String>>,
     /// Canonical signature registry shared by ordinary and builtin callables.
     callable_signatures: CallableSignatures,
+    lazy_function_parameters: HashMap<u32, Vec<usize>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: SpecializableDefinitions,
@@ -1380,6 +1381,7 @@ impl PersistentCheckerState {
             lazy_capture_bindings: HashMap::new(),
             user_func_params: HashMap::new(),
             callable_signatures: HashMap::new(),
+            lazy_function_parameters: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             specializable_defs: HashMap::new(),
@@ -1406,6 +1408,7 @@ impl PersistentCheckerState {
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
+            lazy_function_parameters: self.lazy_function_parameters.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -1435,6 +1438,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             lazy_capture_bindings: checkpoint.lazy_capture_bindings,
             user_func_params: checkpoint.user_func_params,
             callable_signatures: checkpoint.callable_signatures,
+            lazy_function_parameters: checkpoint.lazy_function_parameters,
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
             specializable_defs: checkpoint.specializable_defs,
@@ -1465,6 +1469,7 @@ pub struct ScarCheckpoint {
     user_func_params: HashMap<u32, Vec<String>>,
     #[serde(default)]
     callable_signatures: CallableSignatures,
+    lazy_function_parameters: HashMap<u32, Vec<usize>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: SpecializableDefinitions,
@@ -2219,18 +2224,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(else_node, rewrites);
                 }
             }
-            TypedInner::Require(left, right) => {
-                Self::rewrite_fun_indices_in_node(left, rewrites);
-                Self::rewrite_fun_indices_in_node(right, rewrites);
-            }
-            TypedInner::Ensure(left, middle, right) => {
-                Self::rewrite_fun_indices_in_node(left, rewrites);
-                Self::rewrite_fun_indices_in_node(middle, rewrites);
-                Self::rewrite_fun_indices_in_node(right, rewrites);
-            }
-            TypedInner::MapErr(value, err)
-            | TypedInner::Cause(value, err)
-            | TypedInner::OrElse(value, err) => {
+            TypedInner::Cause(value, err) => {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
                 Self::rewrite_fun_indices_in_node(err, rewrites);
             }
@@ -3135,6 +3129,7 @@ struct Checker {
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     callable_signatures: CallableSignatures,
+    lazy_function_parameters: HashMap<u32, Vec<usize>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: SpecializableDefinitions,
@@ -3303,6 +3298,7 @@ impl Checker {
             consts: state.consts,
             user_func_params: state.user_func_params,
             callable_signatures: state.callable_signatures,
+            lazy_function_parameters: state.lazy_function_parameters,
             impl_method_uids: state.impl_method_uids,
             function_ids_by_name: state.function_ids_by_name,
             specializable_defs: state.specializable_defs,
@@ -3828,16 +3824,8 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(else_branch);
                 }
             }
-            TypedInner::Require(cond, err)
-            | TypedInner::MapErr(cond, err)
-            | TypedInner::Cause(cond, err)
-            | TypedInner::OrElse(cond, err) => {
+            TypedInner::Cause(cond, err) => {
                 self.collect_unused_value_warnings_in_node(cond);
-                self.collect_unused_value_warnings_in_node(err);
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                self.collect_unused_value_warnings_in_node(value);
-                self.collect_unused_value_warnings_in_node(pred);
                 self.collect_unused_value_warnings_in_node(err);
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -4489,6 +4477,7 @@ impl Checker {
             lazy_capture_bindings: self.lazy_capture_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
+            lazy_function_parameters: self.lazy_function_parameters.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -4515,6 +4504,7 @@ impl Checker {
             lazy_capture_bindings: self.lazy_capture_bindings,
             user_func_params: self.user_func_params,
             callable_signatures: self.callable_signatures,
+            lazy_function_parameters: self.lazy_function_parameters,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
             specializable_defs: self.specializable_defs,
@@ -4879,6 +4869,12 @@ impl Checker {
                 }
                 self.validate_constructor_body_positions(body, constructor_traits)?;
             }
+            Resolved::LazyApp(_, _, function, args) => {
+                self.validate_constructor_body_positions(function, constructor_traits)?;
+                for argument in args {
+                    self.validate_constructor_body_positions(argument, constructor_traits)?;
+                }
+            }
             Resolved::App(_, function, args) => {
                 self.validate_constructor_body_positions(function, constructor_traits)?;
                 for arg in args {
@@ -4908,10 +4904,7 @@ impl Checker {
             | Resolved::KleisliCompose(_, left, right)
             | Resolved::ListCons(_, left, right)
             | Resolved::RangeLiteral(_, left, right)
-            | Resolved::Require(_, left, right)
-            | Resolved::MapErr(_, left, right)
-            | Resolved::Cause(_, left, right)
-            | Resolved::OrElse(_, left, right) => {
+            | Resolved::Cause(_, left, right) => {
                 self.validate_constructor_body_positions(left, constructor_traits)?;
                 self.validate_constructor_body_positions(right, constructor_traits)?;
             }
@@ -4927,11 +4920,6 @@ impl Checker {
                 if let Some(branch) = else_branch {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
-            }
-            Resolved::Ensure(_, a, b, c) => {
-                self.validate_constructor_body_positions(a, constructor_traits)?;
-                self.validate_constructor_body_positions(b, constructor_traits)?;
-                self.validate_constructor_body_positions(c, constructor_traits)?;
             }
             Resolved::Match(_, scrutinee, arms)
             | Resolved::IsMatch(_, scrutinee, arms)
@@ -5394,15 +5382,11 @@ impl Checker {
                 "Match".to_string()
             }
             Resolved::Block(..) => "Block".to_string(),
-            Resolved::App(..) => "App".to_string(),
+            Resolved::App(..) | Resolved::LazyApp(..) => "App".to_string(),
             Resolved::Dbg(..) => "Dbg".to_string(),
             Resolved::Cond(..) => "Cond".to_string(),
             Resolved::If(..) => "If".to_string(),
-            Resolved::Ensure(..) => "Ensure".to_string(),
-            Resolved::Require(..) => "Require".to_string(),
-            Resolved::MapErr(..) => "MapErr".to_string(),
             Resolved::Cause(..) => "Cause".to_string(),
-            Resolved::OrElse(..) => "OrElse".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -5427,15 +5411,11 @@ impl Checker {
             Resolved::StatementQuestion(..) => "StatementQuestion",
             Resolved::Match(..) | Resolved::IsMatch(..) | Resolved::IfLet(..) => "Match",
             Resolved::Block(..) => "Block",
-            Resolved::App(..) => "App",
+            Resolved::App(..) | Resolved::LazyApp(..) => "App",
             Resolved::Dbg(..) => "Dbg",
             Resolved::Cond(..) => "Cond",
             Resolved::If(..) => "If",
-            Resolved::Ensure(..) => "Ensure",
-            Resolved::Require(..) => "Require",
-            Resolved::MapErr(..) => "MapErr",
             Resolved::Cause(..) => "Cause",
-            Resolved::OrElse(..) => "OrElse",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

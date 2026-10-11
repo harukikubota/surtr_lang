@@ -304,7 +304,7 @@ API と runtime の対応は次のとおり。canonical identity と通常値の
 
 - `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける
 - `Result::chain(head, tail)` は右 error chain の末尾に左 error chain を付ける
-- `Result::map_err(result, err)` は既存 error chain を捨てて `err` chain で置き換える
+- `Result::map_err(result, err)` は通常の `.srt` 関数で既存 error chain を捨てて `err` chain で置き換える。専用の runtime builtin は持たない
 
 表示契約は次で固定する。
 

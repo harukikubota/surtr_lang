@@ -458,11 +458,7 @@ pub enum TypedInner {
     /// An explicit parenthesized eager boundary at a `Lazy<T>` argument site.
     EagerBoundary(Box<TypedNode>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
-    Require(Box<TypedNode>, Box<TypedNode>),
-    Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
-    MapErr(Box<TypedNode>, Box<TypedNode>),
     Cause(Box<TypedNode>, Box<TypedNode>),
-    OrElse(Box<TypedNode>, Box<TypedNode>),
     ErrorKind(String),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
     /// Expression-local Pattern execution with projection results in slot order.

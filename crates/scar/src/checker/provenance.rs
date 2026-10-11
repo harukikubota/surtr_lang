@@ -274,24 +274,6 @@ impl Checker {
                     .map(|argument| self.cached_source_provenance(argument, bindings, cache))
                     .collect(),
             },
-            TypedInner::MapErr(value, error) => {
-                let source = self.cached_source_provenance(value, bindings, cache);
-                let success = self.project_provenance(
-                    &source,
-                    &Projection::Field {
-                        index: 0,
-                        tag: Some(0),
-                    },
-                    &Ty::Hole,
-                );
-                Provenance::Variants(vec![
-                    (0, vec![success]),
-                    (
-                        1,
-                        vec![self.cached_source_provenance(error, bindings, cache)],
-                    ),
-                ])
-            }
             TypedInner::Capture(function, arguments) if arguments.is_empty() => {
                 self.cached_value_provenance(function, bindings, cache)
             }
@@ -448,10 +430,6 @@ impl Checker {
                     self.cached_source_provenance(then_branch, bindings, cache),
                     self.cached_source_provenance(else_branch, bindings, cache),
                 ]),
-            TypedInner::OrElse(value, next) => self.common_constructor_provenance(&[
-                self.cached_source_provenance(value, bindings, cache),
-                self.cached_source_provenance(next, bindings, cache),
-            ]),
             TypedInner::ApplyPattern {
                 value,
                 pattern,

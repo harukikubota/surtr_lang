@@ -1,0 +1,84 @@
+ordinary-if
+then-eager
+else-eager
+condition
+3
+ordinary-if_then
+branch-eager
+condition
+()
+ordinary-require
+error-eager
+condition
+Err(NoneError("None Value."))
+ordinary-ensure
+value
+error-eager
+predicate
+Err(NoneError("None Value."))
+ordinary-or_else
+input
+fallback-eager
+Ok(9)
+ordinary-map_err
+input
+error-eager
+Err(NoneError("None Value."))
+tail-if
+then-eager
+else-eager
+condition
+3
+tail-if_then
+branch-eager
+condition
+()
+tail-require
+error-eager
+condition
+Err(NoneError("None Value."))
+tail-ensure
+value
+error-eager
+predicate
+Err(NoneError("None Value."))
+tail-or_else
+input
+fallback-eager
+Ok(9)
+tail-map_err
+input
+error-eager
+Err(NoneError("None Value."))
+capture-if
+capture-created
+then-eager
+else-eager
+condition
+3
+capture-if_then
+capture-created
+branch-eager
+condition
+()
+capture-require
+capture-created
+error-eager
+condition
+Err(NoneError("None Value."))
+capture-ensure
+capture-created
+value
+error-eager
+predicate
+Err(NoneError("None Value."))
+capture-or_else
+capture-created
+capture-input
+fallback-eager
+Ok(9)
+capture-map_err
+capture-created
+capture-input
+error-eager
+Err(NoneError("None Value."))

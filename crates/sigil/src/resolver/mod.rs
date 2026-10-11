@@ -825,18 +825,13 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_node(else_branch, base, offset);
             }
         }
-        Resolved::Require(_, flag, err) => {
-            rebase_resolved_node(flag, base, offset);
-            rebase_resolved_node(err, base, offset);
+        Resolved::LazyApp(_, _, func, args) => {
+            rebase_resolved_node(func, base, offset);
+            for input in args {
+                rebase_resolved_node(input, base, offset);
+            }
         }
-        Resolved::Ensure(_, value, pred, err) => {
-            rebase_resolved_node(value, base, offset);
-            rebase_resolved_node(pred, base, offset);
-            rebase_resolved_node(err, base, offset);
-        }
-        Resolved::MapErr(_, value, err)
-        | Resolved::Cause(_, value, err)
-        | Resolved::OrElse(_, value, err) => {
+        Resolved::Cause(_, value, err) => {
             rebase_resolved_node(value, base, offset);
             rebase_resolved_node(err, base, offset);
         }

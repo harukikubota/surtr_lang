@@ -1,0 +1,79 @@
+def flag(label: String, value: Boolean) -> Boolean { print(label); value }
+def number(label: String, value: Int) -> Int { print(label); value }
+def failure(label: String) -> Error { print(label); NoneError() }
+def input(label: String) -> Result<Int> { print(label); Err(NoneError()) }
+def fallback(label: String) -> Result<Int> { print(label); Ok(9) }
+def predicate(value: Int) -> Boolean { print("predicate"); False }
+
+def tail_if() -> Int { if(flag("condition", True), (number("then-eager", 3)), (number("else-eager", 4))) }
+def tail_if_then() -> Unit { if_then(flag("condition", True), (print("branch-eager"))) }
+def tail_require() -> Result<Unit> { require(flag("condition", False), (failure("error-eager"))) }
+def tail_ensure() -> Result<Int> { ensure(number("value", 3), &predicate, (failure("error-eager"))) }
+def tail_or_else() -> Result<Int> { Result::or_else(input("input"), (fallback("fallback-eager"))) }
+def tail_map_err() -> Result<Int> { Result::map_err(input("input"), (failure("error-eager"))) }
+
+print("ordinary-if")
+print(inspect(if(flag("condition", True), (number("then-eager", 3)), (number("else-eager", 4)))))
+
+print("ordinary-if_then")
+print(inspect(if_then(flag("condition", True), (print("branch-eager")))))
+
+print("ordinary-require")
+print(inspect(require(flag("condition", False), (failure("error-eager")))))
+
+print("ordinary-ensure")
+print(inspect(ensure(number("value", 3), &predicate, (failure("error-eager")))))
+
+print("ordinary-or_else")
+print(inspect(Result::or_else(input("input"), (fallback("fallback-eager")))))
+
+print("ordinary-map_err")
+print(inspect(Result::map_err(input("input"), (failure("error-eager")))))
+
+print("tail-if")
+print(inspect(tail_if()))
+
+print("tail-if_then")
+print(inspect(tail_if_then()))
+
+print("tail-require")
+print(inspect(tail_require()))
+
+print("tail-ensure")
+print(inspect(tail_ensure()))
+
+print("tail-or_else")
+print(inspect(tail_or_else()))
+
+print("tail-map_err")
+print(inspect(tail_map_err()))
+
+print("capture-if")
+captured_if = &if(flag("condition", &1), (number("then-eager", 3)), (number("else-eager", 4)))
+print("capture-created")
+print(inspect(captured_if(True)))
+
+print("capture-if_then")
+captured_if_then = &if_then(flag("condition", &1), (print("branch-eager")))
+print("capture-created")
+print(inspect(captured_if_then(True)))
+
+print("capture-require")
+captured_require = &require(flag("condition", &1), (failure("error-eager")))
+print("capture-created")
+print(inspect(captured_require(False)))
+
+print("capture-ensure")
+captured_ensure = &ensure(number("value", &1), &predicate, (failure("error-eager")))
+print("capture-created")
+print(inspect(captured_ensure(3)))
+
+print("capture-or_else")
+captured_or_else = &Result::or_else(&1, (fallback("fallback-eager")))
+print("capture-created")
+print(inspect(captured_or_else(input("capture-input"))))
+
+print("capture-map_err")
+captured_map_err: (Result<Int> -> Result<Int>) = &Result::map_err(&1, (failure("error-eager")))
+print("capture-created")
+print(inspect(captured_map_err(input("capture-input"))))

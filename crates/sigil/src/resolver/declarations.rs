@@ -893,6 +893,8 @@ pub struct DeclarationEntry {
     /// Declared input count, including the final Extractor target input.
     /// Required to classify named Extractor application arguments before binding.
     pub value_parameter_count: Option<usize>,
+    /// Surface Lazy inputs belonging to this selected callable declaration.
+    pub lazy_parameters: Vec<(usize, String)>,
 }
 
 impl DeclarationEntry {
@@ -904,6 +906,15 @@ impl DeclarationEntry {
                 Some(params.len())
             }
             _ => None,
+        };
+        self.lazy_parameters = match declaration {
+            Ast::Def(_, _, _, params, _, _, _, _) | Ast::BuiltinDecl(_, _, _, params, _, _, _) => {
+                params.iter().enumerate().filter_map(|(ordinal, param)| {
+                    matches!(&param.ty, AstTy::Generic(_, head, _) if global_surface_name(head) == "Lazy")
+                        .then(|| (ordinal, param.name.clone()))
+                }).collect()
+            }
+            _ => Vec::new(),
         };
         self
     }
@@ -1238,6 +1249,7 @@ fn declaration_entry(
         user_importable,
         user_callable,
         value_parameter_count: None,
+        lazy_parameters: Vec::new(),
     }
 }
 

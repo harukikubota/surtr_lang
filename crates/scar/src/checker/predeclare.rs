@@ -1408,6 +1408,38 @@ impl Checker {
         Self::rewrite_inherent_self_apps(ast_ty, &target_surface)
     }
 
+    pub(super) fn resolve_def_parameter_contract(
+        &mut self,
+        id: &ResolvedId,
+        signature: &sigil::resolved::ResolvedSignatureTy,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        if let Some(inner) = Self::lazy_parameter_inner(signature.syntax()) {
+            if !self.enforce_builtin_type_contracts
+                && !self.lazy_function_parameters.contains_key(&id.unique_id)
+            {
+                return Err(self.lazy_type_not_allowed_error(Self::ast_ty_span(signature.syntax())));
+            }
+            let inner_signature = sigil::resolved::ResolvedSignatureTy {
+                syntax: inner.clone(),
+                direct_constructor_trait: None,
+            };
+            let result = self.resolve_def_signature_ast_ty_in_context(
+                id,
+                &inner_signature,
+                TypeSyntaxContext::General,
+                tyvars,
+            )?;
+            return Ok(Ty::Func(vec![], Box::new(result)));
+        }
+        self.resolve_def_signature_ast_ty_in_context(
+            id,
+            signature,
+            TypeSyntaxContext::General,
+            tyvars,
+        )
+    }
+
     pub(super) fn resolve_def_signature_ast_ty_in_context(
         &mut self,
         id: &ResolvedId,
@@ -4618,7 +4650,21 @@ impl Checker {
                     _,
                     _attrs,
                 ) => {
+                    self.validate_standard_lazy_function_decl(&id.span, id, params, ret_ty)?;
                     self.register_function_id(id);
+                    let lazy_parameters = params
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ordinal, parameter)| {
+                            Self::lazy_parameter_inner(parameter.ty.syntax())
+                                .is_some()
+                                .then_some(ordinal)
+                        })
+                        .collect::<Vec<_>>();
+                    if self.enforce_builtin_type_contracts && !lazy_parameters.is_empty() {
+                        self.lazy_function_parameters
+                            .insert(id.unique_id, lazy_parameters);
+                    }
                     let mut tyvars = HashMap::new();
                     let mut direct_constructor_inputs =
                         super::signatures::DirectConstructorInputs::default();
@@ -4641,12 +4687,8 @@ impl Checker {
                     let param_tys = params
                         .iter()
                         .map(|param| {
-                            let param_ty = self.resolve_def_signature_ast_ty_in_context(
-                                id,
-                                &param.ty,
-                                TypeSyntaxContext::General,
-                                &mut tyvars,
-                            )?;
+                            let param_ty =
+                                self.resolve_def_parameter_contract(id, &param.ty, &mut tyvars)?;
                             super::signatures::remember_direct_constructor_input(
                                 self,
                                 &param.ty,

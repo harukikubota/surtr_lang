@@ -175,8 +175,9 @@ pub enum Ty {
     /// Generic function type: `(params) -> ret`
     Func(Vec<Ty>, Box<Ty>),
 
-    /// Compiler-reserved lazy special-form marker used only in std builtin
-    /// declarations. User code cannot name or transport Lazy values directly.
+    /// Compiler-reserved Lazy marker for builtin surface declarations. Ordinary
+    /// standard parameters erase their declaration contract to zero-argument
+    /// functions. User code cannot name or transport Lazy values directly.
     Lazy(Box<Ty>),
 
     /// Compiler-managed facet path capability: `Facet<K, S, A, T, B>`.

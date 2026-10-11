@@ -10,9 +10,11 @@ fib_tail(50, 0, 1)"#,
     );
 
     assert_eq!(observation.stats.max_frame_depth, 2);
-    assert_eq!(observation.stats.function_calls, 51);
+    // Each recursive step also calls ordinary Kernel::if and its selected
+    // branch. Both helper transitions are tail calls, including the base case.
+    assert_eq!(observation.stats.function_calls, 2 * 51);
     assert_eq!(observation.stats.return_count, 1);
-    assert_eq!(observation.stats.tail_calls_optimized, 50);
+    assert_eq!(observation.stats.tail_calls_optimized, 50 + 2 * 51);
 }
 
 fn match_arm_tail_calls_are_optimized() {
@@ -45,9 +47,10 @@ even(100)"#,
     );
 
     assert_eq!(observation.stats.max_frame_depth, 2);
-    assert_eq!(observation.stats.function_calls, 101);
+    // The mutual calls retain TCO through Kernel::if and its selected branch.
+    assert_eq!(observation.stats.function_calls, 2 * 101);
     assert_eq!(observation.stats.return_count, 1);
-    assert_eq!(observation.stats.tail_calls_optimized, 100);
+    assert_eq!(observation.stats.tail_calls_optimized, 100 + 2 * 101);
 }
 
 fn non_tail_recursion_keeps_growing_frames() {
@@ -60,8 +63,10 @@ sum_non_tail(200)"#,
     );
 
     assert!(observation.stats.max_frame_depth > 100);
-    assert_eq!(observation.stats.tail_calls_optimized, 0);
-    assert_eq!(observation.stats.function_calls, 201);
+    // Kernel::if and branch invocation are tail calls; the recursive call
+    // beneath addition still returns separately and grows the frame stack.
+    assert_eq!(observation.stats.tail_calls_optimized, 2 * 201);
+    assert_eq!(observation.stats.function_calls, 2 * 201);
     assert_eq!(observation.stats.return_count, 201);
 }
 
@@ -164,7 +169,8 @@ go(40, 0)"#,
         "expected Result branch frame depth to stay bounded, stats={:?}",
         observation.stats
     );
-    assert_eq!(observation.stats.tail_calls_optimized, 40);
+    // Count recursive go calls plus Kernel::if and branch tail calls.
+    assert_eq!(observation.stats.tail_calls_optimized, 40 + 2 * 41);
 }
 
 fn process_handler_helper_tail_call_is_optimized() {

@@ -218,18 +218,13 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(else_branch, bound, free);
             }
         }
-        Resolved::Require(_, cond, err) => {
-            collect_captures_inner(cond, bound, free);
-            collect_captures_inner(err, bound, free);
+        Resolved::LazyApp(_, _, func, args) => {
+            collect_captures_inner(func, bound, free);
+            for input in args {
+                collect_captures_inner(input, bound, free);
+            }
         }
-        Resolved::Ensure(_, value, pred, err) => {
-            collect_captures_inner(value, bound, free);
-            collect_captures_inner(pred, bound, free);
-            collect_captures_inner(err, bound, free);
-        }
-        Resolved::MapErr(_, value, err)
-        | Resolved::Cause(_, value, err)
-        | Resolved::OrElse(_, value, err) => {
+        Resolved::Cause(_, value, err) => {
             collect_captures_inner(value, bound, free);
             collect_captures_inner(err, bound, free);
         }

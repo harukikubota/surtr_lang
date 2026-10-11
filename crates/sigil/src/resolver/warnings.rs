@@ -206,18 +206,13 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_node_usage(else_branch, usage);
             }
         }
-        Resolved::Require(_, flag, err) => {
-            collect_node_usage(flag, usage);
-            collect_node_usage(err, usage);
+        Resolved::LazyApp(_, _, func, args) => {
+            collect_node_usage(func, usage);
+            for input in args {
+                collect_node_usage(input, usage);
+            }
         }
-        Resolved::Ensure(_, value, pred, err) => {
-            collect_node_usage(value, usage);
-            collect_node_usage(pred, usage);
-            collect_node_usage(err, usage);
-        }
-        Resolved::MapErr(_, value, err)
-        | Resolved::Cause(_, value, err)
-        | Resolved::OrElse(_, value, err) => {
+        Resolved::Cause(_, value, err) => {
             collect_node_usage(value, usage);
             collect_node_usage(err, usage);
         }

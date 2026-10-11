@@ -527,3 +527,77 @@ fn error_source_location_hash_map_consumers_keep_key_origin() {
         assert_error_source_location(source, origin, "HashMapKeyMissing");
     }
 }
+
+#[test]
+fn error_source_location_lazy_standard_calls_keep_constructor_origin() {
+    for source in [
+        "require(False, NoneError())",
+        "ensure(3, {|_| False}, NoneError())",
+        "Result::map_err(Err(ZeroDivisionError()), NoneError())",
+        "Result::or_else(Err(ZeroDivisionError()), Err(NoneError()))",
+        "if(True, Err(NoneError()), Ok(1))",
+        "capture = &require(&1, NoneError())\ncapture(False)",
+        "def tail() -> Result<Unit> { require(False, NoneError()) }\ntail()",
+    ] {
+        assert_error_source_location_with_bytecode(source, "NoneError()", "NoneError", true);
+    }
+    for source in [
+        "require(False, {|| NoneError()})",
+        "require(False, ({|| NoneError()}))",
+        "def make_error() -> Error { NoneError() }\nrequire(False, make_error())",
+    ] {
+        assert_error_source_location_with_bytecode(source, "NoneError()", "NoneError", true);
+    }
+    for input in ["7", "code"] {
+        let payload_source = format!("deferror Rejected(number: Int) {{ |value: Int| Self(message: to_string(value), number: value) }}\ncode = 7\nrequire(False, Rejected({input}))");
+        assert_error_source_location_with_bytecode(
+            &payload_source,
+            &format!("Rejected({input})"),
+            "Rejected",
+            true,
+        );
+    }
+}
+
+#[test]
+fn lazy_standard_calls_preserve_existing_error_metadata() {
+    let source = r#"
+deferror Inner { "inner" }
+deferror Outer(code: Int) { |value: Int| Self(message: to_string(value), code: value) }
+def build_error() -> Error {
+  match Result::cause(Err(Inner()), Outer(7)) { Err(error) => error, Ok(_) => Inner() }
+}
+original = build_error()
+prior: Result<Int> = Err(ZeroDivisionError())
+( original,
+  require(False, original),
+  ensure(3, {|_| False}, original),
+  Result::map_err(prior, original),
+  Result::or_else(prior, Err(original)),
+  if(True, Err(original), prior)
+)
+"#;
+    let bytecode = crate::support::compile_script("lazy_error_transport.srt", source)
+        .expect("Lazy error transport must compile");
+    let mut vm = eldr::VM::new(bytecode);
+    vm.run()
+        .expect("Error values inside a tuple are ordinary data");
+    let eldr::value::Value::Tuple(values) = vm.last_value().expect("tuple result") else {
+        panic!("expected tuple: {:?}", vm.last_value());
+    };
+    let eldr::value::Value::Error(original) = &values[0] else {
+        panic!("original Error value");
+    };
+    assert!(!original.stack_trace.is_empty());
+    assert!(original.cause.is_some());
+    assert!(!original.payload.is_empty());
+    for result in &values[1..] {
+        let eldr::value::Value::Tagged { fields, .. } = result else {
+            panic!("expected Err: {result:?}");
+        };
+        assert_eq!(
+            &fields[0], &values[0],
+            "all Error fields must remain unchanged"
+        );
+    }
+}
