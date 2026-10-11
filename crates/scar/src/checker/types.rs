@@ -487,13 +487,13 @@ impl Checker {
         }
     }
 
-    fn lazy_type_not_allowed_error(&self, span: &Span) -> TypeError {
+    pub(super) fn lazy_type_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             structured: None,
-            message: "Lazy<T> is reserved for std-module special-form declarations".into(),
+            message: "Lazy<T> is reserved for standard callable parameter declarations".into(),
             span: span.clone(),
             hint: Some(
-                "Use ordinary expression syntax at call sites; the compiler applies lazy special-form evaluation automatically."
+                "Use a zero-argument function type in user declarations; standard Lazy parameters normalize their inputs at call sites."
                     .into(),
             ),
         }
@@ -4601,24 +4601,7 @@ impl Checker {
                 self.resolve_typed_node(*then),
                 else_opt.map(|node| self.resolve_typed_node(*node)),
             ),
-            TypedInner::Require(cond, err) => TypedInner::Require(
-                self.resolve_typed_node(*cond),
-                self.resolve_typed_node(*err),
-            ),
-            TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                self.resolve_typed_node(*value),
-                self.resolve_typed_node(*pred),
-                self.resolve_typed_node(*err),
-            ),
-            TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                self.resolve_typed_node(*value),
-                self.resolve_typed_node(*err),
-            ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
-                self.resolve_typed_node(*value),
-                self.resolve_typed_node(*err),
-            ),
-            TypedInner::OrElse(value, err) => TypedInner::OrElse(
                 self.resolve_typed_node(*value),
                 self.resolve_typed_node(*err),
             ),

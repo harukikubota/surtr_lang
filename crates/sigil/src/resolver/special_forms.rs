@@ -56,75 +56,35 @@ impl Resolver {
         Ok(resolved)
     }
 
-    pub(super) fn resolve_if(
+    pub(super) fn resolve_lazy_declaration_call(
         &mut self,
         span: Span,
+        func: Resolved,
         args: Vec<RecordLitArg>,
-        kind: IfKind,
+        kind: LazyCaptureKind,
     ) -> Result<Resolved, ResolveError> {
-        match kind {
-            IfKind::If3 => {
-                let [cond_expr, then_expr, else_expr] =
-                    collect_fixed_positional_args(span.clone(), args, "if", 3)?;
-                let cond = self.resolve_node(cond_expr)?;
-                let then = self.resolve_lazy_input(then_expr)?;
-                return Ok(Resolved::If(
-                    span,
-                    Box::new(cond),
-                    Box::new(then),
-                    Some(Box::new(self.resolve_lazy_input(else_expr)?)),
-                ));
-            }
-            IfKind::IfThen2 => {
-                let [cond_expr, then_expr] =
-                    collect_fixed_positional_args(span.clone(), args, "if_then", 2)?;
-                let cond = self.resolve_node(cond_expr)?;
-                let then = self.resolve_lazy_input(then_expr)?;
-                return Ok(Resolved::If(span, Box::new(cond), Box::new(then), None));
-            }
-        }
-    }
-
-    pub(super) fn resolve_require(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [cond_expr, err_expr] =
-            collect_fixed_positional_args(span.clone(), args, "require", 2)?;
-        let cond = self.resolve_node(cond_expr)?;
-        let err = self.resolve_lazy_input(err_expr)?;
-        Ok(Resolved::Require(span, Box::new(cond), Box::new(err)))
-    }
-
-    pub(super) fn resolve_ensure(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [value_expr, pred_expr, err_expr] =
-            collect_fixed_positional_args(span.clone(), args, "ensure", 3)?;
-        let value = self.resolve_node(value_expr)?;
-        let pred = self.resolve_node(pred_expr)?;
-        let err = self.resolve_lazy_input(err_expr)?;
-        Ok(Resolved::Ensure(
-            span,
-            Box::new(value),
-            Box::new(pred),
-            Box::new(err),
-        ))
-    }
-
-    pub(super) fn resolve_map_err(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [value_expr, err_expr] =
-            collect_fixed_positional_args(span.clone(), args, "map_err", 2)?;
-        let value = self.resolve_node(value_expr)?;
-        let err = self.resolve_lazy_input(err_expr)?;
-        Ok(Resolved::MapErr(span, Box::new(value), Box::new(err)))
+        let (name, arity, lazy_ordinals): (_, _, &[usize]) = match kind {
+            LazyCaptureKind::If => ("if", 3, &[1, 2]),
+            LazyCaptureKind::IfThen => ("if_then", 2, &[1]),
+            LazyCaptureKind::Require => ("require", 2, &[1]),
+            LazyCaptureKind::Ensure => ("ensure", 3, &[2]),
+            LazyCaptureKind::MapErr => ("map_err", 2, &[1]),
+            LazyCaptureKind::OrElse => ("or_else", 2, &[1]),
+            _ => unreachable!("only ordinary canonical Lazy declarations use LazyApp"),
+        };
+        let inputs = collect_positional_args(span.clone(), args, name, arity)?;
+        let resolved = inputs
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, expr)| {
+                if lazy_ordinals.contains(&ordinal) {
+                    self.resolve_lazy_input(expr)
+                } else {
+                    self.resolve_node(expr)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Resolved::LazyApp(span, kind, Box::new(func), resolved))
     }
 
     pub(super) fn resolve_cause(
@@ -136,17 +96,6 @@ impl Resolver {
         let value = self.resolve_node(value_expr)?;
         let err = self.resolve_lazy_input(err_expr)?;
         Ok(Resolved::Cause(span, Box::new(value), Box::new(err)))
-    }
-
-    pub(super) fn resolve_or_else(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let [value, next] = collect_fixed_positional_args(span.clone(), args, "or_else", 2)?;
-        let value = self.resolve_node(value)?;
-        let next = self.resolve_lazy_input(next)?;
-        Ok(Resolved::OrElse(span, Box::new(value), Box::new(next)))
     }
 
     pub(super) fn resolve_logic_call(

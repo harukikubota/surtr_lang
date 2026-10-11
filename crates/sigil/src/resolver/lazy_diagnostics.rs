@@ -423,7 +423,18 @@ impl Resolver {
             Some(CanonicalSpecialForm::MapErr) => ("Result::map_err", "Use an explicit capture with the replacement error fixed inside it, such as `f: (Result<Int> -> Result<Int>) = &Result::map_err(&1, NoneError())`. The replacement runs only for Err; an error placeholder accepts a normal (-> Error) callable."),
             Some(CanonicalSpecialForm::Cause) => ("Result::cause", "Use an explicit capture with the cause error fixed inside it, such as `f: (Result<Int> -> Result<Int>) = &Result::cause(&1, NoneError())`. The cause runs only for Err; an error placeholder accepts a normal (-> Error) callable."),
             Some(CanonicalSpecialForm::OrElse) => ("Result::or_else", "Use explicit placeholders: &Result::or_else(&1, &2). The fallback placeholder accepts a normal (-> Result<T>) callable and runs only for Err."),
-            _ => return Ok(()),
+            _ => {
+                let selected = match target {
+                    Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+                    other => other,
+                };
+                let Resolved::Var(_, id) = selected else { return Ok(()); };
+                if self.declaration_entry_for_uid(id.unique_id)
+                    .is_none_or(|entry| entry.lazy_parameters.is_empty()) {
+                    return Ok(());
+                }
+                (id.name.as_str(), "Use explicit capture arguments; a Lazy placeholder accepts its normalized zero-argument function type.")
+            },
         };
         Err(ResolveError {
             message: format!("{name} has Lazy arguments and cannot be captured without explicit arguments. {help}"),

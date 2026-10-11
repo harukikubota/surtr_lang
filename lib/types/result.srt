@@ -93,7 +93,7 @@ impl Result {
   - `Ok(value)` stays `Ok(value)`
   - `Err(old)` becomes `Err(err)`
 
-  This is a special form. The error argument is declared as `Lazy<Error>` so
+  The error argument is declared as `Lazy<Error>` so
   call sites can pass a concrete `deferror` constructor call directly, or
   reuse an `Error` value already obtained from `Err(e)` pattern matching. The
   expression is evaluated only when `result` is `Err(...)`.
@@ -112,7 +112,9 @@ impl Result {
   xldr(3)> replace_error(Ok(1))
   Ok(1)
   """
-  @builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>
+  def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T> {
+    match result { Ok(_) => result, Err(_) => Err(err()) }
+  }
 
   @doc """
   Add a higher-level domain error on top of an existing `Err(...)`.
@@ -120,7 +122,7 @@ impl Result {
   - `Ok(value)` stays `Ok(value)`
   - `Err(old)` becomes `Err(err)` and the previous error is appended to the new error's cause chain
 
-  This is also a special form. The error argument is surface-typed as
+  The error argument is surface-typed as
   `Lazy<Error>` so the compiler can delay constructing the new error, or
   forwarding an existing `Error` value, until the input is actually `Err(...)`.
 
@@ -187,7 +189,9 @@ impl Result {
   xldr(2)> Result::or_else(Err(NoneError()), Ok(2))
   Ok(2)
   """
-  @builtin def or_else(value: Result<$T>, next: Lazy<Result<$T>>) -> Result<$T>
+  def or_else(value: Result<$T>, next: Lazy<Result<$T>>) -> Result<$T> {
+    match value { Ok(_) => value, Err(_) => next() }
+  }
 
   @doc """
   Recover only from the supplied ErrorKind, an opaque ordinary value.

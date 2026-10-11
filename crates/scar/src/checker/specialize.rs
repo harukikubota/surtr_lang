@@ -576,16 +576,10 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Require(left, right)
-            | TypedInner::MapErr(left, right)
-            | TypedInner::Cause(left, right)
-            | TypedInner::OrElse(left, right) => visit(left).or_else(|| visit(right)),
+            | TypedInner::Cause(left, right) => visit(left).or_else(|| visit(right)),
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
-            TypedInner::Ensure(first, second, third) => visit(first)
-                .or_else(|| visit(second))
-                .or_else(|| visit(third)),
             TypedInner::Match(scrutinee, arms) => visit(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
@@ -963,11 +957,7 @@ impl Checker {
             | TypedInner::Dbg(..)
             | TypedInner::EagerBoundary(..)
             | TypedInner::If(..)
-            | TypedInner::Require(..)
-            | TypedInner::Ensure(..)
-            | TypedInner::MapErr(..)
             | TypedInner::Cause(..)
-            | TypedInner::OrElse(..)
             | TypedInner::FieldAccess(..)
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::FacetPath(..)
@@ -1928,87 +1918,7 @@ impl Checker {
                     })
                     .transpose()?,
             ),
-            TypedInner::Require(cond, err) => TypedInner::Require(
-                self.rewrite_specializations_in_node(
-                    *cond,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                self.rewrite_specializations_in_node(
-                    *value,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *pred,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                self.rewrite_specializations_in_node(
-                    *value,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
-                self.rewrite_specializations_in_node(
-                    *value,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::OrElse(value, err) => TypedInner::OrElse(
                 self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
@@ -3249,18 +3159,7 @@ impl Checker {
                     self.collect_pending_trait_receiver_tyvars_in_node(branch, ordered, seen);
                 }
             }
-            TypedInner::Require(cond, err) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(pred, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::MapErr(value, err)
-            | TypedInner::Cause(value, err)
-            | TypedInner::OrElse(value, err) => {
+            TypedInner::Cause(value, err) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
             }
@@ -3428,18 +3327,7 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(else_branch, ordered, seen);
                 }
             }
-            TypedInner::Require(cond, err) => {
-                self.collect_bound_tyvars_in_node(cond, ordered, seen);
-                self.collect_bound_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                self.collect_bound_tyvars_in_node(value, ordered, seen);
-                self.collect_bound_tyvars_in_node(pred, ordered, seen);
-                self.collect_bound_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::MapErr(value, err)
-            | TypedInner::Cause(value, err)
-            | TypedInner::OrElse(value, err) => {
+            TypedInner::Cause(value, err) => {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
@@ -3926,24 +3814,7 @@ impl Checker {
                     Box::new(self.substitute_typed_node_with_mapping(*branch, mapping))
                 }),
             ),
-            TypedInner::Require(cond, err) => TypedInner::Require(
-                Box::new(self.substitute_typed_node_with_mapping(*cond, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
-            TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*pred, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
-            TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
-                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
-            TypedInner::OrElse(value, err) => TypedInner::OrElse(
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
@@ -5395,18 +5266,7 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|branch| Self::typed_node_has_pending_trait_call(branch))
             }
-            TypedInner::Require(cond, err) => {
-                Self::typed_node_has_pending_trait_call(cond)
-                    || Self::typed_node_has_pending_trait_call(err)
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                Self::typed_node_has_pending_trait_call(value)
-                    || Self::typed_node_has_pending_trait_call(pred)
-                    || Self::typed_node_has_pending_trait_call(err)
-            }
-            TypedInner::MapErr(value, err)
-            | TypedInner::Cause(value, err)
-            | TypedInner::OrElse(value, err) => {
+            TypedInner::Cause(value, err) => {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
             }

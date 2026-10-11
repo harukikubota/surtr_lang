@@ -149,6 +149,10 @@ pub enum Resolved {
     /// Function application
     App(Span, Box<Resolved>, Vec<ResolvedRecordLitArg>),
 
+    /// Ordinary declaration call retaining canonical Lazy normalization roles.
+    /// Scar normalizes the inputs and emits an ordinary application of `func`.
+    LazyApp(Span, LazyCaptureKind, Box<Resolved>, Vec<Resolved>),
+
     /// Explicit generic-slot application.
     ReturnTypeArgumentApply(Span, Box<Resolved>, Vec<ResolvedReturnTypeArgument>),
 
@@ -225,23 +229,11 @@ pub enum Resolved {
     /// `dbg!(expr1, expr2, ...)` special form
     Dbg(Span, Vec<Resolved>),
 
-    /// `if(flag, then, else)` / `if_then(flag, then)` special form
+    /// Internal conditional for the retained logical builtin paths
     If(Span, Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
-
-    /// `require(flag, err)` special form
-    Require(Span, Box<Resolved>, Box<Resolved>),
-
-    /// `ensure(value, pred, err)` special form
-    Ensure(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
-
-    /// `Result::map_err(value, err)` special form
-    MapErr(Span, Box<Resolved>, Box<Resolved>),
 
     /// `Result::cause(value, err)` special form
     Cause(Span, Box<Resolved>, Box<Resolved>),
-
-    /// `Result::or_else(value, next)` special form
-    OrElse(Span, Box<Resolved>, Box<Resolved>),
 
     /// Bare canonical deferror declaration used as an ordinary opaque value.
     ErrorKind(Span, ResolvedId),
@@ -638,7 +630,7 @@ pub struct ResolvedTypeParam {
     pub span: Span,
 }
 
-/// Canonical source identity retained solely for Lazy capture diagnostics.
+/// Canonical declaration roles used by Lazy call normalization and capture diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LazyCaptureKind {
     And,

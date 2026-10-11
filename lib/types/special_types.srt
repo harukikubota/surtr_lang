@@ -102,7 +102,7 @@ targets, or module/type declarations.
 
 @doc """
 Compiler-reserved delayed-evaluation marker for standard declarations.
-Standard builtins and Trait methods can declare `Lazy<$T>` arguments. A user
+Standard functions, builtins and Trait methods can declare `Lazy<$T>` arguments. A user
 impl inherits the argument contract of the corresponding standard Trait
 method, including when it overrides a default method.
 It is not an ordinary first-class wrapper type for user data. Independent
@@ -118,7 +118,7 @@ extra invocation.
 
 A capture placeholder receives the normalized callable type, and `(&N)` means
 the same as `&N`. Write a complete call such as `&and(&1, &2)`; a bare capture
-of a standard Lazy special form such as `&and` is rejected.
+of a standard Lazy function such as `&and` is rejected.
 A normalized `(-> Error)` callable follows the same storage and argument rules
 as other callable values; Error remains opaque.
 

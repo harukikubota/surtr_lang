@@ -538,9 +538,7 @@ fn collect_missing_singleton_calls(
         | TypedInner::Pipe(left, right)
         | TypedInner::Compose(_, left, right)
         | TypedInner::ListCons(left, right)
-        | TypedInner::MapErr(left, right)
-        | TypedInner::Cause(left, right)
-        | TypedInner::OrElse(left, right) => {
+        | TypedInner::Cause(left, right) => {
             collect_missing_singleton_calls(
                 left,
                 surface_to_process,
@@ -603,34 +601,6 @@ fn collect_missing_singleton_calls(
                     available_supervisors,
                     first_missing,
                 );
-            }
-        }
-        TypedInner::Require(left, right) | TypedInner::Ensure(left, right, _) => {
-            collect_missing_singleton_calls(
-                left,
-                surface_to_process,
-                available_singletons,
-                available_supervisors,
-                first_missing,
-            );
-            collect_missing_singleton_calls(
-                right,
-                surface_to_process,
-                available_singletons,
-                available_supervisors,
-                first_missing,
-            );
-            match &node.node {
-                TypedInner::Ensure(_, _, third) => {
-                    collect_missing_singleton_calls(
-                        third,
-                        surface_to_process,
-                        available_singletons,
-                        available_supervisors,
-                        first_missing,
-                    );
-                }
-                _ => {}
             }
         }
         TypedInner::Match(scrutinee, arms) => {
@@ -3171,190 +3141,6 @@ mod tests {
     }
 
     #[test]
-    fn emit_require_literal_bool_folds_to_single_result_path() {
-        let mut gene = Codegen::new();
-        let node = TypedNode {
-            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
-            span: span(1, 24),
-            node: TypedInner::Require(
-                Box::new(lit_node(Ty::Bool, Lit::Bool(true), span(1, 5))),
-                Box::new(TypedNode {
-                    ty: Ty::Error,
-                    span: span(10, 19),
-                    node: TypedInner::Var(sigil::resolved::ResolvedId {
-                        name: "NoneError".into(),
-                        qualified_name: Some("NoneError".into()),
-                        unique_id: 99,
-                        compiler_generated: false,
-                        symbol_info: None,
-                        span: span(10, 19),
-                    }),
-                }),
-            ),
-        };
-        gene.state.slot_map.insert(99, 0);
-        gene.state.next_slot = 1;
-
-        gene.emit_node(&node)
-            .expect("require emission should succeed");
-        let (opcodes, _) = gene.finalize().expect("labels should resolve");
-
-        assert!(opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::MakeOk)));
-        assert!(!opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_))));
-        assert!(!opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::MakeErr)));
-    }
-
-    #[test]
-    fn emit_ensure_stores_value_and_calls_predicate_once() {
-        let mut gene = Codegen::new();
-        let pred_id = sigil::resolved::ResolvedId {
-            name: "is_even".into(),
-            qualified_name: None,
-            unique_id: 7,
-            compiler_generated: false,
-            symbol_info: None,
-            span: span(8, 16),
-        };
-        let err_id = sigil::resolved::ResolvedId {
-            name: "NoneError".into(),
-            qualified_name: Some("NoneError".into()),
-            unique_id: 8,
-            compiler_generated: false,
-            symbol_info: None,
-            span: span(18, 27),
-        };
-        gene.state.slot_map.insert(8, 0);
-        gene.state.next_slot = 1;
-
-        let node = TypedNode {
-            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
-            span: span(1, 27),
-            node: TypedInner::Ensure(
-                Box::new(lit_node(Ty::Int, Lit::Int(4.into()), span(1, 2))),
-                Box::new(TypedNode {
-                    ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Bool)),
-                    span: span(8, 16),
-                    node: TypedInner::Capture(
-                        Box::new(TypedNode {
-                            ty: Ty::UserFunc {
-                                fun_idx: 3,
-                                type_params: vec![],
-                                call_substitution: vec![],
-                                params: vec![Ty::Int],
-                                ret: Box::new(Ty::Bool),
-                            },
-                            span: span(8, 16),
-                            node: TypedInner::Var(pred_id),
-                        }),
-                        vec![],
-                    ),
-                }),
-                Box::new(TypedNode {
-                    ty: Ty::Error,
-                    span: span(18, 27),
-                    node: TypedInner::Var(err_id),
-                }),
-            ),
-        };
-
-        gene.emit_node(&node)
-            .expect("ensure emission should succeed");
-        let (opcodes, _) = gene.finalize().expect("labels should resolve");
-
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::StoreLocal(_) | Opcode::StoreConstLocal { .. }
-        )));
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::Call {
-                fun_idx: 3,
-                arity: 1,
-                ..
-            }
-        )));
-        assert!(!opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
-    }
-
-    #[test]
-    fn emit_ensure_direct_user_capture_lowers_without_callclosure() {
-        let mut gene = Codegen::new();
-        let pred_id = sigil::resolved::ResolvedId {
-            name: "is_even".into(),
-            qualified_name: None,
-            unique_id: 70,
-            compiler_generated: false,
-            symbol_info: None,
-            span: span(8, 16),
-        };
-        let err_id = sigil::resolved::ResolvedId {
-            name: "NoneError".into(),
-            qualified_name: Some("NoneError".into()),
-            unique_id: 71,
-            compiler_generated: false,
-            symbol_info: None,
-            span: span(18, 27),
-        };
-        gene.state.slot_map.insert(err_id.unique_id, 0);
-        gene.state.next_slot = 1;
-
-        let node = TypedNode {
-            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
-            span: span(1, 27),
-            node: TypedInner::Ensure(
-                Box::new(lit_node(Ty::Int, Lit::Int(4.into()), span(1, 2))),
-                Box::new(TypedNode {
-                    ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Bool)),
-                    span: span(8, 16),
-                    node: TypedInner::Capture(
-                        Box::new(TypedNode {
-                            ty: Ty::UserFunc {
-                                fun_idx: 3,
-                                type_params: vec![],
-                                call_substitution: vec![],
-                                params: vec![Ty::Int],
-                                ret: Box::new(Ty::Bool),
-                            },
-                            span: span(8, 16),
-                            node: TypedInner::Var(pred_id),
-                        }),
-                        vec![],
-                    ),
-                }),
-                Box::new(TypedNode {
-                    ty: Ty::Error,
-                    span: span(18, 27),
-                    node: TypedInner::Var(err_id),
-                }),
-            ),
-        };
-
-        gene.emit_node(&node)
-            .expect("ensure emission should succeed");
-        let (opcodes, _) = gene.finalize().expect("labels should resolve");
-
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::Call {
-                fun_idx: 3,
-                arity: 1,
-                ..
-            }
-        )));
-        assert!(!opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
-    }
-
-    #[test]
     fn emit_interpolated_str_coalesces_adjacent_text_parts() {
         let mut gene = Codegen::new();
         let node = TypedNode {
@@ -4421,48 +4207,6 @@ mod tests {
             Some(Opcode::Dbg { arg_count: 2, .. })
         ));
         assert_eq!(state.dbg_templates.len(), 1);
-    }
-
-    #[test]
-    fn emit_map_err_routes_error_branch_through_builtin() {
-        let mut gene = Codegen::new();
-        gene.state.slot_map.insert(10, 0);
-        gene.state.slot_map.insert(11, 1);
-        gene.state.next_slot = 2;
-
-        let node = TypedNode {
-            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
-            span: span(1, 20),
-            node: TypedInner::MapErr(
-                Box::new(local_var(
-                    "value",
-                    10,
-                    Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
-                )),
-                Box::new(local_var("err", 11, Ty::Error)),
-            ),
-        };
-
-        gene.emit_node(&node)
-            .expect("map_err emission should succeed");
-        let (opcodes, _) = gene.finalize().expect("labels should resolve");
-        let map_err_id = Codegen::builtin_id("map_err").expect("map_err builtin must exist");
-
-        assert!(opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::StoreLocal(_) | Opcode::CopyLocal { .. })));
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::CallBuiltin {
-                builtin_id,
-                arity: 2,
-                ..
-            } if *builtin_id == map_err_id
-        )));
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::JumpIfTrue(_) | Opcode::JumpIfLocalTagEq { .. }
-        )));
     }
 
     #[test]
@@ -7783,6 +7527,20 @@ impl Codegen {
             _ => return Ok(None),
         };
 
+        // Error construction observes this body's call span. A direct-call
+        // template uses its eventual invocation span instead, so it must not
+        // replace a closure that calls a checked Error constructor.
+        if let DirectCallableTarget::User(fun_idx) = target {
+            if self
+                .state
+                .error_templates
+                .iter()
+                .any(|template| template.constructor_fun_idx == fun_idx)
+            {
+                return Ok(None);
+            }
+        }
+
         let mut arg_sources = Vec::with_capacity(args.len());
         for arg in args {
             let Some(source) = Self::callable_template_arg_for_node(arg, params, captures) else {
@@ -7862,39 +7620,6 @@ impl Codegen {
                 span_end: span.end as u32,
             }),
         }
-    }
-
-    fn emit_callable_invoke(
-        &mut self,
-        callable: &TypedNode,
-        arity: u8,
-        span: &Span,
-    ) -> Result<(), CodegenError> {
-        if let Some(target) = self.direct_callable_target_for_ref(callable)? {
-            self.emit_direct_call(target, arity, span);
-            return Ok(());
-        }
-        if let Some(target) = self.direct_callable_target_for_capture(callable)? {
-            self.emit_direct_call(target, arity, span);
-            return Ok(());
-        }
-        let mut arg_slots = Vec::with_capacity(arity as usize);
-        for _ in 0..arity {
-            let arg_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(arg_slot));
-            arg_slots.push(arg_slot);
-        }
-        self.emit_callable_ref(callable)?;
-        for arg_slot in arg_slots.iter().rev() {
-            self.emit(Opcode::LoadLocal(*arg_slot));
-        }
-        self.emit(Opcode::CallClosure {
-            arity,
-            span_start: span.start as u32,
-            span_end: span.end as u32,
-        });
-        Ok(())
     }
 
     fn emit_closure_function(
@@ -9238,20 +8963,8 @@ impl Codegen {
             TypedInner::If(cond, then, else_opt) => {
                 self.emit_if(cond, then, else_opt)?;
             }
-            TypedInner::Require(cond, err) => {
-                self.emit_require(node, cond, err)?;
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                self.emit_ensure(node, value, pred, err)?;
-            }
-            TypedInner::MapErr(value, err) => {
-                self.emit_result_error_transform(node, value, err, "map_err")?;
-            }
             TypedInner::Cause(value, err) => {
-                self.emit_result_error_transform(node, value, err, "cause")?;
-            }
-            TypedInner::OrElse(value, next) => {
-                self.emit_result_or_else(value, next)?;
+                self.emit_result_cause(node, value, err)?;
             }
 
             TypedInner::Match(scrutinee, arms) => {
@@ -12907,75 +12620,11 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_require(
-        &mut self,
-        _node: &TypedNode,
-        cond: &TypedNode,
-        err: &TypedNode,
-    ) -> Result<(), CodegenError> {
-        let err_eager = self.materialize_eager_boundary(err)?;
-        if let Some(cond_value) = Self::literal_bool_value(cond) {
-            if cond_value {
-                self.emit_ok_unit_result()?;
-            } else {
-                self.emit_lazy_argument(err, err_eager)?;
-                self.emit(Opcode::MakeErr);
-            }
-            return Ok(());
-        }
-
-        self.emit_node(cond)?;
-        let fail_label = self.fresh_label();
-        let end_label = self.fresh_label();
-        self.emit_jump_if_false(fail_label);
-        self.emit_ok_unit_result()?;
-        self.emit_jump(end_label);
-
-        self.patch_label(fail_label);
-        self.emit_lazy_argument(err, err_eager)?;
-        self.emit(Opcode::MakeErr);
-
-        self.patch_label(end_label);
-        Ok(())
-    }
-
-    fn emit_ensure(
-        &mut self,
-        node: &TypedNode,
-        value: &TypedNode,
-        pred: &TypedNode,
-        err: &TypedNode,
-    ) -> Result<(), CodegenError> {
-        self.emit_node(value)?;
-        let value_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        self.emit(Opcode::StoreLocal(value_slot));
-
-        let err_eager = self.materialize_eager_boundary(err)?;
-
-        self.emit(Opcode::LoadLocal(value_slot));
-        self.emit_callable_invoke(pred, 1, &node.span)?;
-
-        let fail_label = self.fresh_label();
-        let end_label = self.fresh_label();
-        self.emit_jump_if_false(fail_label);
-        self.emit_ok_result_local(value_slot)?;
-        self.emit_jump(end_label);
-
-        self.patch_label(fail_label);
-        self.emit_lazy_argument(err, err_eager)?;
-        self.emit(Opcode::MakeErr);
-
-        self.patch_label(end_label);
-        Ok(())
-    }
-
-    fn emit_result_error_transform(
+    fn emit_result_cause(
         &mut self,
         node: &TypedNode,
         value: &TypedNode,
         err: &TypedNode,
-        builtin_name: &str,
     ) -> Result<(), CodegenError> {
         self.emit_node(value)?;
         let result_slot = self.state.next_slot;
@@ -12999,8 +12648,8 @@ impl Codegen {
         self.patch_label(err_path);
         self.emit(Opcode::LoadLocal(result_slot));
         self.emit_lazy_argument(err, err_eager)?;
-        let builtin_id = Self::builtin_id(builtin_name).ok_or_else(|| CodegenError {
-            message: format!("Unknown builtin: {}", builtin_name),
+        let builtin_id = Self::builtin_id("cause").ok_or_else(|| CodegenError {
+            message: "Unknown builtin: cause".into(),
             span: node.span.clone(),
         })?;
         self.emit(Opcode::CallBuiltin {
@@ -13010,34 +12659,6 @@ impl Codegen {
             span_end: node.span.end as u32,
         });
 
-        self.patch_label(end_label);
-        Ok(())
-    }
-
-    fn emit_result_or_else(
-        &mut self,
-        value: &TypedNode,
-        next: &TypedNode,
-    ) -> Result<(), CodegenError> {
-        self.emit_node(value)?;
-        let result_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        self.emit(Opcode::StoreLocal(result_slot));
-        let next_eager = self.materialize_eager_boundary(next)?;
-
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetTag);
-        let err_tag = self.add_constant(Constant::Tag(1));
-        self.emit(Opcode::LoadConst(err_tag));
-        self.emit(Opcode::EqTag);
-
-        let err_path = self.fresh_label();
-        let end_label = self.fresh_label();
-        self.emit_jump_if_true(err_path);
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit_jump(end_label);
-        self.patch_label(err_path);
-        self.emit_lazy_argument(next, next_eager)?;
         self.patch_label(end_label);
         Ok(())
     }
@@ -13053,19 +12674,6 @@ impl Codegen {
             kind: expected_kind.to_string(),
         });
         self.emit_jump_if_false(fail_label);
-        Ok(())
-    }
-
-    fn emit_ok_unit_result(&mut self) -> Result<(), CodegenError> {
-        let unit_idx = self.add_constant(Constant::Unit);
-        self.emit(Opcode::LoadConst(unit_idx));
-        self.emit(Opcode::MakeOk);
-        Ok(())
-    }
-
-    fn emit_ok_result_local(&mut self, slot: u32) -> Result<(), CodegenError> {
-        self.emit(Opcode::LoadLocal(slot));
-        self.emit(Opcode::MakeOk);
         Ok(())
     }
 

@@ -7,7 +7,7 @@ The names if, if_then, require, and ensure are ordinary names; their Lazy
 argument rules apply only when these standard declarations are selected.
 and / or and the Pattern consumer names are reserved.
 Use this layer for operations that are not owned by a single primitive module
-such as conditional special forms, printing, debug inspection, sequence
+such as conditional evaluation, printing, debug inspection, sequence
 decomposition, and process-oriented entrypoint control.
 
 ## REPL
@@ -44,7 +44,9 @@ defmod Kernel {
   xldr(3)> when_true(True, {|| print("selected")})
   selected
   """
-  @builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit
+  def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit {
+    match flag { True => then_branch(), False => () }
+  }
 
   @doc """
   Branching expression that returns one value from two alternatives.
@@ -52,8 +54,7 @@ defmod Kernel {
   The declared type is:
   `if(Boolean, Lazy<$A>, Lazy<$A>) -> $A`
 
-  Both branches are marked as `Lazy<_>` because Surtr treats `if` as a
-  language-level special form.
+  Both branches are marked as `Lazy<_>` to delay their evaluation.
   Only the selected branch is evaluated, and both branches must agree on the
   same result type.
 
@@ -93,7 +94,9 @@ defmod Kernel {
   xldr(3)> choose(True, {|| 42})
   42
   """
-  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
+  def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A {
+    match flag { True => then_branch(), False => else_branch() }
+  }
 
   @doc """
   Pattern-aware branching expression for a single success path.
@@ -279,7 +282,7 @@ defmod Kernel {
   The declared type is:
   `require(Boolean, Lazy<Error>) -> Result<Unit>`
 
-  Like `if`, this is a special form. The error branch is evaluated only when
+  The error branch is evaluated only when
   the condition is `False`, so success does not pay to build diagnostics.
   Call sites may construct a fresh `deferror` or forward an existing `Error`
   value obtained elsewhere. The returned Err preserves the supplied Error, including
@@ -302,7 +305,9 @@ defmod Kernel {
   xldr(3)> check(True)
   Ok(())
   """
-  @builtin def require(flag: Boolean, err: Lazy<Error>) -> Result<Unit>
+  def require(flag: Boolean, err: Lazy<Error>) -> Result<Unit> {
+    match flag { True => Ok(()), False => Err(err()) }
+  }
 
   @doc """
   Validate a value and return it unchanged on success.
@@ -330,7 +335,9 @@ defmod Kernel {
   xldr(3)> positive(3)
   Ok(3)
   """
-  @builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>
+  def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A> {
+    match pred(value) { True => Ok(value), False => Err(err()) }
+  }
 
   @doc """
   Observe `value` for side effects and return it unchanged.
