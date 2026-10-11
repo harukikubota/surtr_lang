@@ -22,7 +22,7 @@ defagent FibWorker {
 
   defp find_cached(cache: List<(Int, Int)>, n: Int) -> Result<Int> {
     match cache {
-      [] => Err(NoneError),
+      [] => Err(NoneError()),
       [entry, ..tail] => if(entry._0 == n, Ok(entry._1), find_cached(tail, n)),
     }
   }
