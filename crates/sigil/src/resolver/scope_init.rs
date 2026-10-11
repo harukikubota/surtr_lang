@@ -69,6 +69,7 @@ pub(super) fn is_special_form_builtin_decl(name: &str, qualified_name: &str) -> 
                 | "ensure"
                 | "map_err"
                 | "cause"
+                | "or_else"
                 | "recover"
                 | "and"
                 | "or"

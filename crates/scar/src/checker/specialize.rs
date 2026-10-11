@@ -578,7 +578,8 @@ impl Checker {
             | TypedInner::ListCons(left, right)
             | TypedInner::Require(left, right)
             | TypedInner::MapErr(left, right)
-            | TypedInner::Cause(left, right) => visit(left).or_else(|| visit(right)),
+            | TypedInner::Cause(left, right)
+            | TypedInner::OrElse(left, right) => visit(left).or_else(|| visit(right)),
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
@@ -966,6 +967,7 @@ impl Checker {
             | TypedInner::Ensure(..)
             | TypedInner::MapErr(..)
             | TypedInner::Cause(..)
+            | TypedInner::OrElse(..)
             | TypedInner::FieldAccess(..)
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::FacetPath(..)
@@ -1989,6 +1991,24 @@ impl Checker {
                 )?,
             ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
+                self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+                self.rewrite_specializations_in_node(
+                    *err,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ),
+            TypedInner::OrElse(value, err) => TypedInner::OrElse(
                 self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
@@ -3238,7 +3258,9 @@ impl Checker {
                 self.collect_pending_trait_receiver_tyvars_in_node(pred, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
             }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::MapErr(value, err)
+            | TypedInner::Cause(value, err)
+            | TypedInner::OrElse(value, err) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
             }
@@ -3415,7 +3437,9 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(pred, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::MapErr(value, err)
+            | TypedInner::Cause(value, err)
+            | TypedInner::OrElse(value, err) => {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
@@ -3916,6 +3940,10 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
+                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
+            ),
+            TypedInner::OrElse(value, err) => TypedInner::OrElse(
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
@@ -5376,7 +5404,9 @@ impl Checker {
                     || Self::typed_node_has_pending_trait_call(pred)
                     || Self::typed_node_has_pending_trait_call(err)
             }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::MapErr(value, err)
+            | TypedInner::Cause(value, err)
+            | TypedInner::OrElse(value, err) => {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
             }

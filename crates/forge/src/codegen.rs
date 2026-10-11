@@ -539,7 +539,8 @@ fn collect_missing_singleton_calls(
         | TypedInner::Compose(_, left, right)
         | TypedInner::ListCons(left, right)
         | TypedInner::MapErr(left, right)
-        | TypedInner::Cause(left, right) => {
+        | TypedInner::Cause(left, right)
+        | TypedInner::OrElse(left, right) => {
             collect_missing_singleton_calls(
                 left,
                 surface_to_process,
@@ -9249,6 +9250,9 @@ impl Codegen {
             TypedInner::Cause(value, err) => {
                 self.emit_result_error_transform(node, value, err, "cause")?;
             }
+            TypedInner::OrElse(value, next) => {
+                self.emit_result_or_else(value, next)?;
+            }
 
             TypedInner::Match(scrutinee, arms) => {
                 self.emit_match(scrutinee, arms)?;
@@ -13006,6 +13010,34 @@ impl Codegen {
             span_end: node.span.end as u32,
         });
 
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_result_or_else(
+        &mut self,
+        value: &TypedNode,
+        next: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(value)?;
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+        let next_eager = self.materialize_eager_boundary(next)?;
+
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit(Opcode::EqTag);
+
+        let err_path = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_true(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_jump(end_label);
+        self.patch_label(err_path);
+        self.emit_lazy_argument(next, next_eager)?;
         self.patch_label(end_label);
         Ok(())
     }

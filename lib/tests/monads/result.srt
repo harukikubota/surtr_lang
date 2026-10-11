@@ -13,6 +13,13 @@ def safe_double_under_limit(x: Int) -> Result<Int> { if(x < 5, Ok(x * 2), Err(No
 def safe_step3(x: Int) -> Result<Int> { Ok(x - 3) }
 def safe_add2(x: Int, y: Int) -> Result<Int> { Ok(x + y) }
 def safe_add3(x: Int, y: Int, z: Int) -> Result<Int> { Ok(x + y + z) }
+def or_else_probe(label: String, value: Result<Int>) -> Result<Int> {
+  print(label)
+  value
+}
+def or_else_forward(value: Result<$A>, next: (-> Result<$A>)) -> Result<$A> {
+  Result::or_else(value, next)
+}
 
 defstruct EqByValue {
   value: Int,
@@ -179,6 +186,55 @@ test("Result") {
           [ZeroDivisionError, NoneError],
           chain(Err(NoneError()), Err(ZeroDivisionError())),
         )
+      }
+    }
+  }
+
+  describe("or_else") {
+    it("keeps Ok and evaluates a fallback once only for Err") {
+      do {
+        kept = Result::or_else(Ok(7), {|| print("unexpected"); Ok(9)})
+        recovered = Result::or_else(Err(NoneError()), {|| print("fallback"); Ok(3)})
+        untouched = or_else(Ok(5), or_else_probe("unexpected call", Ok(6)))
+        called = or_else(Err(NoneError()), or_else_probe("fallback call", Ok(4)))
+        assert_ok_eq(7, kept)
+        assert_ok_eq(3, recovered)
+        assert_ok_eq(5, untouched)
+        assert_ok_eq(4, called)
+        assert_stdout_eq(["fallback", "fallback call"])
+      }
+    }
+
+    it("evaluates grouped RHS before selection without evaluating it again") {
+      do {
+        kept = Result::or_else(or_else_probe("left ok", Ok(7)), (or_else_probe("right ok", Ok(9))))
+        replaced = Result::or_else(or_else_probe("left err", Err(NoneError())), (or_else_probe("right err", Ok(3))))
+        assert_ok_eq(7, kept)
+        assert_ok_eq(3, replaced)
+        assert_stdout_eq(["left ok", "right ok", "left err", "right err"])
+      }
+    }
+
+    it("stops at the first Ok and returns the final Error unchanged") {
+      do {
+        selected = Result::or_else(Result::or_else(Err(NoneError()), Ok(2)), {|| print("unexpected"); Ok(3)})
+        failed = Result::or_else(Result::or_else(Err(FirstFailure("first")), Err(NoneError())), Result::cause(Err(FirstFailure("cause")), SecondFailure("last")))
+        assert_ok_eq(2, selected)
+        assert_err_kind(SecondFailure, failed)
+        assert_cause_chain([SecondFailure, FirstFailure], failed)
+        assert_ok_eq("last", Result::recover(failed, {|error| Ok(error.message)}))
+        assert_stdout_eq([])
+      }
+    }
+
+    it("normalizes explicit captures and forwards ordinary callable values") {
+      do {
+        choose: (Result<Int>, (-> Result<Int>) -> Result<Int>) = &Result::or_else(&1, &2)
+        assert_ok_eq(4, choose(Err(NoneError()), {|| Ok(4)}))
+        assert_ok_eq(7, choose(Ok(7), {|| print("unexpected"); Ok(4)}))
+        assert_ok_eq(8, Err(NoneError()) |> Result::or_else(Ok(8)))
+        assert_ok_eq("forwarded", or_else_forward(Err(NoneError()), {|| Ok("forwarded")}))
+        assert_stdout_eq([])
       }
     }
   }

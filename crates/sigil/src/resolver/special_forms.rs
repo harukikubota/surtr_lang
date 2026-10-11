@@ -138,6 +138,17 @@ impl Resolver {
         Ok(Resolved::Cause(span, Box::new(value), Box::new(err)))
     }
 
+    pub(super) fn resolve_or_else(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let [value, next] = collect_fixed_positional_args(span.clone(), args, "or_else", 2)?;
+        let value = self.resolve_node(value)?;
+        let next = self.resolve_lazy_input(next)?;
+        Ok(Resolved::OrElse(span, Box::new(value), Box::new(next)))
+    }
+
     pub(super) fn resolve_logic_call(
         &mut self,
         span: Span,

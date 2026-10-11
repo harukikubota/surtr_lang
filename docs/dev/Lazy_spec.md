@@ -2,7 +2,7 @@
 
 `Lazy<T>` は標準定義が宣言する引数契約のマーカーであり、通常の値型ではない。標準 special form に加えて、標準 Trait メソッドの引数にも宣言できる。
 
-Sigilは通常の名前解決でcallee UIDを確定し、対応する標準宣言のcanonical identityからspecial formを選ぶ。autoimport属性や呼出しの綴りだけでspecial formへ分類しない。callee解決が失敗した場合は元の診断を返し、通常呼出し・パイプのどちらでも綴りによる救済を行わない。`and` / `or` は予約名で、利用者の独立した関数・member 定義も拒否する。`if`、`if_then`、`require`、`ensure`、`map_err`、`cause` は通常名で、同名の利用者関数・関数値変数は自身の署名と通常の引数評価に従う。Pattern consumer の予約規則は別に維持する。
+Sigilは通常の名前解決でcallee UIDを確定し、対応する標準宣言のcanonical identityからspecial formを選ぶ。autoimport属性や呼出しの綴りだけでspecial formへ分類しない。callee解決が失敗した場合は元の診断を返し、通常呼出し・パイプのどちらでも綴りによる救済を行わない。`and` / `or` は予約名で、利用者の独立した関数・member 定義も拒否する。`if`、`if_then`、`require`、`ensure`、`map_err`、`cause`、`or_else` は通常名で、同名の利用者関数・関数値変数は自身の署名と通常の引数評価に従う。Pattern consumer の予約規則は別に維持する。
 利用者の独立した関数・Trait は Lazy 引数契約を宣言できない。標準 Trait のユーザー impl は、対応するメソッドの引数位置に限って Lazy 契約を継承できる。宣言の identity で対応付け、メソッド名の綴りや実装元では許可を決めない。default method と override の呼出しは同じ宣言契約に従い、実装本体へ通常の0引数 callable を渡す。戻り値・型注釈・field・container の値型としては公開しない。
 builtin の signature は `crates/sindr/src/builtin.rs` の `BUILTIN_METAS` と対応する標準定義を正本とする。Trait メソッドの Lazy 引数位置は、解決された標準 Trait 宣言を正本とする。
 利用者向けの規則と関数別の例は[Lazy evaluation](../site/lazy-evaluation.md)、標準APIの説明は`lib/kernel.srt`・`lib/types/result.srt`の`@doc`に置く。
@@ -55,6 +55,7 @@ depthは型の先頭に連続する0引数関数の段数である。引数付�
 単branchの`if_then`と、bindingを作らない`if_let_then`の成功branchは`(-> Unit)`を要求する。bindingを作る成功branchはDirectExpressionとして`Unit`を要求する。
 `require`・`ensure`・`Result::map_err`・`Result::cause`のerrorは`(-> Error)`を要求する。
 `and`・`or`の右辺は`(-> Boolean)`を要求し、それぞれ左辺が`True`・`False`のときだけ実行する。
+`Result::or_else`の右辺は左辺と同じ`Result<T>`を返す`(-> Result<T>)`を要求し、左辺が`Err`のときだけconsumeする。括弧によるeager境界は左辺の評価後・分岐選択前に一回評価し、その結果を再利用する。
 個別の評価条件は標準 API の契約に従う。Error は通常の値として受け渡す。
 
 ## キャプチャの要求型
