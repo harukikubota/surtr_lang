@@ -462,6 +462,7 @@ pub enum TypedInner {
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     MapErr(Box<TypedNode>, Box<TypedNode>),
     Cause(Box<TypedNode>, Box<TypedNode>),
+    OrElse(Box<TypedNode>, Box<TypedNode>),
     ErrorKind(String),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
     /// Expression-local Pattern execution with projection results in slot order.

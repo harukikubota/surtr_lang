@@ -4618,6 +4618,10 @@ impl Checker {
                 self.resolve_typed_node(*value),
                 self.resolve_typed_node(*err),
             ),
+            TypedInner::OrElse(value, err) => TypedInner::OrElse(
+                self.resolve_typed_node(*value),
+                self.resolve_typed_node(*err),
+            ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 self.resolve_typed_node(*scrutinee),
                 arms.into_iter()

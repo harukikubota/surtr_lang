@@ -58,6 +58,7 @@ impl LazyCaptureText for LazyCaptureKind {
             Self::Ensure => "ensure",
             Self::MapErr => "Result::map_err",
             Self::Cause => "Result::cause",
+            Self::OrElse => "Result::or_else",
         }
     }
 
@@ -75,6 +76,7 @@ impl LazyCaptureText for LazyCaptureKind {
             Self::Ensure => "ensure captures its error argument as (-> Error); it runs only when the predicate returns False.",
             Self::MapErr => "Result::map_err captures the replacement error as (-> Error); it runs only for Err.",
             Self::Cause => "Result::cause captures the cause error as (-> Error); it runs only for Err.",
+            Self::OrElse => "Result::or_else captures its fallback as (-> Result<T>); it runs only for Err.",
         }
     }
 }

@@ -200,6 +200,7 @@ pub(super) enum CanonicalSpecialForm {
     Ensure,
     MapErr,
     Cause,
+    OrElse,
     Logic(LogicKind),
 }
 
@@ -214,6 +215,7 @@ impl Resolver {
             "Kernel::or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
             "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
             "Result::cause" => Some(CanonicalSpecialForm::Cause),
+            "Result::or_else" => Some(CanonicalSpecialForm::OrElse),
             _ => None,
         }
     }
@@ -242,6 +244,7 @@ impl Resolver {
             CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
+            CanonicalSpecialForm::OrElse => self.resolve_or_else(span, args),
             CanonicalSpecialForm::Logic(logic_kind) => {
                 self.resolve_logic_call(span, args, logic_kind)
             }

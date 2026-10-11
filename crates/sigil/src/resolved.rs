@@ -240,6 +240,9 @@ pub enum Resolved {
     /// `Result::cause(value, err)` special form
     Cause(Span, Box<Resolved>, Box<Resolved>),
 
+    /// `Result::or_else(value, next)` special form
+    OrElse(Span, Box<Resolved>, Box<Resolved>),
+
     /// Bare canonical deferror declaration used as an ordinary opaque value.
     ErrorKind(Span, ResolvedId),
 
@@ -648,6 +651,7 @@ pub enum LazyCaptureKind {
     Ensure,
     MapErr,
     Cause,
+    OrElse,
 }
 
 /// Diagnostic-only roles of one generated capture parameter in a canonical Lazy call.
