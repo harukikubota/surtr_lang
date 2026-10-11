@@ -782,6 +782,92 @@ impl Checker {
         Ok(())
     }
 
+    /// Executable callable references owned by Pattern metadata.
+    pub(super) fn pattern_callable_types(node: &TypedNode) -> Vec<(&Ty, &Span)> {
+        fn binding<'a>(pattern: &'a TypedPattern, out: &mut Vec<(&'a Ty, &'a Span)>) {
+            match pattern {
+                TypedPattern::Located(_, inner) | TypedPattern::As(_, inner, _) => {
+                    binding(inner, out)
+                }
+                TypedPattern::HashMap(_, entries) => {
+                    for entry in entries {
+                        binding(&entry.pattern, out);
+                    }
+                }
+                TypedPattern::Extractor {
+                    extractor,
+                    extractor_ty,
+                    items,
+                    ..
+                } => {
+                    out.push((extractor_ty, &extractor.span));
+                    for item in items {
+                        binding(item, out);
+                    }
+                }
+                TypedPattern::ListCons(_, head, tail) => {
+                    binding(head, out);
+                    binding(tail, out);
+                }
+                TypedPattern::Tuple(_, items) | TypedPattern::Constructor { fields: items, .. } => {
+                    for item in items {
+                        binding(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn matching<'a>(pattern: &'a TypedMatchPattern, out: &mut Vec<(&'a Ty, &'a Span)>) {
+            match pattern {
+                TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::HashMap(entries) => {
+                    for entry in entries {
+                        matching(&entry.pattern, out);
+                    }
+                }
+                TypedMatchPattern::Extractor {
+                    extractor,
+                    extractor_ty,
+                    items,
+                    ..
+                } => {
+                    out.push((extractor_ty, &extractor.span));
+                    for item in items {
+                        matching(item, out);
+                    }
+                }
+                TypedMatchPattern::ListCons(head, tail) => {
+                    matching(head, out);
+                    matching(tail, out);
+                }
+                TypedMatchPattern::Tuple(items)
+                | TypedMatchPattern::Record(items)
+                | TypedMatchPattern::Or(items)
+                | TypedMatchPattern::ErrorPayload { fields: items, .. }
+                | TypedMatchPattern::Constructor { fields: items, .. } => {
+                    for item in items {
+                        matching(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        match &node.node {
+            TypedInner::Bind(pattern, _)
+            | TypedInner::SafeBind(pattern, ..)
+            | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, &mut out),
+            TypedInner::DoSafeBind(control) => binding(&control.pattern, &mut out),
+            TypedInner::Match(_, arms) => {
+                for arm in arms {
+                    matching(&arm.pattern, &mut out);
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
     /// Expression subtrees owned by patterns, including nested occurrences.
     /// Expression visitors must include these as well as ordinary Expr children.
     pub(super) fn pattern_expression_nodes(node: &TypedNode) -> Vec<&TypedNode> {
@@ -837,6 +923,7 @@ impl Checker {
                     matching(tail, out);
                 }
                 TypedMatchPattern::Tuple(items)
+                | TypedMatchPattern::Record(items)
                 | TypedMatchPattern::Or(items)
                 | TypedMatchPattern::ErrorPayload { fields: items, .. }
                 | TypedMatchPattern::Constructor { fields: items, .. } => {
@@ -918,6 +1005,7 @@ impl Checker {
                     matching(tail, out);
                 }
                 TypedMatchPattern::Tuple(items)
+                | TypedMatchPattern::Record(items)
                 | TypedMatchPattern::Or(items)
                 | TypedMatchPattern::ErrorPayload { fields: items, .. }
                 | TypedMatchPattern::Constructor { fields: items, .. } => {

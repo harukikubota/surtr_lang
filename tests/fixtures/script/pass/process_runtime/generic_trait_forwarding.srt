@@ -1,0 +1,83 @@
+def inner(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { Monad::bind(source, next) }
+def relay(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { inner(source, next) }
+defagent Relay {
+  meta { instance: Singleton
+    init_policy: Eager
+    state: Int }
+  @init
+  def init() -> Result<Int> { Ok(0) }
+  @get
+  def fetch(state: Int, source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { Monad::bind(source, next) }
+}
+defagent Keep {
+  meta { instance: Singleton
+    init_policy: Eager
+    state: Int }
+  @init
+  def init() -> Result<Int> { Ok(0) }
+  @get
+  def keep(state: Int, value: $A) -> Result<$A> { Ok(value) }
+}
+def wrapper(value: $A) -> Result<$A> { Keep::keep(value) }
+def wrapper_capture(value: $A) -> Result<$A> {
+  f: ($A -> Result<$A>) = &Keep::keep
+  f(value)
+}
+def wrapper_inject(value: $A) -> Result<$A> { value |> Keep::keep() }
+def task(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> {
+  Task::call({|| relay(source, next)})
+}
+def async_task(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> {
+  pending = Task::async({|| relay(source, next)})
+  Task::await(pending)
+}
+defgenserver Server {
+  meta { instance: Singleton
+    init_policy: Eager
+    state: Int }
+  @init
+  def init() -> Result<Int> { Ok(0) }
+  @call
+  def fetch(state: Int, source: Result<$A>, next: ($A -> Result<$B>)) -> Result<CallResult<$B, Int>> {
+    value =? Monad::bind(source, next)
+    Ok(CallResult::Reply(value, state))
+  }
+}
+defagent Worker {
+  meta { instance: Worker
+    init_policy: Eager
+    state: Int }
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+  @get
+  def fetch(state: Int, source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { relay(source, next) }
+  @set
+  def replace(state: Int, value: Int) -> Result<Int> { Ok(value) }
+  defp relay(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { sequence(source, next) }
+  defp sequence(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { Monad::bind(source, next) }
+}
+defsupervisor Root {
+  meta { strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True }
+}
+def launch(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<Unit> {
+  Task::launch({|| _ =? relay(source, next); Ok(())})
+}
+supervisor_init { Root {} }
+print(inspect(Relay::fetch(Ok(7), {|x: Int| Ok(inspect(x))})))
+print(inspect(Relay::fetch(Ok("x"), {|x: String| Ok(x ++ "y")})))
+print(inspect(wrapper(7)))
+print(inspect(wrapper("x")))
+print(inspect(wrapper_capture(7)))
+print(inspect(wrapper_inject("x")))
+print(inspect(task(Ok(7), {|x: Int| Ok(x + 1)})))
+print(inspect(async_task(Ok(7), {|x: Int| Ok(x + 1)})))
+print(inspect(Server::fetch(Ok(7), {|x: Int| Ok(inspect(x))})))
+print(inspect(Server::fetch(Ok("x"), {|x: String| Ok(x ++ "y")})))
+worker =? Root::spawn(Worker::init(0))
+print(inspect(worker |> Worker::fetch(Ok(7), {|x: Int| Ok(inspect(x))})))
+print(inspect(worker |> Worker::fetch(Ok("x"), {|x: String| Ok(x ++ "y")})))
+print(inspect(launch(Ok(7), {|x: Int| Ok(x + 1)})))

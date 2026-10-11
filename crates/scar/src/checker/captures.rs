@@ -64,8 +64,6 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Require(left, right)
-            | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right) => {
                 children.push(left);
                 children.push(right);
@@ -74,11 +72,6 @@ impl Checker {
                 children.push(cond);
                 children.push(then_branch);
                 children.extend(else_branch.as_deref());
-            }
-            TypedInner::Ensure(a, b, c) => {
-                children.push(a);
-                children.push(b);
-                children.push(c);
             }
             TypedInner::Match(value, arms) => {
                 children.push(value);

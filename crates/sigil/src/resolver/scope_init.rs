@@ -62,18 +62,7 @@ pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
 
 pub(super) fn is_special_form_builtin_decl(name: &str, qualified_name: &str) -> bool {
     sindr::pattern::PatternConsumer::from_canonical_name(qualified_name).is_some()
-        || matches!(
-            name,
-            "if" | "if_then"
-                | "require"
-                | "ensure"
-                | "map_err"
-                | "cause"
-                | "recover"
-                | "and"
-                | "or"
-                | "(,)"
-        )
+        || matches!(name, "cause" | "recover" | "and" | "or" | "(,)")
 }
 
 pub(super) fn is_doc_only_builtin_decl(name: &str) -> bool {

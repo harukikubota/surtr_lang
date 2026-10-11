@@ -1439,6 +1439,7 @@ fn declaration_entry(
     DeclarationEntry {
         registration_order: 0,
         value_parameter_count: None,
+        lazy_parameters: Vec::new(),
         module_path: module_path.to_string(),
         name: name.to_string(),
         fq_name: fq_name.to_string(),

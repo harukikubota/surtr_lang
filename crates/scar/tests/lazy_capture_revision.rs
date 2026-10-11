@@ -262,6 +262,46 @@ fn result_error_lazy_capture_uses_fixed_error_requirement() {
 }
 
 #[test]
+fn result_or_else_capture_requires_matching_result_thunk() {
+    let result = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
+    assert_eq!(
+        ty("choose = &Result::or_else(Ok(1), &1)", "choose"),
+        Ty::Func(vec![thunk(result.clone())], Box::new(result.clone()))
+    );
+    assert_eq!(
+        ty("def choose(value: Result<$A>, next: (-> Result<$A>)) -> Result<$A> { Result::or_else(value, next) }\nselected = choose(Err(NoneError()), {|| Ok(1)})", "selected"),
+        result
+    );
+    for source in [
+        "Result::or_else(1, Ok(2))",
+        "Result::or_else(Ok(1), 2)",
+        "Result::or_else(Ok(1), Ok(\"wrong\"))",
+        "Result::or_else(Ok(1), {|| {|| Ok(2)}})",
+        "choose: (Result<Int>, Result<Int> -> Result<Int>) = &Result::or_else(&1, &2)",
+    ] {
+        support::typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+    }
+}
+
+#[test]
+fn result_or_else_preserves_lazy_capture_boundaries_and_declaration_identity() {
+    for source in [
+        "choose = &Result::or_else",
+        "choose = &Result::or_else(Ok(1), (id(&1)))",
+    ] {
+        let error = support::resolve_with_builtin_prelude_result(source).expect_err(source);
+        assert!(error.message.contains("Lazy"), "{error:?}");
+    }
+    assert_eq!(
+        ty(
+            "def or_else(left: Int, right: Int) -> Int { left + right }\nselected = or_else(1, 2)",
+            "selected"
+        ),
+        Ty::Int
+    );
+}
+
+#[test]
 fn direct_expression_requirement_survives_generic_forwarding_and_capture() {
     let header = "def build(value: $A) -> (Int, $A -> $A) { &if_let(&1, x, &2, value) }";
     for consumer in [
@@ -281,4 +321,92 @@ fn direct_expression_requirement_survives_generic_forwarding_and_capture() {
         ty(&forwarded, "result"),
         Ty::Func(vec![Ty::Int, Ty::Int], Box::new(Ty::Int))
     );
+}
+
+#[test]
+fn migrated_lazy_calls_pass_normalized_callables_to_ordinary_functions() {
+    fn ordinary_call(
+        node: &scar::typed::TypedNode,
+    ) -> (&scar::typed::TypedNode, &[scar::typed::TypedNode]) {
+        match &node.node {
+            TypedInner::Block(statements) => ordinary_call(statements.last().expect("call tail")),
+            TypedInner::App(function, args) => (function, args),
+            other => panic!("expected ordinary call, got {other:?}"),
+        }
+    }
+    for (expression, lazy_positions) in [
+        ("if(True, 1, 2)", vec![1, 2]),
+        ("if_then(True, ())", vec![1]),
+        ("require(True, NoneError())", vec![1]),
+        ("ensure(1, {|x| x == 1}, NoneError())", vec![2]),
+        ("Result::or_else(Ok(1), Ok(2))", vec![1]),
+        ("Result::map_err(Ok(1), NoneError())", vec![1]),
+    ] {
+        let nodes = support::typecheck_with_rules(
+            &format!("value = {expression}"),
+            RuntimeSourcePolicy::script(),
+        )
+        .expect(expression);
+        let value = nodes.iter().find_map(|node| match &node.node {
+            TypedInner::Bind(pattern, value) if matches!(pattern.unlocated(), TypedPattern::Var(_, id) if id.name == "value") => Some(value.as_ref()),
+            _ => None,
+        }).expect("value binding");
+        let (function, args) = ordinary_call(value);
+        assert!(
+            matches!(function.ty, Ty::UserFunc { .. }),
+            "{expression}: {:?}",
+            function.ty
+        );
+        for index in lazy_positions {
+            assert!(
+                matches!(args[index].node, TypedInner::Closure(..)),
+                "{expression}: {:?}",
+                args[index]
+            );
+            assert!(matches!(&args[index].ty, Ty::Func(params, _) if params.is_empty()));
+        }
+    }
+}
+
+#[test]
+fn lazy_standard_call_rejects_facet_transport_but_accepts_delayed_facet_view() {
+    let error = support::typecheck_with_rules(
+        "defrecord User(name: String)\nvalue = if(True, (User.name), (User.name))",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("ordinary function boundaries cannot transport compile-time Facet values");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::FacetCompileTimeOnly),
+        "{error:?}"
+    );
+    assert_eq!(ty("defrecord User(name: String)\nuser = User(\"alice\")\nvalue = if(True, Facet::view(User.name, user), \"other\")", "value"), Ty::Str);
+}
+
+#[test]
+fn lazy_standard_call_hoists_preserve_constructor_capabilities() {
+    let declarations = r#"
+deftrait FixtureFunctor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait FixtureMonad where Self: FixtureFunctor { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl FixtureFunctor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl FixtureMonad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def retain_functor(value: $F<Int>) -> $F<Int> where $F: FixtureFunctor { FixtureFunctor::fmap(value, {|x| x}) }
+def retain_monad(value: $F<Int>) -> $F<Int> where $F: FixtureMonad { evidence = FixtureMonad::run(value); value }
+def stronger(value: FixtureMonad<Int>) -> Int { 1 }
+"#;
+    for expression in [
+        "stronger(if(True, (source), (source)))",
+        "match Result::map_err(Ok(source), NoneError()) { Ok(value) => stronger(value), Err(_) => 0 }",
+        "match ensure(source, {|value: Box<Int>| True}, NoneError()) { Ok(value) => stronger(value), Err(_) => 0 }",
+    ] {
+        let valid = format!("{declarations}\nsource = retain_monad(Box::Box(1))\n{expression}");
+        support::typecheck_with_rules(&valid, RuntimeSourcePolicy::script()).unwrap_or_else(|error| panic!("{valid}: {error:?}"));
+        let invalid = format!("{declarations}\nsource = retain_functor(Box::Box(1))\n{expression}");
+        let error = support::typecheck_with_rules(&invalid, RuntimeSourcePolicy::script()).expect_err("normalizing Lazy arguments must not strengthen retained capability views");
+        assert_eq!(error.reason(), Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability), "{invalid}: {error:?}");
+    }
+    let source = format!("{declarations}\nsource = retain_functor(Box::Box(1))\nchecked = ensure(source, {{|value: Box<Int>| True}}, NoneError())");
+    support::typecheck_with_rules(&source, RuntimeSourcePolicy::script())
+        .expect("a matching explicit nominal predicate remains accepted");
 }

@@ -25,15 +25,139 @@ enum ResolvedDeferredDoFailure {
     Alternative(TypedNode),
 }
 
+#[derive(Clone)]
+struct CallableSpecializationRequirements {
+    tyvars: Vec<u32>,
+    requires_concrete: bool,
+}
+
 struct SpecializationContext<'a> {
     defs_by_fun_idx: &'a SpecializableDefinitions,
-    bound_tyvars_by_fun_idx: &'a HashMap<u32, Vec<u32>>,
+    bound_tyvars_by_fun_idx: &'a HashMap<u32, CallableSpecializationRequirements>,
     needs_specialization: &'a HashSet<u32>,
     specialization_fun_idxs: &'a mut HashMap<CallableInstantiationKey, u32>,
     generated_defs: &'a mut Vec<TypedNode>,
 }
 
 impl Checker {
+    fn specialization_type_is_concrete(ty: &Ty) -> bool {
+        let mut variables = Vec::new();
+        Self::collect_ty_vars(ty, &mut variables);
+        variables.is_empty()
+    }
+
+    fn propagate_callable_specialization_requirements(
+        &self,
+        definitions: &SpecializableDefinitions,
+        requirements: &mut HashMap<u32, CallableSpecializationRequirements>,
+    ) -> Result<(), TypeError> {
+        use std::cell::RefCell;
+        let mut signatures = HashMap::new();
+        let mut edges = Vec::new();
+        let mut indices = definitions.keys().copied().collect::<Vec<_>>();
+        indices.sort_unstable();
+        for index in indices {
+            let definition = &definitions[&index];
+            let mut variables = Vec::new();
+            match &definition.node {
+                TypedInner::Def(_, _, arguments, parameters, result, ..) => {
+                    for argument in arguments {
+                        Self::collect_ty_vars(&argument.ty, &mut variables);
+                    }
+                    for parameter in parameters {
+                        Self::collect_ty_vars(&parameter.ty, &mut variables);
+                    }
+                    Self::collect_ty_vars(result, &mut variables);
+                }
+                TypedInner::ExtractorDef(_, _, _, parameters, result, ..) => {
+                    for parameter in parameters {
+                        Self::collect_ty_vars(&parameter.ty, &mut variables);
+                    }
+                    Self::collect_ty_vars(result, &mut variables);
+                }
+                _ => {
+                    return Err(self.typecheck_invariant_error(
+                        "specialization requirements must name a callable definition",
+                        &definition.span,
+                    ))
+                }
+            }
+            signatures.insert(index, variables.into_iter().collect::<HashSet<_>>());
+            let calls = RefCell::new(Vec::new());
+            self.find_typed_node(definition, &|_, node| {
+                let mut types = Self::pattern_callable_types(node);
+                if !matches!(
+                    node.node,
+                    TypedInner::Def(..) | TypedInner::ExtractorDef(..)
+                ) {
+                    types.push((&node.ty, &node.span));
+                }
+                for (ty, span) in types {
+                    if let Ty::UserFunc {
+                        fun_idx,
+                        call_substitution,
+                        ..
+                    } = ty
+                    {
+                        if definitions.contains_key(fun_idx) {
+                            calls.borrow_mut().push((
+                                *fun_idx,
+                                call_substitution.clone(),
+                                span.clone(),
+                            ));
+                        }
+                    }
+                }
+                None::<()>
+            });
+            edges.push((index, calls.into_inner()));
+        }
+
+        // The graph and saved substitutions are immutable. Propagate only
+        // declaration-owned slots until the finite sets reach a fixed point.
+        loop {
+            let mut changed = false;
+            for (caller, calls) in &edges {
+                let mut forwarded = requirements[caller].clone();
+                for (callee, substitution, span) in calls {
+                    let required = &requirements[callee];
+                    forwarded.requires_concrete |= required.requires_concrete;
+                    for variable in &required.tyvars {
+                        let Some((_, input)) =
+                            substitution.iter().find(|(slot, _)| slot == variable)
+                        else {
+                            return Err(self.typecheck_invariant_error(
+                                "Missing call substitution for ordinary specialization",
+                                span,
+                            ));
+                        };
+                        let mut inputs = Vec::new();
+                        Self::collect_ty_vars(&self.resolve_ty(input), &mut inputs);
+                        for input in inputs {
+                            if signatures[caller].contains(&input)
+                                && !forwarded.tyvars.contains(&input)
+                            {
+                                forwarded.tyvars.push(input);
+                            }
+                        }
+                    }
+                }
+                // Stable keys do not depend on hash iteration or definition order.
+                forwarded.tyvars.sort_unstable();
+                if forwarded.tyvars != requirements[caller].tyvars
+                    || forwarded.requires_concrete != requirements[caller].requires_concrete
+                {
+                    requirements.insert(*caller, forwarded);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_deferred_do_failure(
         &mut self,
         deferred: DeferredDoFailureTarget,
@@ -212,11 +336,25 @@ impl Checker {
                     }
                 }
             }
-            let needs = Self::typed_node_has_pending_trait_call(def) || !bound_tyvars.is_empty();
-            if needs {
+            let requires_concrete = Self::typed_node_has_pending_trait_call(def)
+                || self.direct_pattern_requirement_tyvars.contains_key(fun_idx);
+            bound_tyvars_by_fun_idx.insert(
+                *fun_idx,
+                CallableSpecializationRequirements {
+                    tyvars: bound_tyvars,
+                    requires_concrete,
+                },
+            );
+        }
+
+        self.propagate_callable_specialization_requirements(
+            &defs_by_fun_idx,
+            &mut bound_tyvars_by_fun_idx,
+        )?;
+        for (fun_idx, requirements) in &bound_tyvars_by_fun_idx {
+            if requirements.requires_concrete || !requirements.tyvars.is_empty() {
                 needs_specialization.insert(*fun_idx);
             }
-            bound_tyvars_by_fun_idx.insert(*fun_idx, bound_tyvars);
         }
 
         let mut rewritten = Vec::new();
@@ -369,51 +507,60 @@ impl Checker {
                 ) {
                     return None;
                 }
-                let Ty::UserFunc {
-                    fun_idx,
-                    call_substitution,
-                    ..
-                } = &node.ty
-                else {
-                    return None;
-                };
-                if !needs_specialization.contains(fun_idx) || executable_functions.contains(fun_idx)
-                {
-                    return None;
-                }
-                let definition = defs_by_fun_idx
-                    .get(fun_idx)
-                    .expect("specialization template has a definition");
-                let pending = checker.find_typed_node(definition, &|_, call| match &call.node {
-                    TypedInner::TraitCall {
-                        trait_name,
-                        method_name,
-                        receiver_ty,
-                        dispatch,
+                let mut types = Self::pattern_callable_types(node);
+                types.push((&node.ty, &node.span));
+                for (ty, reference_span) in types {
+                    let Ty::UserFunc {
+                        fun_idx,
+                        call_substitution,
                         ..
-                    } if matches!(dispatch, TraitDispatch::Pending)
-                        || matches!(dispatch, TraitDispatch::Selected(instantiation)
-                                if Self::selected_instantiation_has_pending_input(instantiation)) =>
+                    } = ty
+                    else {
+                        continue;
+                    };
+                    if !needs_specialization.contains(fun_idx)
+                        || executable_functions.contains(fun_idx)
                     {
-                        Some((trait_name, method_name, receiver_ty))
+                        continue;
                     }
-                    _ => None,
-                });
-                if let Some((trait_name, method, subject)) = pending {
-                    let mapping = call_substitution.iter().cloned().collect();
-                    let subject = checker.substitute_ty_with_mapping(subject, &mapping);
+                    let definition = defs_by_fun_idx
+                        .get(fun_idx)
+                        .expect("specialization template has a definition");
+                    let pending =
+                        checker.find_typed_node(definition, &|_, call| match &call.node {
+                            TypedInner::TraitCall {
+                                trait_name,
+                                method_name,
+                                receiver_ty,
+                                dispatch,
+                                ..
+                            } if matches!(dispatch, TraitDispatch::Pending)
+                                || matches!(dispatch, TraitDispatch::Selected(instantiation)
+                                if Self::selected_instantiation_has_pending_input(instantiation)) =>
+                            {
+                                Some((trait_name, method_name, receiver_ty))
+                            }
+                            _ => None,
+                        });
+                    if let Some((trait_name, method, subject)) = pending {
+                        let mapping = call_substitution.iter().cloned().collect();
+                        let subject = checker.substitute_ty_with_mapping(subject, &mapping);
+                        return Some(checker.pending_trait_helper_error(
+                            trait_name,
+                            method,
+                            &subject,
+                            reference_span,
+                        ));
+                    }
                     return Some(
-                        checker
-                            .pending_trait_helper_error(trait_name, method, &subject, &node.span),
+                        TypeError::new(
+                            "Callable specialization requires concrete type arguments",
+                            reference_span.clone(),
+                        )
+                        .with_hint("Add parameter or result type annotations at this call."),
                     );
                 }
-                Some(
-                    TypeError::new(
-                        "Callable specialization requires concrete type arguments",
-                        node.span.clone(),
-                    )
-                    .with_hint("Add parameter or result type annotations at this call."),
-                )
+                None
             }) {
                 return Err(error);
             }
@@ -576,15 +723,10 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Require(left, right)
-            | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right) => visit(left).or_else(|| visit(right)),
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
-            TypedInner::Ensure(first, second, third) => visit(first)
-                .or_else(|| visit(second))
-                .or_else(|| visit(third)),
             TypedInner::Match(scrutinee, arms) => visit(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
@@ -712,7 +854,7 @@ impl Checker {
         control: Box<TypedDoSafeBind>,
         span: &Span,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -895,7 +1037,7 @@ impl Checker {
         &mut self,
         node: TypedNode,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -962,9 +1104,6 @@ impl Checker {
             | TypedInner::Dbg(..)
             | TypedInner::EagerBoundary(..)
             | TypedInner::If(..)
-            | TypedInner::Require(..)
-            | TypedInner::Ensure(..)
-            | TypedInner::MapErr(..)
             | TypedInner::Cause(..)
             | TypedInner::FieldAccess(..)
             | TypedInner::ProcessContextHandler { .. }
@@ -1002,7 +1141,7 @@ impl Checker {
         &mut self,
         node: TypedNode,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -1046,10 +1185,10 @@ impl Checker {
                                 span: span.clone(),
                                 hint: None,
                             })?;
-                        let bound_tyvars = bound_tyvars_by_fun_idx
+                        let requirements = bound_tyvars_by_fun_idx
                             .get(fun_idx)
-                            .cloned()
-                            .unwrap_or_default();
+                            .expect("specialization requirements exist for every definition");
+                        let bound_tyvars = &requirements.tyvars;
                         let mapping = self.infer_specialization_mapping(
                             original_def,
                             &args,
@@ -1059,7 +1198,9 @@ impl Checker {
                         )?;
                         let fully_concrete = mapping.len() == bound_tyvars.len()
                             && bound_tyvars.iter().all(|var| {
-                                mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
+                                mapping
+                                    .get(var)
+                                    .is_some_and(Self::specialization_type_is_concrete)
                             });
                         // Type variables are erased at runtime. A definition
                         // without pending trait dispatch can therefore be
@@ -1067,10 +1208,7 @@ impl Checker {
                         // still waiting for a later type witness. This keeps a
                         // valid function-table entry instead of leaking the
                         // pre-normalization generic index into Forge.
-                        if fully_concrete
-                            || (!Self::typed_node_has_pending_trait_call(original_def)
-                                && !self.direct_pattern_requirement_tyvars.contains_key(fun_idx))
-                        {
+                        if fully_concrete || !requirements.requires_concrete {
                             let concrete_tys = bound_tyvars
                                 .iter()
                                 .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
@@ -1192,7 +1330,7 @@ impl Checker {
         &mut self,
         node: TypedNode,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -1231,7 +1369,7 @@ impl Checker {
         &mut self,
         node: TypedNode,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -1300,7 +1438,7 @@ impl Checker {
         &mut self,
         node: TypedNode,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -1370,7 +1508,7 @@ impl Checker {
         &mut self,
         node: TypedNode,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -1926,68 +2064,6 @@ impl Checker {
                     })
                     .transpose()?,
             ),
-            TypedInner::Require(cond, err) => TypedInner::Require(
-                self.rewrite_specializations_in_node(
-                    *cond,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                self.rewrite_specializations_in_node(
-                    *value,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *pred,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
-            TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                self.rewrite_specializations_in_node(
-                    *value,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                self.rewrite_specializations_in_node(
-                    *err,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
                 self.rewrite_specializations_in_node(
                     *value,
@@ -2300,7 +2376,7 @@ impl Checker {
         &mut self,
         mut path: TypedFacetPath,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -2326,7 +2402,7 @@ impl Checker {
         &mut self,
         segment: TypedFacetSegment,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -2399,7 +2475,7 @@ impl Checker {
         &mut self,
         mut path: PendingFacetPath,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -2425,7 +2501,7 @@ impl Checker {
         &mut self,
         segment: PendingFacetSegment,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -2488,11 +2564,11 @@ impl Checker {
                             span: target.span.clone(),
                             hint: None,
                         })?;
-                let bound_tyvars = context
+                let requirements = context
                     .bound_tyvars_by_fun_idx
                     .get(&fun_idx)
-                    .cloned()
-                    .unwrap_or_default();
+                    .expect("specialization requirements exist for every definition");
+                let bound_tyvars = &requirements.tyvars;
                 // The callable signature already carries the declaration's substitution.
                 // InjectCall's bound arguments omit the injected value, so they are
                 // not a complete argument list for ordinary call specialization.
@@ -2504,15 +2580,12 @@ impl Checker {
                     &bound_tyvars,
                 )?;
                 let fully_concrete = mapping.len() == bound_tyvars.len()
-                    && bound_tyvars
-                        .iter()
-                        .all(|var| mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_))));
-                if fully_concrete
-                    || (!Self::typed_node_has_pending_trait_call(original_def)
-                        && !self
-                            .direct_pattern_requirement_tyvars
-                            .contains_key(&fun_idx))
-                {
+                    && bound_tyvars.iter().all(|var| {
+                        mapping
+                            .get(var)
+                            .is_some_and(Self::specialization_type_is_concrete)
+                    });
+                if fully_concrete || !requirements.requires_concrete {
                     let concrete_tys = bound_tyvars
                         .iter()
                         .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
@@ -2550,7 +2623,7 @@ impl Checker {
         concrete_tys: &[Ty],
         mapping: &HashMap<u32, Ty>,
         defs_by_fun_idx: &SpecializableDefinitions,
-        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
@@ -3218,8 +3291,7 @@ impl Checker {
             TypedInner::EagerBoundary(inner)
             | TypedInner::FieldAccess(inner, _)
             | TypedInner::SupervisorSpawn { init: inner, .. }
-            | TypedInner::SupervisorAdopt { pid: inner, .. }
-            | TypedInner::FacetView { source: inner, .. } => {
+            | TypedInner::SupervisorAdopt { pid: inner, .. } => {
                 self.collect_pending_trait_receiver_tyvars_in_node(inner, ordered, seen)
             }
             TypedInner::If(cond, then_branch, else_branch) => {
@@ -3229,16 +3301,7 @@ impl Checker {
                     self.collect_pending_trait_receiver_tyvars_in_node(branch, ordered, seen);
                 }
             }
-            TypedInner::Require(cond, err) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(pred, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::Cause(value, err) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
             }
@@ -3255,14 +3318,44 @@ impl Checker {
                 self.collect_pending_trait_receiver_tyvars_in_node(init, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(strategy, ordered, seen);
             }
-            TypedInner::FacetSet { source, value, .. } => {
+            TypedInner::FacetPath(path) => {
+                for expr in Self::typed_facet_path_expression_nodes(path) {
+                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                }
+            }
+            TypedInner::PendingFacetPath(path) => {
+                for expr in Self::pending_facet_path_expression_nodes(path) {
+                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                }
+            }
+            TypedInner::FacetView { source, path, .. } => {
                 self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
+                for expr in Self::typed_facet_path_expression_nodes(path) {
+                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                }
+            }
+            TypedInner::FacetSet {
+                source,
+                path,
+                value,
+                ..
+            } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
+                for expr in Self::typed_facet_path_expression_nodes(path) {
+                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                }
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
             }
             TypedInner::FacetOver {
-                source, update_fun, ..
+                source,
+                path,
+                update_fun,
+                ..
             } => {
                 self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
+                for expr in Self::typed_facet_path_expression_nodes(path) {
+                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                }
                 self.collect_pending_trait_receiver_tyvars_in_node(update_fun, ordered, seen);
             }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
@@ -3294,9 +3387,7 @@ impl Checker {
             | TypedInner::TraitDef(..)
             | TypedInner::TraitImplDef(..)
             | TypedInner::SupervisorStatus { .. }
-            | TypedInner::ProcessContextHandler { .. }
-            | TypedInner::FacetPath(_)
-            | TypedInner::PendingFacetPath(_) => {}
+            | TypedInner::ProcessContextHandler { .. } => {}
         }
     }
 
@@ -3406,16 +3497,7 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(else_branch, ordered, seen);
                 }
             }
-            TypedInner::Require(cond, err) => {
-                self.collect_bound_tyvars_in_node(cond, ordered, seen);
-                self.collect_bound_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                self.collect_bound_tyvars_in_node(value, ordered, seen);
-                self.collect_bound_tyvars_in_node(pred, ordered, seen);
-                self.collect_bound_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::Cause(value, err) => {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
@@ -3901,19 +3983,6 @@ impl Checker {
                 else_branch.map(|branch| {
                     Box::new(self.substitute_typed_node_with_mapping(*branch, mapping))
                 }),
-            ),
-            TypedInner::Require(cond, err) => TypedInner::Require(
-                Box::new(self.substitute_typed_node_with_mapping(*cond, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
-            TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*pred, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
-            ),
-            TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
@@ -4729,7 +4798,7 @@ impl Checker {
                         })?;
                 let concrete_tys = self.trait_specialization_arguments(
                     original_def,
-                    bound_tyvars,
+                    &bound_tyvars.tyvars,
                     &instantiation.substitution,
                 )?;
                 let fun_idx = self.ensure_specialized_def(
@@ -4810,6 +4879,21 @@ impl Checker {
                 span,
             )),
         }
+    }
+
+    fn specialize_extractor_head(
+        &mut self,
+        extractor: &ResolvedId,
+        extractor_ty: Ty,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<Ty, TypeError> {
+        let mut reference = TypedNode {
+            ty: self.resolve_ty(&extractor_ty),
+            span: extractor.span.clone(),
+            node: TypedInner::Var(extractor.clone()),
+        };
+        self.specialize_callable_reference(&mut reference, context)?;
+        Ok(reference.ty)
     }
 
     fn specialize_extractor_pre_args(
@@ -5048,10 +5132,12 @@ impl Checker {
                     items.len(),
                     &extractor.span,
                 )?;
+                let extractor_ty =
+                    self.specialize_extractor_head(&extractor, extractor_ty, context)?;
                 TypedPattern::Extractor {
                     input_ty: self.resolve_ty(&input_ty),
                     extractor,
-                    extractor_ty: self.resolve_ty(&extractor_ty),
+                    extractor_ty,
                     pre_args: self.specialize_extractor_pre_args(pre_args, context)?,
                     success_tag,
                     err_tag,
@@ -5123,6 +5209,12 @@ impl Checker {
                     .map(|item| self.concretize_specialized_match_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            TypedMatchPattern::Record(items) => TypedMatchPattern::Record(
+                items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             TypedMatchPattern::Constructor {
                 tag,
                 fields,
@@ -5155,6 +5247,8 @@ impl Checker {
                     items.len(),
                     &extractor.span,
                 )?;
+                let extractor_ty =
+                    self.specialize_extractor_head(&extractor, extractor_ty, context)?;
                 TypedMatchPattern::Extractor {
                     input_ty,
                     extractor,
@@ -5230,47 +5324,11 @@ impl Checker {
     }
 
     fn typed_facet_path_has_pending_trait_call(path: &TypedFacetPath) -> bool {
-        path.segments
-            .iter()
-            .any(Self::typed_facet_segment_has_pending_trait_call)
-    }
-
-    fn typed_facet_segment_has_pending_trait_call(segment: &TypedFacetSegment) -> bool {
-        match segment {
-            TypedFacetSegment::ListIndex { index, .. }
-            | TypedFacetSegment::MapKey { key: index, .. } => {
-                Self::typed_node_has_pending_trait_call(index)
-            }
-            TypedFacetSegment::ListRange { start, end, .. } => {
-                Self::typed_node_has_pending_trait_call(start)
-                    || Self::typed_node_has_pending_trait_call(end)
-            }
-            TypedFacetSegment::Field { .. }
-            | TypedFacetSegment::Tuple { .. }
-            | TypedFacetSegment::ReadonlyBuiltin { .. }
-            | TypedFacetSegment::ErrorPayload { .. }
-            | TypedFacetSegment::Variant { .. } => false,
-        }
+        Self::typed_facet_path_expression_nodes(path).any(Self::typed_node_has_pending_trait_call)
     }
 
     fn pending_facet_path_has_pending_trait_call(path: &PendingFacetPath) -> bool {
-        path.segments.iter().any(|segment| match segment {
-            PendingFacetSegment::Field { .. } => false,
-            PendingFacetSegment::Bracket { expr, .. } => {
-                Self::pending_facet_expr_has_pending_trait_call(expr)
-            }
-            PendingFacetSegment::RangeBracket { start, end, .. } => {
-                Self::pending_facet_expr_has_pending_trait_call(start)
-                    || Self::pending_facet_expr_has_pending_trait_call(end)
-            }
-        })
-    }
-
-    fn pending_facet_expr_has_pending_trait_call(expr: &PendingFacetExpr) -> bool {
-        match expr {
-            PendingFacetExpr::Resolved(_) => false,
-            PendingFacetExpr::Typed(expr) => Self::typed_node_has_pending_trait_call(expr),
-        }
+        Self::pending_facet_path_expression_nodes(path).any(Self::typed_node_has_pending_trait_call)
     }
 
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
@@ -5367,16 +5425,7 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|branch| Self::typed_node_has_pending_trait_call(branch))
             }
-            TypedInner::Require(cond, err) => {
-                Self::typed_node_has_pending_trait_call(cond)
-                    || Self::typed_node_has_pending_trait_call(err)
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                Self::typed_node_has_pending_trait_call(value)
-                    || Self::typed_node_has_pending_trait_call(pred)
-                    || Self::typed_node_has_pending_trait_call(err)
-            }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::Cause(value, err) => {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
             }
@@ -5834,6 +5883,43 @@ mod tests {
             )
             .expect_err("ordinary calls must retain the solver substitution");
         assert!(error.message.contains("Missing call substitution"));
+    }
+
+    #[test]
+    fn named_extractor_specialization_rejects_missing_saved_substitution() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let id = resolved_id("relay", Some("Int::relay"), 10);
+        let definitions = HashMap::from([(
+            20,
+            Arc::new(generic_identity_def(
+                20,
+                id.clone(),
+                resolved_id("source", None, 11),
+                1,
+            )),
+        )]);
+        let requirements = HashMap::from([(
+            20,
+            CallableSpecializationRequirements {
+                tyvars: vec![1],
+                requires_concrete: true,
+            },
+        )]);
+        let needs = HashSet::from([20]);
+        let mut instances = HashMap::new();
+        let mut generated = Vec::new();
+        let mut context = SpecializationContext {
+            defs_by_fun_idx: &definitions,
+            bound_tyvars_by_fun_idx: &requirements,
+            needs_specialization: &needs,
+            specialization_fun_idxs: &mut instances,
+            generated_defs: &mut generated,
+        };
+        let error = checker
+            .specialize_extractor_head(&id, generic_identity_ty(20, 1), &mut context)
+            .expect_err("named heads must retain their solver substitution");
+        assert!(error.message.contains("Missing call substitution"));
+        assert!(generated.is_empty());
     }
 
     #[test]

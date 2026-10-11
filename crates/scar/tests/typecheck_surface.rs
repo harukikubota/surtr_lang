@@ -623,8 +623,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         set_exit_code_entry_only_policy_allows_only_entrypoint_function as fn(),
     ),
     (
-        "require_special_form_typechecks_to_result_unit",
-        require_special_form_typechecks_to_result_unit as fn(),
+        "require_standard_call_typechecks_to_result_unit",
+        require_standard_call_typechecks_to_result_unit as fn(),
     ),
     (
         "bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid",
@@ -635,8 +635,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         bitwidth_zero_arg_variant_typechecks_with_builtin_prelude as fn(),
     ),
     (
-        "ensure_special_form_typechecks_to_result_value",
-        ensure_special_form_typechecks_to_result_value as fn(),
+        "ensure_standard_call_typechecks_to_result_value",
+        ensure_standard_call_typechecks_to_result_value as fn(),
     ),
     (
         "and_special_form_typechecks_to_boolean_if",
@@ -675,8 +675,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         kernel_and_contract_rejects_eager_signature as fn(),
     ),
     (
-        "special_form_builtin_decl_must_live_at_its_canonical_std_qname",
-        special_form_builtin_decl_must_live_at_its_canonical_std_qname as fn(),
+        "removed_if_builtin_declaration_is_rejected",
+        removed_if_builtin_declaration_is_rejected as fn(),
     ),
     (
         "kernel_does_not_allow_removed_concat_builtin",
@@ -1306,6 +1306,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(extractor_closure_direct_argument_uses_expected_type),
     surface_case!(apply_pattern_projection_types_and_boundaries),
     surface_case!(error_contract_surface_is_restricted_to_direct_definition_returns),
+    surface_case!(facet_pending_dispatch_collects_path_type_inputs),
     surface_case!(nested_ordinary_match_blocks_typecheck),
     surface_case!(nested_user_closures_typecheck_do_binds_and_captures),
     surface_case!(nested_do_closure_mismatch_keeps_original_source_facts),
@@ -7493,12 +7494,12 @@ fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
     assert!(err.message.contains("only allowed inside entrypoint"));
 }
 
-fn require_special_form_typechecks_to_result_unit() {
+fn require_standard_call_typechecks_to_result_unit() {
     let typed = typecheck_with_builtin_prelude("guard = require(True, NoneError())");
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
         TypedInner::Bind(_, rhs) => {
-            assert!(matches!(rhs.node, TypedInner::Require(_, _)));
+            assert!(matches!(rhs.node, TypedInner::Block(_)));
             assert!(matches!(
                 rhs.ty,
                 scar::types::Ty::Result(ref ok, ref err)
@@ -7595,7 +7596,7 @@ fn bitwidth_zero_arg_variant_typechecks_with_builtin_prelude() {
     ));
 }
 
-fn ensure_special_form_typechecks_to_result_value() {
+fn ensure_standard_call_typechecks_to_result_value() {
     let typed = typecheck_with_builtin_prelude(
         r#"def is_even(n: Int) -> Boolean { Int::is_even(n) }
 guard = ensure(4, &is_even, NoneError())"#,
@@ -7603,7 +7604,7 @@ guard = ensure(4, &is_even, NoneError())"#,
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
         TypedInner::Bind(_, rhs) => {
-            assert!(matches!(rhs.node, TypedInner::Ensure(_, _, _)));
+            assert!(matches!(rhs.node, TypedInner::Block(_)));
         }
         other => panic!("expected bind, got {:?}", other),
     }
@@ -7727,17 +7728,20 @@ fn kernel_and_contract_rejects_eager_signature() {
         .contains("@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean"));
 }
 
-fn special_form_builtin_decl_must_live_at_its_canonical_std_qname() {
-    let boolean_source = include_str!("../../../lib/types/boolean.srt").replacen(
-        "impl Boolean {",
-        "impl Boolean {\n  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
-        1,
+fn removed_if_builtin_declaration_is_rejected() {
+    let ast = spire::parse_with_context(
+        "defmod Kernel { @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A }",
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    ).expect("obsolete builtin declaration should parse");
+    let stages = vec![sigil::staged_modules_from_source_ast(ast, None)];
+    let declarations =
+        sigil::precollect_declaration_index(&stages).expect("precollect declarations");
+    let error = sigil::resolve_staged_program(&stages, Vec::new(), &declarations, None)
+        .expect_err("if must be an ordinary standard function");
+    assert!(
+        error.message.contains("Unknown builtin declaration: if"),
+        "{error:?}"
     );
-    let err = typecheck_std_modules_with_overrides(&[("Boolean", &boolean_source)])
-        .expect_err("special-form declaration outside its canonical module must fail");
-    assert!(err
-        .message
-        .contains("Special-form declaration `if` is only allowed at `Kernel::if`."));
 }
 
 fn kernel_does_not_allow_removed_concat_builtin() {
@@ -7785,7 +7789,7 @@ fn user_lazy_annotation_is_rejected() {
         .expect_err("user lazy annotations must fail");
     assert!(err
         .message
-        .contains("Lazy<T> is reserved for std-module special-form declarations"));
+        .contains("Lazy<T> is reserved for standard callable parameter declarations"));
 }
 
 fn require_accepts_lazy_error_branch() {
@@ -7797,7 +7801,7 @@ guard = require(False, {|| SomeError("boom") })"#,
     .expect("lazy error branch should typecheck");
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
-        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Require(_, _))),
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Block(_))),
         other => panic!("expected bind, got {:?}", other),
     }
 }
@@ -7812,7 +7816,7 @@ guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
     .expect("lazy ensure error branch should typecheck");
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
-        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Ensure(_, _, _))),
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Block(_))),
         other => panic!("expected bind, got {:?}", other),
     }
 }
@@ -9397,15 +9401,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                     || has_pending_trait_call(then_branch)
                     || else_branch.as_deref().is_some_and(has_pending_trait_call)
             }
-            TypedInner::Require(cond, err) => {
-                has_pending_trait_call(cond) || has_pending_trait_call(err)
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                has_pending_trait_call(value)
-                    || has_pending_trait_call(pred)
-                    || has_pending_trait_call(err)
-            }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -9520,15 +9516,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
                     || has_pending_trait_call(then_branch)
                     || else_branch.as_deref().is_some_and(has_pending_trait_call)
             }
-            TypedInner::Require(cond, err) => {
-                has_pending_trait_call(cond) || has_pending_trait_call(err)
-            }
-            TypedInner::Ensure(value, pred, err) => {
-                has_pending_trait_call(value)
-                    || has_pending_trait_call(pred)
-                    || has_pending_trait_call(err)
-            }
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+            TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -12226,5 +12214,62 @@ answer = match map { hash!["a" => _] => True }"#,
             "expected {message}, got {}",
             error.message
         );
+    }
+}
+
+fn check_facet_specializations(body: &str, values_ty: &str, values: &str, result_ty: &str) {
+    let source = format!(
+        r#"
+defrecord Box(values: List<Int>)
+def outer(source: Result<$A>, next: ($A -> Result<Int>), values: {values_ty}) -> {result_ty} {{
+  {body}
+}}
+outer(Ok(1), {{|x: Int| Ok(x)}}, {values})
+outer(Ok("hello"), {{|x: String| Ok(0)}}, {values})
+outer(Ok(1), {{|x: Int| Ok(x)}}, {values})
+"#
+    );
+    let nodes = support::typecheck_with_builtin_prelude(&source);
+    let source_types: Vec<_> = nodes
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(_, name, _, params, _, _, _, _) if name.name == "outer" => {
+                match &params[0].ty {
+                    Ty::Result(source, _) => Some(source.as_ref().clone()),
+                    _ => panic!("outer source must retain its Result signature"),
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        source_types.len(),
+        2,
+        "same-type calls should share their specialization"
+    );
+    assert!(
+        source_types.contains(&Ty::Int),
+        "Int source specialization missing: {source_types:?}"
+    );
+    assert!(
+        source_types.contains(&Ty::Str),
+        "String source specialization missing: {source_types:?}"
+    );
+}
+
+fn facet_pending_dispatch_collects_path_type_inputs() {
+    for (body, values_ty, values, result_ty) in [
+        ("Facet::view(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values)", "List<Int>", "[10, 20]", "Result<Int>"),
+        ("values.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }]", "List<Int>", "[10, 20]", "Result<Int>"),
+        ("Facet::view(List.[(match Monad::bind(source, next) { Ok(x) => x, _ => 0 })..1], values)", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("Facet::view(List.[0..(match Monad::bind(source, next) { Ok(x) => x, _ => 0 })], values)", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("Facet::view(HashMap.[match Monad::bind(source, next) { Ok(x) => \"one\", _ => \"none\" }], values)", "HashMap<Int>", "HashMap::map_from_entries([(\"one\", 10)])", "Result<Int>"),
+        ("Facet::set(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values, 99)", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("Facet::over(List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values, {|value| Ok(value + 1)})", "List<Int>", "[10, 20]", "Result<List<Int>>"),
+        ("path = List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }]\nFacet::view(path, values)", "List<Int>", "[10, 20]", "Result<Int>"),
+        ("Facet::view(List.[0] -> List.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }], values)", "List<List<Int>>", "[[10, 20]]", "Result<Int>"),
+        ("Facet::bulk_update(values) { values.[match Monad::bind(source, next) { Ok(x) => x, _ => 0 }] <- set(99) }", "Box", "Box([10, 20])", "Result<Box>"),
+    ] {
+        check_facet_specializations(body, values_ty, values, result_ty);
     }
 }

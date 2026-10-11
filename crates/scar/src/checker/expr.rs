@@ -9,6 +9,7 @@ use spire::ast::Symbol;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 mod do_block;
+mod lazy_calls;
 
 static SYNTHETIC_RANGE_UID: AtomicU32 = AtomicU32::new(3_000_000_000);
 
@@ -34,7 +35,10 @@ enum OrderedCallArgument<'a> {
 
 #[derive(Clone, Copy)]
 enum CallArgumentMode {
-    User { defer_constructor_conflicts: bool },
+    User {
+        defer_constructor_conflicts: bool,
+        callee_uid: u32,
+    },
     Positional,
 }
 
@@ -424,15 +428,10 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Require(left, right)
-            | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right) => recurse(left).or_else(|| recurse(right)),
             TypedInner::If(condition, then_branch, else_branch) => recurse(condition)
                 .or_else(|| recurse(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(recurse)),
-            TypedInner::Ensure(value, predicate, error) => recurse(value)
-                .or_else(|| recurse(predicate))
-                .or_else(|| recurse(error)),
             TypedInner::Match(scrutinee, arms) => recurse(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
@@ -810,6 +809,45 @@ impl Checker {
         })
     }
 
+    pub(super) fn typed_facet_path_expression_nodes(
+        path: &TypedFacetPath,
+    ) -> impl Iterator<Item = &TypedNode> {
+        path.segments.iter().flat_map(|segment| {
+            let nodes: [Option<&TypedNode>; 2] = match segment {
+                TypedFacetSegment::ListIndex { index, .. }
+                | TypedFacetSegment::MapKey { key: index, .. } => [Some(index), None],
+                TypedFacetSegment::ListRange { start, end, .. } => [Some(start), Some(end)],
+                TypedFacetSegment::Field { .. }
+                | TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::ReadonlyBuiltin { .. }
+                | TypedFacetSegment::ErrorPayload { .. }
+                | TypedFacetSegment::Variant { .. } => [None, None],
+            };
+            nodes.into_iter().flatten()
+        })
+    }
+
+    pub(super) fn pending_facet_path_expression_nodes(
+        path: &PendingFacetPath,
+    ) -> impl Iterator<Item = &TypedNode> {
+        fn typed_expr(expr: &PendingFacetExpr) -> Option<&TypedNode> {
+            match expr {
+                PendingFacetExpr::Typed(node) => Some(node),
+                PendingFacetExpr::Resolved(_) => None,
+            }
+        }
+        path.segments.iter().flat_map(|segment| {
+            let nodes = match segment {
+                PendingFacetSegment::Field { .. } => [None, None],
+                PendingFacetSegment::Bracket { expr, .. } => [typed_expr(expr), None],
+                PendingFacetSegment::RangeBracket { start, end, .. } => {
+                    [typed_expr(start), typed_expr(end)]
+                }
+            };
+            nodes.into_iter().flatten()
+        })
+    }
+
     pub(super) fn find_typed_node<'a, T>(
         &self,
         node: &'a TypedNode,
@@ -890,14 +928,7 @@ impl Checker {
                         .as_deref()
                         .and_then(|branch| self.find_typed_node(branch, inspect))
                 }),
-            TypedInner::Require(cond, err) => self
-                .find_typed_node(cond, inspect)
-                .or_else(|| self.find_typed_node(err, inspect)),
-            TypedInner::Ensure(value, pred, err) => self
-                .find_typed_node(value, inspect)
-                .or_else(|| self.find_typed_node(pred, inspect))
-                .or_else(|| self.find_typed_node(err, inspect)),
-            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => self
+            TypedInner::Cause(value, err) => self
                 .find_typed_node(value, inspect)
                 .or_else(|| self.find_typed_node(err, inspect)),
             TypedInner::Match(scrutinee, arms) => {
@@ -933,14 +964,39 @@ impl Checker {
             TypedInner::SupervisorWorkers { init, strategy, .. } => self
                 .find_typed_node(init, inspect)
                 .or_else(|| self.find_typed_node(strategy, inspect)),
-            TypedInner::FacetView { source, .. } => self.find_typed_node(source, inspect),
-            TypedInner::FacetSet { source, value, .. } => self
-                .find_typed_node(source, inspect)
-                .or_else(|| self.find_typed_node(value, inspect)),
-            TypedInner::FacetOver {
-                source, update_fun, ..
+            TypedInner::FacetPath(path) => Self::typed_facet_path_expression_nodes(path)
+                .find_map(|expr| self.find_typed_node(expr, inspect)),
+            TypedInner::PendingFacetPath(path) => Self::pending_facet_path_expression_nodes(path)
+                .find_map(|expr| self.find_typed_node(expr, inspect)),
+            TypedInner::FacetView { source, path, .. } => {
+                self.find_typed_node(source, inspect).or_else(|| {
+                    Self::typed_facet_path_expression_nodes(path)
+                        .find_map(|expr| self.find_typed_node(expr, inspect))
+                })
+            }
+            TypedInner::FacetSet {
+                source,
+                path,
+                value,
+                ..
             } => self
                 .find_typed_node(source, inspect)
+                .or_else(|| {
+                    Self::typed_facet_path_expression_nodes(path)
+                        .find_map(|expr| self.find_typed_node(expr, inspect))
+                })
+                .or_else(|| self.find_typed_node(value, inspect)),
+            TypedInner::FacetOver {
+                source,
+                path,
+                update_fun,
+                ..
+            } => self
+                .find_typed_node(source, inspect)
+                .or_else(|| {
+                    Self::typed_facet_path_expression_nodes(path)
+                        .find_map(|expr| self.find_typed_node(expr, inspect))
+                })
                 .or_else(|| self.find_typed_node(update_fun, inspect)),
             TypedInner::Lit(_)
             | TypedInner::ErrorKind(_)
@@ -948,8 +1004,6 @@ impl Checker {
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
-            | TypedInner::FacetPath(_)
-            | TypedInner::PendingFacetPath(_)
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)
             | TypedInner::TraitDef(..)
@@ -1026,8 +1080,6 @@ impl Checker {
                 | TypedInner::Pipe(left, right)
                 | TypedInner::Compose(_, left, right)
                 | TypedInner::ListCons(left, right)
-                | TypedInner::Require(left, right)
-                | TypedInner::MapErr(left, right)
                 | TypedInner::Cause(left, right) => {
                     collect(left, obligations);
                     collect(right, obligations);
@@ -1038,11 +1090,6 @@ impl Checker {
                     if let Some(branch) = else_branch {
                         collect(branch, obligations);
                     }
-                }
-                TypedInner::Ensure(value, pred, err) => {
-                    collect(value, obligations);
-                    collect(pred, obligations);
-                    collect(err, obligations);
                 }
                 TypedInner::Match(scrutinee, arms) => {
                     collect(scrutinee, obligations);
@@ -1077,15 +1124,44 @@ impl Checker {
                     collect(init, obligations);
                     collect(strategy, obligations);
                 }
-                TypedInner::FacetView { source, .. } => collect(source, obligations),
-                TypedInner::FacetSet { source, value, .. } => {
+                TypedInner::FacetPath(path) => {
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
+                }
+                TypedInner::PendingFacetPath(path) => {
+                    for expr in Checker::pending_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
+                }
+                TypedInner::FacetView { source, path, .. } => {
                     collect(source, obligations);
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
+                }
+                TypedInner::FacetSet {
+                    source,
+                    path,
+                    value,
+                    ..
+                } => {
+                    collect(source, obligations);
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
                     collect(value, obligations);
                 }
                 TypedInner::FacetOver {
-                    source, update_fun, ..
+                    source,
+                    path,
+                    update_fun,
+                    ..
                 } => {
                     collect(source, obligations);
+                    for expr in Checker::typed_facet_path_expression_nodes(path) {
+                        collect(expr, obligations);
+                    }
                     collect(update_fun, obligations);
                 }
                 _ => {}
@@ -1222,8 +1298,6 @@ impl Checker {
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right)
-            | TypedInner::Require(left, right)
-            | TypedInner::MapErr(left, right)
             | TypedInner::Cause(left, right)
             | TypedInner::SupervisorWorkers {
                 init: left,
@@ -1267,11 +1341,6 @@ impl Checker {
                 if let Some(branch) = else_branch {
                     self.concretize_pending_trait_calls_in_place(branch)?;
                 }
-            }
-            TypedInner::Ensure(value, predicate, error) => {
-                self.concretize_pending_trait_calls_in_place(value)?;
-                self.concretize_pending_trait_calls_in_place(predicate)?;
-                self.concretize_pending_trait_calls_in_place(error)?;
             }
             TypedInner::Match(scrutinee, arms) => {
                 self.concretize_pending_trait_calls_in_place(scrutinee)?;
@@ -1371,6 +1440,9 @@ impl Checker {
                     None,
                 ),
             Resolved::App(span, func, args) => self.check_app(span, func, args),
+            Resolved::LazyApp(span, kind, func, args) => {
+                self.check_lazy_app(span, *kind, func, args, None)
+            }
             Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms) => {
                 self.check_match(span, scrutinee, arms, None, None)
             }
@@ -1747,11 +1819,7 @@ impl Checker {
 
             Resolved::Cond(span, clauses) => self.check_cond(span, clauses, None),
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
-            Resolved::Require(span, cond, err) => self.check_require(span, cond, err),
-            Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
-            Resolved::MapErr(span, value, err) => self.check_map_err(span, value, err),
             Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
-
             Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, None, *then_only)
             }
@@ -2017,6 +2085,7 @@ impl Checker {
             | Resolved::CaptureClosure(..)
             | Resolved::Do(..)
             | Resolved::App(..)
+            | Resolved::LazyApp(..)
             | Resolved::Match(..)
             | Resolved::IsMatch(..) => unreachable!("structural expressions are dispatched by check_node"),
         }
@@ -2958,6 +3027,9 @@ impl Checker {
                 expected,
                 expected_relation,
             ),
+            (Resolved::LazyApp(span, kind, func, args), Some(expected_ty)) => {
+                self.check_lazy_app(span, *kind, func, args, Some(expected_ty))
+            }
             (Resolved::App(span, func, args), Some(expected_ty)) => {
                 self.check_application_with_expected_type(span, func, args, expected_ty)
             }
@@ -4291,6 +4363,7 @@ impl Checker {
             | Resolved::Var(span, _)
             | Resolved::ErrorKind(span, _)
             | Resolved::App(span, _, _)
+            | Resolved::LazyApp(span, _, _, _)
             | Resolved::ReturnTypeArgumentApply(span, _, _)
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
@@ -4317,9 +4390,6 @@ impl Checker {
             | Resolved::Dbg(span, _)
             | Resolved::Cond(span, _)
             | Resolved::If(span, _, _, _)
-            | Resolved::Require(span, _, _)
-            | Resolved::Ensure(span, _, _, _)
-            | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
             | Resolved::IfLet(span, _, _, _)
             | Resolved::Match(span, _, _)
@@ -7909,7 +7979,46 @@ impl Checker {
         if matches!(extractor_ty, Ty::ExtractorClosure(_)) {
             Ok(self.resolve_ty(&extractor_ty))
         } else {
-            Ok(self.instantiate_callable_ty(&extractor_ty))
+            // Named Pattern heads are call sites. Preserve the fresh solver
+            // substitution created with their signature for specialization.
+            let mut fresh = HashMap::new();
+            if let Ty::UserFunc {
+                type_params,
+                call_substitution,
+                ..
+            } = &extractor_ty
+            {
+                if !call_substitution.is_empty() {
+                    return Err(self.typecheck_invariant_error(
+                        "named Extractor binding must retain its declaration signature",
+                        span,
+                    ));
+                }
+                for variable in type_params {
+                    self.instantiate_ty_with_fresh(&Ty::Var(*variable), &mut fresh);
+                }
+            }
+            let mut instantiated = self.instantiate_ty_with_fresh(&extractor_ty, &mut fresh);
+            if let Ty::UserFunc {
+                type_params,
+                call_substitution,
+                ..
+            } = &mut instantiated
+            {
+                *call_substitution = type_params
+                    .iter()
+                    .map(|variable| {
+                        fresh.get(variable).cloned().map(|ty| (*variable, ty)).ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                "named Extractor instantiation must preserve every declaration slot",
+                                span,
+                            )
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
+                call_substitution.sort_unstable_by_key(|(variable, _)| *variable);
+            }
+            Ok(instantiated)
         }
     }
 
@@ -8190,6 +8299,7 @@ impl Checker {
                 callable_hint,
                 CallArgumentMode::User {
                     defer_constructor_conflicts,
+                    callee_uid,
                 },
             );
         }
@@ -8231,6 +8341,7 @@ impl Checker {
             callable_hint,
             CallArgumentMode::User {
                 defer_constructor_conflicts,
+                callee_uid,
             },
         )
     }
@@ -8502,9 +8613,27 @@ impl Checker {
                 let Some(callback_inputs) = callback_inputs else {
                     continue;
                 };
+                let lazy_parameter = match mode {
+                    CallArgumentMode::User { callee_uid, .. } => self
+                        .lazy_function_parameters
+                        .get(&callee_uid)
+                        .is_some_and(|positions| positions.contains(&ordinal)),
+                    CallArgumentMode::Positional => false,
+                };
                 let (typed, defer) =
                     self.with_callback_parameter_provenance(expr, &callback_inputs, |checker| {
-                        checker.check_ordered_call_argument(expr, expected_ty, callee_label, mode)
+                        if lazy_parameter {
+                            checker
+                                .check_trait_lazy_argument(expr, expected_ty, span)
+                                .map(|typed| (typed, false))
+                        } else {
+                            checker.check_ordered_call_argument(
+                                expr,
+                                expected_ty,
+                                callee_label,
+                                mode,
+                            )
+                        }
                     })?;
                 if !defer {
                     if matches!(mode, CallArgumentMode::Positional) {
@@ -8576,6 +8705,7 @@ impl Checker {
         Ok(match mode {
             CallArgumentMode::User {
                 defer_constructor_conflicts,
+                ..
             } => {
                 let defer = defer_constructor_conflicts
                     && self.constructor_argument_needs_deferred_check(expected_ty);
@@ -11231,7 +11361,7 @@ impl Checker {
                     let has_named = args
                         .iter()
                         .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)));
-                    let callee_uid = match func {
+                    let callee_uid = match call_target {
                         Resolved::Var(_, id) => id.unique_id,
                         _ if !has_named => u32::MAX,
                         _ => {
@@ -12630,7 +12760,12 @@ impl Checker {
             };
             let typed_body = if kind == CallableContext::ExtractorClosure
                 || body_is_result_constructor
-                || matches!(body, Resolved::If(..) | Resolved::IfLet(..))
+                || matches!(
+                    body,
+                    Resolved::If(..)
+                        | Resolved::IfLet(..)
+                        | Resolved::LazyApp(_, LazyCaptureKind::If | LazyCaptureKind::IfThen, _, _)
+                )
                 || self.body_tail_is_return_type_argument_call(body)
             {
                 if let Some(Ty::Func(_, expected_ret)) = expected {
@@ -14254,13 +14389,11 @@ impl Checker {
             call_shell: matches!(
                 arg,
                 Resolved::App(..)
+                    | Resolved::LazyApp(..)
                     | Resolved::ConstructorCall(..)
                     | Resolved::EnumConstructorCall(..)
                     | Resolved::If(..)
                     | Resolved::IfLet(..)
-                    | Resolved::Require(..)
-                    | Resolved::Ensure(..)
-                    | Resolved::MapErr(..)
                     | Resolved::Cause(..)
                     | Resolved::ApplyPattern(..)
                     | Resolved::IsMatch(..)
@@ -14669,105 +14802,6 @@ impl Checker {
             ty: Ty::Unit,
             span: span.clone(),
             node: TypedInner::Dbg(typed_args),
-        })
-    }
-
-    pub(super) fn check_require(
-        &mut self,
-        span: &Span,
-        cond: &Resolved,
-        err: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
-        let typed_cond = self.check_node(cond)?;
-        if !self.types_compatible(&Ty::Bool, &typed_cond.ty)? {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "require condition must be Boolean, got {}",
-                    self.ty_name(&typed_cond.ty)
-                ),
-                span: typed_cond.span.clone(),
-                hint: None,
-            });
-        }
-
-        let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
-        self.ensure_guard_error_value(&typed_err, "require")?;
-
-        Ok(TypedNode {
-            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
-            span: span.clone(),
-            node: TypedInner::Require(Box::new(typed_cond), Box::new(typed_err)),
-        })
-    }
-
-    pub(super) fn check_ensure(
-        &mut self,
-        span: &Span,
-        value: &Resolved,
-        pred: &Resolved,
-        err: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_node(value)?;
-        if matches!(pred, Resolved::App(_, _, _)) {
-            return Err(TypeError {
-                structured: None,
-                message: "ensure requires a closure or capture predicate".into(),
-                span: self.resolved_span(pred).clone(),
-                hint: Some("Use `&predicate` or `{|value| predicate(value) }`; call expressions such as `predicate()` are not accepted here.".into()),
-            });
-        }
-        let expected_pred = Ty::Func(vec![self.resolve_ty(&typed_value.ty)], Box::new(Ty::Bool));
-        let mut typed_pred = if Self::is_lazy_placeholder(pred) {
-            self.check_node(pred)?
-        } else {
-            self.check_compose_callable(pred, "ensure")?
-        };
-        self.assert_type_relation(
-            &expected_pred,
-            &typed_pred.ty,
-            self.type_fact(SourceRole::Expected, span, &expected_pred),
-            self.type_fact(SourceRole::Value, &typed_pred.span, &typed_pred.ty),
-            TypeDiagnosticReason::ArgumentTypeMismatch,
-            DiagnosticOrigin::Call,
-            "ensure",
-            1,
-        )?;
-
-        typed_pred.ty = self.resolve_ty(&typed_pred.ty);
-        self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
-
-        let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
-        self.ensure_guard_error_value(&typed_err, "ensure")?;
-
-        Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&typed_value.ty)),
-                Box::new(Ty::Error),
-            ),
-            span: span.clone(),
-            node: TypedInner::Ensure(
-                Box::new(typed_value),
-                Box::new(typed_pred),
-                Box::new(typed_err),
-            ),
-        })
-    }
-
-    pub(super) fn check_map_err(
-        &mut self,
-        span: &Span,
-        value: &Resolved,
-        err: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_result_value(value, "map_err", None)?;
-        let typed_err = self.check_lazy_argument_with_expected(err, &Ty::Error, span)?;
-        self.ensure_result_error_arg(&typed_err, "map_err")?;
-
-        Ok(TypedNode {
-            ty: typed_value.ty.clone(),
-            span: span.clone(),
-            node: TypedInner::MapErr(Box::new(typed_value), Box::new(typed_err)),
         })
     }
 

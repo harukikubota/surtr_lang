@@ -200,6 +200,7 @@ pub(super) enum CanonicalSpecialForm {
     Ensure,
     MapErr,
     Cause,
+    OrElse,
     Logic(LogicKind),
 }
 
@@ -214,6 +215,7 @@ impl Resolver {
             "Kernel::or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
             "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
             "Result::cause" => Some(CanonicalSpecialForm::Cause),
+            "Result::or_else" => Some(CanonicalSpecialForm::OrElse),
             _ => None,
         }
     }
@@ -222,7 +224,11 @@ impl Resolver {
         &self,
         resolved_func: &Resolved,
     ) -> Option<CanonicalSpecialForm> {
-        let Resolved::Var(_, id) = resolved_func else {
+        let selected = match resolved_func {
+            Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+            other => other,
+        };
+        let Resolved::Var(_, id) = selected else {
             return None;
         };
         // The resolver stamps the selected declaration identity onto the callee.
@@ -235,13 +241,28 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
         kind: CanonicalSpecialForm,
+        func: Resolved,
     ) -> Result<Resolved, ResolveError> {
         match kind {
-            CanonicalSpecialForm::If(if_kind) => self.resolve_if(span, args, if_kind),
-            CanonicalSpecialForm::Require => self.resolve_require(span, args),
-            CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
-            CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
+            CanonicalSpecialForm::If(IfKind::If3) => {
+                self.resolve_lazy_declaration_call(span, func, args, LazyCaptureKind::If)
+            }
+            CanonicalSpecialForm::If(IfKind::IfThen2) => {
+                self.resolve_lazy_declaration_call(span, func, args, LazyCaptureKind::IfThen)
+            }
+            CanonicalSpecialForm::Require => {
+                self.resolve_lazy_declaration_call(span, func, args, LazyCaptureKind::Require)
+            }
+            CanonicalSpecialForm::Ensure => {
+                self.resolve_lazy_declaration_call(span, func, args, LazyCaptureKind::Ensure)
+            }
+            CanonicalSpecialForm::MapErr => {
+                self.resolve_lazy_declaration_call(span, func, args, LazyCaptureKind::MapErr)
+            }
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
+            CanonicalSpecialForm::OrElse => {
+                self.resolve_lazy_declaration_call(span, func, args, LazyCaptureKind::OrElse)
+            }
             CanonicalSpecialForm::Logic(logic_kind) => {
                 self.resolve_logic_call(span, args, logic_kind)
             }
@@ -2266,11 +2287,14 @@ impl Resolver {
         declaration_symbol_identity_info(&self.owner_registry, name, kind, enclosing_owner)
     }
 
-    fn extractor_declaration_entries(&self) -> Arc<HashMap<String, DeclarationEntry>> {
+    fn body_declaration_entries(&self) -> Arc<HashMap<String, DeclarationEntry>> {
         Arc::new(
             self.declaration_entries
                 .iter()
-                .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                .filter(|(_, entry)| {
+                    matches!(entry.kind, DeclarationKind::Extractor)
+                        || !entry.lazy_parameters.is_empty()
+                })
                 .map(|(key, entry)| (key.clone(), entry.clone()))
                 .collect(),
         )
@@ -3019,7 +3043,7 @@ impl Resolver {
                 .extend(resolved_params.iter().map(|param| param.id.unique_id));
         }
         body_resolver.declaration_uids = self.declaration_uids.clone();
-        body_resolver.declaration_entries = self.extractor_declaration_entries();
+        body_resolver.declaration_entries = self.body_declaration_entries();
         body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
         body_resolver.owner_registry = self.owner_registry.clone();
@@ -3234,7 +3258,7 @@ impl Resolver {
                         if let Some(kind) =
                             self.classify_canonical_special_form_callee(&resolved_func)
                         {
-                            return self.resolve_canonical_special_form_call(span, args, kind);
+                            return self.resolve_canonical_special_form_call(span, args, kind, resolved_func);
                         }
                         resolved_func
                     }
@@ -3243,14 +3267,34 @@ impl Resolver {
                     }
                 };
                 self.ensure_user_callable_surface(&resolved_func, &span, args.len())?;
+                let selected = match &resolved_func {
+                    Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+                    other => other,
+                };
+                let lazy_parameters = match selected {
+                    Resolved::Var(_, id) => self.declaration_entry_for_uid(id.unique_id)
+                        .map(|entry| entry.lazy_parameters.clone()).unwrap_or_default(),
+                    _ => Vec::new(),
+                };
                 let resolved_args = args
                     .into_iter()
-                    .map(|arg| match arg {
+                    .enumerate()
+                    .map(|(ordinal, arg)| match arg {
                         RecordLitArg::Positional(expr) => {
-                            Ok(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?))
+                            let value = if lazy_parameters.iter().any(|(position, _)| *position == ordinal) {
+                                self.resolve_lazy_input(expr)?
+                            } else {
+                                self.resolve_node(expr)?
+                            };
+                            Ok(ResolvedRecordLitArg::Positional(value))
                         }
                         RecordLitArg::Named(name, expr) => {
-                            Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(expr)?))
+                            let value = if lazy_parameters.iter().any(|(_, parameter)| *parameter == name) {
+                                self.resolve_lazy_input(expr)?
+                            } else {
+                                self.resolve_node(expr)?
+                            };
+                            Ok(ResolvedRecordLitArg::Named(name, value))
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -3694,7 +3738,7 @@ impl Resolver {
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
                 show_resolver.declaration_uids = self.declaration_uids.clone();
-                show_resolver.declaration_entries = self.extractor_declaration_entries();
+                show_resolver.declaration_entries = self.body_declaration_entries();
                 show_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 show_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 show_resolver.owner_registry = self.owner_registry.clone();
@@ -3796,7 +3840,7 @@ impl Resolver {
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
-                body_resolver.declaration_entries = self.extractor_declaration_entries();
+                body_resolver.declaration_entries = self.body_declaration_entries();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -3895,7 +3939,7 @@ impl Resolver {
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
-                body_resolver.declaration_entries = self.extractor_declaration_entries();
+                body_resolver.declaration_entries = self.body_declaration_entries();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.owner_registry = self.owner_registry.clone();
@@ -3989,7 +4033,7 @@ impl Resolver {
                     } = method;
                     let mut method_resolver = Resolver::with_scope(trait_method_scope.child());
                     method_resolver.declaration_uids = self.declaration_uids.clone();
-                    method_resolver.declaration_entries = self.extractor_declaration_entries();
+                    method_resolver.declaration_entries = self.body_declaration_entries();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -4213,7 +4257,7 @@ impl Resolver {
                     // Only declared trait members introduce a self-name alias.
                     let mut method_resolver = Resolver::with_scope(method_scope);
                     method_resolver.declaration_uids = self.declaration_uids.clone();
-                    method_resolver.declaration_entries = self.extractor_declaration_entries();
+                    method_resolver.declaration_entries = self.body_declaration_entries();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -4341,7 +4385,7 @@ impl Resolver {
                     .unwrap_or_else(|| self.scope.reserve_id());
                 let mut decl_resolver = Resolver::with_scope(self.scope.child());
                 decl_resolver.declaration_uids = self.declaration_uids.clone();
-                decl_resolver.declaration_entries = self.extractor_declaration_entries();
+                decl_resolver.declaration_entries = self.body_declaration_entries();
                 decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 decl_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 decl_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -5384,6 +5428,7 @@ mod special_form_identity_tests {
                 user_importable: true,
                 user_callable: true,
                 value_parameter_count: Some(2),
+                lazy_parameters: Vec::new(),
             },
         );
         let callee = Resolved::Var(
@@ -5431,7 +5476,7 @@ mod child_entry_tests {
     use super::*;
 
     #[test]
-    fn body_declaration_entries_keep_only_extractors_and_isolate_updates() {
+    fn body_declaration_entries_keep_extractors_and_lazy_contracts_and_isolate_updates() {
         let mut resolver = Resolver::new();
         let make_entry = |name: &str, kind| DeclarationEntry {
             module_path: "Test".into(),
@@ -5446,6 +5491,7 @@ mod child_entry_tests {
             user_importable: true,
             user_callable: true,
             value_parameter_count: None,
+            lazy_parameters: Vec::new(),
         };
         resolver.declaration_entries = Arc::new(HashMap::from([
             (
@@ -5457,8 +5503,12 @@ mod child_entry_tests {
                 make_entry("function", DeclarationKind::Def),
             ),
         ]));
-        let mut body = resolver.extractor_declaration_entries();
-        assert_eq!(body.len(), 1);
+        let mut lazy = make_entry("lazy", DeclarationKind::Def);
+        lazy.lazy_parameters.push((0, "value".into()));
+        Arc::make_mut(&mut resolver.declaration_entries).insert("Test::lazy".into(), lazy);
+        let mut body = resolver.body_declaration_entries();
+        assert_eq!(body.len(), 2);
+        assert!(body.contains_key("Test::lazy"));
         assert!(body.contains_key("Test::Match"));
         assert!(!body.contains_key("Test::function"));
         Arc::make_mut(&mut body).insert(
@@ -5466,6 +5516,6 @@ mod child_entry_tests {
             make_entry("Nested", DeclarationKind::Extractor),
         );
         assert!(!resolver.declaration_entries.contains_key("Test::Nested"));
-        assert_eq!(resolver.declaration_entries.len(), 2);
+        assert_eq!(resolver.declaration_entries.len(), 3);
     }
 }

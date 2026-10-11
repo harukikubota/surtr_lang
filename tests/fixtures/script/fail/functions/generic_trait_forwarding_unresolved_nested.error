@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Callable specialization requires concrete type arguments

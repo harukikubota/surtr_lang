@@ -504,9 +504,9 @@ fn deep_nested_match_blocks_resolve_on_cli_sized_stack() {
 fn bare_lazy_special_form_captures_reject_before_runtime_with_individual_guidance() {
     let modules = vec![
         staged_auto_import_module("Kernel", parse_module_ast(
-            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
+            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\ndef if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A { yes() }\ndef if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit { yes() }\ndef require(condition: Boolean, error: Lazy<Error>) -> Result<Unit> { Err(error()) }\ndef ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A> { Ok(value) }", "Kernel")),
         staged_module("Result", parse_module_ast(
-            "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
+            "def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A> { value }\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
     ];
     for function in [
         "and",
@@ -4047,9 +4047,12 @@ fn test_if_conversion() {
     let resolved = parse_and_resolve("x = if(True, 1, 2)").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::If(_, _, _, Some(_))));
+            assert!(matches!(
+                rhs.as_ref(),
+                Resolved::LazyApp(_, LazyCaptureKind::If, _, _)
+            ));
         }
-        _ => panic!("Expected Bind with If"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -4058,9 +4061,12 @@ fn test_if_then_conversion() {
     let resolved = parse_and_resolve("x = if_then(True, 1)").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::If(_, _, _, None)));
+            assert!(matches!(
+                rhs.as_ref(),
+                Resolved::LazyApp(_, LazyCaptureKind::IfThen, _, _)
+            ));
         }
-        _ => panic!("Expected Bind with If"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -4290,9 +4296,12 @@ x = require(True, SomeError)"#,
     .unwrap();
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::Require(_, _, _)));
+            assert!(matches!(
+                rhs.as_ref(),
+                Resolved::LazyApp(_, LazyCaptureKind::Require, _, _)
+            ));
         }
-        _ => panic!("Expected Bind with Require"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -4306,9 +4315,12 @@ x = ensure(1, &is_even, SomeError)"#,
     .unwrap();
     match &resolved[2] {
         Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::Ensure(_, _, _, _)));
+            assert!(matches!(
+                rhs.as_ref(),
+                Resolved::LazyApp(_, LazyCaptureKind::Ensure, _, _)
+            ));
         }
-        _ => panic!("Expected Bind with Ensure"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -4333,7 +4345,7 @@ x = and(False, rhs())"#,
             }
             other => panic!("Expected If for and(...), got {:?}", other),
         },
-        _ => panic!("Expected Bind with If"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -4358,7 +4370,7 @@ x = or(True, rhs())"#,
             }
             other => panic!("Expected If for or(...), got {:?}", other),
         },
-        _ => panic!("Expected Bind with If"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -4383,7 +4395,7 @@ x = False && rhs()"#,
             }
             other => panic!("Expected If for &&, got {:?}", other),
         },
-        _ => panic!("Expected Bind with If"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -4408,7 +4420,7 @@ x = True || rhs()"#,
             }
             other => panic!("Expected If for ||, got {:?}", other),
         },
-        _ => panic!("Expected Bind with If"),
+        _ => panic!("Expected Bind with canonical Lazy declaration call"),
     }
 }
 
@@ -6954,6 +6966,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
         DeclarationEntry {
             registration_order: declaration_index.len(),
             value_parameter_count: None,
+            lazy_parameters: Vec::new(),
             module_path: "Global::Helper".to_string(),
             name: "helper".to_string(),
             fq_name: "Global::Helper::helper".to_string(),
@@ -6971,6 +6984,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
         DeclarationEntry {
             registration_order: declaration_index.len(),
             value_parameter_count: None,
+            lazy_parameters: Vec::new(),
             module_path: "Global::Kernel".to_string(),
             name: "hidden_pid".to_string(),
             fq_name: "Global::Kernel::hidden_pid".to_string(),
@@ -8422,9 +8436,9 @@ replaced = Err(GuardError()) |> map_err(GuardError())
 wrapped = Err(GuardError()) |> cause(GuardError())"#,
         &[vec![
             staged_auto_import_module("Kernel", parse_module_ast(
-                "@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>\n@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>", "Kernel")),
+                "def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A> { Ok(value) }\n@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\ndef require(condition: Boolean, error: Lazy<Error>) -> Result<Unit> { Err(error()) }", "Kernel")),
             staged_module("Result", parse_module_ast(
-                "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
+                "def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A> { value }\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
         ]],
     )
     .expect("pipeline partial special forms should resolve");
@@ -8448,8 +8462,11 @@ wrapped = Err(GuardError()) |> cause(GuardError())"#,
                     Resolved::Closure(_, params, _, body) => {
                         assert_eq!(params.len(), 1, "partial ensure must become unary closure");
                         assert!(
-                            matches!(body.as_ref(), Resolved::Ensure(_, _, _, _)),
-                            "partial ensure closure body must resolve to Ensure"
+                            matches!(
+                                body.as_ref(),
+                                Resolved::LazyApp(_, LazyCaptureKind::Ensure, _, _)
+                            ),
+                            "partial ensure closure body must retain the ensure callee"
                         );
                         checked_ok = true;
                     }
@@ -8476,8 +8493,11 @@ wrapped = Err(GuardError()) |> cause(GuardError())"#,
                     Resolved::Closure(_, params, _, body) => {
                         assert_eq!(params.len(), 1, "partial require must become unary closure");
                         assert!(
-                            matches!(body.as_ref(), Resolved::Require(_, _, _)),
-                            "partial require closure body must resolve to Require"
+                            matches!(
+                                body.as_ref(),
+                                Resolved::LazyApp(_, LazyCaptureKind::Require, _, _)
+                            ),
+                            "partial require closure body must retain the require callee"
                         );
                         verified_ok = true;
                     }
@@ -8490,8 +8510,11 @@ wrapped = Err(GuardError()) |> cause(GuardError())"#,
                     Resolved::Closure(_, params, _, body) => {
                         assert_eq!(params.len(), 1, "partial map_err must become unary closure");
                         assert!(
-                            matches!(body.as_ref(), Resolved::MapErr(_, _, _)),
-                            "partial map_err closure body must resolve to MapErr"
+                            matches!(
+                                body.as_ref(),
+                                Resolved::LazyApp(_, LazyCaptureKind::MapErr, _, _)
+                            ),
+                            "partial map_err closure body must retain the map_err callee"
                         );
                         replaced_ok = true;
                     }
@@ -9516,10 +9539,10 @@ fn lazy_eager_expression_rejects_capture_parameter_references() {
     let modules = vec![
         staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { Ok($T), Err(Error) }", "")),
         staged_auto_import_module("Kernel", parse_module_ast(
-            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A\n@builtin def if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit\n@builtin def require(condition: Boolean, error: Lazy<Error>) -> Result<Unit>\n@builtin def ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A>", "Kernel")),
+            "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean\n@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean\ndef if(condition: Boolean, yes: Lazy<$A>, no: Lazy<$A>) -> $A { yes() }\ndef if_then(condition: Boolean, yes: Lazy<Unit>) -> Unit { yes() }\ndef require(condition: Boolean, error: Lazy<Error>) -> Result<Unit> { Err(error()) }\ndef ensure(value: $A, pred: ($A -> Boolean), error: Lazy<Error>) -> Result<$A> { Ok(value) }", "Kernel")),
         kernel_pattern_test_module(),
         staged_module("Result", parse_module_ast(
-            "@builtin def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A>\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
+            "def map_err(value: Result<$A>, error: Lazy<Error>) -> Result<$A> { value }\n@builtin def cause(value: Result<$A>, error: Lazy<Error>) -> Result<$A>", "Result")),
     ];
     for source in [
         "f = &if(&1, (1 + &2), 0)",
@@ -10359,4 +10382,91 @@ fn qualified_bare_deferror_is_a_kind_without_nullary_constructor_lowering() {
             }
         }
     }
+}
+
+#[test]
+fn ordinary_lazy_calls_retain_selected_declaration_identity() {
+    let mut stages = vec![vec![staged_module(
+        "Result",
+        parse_module_ast(
+            "def or_else(value: Result<$T>, next: Lazy<Result<$T>>) -> Result<$T> { value }",
+            "Result",
+        ),
+    )]];
+    stages[0][0].auto_import = false;
+    for source in [
+        "Result::or_else(1, (2))",
+        "import Result::or_else\nor_else(1, (2))",
+    ] {
+        let nodes = resolve_user_with_modules(source, &stages).expect(source);
+        let Resolved::LazyApp(_, LazyCaptureKind::OrElse, callee, args) = nodes.last().unwrap()
+        else {
+            panic!("expected ordinary canonical Lazy call: {nodes:?}");
+        };
+        assert!(
+            matches!(callee.as_ref(), Resolved::Var(_, id) if id.qualified_name.as_deref().is_some_and(|name| global_surface_name(name) == "Result::or_else"))
+        );
+        assert!(matches!(&args[1], Resolved::Grouped(..)));
+    }
+}
+
+#[test]
+fn ordinary_lazy_declaration_metadata_checks_eager_capture_scope() {
+    let mut stages = vec![vec![staged_module(
+        "Kernel",
+        parse_module_ast(
+            "def lazy_probe(value: Lazy<Int>) -> Int { value() }",
+            "Kernel",
+        ),
+    )]];
+    stages[0][0].auto_import = false;
+    for source in [
+        "f = &Kernel::lazy_probe((&1 + 1))",
+        "import Kernel::lazy_probe\nf = &lazy_probe((&1 + 1))",
+    ] {
+        let error = resolve_user_with_modules(source, &stages).expect_err(source);
+        assert!(
+            error
+                .message
+                .contains("capture placeholder is not available in a Lazy eager expression"),
+            "{source}: {error:?}"
+        );
+    }
+    resolve_user_with_modules("f = &Kernel::lazy_probe((&1))", &stages)
+        .expect("grouped direct placeholder keeps its Lazy role");
+}
+
+#[test]
+fn ordinary_lazy_declaration_metadata_survives_function_body_scope() {
+    let stages = vec![vec![staged_module(
+        "Kernel",
+        parse_module_ast("def lazy_probe(value: Lazy<Int>) -> Int { value() }\ndef make_probe() -> (Int -> Int) { &lazy_probe((&1 + 1)) }", "Kernel"),
+    )]];
+    let error = resolve_user_with_modules("Kernel::make_probe()", &stages)
+        .expect_err("eager checks must remain in function bodies");
+    assert!(
+        error
+            .message
+            .contains("capture placeholder is not available in a Lazy eager expression"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn ordinary_lazy_declaration_identity_rejects_bare_capture() {
+    let stages = vec![vec![staged_module(
+        "Kernel",
+        parse_module_ast(
+            "def lazy_probe(value: Lazy<Int>) -> Int { value() }",
+            "Kernel",
+        ),
+    )]];
+    let error = resolve_user_with_modules("f = &Kernel::lazy_probe", &stages)
+        .expect_err("bare capture would erase the declaration Lazy contract");
+    assert!(
+        error
+            .message
+            .contains("has Lazy arguments and cannot be captured without explicit arguments"),
+        "{error:?}"
+    );
 }

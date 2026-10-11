@@ -159,6 +159,17 @@ fn special_form_shape_map_err_or_cause(
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
 }
 
+fn special_form_shape_or_else(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_result_of_named(&params[0].ty, "$T")
+        && matches!(params[1].ty.syntax(), AstTy::Generic(_, name, args)
+            if name == "Lazy" && args.len() == 1
+                && Checker::is_result_of_named(&args[0], "$T"))
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
+}
+
 fn special_form_shape_and_or(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -671,14 +682,10 @@ impl Checker {
     pub(super) fn is_special_form_builtin_decl_name(name: &str) -> bool {
         matches!(
             name,
-            "if" | "if_then"
-                | "if_let"
+            "if_let"
                 | "if_let_then"
                 | "is_match"
                 | "apply_pattern"
-                | "require"
-                | "ensure"
-                | "map_err"
                 | "cause"
                 | "and"
                 | "or"
@@ -687,6 +694,40 @@ impl Checker {
                 | "concat"
                 | "(,)"
         )
+    }
+
+    pub(super) fn validate_standard_lazy_function_decl(
+        &self,
+        span: &Span,
+        id: &ResolvedId,
+        params: &[ResolvedValueParameter],
+        ret_ty: &Option<sigil::resolved::ResolvedSignatureTy>,
+    ) -> Result<(), TypeError> {
+        if !self.enforce_builtin_type_contracts {
+            return Ok(());
+        }
+        let qname = Self::surface_qualified_name(id.qualified_name.as_deref());
+        let name = match qname {
+            Some("Kernel::if") => "if",
+            Some("Kernel::if_then") => "if_then",
+            Some("Kernel::require") => "require",
+            Some("Kernel::ensure") => "ensure",
+            Some("Result::map_err") => "map_err",
+            Some("Result::or_else") => "or_else",
+            _ => return Ok(()),
+        };
+        let contract = Self::special_form_contract(name);
+        let annotation = ret_ty.as_ref().map(|ty| ty.syntax().clone());
+        if !(contract.shape_ok)(params, &annotation) {
+            return Err(TypeError::new(
+                format!(
+                    "Standard Lazy declaration must match the canonical contract: {}",
+                    contract.expected_signature
+                ),
+                span.clone(),
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn is_compiler_flow_operator_decl(id: &ResolvedId) -> bool {
@@ -699,12 +740,12 @@ impl Checker {
         match name {
             "if" => SpecialFormContract {
                 expected_qname: "Kernel::if",
-                expected_signature: "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+                expected_signature: "def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
                 shape_ok: special_form_shape_if,
             },
             "if_then" => SpecialFormContract {
                 expected_qname: "Kernel::if_then",
-                expected_signature: "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
+                expected_signature: "def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
                 shape_ok: special_form_shape_if_then,
             },
             "if_let" => SpecialFormContract {
@@ -729,23 +770,28 @@ impl Checker {
             },
             "require" => SpecialFormContract {
                 expected_qname: "Kernel::require",
-                expected_signature: "@builtin def require(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
+                expected_signature: "def require(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
                 shape_ok: special_form_shape_require,
             },
             "ensure" => SpecialFormContract {
                 expected_qname: "Kernel::ensure",
-                expected_signature: "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
+                expected_signature: "def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
                 shape_ok: special_form_shape_ensure,
             },
             "map_err" => SpecialFormContract {
                 expected_qname: "Result::map_err",
-                expected_signature: "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                expected_signature: "def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
             },
             "cause" => SpecialFormContract {
                 expected_qname: "Result::cause",
                 expected_signature: "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "or_else" => SpecialFormContract {
+                expected_qname: "Result::or_else",
+                expected_signature: "def or_else(value: Result<$T>, next: Lazy<Result<$T>>) -> Result<$T>",
+                shape_ok: special_form_shape_or_else,
             },
             "and" => SpecialFormContract {
                 expected_qname: "Kernel::and",
@@ -1315,6 +1361,13 @@ impl Checker {
             Resolved::Cond(_, clauses) => clauses
                 .iter()
                 .any(|(_, body)| self.body_tail_is_return_type_argument_call(body)),
+            Resolved::LazyApp(_, LazyCaptureKind::If, _, args) => {
+                self.body_tail_is_return_type_argument_call(&args[1])
+                    || self.body_tail_is_return_type_argument_call(&args[2])
+            }
+            Resolved::LazyApp(_, LazyCaptureKind::IfThen, _, args) => {
+                self.body_tail_is_return_type_argument_call(&args[1])
+            }
             Resolved::If(_, _, then_branch, else_branch) => {
                 self.body_tail_is_return_type_argument_call(then_branch)
                     || else_branch
@@ -1394,12 +1447,7 @@ impl Checker {
         }
 
         for param in params {
-            let param_ty = self.resolve_def_signature_ast_ty_in_context(
-                id,
-                &param.ty,
-                TypeSyntaxContext::General,
-                &mut tyvars,
-            )?;
+            let param_ty = self.resolve_def_parameter_contract(id, &param.ty, &mut tyvars)?;
             super::signatures::remember_direct_constructor_input(
                 self,
                 &param.ty,
@@ -1836,16 +1884,72 @@ impl Checker {
             target_span,
             &id.name,
         )?;
-        let local_bindings = typed_params
-            .iter()
-            .map(|param| (param.id.unique_id, param.ty.clone()))
-            .collect::<Vec<_>>();
-
-        let expected_ret = self.resolve_signature_ast_ty_in_context(
+        let mut expected_ret = self.resolve_signature_ast_ty_in_context(
             ret_ty,
             TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
+        // Pattern heads may already refer to the predeclared signature. Keep
+        // those declaration identities when checking the Extractor body.
+        let Some(Ty::UserFunc {
+            type_params: declared_vars,
+            params: declared_params,
+            ret: declared_ret,
+            ..
+        }) = self.env.lookup_var(id.unique_id).cloned()
+        else {
+            return Err(self.typecheck_invariant_error(
+                "Extractor definition must have a predeclared callable signature",
+                span,
+            ));
+        };
+        let checked_types = typed_params
+            .iter()
+            .map(|parameter| parameter.ty.clone())
+            .chain(std::iter::once(expected_ret.clone()))
+            .collect::<Vec<_>>();
+        let declared_types = declared_params
+            .into_iter()
+            .chain(std::iter::once(*declared_ret))
+            .collect::<Vec<_>>();
+        let mut checked_vars = Vec::new();
+        for parameter in type_params {
+            if let Some(ty) = tyvars.get(&parameter.name) {
+                Self::collect_ty_vars(ty, &mut checked_vars);
+            }
+        }
+        Self::collect_ty_vars(&Ty::Tuple(checked_types.clone()), &mut checked_vars);
+        if checked_vars.len() != declared_vars.len() {
+            return Err(self.typecheck_invariant_error(
+                "Extractor signature must retain its predeclared type slots",
+                span,
+            ));
+        }
+        let mapping = checked_vars
+            .into_iter()
+            .zip(declared_vars.into_iter().map(Ty::Var))
+            .collect::<HashMap<_, _>>();
+        if checked_types
+            .iter()
+            .map(|ty| self.substitute_ty_with_mapping(ty, &mapping))
+            .ne(declared_types)
+        {
+            return Err(self.typecheck_invariant_error(
+                "Extractor signature must match its predeclared callable contract",
+                span,
+            ));
+        }
+        for ty in tyvars.values_mut() {
+            *ty = self.substitute_ty_with_mapping(ty, &mapping);
+        }
+        for parameter in &mut typed_params {
+            parameter.ty = self.substitute_ty_with_mapping(&parameter.ty, &mapping);
+        }
+        expected_ret = self.substitute_ty_with_mapping(&expected_ret, &mapping);
+        let local_bindings = typed_params
+            .iter()
+            .map(|param| (param.id.unique_id, param.ty.clone()))
+            .collect::<Vec<_>>();
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 structured: None,

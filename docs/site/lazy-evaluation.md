@@ -23,7 +23,9 @@ Lazy 位置へ直接書いた call は、戻り値型にかかわらず一段包
 call が0引数関数を返しても、その戻り値の関数を追加で呼び出しません。
 
 Lazy 位置の `(EXPR)` は eager 境界です。内側を先に一度評価し、得られた値を正規化へ渡します。
-評価順序は各 special form の既存の順序に従います。
+`if` / `if_then` / `require` は eager 境界を条件式より先に評価します。
+`ensure` は値、eager な error、predicate の順に評価します。
+`Result::or_else` / `Result::map_err` / `Result::cause` は左辺 Result を先に評価し、その後 eager 境界を評価します。
 
 ```surtr
 def selected() -> Unit { print("selected") }
@@ -297,6 +299,10 @@ add_cause(Ok(1)) # Ok(1)
 
 errorを受け取る各関数でも、通常の呼び出しでerror式を括弧で囲むと、判定前に一度評価します。
 Error は通常の値として保持・受け渡しできます。遅延引数であることによって Error の情報は変わりません。
+
+### `Result::or_else`
+
+`Result::or_else(value, next)` は `Ok` をそのまま返し、`Err` の場合に右辺の `Result` を返します。右辺は通常の Lazy 規則に従い、`(EXPR)` は選択前に評価してその値を再利用します。連結した場合は最初の `Ok`、すべて失敗なら最後の `Err` を返し、以前の Error を cause に追加しません。`Alternative` は不要です。キャプチャ `&Result::or_else(&1, &2)` の右辺は `(-> Result<T>)` を受け取ります。
 
 ## `recover_kind` の ErrorKind
 

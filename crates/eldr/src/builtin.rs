@@ -204,10 +204,6 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: |vm, args| builtin_from_codepoints(vm, args),
     },
     BuiltinImpl {
-        name: "map_err",
-        func: |vm, args| builtin_result_map_err(vm, args).map(BuiltinOutcome::Complete),
-    },
-    BuiltinImpl {
         name: "cause",
         func: |vm, args| builtin_result_cause(vm, args).map(BuiltinOutcome::Complete),
     },
@@ -2295,16 +2291,6 @@ fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutco
             }
         }
     }
-}
-
-fn builtin_result_map_err(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let result = decode_result_arg(&args[0], "map_err", "result")?;
-    let replacement = decode_error_arg(&args[1], "map_err", "err")?;
-
-    Ok(match result {
-        Ok(value) => ok_result(value),
-        Err(_) => err_result_from_rich_error(replacement),
-    })
 }
 
 fn builtin_result_cause(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -6580,6 +6566,15 @@ mod tests {
     }
 
     #[test]
+    fn map_err_is_a_surtr_function_without_runtime_builtin() {
+        assert!(builtin_id_by_name("map_err").is_none());
+        assert!(!BUILTIN_IMPLS
+            .iter()
+            .any(|builtin| builtin.name == "map_err"));
+        assert!(builtin_id_by_name("cause").is_some());
+    }
+
+    #[test]
     fn builtin_impl_order_matches_metadata() {
         for (id, builtin) in BUILTIN_IMPLS.iter().enumerate() {
             let meta = builtin_meta_by_id(id as u16).expect("builtin metadata by id");
@@ -8454,33 +8449,6 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn map_err_replaces_error_without_preserving_previous_cause() {
-        let mut vm = test_vm();
-        let builtin_id = builtin_id_by_name("map_err").expect("map_err metadata");
-        let value = call_builtin(
-            &mut vm,
-            builtin_id,
-            vec![
-                err_result_from_rich_error(sample_error("Lower", "lower")),
-                sample_error_value("Higher", "higher"),
-            ],
-        )
-        .expect("map_err should succeed");
-
-        match value {
-            Value::Tagged { tag: 1, fields } => match fields.first() {
-                Some(Value::Error(rich)) => {
-                    assert_eq!(rich.kind, "Higher");
-                    assert_eq!(rich.message, "higher");
-                    assert!(rich.cause.is_none(), "map_err must replace cause chain");
-                }
-                other => panic!("expected Err(Value::Error), got {:?}", other),
-            },
-            other => panic!("expected Err result, got {:?}", other),
-        }
     }
 
     #[test]

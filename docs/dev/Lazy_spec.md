@@ -1,9 +1,11 @@
-# Lazy special formの実装契約
+# Lazy 引数を持つ標準関数の実装契約
 
-`Lazy<T>` は標準定義が宣言する引数契約のマーカーであり、通常の値型ではない。標準 special form に加えて、標準 Trait メソッドの引数にも宣言できる。
+`Lazy<T>` は標準定義が宣言する引数契約のマーカーであり、通常の値型ではない。標準の通常関数、builtin、Trait メソッドの引数に宣言できる。
 
-Sigilは通常の名前解決でcallee UIDを確定し、対応する標準宣言のcanonical identityからspecial formを選ぶ。autoimport属性や呼出しの綴りだけでspecial formへ分類しない。callee解決が失敗した場合は元の診断を返し、通常呼出し・パイプのどちらでも綴りによる救済を行わない。`and` / `or` は予約名で、利用者の独立した関数・member 定義も拒否する。`if`、`if_then`、`require`、`ensure`、`map_err`、`cause` は通常名で、同名の利用者関数・関数値変数は自身の署名と通常の引数評価に従う。Pattern consumer の予約規則は別に維持する。
+Sigilは通常の名前解決でcallee UIDを確定し、対応する標準宣言の canonical identity から Lazy 契約を選ぶ。autoimport 属性や呼び出しの綴りだけで契約を付与しない。callee解決が失敗した場合は元の診断を返し、通常呼出し・パイプのどちらでも綴りによる救済を行わない。`and` / `or` は予約名で、利用者の独立した関数・member 定義も拒否する。`if`、`if_then`、`require`、`ensure`、`map_err`、`cause`、`or_else` は通常名で、同名の利用者関数・関数値変数は自身の署名と通常の引数評価に従う。Pattern consumer の予約規則は別に維持する。
 利用者の独立した関数・Trait は Lazy 引数契約を宣言できない。標準 Trait のユーザー impl は、対応するメソッドの引数位置に限って Lazy 契約を継承できる。宣言の identity で対応付け、メソッド名の綴りや実装元では許可を決めない。default method と override の呼出しは同じ宣言契約に従い、実装本体へ通常の0引数 callable を渡す。戻り値・型注釈・field・container の値型としては公開しない。
+通常関数の Lazy 引数位置は、解決された標準関数の宣言を正本とする。実装の仮引数型は通常の `(-> T)` へ消去し、呼び出し位置の契約とは分けて保持する。ビルトインを呼ぶ必要がある Lazy 関数は `@builtin` 宣言とする。
+`if` / `if_then` / `require` / `ensure` / `Result::or_else` / `Result::map_err` は `.srt` 本体で実行する。`and` / `or` は最適化のため、`Result::cause` と Pattern consumer は固有の実行契約のため `@builtin` を維持する。
 builtin の signature は `crates/sindr/src/builtin.rs` の `BUILTIN_METAS` と対応する標準定義を正本とする。Trait メソッドの Lazy 引数位置は、解決された標準 Trait 宣言を正本とする。
 利用者向けの規則と関数別の例は[Lazy evaluation](../site/lazy-evaluation.md)、標準APIの説明は`lib/kernel.srt`・`lib/types/result.srt`の`@doc`に置く。
 
@@ -12,13 +14,31 @@ builtin の signature は `crates/sindr/src/builtin.rs` の `BUILTIN_METAS` と�
 | フェーズ | 責務 |
 |---|---|
 | Spire | callの引数領域、grouping、capture placeholderを保持する。Patternを通常Exprへ解析し直して救済しない |
-| Sigil | canonical callee・Pattern binding・deferrorのidentityとlexical scopeを確定する。builtin の裸 Lazy capture を拒否し、診断用の由来を生成parameterへ保持する |
-| Scar | Lazy入力の型とclosure shellを正規化し、生成parameterの要求型・callの戻り値型を確定する。Trait の宣言権限・override の対応と裸 capture を検査し、通常の型関係を維持する |
-| Forge | 照合・branch選択前のeager入力を一回評価し、選択されたbranchの正規化済みshellを一回consumeする。tail位置でも同じ順序を守る |
+| Sigil | canonical callee・Pattern binding・deferrorのidentityとlexical scopeを確定する。標準関数の Lazy 引数位置を保持し、裸 Lazy capture を拒否し、診断用の由来を生成parameterへ保持する |
+| Scar | Lazy入力の型とclosure shellを正規化し、生成parameterの要求型・callの戻り値型を確定する。標準宣言の権限・Trait override の対応と裸 capture を検査する。通常関数では正規化済み callable と評価順を通常の Block / Bind / App へ変換する |
+| Forge | 通常の Block / Bind / App と closure を生成する。残る intrinsic では eager 入力と branch の一回 consume を処理する。tail 位置でも同じ順序を守る |
 | Eldr | 通常のcall frame・closureを実行する。Lazy値は公開しない。ErrorKindは独立した通常値として運搬する |
 
 概念上のwrapとruntime closure allocationは別である。Forgeは確定した評価順と型を実行し、すべてのbranchにclosure allocationを要求しない。
 実行式のbranchへLazyマーカーを残したり、正規化済みparameterへ再びLazy処理を適用したりしない。
+
+## 通常関数への受け渡しと評価順
+
+移行した6関数は、呼び出し先の `.srt` 本体が branch を一回呼び出す。Sigil の Lazy call は選択された callee と入力の正規化契約を保持する中間表現であり、Scar で通常の call へ変換する。専用の runtime 命令や branch emitter は持たない。標準関数を関数値として渡す場合も、実装署名は通常の0引数 callable を受け取る型になる。
+通常の call に適用される Facet / MatchResult の受け渡し制限も維持する。Extractor 本体で MatchResult を分岐して構築する場合は Boolean の `match` を使う。
+
+固定 eager 入力は call 前の通常 binding へ取り出し、値と callable を一回だけ評価する。通常位置、tail 位置、capture の呼び出しで同じ順序を守る。
+
+| 関数 | 評価順 |
+|---|---|
+| `if` / `if_then` | then、else の eager 境界を引数順に評価 → 条件式 → 選択 branch |
+| `and` / `or` / `&&` / `||` | 右辺 eager 境界 → 左辺 → 必要な場合だけ右辺 |
+| `require` | error の eager 境界 → 条件式 → 必要な場合だけ error branch |
+| `ensure` | value → error の eager 境界 → predicate の取得と呼び出し → 必要な場合だけ error branch |
+| `Result::or_else` | 左辺 Result → fallback の eager 境界 → Err の場合だけ fallback |
+| `Result::map_err` / `Result::cause` | 左辺 Result → error の eager 境界 → Err の場合だけ error branch |
+
+これらの canonical call は positional-only とし、named / spread / arity 不一致を拒否する。`ensure` は通常の unary predicate 値を受け取るが、predicate 位置へ直接書いた call expression は引き続き拒否する。通常の同名利用者関数にはこの制約や Lazy 評価を適用しない。
 
 ## 入力とclosure depth
 
@@ -55,6 +75,7 @@ depthは型の先頭に連続する0引数関数の段数である。引数付�
 単branchの`if_then`と、bindingを作らない`if_let_then`の成功branchは`(-> Unit)`を要求する。bindingを作る成功branchはDirectExpressionとして`Unit`を要求する。
 `require`・`ensure`・`Result::map_err`・`Result::cause`のerrorは`(-> Error)`を要求する。
 `and`・`or`の右辺は`(-> Boolean)`を要求し、それぞれ左辺が`True`・`False`のときだけ実行する。
+`Result::or_else`の右辺は左辺と同じ`Result<T>`を返す`(-> Result<T>)`を要求し、左辺が`Err`のときだけconsumeする。括弧によるeager境界は左辺の評価後・分岐選択前に一回評価し、その結果を再利用する。
 個別の評価条件は標準 API の契約に従う。Error は通常の値として受け渡す。
 
 ## キャプチャの要求型
