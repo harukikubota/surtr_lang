@@ -1,0 +1,44 @@
+Ok(7)
+7
+Ok(7)
+Ok(7)
+Ok(7)
+Err(NoneError("None Value."))
+Err(NoneError("None Value."))
+Err(NoneError("None Value."))
+7
+Ok(7)
+Ok(7)
+Ok(7)
+Ok("x")
+Ok(7)
+Ok([1, 2])
+Ok((7, "x"))
+Ok(Ok(8))
+Ok(Ok(8))
+Ok((7, "x"))
+Ok([1, 2])
+Ok(7)
+Ok("x")
+Ok(11)
+11
+Ok(11)
+Ok(11)
+Ok(11)
+Ok(10)
+10
+Ok(10)
+Ok(10)
+Ok(10)
+Ok(11)
+11
+Ok(11)
+Ok(11)
+Ok(11)
+Ok(10)
+10
+Ok(10)
+Ok(10)
+Ok(10)
+11
+11

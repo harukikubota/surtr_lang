@@ -1,0 +1,3 @@
+def inner(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { Monad::bind(source,next) }
+def outer(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { inner(source,next) }
+outer(Ok([]), {|_| Ok(7)})

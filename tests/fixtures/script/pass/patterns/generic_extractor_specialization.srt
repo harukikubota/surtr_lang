@@ -1,0 +1,134 @@
+defrecord Holder(value: Result<Int>)
+
+def fixed_outer(source: Result<$A>) -> Result<Int> {
+  apply_pattern(source, Int::fixed(_1))
+}
+
+impl Int {
+  defextractor relay(source: Result<$A>) -> MatchResult<$A> {
+    value =? Monad::bind(source, {|x| Ok(x)})
+    MatchResult::Ok(value)
+  }
+  defextractor fixed(source: Result<$A>) -> MatchResult<Int> {
+    value =? Monad::bind(source, {|_| Ok(7)})
+    MatchResult::Ok(value)
+  }
+  defextractor offset(amount: Int, source: Int) -> MatchResult<Int> {
+    MatchResult::Ok(amount + source)
+  }
+}
+
+def safe(source: Result<Result<Int>>) -> Result<Int> {
+  Int::relay(value) =? source
+  Ok(value)
+}
+
+def inner(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> {
+  Monad::bind(source, next)
+}
+
+def pre_apply(source: Result<$A>) -> Result<Int> {
+  apply_pattern(10, Int::offset(match inner(source, {|_| Ok(1)}) { Ok(value) => value, _ => 0 }, _1))
+}
+
+def pre_match(source: Result<$A>) -> Int {
+  match 10 { Int::offset(match inner(source, {|_| Ok(1)}) { Ok(value) => value, _ => 0 }, value) => value, _ => 0 }
+}
+
+def pre_safe(source: Result<$A>) -> Result<Int> {
+  Int::offset(match inner(source, {|_| Ok(1)}) { Ok(value) => value, _ => 0 }, value) =? Ok(10)
+  Ok(value)
+}
+
+def pre_do(source: Result<$A>) -> Result<Int> {
+  do { Int::offset(match inner(source, {|_| Ok(1)}) { Ok(value) => value, _ => 0 }, value) <- Ok(10); Ok(value) }
+}
+
+def pre_capture(source: Result<$A>) -> Result<Int> {
+  consume: (Int -> Result<Int>) = &apply_pattern(&1, Int::offset(match inner(source, {|_| Ok(1)}) { Ok(value) => value, _ => 0 }, _1))
+  consume(10)
+}
+
+def key_apply(source: Result<$A>) -> Result<Int> {
+  apply_pattern(hash!["one" => 10], hash![match inner(source, {|_| Ok("one")}) { Ok(value) => value, _ => "none" } => _1])
+}
+
+def key_match(source: Result<$A>) -> Int {
+  match hash!["one" => 10] { hash![match inner(source, {|_| Ok("one")}) { Ok(value) => value, _ => "none" } => value] => value, _ => 0 }
+}
+
+def key_safe(source: Result<$A>) -> Result<Int> {
+  hash![match inner(source, {|_| Ok("one")}) { Ok(value) => value, _ => "none" } => value] =? Ok(hash!["one" => 10])
+  Ok(value)
+}
+
+def key_do(source: Result<$A>) -> Result<Int> {
+  do { hash![match inner(source, {|_| Ok("one")}) { Ok(value) => value, _ => "none" } => value] <- Ok(hash!["one" => 10]); Ok(value) }
+}
+
+def key_capture(source: Result<$A>) -> Result<Int> {
+  consume: (HashMap<Int> -> Result<Int>) = &apply_pattern(&1, hash![match inner(source, {|_| Ok("one")}) { Ok(value) => value, _ => "none" } => _1])
+  consume(hash!["one" => 10])
+}
+
+defrecord NumberHolder(value: Int)
+
+def nested_pre_match(source: Result<$A>) -> Int {
+  match NumberHolder(10) {
+    NumberHolder(value: Int::offset(match inner(source, {|_| Ok(1)}) { Ok(value) => value, _ => 0 }, value)) => value,
+    _ => 0,
+  }
+}
+
+print(inspect(apply_pattern(Ok(7), Int::relay(_1))))
+print(inspect(match Ok(7) { Int::relay(value) => value, _ => 0 }))
+print(inspect(safe(Ok(Ok(7)))))
+print(inspect(do { Int::relay(value) <- Ok(Ok(7)); Ok(value) }))
+consume: (Result<Int> -> Result<Int>) = &apply_pattern(&1, Int::relay(_1))
+print(inspect(consume(Ok(7))))
+failure: Result<Int> = Err(NoneError())
+print(inspect(apply_pattern(failure, Int::relay(_1))))
+print(inspect(safe(Ok(Err(NoneError())))))
+print(inspect(do { Int::relay(value) <- Ok(failure); Ok(value) }))
+print(inspect(match Holder(Ok(7)) { Holder(value: Int::relay(value)) => value, _ => 0 }))
+print(inspect(fixed_outer(Ok("x"))))
+print(inspect(fixed_outer(Ok(7))))
+print(inspect(fixed_outer(Ok("x"))))
+
+# Repeat concrete instantiations in both directions, including compound payloads.
+print(inspect(apply_pattern(Ok("x"), Int::relay(_1))))
+print(inspect(apply_pattern(Ok(7), Int::relay(_1))))
+print(inspect(apply_pattern(Ok([1, 2]), Int::relay(_1))))
+print(inspect(apply_pattern(Ok((7, "x")), Int::relay(_1, _2))))
+print(inspect(apply_pattern(Ok(Ok(8)), Int::relay(_1))))
+print(inspect(apply_pattern(Ok(Ok(8)), Int::relay(_1))))
+print(inspect(apply_pattern(Ok((7, "x")), Int::relay(_1, _2))))
+print(inspect(apply_pattern(Ok([1, 2]), Int::relay(_1))))
+print(inspect(apply_pattern(Ok(7), Int::relay(_1))))
+print(inspect(apply_pattern(Ok("x"), Int::relay(_1))))
+
+
+
+print(inspect(pre_apply(Ok(7))))
+print(inspect(pre_match(Ok(7))))
+print(inspect(pre_safe(Ok(7))))
+print(inspect(pre_do(Ok(7))))
+print(inspect(pre_capture(Ok(7))))
+print(inspect(key_apply(Ok(7))))
+print(inspect(key_match(Ok(7))))
+print(inspect(key_safe(Ok(7))))
+print(inspect(key_do(Ok(7))))
+print(inspect(key_capture(Ok(7))))
+print(inspect(pre_apply(Ok("x"))))
+print(inspect(pre_match(Ok("x"))))
+print(inspect(pre_safe(Ok("x"))))
+print(inspect(pre_do(Ok("x"))))
+print(inspect(pre_capture(Ok("x"))))
+print(inspect(key_apply(Ok("x"))))
+print(inspect(key_match(Ok("x"))))
+print(inspect(key_safe(Ok("x"))))
+print(inspect(key_do(Ok("x"))))
+print(inspect(key_capture(Ok("x"))))
+
+print(inspect(nested_pre_match(Ok(7))))
+print(inspect(nested_pre_match(Ok("x"))))

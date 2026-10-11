@@ -1836,16 +1836,72 @@ impl Checker {
             target_span,
             &id.name,
         )?;
-        let local_bindings = typed_params
-            .iter()
-            .map(|param| (param.id.unique_id, param.ty.clone()))
-            .collect::<Vec<_>>();
-
-        let expected_ret = self.resolve_signature_ast_ty_in_context(
+        let mut expected_ret = self.resolve_signature_ast_ty_in_context(
             ret_ty,
             TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
+        // Pattern heads may already refer to the predeclared signature. Keep
+        // those declaration identities when checking the Extractor body.
+        let Some(Ty::UserFunc {
+            type_params: declared_vars,
+            params: declared_params,
+            ret: declared_ret,
+            ..
+        }) = self.env.lookup_var(id.unique_id).cloned()
+        else {
+            return Err(self.typecheck_invariant_error(
+                "Extractor definition must have a predeclared callable signature",
+                span,
+            ));
+        };
+        let checked_types = typed_params
+            .iter()
+            .map(|parameter| parameter.ty.clone())
+            .chain(std::iter::once(expected_ret.clone()))
+            .collect::<Vec<_>>();
+        let declared_types = declared_params
+            .into_iter()
+            .chain(std::iter::once(*declared_ret))
+            .collect::<Vec<_>>();
+        let mut checked_vars = Vec::new();
+        for parameter in type_params {
+            if let Some(ty) = tyvars.get(&parameter.name) {
+                Self::collect_ty_vars(ty, &mut checked_vars);
+            }
+        }
+        Self::collect_ty_vars(&Ty::Tuple(checked_types.clone()), &mut checked_vars);
+        if checked_vars.len() != declared_vars.len() {
+            return Err(self.typecheck_invariant_error(
+                "Extractor signature must retain its predeclared type slots",
+                span,
+            ));
+        }
+        let mapping = checked_vars
+            .into_iter()
+            .zip(declared_vars.into_iter().map(Ty::Var))
+            .collect::<HashMap<_, _>>();
+        if checked_types
+            .iter()
+            .map(|ty| self.substitute_ty_with_mapping(ty, &mapping))
+            .ne(declared_types)
+        {
+            return Err(self.typecheck_invariant_error(
+                "Extractor signature must match its predeclared callable contract",
+                span,
+            ));
+        }
+        for ty in tyvars.values_mut() {
+            *ty = self.substitute_ty_with_mapping(ty, &mapping);
+        }
+        for parameter in &mut typed_params {
+            parameter.ty = self.substitute_ty_with_mapping(&parameter.ty, &mapping);
+        }
+        expected_ret = self.substitute_ty_with_mapping(&expected_ret, &mapping);
+        let local_bindings = typed_params
+            .iter()
+            .map(|param| (param.id.unique_id, param.ty.clone()))
+            .collect::<Vec<_>>();
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 structured: None,

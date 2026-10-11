@@ -1,0 +1,45 @@
+def lift_value(value: $A) -> StateT<Int, Result, $A> { Applicative::pure(value) }
+def sequence_value(source: StateT<Int, Result, $A>, next: ($A -> StateT<Int, Result, $B>)) -> StateT<Int, Result, $B> { Monad::bind(source, next) }
+def map_value(source: StateT<Int, Result, $A>, mapper: ($A -> $B)) -> StateT<Int, Result, $B> {
+  sequence_value(source, {|value| lift_value(mapper(value))})
+}
+def inner(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { Monad::bind(source, next) }
+def outer(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { inner(source, next) }
+def relay(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { outer(source, next) }
+def with_bound(value: $A, next: ($A -> Result<$B>)) -> Result<$B> where $A: Show {
+  Show::to_string(value)
+  inner(Ok(value), next)
+}
+def partial::<$B>(source: Result<$A>) -> (($A -> Result<$B>) -> Result<$B>) { &inner(source, &1) }
+def inject(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { source |> inner(next) }
+def captured(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> {
+  f: (Result<$A>, ($A -> Result<$B>) -> Result<$B>) = &inner
+  f(source, next)
+}
+def returned::<$A, $B>() -> (Result<$A>, ($A -> Result<$B>) -> Result<$B>) { &inner }
+def recurse(n: Int, source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> {
+  if(n == 0, inner(source, next), recurse(n - 1, source, next))
+}
+def left(n: Int, source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> {
+  if(n == 0, inner(source, next), right(n - 1, source, next))
+}
+def right(n: Int, source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { left(n, source, next) }
+state: StateT<Int, Result, Int> = lift_value(7)
+print(inspect(StateT::run(state, 0)))
+print(inspect(StateT::run(map_value(state, {|x| inspect(x)}), 2)))
+print(inspect(StateT::run(map_value(state, {|x| x + 1}), 3)))
+
+print(inspect(relay(Ok(7), {|x: Int| Ok(x + 1)})))
+print(inspect(relay(Ok(7), {|x: Int| Ok(inspect(x))})))
+print(inspect(relay(Ok("x"), {|x: String| Ok(x ++ "y")})))
+print(inspect(relay(Ok([1,2]), {|x: List<Int>| Ok((x, True))})))
+print(inspect(relay(Ok(7), {|x: Int| Ok(x + 1)})))
+print(inspect(with_bound(7, {|x: Int| Ok("test")})))
+f: ((Int -> Result<String>) -> Result<String>) = partial::<String>(Ok(3))
+print(inspect(f({|x| Ok(inspect(x))})))
+print(inspect(inject(Ok(7), {|x: Int| Ok(x + 1)})))
+print(inspect(captured(Ok(7), {|x: Int| Ok(x + 1)})))
+g: (Result<Int>, (Int -> Result<String>) -> Result<String>) = returned()
+print(inspect(g(Ok(7), {|x| Ok(inspect(x))})))
+print(inspect(recurse(2, Ok(7), {|x: Int| Ok(x + 1)})))
+print(inspect(right(2, Ok(7), {|x: Int| Ok(x + 1)})))
