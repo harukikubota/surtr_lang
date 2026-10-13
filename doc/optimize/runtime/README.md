@@ -1,6 +1,6 @@
 # Runtime 改善資料
 
-更新日: 2026-10-13。main `72154707` の資料と、mainへ未統合の3 worktreeの資料・測定原本をここへ集約した。本文の実装済み・未着手・検証値はそれぞれ作成時点の記録であり、現在の統合状態は以下の一覧を基準にする。集約後のRegex入力共有・Builder共有化の作業状況も一覧へ追記した。
+更新日: 2026-10-13。main `72154707` の資料と、mainへ未統合の3 worktreeの資料・測定原本をここへ集約した。本文の実装済み・未着手・検証値はそれぞれ作成時点の記録であり、現在の統合状態は以下の一覧を基準にする。集約後のRegex入力共有・Builder共有化・Future stack走査削減の作業状況も一覧へ追記した。
 
 ## 項目と統合状態
 
@@ -8,7 +8,7 @@
 |---|---|---|
 | List / VM全体 | [残課題](list_runtime_followups.md)、[10月13日の進捗](list_runtime_progress_2026_10_13.md)、[元の基準測定](baseline/list_runtime_measurement_report_2026_10_11.md) | RT-2〜5の作業を横断して辿る。元の測定・棚卸しは4c18から集約した資料 |
 | RT-2 Packed tail | [保持方式比較](list/list_tail_retention_comparison_2026_10_11.md)、[完成Vecのchunk移譲比較](list/list_chunk_handoff_comparison_2026_10_13.md) | 測定・モデル比較のみ。製品への保持方式採用は未決 |
-| RT-3 Value / Future | [基準値](value/list_value_cost_measurement_2026_10_11.md)、[改善計画](value/list_runtime_rt3_optimization_plan.md)、[改善結果](value/list_runtime_rt3_optimization_2026_10_11.md) | 空Future表の走査削減はmain統合済み。非空走査OI-036、RSS差OI-037は残る |
+| RT-3 Value / Future | [基準値](value/list_value_cost_measurement_2026_10_11.md)、[改善計画](value/list_runtime_rt3_optimization_plan.md)、[改善結果](value/list_runtime_rt3_optimization_2026_10_11.md)、[非空Future表の走査削減](value/future_stack_nonempty_optimization_2026_10_13.md) | 空Future表の走査削減はmain統合済み。OI-036のPendingFutureなしの走査削減をmainへコミット済み（CI 2,555件・標準1,124件成功）。未解決PendingFutureの走査・OI-037は残る |
 | RT-4 HashMap | [基準値](hashmap/hashmap_runtime_measurement_2026_10_11.md)、[計画](hashmap/hashmap_runtime_optimization_plan.md)、[結果](hashmap/hashmap_runtime_optimization_2026_10_11.md) | 内部構築・途中outputの反復clone削減はmain統合済み。前処理の分割とOI-038のRSS差は残る |
 | RT-4 Regex | [入力共有の実装・計測](regex/regex_input_sharing_2026_10_13.md)、[mainへの反映と再測定](regex/regex_input_sharing_adoption_2026_10_13.md) | 入力共有はmain `c577b32d`へコミット済み。再測定・workspace CI・標準Surtr全件成功。同期探索/収集は残る |
 | RT-4 FileOutHandler | [現行mainでの再現](file-out/file_out_handler_lifecycle_reproduction_2026_10_13.md)、[修復仕様案](file-out/file_out_handler_lifecycle_repair_spec.md) | 資源寿命の既存不一致を確認。OI-040。仕様案までで修復は未実施 |
@@ -23,7 +23,7 @@
 
 - `baseline/`: RT-2〜5の元の測定原本、RT-4棚卸し、Astraレビュー。
 - `list/`: tail保持方式と、完成Vecのchunk移譲モデル。
-- `value/`: Value clone/drop、generic do、Future stack走査の計測・改善。
+- `value/`: Value clone/drop、generic do、Future stack走査の計測・改善。非空Future表の内部VM・通常Task/List入口の原本も含む。
 - `hashmap/`: HashMap構築とmap_valuesの計測・改善。
 - `regex/`: 入力共有、手組みVM/通常batchの原本。最初のbatch無効系列は除外表示のまま保存。
 - `checkpoint/`: RT-5のmetadata・容器・Builder、OI-039。証跡ディレクトリも同じ項目に置く。

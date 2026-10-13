@@ -553,7 +553,7 @@ fn flat_map_direct_closure_tail_partial_inject_and_compose_use_same_continuation
         let mapper = vm.callable_for_function(0);
         let (callable, args) = match route {
             "direct" => {
-                vm.stack = vec![input, Value::Callable(mapper)];
+                vm.stack = vec![input, Value::Callable(mapper)].into();
                 vm.run().unwrap();
                 assert_eq!(vm.last_result, Some(expected));
                 assert_eq!(flat_map_metrics().builder_clones, 0);

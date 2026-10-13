@@ -83,9 +83,9 @@ fn nonempty_future_table_without_resolved_slots_skips_write_scan() {
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack, expected);
-    assert_eq!(scans(), (256, 0), "no PendingFuture slots to replace");
+    assert_eq!(scans(), (0, 0), "no PendingFuture slots to replace");
 
-    vm.stack = vec![Value::PendingFuture(future); 256];
+    vm.stack = vec![Value::PendingFuture(future); 256].into();
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack, vec![Value::PendingFuture(future); 256]);
@@ -97,7 +97,7 @@ fn nonempty_future_table_without_resolved_slots_skips_write_scan() {
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack, expected);
-    assert_eq!(scans(), (256, 0), "ready table entry has no matching slot");
+    assert_eq!(scans(), (0, 0), "ready table entry has no matching slot");
 }
 
 #[test]
@@ -120,7 +120,8 @@ fn ready_and_cancelled_futures_replace_all_matching_stack_slots() {
         Value::PendingFuture(ready),
         Value::PendingFuture(running),
         Value::PendingFuture(u64::MAX),
-    ];
+    ]
+    .into();
 
     vm.resolve_ready_pending_stack_values();
 
@@ -143,11 +144,11 @@ fn ready_and_cancelled_futures_replace_all_matching_stack_slots() {
 #[test]
 fn context_swap_delivers_ready_value_only_to_its_matching_slots() {
     let mut vm = VM::new(base_bytecode(vec![Opcode::Jump(0), Opcode::Halt]));
-    vm.stack = vec![Value::Int(int(3))];
+    vm.stack = vec![Value::Int(int(3))].into();
     let mut ordinary = vm.take_execution_context(0, ExecutionTarget::TopLevel);
 
     let future = vm.process_runtime.allocate_future(None, None, false);
-    vm.stack = vec![Value::PendingFuture(future), Value::PendingFuture(future)];
+    vm.stack = vec![Value::PendingFuture(future), Value::PendingFuture(future)].into();
     let mut suspended = vm.take_execution_context(0, ExecutionTarget::TopLevel);
     vm.process_runtime
         .resolve_future(future, Value::Int(int(23)));
@@ -172,7 +173,7 @@ fn context_swap_delivers_ready_value_only_to_its_matching_slots() {
 fn checkpoint_restores_pending_stack_and_future_table_before_redelivery() {
     let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
     let future = vm.process_runtime.allocate_future(None, None, false);
-    vm.stack = vec![Value::PendingFuture(future); 2];
+    vm.stack = vec![Value::PendingFuture(future); 2].into();
     let saved = checkpoint(&vm);
 
     vm.process_runtime
@@ -195,4 +196,143 @@ fn checkpoint_restores_pending_stack_and_future_table_before_redelivery() {
         .resolve_future(future, Value::Int(int(19)));
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack, vec![Value::Int(int(19)); 2]);
+}
+
+#[test]
+fn unrelated_future_does_not_scan_each_growing_literal_stack() {
+    let n = 128;
+    let mut bytecode = base_bytecode(
+        (0..n)
+            .map(|_| Opcode::LoadLocal(0))
+            .chain([Opcode::ListFromItems { len: n }, Opcode::Halt])
+            .collect(),
+    );
+    bytecode.num_locals = 1;
+    let mut vm = VM::new(bytecode);
+    vm.frames[0].locals[0] = Value::Int(int(7));
+    vm.process_runtime.allocate_future(None, None, false);
+    reset_scans();
+    vm.run().unwrap();
+    assert!(matches!(vm.last_value(), Some(Value::List(list)) if list.len() == n as usize));
+    assert_eq!(scans(), (0, 0));
+}
+
+#[test]
+fn resolution_preserves_pending_future_returned_by_another_future() {
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let first = vm.process_runtime.allocate_future(None, None, false);
+    let second = vm.process_runtime.allocate_future(None, None, false);
+    vm.stack = vec![Value::PendingFuture(first)].into();
+    vm.process_runtime
+        .resolve_future(first, Value::PendingFuture(second));
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(vm.stack.last(), Some(&Value::PendingFuture(second)));
+    vm.process_runtime
+        .resolve_future(second, Value::Int(int(29)));
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(vm.stack.last(), Some(&Value::Int(int(29))));
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(scans(), (0, 0));
+}
+
+// Manual profile: setup and content verification stay outside the run interval.
+#[test]
+fn nonempty_future_stack_profile() {
+    let profile = std::env::var("OI036_PROFILE").as_deref() == Ok("1");
+    let n: u32 = if profile {
+        std::env::var("OI036_N").unwrap().parse().unwrap()
+    } else {
+        16
+    };
+    let case = std::env::var("OI036_CASE").unwrap_or_else(|_| "unrelated_running".into());
+    let mut bytecode = base_bytecode(
+        (0..n)
+            .map(|_| Opcode::LoadLocal(0))
+            .chain([Opcode::ListFromItems { len: n }, Opcode::Halt])
+            .collect(),
+    );
+    bytecode.num_locals = 1;
+    let mut vm = VM::new(bytecode);
+    vm.frames[0].locals[0] = Value::Int(int(7));
+    match case.as_str() {
+        "empty" => {}
+        "unrelated_running" | "unrelated_ready" | "pending_ready" | "pending_running" => {
+            let id = vm.process_runtime.allocate_future(None, None, false);
+            if case == "unrelated_ready" || case == "pending_ready" {
+                vm.process_runtime.resolve_future(id, Value::Int(int(3)));
+            }
+            if case.starts_with("pending_") {
+                vm.stack.push(Value::PendingFuture(id));
+            }
+        }
+        _ => panic!("unknown OI036_CASE"),
+    }
+    let future_count = vm.process_runtime.futures.len();
+    reset_scans();
+    let started = std::time::Instant::now();
+    vm.run().unwrap();
+    let elapsed_ns = started.elapsed().as_nanos();
+    let (read, write) = scans();
+    let Value::List(list) = vm.last_value().unwrap() else {
+        panic!("expected List")
+    };
+    assert_eq!(list.len(), n as usize);
+    if !profile || std::env::var("PROBE_VERIFY").as_deref() == Ok("1") {
+        assert!(list.iter().all(|v| v == Value::Int(int(7))));
+    }
+    if profile {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "profile":"oi036", "case":case, "n":n, "future_count":future_count,
+                "elapsed_ns":elapsed_ns, "read_visits":read, "write_visits":write,
+                "context_bytes":std::mem::size_of::<ExecutionContext>(),
+                "vm_bytes":std::mem::size_of::<VM>(),
+                "verify":std::env::var("PROBE_VERIFY").as_deref() == Ok("1"),
+            })
+        );
+    }
+}
+
+#[test]
+fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
+    use super::process_continuation::DetachedCompletion;
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    vm.frames[0].call_site = Some((0, 1));
+    let callable = Callable {
+        target: CallableTarget::Builtin(
+            sindr::builtin::builtin_id_by_name("list_flat_map").unwrap(),
+        ),
+        lexical_captures: vec![
+            Value::List(ListHandle::empty()),
+            Value::Callable(Callable {
+                target: CallableTarget::Function(0),
+                lexical_captures: vec![],
+                metadata: Default::default(),
+            }),
+        ],
+        metadata: Default::default(),
+    };
+    let task_id = vm.process_runtime.next_detached_task_id;
+    vm.start_task(callable, TaskMode::Async, None).unwrap();
+    let DetachedCompletion::Future(Some(id)) =
+        vm.process_runtime.detached_tasks[&task_id].completion
+    else {
+        panic!("expected async completion")
+    };
+    vm.process_runtime.resolve_future(id, Value::Int(int(13)));
+    vm.stack.push(Value::PendingFuture(id));
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(vm.stack.last(), Some(&Value::PendingFuture(id)));
+    assert_eq!(scans(), (1, 0));
+    vm.process_runtime.detached_tasks.take(&task_id).unwrap();
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(vm.stack.last(), Some(&Value::Int(int(13))));
+    assert_eq!(scans(), (1, 1));
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(scans(), (0, 0));
 }

@@ -2,9 +2,11 @@ mod test_runner;
 use test_runner::VmTestRunner;
 pub use test_runner::{VmTestCase, VmTestDeclaration, VmTestPolicy, VmTestScope, VmTestScopeKind};
 mod checkpoint_value;
+mod operand_stack;
 mod process_continuation;
 mod runtime_table;
 use checkpoint_value::CheckpointValue;
+use operand_stack::OperandStack;
 pub(crate) use process_continuation::RuntimeContinuation;
 use process_continuation::{DetachedTask, SingletonFlight};
 use runtime_table::RuntimeTable;
@@ -243,7 +245,7 @@ struct CallFrame {
 
 #[derive(Debug, Clone)]
 struct VmCheckpoint {
-    stack: Vec<Value>,
+    stack: OperandStack,
     frames: Vec<CallFrame>,
     tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     continuations: Vec<ContinuationFrame>,
@@ -735,7 +737,7 @@ enum ProcessMailboxMessage {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ExecutionContext {
-    stack: Vec<Value>,
+    stack: OperandStack,
     frames: Vec<CallFrame>,
     tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     continuations: Vec<ContinuationFrame>,
@@ -1027,7 +1029,7 @@ impl FutureState {
 pub struct VM {
     bytecode: Bytecode,
     /// Operand stack
-    stack: Vec<Value>,
+    stack: OperandStack,
     /// Call stack / locals frames
     frames: Vec<CallFrame>,
     /// Logical caller frames overwritten by TCO, newest at the back.
@@ -1086,7 +1088,7 @@ impl VM {
         let process_runtime = ProcessRuntime::from_spec_table(&bytecode.runtime_process_specs);
         let mut vm = Self {
             bytecode,
-            stack: Vec::new(),
+            stack: Default::default(),
             frames: vec![CallFrame {
                 return_pc: 0,
                 stack_base: 0,
@@ -4283,7 +4285,7 @@ impl VM {
     fn resolve_ready_pending_stack_values(&mut self) {
         // Every ready value comes from this table; an empty table cannot
         // resolve any stack slot, including an unknown PendingFuture ID.
-        if self.process_runtime.futures.is_empty() {
+        if self.process_runtime.futures.is_empty() || !self.stack.has_pending_futures() {
             return;
         }
         #[cfg(test)]
@@ -4301,13 +4303,7 @@ impl VM {
         }
         #[cfg(test)]
         future_stack_tests::record_write_scan(self.stack.len());
-        for value in &mut self.stack {
-            if let Value::PendingFuture(id) = value {
-                if let Some(resolved) = ready.get(id) {
-                    *value = resolved.clone();
-                }
-            }
-        }
+        self.stack.replace_ready_futures(&ready);
     }
 
     fn take_execution_context(&mut self, pc: usize, target: ExecutionTarget) -> ExecutionContext {
@@ -6171,7 +6167,7 @@ impl VM {
             }
 
             Opcode::SetCallableSignature(signature) => {
-                let Some(Value::Callable(callable)) = self.stack.last_mut() else {
+                let Some(callable) = self.stack.last_callable_mut() else {
                     return Err(RuntimeError::new(
                         "SetCallableSignature expects a callable on the stack",
                     ));
@@ -6180,7 +6176,7 @@ impl VM {
             }
 
             Opcode::SetCallableOriginSource(capture_index) => {
-                let Some(Value::Callable(callable)) = self.stack.last_mut() else {
+                let Some(callable) = self.stack.last_callable_mut() else {
                     return Err(RuntimeError::new(
                         "SetCallableOriginSource expects a callable on the stack",
                     ));
@@ -6199,7 +6195,7 @@ impl VM {
             }
 
             Opcode::SetCallableDelegateFunction(function_index) => {
-                let Some(Value::Callable(callable)) = self.stack.last_mut() else {
+                let Some(callable) = self.stack.last_callable_mut() else {
                     return Err(RuntimeError::new(
                         "SetCallableDelegateFunction expects a callable on the stack",
                     ));
@@ -7783,7 +7779,7 @@ mod tests {
 
     fn top_level_context(pc: usize, num_locals: usize) -> ExecutionContext {
         ExecutionContext {
-            stack: Vec::new(),
+            stack: Default::default(),
             frames: vec![root_frame(num_locals)],
             tail_call_breadcrumbs: VecDeque::new(),
             continuations: Vec::new(),
@@ -8280,7 +8276,7 @@ mod tests {
         bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::loop"))];
         let mut vm = VM::new(bytecode);
         let mut ctx = ExecutionContext {
-            stack: Vec::new(),
+            stack: Default::default(),
             frames: vec![
                 root_frame(0),
                 CallFrame {
@@ -12290,7 +12286,8 @@ mod tests {
                 metadata: Default::default(),
             }),
             Value::Int(int(40)),
-        ];
+        ]
+        .into();
         let original = ctx.stack.clone();
         assert!(matches!(
             vm.run_quantum(&mut ctx, &mut Budget::new(0)),

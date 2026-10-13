@@ -60,7 +60,7 @@ impl VM {
     /// A scheduler-origin job has an explicit root, independent of any suspended caller.
     pub(super) fn standalone_builtin_context(outcome: BuiltinOutcome) -> ExecutionContext {
         ExecutionContext {
-            stack: Vec::new(),
+            stack: OperandStack::default(),
             frames: vec![CallFrame {
                 return_pc: 0,
                 stack_base: 0,

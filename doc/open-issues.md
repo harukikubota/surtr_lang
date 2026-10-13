@@ -281,20 +281,20 @@
 
 ### OI-036 Future表が非空のoperand stack走査
 
+- 状態: PendingFutureを持たないstackの走査削減はmainへコミット済み。未解決PendingFutureが残る場合の全走査と、追跡の追加費用は残る。
 - 背景:
-  - [RT-3の基準値測定](optimize/runtime/value/list_value_cost_measurement_2026_10_11.md)で、手組みVMの巨大mapper結果のrun時間がnの増加に対して大きく増えた。Astraとコードを確認し、opcodeごとのstack読取り・書込みの全走査を特定した。
-  - [RT-3の最適化](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)では、Future表が空なら両方の走査を省き、解決値がなければ書込み側を省く。追加の追跡状態を持たず、既存のready / cleanup判定を維持する。
-  - Future表が非空なら、stackにPendingFutureがなくても読取りの全走査が残る。無関係なFutureが残る状態で、n個の `LoadLocal` の後に `ListFromItems` を実行すると、読取りの走査要素数がΘ(n²)になる。この残る条件の実時間寄与率は未測定。
-- 未確定点:
-  - Future の配送契約と execution context の切替えを保ちながら、不要な stack 全走査を減らす方式。
-  - 無関係なFutureが残る深いstack、literal Listなど通常のcompiler出力、Futureを含む実入力での寄与率。
-- 受け入れ条件:
-  - Future表が非空でも、PendingFutureがない深いstackでopcodeごとの不要な読取り全走査を減らす。
-  - ready 値への置換、同一 Future を持つ複数 slot、context 切替え後の配送、待機・取消・checkpoint / rollback の契約を保つ。
-  - 速度の閾値を correctness test に加えず、決定的な操作数と同じ入力の手動測定で確認する。
-- テスト方針:
-  - 方式確定後、Eldr の crate-local テストで PendingFuture なし・未解決・ready・複数 slot・context 切替えの境界を固定する。
-  - 通常の List literal と今回の手組み入力を別条件で測り、input 構築・callback・flatten の費用を混同しない。
+  - [従来のRT-3改善](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)ではFuture表が空なら走査を省くが、非空ならPendingFutureがないstackも毎opcodeで読んでいた。
+  - [今回の追加改善](optimize/runtime/value/future_stack_nonempty_optimization_2026_10_13.md)では内部OperandStackにtop-level PendingFuture件数を持たせ、0件なら走査を省く。値と件数はcontext・checkpoint間で一緒に移動・復元する。任意の可変Valueアクセスと、不明状態へのfallbackは設けない。
+  - 10,000要素・無関係なFutureありの内部VMではread visits 50,005,001→0、通常Task / List literalのCLI execute中央値は39.672→1.873ms。FutureなしのCLI対照は1.459→1.558msで、追加費用を観測した。
+- 維持した受入条件:
+  - ready値への置換、同一Futureを持つ全slot、Futureを返すFuture、context切替え、待機・取消・cleanup完了・checkpoint / rollbackの契約を保つ。
+  - 決定的な操作数と前後の手動測定で確認し、速度閾値をcorrectness testへ加えない。
+- 残件:
+  - 未解決PendingFutureがstackにある条件は全走査のままで、今回の10,000要素対照もread visits 50,015,003のまま。
+  - ready判定によるdetached Task表の検索、固定幅metadata、push / pop等の追加費用。追加状態0の条件で実施した従来の最適化とは範囲が異なる。
+- 検証:
+  - slot件数更新・重複slot・Futureが返すFuture・context切替え・rollback・cleanup前後のcrate-local 12件、workspace CI 2,555件、標準Surtr 1,124件が成功。
+  - [内部VM原本](optimize/runtime/value/future_stack_nonempty_2026_10_13.jsonl)・[通常入口原本](optimize/runtime/value/future_stack_nonempty_batch_2026_10_13.jsonl)。Futureなし・無関係Running / Ready・実PendingFutureを分け、全内容検証は別processで行った。
 
 ### OI-037 RT-3のHashMap測定におけるprocess RSS差
 

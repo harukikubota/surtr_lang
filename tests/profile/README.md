@@ -52,3 +52,11 @@ checkpoint. [`checkpoint_builder_short/`](checkpoint_builder_short/README.md)
 uses outputs of 0 / 1 / 8 / 32 / 256 elements. Both use crate-local Eldr test
 probes, logical copy counters, fresh processes, and separate content verification.
 Results are in [`doc/optimize/runtime/checkpoint/`](../../doc/optimize/runtime/checkpoint/).
+
+## Future Stack Scans
+
+[`future_stack_scan/`](future_stack_scan/README.md) compares an empty or nonempty
+Future table, operand stacks with or without PendingFuture, and ordinary cached
+Task/List literal programs. Exact visit counts and content checks are separate
+from elapsed time and whole-process RSS. Results are in
+[`doc/optimize/runtime/value/`](../../doc/optimize/runtime/value/).

@@ -1,0 +1,1048 @@
+{
+  "builds": {
+    "before": {
+      "source_sha256": {
+        "crates/eldr/src/builtin/generator.rs": "158cfbfa46a2b4e6f0355d18bfba11b0f8bebe56e627767b3fc430fbfcf47dc6",
+        "crates/eldr/src/builtin/list_builder.rs": "920bf4235e8baba304e7201ea18324eff7e339f7fa5805b94094a5188005a13a",
+        "crates/eldr/src/builtin/list_finish.rs": "9c676e368f0f736751f8db2f9f3cd5f085f4ba96f4a074f0de5dde8e8f4df8c4",
+        "crates/eldr/src/builtin/list_flat_map.rs": "3baa21ea8bd9783bdad8c53d34440d582b8767cb0fc36d825ea9ea879027ef45",
+        "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+        "crates/eldr/src/builtin.rs": "65e9f39f03b8e46a2629dd0b2da65b59a80ed9448024e563c1454c40a576b4a0",
+        "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+        "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+        "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+        "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+        "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+        "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "850715bb3946aa8a4cbad533707a5683c29f149d653aefd432f3a77128074340",
+        "crates/eldr/src/vm/checkpoint_collections_tests.rs": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+        "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "f8709a4ed55450bb3e0457bc5ad63063ab4cf1a849b3def073f1ba1e00ca9c2d",
+        "crates/eldr/src/vm/checkpoint_value.rs": "504d0024b6cffbcc8a4c8cdacd12e949e963da58d3f0f28d71b5b4fa3bb926ae",
+        "crates/eldr/src/vm/continuation.rs": "08f97adff9f71d1a223e79795277e41a08e11e3b981c667e6d4e3bc36e55d673",
+        "crates/eldr/src/vm/future_stack_tests.rs": "b646e77cc90d9503251ed97b0141f144bd9f0581caedb261ccdd9100245dbd7f",
+        "crates/eldr/src/vm/generator_tests.rs": "95d89b213291353d32bd7ebc1e633876b488d17ce9f6364a46ee465122ab0f98",
+        "crates/eldr/src/vm/list_flat_map_tests.rs": "5ec3e93b8521779d0e88587578116e3dd3a9e77d0e377532653a34cd60bc6372",
+        "crates/eldr/src/vm/map_values_tests.rs": "4325ca369ab087d1a6bc1682bebc57ce48d27363eb37223348a71ff312e1c1da",
+        "crates/eldr/src/vm/process_continuation.rs": "4ceb53e65d83857fed2d385d9c6e84200aa868ec08b2a0c37a868a99afd361a7",
+        "crates/eldr/src/vm/process_identity_tests.rs": "8dd7283a720910882bf31d4d69d2311d6984aaa51ced6545290c994b221fbd12",
+        "crates/eldr/src/vm/process_stop_tests.rs": "b99a821fa7e9eb6aa5448585469ed5235a8773e0ad881916b0dd864efa013011",
+        "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+        "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+        "crates/eldr/src/vm.rs": "e5630024a170e290f07a996982a95fed848ecfc4ff8a70990a30d25fdbaad37f",
+        "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+        "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+        "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+        "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+        "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+        "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+        "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+        "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+        "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+        "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+        "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+        "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+        "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+        "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+        "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+        "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04",
+        "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+        "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+        "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407",
+        "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81"
+      },
+      "records": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--manifest-path",
+            "/Users/haruca/work/rust/surtr/Cargo.toml",
+            "--target-dir",
+            "/tmp/surtr-oi036-before-target",
+            "--message-format=json",
+            "-p",
+            "eldr",
+            "--lib",
+            "--no-run"
+          ],
+          "artifact": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/eldr#0.1.0",
+            "manifest_path": "/Users/haruca/work/rust/surtr/crates/eldr/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "eldr",
+              "src_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/lib.rs",
+              "edition": "2021",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "3",
+              "debuginfo": 0,
+              "debug_assertions": false,
+              "overflow_checks": false,
+              "test": true
+            },
+            "features": [
+              "default",
+              "terminal-io"
+            ],
+            "filenames": [
+              "/tmp/surtr-oi036-before-target/release/deps/eldr-7ddf4dcb324afb88"
+            ],
+            "executable": "/tmp/surtr-oi036-before-target/release/deps/eldr-7ddf4dcb324afb88",
+            "fresh": false
+          },
+          "binary": "/tmp/surtr-oi036-adoption/before-unit",
+          "binary_sha256": "a6b897775286a617bf8d5f1041399c03b4e702a1797dc8169e5efa06d407646f"
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "--manifest-path",
+            "/Users/haruca/work/rust/surtr/Cargo.toml",
+            "--target-dir",
+            "/tmp/surtr-oi036-before-target",
+            "--message-format=json",
+            "-p",
+            "rune",
+            "--bin",
+            "surtr"
+          ],
+          "artifact": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/rune#0.1.0",
+            "manifest_path": "/Users/haruca/work/rust/surtr/crates/rune/Cargo.toml",
+            "target": {
+              "kind": [
+                "bin"
+              ],
+              "crate_types": [
+                "bin"
+              ],
+              "name": "surtr",
+              "src_path": "/Users/haruca/work/rust/surtr/crates/rune/src/main.rs",
+              "edition": "2021",
+              "doc": true,
+              "doctest": false,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "3",
+              "debuginfo": 0,
+              "debug_assertions": false,
+              "overflow_checks": false,
+              "test": false
+            },
+            "features": [
+              "default",
+              "line-editor"
+            ],
+            "filenames": [
+              "/tmp/surtr-oi036-before-target/release/surtr"
+            ],
+            "executable": "/tmp/surtr-oi036-before-target/release/surtr",
+            "fresh": false
+          },
+          "binary": "/tmp/surtr-oi036-adoption/before-cli",
+          "binary_sha256": "5ed5dc53c172e3bba40f31cb6913e7fcec762b23555e6ab65870578dded2ab3d"
+        }
+      ]
+    },
+    "after": {
+      "source_sha256": {
+        "crates/eldr/src/builtin/generator.rs": "158cfbfa46a2b4e6f0355d18bfba11b0f8bebe56e627767b3fc430fbfcf47dc6",
+        "crates/eldr/src/builtin/list_builder.rs": "920bf4235e8baba304e7201ea18324eff7e339f7fa5805b94094a5188005a13a",
+        "crates/eldr/src/builtin/list_finish.rs": "9c676e368f0f736751f8db2f9f3cd5f085f4ba96f4a074f0de5dde8e8f4df8c4",
+        "crates/eldr/src/builtin/list_flat_map.rs": "3baa21ea8bd9783bdad8c53d34440d582b8767cb0fc36d825ea9ea879027ef45",
+        "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+        "crates/eldr/src/builtin.rs": "65e9f39f03b8e46a2629dd0b2da65b59a80ed9448024e563c1454c40a576b4a0",
+        "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+        "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+        "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+        "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+        "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+        "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "850715bb3946aa8a4cbad533707a5683c29f149d653aefd432f3a77128074340",
+        "crates/eldr/src/vm/checkpoint_collections_tests.rs": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+        "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "f8709a4ed55450bb3e0457bc5ad63063ab4cf1a849b3def073f1ba1e00ca9c2d",
+        "crates/eldr/src/vm/checkpoint_value.rs": "504d0024b6cffbcc8a4c8cdacd12e949e963da58d3f0f28d71b5b4fa3bb926ae",
+        "crates/eldr/src/vm/continuation.rs": "ba5f585f3f4075b21830bbb7be5d14f1532d952d75af9f440083ec652cd2e870",
+        "crates/eldr/src/vm/future_stack_tests.rs": "1ce7c6ad60766097a4f5b46ec6dd62d8327737c57d7ae14b24303c6b1dd1e49a",
+        "crates/eldr/src/vm/generator_tests.rs": "95d89b213291353d32bd7ebc1e633876b488d17ce9f6364a46ee465122ab0f98",
+        "crates/eldr/src/vm/list_flat_map_tests.rs": "a1aefe049eefa11fccb4dd25d52403f17f9b2822cd383274b11ec79caf117193",
+        "crates/eldr/src/vm/map_values_tests.rs": "4325ca369ab087d1a6bc1682bebc57ce48d27363eb37223348a71ff312e1c1da",
+        "crates/eldr/src/vm/operand_stack.rs": "f02f7d31f5cc229eb5f851551c235edce371aeec41b367a603ddd84363474fee",
+        "crates/eldr/src/vm/process_continuation.rs": "4ceb53e65d83857fed2d385d9c6e84200aa868ec08b2a0c37a868a99afd361a7",
+        "crates/eldr/src/vm/process_identity_tests.rs": "8dd7283a720910882bf31d4d69d2311d6984aaa51ced6545290c994b221fbd12",
+        "crates/eldr/src/vm/process_stop_tests.rs": "b99a821fa7e9eb6aa5448585469ed5235a8773e0ad881916b0dd864efa013011",
+        "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+        "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+        "crates/eldr/src/vm.rs": "94517ea1590c73f9bcbef125c92232ab4dbd242bb7bdf8929278f66445fefe83",
+        "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+        "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+        "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+        "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+        "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+        "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+        "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+        "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+        "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+        "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+        "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+        "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+        "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+        "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+        "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+        "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04",
+        "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+        "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+        "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407",
+        "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81"
+      },
+      "records": [
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "--manifest-path",
+            "/Users/haruca/work/rust/surtr/Cargo.toml",
+            "--target-dir",
+            "/tmp/surtr-oi036-after-target",
+            "--message-format=json",
+            "-p",
+            "eldr",
+            "--lib",
+            "--no-run"
+          ],
+          "artifact": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/eldr#0.1.0",
+            "manifest_path": "/Users/haruca/work/rust/surtr/crates/eldr/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "eldr",
+              "src_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/lib.rs",
+              "edition": "2021",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "3",
+              "debuginfo": 0,
+              "debug_assertions": false,
+              "overflow_checks": false,
+              "test": true
+            },
+            "features": [
+              "default",
+              "terminal-io"
+            ],
+            "filenames": [
+              "/tmp/surtr-oi036-after-target/release/deps/eldr-7ddf4dcb324afb88"
+            ],
+            "executable": "/tmp/surtr-oi036-after-target/release/deps/eldr-7ddf4dcb324afb88",
+            "fresh": false
+          },
+          "binary": "/tmp/surtr-oi036-adoption/after-unit",
+          "binary_sha256": "9ee067b544a50362a75163c83361ea31d022e44718bd09256ed8005e087a082b"
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "--manifest-path",
+            "/Users/haruca/work/rust/surtr/Cargo.toml",
+            "--target-dir",
+            "/tmp/surtr-oi036-after-target",
+            "--message-format=json",
+            "-p",
+            "rune",
+            "--bin",
+            "surtr"
+          ],
+          "artifact": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/rune#0.1.0",
+            "manifest_path": "/Users/haruca/work/rust/surtr/crates/rune/Cargo.toml",
+            "target": {
+              "kind": [
+                "bin"
+              ],
+              "crate_types": [
+                "bin"
+              ],
+              "name": "surtr",
+              "src_path": "/Users/haruca/work/rust/surtr/crates/rune/src/main.rs",
+              "edition": "2021",
+              "doc": true,
+              "doctest": false,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "3",
+              "debuginfo": 0,
+              "debug_assertions": false,
+              "overflow_checks": false,
+              "test": false
+            },
+            "features": [
+              "default",
+              "line-editor"
+            ],
+            "filenames": [
+              "/tmp/surtr-oi036-after-target/release/surtr"
+            ],
+            "executable": "/tmp/surtr-oi036-after-target/release/surtr",
+            "fresh": false
+          },
+          "binary": "/tmp/surtr-oi036-adoption/after-cli",
+          "binary_sha256": "7e3889b98109792cd5128ce5ed9591f2d5bb66a460b5755f232ddca05806fae6"
+        }
+      ]
+    }
+  },
+  "runner_sha256": "3b4cb3ddc7898af627aca62faf73ab07fb4c22c6855c7fc8da0f944be57c4c2e",
+  "measurements": [
+    {
+      "variant": "before",
+      "n": 1000,
+      "case": "empty",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 192542,
+        "median": 235395.5,
+        "max": 874125
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4259840,
+        "median": 4259840.0,
+        "max": 4276224
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 1000,
+      "case": "empty",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 169709,
+        "median": 225937.5,
+        "max": 870959
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4210688,
+        "median": 4210688.0,
+        "max": 4210688
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 1000,
+      "case": "unrelated_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 314125,
+        "median": 340146.0,
+        "max": 364708
+      },
+      "read_visits": {
+        "min": 500501,
+        "median": 500501.0,
+        "max": 500501
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4308992,
+        "median": 4317184.0,
+        "max": 4325376
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 1000,
+      "case": "unrelated_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 144833,
+        "median": 160645.5,
+        "max": 231833
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4243456,
+        "median": 4243456.0,
+        "max": 4276224
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 1000,
+      "case": "unrelated_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 315208,
+        "median": 320792.0,
+        "max": 331625
+      },
+      "read_visits": {
+        "min": 500501,
+        "median": 500501.0,
+        "max": 500501
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4325376,
+        "median": 4325376.0,
+        "max": 4341760
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 1000,
+      "case": "unrelated_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 149416,
+        "median": 153396.0,
+        "max": 175125
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4259840,
+        "median": 4259840.0,
+        "max": 4259840
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 1000,
+      "case": "pending_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 321875,
+        "median": 331750.0,
+        "max": 375167
+      },
+      "read_visits": {
+        "min": 501503,
+        "median": 501503.0,
+        "max": 501503
+      },
+      "write_visits": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "process_peak_rss_bytes": {
+        "min": 4407296,
+        "median": 4407296.0,
+        "max": 4423680
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 1000,
+      "case": "pending_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 151667,
+        "median": 159104.0,
+        "max": 212000
+      },
+      "read_visits": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "write_visits": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "process_peak_rss_bytes": {
+        "min": 4358144,
+        "median": 4358144.0,
+        "max": 4358144
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 1000,
+      "case": "pending_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 319583,
+        "median": 329667.0,
+        "max": 336166
+      },
+      "read_visits": {
+        "min": 501503,
+        "median": 501503.0,
+        "max": 501503
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4325376,
+        "median": 4325376.0,
+        "max": 4341760
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 1000,
+      "case": "pending_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 327625,
+        "median": 338229.0,
+        "max": 380750
+      },
+      "read_visits": {
+        "min": 501503,
+        "median": 501503.0,
+        "max": 501503
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 4276224,
+        "median": 4276224.0,
+        "max": 4276224
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 10000,
+      "case": "empty",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1287417,
+        "median": 1299062.5,
+        "max": 1311709
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7356416,
+        "median": 7356416.0,
+        "max": 7372800
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 10000,
+      "case": "empty",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1292667,
+        "median": 1325124.5,
+        "max": 1352667
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7307264,
+        "median": 7307264.0,
+        "max": 7307264
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 10000,
+      "case": "unrelated_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 36245916,
+        "median": 36615937.5,
+        "max": 37123750
+      },
+      "read_visits": {
+        "min": 50005001,
+        "median": 50005001.0,
+        "max": 50005001
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7405568,
+        "median": 7413760.0,
+        "max": 7421952
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 10000,
+      "case": "unrelated_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1292708,
+        "median": 1306708.5,
+        "max": 1327542
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7340032,
+        "median": 7340032.0,
+        "max": 7340032
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 10000,
+      "case": "unrelated_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 36234375,
+        "median": 36541125.0,
+        "max": 38472583
+      },
+      "read_visits": {
+        "min": 50005001,
+        "median": 50005001.0,
+        "max": 50005001
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7421952,
+        "median": 7421952.0,
+        "max": 7421952
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 10000,
+      "case": "unrelated_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1293583,
+        "median": 1379729.0,
+        "max": 1432458
+      },
+      "read_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7340032,
+        "median": 7356416.0,
+        "max": 7372800
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 10000,
+      "case": "pending_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 36236458,
+        "median": 36362917.0,
+        "max": 37095417
+      },
+      "read_visits": {
+        "min": 50015003,
+        "median": 50015003.0,
+        "max": 50015003
+      },
+      "write_visits": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "process_peak_rss_bytes": {
+        "min": 7503872,
+        "median": 7503872.0,
+        "max": 7520256
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 10000,
+      "case": "pending_ready",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1311583,
+        "median": 1330062.5,
+        "max": 1381208
+      },
+      "read_visits": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "write_visits": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720.0,
+        "max": 7454720
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    },
+    {
+      "variant": "before",
+      "n": 10000,
+      "case": "pending_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 36384417,
+        "median": 36439437.0,
+        "max": 38376584
+      },
+      "read_visits": {
+        "min": 50015003,
+        "median": 50015003.0,
+        "max": 50015003
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7421952,
+        "median": 7421952.0,
+        "max": 7438336
+      },
+      "context_bytes": {
+        "min": 904,
+        "median": 904.0,
+        "max": 904
+      },
+      "vm_bytes": {
+        "min": 3104,
+        "median": 3104.0,
+        "max": 3104
+      }
+    },
+    {
+      "variant": "after",
+      "n": 10000,
+      "case": "pending_running",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 36316750,
+        "median": 36511666.5,
+        "max": 36854333
+      },
+      "read_visits": {
+        "min": 50015003,
+        "median": 50015003.0,
+        "max": 50015003
+      },
+      "write_visits": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7372800,
+        "median": 7372800.0,
+        "max": 7372800
+      },
+      "context_bytes": {
+        "min": 912,
+        "median": 912.0,
+        "max": 912
+      },
+      "vm_bytes": {
+        "min": 3120,
+        "median": 3120.0,
+        "max": 3120
+      }
+    }
+  ]
+}

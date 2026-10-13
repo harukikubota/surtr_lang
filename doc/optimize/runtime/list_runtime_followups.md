@@ -7,7 +7,7 @@
 
 RT-3のValue測定・方式選定・Future表が空の場合の製品最適化は
 [最適化レポート](value/list_runtime_rt3_optimization_2026_10_11.md) に記録した。
-Future表が非空の場合の読取り走査は [OI-036](../../open-issues.md#oi-036-future表が非空のoperand-stack走査) に残る。
+Future表が非空でもPendingFutureがないstackの読取り走査は[追加改善](value/future_stack_nonempty_optimization_2026_10_13.md)で除いた（mainへコミット済み）。未解決PendingFutureが残る場合の走査は[OI-036](../../open-issues.md#oi-036-future表が非空のoperand-stack走査)に残る。
 
 ## 集約資料とその後の作業
 
