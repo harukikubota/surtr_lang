@@ -3,7 +3,16 @@ use super::*;
 use std::cell::Cell;
 
 thread_local! {
+    static TABLE_EMPTY_CHECKS: Cell<usize> = const { Cell::new(0) };
     static SCANNED_VALUES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+pub(super) fn record_table_empty_check() {
+    TABLE_EMPTY_CHECKS.with(|count| count.set(count.get() + 1));
+}
+
+fn table_empty_checks() -> usize {
+    TABLE_EMPTY_CHECKS.with(Cell::get)
 }
 
 pub(super) fn record_read_scan(n: usize) {
@@ -21,6 +30,7 @@ pub(super) fn record_write_scan(n: usize) {
 }
 
 fn reset_scans() {
+    TABLE_EMPTY_CHECKS.with(|count| count.set(0));
     SCANNED_VALUES.with(|counts| counts.set((0, 0)));
 }
 
@@ -63,6 +73,11 @@ fn empty_future_table_skips_both_scans_of_deep_stack() {
 
         assert_eq!(vm.stack, expected);
         assert_eq!(scans(), (0, 0), "empty table cannot resolve any slot");
+        assert_eq!(
+            table_empty_checks(),
+            0,
+            "ordinary stack does not query the Future table"
+        );
 
         // A missing future ID also stays unresolved, as in the full scan.
         vm.stack.push(Value::PendingFuture(99));
@@ -70,6 +85,11 @@ fn empty_future_table_skips_both_scans_of_deep_stack() {
         vm.resolve_ready_pending_stack_values();
         assert_eq!(vm.stack.last(), Some(&Value::PendingFuture(99)));
         assert_eq!(scans(), (0, 0));
+        assert_eq!(
+            table_empty_checks(),
+            1,
+            "a pending slot still checks the empty table"
+        );
     }
 }
 
@@ -84,12 +104,14 @@ fn nonempty_future_table_without_resolved_slots_skips_write_scan() {
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack, expected);
     assert_eq!(scans(), (0, 0), "no PendingFuture slots to replace");
+    assert_eq!(table_empty_checks(), 0);
 
     vm.stack = vec![Value::PendingFuture(future); 256].into();
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack, vec![Value::PendingFuture(future); 256]);
     assert_eq!(scans(), (256, 0), "Running future has no ready value");
+    assert_eq!(table_empty_checks(), 1);
 
     vm.process_runtime
         .resolve_future(future, Value::Int(int(17)));
@@ -98,6 +120,7 @@ fn nonempty_future_table_without_resolved_slots_skips_write_scan() {
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack, expected);
     assert_eq!(scans(), (0, 0), "ready table entry has no matching slot");
+    assert_eq!(table_empty_checks(), 0);
 }
 
 #[test]
@@ -287,6 +310,7 @@ fn nonempty_future_stack_profile() {
             serde_json::json!({
                 "profile":"oi036", "case":case, "n":n, "future_count":future_count,
                 "elapsed_ns":elapsed_ns, "read_visits":read, "write_visits":write,
+                "table_empty_checks":table_empty_checks(),
                 "context_bytes":std::mem::size_of::<ExecutionContext>(),
                 "vm_bytes":std::mem::size_of::<VM>(),
                 "verify":std::env::var("PROBE_VERIFY").as_deref() == Ok("1"),

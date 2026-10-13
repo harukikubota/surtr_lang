@@ -65,3 +65,5 @@ metadata幅のテストは、stack内に位置Vecを持つ48 bytesに対する�
 ## 比較資料
 
 通常のinline指定版は`future_stack_inline_*`、強いinline指定だけの版は`future_stack_force_*`、Box分離だけの版は`future_stack_metadata_*`と対応するbatch原本に残した。これらは不採用または中間状態の比較資料で、現行ソースは`future_stack_fast_*`のbuild recordを基準にする。製品コードの旧経路は残していない。
+
+その後、[PendingFutureなしの表の空判定削減](future_stack_guard_optimization_2026_10_13.md)を追加した。このレポートの測定値と比較対象は採取時のまま保持している。

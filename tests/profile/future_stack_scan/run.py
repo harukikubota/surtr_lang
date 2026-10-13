@@ -24,7 +24,7 @@ def run(binary, n, case, verify):
         row['process_peak_rss_bytes'] = int(rss[0])
     return row
 
-def check(row, layout):
+def check(row, layout, table_order=None):
     n, case = row['n'], row['case']
     expected_read = 0 if case == 'empty' else n*(n+1)//2+1
     if case.startswith('pending_'): expected_read = (n+1)*(n+2)//2+2
@@ -35,6 +35,10 @@ def check(row, layout):
         expected_read = n + 2 if case == 'pending_running' else (1 if case == 'pending_ready' else 0)
     if (row['read_visits'], row['write_visits']) != (expected_read, expected_write):
         raise RuntimeError((layout, row, expected_read, expected_write))
+    if table_order is not None:
+        expected_checks = n + 2 if table_order == 'table-first' or case == 'pending_running' else (1 if case == 'pending_ready' else 0)
+        if row['table_empty_checks'] != expected_checks:
+            raise RuntimeError((table_order, row, expected_checks))
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -42,8 +46,10 @@ def main():
     p.add_argument('--output',required=True,type=Path);p.add_argument('--samples',type=int,default=6)
     p.add_argument('--before-layout', choices=['full', 'count', 'indexed'], default='full')
     p.add_argument('--after-layout', choices=['full', 'count', 'indexed'], default='count')
+    p.add_argument('--check-table-guard', action='store_true', help='compare table-first before with stack-first after')
     a=p.parse_args()
     layouts={'before':a.before_layout,'after':a.after_layout}
+    table_orders={'before':'table-first','after':'stack-first'} if a.check_table_guard else {'before':None,'after':None}
     if a.samples<2 or a.samples%2: p.error('samples must be positive and even')
     builds={s:json.loads(path.read_text()) for s,path in [('before',a.before),('after',a.after)]}
     binaries={s:Path(next(r['binary'] for r in b['records'] if r['artifact']['target']['name']=='eldr')) for s,b in builds.items()}
@@ -57,24 +63,26 @@ def main():
             for case in CASES:
                 for sample in range(a.samples):
                     for position,side in enumerate(['before','after'] if sample%2==0 else ['after','before']):
-                        row=run(binaries[side],n,case,False);check(row,layouts[side])
+                        row=run(binaries[side],n,case,False);check(row,layouts[side],table_orders[side])
                         row.update(variant=side,sample=sample,order_position=position,layout=layouts[side])
                         raw.write(json.dumps(row,sort_keys=True)+'\n');raw.flush()
                         groups[(side,n,case)].append(row)
                 for side in binaries:
-                    row=run(binaries[side],n,case,True);check(row,layouts[side])
+                    row=run(binaries[side],n,case,True);check(row,layouts[side],table_orders[side])
                     row.pop('elapsed_ns');row['variant']=side;verify.append(row)
                 print(n,case,'complete',flush=True)
     summaries=[]
     for (side,n,case),rows in groups.items():
         summary={'variant':side,'n':n,'case':case,'samples':len(rows)}
-        for key in ['elapsed_ns','read_visits','write_visits','process_peak_rss_bytes','context_bytes','vm_bytes']:
+        keys=['elapsed_ns','read_visits','write_visits','process_peak_rss_bytes','context_bytes','vm_bytes']
+        if all('table_empty_checks' in r for r in rows): keys.append('table_empty_checks')
+        for key in keys:
             vals=[r[key] for r in rows];summary[key]={'min':min(vals),'median':statistics.median(vals),'max':max(vals)}
         summaries.append(summary)
     for side,b in builds.items():
         rec=next(r for r in b['records'] if r['artifact']['target']['name']=='eldr')
         if sha(binaries[side])!=rec['binary_sha256']:raise RuntimeError('binary changed')
-    a.output.with_suffix('.summary.json').write_text(json.dumps({'builds':builds,'layouts':layouts,'runner_sha256':sha(Path(__file__)),'measurements':summaries},indent=2)+'\n')
+    a.output.with_suffix('.summary.json').write_text(json.dumps({'builds':builds,'layouts':layouts,'table_orders':table_orders,'runner_sha256':sha(Path(__file__)),'measurements':summaries},indent=2)+'\n')
     a.output.with_name(a.output.name+'_verify.json').write_text(json.dumps(verify,indent=2)+'\n')
 
 if __name__=='__main__':main()

@@ -4283,9 +4283,15 @@ impl VM {
     }
 
     fn resolve_ready_pending_stack_values(&mut self) {
+        // No tracked slots means there is no top-level value to resolve.
+        if !self.stack.has_pending_futures() {
+            return;
+        }
         // Every ready value comes from this table; an empty table cannot
         // resolve any stack slot, including an unknown PendingFuture ID.
-        if self.process_runtime.futures.is_empty() || !self.stack.has_pending_futures() {
+        #[cfg(test)]
+        future_stack_tests::record_table_empty_check();
+        if self.process_runtime.futures.is_empty() {
             return;
         }
         #[cfg(test)]

@@ -281,11 +281,12 @@
 
 ### OI-036 Future表が非空のoperand stack走査
 
-- 状態: 未解決Futureの位置追跡と通常経路の費用削減をmainへコミット済み。通常値の全走査は除いた。追跡slotのready / cleanup検索と、通常経路の小さい差は残る。
+- 状態: 未解決Futureの位置追跡・通常経路の費用削減・PendingFutureなしの表参照削減をmainへコミット済み。通常値の全走査は除いた。追跡slotのready / cleanup検索と、通常経路の小さい差は残る。
 - 背景:
   - [従来のRT-3改善](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)はFuture表が空なら走査を省く。[件数追跡](optimize/runtime/value/future_stack_nonempty_optimization_2026_10_13.md)で非空表でもPendingFutureなしの走査を除いたが、未解決Futureが一つ残る条件は全走査だった。
   - [位置追跡](optimize/runtime/value/future_stack_index_optimization_2026_10_13.md)と[通常経路の費用削減](optimize/runtime/value/future_stack_metadata_optimization_2026_10_13.md)では、top-level PendingFutureの昇順slot位置を追跡し、そのslotだけを読む。必要時だけBoxへ位置bufferを確保し、stack内の追加metadataを1 pointer幅以内に抑える。
   - 10,000要素・未解決Future一つの内部VMはread visits 50,015,003→10,002、run中央値37.046→1.436ms。位置Vecをstack内に持つ版に対する通常CLI・Taskなしのexecute中央値は1.546→1.444ms、件数版に対しては1.410→1.420msだった。追加費用0は主張しない。
+  - [追加のガード改善](optimize/runtime/value/future_stack_guard_optimization_2026_10_13.md)で、PendingFutureなしの10,000要素入力の表の空判定を10,002→0回にした。通常CLIのTaskなしは1.432→1.424ms、Taskありは1.684→1.688ms。実時間のばらつきが重なり、追加費用の解消は主張しない。
 - 維持した受入条件:
   - 同一Futureを持つ全slot、Futureを返すFuture、context切替え、待機・取消・cleanup完了・checkpoint / rollbackを保つ。入れ子Value内のFutureは対象に含めない。
   - 値と位置を一緒に移動・保存し、任意の可変Value参照と位置不一致時の全走査fallbackを設けない。速度閾値はcorrectness testに加えない。
@@ -293,7 +294,7 @@
   - 追跡slotごとのFuture表とdetached Task cleanup検索、固定幅metadata、実Future slotのBox / 位置buffer確保とclone、使用済みbuffer保持。
   - Futureなしの通常入口で前回の件数版・追跡前のVec版との小さい時間差が残る。入力やbinary配置の寄与を一般化しない。
 - 検証:
-  - crate-local 16件、workspace CI 2,559件、標準Surtr 1,124件が成功。[検証記録](optimize/runtime/value/future_stack_followup_validation_2026_10_13.json)。
+  - crate-local 16件、workspace CI 2,559件、標準Surtr 1,124件が成功。[最新の検証記録](optimize/runtime/value/future_stack_guard_2026_10_13_validation.json)。
   - [最終内部VM原本](optimize/runtime/value/future_stack_fast_2026_10_13.jsonl)・[通常入口原本](optimize/runtime/value/future_stack_count_fast_batch_2026_10_13.jsonl)。AB/BA同数で測り、内部VMの全内容検証は別processにした。
 
 ### OI-037 RT-3のHashMap測定におけるprocess RSS差
