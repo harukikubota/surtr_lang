@@ -2,22 +2,36 @@ use sindr::runtime::{Callable, Value};
 use std::collections::HashMap;
 use std::ops::Deref;
 
-/// Owns both the values and the number of top-level PendingFuture slots.
+/// Owns the values and the sorted positions of top-level PendingFuture slots.
 /// Mutable access cannot change a Value variant outside this type.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct OperandStack {
     values: Vec<Value>,
-    pending_futures: usize,
+    pending_slots: Vec<usize>,
 }
 
 impl OperandStack {
     pub(super) fn has_pending_futures(&self) -> bool {
-        self.pending_futures != 0
+        !self.pending_slots.is_empty()
+    }
+
+    pub(super) fn pending_future_ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.pending_slots
+            .iter()
+            .map(|&slot| match &self.values[slot] {
+                Value::PendingFuture(id) => *id,
+                _ => unreachable!("PendingFuture stack position mismatch"),
+            })
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_slot_count(&self) -> usize {
+        self.pending_slots.len()
     }
 
     pub(super) fn push(&mut self, value: Value) {
         if matches!(value, Value::PendingFuture(_)) {
-            self.pending_futures += 1;
+            self.pending_slots.push(self.values.len());
         }
         self.values.push(value);
     }
@@ -25,33 +39,26 @@ impl OperandStack {
     pub(super) fn pop(&mut self) -> Option<Value> {
         let value = self.values.pop()?;
         if matches!(value, Value::PendingFuture(_)) {
-            self.pending_futures = self
-                .pending_futures
-                .checked_sub(1)
-                .expect("PendingFuture stack count underflow");
+            assert_eq!(
+                self.pending_slots.pop(),
+                Some(self.values.len()),
+                "PendingFuture stack position mismatch"
+            );
         }
         Some(value)
     }
 
     pub(super) fn clear(&mut self) {
         self.values.clear();
-        self.pending_futures = 0;
+        self.pending_slots.clear();
     }
 
     pub(super) fn truncate(&mut self, len: usize) {
         if len >= self.values.len() {
             return;
         }
-        if self.pending_futures != 0 {
-            let removed = self.values[len..]
-                .iter()
-                .filter(|v| matches!(v, Value::PendingFuture(_)))
-                .count();
-            self.pending_futures = self
-                .pending_futures
-                .checked_sub(removed)
-                .expect("PendingFuture stack count underflow");
-        }
+        let kept = self.pending_slots.partition_point(|&slot| slot < len);
+        self.pending_slots.truncate(kept);
         self.values.truncate(len);
     }
 
@@ -63,20 +70,19 @@ impl OperandStack {
     }
 
     pub(super) fn replace_ready_futures(&mut self, ready: &HashMap<u64, Value>) {
-        for value in &mut self.values {
-            if let Value::PendingFuture(id) = value {
-                if let Some(resolved) = ready.get(id) {
-                    let resolved = resolved.clone();
-                    if !matches!(resolved, Value::PendingFuture(_)) {
-                        self.pending_futures = self
-                            .pending_futures
-                            .checked_sub(1)
-                            .expect("PendingFuture stack count underflow");
-                    }
-                    *value = resolved;
-                }
-            }
-        }
+        let values = &mut self.values;
+        self.pending_slots.retain(|&slot| {
+            let Value::PendingFuture(id) = &values[slot] else {
+                unreachable!("PendingFuture stack position mismatch");
+            };
+            let Some(resolved) = ready.get(id) else {
+                return true;
+            };
+            let resolved = resolved.clone();
+            let still_pending = matches!(resolved, Value::PendingFuture(_));
+            values[slot] = resolved;
+            still_pending
+        });
     }
 }
 
@@ -89,13 +95,14 @@ impl Deref for OperandStack {
 
 impl From<Vec<Value>> for OperandStack {
     fn from(values: Vec<Value>) -> Self {
-        let pending_futures = values
+        let pending_slots = values
             .iter()
-            .filter(|v| matches!(v, Value::PendingFuture(_)))
-            .count();
+            .enumerate()
+            .filter_map(|(slot, value)| matches!(value, Value::PendingFuture(_)).then_some(slot))
+            .collect();
         Self {
             values,
-            pending_futures,
+            pending_slots,
         }
     }
 }
@@ -118,17 +125,15 @@ mod tests {
     use super::*;
     fn count(stack: &OperandStack) {
         assert_eq!(
-            stack.pending_futures,
-            stack
-                .values
-                .iter()
-                .filter(|v| matches!(v, Value::PendingFuture(_)))
-                .count()
+            stack.pending_slots,
+            stack.values.iter().enumerate()
+                .filter_map(|(slot, value)| matches!(value, Value::PendingFuture(_)).then_some(slot))
+                .collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn mutations_and_clones_keep_the_exact_pending_slot_count() {
+    fn mutations_and_clones_keep_the_exact_pending_slot_positions() {
         let mut stack = OperandStack::default();
         for value in [
             Value::PendingFuture(1),
@@ -154,11 +159,11 @@ mod tests {
         stack.clear();
         count(&stack);
         assert_eq!(stack.pop(), None);
-        assert_eq!(saved.pending_futures, 2);
+        assert_eq!(saved.pending_slots, vec![0, 2]);
     }
 
     #[test]
-    fn only_top_level_future_variants_contribute_to_the_count() {
+    fn only_top_level_future_variants_contribute_to_the_index() {
         let stack: OperandStack = [
             Value::Tuple(vec![Value::PendingFuture(1)]),
             Value::PendingFuture(1),
@@ -167,11 +172,27 @@ mod tests {
         .into_iter()
         .collect();
         count(&stack);
-        assert_eq!(stack.pending_futures, 2);
+        assert_eq!(stack.pending_slots.len(), 2);
     }
 
     #[test]
-    fn resolving_duplicates_and_future_valued_results_keeps_counts_exact() {
+    fn ordinary_values_do_not_allocate_a_pending_slot_buffer() {
+        let mut stack = OperandStack::default();
+        for _ in 0..1024 {
+            stack.push(Value::Unit);
+        }
+        assert_eq!(stack.pending_slots.capacity(), 0);
+        stack.truncate(512);
+        stack.pop();
+        assert_eq!(stack.pending_slots.capacity(), 0);
+        stack.clear();
+        assert_eq!(stack.pending_slots.capacity(), 0);
+        let stack: OperandStack = vec![Value::Unit; 1024].into();
+        assert_eq!(stack.pending_slots.capacity(), 0);
+    }
+
+    #[test]
+    fn resolving_duplicates_and_future_valued_results_keeps_positions_exact() {
         let mut stack: OperandStack = vec![
             Value::PendingFuture(1),
             Value::PendingFuture(1),
@@ -181,7 +202,7 @@ mod tests {
         .into();
         stack.replace_ready_futures(&[(1, Value::PendingFuture(3)), (2, Value::Unit)].into());
         count(&stack);
-        assert_eq!(stack.pending_futures, 2);
+        assert_eq!(stack.pending_slots.len(), 2);
         stack.replace_ready_futures(&[(3, Value::Unit)].into());
         count(&stack);
         assert!(!stack.has_pending_futures());

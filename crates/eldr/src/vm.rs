@@ -4289,20 +4289,17 @@ impl VM {
             return;
         }
         #[cfg(test)]
-        future_stack_tests::record_read_scan(self.stack.len());
+        future_stack_tests::record_read_scan(self.stack.pending_slot_count());
         let ready = self
             .stack
-            .iter()
-            .filter_map(|value| match value {
-                Value::PendingFuture(id) => self.ready_future_value(*id).map(|value| (*id, value)),
-                _ => None,
-            })
+            .pending_future_ids()
+            .filter_map(|id| self.ready_future_value(id).map(|value| (id, value)))
             .collect::<HashMap<_, _>>();
         if ready.is_empty() {
             return;
         }
         #[cfg(test)]
-        future_stack_tests::record_write_scan(self.stack.len());
+        future_stack_tests::record_write_scan(self.stack.pending_slot_count());
         self.stack.replace_ready_futures(&ready);
     }
 

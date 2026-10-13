@@ -336,3 +336,53 @@ fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
     vm.resolve_ready_pending_stack_values();
     assert_eq!(scans(), (0, 0));
 }
+
+#[test]
+fn unresolved_future_only_visits_its_slot_in_a_growing_literal_stack() {
+    let n = 128;
+    let mut bytecode = base_bytecode(
+        (0..n)
+            .map(|_| Opcode::LoadLocal(0))
+            .chain([Opcode::ListFromItems { len: n }, Opcode::Halt])
+            .collect(),
+    );
+    bytecode.num_locals = 1;
+    let mut vm = VM::new(bytecode);
+    vm.frames[0].locals[0] = Value::Int(int(7));
+    let id = vm.process_runtime.allocate_future(None, None, false);
+    vm.stack.push(Value::PendingFuture(id));
+    reset_scans();
+    vm.run().unwrap();
+    assert_eq!(scans(), (n as usize + 2, 0));
+    assert_eq!(vm.stack.first(), Some(&Value::PendingFuture(id)));
+    assert!(matches!(vm.last_value(), Some(Value::List(list)) if list.len() == n as usize));
+}
+
+#[test]
+fn ready_delivery_visits_only_pending_slots_among_ordinary_values() {
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let ready = vm.process_runtime.allocate_future(None, None, false);
+    let running = vm.process_runtime.allocate_future(None, None, false);
+    vm.stack = (0..4096).map(|_| Value::Unit).collect();
+    for id in [ready, running, ready] {
+        vm.stack.push(Value::PendingFuture(id));
+    }
+    vm.stack
+        .push(Value::Tuple(vec![Value::PendingFuture(ready)]));
+    vm.process_runtime.resolve_future(ready, Value::Int(int(5)));
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(scans(), (3, 3));
+    assert_eq!(
+        &vm.stack[4096..],
+        &[
+            Value::Int(int(5)),
+            Value::PendingFuture(running),
+            Value::Int(int(5)),
+            Value::Tuple(vec![Value::PendingFuture(ready)]),
+        ]
+    );
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(scans(), (1, 0));
+}

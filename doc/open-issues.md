@@ -281,20 +281,11 @@
 
 ### OI-036 Future表が非空のoperand stack走査
 
-- 状態: PendingFutureを持たないstackの走査削減はmainへコミット済み。未解決PendingFutureが残る場合の全走査と、追跡の追加費用は残る。
-- 背景:
-  - [従来のRT-3改善](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)ではFuture表が空なら走査を省くが、非空ならPendingFutureがないstackも毎opcodeで読んでいた。
-  - [今回の追加改善](optimize/runtime/value/future_stack_nonempty_optimization_2026_10_13.md)では内部OperandStackにtop-level PendingFuture件数を持たせ、0件なら走査を省く。値と件数はcontext・checkpoint間で一緒に移動・復元する。任意の可変Valueアクセスと、不明状態へのfallbackは設けない。
-  - 10,000要素・無関係なFutureありの内部VMではread visits 50,005,001→0、通常Task / List literalのCLI execute中央値は39.672→1.873ms。FutureなしのCLI対照は1.459→1.558msで、追加費用を観測した。
-- 維持した受入条件:
-  - ready値への置換、同一Futureを持つ全slot、Futureを返すFuture、context切替え、待機・取消・cleanup完了・checkpoint / rollbackの契約を保つ。
-  - 決定的な操作数と前後の手動測定で確認し、速度閾値をcorrectness testへ加えない。
-- 残件:
-  - 未解決PendingFutureがstackにある条件は全走査のままで、今回の10,000要素対照もread visits 50,015,003のまま。
-  - ready判定によるdetached Task表の検索、固定幅metadata、push / pop等の追加費用。追加状態0の条件で実施した従来の最適化とは範囲が異なる。
-- 検証:
-  - slot件数更新・重複slot・Futureが返すFuture・context切替え・rollback・cleanup前後のcrate-local 12件、workspace CI 2,555件、標準Surtr 1,124件が成功。
-  - [内部VM原本](optimize/runtime/value/future_stack_nonempty_2026_10_13.jsonl)・[通常入口原本](optimize/runtime/value/future_stack_nonempty_batch_2026_10_13.jsonl)。Futureなし・無関係Running / Ready・実PendingFutureを分け、全内容検証は別processで行った。
+- 状態: 未解決Futureの位置追跡をmainへコミット済み。通常値の全走査は除いた。通常経路の追加費用は残る。
+- 方式: [追加改善](optimize/runtime/value/future_stack_index_optimization_2026_10_13.md)でtop-level PendingFutureの昇順slot位置をprivate Vecに持つ。値と位置を一緒に移動・保存し、任意の可変Value参照と位置不一致時の全走査fallbackを設けない。
+- 維持した受入条件: 同一Futureを持つ全slot、Futureを返すFuture、context切替え、待機・取消・cleanup完了・checkpoint / rollback。nested Valueは追跡対象に含めない。
+- 測定: 10,000要素・未解決Future一つの内部VMでread visits 50,015,003→10,002、run中央値36.479→1.506ms。関連15件成功、内部VM 120 sampleと別process全内容検証20件、通常入口80 sampleを記録した。
+- 残件: 通常のcached List literal入口・Taskなしは1.396→1.498ms。位置Vecによりcontextは912→928 bytes、VMは3,120→3,136 bytesに増える。追跡slotのready / cleanup検索、位置Vecのheap確保・clone・保持と、通常経路の追加費用は残る。
 
 ### OI-037 RT-3のHashMap測定におけるprocess RSS差
 
