@@ -1,0 +1,14 @@
+--- before-builder-with-tests.rs
++++ final-list-builder.rs
+@@ -48,6 +48,11 @@
+     fn clone(&self) -> Self {
+         #[cfg(test)]
+         record(|metrics| metrics.clones += 1);
++        // An empty checkpoint has no values to share. Keep any reserved buffer
++        // unique to the original builder so its next push can reuse it.
++        if self.len == 0 {
++            return Self::default();
++        }
+         Self {
+             head: self.head.clone(),
+             len: self.len,

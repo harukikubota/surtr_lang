@@ -1,0 +1,14 @@
+[
+  {
+    "variant": "before",
+    "returncode": 101,
+    "stdout": "\nrunning 1 test\ntest builtin::list_builder::tests::empty_checkpoint_preserves_the_original_reservation ... FAILED\n\nfailures:\n\nfailures:\n    builtin::list_builder::tests::empty_checkpoint_preserves_the_original_reservation\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 359 filtered out; finished in 0.00s\n\n",
+    "stderr": "\nthread 'builtin::list_builder::tests::empty_checkpoint_preserves_the_original_reservation' (1737340) panicked at crates/eldr/src/builtin/list_builder.rs:358:9:\nassertion `left == right` failed\n  left: 1\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+  },
+  {
+    "variant": "final",
+    "returncode": 0,
+    "stdout": "\nrunning 1 test\ntest builtin::list_builder::tests::empty_checkpoint_preserves_the_original_reservation ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 359 filtered out; finished in 0.00s\n\n",
+    "stderr": ""
+  }
+]

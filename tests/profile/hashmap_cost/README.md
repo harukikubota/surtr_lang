@@ -44,9 +44,9 @@ From the repository root:
 cargo build --release --locked --manifest-path tests/profile/hashmap_cost/Cargo.toml --target-dir /tmp/surtr-rt4-after-count
 cargo build --release --locked --no-default-features --manifest-path tests/profile/hashmap_cost/Cargo.toml --target-dir /tmp/surtr-rt4-after-time
 python3 tests/profile/hashmap_cost/verify.py --binary /tmp/surtr-rt4-after-count/release/hashmap-cost-probe
-python3 tests/profile/hashmap_cost/run.py --binary /tmp/surtr-rt4-after-count/release/hashmap-cost-probe --output doc/hashmap_cost_2026_10_11_after_count
-python3 tests/profile/hashmap_cost/run.py --binary /tmp/surtr-rt4-after-time/release/hashmap-cost-probe --output doc/hashmap_cost_2026_10_11_after_time
-python3 tests/profile/hashmap_cost/recheck.py --output doc/hashmap_cost_2026_10_11_recheck
+python3 tests/profile/hashmap_cost/run.py --binary /tmp/surtr-rt4-after-count/release/hashmap-cost-probe --output doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_after_count
+python3 tests/profile/hashmap_cost/run.py --binary /tmp/surtr-rt4-after-time/release/hashmap-cost-probe --output doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_after_time
+python3 tests/profile/hashmap_cost/recheck.py --output doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_recheck
 ```
 
 The saved baseline files and binaries describe the pre-optimization product at

@@ -1,0 +1,30 @@
+{
+  "baseline_source_commit": "72154707399d6cdaf7190ab75007f2049ab010c6",
+  "baseline_source_root": "/Users/haruca/work/rust/surtr",
+  "baseline_probe_root": "/tmp/surtr-regex-20261013-baseline",
+  "dependency_versions_match_root_lock": true,
+  "baseline_build_commands": [
+    "CARGO_TARGET_DIR=/tmp/surtr-regex-20261013-profile-target cargo build --release --locked --manifest-path /tmp/surtr-regex-20261013-baseline/Cargo.toml",
+    "same command plus --no-default-features"
+  ],
+  "probe_sources_identical": true,
+  "baseline_binaries": {
+    "/tmp/surtr-regex-20261013-before-count": "026ee66de55ee2c6831c3642bb02f356e5f70618a43025a006b994d722de60f9",
+    "/tmp/surtr-regex-20261013-before-time": "dd4d61b142747d346fc7e2f26798b4fcf9e845227d0519d96c6786ad69f52336"
+  },
+  "after_build_commands": [
+    "PATH=/Users/haruca/.cargo/bin:$PATH CARGO_TARGET_DIR=/tmp/surtr-regex-20261013-profile-target cargo build --release --locked --manifest-path tests/profile/regex_input_cost/Cargo.toml",
+    "same command plus --no-default-features"
+  ],
+  "build_target_dir": "/tmp/surtr-regex-20261013-profile-target",
+  "after_source_root": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr",
+  "after_source_sha256": {
+    "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+    "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+    "crates/eldr/src/builtin.rs": "5a9d9a6e7590068ad93c12a0d922aae60297c0d3a72797edd3f43bc5ad95956b"
+  },
+  "after_binaries": {
+    "/tmp/surtr-regex-20261013-after-count": "8c515543411ce190d9cc6198af326de084a321460549c0c7316c9750a25eb0f8",
+    "/tmp/surtr-regex-20261013-after-time": "839e8ced689e4e6d0fcfe85328ddaaa099a07c87d15160fd289d5c3996799e2c"
+  }
+}

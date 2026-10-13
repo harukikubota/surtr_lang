@@ -1,0 +1,8 @@
+
+running 1 test
+test vm::list_flat_map_tests::memory_profile::vm_memory_profile ... 
+{"allocator_counting":false,"builder_len":32,"copy_mode":"shared","output_len":2080,"payload":"int","profile":"checkpoint_builder_vm_memory_verify","repeats":1,"tasks":1,"verified":true,"workload_live_restored":false}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 360 filtered out; finished in 0.01s
+

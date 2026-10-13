@@ -1,0 +1,29 @@
+{
+  "before": {
+    "compiler_artifact_executable": "/tmp/surtr-regex-20261013-batch-before-isolated/release/surtr",
+    "saved_binary": "/tmp/surtr-regex-20261013-batch-before-isolated-saved",
+    "binary_sha256": "733523ef8463a2989ed5210f3ea516b312305e6a85f8ceaf312b7b9af699233b",
+    "build_jsonl": "/tmp/surtr-regex-20261013-batch-before-isolated-build.jsonl",
+    "source_manifest": "/Users/haruca/work/rust/surtr/crates/rune/Cargo.toml",
+    "build_command": "PATH=/Users/haruca/.cargo/bin:$PATH cargo build --release --locked --manifest-path /Users/haruca/work/rust/surtr/Cargo.toml --target-dir /tmp/surtr-regex-20261013-batch-before-isolated --message-format=json -p rune --bin surtr",
+    "workspace_manifest": "/Users/haruca/work/rust/surtr/Cargo.toml",
+    "macho_text_section": {
+      "bytes": 11664188,
+      "sha256": "45a1ed6c5f80b9210b963c98f98b1db66e159736566f481e0e26c4b07a04a5a2"
+    }
+  },
+  "after": {
+    "compiler_artifact_executable": "/tmp/surtr-regex-20261013-batch-after-isolated/release/surtr",
+    "saved_binary": "/tmp/surtr-regex-20261013-batch-after-isolated-saved",
+    "binary_sha256": "76064d00c4a0058feed1f66e069187a9737f7e9cb8fb89132da53f0c77eb30ae",
+    "build_jsonl": "/tmp/surtr-regex-20261013-batch-after-isolated-build.jsonl",
+    "source_manifest": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/crates/rune/Cargo.toml",
+    "build_command": "PATH=/Users/haruca/.cargo/bin:$PATH cargo build --release --locked --manifest-path /Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/Cargo.toml --target-dir /tmp/surtr-regex-20261013-batch-after-isolated --message-format=json -p rune --bin surtr",
+    "workspace_manifest": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/Cargo.toml",
+    "macho_text_section": {
+      "bytes": 11632496,
+      "sha256": "66a73f34f8961f97105aaf007bcfc0a8766927066af6f904b821f72a1408abbb"
+    }
+  },
+  "review": "Astra verified compiler-artifact Sindr/Eldr/Rune manifest roots, build-finished success, saved/executable byte equality and different executable code sections."
+}

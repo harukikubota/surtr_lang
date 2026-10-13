@@ -1,0 +1,180 @@
+{
+  "anchor_commit": "72154707399d6cdaf7190ab75007f2049ab010c6",
+  "builds": {
+    "baseline-count": {
+      "source_root": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/baseline",
+      "snapshot_source_count": 199,
+      "source_hashes_match_before_after_final_and_saved_root": true,
+      "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/baseline-count",
+      "binary_sha256": "cce5d1032853c8c793f3fe8a8d2af565de8725d0f5a249191faf4d9db4864eb0",
+      "binary_matches_final_metadata": true,
+      "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-d54bb6a2fff8f52c",
+      "artifact_features": [
+        "default",
+        "terminal-io",
+        "vm-memory-count",
+        "vm-memory-profile"
+      ],
+      "build_finished_success": true,
+      "smoke_stdout": "baseline-count-smoke.stdout",
+      "smoke_stderr": "baseline-count-smoke.stderr"
+    },
+    "baseline-rss": {
+      "source_root": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/baseline",
+      "snapshot_source_count": 199,
+      "source_hashes_match_before_after_final_and_saved_root": true,
+      "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/baseline-rss",
+      "binary_sha256": "84bbcb2fa3e6d236e0e81ba6011163b3d516e30d7851fc7f3cda65b67722b04e",
+      "binary_matches_final_metadata": true,
+      "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-3fb0af3abe8c0bda",
+      "artifact_features": [
+        "default",
+        "terminal-io",
+        "vm-memory-profile"
+      ],
+      "build_finished_success": true,
+      "smoke_stdout": "baseline-rss-smoke.stdout",
+      "smoke_stderr": "baseline-rss-smoke.stderr"
+    },
+    "shared-count": {
+      "source_root": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/shared",
+      "snapshot_source_count": 200,
+      "source_hashes_match_before_after_final_and_saved_root": true,
+      "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/shared-count",
+      "binary_sha256": "7bf05124efe0fc16b646b9d8b890d2ebf04bb0a5ceb2d115c6f00ab6fa0a5b71",
+      "binary_matches_final_metadata": true,
+      "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-d54bb6a2fff8f52c",
+      "artifact_features": [
+        "default",
+        "terminal-io",
+        "vm-memory-count",
+        "vm-memory-profile"
+      ],
+      "build_finished_success": true,
+      "smoke_stdout": "shared-count-smoke.stdout",
+      "smoke_stderr": "shared-count-smoke.stderr"
+    },
+    "shared-rss": {
+      "source_root": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/shared",
+      "snapshot_source_count": 200,
+      "source_hashes_match_before_after_final_and_saved_root": true,
+      "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/shared-rss",
+      "binary_sha256": "1a4accb3dd116df06c2e77f2b744ae884b3cb3abb86b585238b8fcb3230815f0",
+      "binary_matches_final_metadata": true,
+      "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-3fb0af3abe8c0bda",
+      "artifact_features": [
+        "default",
+        "terminal-io",
+        "vm-memory-profile"
+      ],
+      "build_finished_success": true,
+      "smoke_stdout": "shared-rss-smoke.stdout",
+      "smoke_stderr": "shared-rss-smoke.stderr"
+    }
+  },
+  "baseline_main_byte_checks": [
+    {
+      "source": "crates/eldr/src/builtin.rs",
+      "saved": "baseline_source/crates/eldr/src/builtin.rs",
+      "matches_main_exactly": true,
+      "sha256": "12fb42e9d7edb18fda3fedcac8e1a656751e01a824db2d5eef5672cfd2da893f"
+    },
+    {
+      "source": "crates/eldr/src/builtin/generator.rs",
+      "saved": "baseline_source/crates/eldr/src/builtin/generator.rs",
+      "matches_main_exactly": true,
+      "sha256": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f"
+    },
+    {
+      "source": "crates/eldr/src/builtin/list_builder.rs",
+      "saved": "baseline_source/crates/eldr/src/builtin/list_builder.rs",
+      "matches_main_exactly": true,
+      "sha256": "4b422d3c9c5302f2aedb9bc704df4dc1f3dd9edd3e6acbbda7122c398354c926"
+    },
+    {
+      "source": "crates/eldr/src/builtin/list_flat_map.rs",
+      "saved": "baseline_source/crates/eldr/src/builtin/list_flat_map.rs",
+      "matches_main_exactly": true,
+      "sha256": "a010fc7d9151b3bc39cc2213868e7528c97d495e6161ceee486fd4d7ba2ab97e"
+    },
+    {
+      "source": "crates/eldr/src/vm.rs",
+      "saved": "baseline_source/crates/eldr/src/vm.rs",
+      "matches_main_exactly": true,
+      "sha256": "9e80708145e52ff5654e8135eed2203ce3dc9c085183dad6d2b53f135545e52d"
+    },
+    {
+      "source": "crates/eldr/src/vm/continuation.rs",
+      "saved": "baseline_source/crates/eldr/src/vm/continuation.rs",
+      "matches_main_exactly": true,
+      "sha256": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc"
+    },
+    {
+      "source": "crates/eldr/src/vm/generator_tests.rs",
+      "saved": "baseline_source/crates/eldr/src/vm/generator_tests.rs",
+      "matches_main_exactly": true,
+      "sha256": "6382fc91bef5efcd9399ce36f70c0c65399c043eba2a9d38d7087988202c3eb2"
+    }
+  ],
+  "common_files": [
+    {
+      "source": "crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs",
+      "baseline_shared_byte_equal": true,
+      "sha256": "fb46af18a067ec58ac412c996012be288e5d7c5b8c926ac0acd6fbab50780e59"
+    },
+    {
+      "source": "crates/eldr/src/vm/list_flat_map_tests/metrics.rs",
+      "baseline_shared_byte_equal": true,
+      "sha256": "fe53ef66d83628c1eae12bb7de9e83817580e2fc01e99c1203d9e28fa36ffae4"
+    },
+    {
+      "source": "crates/eldr/Cargo.toml",
+      "baseline_shared_byte_equal": true,
+      "sha256": "3d612eb3206cefc574a61b19e5a3dfc98e9dfac03845d903e21559f526e1c55f"
+    },
+    {
+      "source": "crates/eldr/src/vm/process_continuation.rs",
+      "baseline_shared_byte_equal": true,
+      "sha256": "4ceb53e65d83857fed2d385d9c6e84200aa868ec08b2a0c37a868a99afd361a7"
+    }
+  ],
+  "baseline_parent_test_scope": {
+    "source": "crates/eldr/src/vm/list_flat_map_tests.rs",
+    "main_prefix_byte_equal": true,
+    "only_appended_text": "\n#[cfg(feature = \"vm-memory-profile\")]\nmod memory_profile;\n"
+  },
+  "common_parent_helpers": [
+    {
+      "name": "flat_map_callable",
+      "baseline_shared_function_text_equal": true
+    },
+    {
+      "name": "flat_map_opcode",
+      "baseline_shared_function_text_equal": true
+    },
+    {
+      "name": "list",
+      "baseline_shared_function_text_equal": true
+    },
+    {
+      "name": "constant_mapper_vm",
+      "baseline_shared_function_text_equal": true
+    },
+    {
+      "name": "checkpoint",
+      "baseline_shared_function_text_equal": true
+    }
+  ],
+  "root_source_hash_difference": [
+    "crates/eldr/src/builtin.rs",
+    "crates/eldr/src/builtin/generator.rs",
+    "crates/eldr/src/builtin/list_builder.rs",
+    "crates/eldr/src/builtin/list_finish.rs",
+    "crates/eldr/src/builtin/list_flat_map.rs",
+    "crates/eldr/src/vm.rs",
+    "crates/eldr/src/vm/continuation.rs",
+    "crates/eldr/src/vm/generator_tests.rs",
+    "crates/eldr/src/vm/list_flat_map_tests.rs"
+  ],
+  "artifact_copy_scope": "build_all.py asserts original compiler-artifact executable hash equals the saved binary immediately after copy; this audit verifies saved binary hash and frozen sources against final metadata."
+}

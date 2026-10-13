@@ -1,0 +1,7000 @@
+{
+  "metadata": {
+    "source_commit": "72154707399d6cdaf7190ab75007f2049ab010c6",
+    "root": "/Users/haruca/.codex/worktrees/9ea8/surtr",
+    "recorded_at": "2026-10-11T22:59:28.366762+00:00",
+    "git_status_porcelain": " M crates/eldr/src/builtin.rs\n M crates/eldr/src/builtin/list_builder.rs\n M crates/eldr/src/builtin/list_flat_map.rs\n M crates/eldr/src/vm/list_flat_map_tests.rs\n M crates/eldr/src/vm/process_continuation.rs\n?? doc/list_runtime_rt5_builder_measurement_2026_10_12.md\n?? tests/profile/checkpoint_builder/\n",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-rt5-builder-dqx_cjov/eldr-builder-profile",
+    "binary_sha256": "233e138f4c5e371ab10d90135028af863499e4b0f8974d70556369136350167b",
+    "runner_sha256": "a3786039ab0ef346b3c6b8087f2a93e30b5630c59978ef0ed0572568e2909f69",
+    "test_name": "vm::list_flat_map_tests::checkpoint_builder_profile",
+    "build_profile": "release unit-test binary",
+    "tasks": [
+      1,
+      8,
+      32
+    ],
+    "lengths": [
+      32,
+      1024,
+      16384
+    ],
+    "payloads": [
+      "int",
+      "string"
+    ],
+    "samples": 5,
+    "repeats": 8,
+    "verification": false,
+    "allocator_counting": false,
+    "logical_clone_counters": true,
+    "rss_scope": "whole fresh test process high-water mark; includes all repeats and preparation",
+    "sources_sha256": {
+      "crates/eldr/src/builtin/generator.rs": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f",
+      "crates/eldr/src/builtin/list_builder.rs": "a8d3cfc238c0a22da6c43331235b6f0ca86fd9a32cbf951cc2e9dbca7b4e33fd",
+      "crates/eldr/src/builtin/list_flat_map.rs": "ab9e982cbdde2eb29ddbf5c4245f046f6713aeaa8336b25842b906d6c28ad995",
+      "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+      "crates/eldr/src/builtin.rs": "e92b26912aa4bcb03522b2e0cb61156d53b434311aac8f029ea69897797475f5",
+      "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+      "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+      "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+      "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+      "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+      "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "850715bb3946aa8a4cbad533707a5683c29f149d653aefd432f3a77128074340",
+      "crates/eldr/src/vm/checkpoint_collections_tests.rs": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+      "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "f8709a4ed55450bb3e0457bc5ad63063ab4cf1a849b3def073f1ba1e00ca9c2d",
+      "crates/eldr/src/vm/checkpoint_value.rs": "504d0024b6cffbcc8a4c8cdacd12e949e963da58d3f0f28d71b5b4fa3bb926ae",
+      "crates/eldr/src/vm/continuation.rs": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc",
+      "crates/eldr/src/vm/future_stack_tests.rs": "7c6792ed36dfda82089136aaaf9f64858ea1bd72d30bd20e03db9bfcc06f8add",
+      "crates/eldr/src/vm/generator_tests.rs": "6382fc91bef5efcd9399ce36f70c0c65399c043eba2a9d38d7087988202c3eb2",
+      "crates/eldr/src/vm/list_flat_map_tests.rs": "8371d1214868b55fae7072d2c9a4867eb2806591cd6e639ba5dc241f819901e3",
+      "crates/eldr/src/vm/map_values_tests.rs": "4325ca369ab087d1a6bc1682bebc57ce48d27363eb37223348a71ff312e1c1da",
+      "crates/eldr/src/vm/process_continuation.rs": "4ceb53e65d83857fed2d385d9c6e84200aa868ec08b2a0c37a868a99afd361a7",
+      "crates/eldr/src/vm/process_identity_tests.rs": "8dd7283a720910882bf31d4d69d2311d6984aaa51ced6545290c994b221fbd12",
+      "crates/eldr/src/vm/process_stop_tests.rs": "b99a821fa7e9eb6aa5448585469ed5235a8773e0ad881916b0dd864efa013011",
+      "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+      "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+      "crates/eldr/src/vm.rs": "9e80708145e52ff5654e8135eed2203ce3dc9c085183dad6d2b53f135545e52d",
+      "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+      "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+      "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+      "crates/sindr/src/ir.rs": "d496dfaac238b5bd809a1d1dc861907963a6df743afd16fd9c0b55ffeea9e668",
+      "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+      "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+      "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+      "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+      "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+      "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+      "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+      "crates/sindr/src/runtime.rs": "80752c274e332cb5a0d391907f30d30625bb87526bc57e0b7365d54cc287cc3e",
+      "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+      "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+      "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+      "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04"
+    },
+    "manifests_and_lock_sha256": {
+      "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+      "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407",
+      "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81",
+      "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd"
+    },
+    "git_diff_head_sha256": "e7bd969569bf2315852c0be795946ea13ffbfb3a58321c161f03f1e7643e2b98"
+  },
+  "summaries": [
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1099.0,
+        "median": 1463.625,
+        "max": 2474.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 250.125,
+        "median": 317.75,
+        "max": 739.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 55416.625,
+        "median": 72458.125,
+        "max": 114359.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 4,
+        "median": 4.0,
+        "max": 4
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 218.625,
+        "median": 322.875,
+        "max": 807.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 62526.125,
+        "median": 79854.0,
+        "max": 121635.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 544,
+        "median": 544.0,
+        "max": 544
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 10406.25,
+        "median": 13494.875,
+        "max": 30739.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 557.5,
+        "median": 593.875,
+        "max": 3275.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 51525.875,
+        "median": 65250.0,
+        "max": 96775.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 5095424,
+        "median": 5111808,
+        "max": 5636096
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 948.0,
+        "median": 1083.125,
+        "max": 1276.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 213.625,
+        "median": 239.625,
+        "max": 296.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 53083.25,
+        "median": 57755.0,
+        "max": 66354.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 4,
+        "median": 4.0,
+        "max": 4
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 208.25,
+        "median": 229.0,
+        "max": 453.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 61781.125,
+        "median": 63120.0,
+        "max": 80052.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 544,
+        "median": 544.0,
+        "max": 544
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 10604.375,
+        "median": 11557.5,
+        "max": 13343.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 432.625,
+        "median": 583.375,
+        "max": 817.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 48390.75,
+        "median": 49849.125,
+        "max": 60796.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 5898240,
+        "median": 5947392,
+        "max": 5980160
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 10229.125,
+        "median": 10599.0,
+        "max": 10750.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 182.25,
+        "median": 187.375,
+        "max": 218.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 61963.5,
+        "median": 63682.25,
+        "max": 64437.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 1024,
+        "median": 1024.0,
+        "max": 1024
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 197.875,
+        "median": 203.25,
+        "max": 218.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 69505.125,
+        "median": 71276.0,
+        "max": 71833.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 1536,
+        "median": 1536.0,
+        "max": 1536
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 17677.125,
+        "median": 17916.75,
+        "max": 18364.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 307.375,
+        "median": 359.375,
+        "max": 416.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 43765.5,
+        "median": 44474.0,
+        "max": 45291.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 5734400,
+        "median": 5734400,
+        "max": 5750784
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 12385.125,
+        "median": 12932.25,
+        "max": 13312.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 182.25,
+        "median": 229.125,
+        "max": 343.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 70692.875,
+        "median": 72031.375,
+        "max": 75729.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 1024,
+        "median": 1024.0,
+        "max": 1024
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 192.75,
+        "median": 219.0,
+        "max": 380.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 80843.625,
+        "median": 82411.375,
+        "max": 86234.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 1536,
+        "median": 1536.0,
+        "max": 1536
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 21541.625,
+        "median": 21916.875,
+        "max": 22526.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 354.0,
+        "median": 541.75,
+        "max": 619.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 46713.75,
+        "median": 48635.375,
+        "max": 48723.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 7438336,
+        "median": 7454720,
+        "max": 7487488
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 156213.5,
+        "median": 161895.75,
+        "max": 172599.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 270.75,
+        "median": 380.25,
+        "max": 495.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 456244.75,
+        "median": 469437.5,
+        "max": 788583.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 16384,
+        "median": 16384.0,
+        "max": 16384
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 307.125,
+        "median": 354.25,
+        "max": 666.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 352526.125,
+        "median": 370297.0,
+        "max": 415468.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 16896,
+        "median": 16896.0,
+        "max": 16896
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 165895.625,
+        "median": 171635.375,
+        "max": 175562.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 880.25,
+        "median": 1088.5,
+        "max": 1296.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 45604.25,
+        "median": 46823.125,
+        "max": 49187.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 33013760,
+        "median": 33030144,
+        "max": 33030144
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 206781.25,
+        "median": 218859.5,
+        "max": 235432.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 609.375,
+        "median": 651.0,
+        "max": 755.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 610781.0,
+        "median": 662239.625,
+        "max": 663437.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 16384,
+        "median": 16384.0,
+        "max": 16384
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 588.625,
+        "median": 807.125,
+        "max": 1015.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 586166.5,
+        "median": 643156.125,
+        "max": 697281.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 16896,
+        "median": 16896.0,
+        "max": 16896
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 208479.25,
+        "median": 216567.625,
+        "max": 219281.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1588.5,
+        "median": 1719.0,
+        "max": 1869.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 47729.0,
+        "median": 49645.75,
+        "max": 52276.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 35241984,
+        "median": 35241984,
+        "max": 35274752
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 4760.375,
+        "median": 4953.25,
+        "max": 6234.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 203.25,
+        "median": 223.875,
+        "max": 255.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 369885.5,
+        "median": 379802.125,
+        "max": 397697.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 198.0,
+        "median": 239.75,
+        "max": 541.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 434869.875,
+        "median": 446942.75,
+        "max": 457635.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 62567.875,
+        "median": 64703.25,
+        "max": 66599.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 504.875,
+        "median": 671.875,
+        "max": 703.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 364734.625,
+        "median": 377051.875,
+        "max": 404062.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 7176192,
+        "median": 7176192,
+        "max": 7208960
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 5588.75,
+        "median": 6057.25,
+        "max": 6906.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 197.75,
+        "median": 223.875,
+        "max": 302.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 389843.875,
+        "median": 396385.375,
+        "max": 402203.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 256,
+        "median": 256.0,
+        "max": 256
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 223.75,
+        "median": 270.75,
+        "max": 489.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 468682.25,
+        "median": 483098.75,
+        "max": 489260.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 75812.5,
+        "median": 78682.375,
+        "max": 89859.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 473.875,
+        "median": 671.875,
+        "max": 828.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 388062.5,
+        "median": 394838.5,
+        "max": 397458.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 10240000,
+        "median": 10272768,
+        "max": 10289152
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 81302.25,
+        "median": 81849.0,
+        "max": 83812.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 182.375,
+        "median": 203.0,
+        "max": 234.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 497031.25,
+        "median": 507442.625,
+        "max": 511505.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 208.375,
+        "median": 286.375,
+        "max": 359.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 594114.75,
+        "median": 601317.5,
+        "max": 610911.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 12288,
+        "median": 12288.0,
+        "max": 12288
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 137994.75,
+        "median": 139801.875,
+        "max": 143974.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 504.875,
+        "median": 562.5,
+        "max": 614.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 352125.0,
+        "median": 358994.875,
+        "max": 363536.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 10862592,
+        "median": 10862592,
+        "max": 10878976
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 104521.125,
+        "median": 113958.375,
+        "max": 221937.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 192.875,
+        "median": 296.75,
+        "max": 302.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 565094.0,
+        "median": 594875.125,
+        "max": 625953.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 218.625,
+        "median": 307.0,
+        "max": 463.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 689489.625,
+        "median": 721119.75,
+        "max": 782041.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 12288,
+        "median": 12288.0,
+        "max": 12288
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 173484.375,
+        "median": 178552.0,
+        "max": 220307.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 520.75,
+        "median": 791.5,
+        "max": 1031.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 379187.625,
+        "median": 381958.25,
+        "max": 408182.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 19906560,
+        "median": 19922944,
+        "max": 19939328
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1252672.0,
+        "median": 1297771.0,
+        "max": 1408453.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 609.375,
+        "median": 760.5,
+        "max": 1146.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 3572031.125,
+        "median": 3731682.625,
+        "max": 4414109.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 131072,
+        "median": 131072.0,
+        "max": 131072
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1109.25,
+        "median": 1208.375,
+        "max": 4692.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 3019489.5,
+        "median": 3405849.0,
+        "max": 4316088.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 135168,
+        "median": 135168.0,
+        "max": 135168
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1336062.5,
+        "median": 1368656.125,
+        "max": 1478416.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1635.375,
+        "median": 2000.25,
+        "max": 2463.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 370989.625,
+        "median": 387942.625,
+        "max": 393000.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 181616640,
+        "median": 181633024,
+        "max": 181649408
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2155750.0,
+        "median": 2234260.25,
+        "max": 3009557.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 968.875,
+        "median": 1104.125,
+        "max": 1182.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 5136177.25,
+        "median": 5294911.5,
+        "max": 5621953.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 131072,
+        "median": 131072.0,
+        "max": 131072
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1651.125,
+        "median": 1682.5,
+        "max": 1958.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 4352083.5,
+        "median": 4378031.125,
+        "max": 4871661.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      },
+      "copied_items": {
+        "min": 135168,
+        "median": 135168.0,
+        "max": 135168
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 8,
+        "median": 8.0,
+        "max": 8
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1839802.125,
+        "median": 1958838.375,
+        "max": 2125817.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2442.875,
+        "median": 2531.25,
+        "max": 3005.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 8,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 396463.5,
+        "median": 398848.875,
+        "max": 406020.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 266715136,
+        "median": 266715136,
+        "max": 266731520
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 17281.375,
+        "median": 18098.875,
+        "max": 19817.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 224.125,
+        "median": 271.0,
+        "max": 291.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1474130.375,
+        "median": 1505968.75,
+        "max": 1535416.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 1024,
+        "median": 1024.0,
+        "max": 1024
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 128,
+        "median": 128.0,
+        "max": 128
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 291.5,
+        "median": 369.625,
+        "max": 458.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1770296.75,
+        "median": 1788505.25,
+        "max": 1827302.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 17408,
+        "median": 17408.0,
+        "max": 17408
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 252745.0,
+        "median": 254323.0,
+        "max": 260656.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 510.375,
+        "median": 729.25,
+        "max": 984.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1487375.125,
+        "median": 1516979.25,
+        "max": 1526359.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 14024704,
+        "median": 14073856,
+        "max": 14106624
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 23551.75,
+        "median": 24703.125,
+        "max": 31411.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 249.875,
+        "median": 322.875,
+        "max": 369.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1564703.25,
+        "median": 1622572.75,
+        "max": 1662109.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 1024,
+        "median": 1024.0,
+        "max": 1024
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 128,
+        "median": 128.0,
+        "max": 128
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 307.5,
+        "median": 478.75,
+        "max": 671.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1999541.75,
+        "median": 2055010.75,
+        "max": 2144036.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 17408,
+        "median": 17408.0,
+        "max": 17408
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 326593.75,
+        "median": 335536.375,
+        "max": 360567.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 661.25,
+        "median": 718.625,
+        "max": 1380.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 32,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1565099.0,
+        "median": 1578531.25,
+        "max": 1663505.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 25083904,
+        "median": 25116672,
+        "max": 27049984
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 334536.625,
+        "median": 343776.25,
+        "max": 350406.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 312.5,
+        "median": 349.125,
+        "max": 500.0
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2032953.125,
+        "median": 2044624.875,
+        "max": 2127473.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 32768,
+        "median": 32768.0,
+        "max": 32768
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 312.25,
+        "median": 442.75,
+        "max": 927.125
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2425198.125,
+        "median": 2434963.5,
+        "max": 2526765.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 49152,
+        "median": 49152.0,
+        "max": 49152
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 564156.375,
+        "median": 575859.5,
+        "max": 588775.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 723.875,
+        "median": 1041.75,
+        "max": 1489.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1416187.375,
+        "median": 1423390.625,
+        "max": 1476781.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 29851648,
+        "median": 29933568,
+        "max": 29933568
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 529406.25,
+        "median": 550708.375,
+        "max": 573843.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 697.875,
+        "median": 843.75,
+        "max": 958.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2494463.625,
+        "median": 2550500.125,
+        "max": 2594864.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 32768,
+        "median": 32768.0,
+        "max": 32768
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 708.5,
+        "median": 880.0,
+        "max": 1312.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 3014567.625,
+        "median": 3064270.75,
+        "max": 3112958.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 49152,
+        "median": 49152.0,
+        "max": 49152
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 757187.75,
+        "median": 773671.875,
+        "max": 821906.25
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1562.5,
+        "median": 1880.375,
+        "max": 2312.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1518255.375,
+        "median": 1534849.0,
+        "max": 1576520.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 64176128,
+        "median": 64192512,
+        "max": 64471040
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 5442526.0,
+        "median": 5488213.5,
+        "max": 5771265.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1156.375,
+        "median": 1198.0,
+        "max": 1234.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 14629406.25,
+        "median": 14775088.375,
+        "max": 14959213.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 524288,
+        "median": 524288.0,
+        "max": 524288
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1854.125,
+        "median": 2156.25,
+        "max": 2489.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 13369645.875,
+        "median": 13543520.75,
+        "max": 14327958.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 540672,
+        "median": 540672.0,
+        "max": 540672
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 5411125.125,
+        "median": 5745333.25,
+        "max": 5904296.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2380.125,
+        "median": 2692.75,
+        "max": 2911.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1491213.5,
+        "median": 1543239.375,
+        "max": 1574890.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 256868352,
+        "median": 256917504,
+        "max": 256933888
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_changed",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 9071604.125,
+        "median": 10268026.0,
+        "max": 10925208.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1005.375,
+        "median": 1244.75,
+        "max": 1395.75
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "first_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 20521276.0,
+        "median": 21347646.0,
+        "max": 26025692.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 524288,
+        "median": 524288.0,
+        "max": 524288
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2073.125,
+        "median": 2645.875,
+        "max": 3078.5
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 18669036.5,
+        "median": 19136875.0,
+        "max": 34143588.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 540672,
+        "median": 540672.0,
+        "max": 540672
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "rollback",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 7694005.125,
+        "median": 10413442.625,
+        "max": 14756541.625
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "save",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 2692.625,
+        "median": 2870.0,
+        "max": 2921.875
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "second_resume",
+      "process_samples": 5,
+      "repeats": 8,
+      "elapsed_ns_per_operation": {
+        "min": 1612343.625,
+        "median": 1651213.75,
+        "max": 1796708.375
+      },
+      "process_peak_rss_bytes": {
+        "min": 649543680,
+        "median": 650444800,
+        "max": 651788288
+      },
+      "copies": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "median": 8192.0,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    }
+  ]
+}

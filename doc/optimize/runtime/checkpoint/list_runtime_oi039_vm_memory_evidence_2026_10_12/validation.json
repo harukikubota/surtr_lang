@@ -1,0 +1,26 @@
+{
+  "workspace_ci": {
+    "passed": 2543,
+    "binaries": 69,
+    "seconds": 122.095,
+    "exit_code": 0,
+    "feature": "default"
+  },
+  "dedicated_feature_test": {
+    "passed": 1,
+    "skipped": 363,
+    "exit_code": 0,
+    "feature": "vm-memory-count"
+  },
+  "saved_binary_smoke": {
+    "successful_binaries": 4
+  },
+  "large_content_verify": {
+    "counted": 4,
+    "uncounted": 4
+  },
+  "fmt_check_exit_code": 0,
+  "diff_check_exit_code": 0,
+  "stdlib_rerun": false,
+  "product_bodies_unchanged": true
+}

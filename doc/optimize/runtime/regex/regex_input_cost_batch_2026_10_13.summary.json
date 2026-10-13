@@ -1,0 +1,1745 @@
+{
+  "metadata": {
+    "binary": {
+      "before": {
+        "path": "/private/tmp/surtr-regex-20261013-batch-before",
+        "sha256": "733523ef8463a2989ed5210f3ea516b312305e6a85f8ceaf312b7b9af699233b"
+      },
+      "after": {
+        "path": "/private/tmp/surtr-regex-20261013-batch-after",
+        "sha256": "cbe23ad5dabc3ec1f48dbc1ffee9d85ac73906be91f7134a53bfbd4fb5bd5740"
+      }
+    },
+    "samples": 5,
+    "folder": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg",
+    "script_sha256": {
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_1024.srt": "64d0615618e8a31440f96cf5cf982d7c236bbe2b3da53c154ed1a592c7aece5b",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_1024.srt": "9aa57523078ad69ec933939d814c5944efb9fae3f2461167e5761782195064b3",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_1024.srt": "7311efd4671b447a41b323d0a445bd9b5f993853e188ccc666623a3541e30ded",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_4096.srt": "f645c2672bda5f1afc5feb3680a6d09db457a34c9b02e078081c1d0675152b4f",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_4096.srt": "eac27b2382fc2a0f90300e1ab9a98e470b19b8106280e95c81e002589d4aa817",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_4096.srt": "92961aa1139ebd2bac805c0f9d11beea8614034be88c159e1da3fabce9707929"
+    },
+    "runner_sha256": "3ac44f3b6ca55325bee9e60935cd1c411543290f4a42c23e121187b61bfc90f3",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "environment": {
+      "MallocNanoZone": "0",
+      "SURTR_RUN_CACHE": "1",
+      "SURTR_RUN_CACHE_DIR": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/cache"
+    },
+    "warmups": [
+      {
+        "series": "before",
+        "n": 1024,
+        "case": "dense",
+        "matches": 1024,
+        "process_wall_ns": 79557125,
+        "execute_us": 13192,
+        "total_us": 74041,
+        "compile_total_us": 60796,
+        "stdout": "Ok(1024)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "disk_hit"
+          },
+          "compile_total": {
+            "duration_ms": 60,
+            "duration_us": 60796,
+            "status": "executed"
+          },
+          "compile_total_us": 60796,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_1024.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1540,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 1,
+              "duration_us": 1172,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 60,
+              "duration_us": 60796,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 138,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 60,
+              "duration_us": 60796,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 13,
+              "duration_us": 13192,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 62,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 61,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 2,
+              "duration_us": 2560,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 20,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 18,
+              "duration_us": 18280,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 74,
+              "duration_us": 74041,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 4,
+              "duration_us": 4653,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 74,
+            "duration_us": 74041,
+            "status": "executed"
+          },
+          "total_us": 74041
+        }
+      },
+      {
+        "series": "after",
+        "n": 1024,
+        "case": "dense",
+        "matches": 1024,
+        "process_wall_ns": 1049830667,
+        "execute_us": 13804,
+        "total_us": 524474,
+        "compile_total_us": 510538,
+        "stdout": "Ok(1024)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 510,
+            "duration_us": 510538,
+            "status": "executed"
+          },
+          "compile_total_us": 510538,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_1024.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1525,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 667,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 510,
+              "duration_us": 510538,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 1,
+              "duration_us": 1500,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 510,
+              "duration_us": 510538,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 13,
+              "duration_us": 13804,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 67,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 66,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 2,
+              "duration_us": 2050,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 74,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 450,
+              "duration_us": 450988,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 524,
+              "duration_us": 524474,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2459,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 524,
+            "duration_us": 524474,
+            "status": "executed"
+          },
+          "total_us": 524474
+        }
+      },
+      {
+        "series": "before",
+        "n": 1024,
+        "case": "single",
+        "matches": 1,
+        "process_wall_ns": 465244167,
+        "execute_us": 431,
+        "total_us": 460036,
+        "compile_total_us": 459549,
+        "stdout": "Ok(1)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 459,
+            "duration_us": 459549,
+            "status": "executed"
+          },
+          "compile_total_us": 459549,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_1024.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1479,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 641,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 459,
+              "duration_us": 459549,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 143,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 459,
+              "duration_us": 459549,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 431,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 70,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 69,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 1,
+              "duration_us": 1942,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 25,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 422,
+              "duration_us": 422505,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 460,
+              "duration_us": 460036,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2219,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 460,
+            "duration_us": 460036,
+            "status": "executed"
+          },
+          "total_us": 460036
+        }
+      },
+      {
+        "series": "after",
+        "n": 1024,
+        "case": "single",
+        "matches": 1,
+        "process_wall_ns": 458434584,
+        "execute_us": 433,
+        "total_us": 453126,
+        "compile_total_us": 452631,
+        "stdout": "Ok(1)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 452,
+            "duration_us": 452631,
+            "status": "executed"
+          },
+          "compile_total_us": 452631,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_1024.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1484,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 622,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 452,
+              "duration_us": 452631,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 138,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 452,
+              "duration_us": 452631,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 433,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 67,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 67,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 2,
+              "duration_us": 2029,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 26,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 416,
+              "duration_us": 416073,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 453,
+              "duration_us": 453126,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2122,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 453,
+            "duration_us": 453126,
+            "status": "executed"
+          },
+          "total_us": 453126
+        }
+      },
+      {
+        "series": "before",
+        "n": 1024,
+        "case": "none",
+        "matches": 0,
+        "process_wall_ns": 460608583,
+        "execute_us": 398,
+        "total_us": 455109,
+        "compile_total_us": 454652,
+        "stdout": "Ok(0)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 454,
+            "duration_us": 454652,
+            "status": "executed"
+          },
+          "compile_total_us": 454652,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_1024.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1495,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 605,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 454,
+              "duration_us": 454652,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 135,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 454,
+              "duration_us": 454652,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 398,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 65,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 65,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 1,
+              "duration_us": 1982,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 24,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 418,
+              "duration_us": 418192,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 455,
+              "duration_us": 455109,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2112,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 455,
+            "duration_us": 455109,
+            "status": "executed"
+          },
+          "total_us": 455109
+        }
+      },
+      {
+        "series": "after",
+        "n": 1024,
+        "case": "none",
+        "matches": 0,
+        "process_wall_ns": 472190875,
+        "execute_us": 394,
+        "total_us": 466728,
+        "compile_total_us": 466276,
+        "stdout": "Ok(0)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 466,
+            "duration_us": 466276,
+            "status": "executed"
+          },
+          "compile_total_us": 466276,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_1024.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1542,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 615,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 466,
+              "duration_us": 466276,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 147,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 466,
+              "duration_us": 466276,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 394,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 64,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 63,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 1,
+              "duration_us": 1970,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 28,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 429,
+              "duration_us": 429300,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 466,
+              "duration_us": 466728,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2130,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 466,
+            "duration_us": 466728,
+            "status": "executed"
+          },
+          "total_us": 466728
+        }
+      },
+      {
+        "series": "before",
+        "n": 4096,
+        "case": "dense",
+        "matches": 4096,
+        "process_wall_ns": 524888417,
+        "execute_us": 54038,
+        "total_us": 519475,
+        "compile_total_us": 465378,
+        "stdout": "Ok(4096)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 465,
+            "duration_us": 465378,
+            "status": "executed"
+          },
+          "compile_total_us": 465378,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_4096.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_4096.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1540,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 625,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 465,
+              "duration_us": 465378,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 156,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 465,
+              "duration_us": 465378,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 54,
+              "duration_us": 54038,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 69,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 68,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 1,
+              "duration_us": 1938,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 25,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 428,
+              "duration_us": 428672,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 519,
+              "duration_us": 519475,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2197,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 519,
+            "duration_us": 519475,
+            "status": "executed"
+          },
+          "total_us": 519475
+        }
+      },
+      {
+        "series": "after",
+        "n": 4096,
+        "case": "dense",
+        "matches": 4096,
+        "process_wall_ns": 518925000,
+        "execute_us": 53485,
+        "total_us": 513555,
+        "compile_total_us": 460013,
+        "stdout": "Ok(4096)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 460,
+            "duration_us": 460013,
+            "status": "executed"
+          },
+          "compile_total_us": 460013,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_4096.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/dense_4096.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1490,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 615,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 460,
+              "duration_us": 460013,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 162,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 460,
+              "duration_us": 460013,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 53,
+              "duration_us": 53485,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 74,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 73,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 2,
+              "duration_us": 2009,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 24,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 423,
+              "duration_us": 423452,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 513,
+              "duration_us": 513555,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2178,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 513,
+            "duration_us": 513555,
+            "status": "executed"
+          },
+          "total_us": 513555
+        }
+      },
+      {
+        "series": "before",
+        "n": 4096,
+        "case": "single",
+        "matches": 1,
+        "process_wall_ns": 469167500,
+        "execute_us": 513,
+        "total_us": 463934,
+        "compile_total_us": 463365,
+        "stdout": "Ok(1)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 463,
+            "duration_us": 463365,
+            "status": "executed"
+          },
+          "compile_total_us": 463365,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_4096.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_4096.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1444,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 663,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 463,
+              "duration_us": 463365,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 154,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 463,
+              "duration_us": 463365,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 513,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 84,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 83,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 1,
+              "duration_us": 1949,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 25,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 422,
+              "duration_us": 422904,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 463,
+              "duration_us": 463934,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2130,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 463,
+            "duration_us": 463934,
+            "status": "executed"
+          },
+          "total_us": 463934
+        }
+      },
+      {
+        "series": "after",
+        "n": 4096,
+        "case": "single",
+        "matches": 1,
+        "process_wall_ns": 463132542,
+        "execute_us": 535,
+        "total_us": 457912,
+        "compile_total_us": 457321,
+        "stdout": "Ok(1)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 457,
+            "duration_us": 457321,
+            "status": "executed"
+          },
+          "compile_total_us": 457321,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_4096.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/single_4096.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1538,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 609,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 457,
+              "duration_us": 457321,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 156,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 457,
+              "duration_us": 457321,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 535,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 78,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 77,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 2,
+              "duration_us": 2013,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 25,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 420,
+              "duration_us": 420743,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 457,
+              "duration_us": 457912,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2100,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 457,
+            "duration_us": 457912,
+            "status": "executed"
+          },
+          "total_us": 457912
+        }
+      },
+      {
+        "series": "before",
+        "n": 4096,
+        "case": "none",
+        "matches": 0,
+        "process_wall_ns": 464698375,
+        "execute_us": 460,
+        "total_us": 459436,
+        "compile_total_us": 458906,
+        "stdout": "Ok(0)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 458,
+            "duration_us": 458906,
+            "status": "executed"
+          },
+          "compile_total_us": 458906,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_4096.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_4096.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1544,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 611,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 458,
+              "duration_us": 458906,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 154,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 458,
+              "duration_us": 458906,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 460,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 74,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 1,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 73,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 1,
+              "duration_us": 1967,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 35,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 422,
+              "duration_us": 422063,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 459,
+              "duration_us": 459436,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2128,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 459,
+            "duration_us": 459436,
+            "status": "executed"
+          },
+          "total_us": 459436
+        }
+      },
+      {
+        "series": "after",
+        "n": 4096,
+        "case": "none",
+        "matches": 0,
+        "process_wall_ns": 467834333,
+        "execute_us": 469,
+        "total_us": 462497,
+        "compile_total_us": 461956,
+        "stdout": "Ok(0)\n",
+        "phase_timing": {
+          "cache": {
+            "artifact": "miss",
+            "artifact_store": "stored",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 461,
+            "duration_us": 461956,
+            "status": "executed"
+          },
+          "compile_total_us": 461956,
+          "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_4096.srt",
+          "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-batch-20261013-nrlnwlhg/none_4096.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 1,
+              "duration_us": 1454,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 0,
+              "duration_us": 605,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 461,
+              "duration_us": 461956,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 0,
+              "duration_us": 160,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 461,
+              "duration_us": 461956,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "duration_ms": 0,
+              "duration_us": 469,
+              "status": "executed"
+            },
+            "output_write": {
+              "status": "skipped"
+            },
+            "parse": {
+              "duration_ms": 0,
+              "duration_us": 76,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 0,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 0,
+              "duration_us": 75,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 1,
+              "duration_us": 1958,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 38,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 425,
+              "duration_us": 425444,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 462,
+              "duration_us": 462497,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 2,
+              "duration_us": 2148,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 462,
+            "duration_us": 462497,
+            "status": "executed"
+          },
+          "total_us": 462497
+        }
+      }
+    ],
+    "observer_enabled": false,
+    "trace_enabled": false,
+    "allocation_metrics": "not measured",
+    "profile": "release",
+    "validity": "Excluded: saved before/after executable code sections identical; source-to-binary provenance not established. Retained as invalid pilot; superseded after independent manifest/target builds."
+  },
+  "measurements": [
+    {
+      "series": "before",
+      "n": 1024,
+      "case": "dense",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 45743416,
+        "median": 46078583,
+        "max": 47519916
+      },
+      "execute_us": {
+        "min": 13054,
+        "median": 13088,
+        "max": 13190
+      },
+      "total_us": {
+        "min": 40449,
+        "median": 40614,
+        "max": 40760
+      },
+      "compile_total_us": {
+        "min": 27300,
+        "median": 27383,
+        "max": 27616
+      },
+      "process_max_rss_bytes": {
+        "min": 33357824,
+        "median": 33554432,
+        "max": 33570816
+      }
+    },
+    {
+      "series": "after",
+      "n": 1024,
+      "case": "dense",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 45687791,
+        "median": 46067000,
+        "max": 46536750
+      },
+      "execute_us": {
+        "min": 13076,
+        "median": 13096,
+        "max": 13139
+      },
+      "total_us": {
+        "min": 40353,
+        "median": 40590,
+        "max": 40911
+      },
+      "compile_total_us": {
+        "min": 27222,
+        "median": 27452,
+        "max": 27716
+      },
+      "process_max_rss_bytes": {
+        "min": 33243136,
+        "median": 33587200,
+        "max": 33603584
+      }
+    },
+    {
+      "series": "before",
+      "n": 1024,
+      "case": "single",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 33089250,
+        "median": 33219750,
+        "max": 33418625
+      },
+      "execute_us": {
+        "min": 381,
+        "median": 394,
+        "max": 413
+      },
+      "total_us": {
+        "min": 27801,
+        "median": 27915,
+        "max": 27950
+      },
+      "compile_total_us": {
+        "min": 27370,
+        "median": 27434,
+        "max": 27517
+      },
+      "process_max_rss_bytes": {
+        "min": 32210944,
+        "median": 32276480,
+        "max": 32423936
+      }
+    },
+    {
+      "series": "after",
+      "n": 1024,
+      "case": "single",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 33000500,
+        "median": 33447708,
+        "max": 33737958
+      },
+      "execute_us": {
+        "min": 383,
+        "median": 398,
+        "max": 403
+      },
+      "total_us": {
+        "min": 27789,
+        "median": 27985,
+        "max": 28075
+      },
+      "compile_total_us": {
+        "min": 27340,
+        "median": 27537,
+        "max": 27624
+      },
+      "process_max_rss_bytes": {
+        "min": 32047104,
+        "median": 32489472,
+        "max": 32555008
+      }
+    },
+    {
+      "series": "before",
+      "n": 1024,
+      "case": "none",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 33133291,
+        "median": 33273042,
+        "max": 33348542
+      },
+      "execute_us": {
+        "min": 345,
+        "median": 371,
+        "max": 377
+      },
+      "total_us": {
+        "min": 27831,
+        "median": 27912,
+        "max": 28033
+      },
+      "compile_total_us": {
+        "min": 27438,
+        "median": 27497,
+        "max": 27599
+      },
+      "process_max_rss_bytes": {
+        "min": 32129024,
+        "median": 32325632,
+        "max": 32342016
+      }
+    },
+    {
+      "series": "after",
+      "n": 1024,
+      "case": "none",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 33179667,
+        "median": 33348750,
+        "max": 33560750
+      },
+      "execute_us": {
+        "min": 343,
+        "median": 371,
+        "max": 382
+      },
+      "total_us": {
+        "min": 27915,
+        "median": 27983,
+        "max": 28017
+      },
+      "compile_total_us": {
+        "min": 27483,
+        "median": 27554,
+        "max": 27578
+      },
+      "process_max_rss_bytes": {
+        "min": 31932416,
+        "median": 32325632,
+        "max": 32374784
+      }
+    },
+    {
+      "series": "before",
+      "n": 4096,
+      "case": "dense",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 87093333,
+        "median": 87334333,
+        "max": 87770083
+      },
+      "execute_us": {
+        "min": 54281,
+        "median": 54532,
+        "max": 54756
+      },
+      "total_us": {
+        "min": 81722,
+        "median": 81958,
+        "max": 82282
+      },
+      "compile_total_us": {
+        "min": 27376,
+        "median": 27465,
+        "max": 27607
+      },
+      "process_max_rss_bytes": {
+        "min": 49020928,
+        "median": 49086464,
+        "max": 49086464
+      }
+    },
+    {
+      "series": "after",
+      "n": 4096,
+      "case": "dense",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 87730917,
+        "median": 87817416,
+        "max": 88312625
+      },
+      "execute_us": {
+        "min": 54658,
+        "median": 54838,
+        "max": 55248
+      },
+      "total_us": {
+        "min": 82222,
+        "median": 82305,
+        "max": 82814
+      },
+      "compile_total_us": {
+        "min": 27399,
+        "median": 27432,
+        "max": 27516
+      },
+      "process_max_rss_bytes": {
+        "min": 49152000,
+        "median": 49201152,
+        "max": 49201152
+      }
+    },
+    {
+      "series": "before",
+      "n": 4096,
+      "case": "single",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 33106042,
+        "median": 33563708,
+        "max": 33676625
+      },
+      "execute_us": {
+        "min": 482,
+        "median": 494,
+        "max": 510
+      },
+      "total_us": {
+        "min": 27856,
+        "median": 28094,
+        "max": 28248
+      },
+      "compile_total_us": {
+        "min": 27321,
+        "median": 27520,
+        "max": 27681
+      },
+      "process_max_rss_bytes": {
+        "min": 32325632,
+        "median": 32473088,
+        "max": 32505856
+      }
+    },
+    {
+      "series": "after",
+      "n": 4096,
+      "case": "single",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 33039625,
+        "median": 33351417,
+        "max": 33506958
+      },
+      "execute_us": {
+        "min": 494,
+        "median": 500,
+        "max": 510
+      },
+      "total_us": {
+        "min": 27836,
+        "median": 27988,
+        "max": 28091
+      },
+      "compile_total_us": {
+        "min": 27283,
+        "median": 27437,
+        "max": 27532
+      },
+      "process_max_rss_bytes": {
+        "min": 32063488,
+        "median": 32456704,
+        "max": 32604160
+      }
+    },
+    {
+      "series": "before",
+      "n": 4096,
+      "case": "none",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 32999416,
+        "median": 33215084,
+        "max": 33243125
+      },
+      "execute_us": {
+        "min": 408,
+        "median": 409,
+        "max": 415
+      },
+      "total_us": {
+        "min": 27750,
+        "median": 27909,
+        "max": 27949
+      },
+      "compile_total_us": {
+        "min": 27296,
+        "median": 27443,
+        "max": 27472
+      },
+      "process_max_rss_bytes": {
+        "min": 32243712,
+        "median": 32342016,
+        "max": 32374784
+      }
+    },
+    {
+      "series": "after",
+      "n": 4096,
+      "case": "none",
+      "samples": 5,
+      "process_wall_ns": {
+        "min": 32993875,
+        "median": 33321875,
+        "max": 33376458
+      },
+      "execute_us": {
+        "min": 392,
+        "median": 411,
+        "max": 412
+      },
+      "total_us": {
+        "min": 27782,
+        "median": 27940,
+        "max": 27974
+      },
+      "compile_total_us": {
+        "min": 27337,
+        "median": 27478,
+        "max": 27508
+      },
+      "process_max_rss_bytes": {
+        "min": 31997952,
+        "median": 32374784,
+        "max": 32407552
+      }
+    }
+  ]
+}

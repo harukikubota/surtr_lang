@@ -282,8 +282,8 @@
 ### OI-036 Future表が非空のoperand stack走査
 
 - 背景:
-  - [RT-3の基準値測定](list_value_cost_measurement_2026_10_11.md)で、手組みVMの巨大mapper結果のrun時間がnの増加に対して大きく増えた。Astraとコードを確認し、opcodeごとのstack読取り・書込みの全走査を特定した。
-  - [RT-3の最適化](list_runtime_rt3_optimization_2026_10_11.md)では、Future表が空なら両方の走査を省き、解決値がなければ書込み側を省く。追加の追跡状態を持たず、既存のready / cleanup判定を維持する。
+  - [RT-3の基準値測定](optimize/runtime/value/list_value_cost_measurement_2026_10_11.md)で、手組みVMの巨大mapper結果のrun時間がnの増加に対して大きく増えた。Astraとコードを確認し、opcodeごとのstack読取り・書込みの全走査を特定した。
+  - [RT-3の最適化](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)では、Future表が空なら両方の走査を省き、解決値がなければ書込み側を省く。追加の追跡状態を持たず、既存のready / cleanup判定を維持する。
   - Future表が非空なら、stackにPendingFutureがなくても読取りの全走査が残る。無関係なFutureが残る状態で、n個の `LoadLocal` の後に `ListFromItems` を実行すると、読取りの走査要素数がΘ(n²)になる。この残る条件の実時間寄与率は未測定。
 - 未確定点:
   - Future の配送契約と execution context の切替えを保ちながら、不要な stack 全走査を減らす方式。
@@ -299,7 +299,7 @@
 ### OI-037 RT-3のHashMap測定におけるprocess RSS差
 
 - 背景:
-  - [RT-3の前後測定](list_runtime_rt3_optimization_2026_10_11.md)で、counter無効のHashMap / chain・nestedのprocess peak RSSが、n=1,000では約2.2 MiB、n=10,000では約22.4 MiB増えた。VMの全区間でrequested / freed / live / peakは前後で一致し、counter有効系列のRSSにも同じ増加はなかった。
+  - [RT-3の前後測定](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)で、counter無効のHashMap / chain・nestedのprocess peak RSSが、n=1,000では約2.2 MiB、n=10,000では約22.4 MiB増えた。VMの全区間でrequested / freed / live / peakは前後で一致し、counter有効系列のRSSにも同じ増加はなかった。
   - 既存binaryの交互再測定でも差を確認した。ただし基準binaryのnestedも1回98.625 MiBになった。構成診断では両binaryともmacOSのxzone allocatorが有効だった。原因は未確定である。
   - 採用した最適化は新しい保持状態を持たず、計画の受入を満たす。RSS非増加まで保証したものではない。
 - 未確定点:
@@ -315,7 +315,7 @@
 ### OI-038 HashMapコピー削減後のprocess RSS差
 
 - 背景:
-  - [HashMapコピー削減](hashmap_runtime_optimization_2026_10_11.md)で、反復追加時の既存entry全cloneを除いた。String 1,024件のVM構築の累積requestedは269.502 → 3.770 MiB、構築＋map_valuesは537.619 → 6.154 MiBとなった。
+  - [HashMapコピー削減](optimize/runtime/hashmap/hashmap_runtime_optimization_2026_10_11.md)で、反復追加時の既存entry全cloneを除いた。String 1,024件のVM構築の累積requestedは269.502 → 3.770 MiB、構築＋map_valuesは537.619 → 6.154 MiBとなった。
   - time-onlyの旧・新binaryを交互に各10回実行した追試で、VM distinct Stringのprocess peak RSS中央値は6.180 → 6.430 MiB、範囲は旧6.156〜6.219 / 新6.422〜6.453 MiBとなり、0.250 MiBの増加が再現した。構築＋map_valuesの中央値も6.352 → 6.562 MiBだった。
   - VMの最終論理liveと破棄bytesは一致し、区間peakは低下したが、RSS差を否定する根拠にはならない。原因は未確定であり、OI-037と同じ原因だと判断する根拠はない。Astraへ相談し、今回のコピー削減受入とは分けて記録した。
 - 未確定点:
@@ -325,8 +325,47 @@
   - 旧・新binaryと入力・所有条件を固定してRSS差の原因を特定し、改善対象と残る保持条件を明示する。
   - 公開mapの永続性、duplicate後勝ち、callback順序、待機・取消・checkpointを保つ。コピーを復活させてRSS差だけを隠さない。
 - テスト方針:
-  - [前後測定と交互追試原本](hashmap_runtime_optimization_2026_10_11.md#同一キーの保持量とrss)を保持し、count有効・無効、allocator構成、同一binary内とbinary間の分布を分ける。
+  - [前後測定と交互追試原本](optimize/runtime/hashmap/hashmap_runtime_optimization_2026_10_11.md#同一キーの保持量とrss)を保持し、count有効・無効、allocator構成、同一binary内とbinary間の分布を分ける。
   - 時間・RSSの閾値をcorrectness testに追加せず、原因を固定する決定的な検証と手動測定を組み合わせる。
+
+### OI-039 Builderコピー削減後の通常経路とIntのRSS差
+
+- 対象: `codex/rt5-builder-checkpoint-measurement` の未コミット改善に関する残件。資料を集約したが、Builder実装はmain未統合。
+
+- 背景:
+  - [RT-5のBuilder改善](optimize/runtime/checkpoint/list_runtime_rt5_builder_optimization_2026_10_12.md)で保存済みValueの初回再開時コピーを除き、共有prefixの完成を予算内で進める方式へ移行した。保存付き9区間合計は長いBuilderで減少した。
+  - 前後binaryをAB/BAで各6 process測った保存なしの `unique_complete` は、32 Task / 保存前相当長16,384でInt 11.144932→11.995281 ms、String 12.571930→13.004888 msとなった。Intは前後の観測範囲も重ならない。
+  - 同条件のprocess全期間peak RSS中央値はInt 256.359375→279.093750 MiBと増え、Stringは628.515625→541.820313 MiBへ減った。RSSは準備・全反復・全区間・assert・JSONを含む高水位で、区間保持量ではない。requested allocationと論理liveは未測定。Astraが原本を独立照合し、コピー削減の成果と分けて残す方針を確認した。
+  - [追加の寄与分離と局所改善](optimize/runtime/checkpoint/list_runtime_oi039_cost_2026_10_12.md)でVMの判定順変更を試し、改善未確認で撤回した。Builder追加のinline化と容量不足時だけの予約は通常経路に軽微な改善傾向があり採用したが、32 Task / 長さ16,384のIntの遅化解消は確認できない。
+  - Builder直接kernelではCons完成時のrequested増、完成後のrequested-live減少、全破棄後のlive復帰、対応するcount無効系列のresident残存を分けて確認した。旧Vecの保存枝・進行枝の容量配置が測定値へ影響するため、kernelの値から実VMのRSS差を説明済みとはしない。
+  - [構築経路の選択](optimize/runtime/checkpoint/list_builder_route_decision_2026_10_12.md)では、サイズ閾値を設けずList/Generatorの共通Builderを使う方針を確認した。サイズ単独の優劣境界は原本から選べず、全条件の最速方式を確定したものではない。
+  - [末尾の直接所有の比較](optimize/runtime/checkpoint/list_builder_owned_tail_2026_10_12.md)で真に短い実出力0/1/8/32/256と初期構築を追加した。RefCell直接保持と専有Boxはいずれも改善・悪化が混在し不採用。Rc方式を維持し、空の保存で元の予約bufferが共有化される問題のみ修正した。通常経路の遅化とRSS差の解消を示す結果ではない。
+  - [実VMのメモリ境界測定](optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_2026_10_12.md)でrequested-live最大増分はInt約360→180 MiB、String約745→448 MiBとなり、全破棄後の開始値復帰を確認した。Intの全期間peak RSSは停止barrierなしでも約22 MiB増えた。解放境界のresident増と後続反復への残存を観測したが、allocator/OS内訳とpeakへの寄与量は未特定。計数とRSSは別processの系列である。
+- 未確定点:
+  - 通常追加時のRc所有確認、残るValueのstackコピー、VMの完成継続判定等が時間へ与える寄与。判定順の変更が無効でも、判定費用自体が0と確定したわけではない。最初のsegment確保は `unique_complete` の準備区間に含まれるため、測定した遅化をその確保時間と同一視しない。
+  - IntのRSS増に対するCons構築、allocator、前区間の解放・再利用の寄与。構造上の追加allocationだけからRSS差の原因と量を断定しない。
+  - compiler / REPL / 通常のbatch入力全体における時間・保持量の差。
+- 受け入れ条件:
+  - 入口・所有条件・前後binaryを固定して寄与を分離し、通常経路の追加費用とRSS差の原因を特定する。
+  - 保存位置、分岐・完成途中の独立性、予算0/1と終端配送、mapper / step / predicateの一度だけの評価、待機・取消・rollbackを保つ。
+  - 全Vec cloneや無課金の一括finishを復活させて測定値だけを隠さない。必要なら方式と受入仕様を先に比較する。
+- テスト方針:
+  - [採用した交互原本](optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_recheck.jsonl)・[集計](optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_recheck.summary.json)と保存binaryを保持する。
+  - [今回の全条件交互比較](optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.jsonl)・[集計](optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.summary.json)とkernelの所有条件別原本も保持し、実VMのentry変更・保存枝・解放境界でrequested/live/RSSを直接照合する。
+  - shared処理合計、通常の完了区間、準備・初回確保、解放を分け、requested / live / RSSを別指標として測る。速度閾値をcorrectness testへ加えない。
+
+### OI-040 FileOutHandlerの資源寿命と初期化
+
+- 状態: 現行mainで既存契約不一致を実行再現。製品修復は未実施。
+- 正本: `docs/dev/ProcessRuntime_spec.md` 第3.19節のinit時open、lifecycle保持、shutdown時flush/close。
+- 背景: [2026-10-13の再現](optimize/runtime/file-out/file_out_handler_lifecycle_reproduction_2026_10_13.md)。main `72154707`を再ビルドし、存在しない親pathでもinit内のhandler参照とgetterが成功する一方、最初のwriteでopen Errorを返すことを確認した。write間でpathnameをrename・置換すると2回目のwriteが置換後のfileへ届き、descriptorを保持していない。
+- 現行 `process_context_handler` はhandler PIDの解決のみで、`out_handler_write` はwriteごとにopen/dropする。両関数は元の測定基準 `ee13e448` とbyte一致し、今回のRegex共有化による新規デグレではない。
+- 未確定点: canonical化のcwd・新規leaf・symlink、dependency取得の時点、shutdownと保存leaseによる物理close、VM clone、rollbackを跨ぐ配送保証、flush失敗の配送先。
+- 次の作業: [修復仕様案](optimize/runtime/file-out/file_out_handler_lifecycle_repair_spec.md)のcanonical path / sink identity、initエラー配送、複数dependencyのmailbox順、shutdownと取消時の所有、checkpoint / VM cloneとhost descriptorの関係を確定し、回帰テストから修復する。外部file I/Oはrollbackしない。
+- 制限: canonical正規化、mailbox順、flush/close、取消・REPL rollbackは実行検証していない。Astraへ相談し、複数所有者のうち1producerの取消で共有sinkを早期closeしない条件も残した。
+- ID: 別worktreeのBuilder調査で使用するOI-039を避けた。元の4c18の未コミットOI-038はmainのHashMap RSSのOI-038とは別内容であり、本項へ整理する。
+- 受け入れ条件: init時open失敗をwriteまで先送りせず、同じlifecycle中はdescriptorを保持する。canonical pathが同じdependencyの順序と、最後のactive owner・保存owner・shutdownの資源所有を[修復仕様案](optimize/runtime/file-out/file_out_handler_lifecycle_repair_spec.md)で確定する。通常再開でwrite/結果を重複させず、外部I/Oをrollbackしない。
+- テスト方針: Eldrでopen/write/flush/close・部分init失敗・共有owner・checkpoint/cloneを直接検証し、公開CLIでpathname差替え、REPLで失敗chunkと外部bytesの扱いを確認する。確定後にlevel4全体gateと独立レビューを行う。
 
 ## 更新ルール
 

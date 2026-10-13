@@ -1,0 +1,34 @@
+{
+  "focus": {
+    "passed": 38,
+    "skipped": 325,
+    "binaries": 2
+  },
+  "workspace_ci": {
+    "command": "rtk cargo nextest run --profile ci --workspace",
+    "passed": 2543,
+    "binaries": 69,
+    "seconds": 117.721,
+    "exit_code": 0
+  },
+  "stdlib": {
+    "discovered": 1124,
+    "executed": 1124,
+    "failed": 0,
+    "filtered": 0,
+    "passed": 1124,
+    "pending": 0,
+    "policy_errors": 0,
+    "runnable": 0,
+    "scope_failures": 0,
+    "script_errors": 0,
+    "selected": 1124,
+    "skipped": 0
+  },
+  "stdlib_command": "rtk proxy cargo run -- test --quiet --all --format=json",
+  "stdlib_exit_code": 0,
+  "fmt_command": "cargo fmt --all -- --check",
+  "fmt_exit_code": 0,
+  "long_verified_conditions": 18,
+  "short_verified_conditions": 40
+}

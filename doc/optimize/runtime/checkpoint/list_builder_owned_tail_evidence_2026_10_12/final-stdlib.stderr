@@ -1,0 +1,4 @@
+   Compiling xldr v0.1.0 (/Users/haruca/.codex/worktrees/9ea8/surtr/crates/xldr)
+   Compiling rune v0.1.0 (/Users/haruca/.codex/worktrees/9ea8/surtr/crates/rune)
+    Finished `dev` profile [unoptimized] target(s) in 3.08s
+     Running `target/debug/surtr test --quiet --all --format=json`

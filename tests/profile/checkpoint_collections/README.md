@@ -15,7 +15,7 @@ build の JSON にある `compiler-artifact` の `target.name == "eldr"` の `ex
 別の output 名を使う。前回の metadata 測定原本は上書きしない。
 
 ```sh
-python3 tests/profile/checkpoint_collections/run.py --binary /absolute/path/to/saved-eldr-test-binary --output doc/rt5_collections_before --samples 5 --repeats 32
+python3 tests/profile/checkpoint_collections/run.py --binary /absolute/path/to/saved-eldr-test-binary --output doc/optimize/runtime/checkpoint/rt5_collections_before --samples 5 --repeats 32
 ```
 
 N = 16 / 128 / 1,024 の条件で、次の合成状態を用意する。
@@ -71,7 +71,7 @@ source hash はビルド証明ではなく runner 実行時のソースを表す
 各条件は before / after 各10 process、合計480行の原本と48個の集計になる。
 
 ```sh
-python3 tests/profile/checkpoint_collections/recheck.py --before doc/rt5_collections_before.summary.json --after doc/rt5_collections_after.summary.json --output doc/rt5_collections_recheck --samples 10
+python3 tests/profile/checkpoint_collections/recheck.py --before doc/optimize/runtime/checkpoint/rt5_collections_before.summary.json --after doc/optimize/runtime/checkpoint/rt5_collections_after.summary.json --output doc/optimize/runtime/checkpoint/rt5_collections_recheck --samples 10
 ```
 
 再測定は元の summary の build metadata を継承し、保存済み binary hash、

@@ -1,0 +1,84 @@
+{
+  "before": {
+    "snapshot_before": "before-build-snapshot.json",
+    "snapshot_after": "before-after-build-snapshot.json",
+    "snapshots_equal": true,
+    "source_count": 42,
+    "changed_sources_from_before": [],
+    "manifests_and_lock_equal_to_before": true,
+    "source_file": "before-builder-with-tests.rs",
+    "source_sha256_matches": true,
+    "short_metadata_sources_match": true,
+    "build_log": "before-build.jsonl",
+    "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-7ddf4dcb324afb88",
+    "build_finished_success": true,
+    "saved_binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/before-binary",
+    "saved_binary_sha256": "6748ab984940bb407c2fbc178c10f71910ca5938bff2ebbb2b23b3cf380e7f7b",
+    "saved_binary_sha256_matches_metadata": true
+  },
+  "direct": {
+    "snapshot_before": "direct-before-build-snapshot.json",
+    "snapshot_after": "direct-after-build-snapshot.json",
+    "snapshots_equal": true,
+    "source_count": 42,
+    "changed_sources_from_before": [
+      "crates/eldr/src/builtin/list_builder.rs"
+    ],
+    "manifests_and_lock_equal_to_before": true,
+    "source_file": "direct-list-builder.rs",
+    "source_sha256_matches": true,
+    "short_metadata_sources_match": true,
+    "build_log": "direct-build.jsonl",
+    "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-7ddf4dcb324afb88",
+    "build_finished_success": true,
+    "saved_binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary",
+    "saved_binary_sha256": "b946509ee1c2dc2940821414b4fcdbdb80f4a176d82bc744a5b26c866cac1700",
+    "saved_binary_sha256_matches_metadata": true
+  },
+  "box": {
+    "snapshot_before": "box-before-build-snapshot.json",
+    "snapshot_after": "box-after-build-snapshot.json",
+    "snapshots_equal": true,
+    "source_count": 42,
+    "changed_sources_from_before": [
+      "crates/eldr/src/builtin/list_builder.rs"
+    ],
+    "manifests_and_lock_equal_to_before": true,
+    "source_file": "box-list-builder.rs",
+    "source_sha256_matches": true,
+    "short_metadata_sources_match": true,
+    "build_log": "box-build.jsonl",
+    "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-7ddf4dcb324afb88",
+    "build_finished_success": true,
+    "saved_binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary",
+    "saved_binary_sha256": "55502173a0092c9f38fea11c77c5a5331d11c9fc9532bcc485a50f4ded2ca14c",
+    "saved_binary_sha256_matches_metadata": true
+  },
+  "final": {
+    "snapshot_before": "final-before-build-snapshot.json",
+    "snapshot_after": "final-after-build-snapshot.json",
+    "snapshots_equal": true,
+    "source_count": 42,
+    "changed_sources_from_before": [
+      "crates/eldr/src/builtin/list_builder.rs"
+    ],
+    "manifests_and_lock_equal_to_before": true,
+    "source_file": "final-list-builder.rs",
+    "source_sha256_matches": true,
+    "short_metadata_sources_match": true,
+    "build_log": "final-build.jsonl",
+    "compiler_artifact_executable": "/Users/haruca/.codex/worktrees/9ea8/surtr/target/release/deps/eldr-7ddf4dcb324afb88",
+    "build_finished_success": true,
+    "saved_binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/final-binary",
+    "saved_binary_sha256": "5cc683fcc34925f8684cb7f29163a847702de97af77a6a98718afb72f8822237",
+    "saved_binary_sha256_matches_metadata": true
+  },
+  "final_scope": {
+    "added_lines": 5,
+    "removed_lines": 0,
+    "patch": "final-versus-before.patch",
+    "workspace_product_sha256_matches_final": true,
+    "product_contains_owned_frozen_candidates": false,
+    "candidate_sources_scope": "doc evidence only; not production modules"
+  }
+}

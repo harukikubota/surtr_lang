@@ -1,0 +1,9 @@
+# OI-039 実VMメモリ計測のビルド証拠
+
+旧Vec実VMと現在のRc segment実VMを、隔離したbaseline/shared sourceから計数有効・無効でそれぞれビルドした記録を保存する。4版のbuild前後snapshot、compiler-artifact JSON/stderr、最終metadata、smoke出力、baseline復元source、両版の共通probe sourceを原本どおりコピーした。コピー元とのSHA-256一致は `copied-files.sha256.json`、source/build/binary対応の照合は `source-build-audit.json` に記録する。数値原本や集計結果はここへ混ぜない。
+
+baselineの6製品sourceはmain `72154707399d6cdaf7190ab75007f2049ab010c6` とbyte単位で一致する。Generator親testもmainと一致し、FlatMap親testはmain原本へfeature付きmemory_profile module宣言だけを末尾追加した。memory_profile.rs・metrics.rs、feature定義、Task準備helperはbaseline/shared間でbyte単位で一致し、利用する5つの親関数の本文も一致する。異なるのは復元対象6source、共有版だけのlist_finish.rs、両親testの既存内容で、他のruntime COWや共通入力は変更していない。未実行testの内容とbinary配置が完全に同一であるという意味ではない。
+
+各buildでsource hashは前後snapshotと最終metadataに一致し、saved binaryのhashも一致した。build_all.pyはcompiler-artifactから得たexecutableを保存直後にhash照合する。binaryと隔離source rootは `/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-vm-memory-mlt131l7/` に保持する。本書のsource-build照合では新たなbuild/testや性能測定を実行していない。
+
+旧Vec実装は隔離した比較fixtureのコンパイルにだけ使う。現在の製品に旧経路・方式切替を追加しておらず、計測moduleもtest/feature境界に置く。この証拠保存自体は、新しい証拠フォルダ以外を変更しない。

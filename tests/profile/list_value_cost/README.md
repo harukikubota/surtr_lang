@@ -1,8 +1,8 @@
 # RT-3: Value と実入口の費用
 
-入力は [2026-10-11 の測定レポート](/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_measurement_report_2026_10_11.md) の RT-3。
+入力は [2026-10-11 の測定レポート](../../../doc/optimize/runtime/baseline/list_runtime_measurement_report_2026_10_11.md) の RT-3。
 製品コードや通常の correctness test から独立した、level2 相当の手動測定である。
-harness自体は速度やRSSの合否閾値を持たない。方式選定と製品変更は [最適化レポート](../../../doc/list_runtime_rt3_optimization_2026_10_11.md) に記録する。
+harness自体は速度やRSSの合否閾値を持たない。方式選定と製品変更は [最適化レポート](../../../doc/optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md) に記録する。
 
 ## 対象
 
@@ -11,7 +11,7 @@ singleton / empty / huge / chain / nested / product を実行する。
 小さい Int、256-byte String、固定深さの Tuple / List / HashMap を比較する。
 scalar の値も共通の template local から取得する。
 List は backing storage を共有し、Tuple と HashMap は内部の Value を clone する。
-payload の詳細と所有条件は [測定結果](../../../doc/list_value_cost_measurement_2026_10_11.md) に記載する。
+payload の詳細と所有条件は [測定結果](../../../doc/optimize/runtime/value/list_value_cost_measurement_2026_10_11.md) に記載する。
 
 `generic_do` は現行の compiler 全段と標準 `Monad::bind` / generic do を通す。
 Int / String の6 workloadを測る。三段直積は `(x, y, z)` の Tuple を作る。
@@ -72,12 +72,12 @@ lock は root と同じ依存版を使用する。runner は macOS 専用。
 ```bash
 cargo build --release --locked --manifest-path tests/profile/list_value_cost/Cargo.toml --target-dir target/list-value-cost-count
 target/list-value-cost-count/release/generic_do singleton 1 int 1 > /dev/null
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-count/release/list-value-cost-probe --entry vm --output doc/list_value_cost_vm_2026_10_11_count --samples 5
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-count/release/generic_do --entry do --output doc/list_value_cost_do_2026_10_11_count --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-count/release/list-value-cost-probe --entry vm --output doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_count --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-count/release/generic_do --entry do --output doc/optimize/runtime/value/list_value_cost_do_2026_10_11_count --samples 5
 cargo build --release --locked --no-default-features --manifest-path tests/profile/list_value_cost/Cargo.toml --target-dir target/list-value-cost-time
 target/list-value-cost-time/release/generic_do singleton 1 int 1 > /dev/null
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-time/release/list-value-cost-probe --entry vm --output doc/list_value_cost_vm_2026_10_11_time --samples 5
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-time/release/generic_do --entry do --output doc/list_value_cost_do_2026_10_11_time --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-time/release/list-value-cost-probe --entry vm --output doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_time --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-time/release/generic_do --entry do --output doc/optimize/runtime/value/list_value_cost_do_2026_10_11_time --samples 5
 python3 tests/profile/list_value_cost/verify.py --binary target/list-value-cost-count/release/list-value-cost-probe --entry vm
 python3 tests/profile/list_value_cost/verify.py --binary target/list-value-cost-count/release/generic_do --entry do
 ```
@@ -88,7 +88,7 @@ python3 tests/profile/list_value_cost/verify.py --binary target/list-value-cost-
 
 ## 製品最適化後の再測定
 
-前後の結果は [最適化レポート](../../../doc/list_runtime_rt3_optimization_2026_10_11.md)に記録する。
+前後の結果は [最適化レポート](../../../doc/optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)に記録する。
 基準値のbinaryと原本を上書きせず、別のtarget directoryと出力prefixを使う。
 未コミットの製品差分がある場合は、`source_commit`に加えて変更ソースとdiffのSHA-256をレポートへ保存する。
 同じharnessを使い、workload・依存版・sample数・cache条件を維持する。
@@ -96,12 +96,12 @@ python3 tests/profile/list_value_cost/verify.py --binary target/list-value-cost-
 ```bash
 cargo build --release --locked --manifest-path tests/profile/list_value_cost/Cargo.toml --target-dir target/list-value-cost-optimized-count
 target/list-value-cost-optimized-count/release/generic_do singleton 1 int 1 > /dev/null
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-count/release/list-value-cost-probe --entry vm --output doc/list_value_cost_vm_2026_10_11_optimized_count --samples 5
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-count/release/generic_do --entry do --output doc/list_value_cost_do_2026_10_11_optimized_count --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-count/release/list-value-cost-probe --entry vm --output doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_optimized_count --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-count/release/generic_do --entry do --output doc/optimize/runtime/value/list_value_cost_do_2026_10_11_optimized_count --samples 5
 cargo build --release --locked --no-default-features --manifest-path tests/profile/list_value_cost/Cargo.toml --target-dir target/list-value-cost-optimized-time
 target/list-value-cost-optimized-time/release/generic_do singleton 1 int 1 > /dev/null
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-time/release/list-value-cost-probe --entry vm --output doc/list_value_cost_vm_2026_10_11_optimized_time --samples 5
-python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-time/release/generic_do --entry do --output doc/list_value_cost_do_2026_10_11_optimized_time --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-time/release/list-value-cost-probe --entry vm --output doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_optimized_time --samples 5
+python3 tests/profile/list_value_cost/run.py --binary target/list-value-cost-optimized-time/release/generic_do --entry do --output doc/optimize/runtime/value/list_value_cost_do_2026_10_11_optimized_time --samples 5
 python3 tests/profile/list_value_cost/verify.py --binary target/list-value-cost-optimized-count/release/list-value-cost-probe --entry vm
 python3 tests/profile/list_value_cost/verify.py --binary target/list-value-cost-optimized-count/release/generic_do --entry do
 ```

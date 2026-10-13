@@ -1,6 +1,6 @@
 # RT-2: 短い suffix の保持方式比較
 
-指定入力は [2026-10-11 の測定レポート](/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_measurement_report_2026_10_11.md) の RT-2。
+指定入力は [2026-10-11 の測定レポート](../../../doc/optimize/runtime/baseline/list_runtime_measurement_report_2026_10_11.md) の RT-2。
 製品コード・通常の correctness test から独立した、level2 相当の手動測定である。
 採用方式、実時間や RSS の合否閾値は決めない。
 
@@ -59,9 +59,9 @@ lock は root lock を基に不要項目を除いて生成した。同じ依存�
 
 ```bash
 cargo build --release --locked --manifest-path tests/profile/list_tail_retention/Cargo.toml --target-dir target/list-tail-retention-count
-python3 tests/profile/list_tail_retention/run.py --binary target/list-tail-retention-count/release/list-tail-retention-probe --output doc/list_tail_retention_2026_10_11_count --samples 5
+python3 tests/profile/list_tail_retention/run.py --binary target/list-tail-retention-count/release/list-tail-retention-probe --output doc/optimize/runtime/list/list_tail_retention_2026_10_11_count --samples 5
 cargo build --release --locked --no-default-features --manifest-path tests/profile/list_tail_retention/Cargo.toml --target-dir target/list-tail-retention-time
-python3 tests/profile/list_tail_retention/run.py --binary target/list-tail-retention-time/release/list-tail-retention-probe --output doc/list_tail_retention_2026_10_11_time --samples 5
+python3 tests/profile/list_tail_retention/run.py --binary target/list-tail-retention-time/release/list-tail-retention-probe --output doc/optimize/runtime/list/list_tail_retention_2026_10_11_time --samples 5
 python3 tests/profile/list_tail_retention/verify.py --binary target/list-tail-retention-count/release/list-tail-retention-probe
 PROBE_VERIFY=1 target/list-tail-retention-count/release/list-tail-retention-probe chunk 100000 nested siblings
 ```

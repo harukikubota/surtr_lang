@@ -13,7 +13,7 @@ build の JSON にある `compiler-artifact` の `target.name == "eldr"` の `ex
 別名に保存して、変更前後を分ける。runner は同じ probe をそれぞれ新しい process で5回実行する。
 
 ```sh
-python3 tests/profile/checkpoint_metadata/run.py --binary /absolute/path/to/saved-eldr-test-binary --output doc/rt5_metadata_sample --samples 5 --repeats 32
+python3 tests/profile/checkpoint_metadata/run.py --binary /absolute/path/to/saved-eldr-test-binary --output doc/optimize/runtime/checkpoint/rt5_metadata_sample --samples 5 --repeats 32
 ```
 
 16 / 128 / 1024 個の Worker 定義を持つ VM を用意する。定義ごとに2 handler、
@@ -48,7 +48,7 @@ binary は記録したソースをビルドした直後に保存する。
 記録済み binary hash を確認し、build metadata は対応する元の summary から引き継ぐ。
 
 ```sh
-python3 tests/profile/checkpoint_metadata/recheck.py --before doc/rt5_metadata_2026_10_12_before_v2.summary.json --after doc/rt5_metadata_2026_10_12_after_v2.summary.json --output doc/rt5_metadata_2026_10_12_recheck --samples 10
+python3 tests/profile/checkpoint_metadata/recheck.py --before doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_before_v2.summary.json --after doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_after_v2.summary.json --output doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_recheck --samples 10
 ```
 
 ビルドやテストと重ねて測らない。JSON 出力前の全要素検査や表示で計測を汚さない。

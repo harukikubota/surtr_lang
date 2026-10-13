@@ -2,7 +2,7 @@
 
 ## 対象と原因
 
-`doc/list_runtime_followups.md` の旧 C-2 を起点に、Test DSL と List に限定せず通常の多段 Block / Closure を調査した。
+`doc/optimize/runtime/list_runtime_followups.md` の旧 C-2 を起点に、Test DSL と List に限定せず通常の多段 Block / Closure を調査した。
 言語仕様を変えない compiler 内部の修正。Sigil と Scar の二フェーズを扱うため level 3 とし、両 crate、CLI の process 境界、標準テストと workspace CI を検証する。
 
 基線は `df09dc51`、通常の debug build。core dump を無効化した別 process で再現し、LLDB の停止箇所を確認した。

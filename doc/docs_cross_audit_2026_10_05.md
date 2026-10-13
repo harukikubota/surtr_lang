@@ -37,7 +37,7 @@
 
 | 項目 | 参照先 |
 |---|---|
-| List / runtimeの残る性能課題 | `doc/list_runtime_followups.md` と `doc/v0.1_release_codebase_audit.md` |
+| List / runtimeの残る性能課題 | `doc/optimize/runtime/list_runtime_followups.md` と `doc/v0.1_release_codebase_audit.md` |
 | LSPのsemantic cache・外部入力更新の責務 | `doc/v0.1_release_codebase_audit.md` |
 | WarningのCLI・REPL未接続 | `docs/site/warnings.md` とOI-033 |
 | release buildのtest --all | `doc/test_command_release_build_memo.md`の未設計範囲 |

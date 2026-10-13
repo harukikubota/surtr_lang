@@ -1,0 +1,2871 @@
+{
+  "purpose": "runtime資料の移動・未統合資料の集約。製品コードの統合ではない",
+  "main_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+  "source_states": {
+    "/Users/haruca/work/rust/surtr": {
+      "head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "branch": "main",
+      "status": "",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "/Users/haruca/.codex/worktrees/4c18/surtr": {
+      "head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "branch": "detached",
+      "status": " M doc/list_runtime_followups.md\n M doc/open-issues.md\n M tests/profile/README.md\n?? doc/list_runtime_astra_review.md\n?? doc/list_runtime_measurement_report_2026_10_11.md\n?? doc/list_runtime_measurements_2026_10_11.jsonl\n?? doc/list_runtime_measurements_2026_10_11.summary.json\n?? doc/list_runtime_measurements_2026_10_11_time.jsonl\n?? doc/list_runtime_measurements_2026_10_11_time.summary.json\n?? doc/list_runtime_rt4_inventory.md\n?? doc/list_runtime_rt5_measurement_plan.md\n?? tests/profile/list_runtime/\n",
+      "diff_sha256": "97595f64ab0cc82f44f5640ff7f9580ba98f72b681801171b4160d67bb3246e7"
+    },
+    "/Users/haruca/.codex/worktrees/9ea8/surtr": {
+      "head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "branch": "codex/rt5-builder-checkpoint-measurement",
+      "status": " M crates/eldr/Cargo.toml\n M crates/eldr/src/builtin.rs\n M crates/eldr/src/builtin/generator.rs\n M crates/eldr/src/builtin/list_builder.rs\n M crates/eldr/src/builtin/list_flat_map.rs\n M crates/eldr/src/vm.rs\n M crates/eldr/src/vm/continuation.rs\n M crates/eldr/src/vm/generator_tests.rs\n M crates/eldr/src/vm/list_flat_map_tests.rs\n M crates/eldr/src/vm/process_continuation.rs\n M doc/list_runtime_followups.md\n M doc/open-issues.md\n M docs/dev/EldrVM_spec.md\n M docs/dev/ProcessRuntime_spec.md\n?? crates/eldr/src/builtin/list_finish.rs\n?? crates/eldr/src/vm/list_flat_map_tests/\n?? doc/list_builder_owned_tail_2026_10_12.md\n?? doc/list_builder_owned_tail_evidence_2026_10_12/\n?? doc/list_builder_route_decision_2026_10_12.md\n?? doc/list_runtime_oi039_cost_2026_10_12.md\n?? doc/list_runtime_oi039_vm_memory_2026_10_12.md\n?? doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/\n?? doc/list_runtime_rt5_builder_measurement_2026_10_12.md\n?? doc/list_runtime_rt5_builder_optimization_2026_10_12.md\n?? doc/oi039_2026_10_12_capacity.jsonl\n?? doc/oi039_2026_10_12_capacity.summary.json\n?? doc/oi039_2026_10_12_capacity_compare.jsonl\n?? doc/oi039_2026_10_12_capacity_compare.summary.json\n?? doc/oi039_2026_10_12_capacity_verify.jsonl\n?? doc/oi039_2026_10_12_capacity_verify.summary.json\n?? doc/oi039_2026_10_12_cost.jsonl\n?? doc/oi039_2026_10_12_cost.summary.json\n?? doc/oi039_2026_10_12_cost_final.jsonl\n?? doc/oi039_2026_10_12_cost_final.summary.json\n?? doc/oi039_2026_10_12_cost_verify.jsonl\n?? doc/oi039_2026_10_12_cost_verify.summary.json\n?? doc/oi039_2026_10_12_cost_verify_final.jsonl\n?? doc/oi039_2026_10_12_cost_verify_final.summary.json\n?? doc/oi039_2026_10_12_cost_vm.jsonl\n?? doc/oi039_2026_10_12_cost_vm.summary.json\n?? doc/oi039_2026_10_12_cost_vm_verify.jsonl\n?? doc/oi039_2026_10_12_cost_vm_verify.summary.json\n?? doc/oi039_2026_10_12_guard.jsonl\n?? doc/oi039_2026_10_12_guard.summary.json\n?? doc/oi039_2026_10_12_guard_compare.jsonl\n?? doc/oi039_2026_10_12_guard_compare.summary.json\n?? doc/oi039_2026_10_12_inline.jsonl\n?? doc/oi039_2026_10_12_inline.summary.json\n?? doc/oi039_2026_10_12_inline_compare.jsonl\n?? doc/oi039_2026_10_12_inline_compare.summary.json\n?? doc/oi039_2026_10_12_vm_memory_control.jsonl\n?? doc/oi039_2026_10_12_vm_memory_control.summary.json\n?? doc/oi039_2026_10_12_vm_memory_count.jsonl\n?? doc/oi039_2026_10_12_vm_memory_count.summary.json\n?? doc/oi039_2026_10_12_vm_memory_rss.jsonl\n?? doc/oi039_2026_10_12_vm_memory_rss.summary.json\n?? doc/oi039_2026_10_12_vm_memory_rss_verify.jsonl\n?? doc/oi039_2026_10_12_vm_memory_rss_verify.summary.json\n?? doc/oi039_2026_10_12_vm_memory_verify.jsonl\n?? doc/oi039_2026_10_12_vm_memory_verify.summary.json\n?? doc/owned_tail_2026_10_12_before.jsonl\n?? doc/owned_tail_2026_10_12_before.summary.json\n?? doc/owned_tail_2026_10_12_box.jsonl\n?? doc/owned_tail_2026_10_12_box.summary.json\n?? doc/owned_tail_2026_10_12_box_compare.jsonl\n?? doc/owned_tail_2026_10_12_box_compare.summary.json\n?? doc/owned_tail_2026_10_12_box_short.jsonl\n?? doc/owned_tail_2026_10_12_box_short.summary.json\n?? doc/owned_tail_2026_10_12_direct.jsonl\n?? doc/owned_tail_2026_10_12_direct.summary.json\n?? doc/owned_tail_2026_10_12_direct_compare.jsonl\n?? doc/owned_tail_2026_10_12_direct_compare.summary.json\n?? doc/owned_tail_2026_10_12_direct_short.jsonl\n?? doc/owned_tail_2026_10_12_direct_short.summary.json\n?? doc/owned_tail_2026_10_12_final.jsonl\n?? doc/owned_tail_2026_10_12_final.summary.json\n?? doc/owned_tail_2026_10_12_final_short.jsonl\n?? doc/owned_tail_2026_10_12_final_short.summary.json\n?? doc/owned_tail_2026_10_12_final_short_verify.jsonl\n?? doc/owned_tail_2026_10_12_final_short_verify.summary.json\n?? doc/owned_tail_2026_10_12_final_verify.jsonl\n?? doc/owned_tail_2026_10_12_final_verify.summary.json\n?? doc/owned_tail_2026_10_12_reservation_red_green.json\n?? doc/rt5_builder_2026_10_12.jsonl\n?? doc/rt5_builder_2026_10_12.summary.json\n?? doc/rt5_builder_2026_10_12_accepted_completion.jsonl\n?? doc/rt5_builder_2026_10_12_accepted_completion.summary.json\n?? doc/rt5_builder_2026_10_12_accepted_recheck.jsonl\n?? doc/rt5_builder_2026_10_12_accepted_recheck.summary.json\n?? doc/rt5_builder_2026_10_12_accepted_verify.jsonl\n?? doc/rt5_builder_2026_10_12_accepted_verify.summary.json\n?? doc/rt5_builder_2026_10_12_after_completion.jsonl\n?? doc/rt5_builder_2026_10_12_after_completion.summary.json\n?? doc/rt5_builder_2026_10_12_after_final_completion.jsonl\n?? doc/rt5_builder_2026_10_12_after_final_completion.summary.json\n?? doc/rt5_builder_2026_10_12_after_final_verify.jsonl\n?? doc/rt5_builder_2026_10_12_after_final_verify.summary.json\n?? doc/rt5_builder_2026_10_12_before_completion.jsonl\n?? doc/rt5_builder_2026_10_12_before_completion.summary.json\n?? doc/rt5_builder_2026_10_12_final_recheck.jsonl\n?? doc/rt5_builder_2026_10_12_final_recheck.summary.json\n?? doc/rt5_builder_2026_10_12_verify.jsonl\n?? doc/rt5_builder_2026_10_12_verify.summary.json\n?? tests/profile/checkpoint_builder/\n?? tests/profile/checkpoint_builder_cost/\n?? tests/profile/checkpoint_builder_short/\n?? tests/profile/checkpoint_builder_vm_memory/\n",
+      "diff_sha256": "63774b0712c262a79e3a6437475a61789077e00c07ecd5777963673346fd010e"
+    },
+    "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr": {
+      "head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "branch": "detached",
+      "status": " M crates/eldr/src/builtin.rs\n M crates/sindr/src/ir.rs\n M crates/sindr/src/runtime.rs\n M doc/list_runtime_followups.md\n M doc/open-issues.md\n M docs/dev/EldrVM_spec.md\n M tests/profile/README.md\n?? doc/file_out_handler_lifecycle_repair_spec.md\n?? doc/file_out_handler_lifecycle_reproduction_2026_10_13.md\n?? doc/list_chunk_handoff_2026_10_13.jsonl\n?? doc/list_chunk_handoff_2026_10_13.summary.json\n?? doc/list_chunk_handoff_2026_10_13_verify.json\n?? doc/list_chunk_handoff_comparison_2026_10_13.md\n?? doc/list_runtime_progress_2026_10_13.md\n?? doc/regex_input_cost_2026_10_13.jsonl\n?? doc/regex_input_cost_2026_10_13.summary.json\n?? doc/regex_input_cost_2026_10_13_builds.json\n?? doc/regex_input_cost_2026_10_13_verify.json\n?? doc/regex_input_cost_batch_2026_10_13.jsonl\n?? doc/regex_input_cost_batch_2026_10_13.summary.json\n?? doc/regex_input_cost_batch_2026_10_13_isolated_builds.json\n?? doc/regex_input_cost_batch_2026_10_13_rechecked.jsonl\n?? doc/regex_input_cost_batch_2026_10_13_rechecked.summary.json\n?? doc/regex_input_sharing_2026_10_13.md\n?? tests/profile/list_chunk_handoff/\n?? tests/profile/regex_input_cost/\n",
+      "diff_sha256": "d753fc18edc3a76247749eb0c86e2b2ed3dc7d036357167c8a4afc1ac30c7a41"
+    }
+  },
+  "records": [
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_after_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "c1da4892740422d2b274721c1f4b2f24b4f710806bd99fcbd1d2b63193739af9",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_after_count.jsonl",
+      "destination_sha256": "c1da4892740422d2b274721c1f4b2f24b4f710806bd99fcbd1d2b63193739af9",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_after_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "52ed57bb90d8542cc3b89e3d98467500247ad0fc64f1f261224e8110c69d8c2a",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_after_count.summary.json",
+      "destination_sha256": "52ed57bb90d8542cc3b89e3d98467500247ad0fc64f1f261224e8110c69d8c2a",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_after_time.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "77b11d0d66631368857e0c466c2402a9c6bd0161ea7dac563d1f55446bd23991",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_after_time.jsonl",
+      "destination_sha256": "77b11d0d66631368857e0c466c2402a9c6bd0161ea7dac563d1f55446bd23991",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_after_time.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "067a70968a3685e74ce8871d860905c7d83abbc504eef9aefabe17b79fe0c465",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_after_time.summary.json",
+      "destination_sha256": "067a70968a3685e74ce8871d860905c7d83abbc504eef9aefabe17b79fe0c465",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "9cb8148f17340a87bcbfff255ed26de8b7cbfa8338b378b05c7bf4211ea45b54",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_count.jsonl",
+      "destination_sha256": "9cb8148f17340a87bcbfff255ed26de8b7cbfa8338b378b05c7bf4211ea45b54",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "479dde792562c7c873245a21ecc90e33ee0c44db03a99ae31c8c6b27df1adea0",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_count.summary.json",
+      "destination_sha256": "479dde792562c7c873245a21ecc90e33ee0c44db03a99ae31c8c6b27df1adea0",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_recheck.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "3616419a25204dd5d2ce17570ef924c11d88a9a56e0837f190c74f49ff973bbc",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_recheck.jsonl",
+      "destination_sha256": "3616419a25204dd5d2ce17570ef924c11d88a9a56e0837f190c74f49ff973bbc",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_recheck.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "268662bf30800af7f256f9a0d94f41d7ac76fda50d4deef5013fd41de279540a",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_recheck.summary.json",
+      "destination_sha256": "268662bf30800af7f256f9a0d94f41d7ac76fda50d4deef5013fd41de279540a",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_time.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "6bcc0cd4c24afc19a6d0c30106fb5999c8d6a4ef8f87034379e014e49aa2978b",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_time.jsonl",
+      "destination_sha256": "6bcc0cd4c24afc19a6d0c30106fb5999c8d6a4ef8f87034379e014e49aa2978b",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_cost_2026_10_11_time.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "ac996ffca3d891589aa6355efe3981759a3cf86f4318c79dd203c542fe229666",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_time.summary.json",
+      "destination_sha256": "ac996ffca3d891589aa6355efe3981759a3cf86f4318c79dd203c542fe229666",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_runtime_measurement_2026_10_11.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "02c7d5c1eff601c265ac8cbea72036d53b927f841b91a9642bf1027865aac56d",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_runtime_measurement_2026_10_11.md",
+      "destination_sha256": "e9de2e3d9511b0a04e929025baef0dbb766fe9edce84b5c7c88fec9b5c42cb8d",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_runtime_optimization_2026_10_11.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "1d0be0428790e89db18e55adc1e272f521b4b42b780713fcfd11c0fcd004bcb2",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_runtime_optimization_2026_10_11.md",
+      "destination_sha256": "6de2f05a48eb0fb17e490bc74e9d2c572c58cf994ac0da840968d697ecbc28d2",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/hashmap_runtime_optimization_plan.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "3f17274ae9c896888e8b5c1e62bbf7f803bd9e1c0d18e78c66400673b36dbbee",
+      "destination": "doc/optimize/runtime/hashmap/hashmap_runtime_optimization_plan.md",
+      "destination_sha256": "472fe898902c66a4e55f2092eb9aff48d661f6f5b93d8c39aff160f20508685c",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_runtime_followups.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "f8f4780c25eb55cb4b44aa79552aacfed2524fad96c691a5c0a7e7da655b72ce",
+      "destination": "doc/optimize/runtime/list_runtime_followups.md",
+      "destination_sha256": "ef8e01c2071d60ffb2922263e03fedfbd55321de535ed0c3da9aff22af362b24",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_runtime_rt3_optimization_2026_10_11.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "60fe0f7429437405636b1c3ffc87520e9396f3331f47ec6b6c50ab6065223d0f",
+      "destination": "doc/optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md",
+      "destination_sha256": "74a499dc139b23ca8e6c8b3081fd324858015a7ca3e913008b9cdbe7e19b1848",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_runtime_rt3_optimization_plan.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "dc3b4ed358e3ebec3611706caef0562d0062ea476f92863b10c8689236cbb78e",
+      "destination": "doc/optimize/runtime/value/list_runtime_rt3_optimization_plan.md",
+      "destination_sha256": "7fd24923def79c9e6543ff793fcbd0d61f55ac4455a2b70b994f3f7a412972f8",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_runtime_rt5_metadata_optimization_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "833bb8bed5d34f4c75d2fe2d7573a2ad82a889cd75d127f5753a00bfb4e4b218",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_rt5_metadata_optimization_2026_10_12.md",
+      "destination_sha256": "69ee8dd826d7cef61355c78d41fc70ca7c0e80fded9fc27d6a3aa0e492ca7752",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_runtime_rt5_remaining_optimization_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "8bf63a8c437313c0ea3fef0061aa309760de3f0b776c241a398a5fee588d2a90",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_rt5_remaining_optimization_2026_10_12.md",
+      "destination_sha256": "70c3fbb5e83de376a5f4c1604b9db77bef99383ea0ecb51eb614855b9b1683d0",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_tail_retention_2026_10_11_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "84e2fc82db51c923dce58039324c7f07d0d991c6bbee5d7fdd2eb760ee786576",
+      "destination": "doc/optimize/runtime/list/list_tail_retention_2026_10_11_count.jsonl",
+      "destination_sha256": "84e2fc82db51c923dce58039324c7f07d0d991c6bbee5d7fdd2eb760ee786576",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_tail_retention_2026_10_11_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "5ecfcb89d258cee4e8ff43580c3e5408dcc1bb15aefd400702514a67b7bb7c71",
+      "destination": "doc/optimize/runtime/list/list_tail_retention_2026_10_11_count.summary.json",
+      "destination_sha256": "5ecfcb89d258cee4e8ff43580c3e5408dcc1bb15aefd400702514a67b7bb7c71",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_tail_retention_2026_10_11_time.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "27d7be786ee977825e724ba6bbc5aa11a32148570e225cf42780dfb5c69e5d2e",
+      "destination": "doc/optimize/runtime/list/list_tail_retention_2026_10_11_time.jsonl",
+      "destination_sha256": "27d7be786ee977825e724ba6bbc5aa11a32148570e225cf42780dfb5c69e5d2e",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_tail_retention_2026_10_11_time.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "671fbe9cc37f066660709ef9daca5c189efb51343bb97333891eae99314512bf",
+      "destination": "doc/optimize/runtime/list/list_tail_retention_2026_10_11_time.summary.json",
+      "destination_sha256": "671fbe9cc37f066660709ef9daca5c189efb51343bb97333891eae99314512bf",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_tail_retention_comparison_2026_10_11.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "e799f507453be27a7e9504c3243a0744c9afb3191179ee0d7f8b83022a091670",
+      "destination": "doc/optimize/runtime/list/list_tail_retention_comparison_2026_10_11.md",
+      "destination_sha256": "c824c94fa6467983206a3a3609519452c3a595407ef1eea1fb44f22e6ee357cf",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_allocator_config_2026_10_11.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "f103a3ebd3db98fe947d760511f666bda8fcc657ac135fd6622b3a0f711d2f12",
+      "destination": "doc/optimize/runtime/value/list_value_cost_allocator_config_2026_10_11.json",
+      "destination_sha256": "f103a3ebd3db98fe947d760511f666bda8fcc657ac135fd6622b3a0f711d2f12",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "1faee5213151c90e682fdb3a6570d18aa14ccdeb8af56db37160b374d0ba2833",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_count.jsonl",
+      "destination_sha256": "1faee5213151c90e682fdb3a6570d18aa14ccdeb8af56db37160b374d0ba2833",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "7f56cdaf5a42f2b59fa1c0ab190dbfd6556219c7ac4acb2c26821f173ab9ec5f",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_count.summary.json",
+      "destination_sha256": "7f56cdaf5a42f2b59fa1c0ab190dbfd6556219c7ac4acb2c26821f173ab9ec5f",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_optimized_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "0afca1096b249b28a22d3a40f502d59ab1dd944f6e94268eb2351b31286c5fa4",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_optimized_count.jsonl",
+      "destination_sha256": "0afca1096b249b28a22d3a40f502d59ab1dd944f6e94268eb2351b31286c5fa4",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_optimized_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "8b32b4c3fdf28180001302035dde1ad8e7052ffc829afce3ffc0ea858412b720",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_optimized_count.summary.json",
+      "destination_sha256": "8b32b4c3fdf28180001302035dde1ad8e7052ffc829afce3ffc0ea858412b720",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_optimized_time.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "ad88485b81fed226cbe0f98e1e14e2bdaf9d41aad1e47f75d08de3b576cf9e04",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_optimized_time.jsonl",
+      "destination_sha256": "ad88485b81fed226cbe0f98e1e14e2bdaf9d41aad1e47f75d08de3b576cf9e04",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_optimized_time.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "f44ea393333b941b978a5e10706d6b3e429e5e8b8c4cfc218958c3f677ddbad0",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_optimized_time.summary.json",
+      "destination_sha256": "f44ea393333b941b978a5e10706d6b3e429e5e8b8c4cfc218958c3f677ddbad0",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_time.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "330890952dd1720ec01737bab85de30c096951f4f37b86c42947a27042e31256",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_time.jsonl",
+      "destination_sha256": "330890952dd1720ec01737bab85de30c096951f4f37b86c42947a27042e31256",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_do_2026_10_11_time.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "f90b2513e66023d7990c2f0023427cea9ff3b209e1f25879ca682ebce8c05ad9",
+      "destination": "doc/optimize/runtime/value/list_value_cost_do_2026_10_11_time.summary.json",
+      "destination_sha256": "f90b2513e66023d7990c2f0023427cea9ff3b209e1f25879ca682ebce8c05ad9",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_measurement_2026_10_11.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "40d26611839706c12ae531229fbf64c16cebbe6b06b287ba86bce7991cf6199e",
+      "destination": "doc/optimize/runtime/value/list_value_cost_measurement_2026_10_11.md",
+      "destination_sha256": "46e472ac2fff734a57f677da2ee4e1a8b9975505e2023af15ba25effb43d9357",
+      "action": "move-main",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_rss_diagnostic_2026_10_11.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "d5eb378f8c48a84fdc69a09955be80f90605939561357096ba65f5852058a2cc",
+      "destination": "doc/optimize/runtime/value/list_value_cost_rss_diagnostic_2026_10_11.jsonl",
+      "destination_sha256": "d5eb378f8c48a84fdc69a09955be80f90605939561357096ba65f5852058a2cc",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "812f85c2922cbc1ed3fa4d110835e9c473097ed40d157fc309868e38bbaf3390",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_count.jsonl",
+      "destination_sha256": "812f85c2922cbc1ed3fa4d110835e9c473097ed40d157fc309868e38bbaf3390",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "79a5706ed065bb6a8d7d1a307d1729e252ee92687618b825a56522958cbb8859",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_count.summary.json",
+      "destination_sha256": "79a5706ed065bb6a8d7d1a307d1729e252ee92687618b825a56522958cbb8859",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_optimized_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "ee1fa342e599b3564ab36dd39c48498f11a7a443f8db4648cba43783f159a287",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_optimized_count.jsonl",
+      "destination_sha256": "ee1fa342e599b3564ab36dd39c48498f11a7a443f8db4648cba43783f159a287",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_optimized_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "28f05556aca0aa4ff34d20cdf1960c94380a3214a012056a57a57d428a0a05a5",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_optimized_count.summary.json",
+      "destination_sha256": "28f05556aca0aa4ff34d20cdf1960c94380a3214a012056a57a57d428a0a05a5",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_optimized_time.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "f86abf733f391ef3f2416858ad29caca57f8e6ab256da86c89a6606c8990d2c5",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_optimized_time.jsonl",
+      "destination_sha256": "f86abf733f391ef3f2416858ad29caca57f8e6ab256da86c89a6606c8990d2c5",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_optimized_time.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "11f702f88262fd578a9ff283bd02d31c0433f44b2781a86255e3e9294c586fa1",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_optimized_time.summary.json",
+      "destination_sha256": "11f702f88262fd578a9ff283bd02d31c0433f44b2781a86255e3e9294c586fa1",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_time.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "f83c56b6ad6324108086ef3dc6e6de7a8f7860c32920b77d1bd031f5ac21bd5b",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_time.jsonl",
+      "destination_sha256": "f83c56b6ad6324108086ef3dc6e6de7a8f7860c32920b77d1bd031f5ac21bd5b",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/list_value_cost_vm_2026_10_11_time.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "177c957c48a98467fcf09981ca8dabdaf86850b31e6d4e6cf460183a7058ac6f",
+      "destination": "doc/optimize/runtime/value/list_value_cost_vm_2026_10_11_time.summary.json",
+      "destination_sha256": "177c957c48a98467fcf09981ca8dabdaf86850b31e6d4e6cf460183a7058ac6f",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_after.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "d15a58a0aa2a4cebb79d014d1de7bdc654d2e40d7588d0da69596400e53a4e18",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_after.jsonl",
+      "destination_sha256": "d15a58a0aa2a4cebb79d014d1de7bdc654d2e40d7588d0da69596400e53a4e18",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_after.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "43721ff1efced9c80c5bb85e8fd19a80ee7c1b219d144935a873e0990fdb9e21",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_after.summary.json",
+      "destination_sha256": "43721ff1efced9c80c5bb85e8fd19a80ee7c1b219d144935a873e0990fdb9e21",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_before.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "c42d5ed41f59f003aa949708721dad6a216d189a5d147e75769f093c455daf00",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_before.jsonl",
+      "destination_sha256": "c42d5ed41f59f003aa949708721dad6a216d189a5d147e75769f093c455daf00",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_before.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "9a51db9e3a451bc0cf4c245856415d6b8032ef01182e9d46c0ed9f590eee1c92",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_before.summary.json",
+      "destination_sha256": "9a51db9e3a451bc0cf4c245856415d6b8032ef01182e9d46c0ed9f590eee1c92",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_final_after.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "3d1baa8fee103c701efdaf16a041777b36cdbefdb3c94270d4f0ee95990efb4b",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_final_after.jsonl",
+      "destination_sha256": "3d1baa8fee103c701efdaf16a041777b36cdbefdb3c94270d4f0ee95990efb4b",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_final_after.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "88fbaf05d1e0f6d0730583dcfeea4dd1e8306f8f533b46c28f3945d1c14761eb",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_final_after.summary.json",
+      "destination_sha256": "88fbaf05d1e0f6d0730583dcfeea4dd1e8306f8f533b46c28f3945d1c14761eb",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_final_recheck.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "9e50ff52253ae5425bf72a94c3a71fa804dee0722074cef0bde9eb244a6b7dbc",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_final_recheck.jsonl",
+      "destination_sha256": "9e50ff52253ae5425bf72a94c3a71fa804dee0722074cef0bde9eb244a6b7dbc",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_final_recheck.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "a2b30ee015dde6b9bd648d3a089d80390bbb4e6e8ed8f0dbce85107d6508fbf1",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_final_recheck.summary.json",
+      "destination_sha256": "a2b30ee015dde6b9bd648d3a089d80390bbb4e6e8ed8f0dbce85107d6508fbf1",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_recheck.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "7cd8e584e112de7e86813fdc6b235961fccde1172e992527de780c3a1d6e4d97",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_recheck.jsonl",
+      "destination_sha256": "7cd8e584e112de7e86813fdc6b235961fccde1172e992527de780c3a1d6e4d97",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_collections_2026_10_12_recheck.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "7fb8d3f25ea5489ab294621d94f0b54d72e2f247cff22518e855b59b351a590e",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_collections_2026_10_12_recheck.summary.json",
+      "destination_sha256": "7fb8d3f25ea5489ab294621d94f0b54d72e2f247cff22518e855b59b351a590e",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_after.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "9de3eb2560691d70f617501ff6b4dd80e636052537cb71810765729f6371cf52",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_after.jsonl",
+      "destination_sha256": "9de3eb2560691d70f617501ff6b4dd80e636052537cb71810765729f6371cf52",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_after.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "f60eafb05d30e71f7b28a9d7dce4aa737dcf42a6ff8e5100684ec8275e30139f",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_after.summary.json",
+      "destination_sha256": "f60eafb05d30e71f7b28a9d7dce4aa737dcf42a6ff8e5100684ec8275e30139f",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_after_v2.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "b87de0f36e473f09783825fdd28d5eee50b32f65d6d7f495934164639ff2e66c",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_after_v2.jsonl",
+      "destination_sha256": "b87de0f36e473f09783825fdd28d5eee50b32f65d6d7f495934164639ff2e66c",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_after_v2.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "127ef3ff056dc6b94932535f6a810365fce9ba4e5e689101f320bf9fae550827",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_after_v2.summary.json",
+      "destination_sha256": "127ef3ff056dc6b94932535f6a810365fce9ba4e5e689101f320bf9fae550827",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_before.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "410f820e37ba5aaf97d0bad50556e3957a844b7b9a60cb5b5f023947b40cf5b9",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_before.jsonl",
+      "destination_sha256": "410f820e37ba5aaf97d0bad50556e3957a844b7b9a60cb5b5f023947b40cf5b9",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_before.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "04672c370f49a0ca1c534bb04857a0dad4947fe6c0b085bb4791bdec208965fc",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_before.summary.json",
+      "destination_sha256": "04672c370f49a0ca1c534bb04857a0dad4947fe6c0b085bb4791bdec208965fc",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_before_v2.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "c17d0fd81b449e6f442c5121d3bf30124646115f5905ad4db042259c1a870dfd",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_before_v2.jsonl",
+      "destination_sha256": "c17d0fd81b449e6f442c5121d3bf30124646115f5905ad4db042259c1a870dfd",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_before_v2.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "29fa1dbf29f566eb0886bf7eab3fb138741fb6ff5b3647a4b1f0c3e8f99452d4",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_before_v2.summary.json",
+      "destination_sha256": "29fa1dbf29f566eb0886bf7eab3fb138741fb6ff5b3647a4b1f0c3e8f99452d4",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_recheck.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "adb9b982b51754f01d62768a0f35792fcf32ccb0fe753d7ca7c2c29b4fe43f8d",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_recheck.jsonl",
+      "destination_sha256": "adb9b982b51754f01d62768a0f35792fcf32ccb0fe753d7ca7c2c29b4fe43f8d",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/work/rust/surtr/doc/rt5_metadata_2026_10_12_recheck.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "main",
+      "source_sha256": "a7b4d834a6988fffdd1eec0f96e85b0cba9c96ae4b0290748a614a3530352c9d",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_metadata_2026_10_12_recheck.summary.json",
+      "destination_sha256": "a7b4d834a6988fffdd1eec0f96e85b0cba9c96ae4b0290748a614a3530352c9d",
+      "action": "move-main",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_astra_review.md",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "56523a019a00333b7a38574f5421c9e188fff0978235e6558c19c036add6ba38",
+      "destination": "doc/optimize/runtime/baseline/list_runtime_astra_review.md",
+      "destination_sha256": "f4719a713bd2cedfbf3e2b17071cd2318f027135ef20e271527759e298946df9",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_measurement_report_2026_10_11.md",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "9f5ec756919b44e13ce61b04dc1f0412f3ab00bde20e6271f4d00c49972834cb",
+      "destination": "doc/optimize/runtime/baseline/list_runtime_measurement_report_2026_10_11.md",
+      "destination_sha256": "f616b1ac189e9d34c3d4722109a0e3af0a8686092de2fd562bda19bf2ab3802e",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_measurements_2026_10_11.jsonl",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "19fa855d5841c13da4b662a3a183a192c303975fb36e1e7968ffb2844b1f5a19",
+      "destination": "doc/optimize/runtime/baseline/list_runtime_measurements_2026_10_11.jsonl",
+      "destination_sha256": "19fa855d5841c13da4b662a3a183a192c303975fb36e1e7968ffb2844b1f5a19",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_measurements_2026_10_11.summary.json",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "1780006520e8855bd4c0720a656d74f3ba674dda3cb88553d37bdcab85c584ea",
+      "destination": "doc/optimize/runtime/baseline/list_runtime_measurements_2026_10_11.summary.json",
+      "destination_sha256": "1780006520e8855bd4c0720a656d74f3ba674dda3cb88553d37bdcab85c584ea",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_measurements_2026_10_11_time.jsonl",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "7e4328c28530195739e7a0117be6a93b464a9beb8c968c0cc3a622e2b863b8ce",
+      "destination": "doc/optimize/runtime/baseline/list_runtime_measurements_2026_10_11_time.jsonl",
+      "destination_sha256": "7e4328c28530195739e7a0117be6a93b464a9beb8c968c0cc3a622e2b863b8ce",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_measurements_2026_10_11_time.summary.json",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "b77840c998d9e3c86785fa9466ec518418ec4194682776990341c4f0277b1945",
+      "destination": "doc/optimize/runtime/baseline/list_runtime_measurements_2026_10_11_time.summary.json",
+      "destination_sha256": "b77840c998d9e3c86785fa9466ec518418ec4194682776990341c4f0277b1945",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_rt4_inventory.md",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "6c091f77589f175e2c5805ddd26d4700310c5f52c7419be4d8e2cf94bd0f77cf",
+      "destination": "doc/optimize/runtime/baseline/list_runtime_rt4_inventory.md",
+      "destination_sha256": "40bdd8e6e710ef6e739b95f60669235e3b390d6a397afd6db39ff67cdeebef57",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_rt5_measurement_plan.md",
+      "source_head": "ee13e44820993fcfc56ecfa216ce4165be67f4ca",
+      "source_branch": "detached",
+      "source_sha256": "5caa990d555f55e5f9ea0c67b2b4646110ebe1df258eb1299e7aaf09acd74118",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_rt5_measurement_plan.md",
+      "destination_sha256": "db0cb1db0bbaaaac021a5190335b657d7eac197e636575b9559221a5bdd8abf5",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "52f4dac79d74aa4e86b25394c91087eaaa79c37747b97d26ae279e8d7714cd4a",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_2026_10_12.md",
+      "destination_sha256": "2be101583f39256608e1eb3919a34a50866c617155d25434f80d4697355f9b0d",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/asm-evidence.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "1560d9d006effb9f318a23cbc280ed977c5cf409d3598bdebb5dd87b9995baf1",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/asm-evidence.md",
+      "destination_sha256": "1560d9d006effb9f318a23cbc280ed977c5cf409d3598bdebb5dd87b9995baf1",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/asm-evidence.original.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6b0234558020beaf18a12634a7ae7322c4f1c096c240e330e9eb3eb299053cea",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/asm-evidence.original.md",
+      "destination_sha256": "6b0234558020beaf18a12634a7ae7322c4f1c096c240e330e9eb3eb299053cea",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/asm-manifest.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9178575b4b1e37516b3c2eeafbf540ace4da11e8ddb4e4ffb8fb05bc08c5541b",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/asm-manifest.json",
+      "destination_sha256": "9178575b4b1e37516b3c2eeafbf540ace4da11e8ddb4e4ffb8fb05bc08c5541b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-after-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "603afa95c092e4d614ed5143869449c51113515b00e32976dc32a199916f0f3e",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-after-build-snapshot.json",
+      "destination_sha256": "603afa95c092e4d614ed5143869449c51113515b00e32976dc32a199916f0f3e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-asm-flat_map_resume.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "4fe4512238642204f3cce3978eba01374cb2487b316070de34ebaf7682eb0e90",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-asm-flat_map_resume.txt",
+      "destination_sha256": "4fe4512238642204f3cce3978eba01374cb2487b316070de34ebaf7682eb0e90",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-asm-list_builder_push.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "a876502f9995446ad8f6aa72b21880d2245cb8445995da3e64cf9ecfb2da7600",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-asm-list_builder_push.txt",
+      "destination_sha256": "a876502f9995446ad8f6aa72b21880d2245cb8445995da3e64cf9ecfb2da7600",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-asm-run_quantum.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "7f92f08860db8a33b053cd1b633fa3a99fca8db87402c07e1dfa1ff9118515d4",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-asm-run_quantum.txt",
+      "destination_sha256": "7f92f08860db8a33b053cd1b633fa3a99fca8db87402c07e1dfa1ff9118515d4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-asm-step_context.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "495ca20269270730f50e2b79d00369332e40365e311e014c8b30d9d6de8036f9",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-asm-step_context.txt",
+      "destination_sha256": "495ca20269270730f50e2b79d00369332e40365e311e014c8b30d9d6de8036f9",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-asm-symbols.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "057a130f790b78dbaf4c4a65e53e5b0b1e4b73c8e720f5fbd98298dcf32cf4fa",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-asm-symbols.txt",
+      "destination_sha256": "057a130f790b78dbaf4c4a65e53e5b0b1e4b73c8e720f5fbd98298dcf32cf4fa",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "603afa95c092e4d614ed5143869449c51113515b00e32976dc32a199916f0f3e",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-build-snapshot.json",
+      "destination_sha256": "603afa95c092e4d614ed5143869449c51113515b00e32976dc32a199916f0f3e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d05634945be3129fa4ecbfe50e850139d8726f5ac78119eb3647a016c19f752d",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-build.jsonl",
+      "destination_sha256": "d05634945be3129fa4ecbfe50e850139d8726f5ac78119eb3647a016c19f752d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "3f8a4971a222c84b64de900d845cc85696feada22de67bd9175faac384b4f4fd",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-build.stderr",
+      "destination_sha256": "3f8a4971a222c84b64de900d845cc85696feada22de67bd9175faac384b4f4fd",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/before-builder-with-tests.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d46202a8e7807fcc50b60f5d2352c079ab9079d111cb926f4e9bbfbfe1991f19",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/before-builder-with-tests.rs",
+      "destination_sha256": "d46202a8e7807fcc50b60f5d2352c079ab9079d111cb926f4e9bbfbfe1991f19",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-after-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e6f86b17a50c46053b3849298af2bad48f0b84754644cde04bf31d557e1fbca3",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-after-build-snapshot.json",
+      "destination_sha256": "e6f86b17a50c46053b3849298af2bad48f0b84754644cde04bf31d557e1fbca3",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-asm-flat_map_resume.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "5385c361309f53e8555b491298a2735ca854f84c4088a0499b114617aac79e52",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-asm-flat_map_resume.txt",
+      "destination_sha256": "5385c361309f53e8555b491298a2735ca854f84c4088a0499b114617aac79e52",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-asm-list_builder_clone.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "8ebefd006efebada9640123b6df81ca02208dd2802462c02234563286040c61d",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-asm-list_builder_clone.txt",
+      "destination_sha256": "8ebefd006efebada9640123b6df81ca02208dd2802462c02234563286040c61d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-asm-list_builder_finish.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "21d24b78b1a09fb3a335490fbf90c473221db7838c1d4f683ec70d62cd544e2c",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-asm-list_builder_finish.txt",
+      "destination_sha256": "21d24b78b1a09fb3a335490fbf90c473221db7838c1d4f683ec70d62cd544e2c",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-asm-list_builder_push.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9ab3610197ccfc9fc4055adb8ca5a90171407dd6f29b0b5592188b967f4f84de",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-asm-list_builder_push.txt",
+      "destination_sha256": "9ab3610197ccfc9fc4055adb8ca5a90171407dd6f29b0b5592188b967f4f84de",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-asm-run_quantum.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "63fdf3024da4e0da7a29cf48317bf96137cf6f4ed37ca3f484ea5b4c71535465",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-asm-run_quantum.txt",
+      "destination_sha256": "63fdf3024da4e0da7a29cf48317bf96137cf6f4ed37ca3f484ea5b4c71535465",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-asm-step_context.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ea82b96e652f97f2cf435a69e14186e9662483a3549ce4cf7beda9f608023839",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-asm-step_context.txt",
+      "destination_sha256": "ea82b96e652f97f2cf435a69e14186e9662483a3549ce4cf7beda9f608023839",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-asm-symbols.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "f43a14e7ce1c0471e673dea903b52fe33e5ed6136d07f9be9e8d56a1e6bf67a4",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-asm-symbols.txt",
+      "destination_sha256": "f43a14e7ce1c0471e673dea903b52fe33e5ed6136d07f9be9e8d56a1e6bf67a4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-before-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e6f86b17a50c46053b3849298af2bad48f0b84754644cde04bf31d557e1fbca3",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-before-build-snapshot.json",
+      "destination_sha256": "e6f86b17a50c46053b3849298af2bad48f0b84754644cde04bf31d557e1fbca3",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "0177f22d14c4acb7b1b430ede4225cedaebd269fc136521355a5445d6018ec91",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-build.jsonl",
+      "destination_sha256": "0177f22d14c4acb7b1b430ede4225cedaebd269fc136521355a5445d6018ec91",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "42dab3dcb35c39611cc86ccdc5113ba12403b4eb2b860c179910cd0666c38de9",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-build.stderr",
+      "destination_sha256": "42dab3dcb35c39611cc86ccdc5113ba12403b4eb2b860c179910cd0666c38de9",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/box-list-builder.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "336aab7914e63ca5b3ebc8634d6373afd7c38d1b5ad87f3c1fdf658bff4f825b",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/box-list-builder.rs",
+      "destination_sha256": "336aab7914e63ca5b3ebc8634d6373afd7c38d1b5ad87f3c1fdf658bff4f825b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/build-source-audit.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "634dffdd416081aa06a775924f5df0caaba86961065e56da6b816344a7e40512",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/build-source-audit.json",
+      "destination_sha256": "634dffdd416081aa06a775924f5df0caaba86961065e56da6b816344a7e40512",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/copied-files.sha256.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "5a5abb22384a7ca40ac6f2ce9d35d6ddf7bfd1f8cde11b491ca1aa5203f6f2bb",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/copied-files.sha256.json",
+      "destination_sha256": "5a5abb22384a7ca40ac6f2ce9d35d6ddf7bfd1f8cde11b491ca1aa5203f6f2bb",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-after-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6755eddd7927168bc7d1279e61276143e89d7f84c49b4283c227f5d27a4344b7",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-after-build-snapshot.json",
+      "destination_sha256": "6755eddd7927168bc7d1279e61276143e89d7f84c49b4283c227f5d27a4344b7",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-asm-flat_map_resume.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "7ccde7d04801fb0372589a21a834c63c5f7e39203e946180f03f2d39b1a517fd",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-asm-flat_map_resume.txt",
+      "destination_sha256": "7ccde7d04801fb0372589a21a834c63c5f7e39203e946180f03f2d39b1a517fd",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-asm-list_builder_clone.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "8d524b9be8df9720ffa6f53c88c2f5f0c138d598f764525101ff29bf434b867f",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-asm-list_builder_clone.txt",
+      "destination_sha256": "8d524b9be8df9720ffa6f53c88c2f5f0c138d598f764525101ff29bf434b867f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-asm-list_builder_finish.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ea552677cb675b9de5a94ae2f8760d5d6f89683270eded94c0c98551ddc37461",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-asm-list_builder_finish.txt",
+      "destination_sha256": "ea552677cb675b9de5a94ae2f8760d5d6f89683270eded94c0c98551ddc37461",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-asm-list_builder_push.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "40497db26753014cd89f7bf7c56e9098624dd955a500f853fe034610107764f9",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-asm-list_builder_push.txt",
+      "destination_sha256": "40497db26753014cd89f7bf7c56e9098624dd955a500f853fe034610107764f9",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-asm-run_quantum.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ce05f89fd5ec36cd9c98ddff540f6b80d212cc3d7fa7a0e9555d7d06f1310bda",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-asm-run_quantum.txt",
+      "destination_sha256": "ce05f89fd5ec36cd9c98ddff540f6b80d212cc3d7fa7a0e9555d7d06f1310bda",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-asm-step_context.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "b39e4c929329c060f386a8fe26f2bfbdf5bd0b6d3ebc09b01174006e97157ea8",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-asm-step_context.txt",
+      "destination_sha256": "b39e4c929329c060f386a8fe26f2bfbdf5bd0b6d3ebc09b01174006e97157ea8",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-asm-symbols.txt",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "37129642d5b4307b2ef5afdaae9eac4a7b4512c2dc6af05deca8716337e21def",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-asm-symbols.txt",
+      "destination_sha256": "37129642d5b4307b2ef5afdaae9eac4a7b4512c2dc6af05deca8716337e21def",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-before-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6755eddd7927168bc7d1279e61276143e89d7f84c49b4283c227f5d27a4344b7",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-before-build-snapshot.json",
+      "destination_sha256": "6755eddd7927168bc7d1279e61276143e89d7f84c49b4283c227f5d27a4344b7",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "855a6494ff1d8604f4105650fc1cc188bbfcfd76adaf7aab444b16a7e17897de",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-build.jsonl",
+      "destination_sha256": "855a6494ff1d8604f4105650fc1cc188bbfcfd76adaf7aab444b16a7e17897de",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "52670c36a23841bd67c5b23a00725653c3ad06111e1054ef9546cfaa34af833b",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-build.stderr",
+      "destination_sha256": "52670c36a23841bd67c5b23a00725653c3ad06111e1054ef9546cfaa34af833b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/direct-list-builder.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "683239f455bf7cb326b247ccbd2a26e542f3dac40ab9db9ff1a5096379e4f540",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/direct-list-builder.rs",
+      "destination_sha256": "683239f455bf7cb326b247ccbd2a26e542f3dac40ab9db9ff1a5096379e4f540",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-after-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "46a5aa167166751cc6f449fb599361e86667e03e4714259e56839f04cb9fa238",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-after-build-snapshot.json",
+      "destination_sha256": "46a5aa167166751cc6f449fb599361e86667e03e4714259e56839f04cb9fa238",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-before-build-snapshot.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "46a5aa167166751cc6f449fb599361e86667e03e4714259e56839f04cb9fa238",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-before-build-snapshot.json",
+      "destination_sha256": "46a5aa167166751cc6f449fb599361e86667e03e4714259e56839f04cb9fa238",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "72591c87aa28cc17f1e79b3c13d816f28f32ef03361d5f5ee6db43d3be631951",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-build.jsonl",
+      "destination_sha256": "72591c87aa28cc17f1e79b3c13d816f28f32ef03361d5f5ee6db43d3be631951",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e1b4571c7e4b2e98be9b8f9f54adce8fc249a6d77a2625b183c6d7fed268859b",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-build.stderr",
+      "destination_sha256": "e1b4571c7e4b2e98be9b8f9f54adce8fc249a6d77a2625b183c6d7fed268859b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-list-builder.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "920bf4235e8baba304e7201ea18324eff7e339f7fa5805b94094a5188005a13a",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-list-builder.rs",
+      "destination_sha256": "920bf4235e8baba304e7201ea18324eff7e339f7fa5805b94094a5188005a13a",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-stdlib.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "7bc688ae1ed9e84860619b6c24573b3ff7447411e9b5483b3a8e26f4034c171e",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-stdlib.jsonl",
+      "destination_sha256": "7bc688ae1ed9e84860619b6c24573b3ff7447411e9b5483b3a8e26f4034c171e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-stdlib.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "db23fe22b202c50c43507cd969aa9e49c7ec6310edac91465b1c3a48acfeda49",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-stdlib.stderr",
+      "destination_sha256": "db23fe22b202c50c43507cd969aa9e49c7ec6310edac91465b1c3a48acfeda49",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-validation.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "3d4b7cea2d6a265ca2d41d70e7a22070fe5a8bf693a8fbebe1c4e6ea0472965b",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-validation.json",
+      "destination_sha256": "3d4b7cea2d6a265ca2d41d70e7a22070fe5a8bf693a8fbebe1c4e6ea0472965b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-versus-before.patch",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e0190da59653c21c96a50a86535cc72900824f2dea1666a624825386615d3104",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-versus-before.patch",
+      "destination_sha256": "e0190da59653c21c96a50a86535cc72900824f2dea1666a624825386615d3104",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/final-workspace.log",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d709913fbb817cc88a50abdebf1ab42a8aba2ed8858e99ee026c4f83a176e3cf",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/final-workspace.log",
+      "destination_sha256": "d709913fbb817cc88a50abdebf1ab42a8aba2ed8858e99ee026c4f83a176e3cf",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/inspect_asm.original.py",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "4bb7d3da6505f6db242235bc7fc91dfef47815a68b1267ae799aef513a89010b",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/inspect_asm.original.py",
+      "destination_sha256": "4bb7d3da6505f6db242235bc7fc91dfef47815a68b1267ae799aef513a89010b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/inspect_asm.py",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9571a5acdf811972e12de9dcd748309cb000b90bd561629fd5f17bd9b879a391",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/inspect_asm.py",
+      "destination_sha256": "9571a5acdf811972e12de9dcd748309cb000b90bd561629fd5f17bd9b879a391",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/short-before.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "43d8447f0b4f24729175ebbaa3d277ef18fe0ef2c7ab66857e68c48342da902c",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/short-before.json",
+      "destination_sha256": "43d8447f0b4f24729175ebbaa3d277ef18fe0ef2c7ab66857e68c48342da902c",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/short-box.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2e2ae4935dc0bfa87bf80996105addd90350a05f7a5cf0ffdbfd9eb143e86c87",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/short-box.json",
+      "destination_sha256": "2e2ae4935dc0bfa87bf80996105addd90350a05f7a5cf0ffdbfd9eb143e86c87",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/short-direct.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "5ce1193bd737976f1c905d89cde43aef65da5c84a33b49e1ee5570ef055a1b63",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/short-direct.json",
+      "destination_sha256": "5ce1193bd737976f1c905d89cde43aef65da5c84a33b49e1ee5570ef055a1b63",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_owned_tail_evidence_2026_10_12/short-final.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6819b9d759673c9522d46eac80c3331793ee6990e544201f032bd0a131a8abce",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_owned_tail_evidence_2026_10_12/short-final.json",
+      "destination_sha256": "6819b9d759673c9522d46eac80c3331793ee6990e544201f032bd0a131a8abce",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_builder_route_decision_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "1bd0856ca542185c8417615848b03ffdfa25bfedced0c3e436fbc48cef2444c3",
+      "destination": "doc/optimize/runtime/checkpoint/list_builder_route_decision_2026_10_12.md",
+      "destination_sha256": "18922575a5ae12e7bbba04bdee4a22dd294144044d06145e1954230f51e2ac26",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_cost_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "45282ab7140a80175715b2a4b5311ca6bad7270b31d7fa871c1bd131fc7e57a9",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_cost_2026_10_12.md",
+      "destination_sha256": "43467b4b1f1012f0f34d18f9055a8a329d80f56de41bddd09dc5d0131efd146c",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "eb7affa98466bade36f0526fd72e19a07b4bdb4e4e9aa3345f2282ee51e5face",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_2026_10_12.md",
+      "destination_sha256": "1fc22f155010fd6bc62af31271c710737d4a8e74430ba0c3ed451de967a83e29",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/README.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "67a05d599865915d82b69368b8635861c4d565787ae5989410d5c000d9e9eaa4",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/README.md",
+      "destination_sha256": "67a05d599865915d82b69368b8635861c4d565787ae5989410d5c000d9e9eaa4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-count-final.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "c8144773314cdfa6be1b8055349909ff1105fe2d6833f6cf420a099e7c9f62a0",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-count-final.json",
+      "destination_sha256": "c8144773314cdfa6be1b8055349909ff1105fe2d6833f6cf420a099e7c9f62a0",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-count-smoke.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-count-smoke.stderr",
+      "destination_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-count-smoke.stdout",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "c0ec98a680ccf00162f1a60c76f74d910e66b811ddec7fa993e5898366422c01",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-count-smoke.stdout",
+      "destination_sha256": "c0ec98a680ccf00162f1a60c76f74d910e66b811ddec7fa993e5898366422c01",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-rss-final.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "8ff5933273049b09749179262de87567bdff7a7ca77b4d8a124550c22a47e14e",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-rss-final.json",
+      "destination_sha256": "8ff5933273049b09749179262de87567bdff7a7ca77b4d8a124550c22a47e14e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-rss-smoke.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-rss-smoke.stderr",
+      "destination_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-rss-smoke.stdout",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2097004bcfc503dd14ead602f0e93abd0deff2c229889f56dcd0fddfb147a120",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline-rss-smoke.stdout",
+      "destination_sha256": "2097004bcfc503dd14ead602f0e93abd0deff2c229889f56dcd0fddfb147a120",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin/generator.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin/generator.rs",
+      "destination_sha256": "dfd418ac54b81e0b96edcb1291e4ec19f0d2fc95cee5b5e928c74c4dd9af8d0f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin/list_builder.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "4b422d3c9c5302f2aedb9bc704df4dc1f3dd9edd3e6acbbda7122c398354c926",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin/list_builder.rs",
+      "destination_sha256": "4b422d3c9c5302f2aedb9bc704df4dc1f3dd9edd3e6acbbda7122c398354c926",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin/list_flat_map.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "a010fc7d9151b3bc39cc2213868e7528c97d495e6161ceee486fd4d7ba2ab97e",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin/list_flat_map.rs",
+      "destination_sha256": "a010fc7d9151b3bc39cc2213868e7528c97d495e6161ceee486fd4d7ba2ab97e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "12fb42e9d7edb18fda3fedcac8e1a656751e01a824db2d5eef5672cfd2da893f",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/builtin.rs",
+      "destination_sha256": "12fb42e9d7edb18fda3fedcac8e1a656751e01a824db2d5eef5672cfd2da893f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/continuation.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/continuation.rs",
+      "destination_sha256": "8330885cfdf62271d8adabb11307fd577d0e0131935d3f985842388ceeaf48bc",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/generator_tests.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6382fc91bef5efcd9399ce36f70c0c65399c043eba2a9d38d7087988202c3eb2",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/generator_tests.rs",
+      "destination_sha256": "6382fc91bef5efcd9399ce36f70c0c65399c043eba2a9d38d7087988202c3eb2",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "fb46af18a067ec58ac412c996012be288e5d7c5b8c926ac0acd6fbab50780e59",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs",
+      "destination_sha256": "fb46af18a067ec58ac412c996012be288e5d7c5b8c926ac0acd6fbab50780e59",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/list_flat_map_tests/metrics.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "fe53ef66d83628c1eae12bb7de9e83817580e2fc01e99c1203d9e28fa36ffae4",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/list_flat_map_tests/metrics.rs",
+      "destination_sha256": "fe53ef66d83628c1eae12bb7de9e83817580e2fc01e99c1203d9e28fa36ffae4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/list_flat_map_tests.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d561734f8fd785c68a7af3f9a0a54c442a193861797bb746d085665da022a47d",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm/list_flat_map_tests.rs",
+      "destination_sha256": "d561734f8fd785c68a7af3f9a0a54c442a193861797bb746d085665da022a47d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9e80708145e52ff5654e8135eed2203ce3dc9c085183dad6d2b53f135545e52d",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/baseline_source/crates/eldr/src/vm.rs",
+      "destination_sha256": "9e80708145e52ff5654e8135eed2203ce3dc9c085183dad6d2b53f135545e52d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/build_all.py",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "3836ae8ec886ff28dbbd8d3c627f571f511d3738b7c5d0c23468fe2e1d9047ae",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/build_all.py",
+      "destination_sha256": "3836ae8ec886ff28dbbd8d3c627f571f511d3738b7c5d0c23468fe2e1d9047ae",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-after.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-after.json",
+      "destination_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-before.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-before.json",
+      "destination_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "7c308383c9728f69f06d7a060c221419f1561c968707ba530f921b85722795bc",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-build.jsonl",
+      "destination_sha256": "7c308383c9728f69f06d7a060c221419f1561c968707ba530f921b85722795bc",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "8e770c13cf1bf659949e7a0d8f7f5cfe2ef59e40c5432065041a2280c0dc46a2",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-count-build.stderr",
+      "destination_sha256": "8e770c13cf1bf659949e7a0d8f7f5cfe2ef59e40c5432065041a2280c0dc46a2",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-after.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-after.json",
+      "destination_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-before.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-before.json",
+      "destination_sha256": "9208d92c8cd732df7035b1f6c69d20e74031bead846aa4a559a19f3ae71558cf",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2b97de13b30543913664745b1bca7713c24c54e423042729579f582606bfb4e0",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-build.jsonl",
+      "destination_sha256": "2b97de13b30543913664745b1bca7713c24c54e423042729579f582606bfb4e0",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "16dad1d17946d83119d4c81e776170ee9af6c0b03ef5a4ab432a05d2edc7bf58",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/baseline-rss-build.stderr",
+      "destination_sha256": "16dad1d17946d83119d4c81e776170ee9af6c0b03ef5a4ab432a05d2edc7bf58",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-after.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-after.json",
+      "destination_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-before.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-before.json",
+      "destination_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "dab165f56996f62f12b3cea6b937970ed168a11847308c2f9c186add835f8e31",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-build.jsonl",
+      "destination_sha256": "dab165f56996f62f12b3cea6b937970ed168a11847308c2f9c186add835f8e31",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "1e969a70818aa227fda45983b983dcbf2e6264ddae3e08e4c7f30e7e25a51ee2",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-count-build.stderr",
+      "destination_sha256": "1e969a70818aa227fda45983b983dcbf2e6264ddae3e08e4c7f30e7e25a51ee2",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-after.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-after.json",
+      "destination_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-before.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-before.json",
+      "destination_sha256": "905e20329ea2a6519299b450218573f5c426a98a75b04fd32acd51de4f3abf32",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-build.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "1b599784810a7133c37345545caa3cd9cd70645c0fd543a645110085b70a8875",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-build.jsonl",
+      "destination_sha256": "1b599784810a7133c37345545caa3cd9cd70645c0fd543a645110085b70a8875",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-build.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "c1919ab342c134420e4df2ff596648dfe2e16ab56377798a113ed242bbfd76e8",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/builds/shared-rss-build.stderr",
+      "destination_sha256": "c1919ab342c134420e4df2ff596648dfe2e16ab56377798a113ed242bbfd76e8",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/copied-files.sha256.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6e9a767bba35a77f25007431f563daaf38c40fef13cadaff3328659b22ce93f4",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/copied-files.sha256.json",
+      "destination_sha256": "6e9a767bba35a77f25007431f563daaf38c40fef13cadaff3328659b22ce93f4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/environment-after-measurement.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d7b626d984edbe0987f30ddadebc383268c347e345bd2cb116a08f62fbce91c5",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/environment-after-measurement.json",
+      "destination_sha256": "d7b626d984edbe0987f30ddadebc383268c347e345bd2cb116a08f62fbce91c5",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/feature-smoke.log",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "32084f3a6ffaf93da0cd649b712ac41092f10b883c4817d26d3b90d35cc9994e",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/feature-smoke.log",
+      "destination_sha256": "32084f3a6ffaf93da0cd649b712ac41092f10b883c4817d26d3b90d35cc9994e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/product-unchanged-audit.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "0e89cd0ad175f3f121395df01430ce6ce6ddad58a96f0260e11b08b9c0774d4f",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/product-unchanged-audit.json",
+      "destination_sha256": "0e89cd0ad175f3f121395df01430ce6ce6ddad58a96f0260e11b08b9c0774d4f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-count-final.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "68c7d4dd309e05a759792ae10a11af86eaba4832d8f9fadc29ab4cdcfaf44b66",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-count-final.json",
+      "destination_sha256": "68c7d4dd309e05a759792ae10a11af86eaba4832d8f9fadc29ab4cdcfaf44b66",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-count-smoke.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-count-smoke.stderr",
+      "destination_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-count-smoke.stdout",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "26de24b2f4ffa5b77c82b676462fc652bed73d51f6d5df4eaa80b9fd581a6a5e",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-count-smoke.stdout",
+      "destination_sha256": "26de24b2f4ffa5b77c82b676462fc652bed73d51f6d5df4eaa80b9fd581a6a5e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-rss-final.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "17fd13730c93685041f95cde60aaa9151fa6762f3303b127b7c3a8730c221bd8",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-rss-final.json",
+      "destination_sha256": "17fd13730c93685041f95cde60aaa9151fa6762f3303b127b7c3a8730c221bd8",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-rss-smoke.stderr",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-rss-smoke.stderr",
+      "destination_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-rss-smoke.stdout",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e5013e5dcc97972a51e856fa85a6d19dd3d1c9417892dcb0a791958a649e95ea",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared-rss-smoke.stdout",
+      "destination_sha256": "e5013e5dcc97972a51e856fa85a6d19dd3d1c9417892dcb0a791958a649e95ea",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared_source/crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "fb46af18a067ec58ac412c996012be288e5d7c5b8c926ac0acd6fbab50780e59",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared_source/crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs",
+      "destination_sha256": "fb46af18a067ec58ac412c996012be288e5d7c5b8c926ac0acd6fbab50780e59",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared_source/crates/eldr/src/vm/list_flat_map_tests/metrics.rs",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "fe53ef66d83628c1eae12bb7de9e83817580e2fc01e99c1203d9e28fa36ffae4",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/shared_source/crates/eldr/src/vm/list_flat_map_tests/metrics.rs",
+      "destination_sha256": "fe53ef66d83628c1eae12bb7de9e83817580e2fc01e99c1203d9e28fa36ffae4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/source-build-audit.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "cc6b54ddd4f23519d5082c69ea393738e51fafb99fe373e6a9fb857d59890902",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/source-build-audit.json",
+      "destination_sha256": "cc6b54ddd4f23519d5082c69ea393738e51fafb99fe373e6a9fb857d59890902",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/validation.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "3e142e03c7284cba1149eeeca3a44d3742123973243d900214bbfcf2d74dc92f",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/validation.json",
+      "destination_sha256": "3e142e03c7284cba1149eeeca3a44d3742123973243d900214bbfcf2d74dc92f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_oi039_vm_memory_evidence_2026_10_12/workspace-ci.log",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "744661bc348844b19fb64dcbadb4ab47f89fa52981cc75d1214cd22149bb458a",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_evidence_2026_10_12/workspace-ci.log",
+      "destination_sha256": "744661bc348844b19fb64dcbadb4ab47f89fa52981cc75d1214cd22149bb458a",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_rt5_builder_measurement_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "bdf89efdd8409fc133f8694cbf2ded6b1e68d63481302819846e7b7ba81689f4",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_rt5_builder_measurement_2026_10_12.md",
+      "destination_sha256": "156d722517ef3b639785c7c3e84ce269fdbf98ba0adc0ee939b89d835a3ed416",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_rt5_builder_optimization_2026_10_12.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "990cd0016d55791f1f6b4f16591bbc5938794d90f0797b450238dc895aa008db",
+      "destination": "doc/optimize/runtime/checkpoint/list_runtime_rt5_builder_optimization_2026_10_12.md",
+      "destination_sha256": "c6af99224fb1c4a8756beaac3ff31540e4252551b0dfae6f27d11509faa538d1",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_capacity.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d5adb2f32f4b4652ebed8841cd3587c3df7c2775986943c01dbc3364ffdde491",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_capacity.jsonl",
+      "destination_sha256": "d5adb2f32f4b4652ebed8841cd3587c3df7c2775986943c01dbc3364ffdde491",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_capacity.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "116067206e21239e04797e3845d079732190b0e6a3b89017bfece23f4be48559",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_capacity.summary.json",
+      "destination_sha256": "116067206e21239e04797e3845d079732190b0e6a3b89017bfece23f4be48559",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_capacity_compare.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "4dc39c577af4279393380e1207a666765f72145e139ad7e7443ef94955c9de8f",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.jsonl",
+      "destination_sha256": "4dc39c577af4279393380e1207a666765f72145e139ad7e7443ef94955c9de8f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_capacity_compare.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ae3d6f589f57df63448b240bff69c759c7ca0871a477b04c4591ada59e5e5459",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.summary.json",
+      "destination_sha256": "ae3d6f589f57df63448b240bff69c759c7ca0871a477b04c4591ada59e5e5459",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_capacity_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_capacity_verify.jsonl",
+      "destination_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_capacity_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d7d896d0d49d7240799f2096829585f1c3924695fbb3dc599e588e2cea0fc668",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_capacity_verify.summary.json",
+      "destination_sha256": "d7d896d0d49d7240799f2096829585f1c3924695fbb3dc599e588e2cea0fc668",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "81ee9e223c19b31b49adb5cd5e9ab83fb0d96b7d032c71660eed65c38966b55c",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost.jsonl",
+      "destination_sha256": "81ee9e223c19b31b49adb5cd5e9ab83fb0d96b7d032c71660eed65c38966b55c",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "9dee725c0e067b4e5f93a65830ccf139b6e2b6d93240cd6321732c98e08f1d2c",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost.summary.json",
+      "destination_sha256": "9dee725c0e067b4e5f93a65830ccf139b6e2b6d93240cd6321732c98e08f1d2c",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_final.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "11e52d0c8a92f096be30b1341336ff9518d17a45f964d1447144c4ac4ff3d919",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_final.jsonl",
+      "destination_sha256": "11e52d0c8a92f096be30b1341336ff9518d17a45f964d1447144c4ac4ff3d919",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_final.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "daba445173531f5066e54a49bf838260acb5bdea415e99baaaaf8c8c5916f666",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_final.summary.json",
+      "destination_sha256": "daba445173531f5066e54a49bf838260acb5bdea415e99baaaaf8c8c5916f666",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "cf971d928b944fe030818512ee717a4bea380cccb812cd60b71a47cd481c8d6c",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_verify.jsonl",
+      "destination_sha256": "cf971d928b944fe030818512ee717a4bea380cccb812cd60b71a47cd481c8d6c",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2f01d831313e622a553e3aa80608e048a0101903e42dffb58671e89eaa1630b9",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_verify.summary.json",
+      "destination_sha256": "2f01d831313e622a553e3aa80608e048a0101903e42dffb58671e89eaa1630b9",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_verify_final.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "cf971d928b944fe030818512ee717a4bea380cccb812cd60b71a47cd481c8d6c",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_verify_final.jsonl",
+      "destination_sha256": "cf971d928b944fe030818512ee717a4bea380cccb812cd60b71a47cd481c8d6c",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_verify_final.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6a402cc1b2b8b492e057a3103c49833bb3b7fc27b4374b9ec9e1db19e44ef4eb",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_verify_final.summary.json",
+      "destination_sha256": "6a402cc1b2b8b492e057a3103c49833bb3b7fc27b4374b9ec9e1db19e44ef4eb",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_vm.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "73099a2e33fee2aa857576f24cfd1d3500ad5016a6330b3b0d0f8941194405df",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_vm.jsonl",
+      "destination_sha256": "73099a2e33fee2aa857576f24cfd1d3500ad5016a6330b3b0d0f8941194405df",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_vm.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "bbb3cd8b372d1ff46acb810e413d6a5d83d7279e2de3ebeb57d62d2c410c69f1",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_vm.summary.json",
+      "destination_sha256": "bbb3cd8b372d1ff46acb810e413d6a5d83d7279e2de3ebeb57d62d2c410c69f1",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_vm_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "1e5afb4889b80e94dc4966908401a616db49a566caf91effe7a5372f158dd464",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_vm_verify.jsonl",
+      "destination_sha256": "1e5afb4889b80e94dc4966908401a616db49a566caf91effe7a5372f158dd464",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_cost_vm_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "126290169695d7ff94c1e14a0c3b52dc36549e9a887f20b3db469e93fe98bb9e",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_cost_vm_verify.summary.json",
+      "destination_sha256": "126290169695d7ff94c1e14a0c3b52dc36549e9a887f20b3db469e93fe98bb9e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_guard.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "7e1f49ac01d7d3666cbbd6541e5d2c5a438721a852b14373394c260792294f5b",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_guard.jsonl",
+      "destination_sha256": "7e1f49ac01d7d3666cbbd6541e5d2c5a438721a852b14373394c260792294f5b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_guard.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "26a59616fdf30420de2b74c9e3b6f65486ca818829d238a702e077e24e437b5e",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_guard.summary.json",
+      "destination_sha256": "26a59616fdf30420de2b74c9e3b6f65486ca818829d238a702e077e24e437b5e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_guard_compare.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "c4e458bc095ddeb727588b3f93a1c589e2e448248cac499c20269b27fd088c84",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_guard_compare.jsonl",
+      "destination_sha256": "c4e458bc095ddeb727588b3f93a1c589e2e448248cac499c20269b27fd088c84",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_guard_compare.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "0cf56d5ea48d9f7f88054a56f3313e5b95b73a54ada5104f081bb6284950ff25",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_guard_compare.summary.json",
+      "destination_sha256": "0cf56d5ea48d9f7f88054a56f3313e5b95b73a54ada5104f081bb6284950ff25",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_inline.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "19a1574b21e37d75118058f0cce3dbbb99a8893c6bdc86958f7032a6fd9fb9ac",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_inline.jsonl",
+      "destination_sha256": "19a1574b21e37d75118058f0cce3dbbb99a8893c6bdc86958f7032a6fd9fb9ac",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_inline.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "4aadc80f6fbc09cccdb10f47117834d3d366d9414f86c0600b32c0ac914b172f",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_inline.summary.json",
+      "destination_sha256": "4aadc80f6fbc09cccdb10f47117834d3d366d9414f86c0600b32c0ac914b172f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_inline_compare.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2263ad719570d3e5089a1aee4b14c4a61fb051232e7bf3aa5fab94d76aec8cc2",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_inline_compare.jsonl",
+      "destination_sha256": "2263ad719570d3e5089a1aee4b14c4a61fb051232e7bf3aa5fab94d76aec8cc2",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_inline_compare.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "45d8cdfd67de4bfb23c4b8914522f7233a05c01f052ded97efbe333c8dd97c08",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_inline_compare.summary.json",
+      "destination_sha256": "45d8cdfd67de4bfb23c4b8914522f7233a05c01f052ded97efbe333c8dd97c08",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_control.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "83f7526221172a3c2a179189a74a89c78b656274742a4997731ab560db8c686b",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_control.jsonl",
+      "destination_sha256": "83f7526221172a3c2a179189a74a89c78b656274742a4997731ab560db8c686b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_control.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "12280165fdd3576668937c7b21718dc086ce1975190b8c7e8b4646cb1f59bbda",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_control.summary.json",
+      "destination_sha256": "12280165fdd3576668937c7b21718dc086ce1975190b8c7e8b4646cb1f59bbda",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_count.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "f608e606fbf0320c8b146d1ba1156e735da79588f9283c470605015d29e60c27",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_count.jsonl",
+      "destination_sha256": "f608e606fbf0320c8b146d1ba1156e735da79588f9283c470605015d29e60c27",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_count.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "8724404e3017fae2f29c2bf85d270efd06e9422889972aa46a309bd23eef4a83",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_count.summary.json",
+      "destination_sha256": "8724404e3017fae2f29c2bf85d270efd06e9422889972aa46a309bd23eef4a83",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_rss.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "f86df1dbe141113b6d6342b4298262db11616395fbe4a2142245e6add65dbce3",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_rss.jsonl",
+      "destination_sha256": "f86df1dbe141113b6d6342b4298262db11616395fbe4a2142245e6add65dbce3",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_rss.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "341aa50accc42b5761582d6cec1566d9262fc3cfa0ff5b2c9264681c07a5a410",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_rss.summary.json",
+      "destination_sha256": "341aa50accc42b5761582d6cec1566d9262fc3cfa0ff5b2c9264681c07a5a410",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_rss_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2e3f00faa7186caeedbd2009c7ad29931d7d00d13b162cb281a81ff2121d48ca",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_rss_verify.jsonl",
+      "destination_sha256": "2e3f00faa7186caeedbd2009c7ad29931d7d00d13b162cb281a81ff2121d48ca",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_rss_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "65feb3d57400d210c8eda58d683b821497ef1d7418f7df61b4ead743e90bd179",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_rss_verify.summary.json",
+      "destination_sha256": "65feb3d57400d210c8eda58d683b821497ef1d7418f7df61b4ead743e90bd179",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "c32b42a9ab5d144642682f29362e11941c98c9c9d3071b2b9cf735b5793b7a43",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_verify.jsonl",
+      "destination_sha256": "c32b42a9ab5d144642682f29362e11941c98c9c9d3071b2b9cf735b5793b7a43",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/oi039_2026_10_12_vm_memory_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "3d5a6b2e1cd107924fa1d523b3c246b10514428ff983736e1580a94f2cb46a5a",
+      "destination": "doc/optimize/runtime/checkpoint/oi039_2026_10_12_vm_memory_verify.summary.json",
+      "destination_sha256": "3d5a6b2e1cd107924fa1d523b3c246b10514428ff983736e1580a94f2cb46a5a",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_before.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "cccd2f3bec21f76f9a0b303bcd003bc2c0897d7d5d85f7f99138a33b2667866d",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_before.jsonl",
+      "destination_sha256": "cccd2f3bec21f76f9a0b303bcd003bc2c0897d7d5d85f7f99138a33b2667866d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_before.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "a0b3f3720eec80170b2eb20f181723227a9fdbe85ba893155a2deaa4e803dd89",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_before.summary.json",
+      "destination_sha256": "a0b3f3720eec80170b2eb20f181723227a9fdbe85ba893155a2deaa4e803dd89",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_box.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "3fc378e5a764685bf16a31d0afb3cc3b23e9764b3d3b8e03cddead12695ad229",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_box.jsonl",
+      "destination_sha256": "3fc378e5a764685bf16a31d0afb3cc3b23e9764b3d3b8e03cddead12695ad229",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_box.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ede356ba4342eaa97c6c542d10b27880de4342d1aec2b7d462850811f6fa483a",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_box.summary.json",
+      "destination_sha256": "ede356ba4342eaa97c6c542d10b27880de4342d1aec2b7d462850811f6fa483a",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_box_compare.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d1418e5a66f7c838f45664c3b759c937380ec6f3f8dcca416d88a7b9f79a8281",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_box_compare.jsonl",
+      "destination_sha256": "d1418e5a66f7c838f45664c3b759c937380ec6f3f8dcca416d88a7b9f79a8281",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_box_compare.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "00688c622bde1c9bd7132703688735d8b624aca3e1eab6b8e0c8df855e56bb9c",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_box_compare.summary.json",
+      "destination_sha256": "00688c622bde1c9bd7132703688735d8b624aca3e1eab6b8e0c8df855e56bb9c",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_box_short.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "24dd1193e4ef567ab95507338d97c70af8002e653e7ea01549a4daf495436d2b",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_box_short.jsonl",
+      "destination_sha256": "24dd1193e4ef567ab95507338d97c70af8002e653e7ea01549a4daf495436d2b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_box_short.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "59dab75a4ed207ae9eeaeed53b61dc40ca0b66068178aeeee9a768b05d8d459d",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_box_short.summary.json",
+      "destination_sha256": "59dab75a4ed207ae9eeaeed53b61dc40ca0b66068178aeeee9a768b05d8d459d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_direct.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "42913469c7a6195520517ae71bb5577fc7d9ed54bf00288630b5f16fed7d4fd4",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_direct.jsonl",
+      "destination_sha256": "42913469c7a6195520517ae71bb5577fc7d9ed54bf00288630b5f16fed7d4fd4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_direct.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "b5c59b0d72b4d8a12954e2d462fd11c9b773b16c05c985cdbc587e35cfab62ff",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_direct.summary.json",
+      "destination_sha256": "b5c59b0d72b4d8a12954e2d462fd11c9b773b16c05c985cdbc587e35cfab62ff",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_direct_compare.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "16360e0bde4310858183a8d06f275e04236b1b24728e7603a451217329e445c2",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_direct_compare.jsonl",
+      "destination_sha256": "16360e0bde4310858183a8d06f275e04236b1b24728e7603a451217329e445c2",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_direct_compare.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d39d1a13f17a131b1ac67bb1db5fbf012942139e11e0e5bbb09486df5d964e31",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_direct_compare.summary.json",
+      "destination_sha256": "d39d1a13f17a131b1ac67bb1db5fbf012942139e11e0e5bbb09486df5d964e31",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_direct_short.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6bbc57bf369b268c889cf0465c42279fb1e7ddcabab3fee706c08737ca6268b1",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_direct_short.jsonl",
+      "destination_sha256": "6bbc57bf369b268c889cf0465c42279fb1e7ddcabab3fee706c08737ca6268b1",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_direct_short.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "41431cc5be8aef6d1ffe14582a60fa7f2e6ff9ea4985a79d7da568e73cd2f5b6",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_direct_short.summary.json",
+      "destination_sha256": "41431cc5be8aef6d1ffe14582a60fa7f2e6ff9ea4985a79d7da568e73cd2f5b6",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "a937dc413b9b18642156190961bcaaa011537a7a6e6c5d24da8fffad281e754e",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final.jsonl",
+      "destination_sha256": "a937dc413b9b18642156190961bcaaa011537a7a6e6c5d24da8fffad281e754e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e91ba130f7505331a98c1a1ceca9df33e24cca7446c30caf029227e4cb64d6b7",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final.summary.json",
+      "destination_sha256": "e91ba130f7505331a98c1a1ceca9df33e24cca7446c30caf029227e4cb64d6b7",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final_short.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "b7bfebd5e105688bae66d0ddaf53956eca0c9ac59b3fbabd41e7f7d16c51e91f",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final_short.jsonl",
+      "destination_sha256": "b7bfebd5e105688bae66d0ddaf53956eca0c9ac59b3fbabd41e7f7d16c51e91f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final_short.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "34510162f5457c694ef6361df871094e0adf087dc21407469be4cbfeced2c2ab",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final_short.summary.json",
+      "destination_sha256": "34510162f5457c694ef6361df871094e0adf087dc21407469be4cbfeced2c2ab",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final_short_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "7da479aaccdcf96e2a0aca4afee2cee65be976e54fd3c2c77883d89f8f36c26a",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final_short_verify.jsonl",
+      "destination_sha256": "7da479aaccdcf96e2a0aca4afee2cee65be976e54fd3c2c77883d89f8f36c26a",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final_short_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "a5255a6fd26d2dc131003af1fa79893fa01ec5bbd5560b5bb34ef6037348c728",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final_short_verify.summary.json",
+      "destination_sha256": "a5255a6fd26d2dc131003af1fa79893fa01ec5bbd5560b5bb34ef6037348c728",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final_verify.jsonl",
+      "destination_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_final_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2fe2b093a91e1f7a590f9446e8e24e43159917928cbf2f22183f95d0630415e7",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_final_verify.summary.json",
+      "destination_sha256": "2fe2b093a91e1f7a590f9446e8e24e43159917928cbf2f22183f95d0630415e7",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/owned_tail_2026_10_12_reservation_red_green.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "e150f9ffcf70e25795e2ff2f13ca260ee9ad1ca7f016b40c381e7063b4dfcd75",
+      "destination": "doc/optimize/runtime/checkpoint/owned_tail_2026_10_12_reservation_red_green.json",
+      "destination_sha256": "e150f9ffcf70e25795e2ff2f13ca260ee9ad1ca7f016b40c381e7063b4dfcd75",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "49f0b2710eb678af6a3f1103d9d747f4bf2c1bc231278d983f4d804b4d23c8b1",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12.jsonl",
+      "destination_sha256": "49f0b2710eb678af6a3f1103d9d747f4bf2c1bc231278d983f4d804b4d23c8b1",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "8e370c3778403c59bfe4b2d8794a1704fad9cd7ceefb0b1010422605ddde0950",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12.summary.json",
+      "destination_sha256": "8e370c3778403c59bfe4b2d8794a1704fad9cd7ceefb0b1010422605ddde0950",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_accepted_completion.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "30cae0d4878200d537ff1c8ca70283d6e859285ff87233d083f3f0f25ae8640d",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_completion.jsonl",
+      "destination_sha256": "30cae0d4878200d537ff1c8ca70283d6e859285ff87233d083f3f0f25ae8640d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_accepted_completion.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2b5ea0a30d83167676d019aef9edf0ef8c1d71fa4dad5429ff8685b71c8cb808",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_completion.summary.json",
+      "destination_sha256": "2b5ea0a30d83167676d019aef9edf0ef8c1d71fa4dad5429ff8685b71c8cb808",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_accepted_recheck.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "6a78f18e3e31efc0a19c8f9a2546a03cda68d4cd1f1817249f174c226e6ea726",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_recheck.jsonl",
+      "destination_sha256": "6a78f18e3e31efc0a19c8f9a2546a03cda68d4cd1f1817249f174c226e6ea726",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_accepted_recheck.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "016258a00a9902724561bff5bcf08b99bbbf8b7d9d6c0a25288c676a2361e98a",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_recheck.summary.json",
+      "destination_sha256": "016258a00a9902724561bff5bcf08b99bbbf8b7d9d6c0a25288c676a2361e98a",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_accepted_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_verify.jsonl",
+      "destination_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_accepted_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "97d578eb85a79576cf1f3ee01e387e35b918157f35b5c108e7523b27a9d56486",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_verify.summary.json",
+      "destination_sha256": "97d578eb85a79576cf1f3ee01e387e35b918157f35b5c108e7523b27a9d56486",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_after_completion.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "691e395cb2bd7b48a1c85b2b415643e048f0e9e94c7a5c6ae85edddd6a61deea",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_after_completion.jsonl",
+      "destination_sha256": "691e395cb2bd7b48a1c85b2b415643e048f0e9e94c7a5c6ae85edddd6a61deea",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_after_completion.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "da672600f4e6a7d23ff37d632ebb313fe777b748dd192490c69cc2411f3d041e",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_after_completion.summary.json",
+      "destination_sha256": "da672600f4e6a7d23ff37d632ebb313fe777b748dd192490c69cc2411f3d041e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_after_final_completion.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "5e53d5255cdaf4e4b0c0fb3bd1dc2431bdc2bc05be7cf233438beb777e0f537e",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_after_final_completion.jsonl",
+      "destination_sha256": "5e53d5255cdaf4e4b0c0fb3bd1dc2431bdc2bc05be7cf233438beb777e0f537e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_after_final_completion.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "99a8efc4679b58b02e9404d3c23ae599c8403b9794b0dc9e5c88b3547521c52b",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_after_final_completion.summary.json",
+      "destination_sha256": "99a8efc4679b58b02e9404d3c23ae599c8403b9794b0dc9e5c88b3547521c52b",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_after_final_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_after_final_verify.jsonl",
+      "destination_sha256": "ac37637078d7573fb6a25ad08369a7978b668c803ce5e06f19eb86b75d619c23",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_after_final_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "19368ab42d2d56400239938a25f633bc6ced9e0729e4b4140d080e5ff240f202",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_after_final_verify.summary.json",
+      "destination_sha256": "19368ab42d2d56400239938a25f633bc6ced9e0729e4b4140d080e5ff240f202",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_before_completion.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ee260bea79368d4f3c5608b7d86b56b907b96feba0a21d99270140027e8e2ada",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_before_completion.jsonl",
+      "destination_sha256": "ee260bea79368d4f3c5608b7d86b56b907b96feba0a21d99270140027e8e2ada",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_before_completion.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "f9af1525a5940693e81ae0f873145fcb7b3ae9a511de70166bc161e85207447f",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_before_completion.summary.json",
+      "destination_sha256": "f9af1525a5940693e81ae0f873145fcb7b3ae9a511de70166bc161e85207447f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_final_recheck.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "ffcf895f5b9dfacffa69763c1cfb3ea0cf95f44d745f6b7af81f4815e848e70e",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_final_recheck.jsonl",
+      "destination_sha256": "ffcf895f5b9dfacffa69763c1cfb3ea0cf95f44d745f6b7af81f4815e848e70e",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_final_recheck.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "74b9743aa4cd83e8b7b884c447d580aa4afdd0e4250ec0b9ee6568e5df84f83f",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_final_recheck.summary.json",
+      "destination_sha256": "74b9743aa4cd83e8b7b884c447d580aa4afdd0e4250ec0b9ee6568e5df84f83f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_verify.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "2c457a65c07a2b740bf3720d93fd06cc4578e678491cf7bdc68dd9dff2933f93",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_verify.jsonl",
+      "destination_sha256": "2c457a65c07a2b740bf3720d93fd06cc4578e678491cf7bdc68dd9dff2933f93",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/rt5_builder_2026_10_12_verify.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "codex/rt5-builder-checkpoint-measurement",
+      "source_sha256": "d7f1cf9d6d544b1f793847e5fe0f70030dd132d4b5206a5959123501a3451af4",
+      "destination": "doc/optimize/runtime/checkpoint/rt5_builder_2026_10_12_verify.summary.json",
+      "destination_sha256": "d7f1cf9d6d544b1f793847e5fe0f70030dd132d4b5206a5959123501a3451af4",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/file_out_handler_lifecycle_repair_spec.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "746b66aa2c43a8c817e2b2deda789ca4365852d4a171214ab11604948a70c4bb",
+      "destination": "doc/optimize/runtime/file-out/file_out_handler_lifecycle_repair_spec.md",
+      "destination_sha256": "12e1f0ea31511176be64661d8b5337af9ffe1856ad0a9203b61597edc40bd91b",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/file_out_handler_lifecycle_reproduction_2026_10_13.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "de3b16531f96b139c5f3334b862ab5521413542caa10c6696af78bdc848fb597",
+      "destination": "doc/optimize/runtime/file-out/file_out_handler_lifecycle_reproduction_2026_10_13.md",
+      "destination_sha256": "f0c3098683f9caada99f355211c23bc1e5e445ec6a8ea381d65c68879ad9b3a6",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/list_chunk_handoff_2026_10_13.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "375fd384c39342faf26c0acc54ac0cdaabb09ab27c2b22a5e3f0b5a3a3b1eec9",
+      "destination": "doc/optimize/runtime/list/list_chunk_handoff_2026_10_13.jsonl",
+      "destination_sha256": "375fd384c39342faf26c0acc54ac0cdaabb09ab27c2b22a5e3f0b5a3a3b1eec9",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/list_chunk_handoff_2026_10_13.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "ce8a6e98bb7edd07d93a0d7fe1d378daa0712dcb54e56018a8958a86fdea66d0",
+      "destination": "doc/optimize/runtime/list/list_chunk_handoff_2026_10_13.summary.json",
+      "destination_sha256": "ce8a6e98bb7edd07d93a0d7fe1d378daa0712dcb54e56018a8958a86fdea66d0",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/list_chunk_handoff_2026_10_13_verify.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "9a0f3a800a52703f882bb7af276289ddba63bd04c01c8add9e0949011c306b74",
+      "destination": "doc/optimize/runtime/list/list_chunk_handoff_2026_10_13_verify.json",
+      "destination_sha256": "9a0f3a800a52703f882bb7af276289ddba63bd04c01c8add9e0949011c306b74",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/list_chunk_handoff_comparison_2026_10_13.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "0dbe331568da61bfab8c4d329f5aabf10b94cc5522f231772834ac86cdbc5b2e",
+      "destination": "doc/optimize/runtime/list/list_chunk_handoff_comparison_2026_10_13.md",
+      "destination_sha256": "a2cae1fd00b253baab8680cfe02fe239dc829d57dd3eefea1e388b4f1272d008",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/list_runtime_progress_2026_10_13.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "291938f9eb9d8db171b63963fd8c58a38b4c282331de133240c739fe1be73266",
+      "destination": "doc/optimize/runtime/list_runtime_progress_2026_10_13.md",
+      "destination_sha256": "32443079bf5e026215686269aa91fb6a3e2dcb26bef5a1317fc202070d6fc1d5",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_2026_10_13.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "97eeb7a229206aff3c704bc509495f370bf5bee8d4444bfa0a437c65bdf26b64",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_2026_10_13.jsonl",
+      "destination_sha256": "97eeb7a229206aff3c704bc509495f370bf5bee8d4444bfa0a437c65bdf26b64",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_2026_10_13.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "90b6cef66b363d13bac61e0e22017f3da93dae9aeafbb9459ad2254fc59dbe13",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_2026_10_13.summary.json",
+      "destination_sha256": "90b6cef66b363d13bac61e0e22017f3da93dae9aeafbb9459ad2254fc59dbe13",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_2026_10_13_builds.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "640f987ffcb345ce1b0b02bd7af10f5bc4a4ebf8c02039769ece92c029629dac",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_2026_10_13_builds.json",
+      "destination_sha256": "640f987ffcb345ce1b0b02bd7af10f5bc4a4ebf8c02039769ece92c029629dac",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_2026_10_13_verify.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "8918451fc78d895b81b59b75992feec7552ba642a401f232bb660aa4c1fd954d",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_2026_10_13_verify.json",
+      "destination_sha256": "8918451fc78d895b81b59b75992feec7552ba642a401f232bb660aa4c1fd954d",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_batch_2026_10_13.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "0c649f75f1eb037053702c5771e255fe852ff69073694f5b5c7f34cfd1212391",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_batch_2026_10_13.jsonl",
+      "destination_sha256": "0c649f75f1eb037053702c5771e255fe852ff69073694f5b5c7f34cfd1212391",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_batch_2026_10_13.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "a92f46de79b68914020472d15a693dc94ac92776770eb2021c85637b5d197838",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_batch_2026_10_13.summary.json",
+      "destination_sha256": "a92f46de79b68914020472d15a693dc94ac92776770eb2021c85637b5d197838",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_batch_2026_10_13_isolated_builds.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "69a0e6ef7d295a3a2403af066d367d32fd3f5ae3a1a52e18d174ecfe3c1048fe",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_batch_2026_10_13_isolated_builds.json",
+      "destination_sha256": "69a0e6ef7d295a3a2403af066d367d32fd3f5ae3a1a52e18d174ecfe3c1048fe",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_batch_2026_10_13_rechecked.jsonl",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "8f311f247cc28fb29c57ae4a1439b7fd8b85240658636893fba70528f4628346",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_batch_2026_10_13_rechecked.jsonl",
+      "destination_sha256": "8f311f247cc28fb29c57ae4a1439b7fd8b85240658636893fba70528f4628346",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_cost_batch_2026_10_13_rechecked.summary.json",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "4e30f24a8a4f6b7a75b2b44a40b5811942c82007f4eb8e2f017bbfaa6986f43f",
+      "destination": "doc/optimize/runtime/regex/regex_input_cost_batch_2026_10_13_rechecked.summary.json",
+      "destination_sha256": "4e30f24a8a4f6b7a75b2b44a40b5811942c82007f4eb8e2f017bbfaa6986f43f",
+      "action": "copy-unmerged",
+      "byte_preserved": true
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/regex_input_sharing_2026_10_13.md",
+      "source_head": "72154707399d6cdaf7190ab75007f2049ab010c6",
+      "source_branch": "detached",
+      "source_sha256": "853372ec724dc12a485e2559d3cf1651ac0087017203dcfa13b05f83d838828a",
+      "destination": "doc/optimize/runtime/regex/regex_input_sharing_2026_10_13.md",
+      "destination_sha256": "f6b960f0faa88581c4bd4527e8cec5109c06249cd403f23423d59b6f80531045",
+      "action": "copy-unmerged",
+      "byte_preserved": false
+    }
+  ],
+  "state_doc_variants": [
+    {
+      "source": "/Users/haruca/.codex/worktrees/4c18/surtr/doc/list_runtime_followups.md",
+      "source_sha256": "3f1ad5009743798933ccdffee6cb3de06992094bc3efa5b9d9fb8e2df7eca3de",
+      "selected": "/Users/haruca/work/rust/surtr/doc/optimize/runtime/list_runtime_followups.md",
+      "reason": "状態一覧の旧/別worktree版。main一覧へ未統合の追加分を明記する"
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/9ea8/surtr/doc/list_runtime_followups.md",
+      "source_sha256": "fe07bcf663a1049deef04e2747c275f7235b00909b44ba29b5c3b6eaf2857e6b",
+      "selected": "/Users/haruca/work/rust/surtr/doc/optimize/runtime/list_runtime_followups.md",
+      "reason": "状態一覧の旧/別worktree版。main一覧へ未統合の追加分を明記する"
+    },
+    {
+      "source": "/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr/doc/list_runtime_followups.md",
+      "source_sha256": "65b974075882ce622713121efe561b0529679abc4e7308610a1afb6bb9bce128",
+      "selected": "/Users/haruca/work/rust/surtr/doc/optimize/runtime/list_runtime_followups.md",
+      "reason": "状態一覧の旧/別worktree版。main一覧へ未統合の追加分を明記する"
+    }
+  ],
+  "reference_updates": [
+    "doc/docs_cross_audit_2026_10_05.md",
+    "doc/open-issues.md",
+    "doc/optimize/021_recursive_compiler_stack_usage.md",
+    "tests/profile/checkpoint_collections/README.md",
+    "tests/profile/checkpoint_metadata/README.md",
+    "tests/profile/hashmap_cost/README.md",
+    "tests/profile/hashmap_cost/recheck.py",
+    "tests/profile/list_tail_retention/README.md",
+    "tests/profile/list_value_cost/README.md"
+  ],
+  "local_refs": [
+    "codex/cleanup-pre-aggregate-20260516 9ab7c6eaa679db2c3f5d1c22320d8b297f5b71d8",
+    "codex/doc-mahjong-14mode 80641569b306cda6f8186f7b58ec18c5959b5a9a",
+    "codex/hashmap-pattern 988b39236ec03996ab90010e6db4a32e4d26ce37",
+    "codex/lazy-args eb706dff6321a9618a4261db428b9dc392ea752c",
+    "codex/list-value-cost-optimization 282f781519eab07dfc67549a092a38c30ad952e0",
+    "codex/mahjong-sample 1886281e395fc824a60a2cf9a4e6ea53a9afb923",
+    "codex/n12-generator-core 715e594a5843087a16020eb3364486ae42c98d7e",
+    "codex/precompiled-stdlib-v2 1886281e395fc824a60a2cf9a4e6ea53a9afb923",
+    "codex/process-stop-reclamation cfc7cd1843bf1bcca8d188a6aa09491de0a839d0",
+    "codex/repl-error-messages eb706dff6321a9618a4261db428b9dc392ea752c",
+    "codex/repl-tab-completion 079c1da94a356cdc11bf94960f2e130293313d14",
+    "codex/rt5-builder-checkpoint-measurement 72154707399d6cdaf7190ab75007f2049ab010c6",
+    "codex/rune-observability-followups b7b5da27e7d0a09994dc76a5a0a062c67d9e020d",
+    "codex/runtime-stacktrace-display 072dc492d16064013c94d76d35dc9a750979246d",
+    "codex/scar-compile-time 6dada4d6e189436913c9c6906336bb0b80ad0537",
+    "codex/scar-compile-time-recovery fc3fb4ab3bc23e9458463fa713a1d50140c55380",
+    "codex/spec-bypass-audit-20261003 7458fe8d8d16aa795d038345d7f86b9d6209ccee",
+    "codex/test-aggregate-pre-697d2ef5 bd5c985ad33086032f1a7e12fe3a3ca1b0e5f561",
+    "codex/test-overhaul c4dc944a6fce68da6e53768bc5a87837ed7c1dd8",
+    "codex/trait-helper-delayed-inference d120738711ce5c6f8bb1af4d10befccbdfa9e13a",
+    "codex/type-constructor-signature-unification-task1 c1496ba67cf2244792a82cc7292cf696080d0927",
+    "codex/type-constructor-signature-unification-task6 e88723da8422d0fb44fbf9b8e2f8f356f1577677",
+    "codex/type-constructor-signature-unification-task7 dfe4a2e1db3b56f77df917b8827a2388950f5115",
+    "codex/type-constructor-signature-unification-task9 acfc5bde74f91f652489177a617d54c58cb8ff77",
+    "codex/type-identity-capability-refactor 64a2d1dac49b4ef57596f3aa46f23be24c464457",
+    "codex/vm-dump 0b1375c06ea4d6cc81b7e789dfca9f9e922ec410",
+    "codex/vm-observability-tools 385361e68daa01e9b692bef015b7f844426b3b53",
+    "codex/vm-preemptive-step-initial-phase db7b49c2069ff718be6797ec468648b65df5e0e6",
+    "codex/xldr-nested-completion-signatures 70d550cb58b96f11d9a807cb80f4ba3f0ebf4ae4",
+    "codex/xldr-source-only-doc-sig e969ab966370195a597a7a95dee788fe43309699",
+    "docs/pattern-matching-guide be54d0c240e50a39bbd040dc678c9381950988a6",
+    "docs/struct-inspect-private-spec cb7cac295bc28184709484ea57cb1ff2616f7f87",
+    "facet-path-case-api fc40e7e2a0317041a6b72ab00fb57f480881036a",
+    "json-encode-decode-standard 53dd7fffd1afe113aa16509c544b4a2e33f32687",
+    "main 72154707399d6cdaf7190ab75007f2049ab010c6",
+    "parser-monad-example 63ca734ccb2236cd4979e781df001cd520026869"
+  ],
+  "branch_inventory": "36 local refs compared from merge-base with main; no branch-side added/modified runtime optimization doc beyond dirty worktree materials. Inherited deleted old plans excluded.",
+  "validation": {
+    "copied_unmerged_source_files_unchanged": 214,
+    "byte_preserved_artifacts": 251,
+    "narrative_broken_links": 0,
+    "narrative_files_checked": 38,
+    "source_worktree_status_and_diff_unchanged": true,
+    "hashmap_recheck": "AST parse and 2 references exist/JSON parse; recorded binary paths unavailable, no remeasurement",
+    "compiler_tests": "not run; documentation relocation and 2 harness reference paths only"
+  }
+}

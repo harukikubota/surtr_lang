@@ -1,0 +1,62 @@
+
+/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+00000001001eda7c <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE>:
+1001eda7c: d10143ff    	sub	sp, sp, #0x50
+1001eda80: a9034ff4    	stp	x20, x19, [sp, #0x30]
+1001eda84: a9047bfd    	stp	x29, x30, [sp, #0x40]
+1001eda88: 910103fd    	add	x29, sp, #0x40
+1001eda8c: aa0003e9    	mov	x9, x0
+1001eda90: aa0803f3    	mov	x19, x8
+1001eda94: a9408008    	ldp	x8, x0, [x0, #0x8]
+1001eda98: d2f0000a    	mov	x10, #-0x8000000000000000 ; =-9223372036854775808
+1001eda9c: eb0a011f    	cmp	x8, x10
+1001edaa0: 54000061    	b.ne	0x1001edaac <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0x30>
+1001edaa4: f9401534    	ldr	x20, [x9, #0x28]
+1001edaa8: 14000012    	b	0x1001edaf0 <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0x74>
+1001edaac: f9401534    	ldr	x20, [x9, #0x28]
+1001edab0: b4000314    	cbz	x20, 0x1001edb10 <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0x94>
+1001edab4: 3cc18120    	ldur	q0, [x9, #0x18]
+1001edab8: 3d800be0    	str	q0, [sp, #0x20]
+1001edabc: 52800029    	mov	w9, #0x1                ; =1
+1001edac0: 4e080d20    	dup.2d	v0, x9
+1001edac4: 3d8003e0    	str	q0, [sp]
+1001edac8: a90103e8    	stp	x8, x0, [sp, #0x10]
+1001edacc: 9402070a    	bl	0x10026f6f4 <__RNvCs1Y7DaGC1cwg_7___rustc35___rust_no_alloc_shim_is_unstable_v2>
+1001edad0: 52800600    	mov	w0, #0x30               ; =48
+1001edad4: 52800101    	mov	w1, #0x8                ; =8
+1001edad8: 94020703    	bl	0x10026f6e4 <__RNvCs1Y7DaGC1cwg_7___rustc12___rust_alloc>
+1001edadc: b40002a0    	cbz	x0, 0x1001edb30 <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0xb4>
+1001edae0: ad4007e0    	ldp	q0, q1, [sp]
+1001edae4: ad000400    	stp	q0, q1, [x0]
+1001edae8: 3dc00be0    	ldr	q0, [sp, #0x20]
+1001edaec: 3d800800    	str	q0, [x0, #0x20]
+1001edaf0: f9401008    	ldr	x8, [x0, #0x20]
+1001edaf4: f900027f    	str	xzr, [x19]
+1001edaf8: a901827f    	stp	xzr, x0, [x19, #0x18]
+1001edafc: a902d268    	stp	x8, x20, [x19, #0x28]
+1001edb00: a9447bfd    	ldp	x29, x30, [sp, #0x40]
+1001edb04: a9434ff4    	ldp	x20, x19, [sp, #0x30]
+1001edb08: 910143ff    	add	sp, sp, #0x50
+1001edb0c: d65f03c0    	ret
+1001edb10: 3cc18120    	ldur	q0, [x9, #0x18]
+1001edb14: 3d8007e0    	str	q0, [sp, #0x10]
+1001edb18: a90003e8    	stp	x8, x0, [sp]
+1001edb1c: 910003e0    	mov	x0, sp
+1001edb20: 97ffe36f    	bl	0x1001e68dc <__ZN4core3ptr57drop_in_place$LT$eldr..builtin..list_builder..Segment$GT$17h75e82acd968a4867E>
+1001edb24: d2800000    	mov	x0, #0x0                ; =0
+1001edb28: d2800008    	mov	x8, #0x0                ; =0
+1001edb2c: 17fffff2    	b	0x1001edaf4 <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0x78>
+1001edb30: 910003f4    	mov	x20, sp
+1001edb34: 52800100    	mov	w0, #0x8                ; =8
+1001edb38: 52800601    	mov	w1, #0x30               ; =48
+1001edb3c: 9407596d    	bl	0x1003c40f0 <__ZN5alloc5alloc18handle_alloc_error17h06754e1196e3be78E>
+1001edb40: d4200020    	brk	#0x1
+1001edb44: aa0003f3    	mov	x19, x0
+1001edb48: 91004280    	add	x0, x20, #0x10
+1001edb4c: 97ffe364    	bl	0x1001e68dc <__ZN4core3ptr57drop_in_place$LT$eldr..builtin..list_builder..Segment$GT$17h75e82acd968a4867E>
+1001edb50: aa1303e0    	mov	x0, x19
+1001edb54: 94075b2b    	bl	0x1003c4800 <dyld_stub_binder+0x1003c4800>
+1001edb58: 94075a97    	bl	0x1003c45b4 <__ZN4core9panicking16panic_in_cleanup17h2d3328184a42aad6E>

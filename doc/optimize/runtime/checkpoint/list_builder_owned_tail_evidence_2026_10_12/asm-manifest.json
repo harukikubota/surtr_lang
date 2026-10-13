@@ -1,0 +1,390 @@
+{
+  "before": {
+    "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/before-binary",
+    "sha256": "6748ab984940bb407c2fbc178c10f71910ca5938bff2ebbb2b23b3cf380e7f7b",
+    "commands": [
+      [
+        "nm",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/before-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr2vm2VM11run_quantum17hf0bebef226766958E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/before-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr2vm2VM12step_context17hd492fb85a05ecefcE",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/before-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin12list_builder11ListBuilder4push17hc57459c33799ea6eE",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/before-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin13list_flat_map19FlatMapContinuation6resume17hd8a8cdb045a0ddc5E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/before-binary"
+      ]
+    ],
+    "functions": {
+      "run_quantum": {
+        "instruction_count": 223,
+        "prologue": [
+          "10003246c: a9ba6ffc    \tstp\tx28, x27, [sp, #-0x60]!",
+          "100032470: a90167fa    \tstp\tx26, x25, [sp, #0x10]",
+          "100032474: a9025ff8    \tstp\tx24, x23, [sp, #0x20]",
+          "100032478: a90357f6    \tstp\tx22, x21, [sp, #0x30]",
+          "10003247c: a9044ff4    \tstp\tx20, x19, [sp, #0x40]",
+          "100032480: a9057bfd    \tstp\tx29, x30, [sp, #0x50]",
+          "100032484: 910143fd    \tadd\tx29, sp, #0x50",
+          "100032488: d12783ff    \tsub\tsp, sp, #0x9e0",
+          "10003248c: f90003ff    \tstr\txzr, [sp]",
+          "100032490: aa0803f3    \tmov\tx19, x8",
+          "100032494: a9405c58    \tldp\tx24, x23, [x2]",
+          "100032498: eb1802ff    \tcmp\tx23, x24"
+        ]
+      },
+      "step_context": {
+        "instruction_count": 3133,
+        "prologue": [
+          "100032930: 6db923e9    \tstp\td9, d8, [sp, #-0x70]!",
+          "100032934: a9016ffc    \tstp\tx28, x27, [sp, #0x10]",
+          "100032938: a90267fa    \tstp\tx26, x25, [sp, #0x20]",
+          "10003293c: a9035ff8    \tstp\tx24, x23, [sp, #0x30]",
+          "100032940: a90457f6    \tstp\tx22, x21, [sp, #0x40]",
+          "100032944: a9054ff4    \tstp\tx20, x19, [sp, #0x50]",
+          "100032948: a9067bfd    \tstp\tx29, x30, [sp, #0x60]",
+          "10003294c: 910183fd    \tadd\tx29, sp, #0x60",
+          "100032950: d13f83ff    \tsub\tsp, sp, #0xfe0",
+          "100032954: f90003ff    \tstr\txzr, [sp]",
+          "100032958: aa0103f4    \tmov\tx20, x1",
+          "10003295c: aa0003f3    \tmov\tx19, x0"
+        ]
+      },
+      "list_builder_push": {
+        "instruction_count": 225,
+        "prologue": [
+          "10020a2ec: d10403ff    \tsub\tsp, sp, #0x100",
+          "10020a2f0: a90a6ffc    \tstp\tx28, x27, [sp, #0xa0]",
+          "10020a2f4: a90b67fa    \tstp\tx26, x25, [sp, #0xb0]",
+          "10020a2f8: a90c5ff8    \tstp\tx24, x23, [sp, #0xc0]",
+          "10020a2fc: a90d57f6    \tstp\tx22, x21, [sp, #0xd0]",
+          "10020a300: a90e4ff4    \tstp\tx20, x19, [sp, #0xe0]",
+          "10020a304: a90f7bfd    \tstp\tx29, x30, [sp, #0xf0]",
+          "10020a308: 9103c3fd    \tadd\tx29, sp, #0xf0",
+          "10020a30c: aa0203f5    \tmov\tx21, x2",
+          "10020a310: aa0003f3    \tmov\tx19, x0",
+          "10020a314: f9400428    \tldr\tx8, [x1, #0x8]",
+          "10020a318: b1000518    \tadds\tx24, x8, #0x1"
+        ]
+      },
+      "flat_map_resume": {
+        "instruction_count": 1022,
+        "prologue": [
+          "1001c6aa0: a9ba6ffc    \tstp\tx28, x27, [sp, #-0x60]!",
+          "1001c6aa4: a90167fa    \tstp\tx26, x25, [sp, #0x10]",
+          "1001c6aa8: a9025ff8    \tstp\tx24, x23, [sp, #0x20]",
+          "1001c6aac: a90357f6    \tstp\tx22, x21, [sp, #0x30]",
+          "1001c6ab0: a9044ff4    \tstp\tx20, x19, [sp, #0x40]",
+          "1001c6ab4: a9057bfd    \tstp\tx29, x30, [sp, #0x50]",
+          "1001c6ab8: 910143fd    \tadd\tx29, sp, #0x50",
+          "1001c6abc: d10e03ff    \tsub\tsp, sp, #0x380",
+          "1001c6ac0: aa0003f3    \tmov\tx19, x0",
+          "1001c6ac4: aa0803f4    \tmov\tx20, x8",
+          "1001c6ac8: aa0103f6    \tmov\tx22, x1",
+          "1001c6acc: f84086c8    \tldr\tx8, [x22], #0x8"
+        ]
+      }
+    }
+  },
+  "direct": {
+    "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary",
+    "sha256": "b946509ee1c2dc2940821414b4fcdbdb80f4a176d82bc744a5b26c866cac1700",
+    "commands": [
+      [
+        "nm",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr2vm2VM11run_quantum17hf0bebef226766958E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr2vm2VM12step_context17hd492fb85a05ecefcE",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin12list_builder11ListBuilder4push17h6e0f12072fd45288E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin13list_flat_map19FlatMapContinuation6resume17hd8a8cdb045a0ddc5E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN79_$LT$eldr..builtin..list_builder..ListBuilder$u20$as$u20$core..clone..Clone$GT$5clone17h5d44256c3d1358a4E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/direct-binary"
+      ]
+    ],
+    "functions": {
+      "run_quantum": {
+        "instruction_count": 223,
+        "prologue": [
+          "100032574: a9ba6ffc    \tstp\tx28, x27, [sp, #-0x60]!",
+          "100032578: a90167fa    \tstp\tx26, x25, [sp, #0x10]",
+          "10003257c: a9025ff8    \tstp\tx24, x23, [sp, #0x20]",
+          "100032580: a90357f6    \tstp\tx22, x21, [sp, #0x30]",
+          "100032584: a9044ff4    \tstp\tx20, x19, [sp, #0x40]",
+          "100032588: a9057bfd    \tstp\tx29, x30, [sp, #0x50]",
+          "10003258c: 910143fd    \tadd\tx29, sp, #0x50",
+          "100032590: d12903ff    \tsub\tsp, sp, #0xa40",
+          "100032594: f90003ff    \tstr\txzr, [sp]",
+          "100032598: aa0803f3    \tmov\tx19, x8",
+          "10003259c: a9405c58    \tldp\tx24, x23, [x2]",
+          "1000325a0: eb1802ff    \tcmp\tx23, x24"
+        ]
+      },
+      "step_context": {
+        "instruction_count": 3140,
+        "prologue": [
+          "100032a38: 6db923e9    \tstp\td9, d8, [sp, #-0x70]!",
+          "100032a3c: a9016ffc    \tstp\tx28, x27, [sp, #0x10]",
+          "100032a40: a90267fa    \tstp\tx26, x25, [sp, #0x20]",
+          "100032a44: a9035ff8    \tstp\tx24, x23, [sp, #0x30]",
+          "100032a48: a90457f6    \tstp\tx22, x21, [sp, #0x40]",
+          "100032a4c: a9054ff4    \tstp\tx20, x19, [sp, #0x50]",
+          "100032a50: a9067bfd    \tstp\tx29, x30, [sp, #0x60]",
+          "100032a54: 910183fd    \tadd\tx29, sp, #0x60",
+          "100032a58: d14007ff    \tsub\tsp, sp, #0x1, lsl #12   ; =0x1000",
+          "100032a5c: f81a07ff    \tstr\txzr, [sp], #-0x60",
+          "100032a60: aa0103f4    \tmov\tx20, x1",
+          "100032a64: aa0003f3    \tmov\tx19, x0"
+        ]
+      },
+      "list_builder_push": {
+        "instruction_count": 373,
+        "prologue": [
+          "100248aa8: d10483ff    \tsub\tsp, sp, #0x120",
+          "100248aac: a90c6ffc    \tstp\tx28, x27, [sp, #0xc0]",
+          "100248ab0: a90d67fa    \tstp\tx26, x25, [sp, #0xd0]",
+          "100248ab4: a90e5ff8    \tstp\tx24, x23, [sp, #0xe0]",
+          "100248ab8: a90f57f6    \tstp\tx22, x21, [sp, #0xf0]",
+          "100248abc: a9104ff4    \tstp\tx20, x19, [sp, #0x100]",
+          "100248ac0: a9117bfd    \tstp\tx29, x30, [sp, #0x110]",
+          "100248ac4: 910443fd    \tadd\tx29, sp, #0x110",
+          "100248ac8: aa0203f4    \tmov\tx20, x2",
+          "100248acc: aa0003f3    \tmov\tx19, x0",
+          "100248ad0: f9401428    \tldr\tx8, [x1, #0x28]",
+          "100248ad4: b100051a    \tadds\tx26, x8, #0x1"
+        ]
+      },
+      "list_builder_finish": {
+        "instruction_count": 56,
+        "prologue": [
+          "1001eda7c: d10143ff    \tsub\tsp, sp, #0x50",
+          "1001eda80: a9034ff4    \tstp\tx20, x19, [sp, #0x30]",
+          "1001eda84: a9047bfd    \tstp\tx29, x30, [sp, #0x40]",
+          "1001eda88: 910103fd    \tadd\tx29, sp, #0x40",
+          "1001eda8c: aa0003e9    \tmov\tx9, x0",
+          "1001eda90: aa0803f3    \tmov\tx19, x8",
+          "1001eda94: a9408008    \tldp\tx8, x0, [x0, #0x8]",
+          "1001eda98: d2f0000a    \tmov\tx10, #-0x8000000000000000 ; =-9223372036854775808",
+          "1001eda9c: eb0a011f    \tcmp\tx8, x10",
+          "1001edaa0: 54000061    \tb.ne\t0x1001edaac <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0x30>",
+          "1001edaa4: f9401534    \tldr\tx20, [x9, #0x28]",
+          "1001edaa8: 14000012    \tb\t0x1001edaf0 <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0x74>"
+        ]
+      },
+      "flat_map_resume": {
+        "instruction_count": 1157,
+        "prologue": [
+          "10020ede0: a9ba6ffc    \tstp\tx28, x27, [sp, #-0x60]!",
+          "10020ede4: a90167fa    \tstp\tx26, x25, [sp, #0x10]",
+          "10020ede8: a9025ff8    \tstp\tx24, x23, [sp, #0x20]",
+          "10020edec: a90357f6    \tstp\tx22, x21, [sp, #0x30]",
+          "10020edf0: a9044ff4    \tstp\tx20, x19, [sp, #0x40]",
+          "10020edf4: a9057bfd    \tstp\tx29, x30, [sp, #0x50]",
+          "10020edf8: 910143fd    \tadd\tx29, sp, #0x50",
+          "10020edfc: d10e43ff    \tsub\tsp, sp, #0x390",
+          "10020ee00: aa0003f3    \tmov\tx19, x0",
+          "10020ee04: aa0803f4    \tmov\tx20, x8",
+          "10020ee08: aa0103f6    \tmov\tx22, x1",
+          "10020ee0c: f84086c8    \tldr\tx8, [x22], #0x8"
+        ]
+      },
+      "list_builder_clone": {
+        "instruction_count": 140,
+        "prologue": [
+          "1001f0fa4: d101c3ff    \tsub\tsp, sp, #0x70",
+          "1001f0fa8: a9035ff8    \tstp\tx24, x23, [sp, #0x30]",
+          "1001f0fac: a90457f6    \tstp\tx22, x21, [sp, #0x40]",
+          "1001f0fb0: a9054ff4    \tstp\tx20, x19, [sp, #0x50]",
+          "1001f0fb4: a9067bfd    \tstp\tx29, x30, [sp, #0x60]",
+          "1001f0fb8: 910183fd    \tadd\tx29, sp, #0x60",
+          "1001f0fbc: aa0003f3    \tmov\tx19, x0",
+          "1001f0fc0: aa0803f4    \tmov\tx20, x8",
+          "1001f0fc4: 900020a0    \tadrp\tx0, 0x100604000 <dyld_stub_binder+0x100604000>",
+          "1001f0fc8: 913e4000    \tadd\tx0, x0, #0xf90",
+          "1001f0fcc: f9400008    \tldr\tx8, [x0]",
+          "1001f0fd0: d63f0100    \tblr\tx8"
+        ]
+      }
+    }
+  },
+  "box": {
+    "binary": "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary",
+    "sha256": "55502173a0092c9f38fea11c77c5a5331d11c9fc9532bcc485a50f4ded2ca14c",
+    "commands": [
+      [
+        "nm",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr2vm2VM11run_quantum17hf0bebef226766958E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr2vm2VM12step_context17hd492fb85a05ecefcE",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin12list_builder11ListBuilder4push17h6e0f12072fd45288E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN4eldr7builtin13list_flat_map19FlatMapContinuation6resume17hd8a8cdb045a0ddc5E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary"
+      ],
+      [
+        "objdump",
+        "--disassemble-symbols=__ZN79_$LT$eldr..builtin..list_builder..ListBuilder$u20$as$u20$core..clone..Clone$GT$5clone17h5d44256c3d1358a4E",
+        "/private/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-9ea8-owned-tail-ggh5r2z4/box-binary"
+      ]
+    ],
+    "functions": {
+      "run_quantum": {
+        "instruction_count": 223,
+        "prologue": [
+          "1000325a4: a9ba6ffc    \tstp\tx28, x27, [sp, #-0x60]!",
+          "1000325a8: a90167fa    \tstp\tx26, x25, [sp, #0x10]",
+          "1000325ac: a9025ff8    \tstp\tx24, x23, [sp, #0x20]",
+          "1000325b0: a90357f6    \tstp\tx22, x21, [sp, #0x30]",
+          "1000325b4: a9044ff4    \tstp\tx20, x19, [sp, #0x40]",
+          "1000325b8: a9057bfd    \tstp\tx29, x30, [sp, #0x50]",
+          "1000325bc: 910143fd    \tadd\tx29, sp, #0x50",
+          "1000325c0: d12783ff    \tsub\tsp, sp, #0x9e0",
+          "1000325c4: f90003ff    \tstr\txzr, [sp]",
+          "1000325c8: aa0803f3    \tmov\tx19, x8",
+          "1000325cc: a9405c58    \tldp\tx24, x23, [x2]",
+          "1000325d0: eb1802ff    \tcmp\tx23, x24"
+        ]
+      },
+      "step_context": {
+        "instruction_count": 3133,
+        "prologue": [
+          "100032a68: 6db923e9    \tstp\td9, d8, [sp, #-0x70]!",
+          "100032a6c: a9016ffc    \tstp\tx28, x27, [sp, #0x10]",
+          "100032a70: a90267fa    \tstp\tx26, x25, [sp, #0x20]",
+          "100032a74: a9035ff8    \tstp\tx24, x23, [sp, #0x30]",
+          "100032a78: a90457f6    \tstp\tx22, x21, [sp, #0x40]",
+          "100032a7c: a9054ff4    \tstp\tx20, x19, [sp, #0x50]",
+          "100032a80: a9067bfd    \tstp\tx29, x30, [sp, #0x60]",
+          "100032a84: 910183fd    \tadd\tx29, sp, #0x60",
+          "100032a88: d13f83ff    \tsub\tsp, sp, #0xfe0",
+          "100032a8c: f90003ff    \tstr\txzr, [sp]",
+          "100032a90: aa0103f4    \tmov\tx20, x1",
+          "100032a94: aa0003f3    \tmov\tx19, x0"
+        ]
+      },
+      "list_builder_push": {
+        "instruction_count": 413,
+        "prologue": [
+          "100264128: d10443ff    \tsub\tsp, sp, #0x110",
+          "10026412c: a90b6ffc    \tstp\tx28, x27, [sp, #0xb0]",
+          "100264130: a90c67fa    \tstp\tx26, x25, [sp, #0xc0]",
+          "100264134: a90d5ff8    \tstp\tx24, x23, [sp, #0xd0]",
+          "100264138: a90e57f6    \tstp\tx22, x21, [sp, #0xe0]",
+          "10026413c: a90f4ff4    \tstp\tx20, x19, [sp, #0xf0]",
+          "100264140: a9107bfd    \tstp\tx29, x30, [sp, #0x100]",
+          "100264144: 910403fd    \tadd\tx29, sp, #0x100",
+          "100264148: aa0203f4    \tmov\tx20, x2",
+          "10026414c: aa0003f3    \tmov\tx19, x0",
+          "100264150: f9400428    \tldr\tx8, [x1, #0x8]",
+          "100264154: b100051b    \tadds\tx27, x8, #0x1"
+        ]
+      },
+      "list_builder_finish": {
+        "instruction_count": 77,
+        "prologue": [
+          "1001ece58: d10183ff    \tsub\tsp, sp, #0x60",
+          "1001ece5c: a90357f6    \tstp\tx22, x21, [sp, #0x30]",
+          "1001ece60: a9044ff4    \tstp\tx20, x19, [sp, #0x40]",
+          "1001ece64: a9057bfd    \tstp\tx29, x30, [sp, #0x50]",
+          "1001ece68: 910143fd    \tadd\tx29, sp, #0x50",
+          "1001ece6c: aa0103f3    \tmov\tx19, x1",
+          "1001ece70: aa0803f4    \tmov\tx20, x8",
+          "1001ece74: b40004c0    \tcbz\tx0, 0x1001ecf0c <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0xb4>",
+          "1001ece78: a940d808    \tldp\tx8, x22, [x0, #0x8]",
+          "1001ece7c: d2f00009    \tmov\tx9, #-0x8000000000000000 ; =-9223372036854775808",
+          "1001ece80: eb09011f    \tcmp\tx8, x9",
+          "1001ece84: 54000280    \tb.eq\t0x1001eced4 <__ZN4eldr7builtin12list_builder11ListBuilder6finish17hed2b1e00d8cbc46fE+0x7c>"
+        ]
+      },
+      "flat_map_resume": {
+        "instruction_count": 1207,
+        "prologue": [
+          "100211c9c: a9ba6ffc    \tstp\tx28, x27, [sp, #-0x60]!",
+          "100211ca0: a90167fa    \tstp\tx26, x25, [sp, #0x10]",
+          "100211ca4: a9025ff8    \tstp\tx24, x23, [sp, #0x20]",
+          "100211ca8: a90357f6    \tstp\tx22, x21, [sp, #0x30]",
+          "100211cac: a9044ff4    \tstp\tx20, x19, [sp, #0x40]",
+          "100211cb0: a9057bfd    \tstp\tx29, x30, [sp, #0x50]",
+          "100211cb4: 910143fd    \tadd\tx29, sp, #0x50",
+          "100211cb8: d10e43ff    \tsub\tsp, sp, #0x390",
+          "100211cbc: aa0003f3    \tmov\tx19, x0",
+          "100211cc0: aa0803f4    \tmov\tx20, x8",
+          "100211cc4: aa0103f6    \tmov\tx22, x1",
+          "100211cc8: f84086c8    \tldr\tx8, [x22], #0x8"
+        ]
+      },
+      "list_builder_clone": {
+        "instruction_count": 163,
+        "prologue": [
+          "1001f03d4: d101c3ff    \tsub\tsp, sp, #0x70",
+          "1001f03d8: a9035ff8    \tstp\tx24, x23, [sp, #0x30]",
+          "1001f03dc: a90457f6    \tstp\tx22, x21, [sp, #0x40]",
+          "1001f03e0: a9054ff4    \tstp\tx20, x19, [sp, #0x50]",
+          "1001f03e4: a9067bfd    \tstp\tx29, x30, [sp, #0x60]",
+          "1001f03e8: 910183fd    \tadd\tx29, sp, #0x60",
+          "1001f03ec: aa0003e8    \tmov\tx8, x0",
+          "1001f03f0: 900020a0    \tadrp\tx0, 0x100604000 <dyld_stub_binder+0x100604000>",
+          "1001f03f4: 913e4000    \tadd\tx0, x0, #0xf90",
+          "1001f03f8: f9400009    \tldr\tx9, [x0]",
+          "1001f03fc: d63f0120    \tblr\tx9",
+          "1001f0400: 3940e009    \tldrb\tw9, [x0, #0x38]"
+        ]
+      }
+    }
+  }
+}

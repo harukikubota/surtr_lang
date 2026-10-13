@@ -1,0 +1,9 @@
+{
+  "observed_after_measurement": {
+    "MallocScribble": null,
+    "MallocPreScribble": null,
+    "MallocNanoZone": "0",
+    "MallocStackLogging": null
+  },
+  "note": "Measured child environments inherit the runner environment; these allocator variables were observed after the series, not recorded at child startup."
+}

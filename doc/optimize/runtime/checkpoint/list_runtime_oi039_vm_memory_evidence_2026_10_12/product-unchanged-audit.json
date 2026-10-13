@@ -1,0 +1,12 @@
+{
+  "previous_metadata": "doc/list_builder_owned_tail_evidence_2026_10_12/short-final.json",
+  "changed_existing_sources": [
+    "crates/eldr/src/vm/list_flat_map_tests.rs",
+    "crates/eldr/Cargo.toml"
+  ],
+  "new_sources": [
+    "crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs",
+    "crates/eldr/src/vm/list_flat_map_tests/metrics.rs"
+  ],
+  "scope": "feature-gated test observation only; product Rust bodies match the preceding final build"
+}

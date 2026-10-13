@@ -20,8 +20,8 @@ if args.samples < 1 or platform.system() != "Darwin" or "PROBE_VERIFY" in os.env
 package = Path(__file__).resolve().parent
 root = package.parents[2]
 references = {
-    "before": root / "doc/hashmap_cost_2026_10_11_time.summary.json",
-    "after": root / "doc/hashmap_cost_2026_10_11_after_time.summary.json",
+    "before": root / "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_time.summary.json",
+    "after": root / "doc/optimize/runtime/hashmap/hashmap_cost_2026_10_11_after_time.summary.json",
 }
 binaries = {}
 for side, reference in references.items():
