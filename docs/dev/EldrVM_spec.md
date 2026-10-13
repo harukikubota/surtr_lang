@@ -500,7 +500,10 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
 - process / workers / task await timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
-- `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
+- `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>` と、不変の入力全文 `input: Rc<String>` を保持する。`RegexMatch` も入力全文と byte offset の `start` / `end` を保持する
+- `Regex::find_all` の同じ呼出しから得た一致は一つの入力全文を共有する。handle / `Value` の clone は入力文字列を複製せず、元の引数や結果 List の破棄後も利用できる。`find` / `captures` も所有した入力を保持する。`find_all` が返す空 List は入力を保持しない。`find` / `captures` の無一致エラーは従来どおり入力全文を保持する
+- 入力全文と span による内容比較、UTF-8 の文字境界、空一致の列挙を維持する。`text` / capture 抽出は範囲外・逆順・文字の途中の span を RuntimeError として拒否する。`start` / `end` は従来どおり保存した byte offset を返す
+- この共有は同一 VM 内の不変値の所有表現であり、bytecode の Constant / schema を変更しない。正規表現の compile・探索・結果収集は同期処理のままである
 - random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す
 - `Float` は finite-only の `f64` ラッパーとして扱う
 - VM は `LoadConst`, float arithmetic opcode, float builtin helper, `safe_div`, JSON bridge の各経路で non-finite value を user-visible `Float` として生成しない

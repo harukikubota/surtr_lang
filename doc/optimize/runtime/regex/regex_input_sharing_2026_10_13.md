@@ -1,6 +1,8 @@
-> 取り込み元: `/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr`（detached、HEAD `72154707`）。資料の集約。記載された製品変更・harnessはmain未統合。作成時点の実装・検証記録を保存し、現在の整理一覧は [runtime README](../README.md) を参照。実行コマンドは取り込み元のソースを基準にする。
+> 取り込み元: `/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr`（detached、HEAD `72154707`）。資料の集約。集約時点では、記載された製品変更・harnessはmain未統合。作成時点の実装・検証記録を保存し、現在の整理一覧は [runtime README](../README.md) を参照。実行コマンドは取り込み元のソースを基準にする。
 
 # RT-4: Regex の入力全文を共有する
+
+集約後に[main作業treeへの反映・再測定](regex_input_sharing_adoption_2026_10_13.md)を実施した（未コミット）。以下は先行worktreeでの実装・測定記録として保持する。
 
 入力は [2026-10-11 の指定測定レポート](../baseline/list_runtime_measurement_report_2026_10_11.md) と [現在の残課題](../list_runtime_followups.md)。main `72154707399d6cdaf7190ab75007f2049ab010c6` を基準とする。RT-3、HashMap のコピー削減、RT-5 の管理表共有は統合済みで、別 worktree `9ea8` の Builder 改善も重複して実装しない。
 

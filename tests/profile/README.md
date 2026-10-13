@@ -36,3 +36,10 @@ RUST_TEST_THREADS=1 SURTR_TEST_TIMING=1 SURTR_TEST_CACHE=1 cargo nextest run -p 
 `legacy_orphans/**` keeps historical `.srt` inputs that were present without a
 matching `.expected` or `.error` file before the fixture relocation. They are
 not part of the normal nextest gate until an explicit expectation is added.
+
+## Regex Input Ownership
+
+[`regex_input_cost/`](regex_input_cost/README.md) measures whole VM Regex::find_all work,
+result handle clones, and retained input lifetime. Use independent baseline/after
+target directories and keep allocation and time series separate. The recorded
+results are in [`doc/optimize/runtime/regex/`](../../doc/optimize/runtime/regex/).

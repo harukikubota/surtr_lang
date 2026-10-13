@@ -278,14 +278,14 @@ pub struct RegexHandle {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegexCapturesHandle {
-    pub input: String,
+    pub input: Rc<String>,
     pub groups: Vec<Option<(usize, usize)>>,
     pub name_to_index: HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegexMatchHandle {
-    pub input: String,
+    pub input: Rc<String>,
     pub start: usize,
     pub end: usize,
 }

@@ -9,12 +9,12 @@ RT-3のValue測定・方式選定・Future表が空の場合の製品最適化�
 [最適化レポート](value/list_runtime_rt3_optimization_2026_10_11.md) に記録した。
 Future表が非空の場合の読取り走査は [OI-036](../../open-issues.md#oi-036-future表が非空のoperand-stack走査) に残る。
 
-## 集約した未統合資料
+## 集約資料とその後の作業
 
-以下は資料だけをmainへ集約した。製品コードの統合状況は [runtime一覧](README.md) を参照する。
+以下は当初資料だけをmainへ集約した。製品コードの統合状況は [runtime一覧](README.md) を参照する。
 
 - RT-2: [完成Vecのchunk移譲比較](list/list_chunk_handoff_comparison_2026_10_13.md)。保持量だけでなく移譲の追加allocation・peakを測定した。製品方式は未決。
-- RT-4: [Regex入力共有](regex/regex_input_sharing_2026_10_13.md)は `list-runtime-remaining` worktreeで実装・検証済み、main未統合。
+- RT-4: [Regex入力共有](regex/regex_input_sharing_2026_10_13.md)をmain作業treeへ反映した（未コミット）。[mainでの再測定・検証](regex/regex_input_sharing_adoption_2026_10_13.md)を追加した。同期探索・収集の分割は残る。
 - RT-4: [FileOutHandler再現](file-out/file_out_handler_lifecycle_reproduction_2026_10_13.md)と[修復仕様案](file-out/file_out_handler_lifecycle_repair_spec.md)。既存の資源寿命不一致はOI-040で追跡する。製品修復は未実施。
 - RT-5: [Builder共有化](checkpoint/list_runtime_rt5_builder_optimization_2026_10_12.md)、[通常経路の追加調査](checkpoint/list_runtime_oi039_cost_2026_10_12.md)、[実VMメモリ境界](checkpoint/list_runtime_oi039_vm_memory_2026_10_12.md)、[末尾所有の比較](checkpoint/list_builder_owned_tail_2026_10_12.md)。`9ea8` worktreeで実装・検証を進めた未コミット成果で、main未統合。OI-039の遅化/RSS原因は残る。
 

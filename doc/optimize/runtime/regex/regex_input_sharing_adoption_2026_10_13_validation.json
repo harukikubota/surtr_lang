@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-13",
+  "level": 3,
+  "baseline_commit": "b5229abd",
+  "committed": false,
+  "checks": [
+    {
+      "phase": "red",
+      "exit_code": 100,
+      "passed": 0,
+      "failed": 2,
+      "log": "/tmp/surtr-regex-adoption-red.log"
+    },
+    {
+      "phase": "focused",
+      "exit_code": 0,
+      "passed": 8,
+      "skipped": 468,
+      "log": "/tmp/surtr-regex-adoption-focused.log"
+    },
+    {
+      "phase": "initial_ci",
+      "exit_code": 100,
+      "passed": 2229,
+      "failed": 299,
+      "failure_reason": "prepared Scar test prefix key mismatch; setup Cargo target differed",
+      "log": "/tmp/surtr-regex-adoption-ci.log"
+    },
+    {
+      "phase": "final_ci",
+      "exit_code": 0,
+      "passed": 2528,
+      "failed": 0,
+      "skipped": 0,
+      "binaries": 69,
+      "nextest_seconds": 107.98,
+      "log": "/tmp/surtr-regex-adoption-ci-rechecked.log"
+    },
+    {
+      "phase": "stdlib_all",
+      "exit_code": 0,
+      "log": "/tmp/surtr-regex-adoption-stdlib.log",
+      "artifacts": [
+        {
+          "target": "sindr",
+          "manifest_path": "/Users/haruca/work/rust/surtr/crates/sindr/Cargo.toml",
+          "executable": null,
+          "fresh": true
+        },
+        {
+          "target": "eldr",
+          "manifest_path": "/Users/haruca/work/rust/surtr/crates/eldr/Cargo.toml",
+          "executable": null,
+          "fresh": true
+        },
+        {
+          "target": "surtr",
+          "manifest_path": "/Users/haruca/work/rust/surtr/crates/rune/Cargo.toml",
+          "executable": "/tmp/surtr-regex-adoption-debug-target/debug/surtr",
+          "fresh": false
+        }
+      ]
+    }
+  ],
+  "final_product_sha256": {
+    "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+    "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+    "crates/eldr/src/builtin.rs": "c7ff8f01526d7d8f557e754feac4345f9108fd4ad76795a6ed6b3e0ff4366ad8"
+  },
+  "performance_raw_rows": 1200,
+  "performance_groups": 240,
+  "separate_verification_processes": 24
+}

@@ -30,6 +30,7 @@ use std::io::{self, IsTerminal, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2841,16 +2842,18 @@ fn builtin_regex_matches(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
 }
 
 fn builtin_regex_captures(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
-    let pattern = decode_regex_arg(&args[0], "captures", "re")?;
-    let Value::Str(input) = &args[1] else {
+    let mut args = args.into_iter();
+    let regex = args.next().expect("builtin arity checked");
+    let pattern = decode_regex_arg(&regex, "captures", "re")?;
+    let Value::Str(input) = args.next().expect("builtin arity checked") else {
         return Err(RuntimeError::new("captures expects String as input"));
     };
     let re = compile_cached_regex(pattern, "captures")?;
-    let Some(captures) = re.captures(input) else {
+    let Some(captures) = re.captures(&input) else {
         return language_error_result(
             vm,
             "RegexCapturesNoMatch",
-            vec![Value::Str(pattern.into()), Value::Str(input.clone())],
+            vec![Value::Str(pattern.into()), Value::Str(input)],
         );
     };
 
@@ -2867,7 +2870,7 @@ fn builtin_regex_captures(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcom
     }
 
     complete(ok_result(Value::RegexCaptures(RegexCapturesHandle {
-        input: input.clone(),
+        input: Rc::new(input),
         groups,
         name_to_index,
     })))
@@ -2943,36 +2946,42 @@ fn builtin_regex_get_name(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcom
 }
 
 fn builtin_regex_find(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, RuntimeError> {
-    let pattern = decode_regex_arg(&args[0], "find", "re")?;
-    let Value::Str(input) = &args[1] else {
+    let mut args = args.into_iter();
+    let regex = args.next().expect("builtin arity checked");
+    let pattern = decode_regex_arg(&regex, "find", "re")?;
+    let Value::Str(input) = args.next().expect("builtin arity checked") else {
         return Err(RuntimeError::new("find expects String as input"));
     };
     let re = compile_cached_regex(pattern, "find")?;
-    let Some(matched) = re.find(input) else {
+    let Some(matched) = re.find(&input) else {
         return language_error_result(
             vm,
             "RegexFindNoMatch",
-            vec![Value::Str(pattern.into()), Value::Str(input.clone())],
+            vec![Value::Str(pattern.into()), Value::Str(input)],
         );
     };
+    let (start, end) = (matched.start(), matched.end());
     complete(ok_result(Value::RegexMatch(RegexMatchHandle {
-        input: input.clone(),
-        start: matched.start(),
-        end: matched.end(),
+        input: Rc::new(input),
+        start,
+        end,
     })))
 }
 
 fn builtin_regex_find_all(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let pattern = decode_regex_arg(&args[0], "find_all", "re")?;
-    let Value::Str(input) = &args[1] else {
+    let mut args = args.into_iter();
+    let regex = args.next().expect("builtin arity checked");
+    let pattern = decode_regex_arg(&regex, "find_all", "re")?;
+    let Value::Str(input) = args.next().expect("builtin arity checked") else {
         return Err(RuntimeError::new("find_all expects String as input"));
     };
     let re = compile_cached_regex(pattern, "find_all")?;
+    let input = Rc::new(input);
     let items = re
-        .find_iter(input)
+        .find_iter(&input)
         .map(|matched| {
             Value::RegexMatch(RegexMatchHandle {
-                input: input.clone(),
+                input: Rc::clone(&input),
                 start: matched.start(),
                 end: matched.end(),
             })
@@ -7101,6 +7110,268 @@ mod tests {
             },
             other => panic!("expected Err result, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn regex_find_all_shares_input_through_value_clones() {
+        let mut vm = test_vm();
+        let input = String::from("éあé");
+        let input_ptr = input.as_ptr();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("find_all"),
+            vec![
+                Value::Regex(sindr::runtime::RegexHandle {
+                    pattern: ".".into(),
+                }),
+                Value::Str(input),
+            ],
+        )
+        .expect("find_all should succeed");
+        let Value::List(list) = result else {
+            panic!("expected List")
+        };
+        let matches = list.iter().collect::<Vec<_>>();
+        assert_eq!(matches.len(), 3);
+        let Value::RegexMatch(first) = &matches[0] else {
+            panic!("expected match")
+        };
+        assert_eq!(
+            first.input.as_ptr(),
+            input_ptr,
+            "find_all must move its owned input buffer"
+        );
+        for value in &matches {
+            let Value::RegexMatch(matched) = value else {
+                panic!("expected match")
+            };
+            assert_eq!(
+                matched.input.as_ptr(),
+                input_ptr,
+                "all matches must retain one input buffer"
+            );
+        }
+        for (value, (start, end, text)) in
+            matches.iter().zip([(0, 2, "é"), (2, 5, "あ"), (5, 7, "é")])
+        {
+            let Value::RegexMatch(matched) = value else {
+                panic!("expected match")
+            };
+            assert_eq!((matched.start, matched.end), (start, end));
+            assert_eq!(
+                call_builtin(&mut vm, builtin_id("text"), vec![value.clone()]).unwrap(),
+                Value::Str(text.into())
+            );
+            let cloned = value.clone();
+            let Value::RegexMatch(cloned) = cloned else {
+                panic!("expected cloned match")
+            };
+            assert_eq!(
+                cloned.input.as_ptr(),
+                input_ptr,
+                "Value clones must share the input buffer"
+            );
+        }
+        let retained = matches[1].clone();
+        drop(matches);
+        drop(list);
+        assert_eq!(
+            call_builtin(&mut vm, builtin_id("text"), vec![retained]).unwrap(),
+            Value::Str("あ".into())
+        );
+    }
+
+    #[test]
+    fn regex_find_and_captures_clones_share_input() {
+        let mut vm = test_vm();
+        for builtin in ["find", "captures"] {
+            let input = String::from("!éあ?");
+            let input_ptr = input.as_ptr();
+            let result = call_builtin(
+                &mut vm,
+                builtin_id(builtin),
+                vec![
+                    Value::Regex(sindr::runtime::RegexHandle {
+                        pattern: "(?<word>éあ)".into(),
+                    }),
+                    Value::Str(input),
+                ],
+            )
+            .unwrap();
+            let Value::Tagged { tag: 0, mut fields } = result else {
+                panic!("expected Ok")
+            };
+            let value = fields.remove(0);
+            let cloned = value.clone();
+            match (&value, &cloned) {
+                (Value::RegexMatch(original), Value::RegexMatch(cloned)) => {
+                    assert_eq!(
+                        original.input.as_ptr(),
+                        input_ptr,
+                        "find must move its owned input buffer"
+                    );
+                    assert_eq!(
+                        original.input.as_ptr(),
+                        cloned.input.as_ptr(),
+                        "find Value clone must share input"
+                    );
+                    assert_eq!((cloned.start, cloned.end), (1, 6));
+                }
+                (Value::RegexCaptures(original), Value::RegexCaptures(cloned)) => {
+                    assert_eq!(
+                        original.input.as_ptr(),
+                        input_ptr,
+                        "captures must move its owned input buffer"
+                    );
+                    assert_eq!(
+                        original.input.as_ptr(),
+                        cloned.input.as_ptr(),
+                        "captures Value clone must share input"
+                    );
+                    assert_eq!(cloned.groups, vec![Some((1, 6)), Some((1, 6))]);
+                }
+                other => panic!("unexpected regex values: {other:?}"),
+            }
+            drop(value);
+            let accessor = if builtin == "find" { "text" } else { "whole" };
+            assert_eq!(
+                call_builtin(&mut vm, builtin_id(accessor), vec![cloned]).unwrap(),
+                Value::Str("éあ".into())
+            );
+        }
+    }
+
+    #[test]
+    fn regex_find_all_preserves_utf8_zero_width_and_empty_results() {
+        let mut vm = test_vm();
+        for (pattern, input, expected) in [
+            ("", "éあ", vec![(0, 0), (2, 2), (5, 5)]),
+            ("", "", vec![(0, 0)]),
+            ("z", "éあ", vec![]),
+            (".", "", vec![]),
+        ] {
+            let result = call_builtin(
+                &mut vm,
+                builtin_id("find_all"),
+                vec![
+                    Value::Regex(sindr::runtime::RegexHandle {
+                        pattern: pattern.into(),
+                    }),
+                    Value::Str(input.into()),
+                ],
+            )
+            .unwrap();
+            let Value::List(list) = result else {
+                panic!("expected List")
+            };
+            let matches = list.iter().collect::<Vec<_>>();
+            assert_eq!(
+                matches.len(),
+                expected.len(),
+                "pattern {pattern:?}, input {input:?}"
+            );
+            for (value, (start, end)) in matches.into_iter().zip(expected) {
+                let Value::RegexMatch(matched) = &value else {
+                    panic!("expected match")
+                };
+                assert_eq!((matched.start, matched.end), (start, end));
+                assert_eq!(
+                    call_builtin(&mut vm, builtin_id("start"), vec![value.clone()]).unwrap(),
+                    Value::Int(int(start as u64))
+                );
+                assert_eq!(
+                    call_builtin(&mut vm, builtin_id("end"), vec![value.clone()]).unwrap(),
+                    Value::Int(int(end as u64))
+                );
+                assert_eq!(
+                    call_builtin(&mut vm, builtin_id("text"), vec![value]).unwrap(),
+                    Value::Str(input[start..end].into())
+                );
+            }
+        }
+        for (builtin, kind) in [
+            ("find", "RegexFindNoMatch"),
+            ("captures", "RegexCapturesNoMatch"),
+        ] {
+            let result = call_builtin(
+                &mut vm,
+                builtin_id(builtin),
+                vec![
+                    Value::Regex(sindr::runtime::RegexHandle {
+                        pattern: "z".into(),
+                    }),
+                    Value::Str("éあ".into()),
+                ],
+            )
+            .unwrap();
+            let Value::Tagged { tag: 1, fields } = result else {
+                panic!("expected Err")
+            };
+            let Value::Error(error) = &fields[0] else {
+                panic!("expected regex error")
+            };
+            assert_eq!(error.kind, format!("Global::{kind}"));
+            assert_eq!(
+                error.payload,
+                vec![Value::Str("z".into()), Value::Str("éあ".into())]
+            );
+        }
+    }
+
+    #[test]
+    fn regex_accessors_reject_invalid_utf8_and_out_of_bounds_spans() {
+        let mut vm = test_vm();
+        for (start, end) in [(3, 2), (0, 6), (1, 2), (2, 3)] {
+            let matched = Value::RegexMatch(sindr::runtime::RegexMatchHandle {
+                input: String::from("éあ").into(),
+                start,
+                end,
+            });
+            let error = call_builtin(&mut vm, builtin_id("text"), vec![matched])
+                .expect_err("invalid match span must be RuntimeError");
+            assert!(error.message.contains("text observed invalid regex span"));
+            let captures = Value::RegexCaptures(sindr::runtime::RegexCapturesHandle {
+                input: String::from("éあ").into(),
+                groups: vec![Some((start, end))],
+                name_to_index: [("word".into(), 0)].into_iter().collect(),
+            });
+            for (builtin, args) in [
+                ("whole", vec![captures.clone()]),
+                ("get", vec![captures.clone(), Value::Int(int(0))]),
+                (
+                    "get_name",
+                    vec![captures.clone(), Value::Str("word".into())],
+                ),
+            ] {
+                let error = call_builtin(&mut vm, builtin_id(builtin), args)
+                    .expect_err("invalid capture span must be RuntimeError");
+                assert!(error
+                    .message
+                    .contains(&format!("{builtin} observed invalid regex span")));
+            }
+        }
+    }
+
+    #[test]
+    fn regex_handle_equality_compares_complete_input_content() {
+        let match_value = |input: &str| {
+            Value::RegexMatch(sindr::runtime::RegexMatchHandle {
+                input: input.to_owned().into(),
+                start: 1,
+                end: 3,
+            })
+        };
+        assert_eq!(match_value("!é?"), match_value("!é?"));
+        assert_ne!(match_value("!é?"), match_value("!é."));
+        let captures_value = |input: &str| {
+            Value::RegexCaptures(sindr::runtime::RegexCapturesHandle {
+                input: input.to_owned().into(),
+                groups: vec![Some((1, 3))],
+                name_to_index: [("word".into(), 0)].into_iter().collect(),
+            })
+        };
+        assert_eq!(captures_value("!é?"), captures_value("!é?"));
+        assert_ne!(captures_value("!é?"), captures_value("!é."));
     }
 
     #[test]

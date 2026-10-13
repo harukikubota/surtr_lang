@@ -2392,7 +2392,7 @@ mod tests {
                 "RegexCaptures",
                 vec![],
                 Value::RegexCaptures(RegexCapturesHandle {
-                    input: "x".into(),
+                    input: String::from("x").into(),
                     groups: vec![],
                     name_to_index: Default::default(),
                 }),
@@ -2401,7 +2401,7 @@ mod tests {
                 "RegexMatch",
                 vec![],
                 Value::RegexMatch(RegexMatchHandle {
-                    input: "x".into(),
+                    input: String::from("x").into(),
                     start: 0,
                     end: 1,
                 }),

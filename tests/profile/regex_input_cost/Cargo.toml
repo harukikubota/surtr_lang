@@ -1,0 +1,13 @@
+[package]
+name = "regex-input-cost-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[workspace]
+[features]
+default = ["count-alloc"]
+count-alloc = []
+[dependencies]
+sindr = { path = "../../../crates/sindr" }
+eldr = { path = "../../../crates/eldr" }
+serde_json = "1"

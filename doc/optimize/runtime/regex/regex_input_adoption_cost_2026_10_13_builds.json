@@ -1,0 +1,494 @@
+[
+  {
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost/Cargo.toml",
+      "--target-dir",
+      "/tmp/surtr-regex-adoption-before-target",
+      "--message-format=json"
+    ],
+    "executable": "/tmp/surtr-regex-adoption-before-target/release/regex-input-cost-probe",
+    "saved": "/tmp/surtr-regex-adoption-binaries/before-count",
+    "sha256": "a70fd66c7de46a263492447f1424116610a53ab7c5add3721ac3edc88e8af072",
+    "artifacts": [
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/sindr#0.1.0",
+        "manifest_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/sindr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "sindr",
+          "src_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/sindr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libsindr-d4969b80e2c51cbc.rlib",
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libsindr-d4969b80e2c51cbc.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/eldr#0.1.0",
+        "manifest_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/eldr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "eldr",
+          "src_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/eldr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default",
+          "terminal-io"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libeldr-f744f88e1b63a2bc.rlib",
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libeldr-f744f88e1b63a2bc.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost#regex-input-cost-probe@0.0.0",
+        "manifest_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "regex-input-cost-probe",
+          "src_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost/src/main.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "count-alloc",
+          "default"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-before-target/release/regex-input-cost-probe"
+        ],
+        "executable": "/tmp/surtr-regex-adoption-before-target/release/regex-input-cost-probe",
+        "fresh": false
+      }
+    ]
+  },
+  {
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost/Cargo.toml",
+      "--target-dir",
+      "/tmp/surtr-regex-adoption-before-target",
+      "--message-format=json",
+      "--no-default-features"
+    ],
+    "executable": "/tmp/surtr-regex-adoption-before-target/release/regex-input-cost-probe",
+    "saved": "/tmp/surtr-regex-adoption-binaries/before-time",
+    "sha256": "0f36ffa44bbcfcbaa0b55c25b91a5c2986fa815ed037293d35dbbccad0927823",
+    "artifacts": [
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/sindr#0.1.0",
+        "manifest_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/sindr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "sindr",
+          "src_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/sindr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libsindr-d4969b80e2c51cbc.rlib",
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libsindr-d4969b80e2c51cbc.rmeta"
+        ],
+        "executable": null,
+        "fresh": true
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/eldr#0.1.0",
+        "manifest_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/eldr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "eldr",
+          "src_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/crates/eldr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default",
+          "terminal-io"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libeldr-f744f88e1b63a2bc.rlib",
+          "/tmp/surtr-regex-adoption-before-target/release/deps/libeldr-f744f88e1b63a2bc.rmeta"
+        ],
+        "executable": null,
+        "fresh": true
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost#regex-input-cost-probe@0.0.0",
+        "manifest_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "regex-input-cost-probe",
+          "src_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-regex-baseline-20261013-lsgqlq8h/tests/profile/regex_input_cost/src/main.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-before-target/release/regex-input-cost-probe"
+        ],
+        "executable": "/tmp/surtr-regex-adoption-before-target/release/regex-input-cost-probe",
+        "fresh": false
+      }
+    ]
+  },
+  {
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/Users/haruca/work/rust/surtr/tests/profile/regex_input_cost/Cargo.toml",
+      "--target-dir",
+      "/tmp/surtr-regex-adoption-after-target",
+      "--message-format=json"
+    ],
+    "executable": "/tmp/surtr-regex-adoption-after-target/release/regex-input-cost-probe",
+    "saved": "/tmp/surtr-regex-adoption-binaries/after-count",
+    "sha256": "e93f2e33f890849c988b6795eae238b9f8adbb648fa2a776eb251ffd521a36fc",
+    "artifacts": [
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/sindr#0.1.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/crates/sindr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "sindr",
+          "src_path": "/Users/haruca/work/rust/surtr/crates/sindr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libsindr-697c8897df18f575.rlib",
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libsindr-697c8897df18f575.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/eldr#0.1.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/crates/eldr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "eldr",
+          "src_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default",
+          "terminal-io"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libeldr-7c1350cb9864022a.rlib",
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libeldr-7c1350cb9864022a.rmeta"
+        ],
+        "executable": null,
+        "fresh": false
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/tests/profile/regex_input_cost#regex-input-cost-probe@0.0.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/tests/profile/regex_input_cost/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "regex-input-cost-probe",
+          "src_path": "/Users/haruca/work/rust/surtr/tests/profile/regex_input_cost/src/main.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "count-alloc",
+          "default"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-after-target/release/regex-input-cost-probe"
+        ],
+        "executable": "/tmp/surtr-regex-adoption-after-target/release/regex-input-cost-probe",
+        "fresh": false
+      }
+    ]
+  },
+  {
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/Users/haruca/work/rust/surtr/tests/profile/regex_input_cost/Cargo.toml",
+      "--target-dir",
+      "/tmp/surtr-regex-adoption-after-target",
+      "--message-format=json",
+      "--no-default-features"
+    ],
+    "executable": "/tmp/surtr-regex-adoption-after-target/release/regex-input-cost-probe",
+    "saved": "/tmp/surtr-regex-adoption-binaries/after-time",
+    "sha256": "34019cc9b3edb7ea1377405724af0bbb85c3048bb476067c9e6718df96817083",
+    "artifacts": [
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/sindr#0.1.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/crates/sindr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "sindr",
+          "src_path": "/Users/haruca/work/rust/surtr/crates/sindr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libsindr-697c8897df18f575.rlib",
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libsindr-697c8897df18f575.rmeta"
+        ],
+        "executable": null,
+        "fresh": true
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/eldr#0.1.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/crates/eldr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "eldr",
+          "src_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default",
+          "terminal-io"
+        ],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libeldr-7c1350cb9864022a.rlib",
+          "/tmp/surtr-regex-adoption-after-target/release/deps/libeldr-7c1350cb9864022a.rmeta"
+        ],
+        "executable": null,
+        "fresh": true
+      },
+      {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/tests/profile/regex_input_cost#regex-input-cost-probe@0.0.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/tests/profile/regex_input_cost/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "regex-input-cost-probe",
+          "src_path": "/Users/haruca/work/rust/surtr/tests/profile/regex_input_cost/src/main.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [],
+        "filenames": [
+          "/tmp/surtr-regex-adoption-after-target/release/regex-input-cost-probe"
+        ],
+        "executable": "/tmp/surtr-regex-adoption-after-target/release/regex-input-cost-probe",
+        "fresh": false
+      }
+    ]
+  }
+]
