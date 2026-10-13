@@ -11,6 +11,13 @@ pub(super) struct DetachedTask {
     init_context: Option<(String, &'static str, &'static str)>,
 }
 
+#[cfg(test)]
+impl DetachedTask {
+    pub(super) fn test_mark_started(&mut self) {
+        self.started = true;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum DetachedTaskState {
     Runnable(ExecutionContext),

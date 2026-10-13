@@ -1591,7 +1591,7 @@ rollback 後は保存位置から再開する。外部 I/O の副作用を巻き
 checkpoint は受付状態、実行 record、ExecutionContext、future / reply / waiting / deadline / task、Workers・supervisor、停止識別表を同一時点で保存・復元する。表と entry は copy-on-write で共有し、変更する部分だけを複製する。不変 identity は共有できるが、Cell 等の共有可変な停止 flag は使わない。live 側の停止は保存側を変更しない。
 停止前へ rollback すれば当時の受付・実行へ戻り、停止要求中へ戻れば新規要求を拒否したまま継続を再開する。個体 ID の高水位は戻さない。active VM の本体を削除しても停止前の checkpoint は state と継続を保持でき、物理解放はその checkpoint の破棄後まで含めて測る。
 観測は本体の scheduler 状態と受付状態を分け、停止要求中の本体数、未完了実行数、保持中の停止識別 entry 数を区別する。回収済み個体は process 一覧と本体件数から除き、診断用の無期限停止履歴を残さない。
-中断中の継続状態を変更する場合は、そのentry内の可変Builderも独立した状態へ複製し、保存位置を維持する。
+中断中のBuilderはappend専用segmentを共有し、保存済み末尾への追加は新しいsegmentで行う。entryを複製しても保存済みValueを全cloneせず、保存位置と各再開枝の独立性を維持する。共有prefixの完成は共通予算で一要素または一segment境界ずつ進め、完成途中も不変の部分出力とcursorを保存する。共有要素のcloneと最終解放は残る。
 未分割の Rust loop・外部呼出し・要素の clone / drop は、実時間の公平性保証の対象外とする。
 
 ---

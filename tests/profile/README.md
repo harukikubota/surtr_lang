@@ -43,3 +43,12 @@ not part of the normal nextest gate until an explicit expectation is added.
 result handle clones, and retained input lifetime. Use independent baseline/after
 target directories and keep allocation and time series separate. The recorded
 results are in [`doc/optimize/runtime/regex/`](../../doc/optimize/runtime/regex/).
+
+## Checkpoint Builder
+
+[`checkpoint_builder/`](checkpoint_builder/README.md) measures suspended Task
+checkpoint, resume, shared completion, destruction, and completion without a
+checkpoint. [`checkpoint_builder_short/`](checkpoint_builder_short/README.md)
+uses outputs of 0 / 1 / 8 / 32 / 256 elements. Both use crate-local Eldr test
+probes, logical copy counters, fresh processes, and separate content verification.
+Results are in [`doc/optimize/runtime/checkpoint/`](../../doc/optimize/runtime/checkpoint/).

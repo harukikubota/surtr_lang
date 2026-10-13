@@ -152,12 +152,12 @@ impl MaterializeContinuation {
             GeneratorContinuation::Materialize(self),
         ))
     }
-    fn finish(self) -> BuiltinOutcome {
-        let list = Value::List(self.builder.finish());
-        BuiltinOutcome::Complete(match self.mode {
-            MaterializeMode::All => list,
-            _ => Value::Tuple(vec![list, self.source]),
-        })
+    fn finish(self) -> Result<BuiltinOutcome, RuntimeError> {
+        let rest = match self.mode {
+            MaterializeMode::All => None,
+            _ => Some(self.source),
+        };
+        super::list_finish::finish_list(self.builder, rest)
     }
     fn resume(mut self, vm: &mut VM, result: Value) -> Result<BuiltinOutcome, RuntimeError> {
         match std::mem::replace(&mut self.phase, MaterializePhase::Start) {
@@ -169,7 +169,7 @@ impl MaterializeContinuation {
                 };
                 let Some(value) = value else {
                     self.source = terminal();
-                    return Ok(self.finish());
+                    return self.finish();
                 };
                 let (item, next) = pair(value)?;
                 check_kind(&next, matches!(self.source, Value::InfiniteGenerator(_)))?;
@@ -197,7 +197,7 @@ impl MaterializeContinuation {
                     ));
                 };
                 if !keep {
-                    return Ok(self.finish());
+                    return self.finish();
                 }
                 self.phase = MaterializePhase::Append { item, next };
                 Ok(self.runnable())
@@ -212,7 +212,7 @@ impl MaterializeContinuation {
             }
             MaterializePhase::Start => {
                 if matches!(&self.mode,MaterializeMode::Count(n) if n<=&int(0)) {
-                    return Ok(self.finish());
+                    return self.finish();
                 }
                 let name = if matches!(self.source, Value::Generator(_)) {
                     "gen_step"

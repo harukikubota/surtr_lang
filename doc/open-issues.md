@@ -330,7 +330,7 @@
 
 ### OI-039 Builderコピー削減後の通常経路とIntのRSS差
 
-- 対象: `codex/rt5-builder-checkpoint-measurement` の未コミット改善に関する残件。資料を集約したが、Builder実装はmain未統合。
+- 対象: Builder共有化後の通常経路の費用とInt RSS差。`9ea8`の採用済み方式をmainへコミットした。[mainでの再測定](optimize/runtime/checkpoint/list_runtime_rt5_builder_adoption_2026_10_13.md)でも通常経路の時間増加とIntのRSS増加は残る。
 
 - 背景:
   - [RT-5のBuilder改善](optimize/runtime/checkpoint/list_runtime_rt5_builder_optimization_2026_10_12.md)で保存済みValueの初回再開時コピーを除き、共有prefixの完成を予算内で進める方式へ移行した。保存付き9区間合計は長いBuilderで減少した。

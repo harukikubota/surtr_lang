@@ -3,13 +3,14 @@ use crate::value::Value;
 use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
 mod generator;
 mod list_builder;
+mod list_finish;
 mod list_flat_map;
 mod map_values;
 #[cfg(test)]
 pub(crate) use list_builder::{list_builder_metrics, reset_list_builder_metrics};
 use list_flat_map::{builtin_list_flat_map, FlatMapContinuation};
 #[cfg(test)]
-pub(crate) use list_flat_map::{flat_map_metrics, reset_flat_map_metrics};
+pub(crate) use list_flat_map::{flat_map_metrics, reset_flat_map_metrics, FlatMapMetrics};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{
@@ -56,6 +57,7 @@ pub(crate) enum BuiltinOutcome {
 #[derive(Debug, Clone)]
 pub(crate) enum BuiltinContinuation {
     FlatMap(FlatMapContinuation),
+    ListFinish(list_finish::ListFinishContinuation),
     MapValues(map_values::MapValuesContinuation),
     Generator(generator::GeneratorContinuation),
     Runtime(crate::vm::RuntimeContinuation),
@@ -78,6 +80,7 @@ impl BuiltinContinuation {
     ) -> Result<BuiltinOutcome, RuntimeError> {
         let value = match self {
             Self::FlatMap(continuation) => return continuation.resume(result),
+            Self::ListFinish(continuation) => return continuation.resume(result),
             Self::MapValues(continuation) => return continuation.resume(result),
             Self::Generator(continuation) => return continuation.resume(vm, result),
             Self::Runtime(continuation) => return continuation.resume(vm, result),

@@ -1,6 +1,6 @@
 # RT-4 Regex入力共有のmainへの反映
 
-作業日: 2026-10-13。入力は [runtime一覧](../README.md) と [入力共有の仕様・先行実装](regex_input_sharing_2026_10_13.md)。変更前はmain `b5229abd`。mainの作業treeへ反映し、コミット・マージはしていない。
+作業日: 2026-10-13。入力は [runtime一覧](../README.md) と [入力共有の仕様・先行実装](regex_input_sharing_2026_10_13.md)。変更前はmain `b5229abd`。作業時はmainの作業treeへ反映した未コミット状態だった。その後、ユーザーが `c577b32d` としてコミットした。
 
 ## 変更と受入条件
 

@@ -7,6 +7,33 @@ pub(super) enum Invocation {
     Builtin(BuiltinOutcome),
 }
 
+impl ExecutionContext {
+    /// A pure finish transition changes neither frames nor the delivery target.
+    pub(super) fn resume_list_finish(&mut self, budget: &mut Budget) -> bool {
+        if budget.expired()
+            || self.cancellation.is_some()
+            || !matches!(
+                self.pending_invocation.as_ref(),
+                Some(Ok(Invocation::Builtin(BuiltinOutcome::Resume(
+                    BuiltinContinuation::ListFinish(_)
+                ))))
+            )
+        {
+            return false;
+        }
+        let Some(Ok(Invocation::Builtin(BuiltinOutcome::Resume(BuiltinContinuation::ListFinish(
+            continuation,
+        ))))) = self.pending_invocation.take()
+        else {
+            unreachable!("checked List finish invocation");
+        };
+        let (outcome, used) = continuation.resume_steps(budget.remaining());
+        budget.consume(used);
+        self.pending_invocation = Some(outcome.map(Invocation::Builtin));
+        true
+    }
+}
+
 #[derive(Debug, Clone)]
 enum ReturnDestination {
     Stack {

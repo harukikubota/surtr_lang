@@ -1,3 +1,4 @@
+use super::process_continuation::{DetachedCompletion, DetachedTaskState};
 use super::tests::{base_bytecode, function_entry};
 use super::*;
 use crate::builtin::{flat_map_metrics, reset_flat_map_metrics};
@@ -891,4 +892,731 @@ fn flat_map_rejects_invalid_runtime_arguments_before_starting_work() {
         assert!(error.message.contains(message), "{error:?}");
     }
     assert_eq!(flat_map_metrics(), Default::default());
+}
+
+// This crate-local probe measures the real detached-task driver. Its timers include
+// scheduler work and Value copies/growth during 256 output transitions per task.
+// Completion is a separate phase; whole-output scans run only in smoke or
+// PROBE_VERIFY mode, outside every measured interval.
+fn builder_probe_payload(index: usize, payload: &str) -> Value {
+    match payload {
+        "int" => Value::Int(int(index)),
+        "string" => Value::Str(format!("{index:020}{}", "x".repeat(236))),
+        other => panic!("unknown SURTR_BUILDER_PAYLOAD: {other}"),
+    }
+}
+
+fn builder_probe_vm(
+    task_count: usize,
+    builder_len: usize,
+    payload: &str,
+) -> (VM, Vec<FutureId>, usize) {
+    // Three timed quanta must all stop inside one completed mapper's output.
+    let output_len = builder_len.checked_add(2048).unwrap();
+    let output = list((0..output_len).map(|n| builder_probe_payload(n, payload)));
+    let (mut vm, mapper) = constant_mapper_vm(output);
+    vm.frames[0].call_site = Some((0, 1));
+    let mut futures = Vec::with_capacity(task_count);
+    for _ in 0..task_count {
+        let mut computation = flat_map_callable();
+        computation.lexical_captures = vec![list([Value::Unit]), Value::Callable(mapper.clone())];
+        let id = vm.process_runtime.next_detached_task_id;
+        // start_task registers a genuine scheduler task without invoke_task's
+        // automatic startup quantum, so task count and saved length are independent.
+        vm.start_task(computation, TaskMode::Async, None).unwrap();
+        let mut task = vm.process_runtime.detached_tasks.take(&id).unwrap();
+        let DetachedCompletion::Future(Some(future)) = task.completion else {
+            panic!("async task must have a completion Future")
+        };
+        futures.push(future);
+        let DetachedTaskState::Runnable(context) = &mut task.state else {
+            panic!("new task must be runnable")
+        };
+        let caller = vm.take_execution_context(vm.pc, ExecutionTarget::TopLevel);
+        reset_flat_map_metrics();
+        for _ in 0..builder_len + 32 {
+            if flat_map_metrics().builder_pushes == builder_len {
+                break;
+            }
+            assert!(matches!(
+                vm.run_quantum(context, &mut Budget::new(1)),
+                ProcessRunOutcome::QuantumExpired
+            ));
+        }
+        let prepared = flat_map_metrics();
+        assert_eq!(prepared.builder_pushes, builder_len);
+        assert_eq!(prepared.callback_calls, 1);
+        assert_eq!(prepared.builder_finishes, 0);
+        assert_eq!(prepared.builder_clones, 0);
+        vm.restore_execution_context(caller);
+        task.test_mark_started();
+        vm.process_runtime.detached_tasks.insert(id, task);
+        assert!(vm.ready_future_value(future).is_none());
+    }
+    assert_eq!(vm.process_runtime.detached_tasks.len(), task_count);
+    reset_flat_map_metrics();
+    (vm, futures, output_len)
+}
+
+#[derive(Debug)]
+struct BuilderProbeSample {
+    phase: &'static str,
+    repeat: usize,
+    elapsed_ns: u64,
+    position_before: usize,
+    position_after: usize,
+    metrics: crate::builtin::FlatMapMetrics,
+}
+
+fn builder_probe_phase<R>(
+    timed: bool,
+    phase: &'static str,
+    repeat: usize,
+    position: usize,
+    action: impl FnOnce() -> R,
+) -> (R, BuilderProbeSample) {
+    reset_flat_map_metrics();
+    let start = timed.then(std::time::Instant::now);
+    let result = action();
+    let elapsed_ns = start.map_or(0, |start| start.elapsed().as_nanos() as u64);
+    let metrics = flat_map_metrics();
+    (
+        result,
+        BuilderProbeSample {
+            phase,
+            repeat,
+            elapsed_ns,
+            position_before: position,
+            position_after: position,
+            metrics,
+        },
+    )
+}
+
+fn builder_probe_sample_assertions(
+    sample: &BuilderProbeSample,
+    copies: usize,
+    copied_items: usize,
+) {
+    assert_eq!(sample.metrics.builder_clones, copies, "{sample:?}");
+    assert_eq!(
+        sample.metrics.builder_copied_items, copied_items,
+        "{sample:?}"
+    );
+    assert_eq!(sample.metrics.callback_calls, 0, "{sample:?}");
+    assert_eq!(sample.metrics.builder_finishes, 0, "{sample:?}");
+    assert_eq!(sample.metrics.builder_finish_steps, 0, "{sample:?}");
+    assert_eq!(sample.metrics.builder_finish_copied_items, 0, "{sample:?}");
+}
+
+fn builder_probe_repeat(
+    task_count: usize,
+    builder_len: usize,
+    payload: &str,
+    repeat: usize,
+    verify: bool,
+    copy_mode: &str,
+) -> (usize, Vec<BuilderProbeSample>) {
+    let (mut vm, futures, output_len) = builder_probe_vm(task_count, builder_len, payload);
+    let timed = !verify;
+    let mut samples = Vec::with_capacity(10);
+    let (original, save) =
+        builder_probe_phase(timed, "save", repeat, builder_len, || checkpoint(&vm));
+    builder_probe_sample_assertions(&save, 0, 0);
+    samples.push(save);
+
+    let unchanged = checkpoint(&vm);
+    let (_, drop_unchanged) =
+        builder_probe_phase(timed, "drop_unchanged", repeat, builder_len, || {
+            drop(unchanged)
+        });
+    builder_probe_sample_assertions(&drop_unchanged, 0, 0);
+    samples.push(drop_unchanged);
+
+    let mut position = builder_len;
+    for (phase, copies) in [("first_resume", task_count), ("second_resume", 0)] {
+        let (result, mut sample) = builder_probe_phase(timed, phase, repeat, position, || {
+            vm.drive_ready_runtime_quantum()
+        });
+        result.unwrap();
+        let copied_items = if copy_mode == "baseline" {
+            copies * position
+        } else {
+            0
+        };
+        builder_probe_sample_assertions(&sample, copies, copied_items);
+        assert_eq!(
+            sample.metrics.builder_pushes,
+            task_count * 256,
+            "{sample:?}"
+        );
+        position += sample.metrics.builder_pushes / task_count;
+        sample.position_after = position;
+        samples.push(sample);
+    }
+
+    let restored_position = position;
+    let (advanced, resave) =
+        builder_probe_phase(timed, "resave", repeat, position, || checkpoint(&vm));
+    builder_probe_sample_assertions(&resave, 0, 0);
+    samples.push(resave);
+    let (result, mut resume) =
+        builder_probe_phase(timed, "resume_after_resave", repeat, position, || {
+            vm.drive_ready_runtime_quantum()
+        });
+    result.unwrap();
+    let copied_items = if copy_mode == "baseline" {
+        task_count * position
+    } else {
+        0
+    };
+    builder_probe_sample_assertions(&resume, task_count, copied_items);
+    assert_eq!(
+        resume.metrics.builder_pushes,
+        task_count * 256,
+        "{resume:?}"
+    );
+    position += resume.metrics.builder_pushes / task_count;
+    resume.position_after = position;
+    samples.push(resume);
+    assert_eq!(vm.process_runtime.detached_tasks.len(), task_count);
+    for &future in &futures {
+        assert!(vm.ready_future_value(future).is_none());
+    }
+
+    let (_, mut rollback) = builder_probe_phase(timed, "rollback", repeat, position, || {
+        vm.rollback_to_checkpoint(advanced)
+    });
+    rollback.position_after = restored_position;
+    builder_probe_sample_assertions(&rollback, 0, 0);
+    samples.push(rollback);
+    // Keep the original save alive through completion. The shared representation
+    // only clones its saved prefix Values when materializing the final List.
+    let (result, mut complete) =
+        builder_probe_phase(timed, "complete_shared", repeat, restored_position, || {
+            vm.drain_background_tasks()
+        });
+    result.unwrap();
+    complete.position_after = output_len;
+    let finish_copied_items = if copy_mode == "shared" {
+        task_count * builder_len
+    } else {
+        0
+    };
+    builder_probe_completion_assertions(
+        &complete,
+        task_count,
+        task_count * (output_len - restored_position),
+        finish_copied_items,
+    );
+    if verify {
+        builder_probe_verify_results(&vm, &futures, output_len, payload);
+    }
+    samples.push(complete);
+
+    let (_, drop_changed) =
+        builder_probe_phase(timed, "drop_changed", repeat, output_len, || drop(original));
+    builder_probe_sample_assertions(&drop_changed, 0, 0);
+    samples.push(drop_changed);
+
+    drop(vm);
+    drop(futures);
+    let (mut unique, unique_futures, unique_output_len) =
+        builder_probe_vm(task_count, builder_len, payload);
+    assert_eq!(unique_output_len, output_len);
+    let (result, mut complete) =
+        builder_probe_phase(timed, "unique_complete", repeat, builder_len, || {
+            unique.drain_background_tasks()
+        });
+    result.unwrap();
+    complete.position_after = output_len;
+    builder_probe_completion_assertions(
+        &complete,
+        task_count,
+        task_count * (output_len - builder_len),
+        0,
+    );
+    if verify {
+        builder_probe_verify_results(&unique, &unique_futures, output_len, payload);
+    }
+    samples.push(complete);
+    (output_len, samples)
+}
+
+fn builder_probe_completion_assertions(
+    sample: &BuilderProbeSample,
+    task_count: usize,
+    pushes: usize,
+    finish_copied_items: usize,
+) {
+    assert_eq!(sample.metrics.builder_clones, 0, "{sample:?}");
+    assert_eq!(sample.metrics.builder_copied_items, 0, "{sample:?}");
+    assert_eq!(
+        sample.metrics.callback_calls, 0,
+        "completion must not rerun mappers: {sample:?}"
+    );
+    assert_eq!(sample.metrics.builder_finishes, task_count, "{sample:?}");
+    assert_eq!(sample.metrics.builder_pushes, pushes, "{sample:?}");
+    assert_eq!(
+        sample.metrics.builder_finish_copied_items, finish_copied_items,
+        "{sample:?}"
+    );
+}
+
+fn builder_probe_verify_results(vm: &VM, futures: &[FutureId], output_len: usize, payload: &str) {
+    assert!(vm.process_runtime.detached_tasks.is_empty());
+    for &future in futures {
+        let Some(Value::List(mut output)) = vm.ready_future_value(future) else {
+            panic!("completed task must deliver its List Future")
+        };
+        assert_eq!(output.len(), output_len);
+        for index in 0..output_len {
+            assert_eq!(
+                output.head_value(),
+                Some(builder_probe_payload(index, payload))
+            );
+            output = output.tail_handle().unwrap();
+        }
+        assert!(output.head_value().is_none());
+    }
+}
+
+#[test]
+fn checkpoint_builder_profile() {
+    fn positive_env(name: &str, default: usize) -> usize {
+        match std::env::var(name) {
+            Ok(value) => {
+                let parsed: usize = value.parse().unwrap_or_else(|_| panic!("invalid {name}"));
+                assert!(parsed > 0, "{name} must be positive");
+                parsed
+            }
+            Err(std::env::VarError::NotPresent) => default,
+            Err(error) => panic!("invalid {name}: {error}"),
+        }
+    }
+    let profile = std::env::var("SURTR_BUILDER_PROFILE").as_deref() == Ok("1");
+    if !profile {
+        builder_probe_repeat(2, 32, "int", 0, true, "shared");
+        return;
+    }
+    let task_count = positive_env("SURTR_BUILDER_TASKS", 1);
+    let builder_len = positive_env("SURTR_BUILDER_LEN", 32);
+    let repeats = positive_env("SURTR_BUILDER_REPEATS", 5);
+    let payload = std::env::var("SURTR_BUILDER_PAYLOAD").unwrap_or_else(|_| "int".into());
+    assert!(matches!(payload.as_str(), "int" | "string"));
+    let verify = std::env::var("PROBE_VERIFY").as_deref() == Ok("1");
+    let copy_mode = std::env::var("SURTR_BUILDER_COPY_MODE").unwrap_or_else(|_| "shared".into());
+    assert!(
+        matches!(copy_mode.as_str(), "baseline" | "shared"),
+        "unknown SURTR_BUILDER_COPY_MODE: {copy_mode}"
+    );
+    let mut samples = Vec::with_capacity(repeats * 10);
+    let mut output_len = 0;
+    for repeat in 0..repeats {
+        let (len, current) = builder_probe_repeat(
+            task_count,
+            builder_len,
+            &payload,
+            repeat,
+            verify,
+            &copy_mode,
+        );
+        output_len = len;
+        samples.extend(current);
+    }
+    // Formatting and emission happen after every timed interval and repeat.
+    if verify {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "profile": "checkpoint_builder_verify", "tasks": task_count,
+                "builder_len": builder_len, "payload": payload, "repeats": repeats,
+                "copy_mode": copy_mode,
+                "verified": true,
+            })
+        );
+    } else {
+        for sample in samples {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "profile": "checkpoint_builder", "phase": sample.phase, "repeat": sample.repeat,
+                    "tasks": task_count, "builder_len": builder_len, "payload": payload,
+                    "copy_mode": copy_mode,
+                    "output_len": output_len, "quantum": 256, "elapsed_ns": sample.elapsed_ns,
+                    "copies": sample.metrics.builder_clones,
+                    "copied_items": sample.metrics.builder_copied_items,
+                    "pushes": sample.metrics.builder_pushes,
+                    "callback_calls": sample.metrics.callback_calls,
+                    "finishes": sample.metrics.builder_finishes,
+                    "capacity_growths": sample.metrics.builder_capacity_growths,
+                    "finish_steps": sample.metrics.builder_finish_steps,
+                    "finish_copied_items": sample.metrics.builder_finish_copied_items,
+                    "position_before": sample.position_before, "position_after": sample.position_after,
+                })
+            );
+        }
+    }
+}
+
+fn shared_builder_finishing_vm() -> (VM, FutureId, VmCheckpoint, usize) {
+    let (mut vm, futures, output_len) = builder_probe_vm(1, 1024, "int");
+    let original = checkpoint(&vm);
+    for _ in 0..32 {
+        vm.drive_ready_runtime_quantum().unwrap();
+        if flat_map_metrics().builder_finish_steps > 0
+            || vm.ready_future_value(futures[0]).is_some()
+        {
+            break;
+        }
+    }
+    assert!(flat_map_metrics().builder_finish_steps > 0);
+    assert!(vm.ready_future_value(futures[0]).is_none());
+    (vm, futures[0], original, output_len)
+}
+
+#[test]
+fn flat_map_checkpoint_during_shared_finish_restores_cursor_without_recopies() {
+    let (mut vm, future, original, output_len) = shared_builder_finishing_vm();
+    reset_flat_map_metrics();
+    let saved = checkpoint(&vm);
+    assert_eq!(flat_map_metrics().builder_copied_items, 0);
+    vm.drive_ready_runtime_quantum().unwrap();
+    assert_eq!(flat_map_metrics().builder_copied_items, 0);
+    assert_eq!(flat_map_metrics().builder_finish_steps, 256);
+    assert!(vm.ready_future_value(future).is_none());
+    vm.rollback_to_checkpoint(saved);
+    reset_flat_map_metrics();
+    vm.drain_background_tasks().unwrap();
+    assert_eq!(flat_map_metrics().callback_calls, 0);
+    assert_eq!(flat_map_metrics().builder_copied_items, 0);
+    assert_eq!(flat_map_metrics().builder_finishes, 1);
+    assert!(vm.process_runtime.detached_tasks.is_empty());
+    assert_eq!(
+        vm.ready_future_value(future),
+        Some(list((0..output_len).map(|index| Value::Int(int(index)))))
+    );
+    drop(original);
+}
+
+#[test]
+fn flat_map_cancellation_during_shared_finish_discards_partial_result() {
+    let (mut vm, future, original, _) = shared_builder_finishing_vm();
+    let id = *vm.process_runtime.detached_tasks.iter().next().unwrap().0;
+    let mut task = vm.process_runtime.detached_tasks.take(&id).unwrap();
+    let DetachedTaskState::Runnable(context) = &mut task.state else {
+        panic!("finish must be runnable");
+    };
+    reset_flat_map_metrics();
+    VM::cancel_execution_context(context, RuntimeError::new("cancelled finish"));
+    assert_eq!(fail(&mut vm, context, 1).message, "cancelled finish");
+    assert_eq!(flat_map_metrics().builder_finishes, 0);
+    assert_eq!(flat_map_metrics().builder_finish_steps, 0);
+    assert!(vm.ready_future_value(future).is_none());
+    drop(original);
+}
+
+#[test]
+fn flat_map_shared_finish_keeps_zero_and_one_reduction_boundaries() {
+    for quantum in [1, 7, 256] {
+        let (mut vm, future, original, output_len) = shared_builder_finishing_vm();
+        let id = *vm.process_runtime.detached_tasks.iter().next().unwrap().0;
+        let mut task = vm.process_runtime.detached_tasks.take(&id).unwrap();
+        let DetachedTaskState::Runnable(context) = &mut task.state else {
+            panic!("finish must be runnable");
+        };
+        let before = format!("{context:?}");
+        let mut zero = Budget::new(0);
+        assert!(matches!(
+            vm.run_quantum(context, &mut zero),
+            ProcessRunOutcome::QuantumExpired
+        ));
+        assert_eq!(format!("{context:?}"), before);
+        reset_flat_map_metrics();
+        let mut one = Budget::new(1);
+        assert!(matches!(
+            vm.run_quantum(context, &mut one),
+            ProcessRunOutcome::QuantumExpired
+        ));
+        assert_eq!(one.reductions(), 1);
+        assert_eq!(flat_map_metrics().builder_finish_steps, 1);
+        assert!(vm.ready_future_value(future).is_none());
+        assert_eq!(vm.pc, context.pc);
+        assert_eq!(
+            finish(&mut vm, context, quantum),
+            list((0..output_len).map(|index| Value::Int(int(index))))
+        );
+        assert_eq!(flat_map_metrics().callback_calls, 0);
+        assert_eq!(flat_map_metrics().builder_finishes, 1);
+        drop(original);
+    }
+}
+
+#[test]
+fn flat_map_finish_completion_at_budget_boundary_defers_delivery() {
+    for quantum in [2, 7] {
+        let (mut vm, future, original, output_len) = shared_builder_finishing_vm();
+        let id = *vm.process_runtime.detached_tasks.iter().next().unwrap().0;
+        let mut task = vm.process_runtime.detached_tasks.take(&id).unwrap();
+        let DetachedTaskState::Runnable(context) = &mut task.state else {
+            panic!("finish must be runnable");
+        };
+        // Leave one prefix item and the final boundary for the next quantum.
+        while flat_map_metrics().builder_finish_copied_items < 1023 {
+            assert!(matches!(
+                vm.run_quantum(context, &mut Budget::new(1)),
+                ProcessRunOutcome::QuantumExpired
+            ));
+        }
+        let mut budget = Budget::new(quantum);
+        let outcome = vm.run_quantum(context, &mut budget);
+        assert_eq!(flat_map_metrics().builder_finishes, 1);
+        assert!(vm.ready_future_value(future).is_none());
+        let expected = list((0..output_len).map(|index| Value::Int(int(index))));
+        if quantum == 2 {
+            assert!(matches!(outcome, ProcessRunOutcome::QuantumExpired));
+            assert_eq!(budget.reductions(), 2);
+            assert!(matches!(
+                context.pending_invocation,
+                Some(Ok(continuation::Invocation::Builtin(
+                    BuiltinOutcome::Complete(Value::List(_))
+                )))
+            ));
+            assert_eq!(finish(&mut vm, context, 1), expected);
+        } else {
+            let ProcessRunOutcome::Halted(value) = outcome else {
+                panic!("finish must use its remaining budget for delivery: {outcome:?}");
+            };
+            assert_eq!(value, expected);
+            assert!(budget.reductions() > 2 && budget.reductions() < quantum);
+        }
+        drop(original);
+    }
+}
+
+fn short_builder_start_vm(tasks: usize, output_len: usize, payload: &str) -> (VM, Vec<FutureId>) {
+    let output = list((0..output_len).map(|index| builder_probe_payload(index, payload)));
+    let (mut vm, mapper) = constant_mapper_vm(output);
+    vm.frames[0].call_site = Some((0, 1));
+    let mut futures = Vec::with_capacity(tasks);
+    for _ in 0..tasks {
+        let mut computation = flat_map_callable();
+        computation.lexical_captures = vec![list([Value::Unit]), Value::Callable(mapper.clone())];
+        let id = vm.process_runtime.next_detached_task_id;
+        vm.start_task(computation, TaskMode::Async, None).unwrap();
+        let DetachedCompletion::Future(Some(future)) =
+            vm.process_runtime.detached_tasks[&id].completion
+        else {
+            panic!("short async task must have its completion Future")
+        };
+        futures.push(future);
+    }
+    (vm, futures)
+}
+
+fn short_builder_prepare_snapshot(vm: &mut VM, tasks: usize, output_len: usize) {
+    let midpoint = output_len / 2;
+    let ids: Vec<_> = vm
+        .process_runtime
+        .detached_tasks
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(ids.len(), tasks);
+    for id in ids {
+        let mut task = vm.process_runtime.detached_tasks.take(&id).unwrap();
+        let DetachedTaskState::Runnable(context) = &mut task.state else {
+            panic!("short Task must be runnable before its preparation")
+        };
+        let caller = vm.take_execution_context(vm.pc, ExecutionTarget::TopLevel);
+        reset_flat_map_metrics();
+        for _ in 0..midpoint + 32 {
+            let metrics = flat_map_metrics();
+            // In particular n=0/1 stop after the callback result handoff and
+            // before the first append/finish, with an empty runnable Builder.
+            let output_ready = matches!(
+                &context.pending_invocation,
+                Some(Ok(continuation::Invocation::Builtin(
+                    BuiltinOutcome::Resume(BuiltinContinuation::FlatMap(_))
+                )))
+            );
+            if metrics.builder_pushes == midpoint && metrics.callback_calls == 1 && output_ready {
+                break;
+            }
+            let outcome = vm.run_quantum(context, &mut Budget::new(1));
+            assert!(
+                matches!(outcome, ProcessRunOutcome::QuantumExpired),
+                "{outcome:?}"
+            );
+        }
+        let metrics = flat_map_metrics();
+        assert_eq!(metrics.builder_pushes, midpoint);
+        assert_eq!(metrics.callback_calls, 1);
+        assert_eq!(metrics.builder_finishes, 0);
+        assert!(matches!(
+            &context.pending_invocation,
+            Some(Ok(continuation::Invocation::Builtin(
+                BuiltinOutcome::Resume(BuiltinContinuation::FlatMap(_))
+            )))
+        ));
+        vm.restore_execution_context(caller);
+        task.test_mark_started();
+        vm.process_runtime.detached_tasks.insert(id, task);
+    }
+}
+
+#[derive(Debug)]
+struct ShortBuilderSample {
+    repeat: usize,
+    elapsed_ns: u64,
+    metrics: crate::builtin::FlatMapMetrics,
+}
+
+fn short_builder_sample(
+    tasks: usize,
+    output_len: usize,
+    payload: &str,
+    workload: &str,
+    repeat: usize,
+    verify: bool,
+) -> ShortBuilderSample {
+    let (vm, futures, elapsed_ns, metrics) = match workload {
+        "construct_complete" => {
+            reset_flat_map_metrics();
+            let started = (!verify).then(std::time::Instant::now);
+            let (mut vm, futures) = short_builder_start_vm(tasks, output_len, payload);
+            let result = vm.drain_background_tasks();
+            let elapsed_ns = started.map_or(0, |start| start.elapsed().as_nanos() as u64);
+            let metrics = flat_map_metrics();
+            result.unwrap();
+            (vm, futures, elapsed_ns, metrics)
+        }
+        "snapshot_resume" => {
+            let (mut vm, futures) = short_builder_start_vm(tasks, output_len, payload);
+            short_builder_prepare_snapshot(&mut vm, tasks, output_len);
+            reset_flat_map_metrics();
+            let started = (!verify).then(std::time::Instant::now);
+            let saved = checkpoint(&vm);
+            let result = vm.drain_background_tasks();
+            drop(saved);
+            let elapsed_ns = started.map_or(0, |start| start.elapsed().as_nanos() as u64);
+            let metrics = flat_map_metrics();
+            result.unwrap();
+            (vm, futures, elapsed_ns, metrics)
+        }
+        _ => panic!("invalid short builder workload: {workload}"),
+    };
+    assert!(vm.process_runtime.detached_tasks.is_empty());
+    assert_eq!(metrics.builder_finishes, tasks);
+    assert_eq!(metrics.builder_copied_items, 0);
+    match workload {
+        "construct_complete" => {
+            assert_eq!(metrics.callback_calls, tasks);
+            assert_eq!(metrics.input_visits, tasks);
+            assert_eq!(metrics.builder_pushes, tasks * output_len);
+            assert_eq!(metrics.builder_clones, 0);
+        }
+        "snapshot_resume" => {
+            assert_eq!(
+                metrics.callback_calls, 0,
+                "saved mappers must not be reevaluated"
+            );
+            assert_eq!(metrics.input_visits, 0);
+            assert_eq!(
+                metrics.builder_pushes,
+                tasks * (output_len - output_len / 2)
+            );
+            assert_eq!(metrics.builder_clones, tasks);
+        }
+        _ => unreachable!(),
+    }
+    if verify {
+        builder_probe_verify_results(&vm, &futures, output_len, payload);
+    } else {
+        for future in futures {
+            let Some(Value::List(output)) = vm.ready_future_value(future) else {
+                panic!("completed short Task must deliver its List")
+            };
+            assert_eq!(output.len(), output_len);
+        }
+    }
+    // VM destruction is outside the two requested intervals.
+    ShortBuilderSample {
+        repeat,
+        elapsed_ns,
+        metrics,
+    }
+}
+
+#[test]
+fn true_short_builder_profile() {
+    fn positive_env(name: &str, default: usize) -> usize {
+        let value = match std::env::var(name) {
+            Ok(value) => value
+                .parse::<usize>()
+                .unwrap_or_else(|_| panic!("invalid {name}")),
+            Err(std::env::VarError::NotPresent) => default,
+            Err(error) => panic!("invalid {name}: {error}"),
+        };
+        assert!(value > 0, "{name} must be positive");
+        value
+    }
+    let profile = std::env::var("SURTR_SHORT_PROFILE").as_deref() == Ok("1");
+    if !profile {
+        for workload in ["construct_complete", "snapshot_resume"] {
+            for len in [0, 1, 8] {
+                short_builder_sample(1, len, "int", workload, 0, true);
+            }
+        }
+        return;
+    }
+    let output_len = match std::env::var("SURTR_SHORT_LEN") {
+        Ok(value) => value.parse::<usize>().expect("invalid SURTR_SHORT_LEN"),
+        Err(std::env::VarError::NotPresent) => 8,
+        Err(error) => panic!("invalid SURTR_SHORT_LEN: {error}"),
+    };
+    let tasks = positive_env("SURTR_SHORT_TASKS", 1);
+    let repeats = positive_env("SURTR_SHORT_REPEATS", 8);
+    let payload = std::env::var("SURTR_SHORT_PAYLOAD").unwrap_or_else(|_| "int".into());
+    let workload =
+        std::env::var("SURTR_SHORT_WORKLOAD").unwrap_or_else(|_| "construct_complete".into());
+    assert!(matches!(payload.as_str(), "int" | "string"));
+    assert!(matches!(
+        workload.as_str(),
+        "construct_complete" | "snapshot_resume"
+    ));
+    let verify = std::env::var("PROBE_VERIFY").as_deref() == Ok("1");
+    let mut samples = Vec::with_capacity(repeats);
+    for repeat in 0..repeats {
+        samples.push(short_builder_sample(
+            tasks, output_len, &payload, &workload, repeat, verify,
+        ));
+    }
+    if verify {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "profile": "checkpoint_builder_short_verify", "workload": workload,
+                "tasks": tasks, "output_len": output_len, "payload": payload,
+                "repeats": repeats, "verified": true,
+            })
+        );
+    } else {
+        for sample in samples {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "profile": "checkpoint_builder_short", "workload": workload,
+                    "tasks": tasks, "output_len": output_len, "payload": payload,
+                    "saved_len": if workload == "snapshot_resume" { Some(output_len / 2) } else { None },
+                    "repeat": sample.repeat, "repeats": repeats, "elapsed_ns": sample.elapsed_ns,
+                    "callback_calls": sample.metrics.callback_calls, "input_visits": sample.metrics.input_visits,
+                    "pushes": sample.metrics.builder_pushes, "finishes": sample.metrics.builder_finishes,
+                    "copies": sample.metrics.builder_clones, "copied_items": sample.metrics.builder_copied_items,
+                    "finish_steps": sample.metrics.builder_finish_steps,
+                    "finish_copied_items": sample.metrics.builder_finish_copied_items,
+                })
+            );
+        }
+    }
 }

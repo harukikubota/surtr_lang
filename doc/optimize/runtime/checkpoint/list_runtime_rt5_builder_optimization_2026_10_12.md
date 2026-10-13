@@ -1,6 +1,8 @@
-> 取り込み元: `/Users/haruca/.codex/worktrees/9ea8/surtr`（codex/rt5-builder-checkpoint-measurement、HEAD `72154707`）。資料の集約。記載された製品変更・harnessはmain未統合。作成時点の実装・検証記録を保存し、現在の整理一覧は [runtime README](../README.md) を参照。実行コマンドは取り込み元のソースを基準にする。
+> 取り込み元: `/Users/haruca/.codex/worktrees/9ea8/surtr`（codex/rt5-builder-checkpoint-measurement、HEAD `72154707`）。資料の集約。集約時点では、記載された製品変更・harnessはmain未統合。作成時点の実装・検証記録を保存し、現在の整理一覧は [runtime README](../README.md) を参照。実行コマンドは取り込み元のソースを基準にする。
 
 # RT-5: 保存した Builder のコピー削減
+
+集約後に[main作業treeへの反映・再測定](list_runtime_rt5_builder_adoption_2026_10_13.md)を実施した（未コミット）。以下は先行worktreeの実装・測定記録として保持する。
 
 入力は [中断中 Task の測定レポート](list_runtime_rt5_builder_measurement_2026_10_12.md)。ユーザーの「調査範囲の改善を進めてください」に基づき、同レポートの Builder コピーを削減する。level2とし、Eldr内の所有表現と共通の完成継続を変更する。言語の評価結果、公開API、VM/schema versionは変えない。process表index、override、chunk登録処理は対象外とする。
 

@@ -839,6 +839,10 @@ impl Budget {
     fn reductions(&self) -> u64 {
         self.reductions
     }
+
+    fn remaining(&self) -> u64 {
+        self.max_reductions.saturating_sub(self.reductions)
+    }
 }
 
 #[allow(dead_code)]
@@ -4448,10 +4452,17 @@ impl VM {
         context: &mut ExecutionContext,
         budget: &mut Budget,
     ) -> ProcessRunOutcome {
+        // The first common step installs the context and clears VM scratch state.
+        let mut entered_context = false;
         loop {
             if budget.expired() {
                 return ProcessRunOutcome::QuantumExpired;
             }
+            if entered_context && context.resume_list_finish(budget) {
+                self.pc = context.pc;
+                continue;
+            }
+            entered_context = true;
             match self.step_context(context) {
                 StepOutcome::Continue => {
                     budget.consume(1);

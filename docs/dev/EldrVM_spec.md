@@ -356,9 +356,12 @@ API と runtime の対応は次のとおり。canonical identity と通常値の
 継続は入力 cursor、mapper、出力 cursor、`ListBuilder` を所有する。入力一要素の処理と出力一要素の追加で
 共通予算を消費し、callback の命令も同じ予算で進める。mapper は入力順に一度だけ呼ぶ。
 mapper の結果が List でない不正な bytecode は RuntimeError とし、後続の mapper を実行しない。
-完了時にだけ Builder の buffer を ListHandle へ移す。中断状態や Builder は利用者の Value に追加しない。
+完了時にだけ Builder の要素を ListHandle として公開する。中断状態や Builder は利用者の Value に追加しない。
 REPL checkpointはprocess・future・detached taskの表とentryを共有し、変更するentryだけを複製する。
-そのentry内のBuilderも初回変更時に独立させ、保存した継続位置を維持する。通常の実行切替えでは所有権を移し、複製しない。
+Builderはappend専用segmentを共有し、保存済み末尾への追加は新しいsegmentで行う。保存・entry複製・初回追加では保存済みValueを全cloneしない。通常の実行切替えでは所有権を移す。
+空のBuilderの複製は空状態を返し、元の予約bufferを共有化せず、元側の次の追加で再利用する。
+このflat_mapとGeneratorのList取得では、入力長・出力長の閾値で構築方式を切り替えず、共通のBuilderと完成継続を使う。独占・共有による所有条件の最適化は維持する。
+単一の独占segmentはVecをPackedへ移して完成する。共有・分割済みのBuilderは、独占末尾をPackedへ移し、prefixを逆順に一要素ずつConsで接続する。完成途中もsegment cursorと不変ListHandleを共有して保存する。完成遷移は一要素または一segment境界ごとに1 reductionを消費する。純粋な完成遷移は残予算内で連続処理してよいが、Complete / Errの配送は次の共通stepで行う。共有要素のcloneとCons allocationはこの段階に残る。segment鎖のDropは反復処理し、Debugは再帰表示しない。
 
 要素操作を単位とする仮想計算量では、`cons` / `uncons` / `len` / `head` / `tail` は `O(1)`、
 全走査は `O(n)`、`append` は左辺の長さに比例する。flat_map は入力長を N、mapper が返す全要素数を M とすると
@@ -387,7 +390,7 @@ process 定義の ID・名前・名前から ID を引く3表と handler / super
 handler / supervisor の可変設定は毎 chunk で既定値へ戻し、既存の override を適用する。既定値と保存側を変更しない。
 handler 設定、singleton / flight / refilling / reply / waiting の表、deadline / runnable / output queue、supervisor の failure / policy / child 表も checkpoint で共有する。
 保存中の最初の可変アクセスでは対象の容器を複製する。不在キーの `get_mut` / `remove`、空 queue の `pop_front`、期限未到達の確認だけでは容器を分離しない。
-worker set は表 index と entry を共有し、変更対象 entry だけを独立させる。表 index と変更する entry / Builder のコピーは残り、runtime 全体の定数時間保存・変更や実時間上限を保証しない。
+worker set は表 index と entry を共有し、変更対象 entry だけを独立させる。表 indexと変更するentryのコピー、Builder完成時の共有要素cloneと解放費用は残り、runtime全体の定数時間保存・変更や実時間上限を保証しない。
 
 ---
 
@@ -404,7 +407,8 @@ worker set は表 index と entry を共有し、変更対象 entry だけを独
 - take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `Err(GeneratorExhausted())` を返す。
 - 条件停止した item は List に含めず、その生成前の handle を rest とする。再利用ではその位置を再評価する。step の RuntimeError や不正 carrier を終端や途中までの成功 List に変換しない。
 - callback、条件判定、List への一件追加は共通の builtin continuation と VM 予算で進める。一回の取得の中断・再開で callback を重複実行しない。通常の切替えでは状態を移動し、checkpoint は独立した状態を保持する。
-- materialize は flat_map と同じ private `ListBuilder` を使い、完了時だけ buffer を ListHandle に移す。非空は既存の Packed、空は Empty になる。巨大な count の初期予約容量を制限しても、BigInt の要求件数と結果は切り詰めない。
+- materializeはflat_mapと同じprivate `ListBuilder` と完成継続を使う。単一の独占bufferはPacked、共有・分割済みの結果はCons/Packedの組合せ、空はEmptyになる。完成途中の保存と再開でstepやpredicateを呼び直さず、take系のrestも維持する。巨大なcountの初期予約容量を制限しても、BigIntの要求件数と結果は切り詰めない。
+- 初期予約容量の上限は構築方式のサイズ閾値ではない。take上限や入力長による別のコピー経路を設けない。
 
 公開 API、生成・取得、入力検証エラーの契約は `lib/types/generator.srt` と `lib/types/infinite_generator.srt` の `@doc`、
 利用例は [Generator](../site/generator.md) を参照する。専用 Opcode、公開 mutable cursor、新しい serialization / equality 契約は追加しない。

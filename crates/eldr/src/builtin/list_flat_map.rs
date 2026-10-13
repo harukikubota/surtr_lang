@@ -61,7 +61,7 @@ impl FlatMapContinuation {
             });
         }
 
-        Ok(BuiltinOutcome::Complete(Value::List(self.builder.finish())))
+        super::list_finish::finish_list(self.builder, None)
     }
 }
 
@@ -91,12 +91,18 @@ pub(crate) struct FlatMapMetrics {
     pub builder_pushes: usize,
     pub builder_finishes: usize,
     pub builder_clones: usize,
+    pub builder_copied_items: usize,
+    pub builder_capacity_growths: usize,
+    pub builder_finish_steps: usize,
+    pub builder_finish_copied_items: usize,
 }
 
 #[cfg(test)]
 thread_local! {
     static METRICS: std::cell::Cell<FlatMapMetrics> = std::cell::Cell::new(FlatMapMetrics {
         input_visits:0,callback_calls:0,builder_pushes:0,builder_finishes:0,builder_clones:0,
+        builder_copied_items:0,builder_capacity_growths:0,
+        builder_finish_steps:0,builder_finish_copied_items:0,
     });
 }
 
@@ -115,6 +121,10 @@ pub(crate) fn flat_map_metrics() -> FlatMapMetrics {
     let builder = super::list_builder::list_builder_metrics();
     value.builder_pushes = builder.pushes;
     value.builder_clones = builder.clones;
+    value.builder_copied_items = builder.copied_items;
+    value.builder_capacity_growths = builder.capacity_growths;
+    value.builder_finish_steps = builder.finish_steps;
+    value.builder_finish_copied_items = builder.finish_copied_items;
     value.builder_finishes = builder.finishes;
     value
 }
