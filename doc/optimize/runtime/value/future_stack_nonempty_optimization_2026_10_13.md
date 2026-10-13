@@ -62,3 +62,5 @@ PendingFutureがない条件の二次的な全走査を除いた。ready Pending
 ## 残件
 
 OI-036のPendingFutureなしの不要な読取り走査には対応した。未解決PendingFutureが残るstackの全走査、ready判定によるdetached Task表の検索は残る。固定幅metadataとFutureなしの追加費用、Value clone / drop、OI-037の別workloadのRSS差は今回の効果へ読み替えない。
+
+その後の[未解決Futureの位置追跡](future_stack_index_optimization_2026_10_13.md)と[通常経路の費用削減](future_stack_metadata_optimization_2026_10_13.md)は別の改善として記録した。上記の件数方式・残件・測定値は、このレポート作成時点の状態である。

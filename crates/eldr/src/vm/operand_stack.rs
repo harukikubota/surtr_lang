@@ -7,16 +7,23 @@ use std::ops::Deref;
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct OperandStack {
     values: Vec<Value>,
-    pending_slots: Vec<usize>,
+    pending_slots: Option<Box<Vec<usize>>>,
 }
 
 impl OperandStack {
     pub(super) fn has_pending_futures(&self) -> bool {
-        !self.pending_slots.is_empty()
+        !self.pending_positions().is_empty()
+    }
+
+    fn pending_positions(&self) -> &[usize] {
+        match &self.pending_slots {
+            Some(slots) => slots,
+            None => &[],
+        }
     }
 
     pub(super) fn pending_future_ids(&self) -> impl Iterator<Item = u64> + '_ {
-        self.pending_slots
+        self.pending_positions()
             .iter()
             .map(|&slot| match &self.values[slot] {
                 Value::PendingFuture(id) => *id,
@@ -26,39 +33,50 @@ impl OperandStack {
 
     #[cfg(test)]
     pub(super) fn pending_slot_count(&self) -> usize {
-        self.pending_slots.len()
+        self.pending_positions().len()
     }
 
+    #[inline(always)]
     pub(super) fn push(&mut self, value: Value) {
         if matches!(value, Value::PendingFuture(_)) {
-            self.pending_slots.push(self.values.len());
+            self.push_pending_position();
         }
         self.values.push(value);
     }
 
+    #[cold]
+    fn push_pending_position(&mut self) {
+        self.pending_slots
+            .get_or_insert_with(|| Box::new(Vec::new()))
+            .push(self.values.len());
+    }
+
+    #[inline(always)]
     pub(super) fn pop(&mut self) -> Option<Value> {
-        let value = self.values.pop()?;
-        if matches!(value, Value::PendingFuture(_)) {
-            assert_eq!(
-                self.pending_slots.pop(),
-                Some(self.values.len()),
-                "PendingFuture stack position mismatch"
-            );
+        let slot = self.values.len().checked_sub(1)?;
+        if let Some(slots) = &mut self.pending_slots {
+            if slots.last() == Some(&slot) {
+                slots.pop();
+            }
         }
-        Some(value)
+        self.values.pop()
     }
 
     pub(super) fn clear(&mut self) {
         self.values.clear();
-        self.pending_slots.clear();
+        if let Some(slots) = &mut self.pending_slots {
+            slots.clear();
+        }
     }
 
     pub(super) fn truncate(&mut self, len: usize) {
         if len >= self.values.len() {
             return;
         }
-        let kept = self.pending_slots.partition_point(|&slot| slot < len);
-        self.pending_slots.truncate(kept);
+        if let Some(slots) = &mut self.pending_slots {
+            let kept = slots.partition_point(|&slot| slot < len);
+            slots.truncate(kept);
+        }
         self.values.truncate(len);
     }
 
@@ -71,7 +89,10 @@ impl OperandStack {
 
     pub(super) fn replace_ready_futures(&mut self, ready: &HashMap<u64, Value>) {
         let values = &mut self.values;
-        self.pending_slots.retain(|&slot| {
+        let Some(slots) = &mut self.pending_slots else {
+            return;
+        };
+        slots.retain(|&slot| {
             let Value::PendingFuture(id) = &values[slot] else {
                 unreachable!("PendingFuture stack position mismatch");
             };
@@ -95,14 +116,14 @@ impl Deref for OperandStack {
 
 impl From<Vec<Value>> for OperandStack {
     fn from(values: Vec<Value>) -> Self {
-        let pending_slots = values
+        let pending_slots: Vec<_> = values
             .iter()
             .enumerate()
             .filter_map(|(slot, value)| matches!(value, Value::PendingFuture(_)).then_some(slot))
             .collect();
         Self {
             values,
-            pending_slots,
+            pending_slots: (!pending_slots.is_empty()).then(|| Box::new(pending_slots)),
         }
     }
 }
@@ -125,7 +146,7 @@ mod tests {
     use super::*;
     fn count(stack: &OperandStack) {
         assert_eq!(
-            stack.pending_slots,
+            stack.pending_positions(),
             stack.values.iter().enumerate()
                 .filter_map(|(slot, value)| matches!(value, Value::PendingFuture(_)).then_some(slot))
                 .collect::<Vec<_>>()
@@ -159,7 +180,7 @@ mod tests {
         stack.clear();
         count(&stack);
         assert_eq!(stack.pop(), None);
-        assert_eq!(saved.pending_slots, vec![0, 2]);
+        assert_eq!(saved.pending_positions(), &[0, 2]);
     }
 
     #[test]
@@ -172,7 +193,15 @@ mod tests {
         .into_iter()
         .collect();
         count(&stack);
-        assert_eq!(stack.pending_slots.len(), 2);
+        assert_eq!(stack.pending_positions().len(), 2);
+    }
+
+    #[test]
+    fn position_metadata_fits_in_one_pointer_width() {
+        assert!(
+            std::mem::size_of::<OperandStack>()
+                <= std::mem::size_of::<Vec<Value>>() + std::mem::size_of::<usize>()
+        );
     }
 
     #[test]
@@ -181,14 +210,14 @@ mod tests {
         for _ in 0..1024 {
             stack.push(Value::Unit);
         }
-        assert_eq!(stack.pending_slots.capacity(), 0);
+        assert!(stack.pending_slots.is_none());
         stack.truncate(512);
         stack.pop();
-        assert_eq!(stack.pending_slots.capacity(), 0);
+        assert!(stack.pending_slots.is_none());
         stack.clear();
-        assert_eq!(stack.pending_slots.capacity(), 0);
+        assert!(stack.pending_slots.is_none());
         let stack: OperandStack = vec![Value::Unit; 1024].into();
-        assert_eq!(stack.pending_slots.capacity(), 0);
+        assert!(stack.pending_slots.is_none());
     }
 
     #[test]
@@ -202,7 +231,7 @@ mod tests {
         .into();
         stack.replace_ready_futures(&[(1, Value::PendingFuture(3)), (2, Value::Unit)].into());
         count(&stack);
-        assert_eq!(stack.pending_slots.len(), 2);
+        assert_eq!(stack.pending_positions().len(), 2);
         stack.replace_ready_futures(&[(3, Value::Unit)].into());
         count(&stack);
         assert!(!stack.has_pending_futures());

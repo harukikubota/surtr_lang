@@ -185,7 +185,7 @@ VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk
 - `run_quantum(ctx, budget)` は reduction budget が切れた時点で scheduler 境界へ戻る。
 - opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。builtin の再開は有界の状態遷移単位で課金し、callback の opcode と同じ予算を使う。予算 0 では進めず、新しい予算は scheduler が実行対象を選び直したときに与える。
 - `StepOutcome::Pending` は future id と resume 用 `ExecutionContext` を保持する。
-- operand stackはtop-level PendingFutureのslot位置を昇順のprivate Vecに保持する。push / pop / truncate / clear / ready置換が値と位置を一緒に更新し、任意の可変Valueアクセスは公開しない。context切替え・Clone・checkpoint / rollbackでも一緒に移動・保存する。Future表が空、または追跡slotが0件なら走査を行わない。それ以外は追跡slotだけを読み、cleanup完了条件を含むready判定で解決値を収集する。その収集結果を固定して追跡slotだけを書き換え、同じFutureを持つ全slotを置換する。解決値がPendingFutureなら位置を保持し、それ以外なら位置を削除する。解決値がない場合は書込みを行わない。nested Value内のFutureは追跡・解決に含めない。位置不一致を全走査へのfallbackで隠さない。位置Vecは初期状態でheap確保せず、使用済みの容量は再利用する。
+- operand stackはtop-level PendingFutureのslot位置を昇順のprivate Vecに保持し、buffer metadataは必要になったときだけBoxで確保する。stack内の追加metadataは1 pointer幅以内とする。push / pop / truncate / clear / ready置換が値と位置を一緒に更新し、任意の可変Valueアクセスは公開しない。context切替え・Clone・checkpoint / rollbackでも一緒に移動・保存する。Future表が空、または追跡slotが0件なら走査を行わない。それ以外は追跡slotだけを読み、cleanup完了条件を含むready判定で解決値を収集する。その収集結果を固定して追跡slotだけを書き換え、同じFutureを持つ全slotを置換する。解決値がPendingFutureなら位置を保持し、それ以外なら位置を削除する。解決値がない場合は書込みを行わない。nested Value内のFutureは追跡・解決に含めない。位置不一致を全走査へのfallbackで隠さない。Futureを一度も持たないstackは位置bufferもそのBoxも確保しない。使用済みの位置VecとBoxはclear後も再利用する。
 
 ### 3.9 Builtin / callback の継続実行
 

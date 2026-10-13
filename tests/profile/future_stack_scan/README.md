@@ -43,7 +43,9 @@ output files. Stop builds/tests before performance samples.
 
 See [implementation and measurements](../../../doc/optimize/runtime/value/future_stack_nonempty_optimization_2026_10_13.md).
 
-The indexed follow-up compares count/indexed layouts, and a second series compares
-indexed/indexed binaries with and without stack-operation inline hints. Preserve
+The indexed follow-up compares count/indexed layouts, and further series compare
+indexed/indexed binaries with inline hints, optional Box metadata, and the final
+compact push/pop path. Preserve
 both build records and treat binary code layout as part of the measured variant.
-See [follow-up plan](../../../doc/optimize/runtime/value/future_stack_index_plan_2026_10_13.md).
+See [final costs](../../../doc/optimize/runtime/value/future_stack_metadata_optimization_2026_10_13.md)
+and [follow-up plan](../../../doc/optimize/runtime/value/future_stack_index_plan_2026_10_13.md).

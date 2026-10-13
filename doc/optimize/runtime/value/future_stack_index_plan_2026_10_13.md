@@ -13,7 +13,7 @@ ready収集は追跡したslotだけを読み、従来と同じ`ready_future_val
 - push / pop / truncate / clear、重複slot、配送による位置削除とFuture値への置換後の位置保持を固定する。
 - 頻繁に使う小さなstack操作のインライン化を比較し、通常入口の追加費用を測る。時間閾値はcorrectness testへ入れない。対象系列で改善しなければ解決済みと報告しない。
 
-位置Vecの固定幅metadataと実Future slot分のheapは新しい費用である。Future表自体の検索、detached Taskのcleanup検索、入れ子Valueの探索、public API、fairness全般は変更しない。
+位置Vecの固定幅metadataと実Future slot分のheapは新しい費用である。通常のcontext移動に追加するmetadataは件数版と同じ1 pointer幅以内に抑える方式も比較する。位置bufferはFutureを持つ場合だけBoxへ分離し、初期状態でheap確保しない。Future表自体の検索、detached Taskのcleanup検索、入れ子Valueの探索、public API、fairness全般は変更しない。
 
 ## 手順と検証
 

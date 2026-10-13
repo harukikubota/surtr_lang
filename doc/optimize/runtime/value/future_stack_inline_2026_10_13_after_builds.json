@@ -1,0 +1,161 @@
+{
+  "source_sha256": {
+    "crates/eldr/src/builtin/generator.rs": "158cfbfa46a2b4e6f0355d18bfba11b0f8bebe56e627767b3fc430fbfcf47dc6",
+    "crates/eldr/src/builtin/list_builder.rs": "920bf4235e8baba304e7201ea18324eff7e339f7fa5805b94094a5188005a13a",
+    "crates/eldr/src/builtin/list_finish.rs": "9c676e368f0f736751f8db2f9f3cd5f085f4ba96f4a074f0de5dde8e8f4df8c4",
+    "crates/eldr/src/builtin/list_flat_map.rs": "3baa21ea8bd9783bdad8c53d34440d582b8767cb0fc36d825ea9ea879027ef45",
+    "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+    "crates/eldr/src/builtin.rs": "65e9f39f03b8e46a2629dd0b2da65b59a80ed9448024e563c1454c40a576b4a0",
+    "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+    "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+    "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+    "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+    "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+    "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "850715bb3946aa8a4cbad533707a5683c29f149d653aefd432f3a77128074340",
+    "crates/eldr/src/vm/checkpoint_collections_tests.rs": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+    "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "f8709a4ed55450bb3e0457bc5ad63063ab4cf1a849b3def073f1ba1e00ca9c2d",
+    "crates/eldr/src/vm/checkpoint_value.rs": "504d0024b6cffbcc8a4c8cdacd12e949e963da58d3f0f28d71b5b4fa3bb926ae",
+    "crates/eldr/src/vm/continuation.rs": "ba5f585f3f4075b21830bbb7be5d14f1532d952d75af9f440083ec652cd2e870",
+    "crates/eldr/src/vm/future_stack_tests.rs": "5afa8fdd030854eb3f3996a9df706f813bcce24b554209a531ca2c452bf8d3b7",
+    "crates/eldr/src/vm/generator_tests.rs": "95d89b213291353d32bd7ebc1e633876b488d17ce9f6364a46ee465122ab0f98",
+    "crates/eldr/src/vm/list_flat_map_tests.rs": "a1aefe049eefa11fccb4dd25d52403f17f9b2822cd383274b11ec79caf117193",
+    "crates/eldr/src/vm/map_values_tests.rs": "4325ca369ab087d1a6bc1682bebc57ce48d27363eb37223348a71ff312e1c1da",
+    "crates/eldr/src/vm/operand_stack.rs": "7449db9c01ca760ebf012fd33a9ebb4c4d76250389b5614a12fe088bdc9c76cc",
+    "crates/eldr/src/vm/process_continuation.rs": "4ceb53e65d83857fed2d385d9c6e84200aa868ec08b2a0c37a868a99afd361a7",
+    "crates/eldr/src/vm/process_identity_tests.rs": "8dd7283a720910882bf31d4d69d2311d6984aaa51ced6545290c994b221fbd12",
+    "crates/eldr/src/vm/process_stop_tests.rs": "b99a821fa7e9eb6aa5448585469ed5235a8773e0ad881916b0dd864efa013011",
+    "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+    "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+    "crates/eldr/src/vm.rs": "b24042d75d2adc6a4efdaf411899c786cf3a98ccb9f6e306ad793388f667b94a",
+    "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+    "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+    "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+    "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+    "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+    "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+    "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+    "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+    "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+    "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+    "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+    "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+    "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+    "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+    "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+    "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04",
+    "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+    "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+    "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407",
+    "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81"
+  },
+  "records": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--release",
+        "--locked",
+        "--manifest-path",
+        "/Users/haruca/work/rust/surtr/Cargo.toml",
+        "--target-dir",
+        "/tmp/surtr-oi036-index-inline-target",
+        "--message-format=json",
+        "-p",
+        "eldr",
+        "--lib",
+        "--no-run"
+      ],
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/eldr#0.1.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/crates/eldr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "eldr",
+          "src_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": true
+        },
+        "features": [
+          "default",
+          "terminal-io"
+        ],
+        "filenames": [
+          "/tmp/surtr-oi036-index-inline-target/release/deps/eldr-7ddf4dcb324afb88"
+        ],
+        "executable": "/tmp/surtr-oi036-index-inline-target/release/deps/eldr-7ddf4dcb324afb88",
+        "fresh": false
+      },
+      "binary": "/tmp/surtr-oi036-index/inline-unit",
+      "binary_sha256": "b1adcddd2c6114194e9496f4d97d246fa70559bfc1ae01e1de1012026fbf4b95"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "--manifest-path",
+        "/Users/haruca/work/rust/surtr/Cargo.toml",
+        "--target-dir",
+        "/tmp/surtr-oi036-index-inline-target",
+        "--message-format=json",
+        "-p",
+        "rune",
+        "--bin",
+        "surtr"
+      ],
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/rune#0.1.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/crates/rune/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "surtr",
+          "src_path": "/Users/haruca/work/rust/surtr/crates/rune/src/main.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "default",
+          "line-editor"
+        ],
+        "filenames": [
+          "/tmp/surtr-oi036-index-inline-target/release/surtr"
+        ],
+        "executable": "/tmp/surtr-oi036-index-inline-target/release/surtr",
+        "fresh": false
+      },
+      "binary": "/tmp/surtr-oi036-index/inline-cli",
+      "binary_sha256": "ad0d926c8e6c75d3bad5895da90d09f6bf77dc51c7df122d745fb4927a3058a9"
+    }
+  ]
+}
