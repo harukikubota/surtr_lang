@@ -10,8 +10,9 @@ def main():
     p.add_argument('--after-source',type=Path,required=True)
     p.add_argument('--sindr-build',type=Path,required=True)
     p.add_argument('--output-dir',type=Path,required=True)
+    p.add_argument('--probe',type=Path,default=Path(__file__).with_name('probe.rs'))
     a=p.parse_args();a.output_dir.mkdir(parents=True,exist_ok=True)
-    probe=Path(__file__).with_name('probe.rs').resolve();root=probe.parents[3]
+    probe=a.probe.resolve();root=Path(__file__).resolve().parents[3]
     artifact=next(j for l in a.sindr_build.read_text().splitlines() if l.startswith('{')
                   for j in [json.loads(l)] if j.get('reason')=='compiler-artifact' and j['target']['name']=='sindr')
     assert Path(artifact['manifest_path']).resolve()==root/'crates/sindr/Cargo.toml'

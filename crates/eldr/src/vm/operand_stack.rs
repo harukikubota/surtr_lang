@@ -1,13 +1,14 @@
 use sindr::runtime::{Callable, Value};
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::rc::Rc;
 
 /// Owns the values and the sorted positions of top-level PendingFuture slots.
 /// Mutable access cannot change a Value variant outside this type.
 #[derive(Debug, Default)]
 pub(super) struct OperandStack {
     values: Vec<Value>,
-    pending_slots: Option<Box<Vec<usize>>>,
+    pending_slots: Option<Rc<Vec<usize>>>,
 }
 
 impl Clone for OperandStack {
@@ -65,9 +66,11 @@ impl OperandStack {
 
     #[cold]
     fn push_pending_position(&mut self) {
-        self.pending_slots
-            .get_or_insert_with(|| Box::new(Vec::new()))
-            .push(self.values.len());
+        Rc::make_mut(
+            self.pending_slots
+                .get_or_insert_with(|| Rc::new(Vec::new())),
+        )
+        .push(self.values.len());
     }
 
     #[inline(always)]
@@ -75,17 +78,29 @@ impl OperandStack {
         let slot = self.values.len().checked_sub(1)?;
         if let Some(slots) = &mut self.pending_slots {
             if slots.last() == Some(&slot) {
-                slots.pop();
+                if slots.len() == 1 {
+                    self.clear_pending_positions();
+                } else {
+                    Rc::make_mut(slots).pop();
+                }
             }
         }
         self.values.pop()
     }
 
+    fn clear_pending_positions(&mut self) {
+        if let Some(slots) = &mut self.pending_slots {
+            if let Some(owned) = Rc::get_mut(slots) {
+                owned.clear();
+            } else {
+                self.pending_slots = None;
+            }
+        }
+    }
+
     pub(super) fn clear(&mut self) {
         self.values.clear();
-        if let Some(slots) = &mut self.pending_slots {
-            slots.clear();
-        }
+        self.clear_pending_positions();
     }
 
     pub(super) fn truncate(&mut self, len: usize) {
@@ -94,7 +109,11 @@ impl OperandStack {
         }
         if let Some(slots) = &mut self.pending_slots {
             let kept = slots.partition_point(|&slot| slot < len);
-            slots.truncate(kept);
+            if kept == 0 {
+                self.clear_pending_positions();
+            } else if kept < slots.len() {
+                Rc::make_mut(slots).truncate(kept);
+            }
         }
         self.values.truncate(len);
     }
@@ -111,18 +130,21 @@ impl OperandStack {
         let Some(slots) = &mut self.pending_slots else {
             return;
         };
-        slots.retain(|&slot| {
+        let mut remaining = 0;
+        for &slot in slots.iter() {
             let Value::PendingFuture(id) = &values[slot] else {
                 unreachable!("PendingFuture stack position mismatch");
             };
-            let Some(resolved) = ready.get(id) else {
-                return true;
-            };
-            let resolved = resolved.clone();
-            let still_pending = matches!(resolved, Value::PendingFuture(_));
-            values[slot] = resolved;
-            still_pending
-        });
+            if let Some(resolved) = ready.get(id) {
+                values[slot] = resolved.clone();
+            }
+            remaining += usize::from(matches!(values[slot], Value::PendingFuture(_)));
+        }
+        if remaining == 0 {
+            self.clear_pending_positions();
+        } else if remaining < slots.len() {
+            Rc::make_mut(slots).retain(|&slot| matches!(values[slot], Value::PendingFuture(_)));
+        }
     }
 }
 
@@ -142,7 +164,7 @@ impl From<Vec<Value>> for OperandStack {
             .collect();
         Self {
             values,
-            pending_slots: (!pending_slots.is_empty()).then(|| Box::new(pending_slots)),
+            pending_slots: (!pending_slots.is_empty()).then(|| Rc::new(pending_slots)),
         }
     }
 }
@@ -301,6 +323,78 @@ mod tests {
             assert_eq!(original.pending_future_ids().collect::<Vec<_>>(), vec![2]);
             count(&saved);
             count(&original);
+        }
+    }
+
+    #[test]
+    fn pending_positions_are_shared_until_an_actual_partial_mutation() {
+        let mut original: OperandStack = vec![
+            Value::PendingFuture(1),
+            Value::PendingFuture(1),
+            Value::PendingFuture(2),
+        ]
+        .into();
+        let saved = original.clone();
+        let shared = &**saved.pending_slots.as_ref().unwrap() as *const Vec<usize>;
+        assert_eq!(
+            &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
+            shared
+        );
+        original.push(Value::Unit);
+        original.pop();
+        original.truncate(3);
+        original.replace_ready_futures(&HashMap::new());
+        original.replace_ready_futures(&[(99, Value::Unit)].into());
+        original.replace_ready_futures(&[(1, Value::PendingFuture(4))].into());
+        assert_eq!(
+            &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
+            shared
+        );
+        assert_eq!(
+            saved.values,
+            vec![
+                Value::PendingFuture(1),
+                Value::PendingFuture(1),
+                Value::PendingFuture(2)
+            ]
+        );
+        original.replace_ready_futures(&[(2, Value::Unit)].into());
+        assert_ne!(
+            &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
+            shared
+        );
+        assert_eq!(original.pending_positions(), &[0, 1]);
+        assert_eq!(saved.pending_positions(), &[0, 1, 2]);
+        count(&original);
+        count(&saved);
+        let mut appended = saved.clone();
+        appended.push(Value::PendingFuture(3));
+        assert_eq!(saved.pending_positions(), &[0, 1, 2]);
+        assert_eq!(appended.pending_positions(), &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn retiring_all_shared_positions_discards_the_view_without_copying() {
+        for operation in ["pop", "truncate", "clear", "resolve"] {
+            let mut original: OperandStack = vec![Value::Unit, Value::PendingFuture(1)].into();
+            let saved = original.clone();
+            match operation {
+                "pop" => {
+                    original.pop();
+                }
+                "truncate" => original.truncate(1),
+                "clear" => original.clear(),
+                "resolve" => original.replace_ready_futures(&[(1, Value::Unit)].into()),
+                _ => unreachable!(),
+            }
+            assert!(
+                original.pending_slots.is_none(),
+                "{operation}: do not copy a shared table only to empty it"
+            );
+            assert_eq!(saved.pending_positions(), &[1]);
+            assert_eq!(saved.values, vec![Value::Unit, Value::PendingFuture(1)]);
+            count(&original);
+            count(&saved);
         }
     }
 }

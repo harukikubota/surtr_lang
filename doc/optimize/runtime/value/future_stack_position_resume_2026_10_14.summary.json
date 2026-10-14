@@ -1,0 +1,7752 @@
+{
+  "builds": {
+    "scope": "isolated OperandStack, not full Eldr VM",
+    "records": {
+      "before": {
+        "command": [
+          "rustc",
+          "--edition=2021",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-C",
+          "codegen-units=16",
+          "/Users/haruca/work/rust/surtr/tests/profile/future_stack_clone/resume.rs",
+          "--extern",
+          "sindr=/tmp/surtr-oi036-index-inline-target/release/libsindr.rlib",
+          "-L",
+          "dependency=/tmp/surtr-oi036-index-inline-target/release/deps",
+          "-o",
+          "/private/tmp/surtr-oi036-position-sharing/resume/before-probe"
+        ],
+        "source_path": "/private/tmp/surtr-oi036-position-sharing/before_operand_stack.rs",
+        "source_sha256": "8c3374a12bdab3780f76c5fec9ec6c4c0e36e462df9a003e2016d670b6caaa88",
+        "saved_source": "/private/tmp/surtr-oi036-position-sharing/resume/before_operand_stack.rs",
+        "binary": "/private/tmp/surtr-oi036-position-sharing/resume/before-probe",
+        "binary_sha256": "11cd5de4bb04dc2888c8e6142dd7b809d7de3396c30dea527727a0aeb3687cc0"
+      },
+      "after": {
+        "command": [
+          "rustc",
+          "--edition=2021",
+          "-C",
+          "opt-level=3",
+          "-C",
+          "debuginfo=0",
+          "-C",
+          "codegen-units=16",
+          "/Users/haruca/work/rust/surtr/tests/profile/future_stack_clone/resume.rs",
+          "--extern",
+          "sindr=/tmp/surtr-oi036-index-inline-target/release/libsindr.rlib",
+          "-L",
+          "dependency=/tmp/surtr-oi036-index-inline-target/release/deps",
+          "-o",
+          "/private/tmp/surtr-oi036-position-sharing/resume/after-probe"
+        ],
+        "source_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/vm/operand_stack.rs",
+        "source_sha256": "5baca861265d25594c45251da2b96211a89b5c182067c5d612816d88adbf1992",
+        "saved_source": "/private/tmp/surtr-oi036-position-sharing/resume/after_operand_stack.rs",
+        "binary": "/private/tmp/surtr-oi036-position-sharing/resume/after-probe",
+        "binary_sha256": "5b4fa399b7a122ae84061c8052eee772d9287350001677506965968e5652983a"
+      }
+    },
+    "sindr_artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/sindr#0.1.0",
+      "manifest_path": "/Users/haruca/work/rust/surtr/crates/sindr/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "sindr",
+        "src_path": "/Users/haruca/work/rust/surtr/crates/sindr/src/lib.rs",
+        "edition": "2021",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "features": [
+        "default"
+      ],
+      "filenames": [
+        "/tmp/surtr-oi036-index-inline-target/release/libsindr.rlib",
+        "/tmp/surtr-oi036-index-inline-target/release/deps/libsindr-c0c7bdea367ce351.rmeta"
+      ],
+      "executable": null,
+      "fresh": false
+    },
+    "sindr_library_sha256": "9e32b40fc8f6056164c6a6100923df721cd90c2074629dad41269fbec0ba88d0",
+    "sindr_source_sha256": {
+      "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+      "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+      "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+      "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+      "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+      "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+      "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+      "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+      "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+      "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+      "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+      "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+      "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+      "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+      "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+      "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04",
+      "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+      "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+      "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81"
+    },
+    "probe_source": "/Users/haruca/work/rust/surtr/tests/profile/future_stack_clone/resume.rs",
+    "probe_sha256": "7687a00bc5354736834e4bdc2055c6b32add98eccb4ee35eeefa6773cc2995d0",
+    "builder_sha256": "1a6915f77cc387f89cb78bde540365fbebc0a1438f053a5eb862991fdfe87a4f",
+    "rustc_version": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: aarch64-apple-darwin\nrelease: 1.94.1\nLLVM version: 21.1.8\n"
+  },
+  "runner_sha256": "2a465a3f0fc59e5f263ea101be997adc914ebb3493f04a904c40931a46e830e4",
+  "clones": 32,
+  "measurements": [
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "peak_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "peak_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "peak_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "peak_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "peak_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "peak_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 125,
+        "median": 167.0,
+        "max": 291
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3000,
+        "median": 3354.5,
+        "max": 5375
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 41,
+        "median": 83.0,
+        "max": 84
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2250,
+        "median": 2333.0,
+        "max": 2708
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 125,
+        "median": 166.0,
+        "max": 250
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1625,
+        "median": 3521.0,
+        "max": 4042
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 41,
+        "median": 62.5,
+        "max": 84
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 791,
+        "median": 812.5,
+        "max": 917
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "peak_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "peak_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 18432,
+        "median": 18432.0,
+        "max": 18432
+      },
+      "freed_bytes": {
+        "min": 4608,
+        "median": 4608.0,
+        "max": 4608
+      },
+      "live_bytes": {
+        "min": 19200,
+        "median": 19200.0,
+        "max": 19200
+      },
+      "peak_bytes": {
+        "min": 19200,
+        "median": 19200.0,
+        "max": 19200
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 19200,
+        "median": 19200.0,
+        "max": 19200
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 19200,
+        "median": 19200.0,
+        "max": 19200
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "peak_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "peak_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 19968,
+        "median": 19968.0,
+        "max": 19968
+      },
+      "freed_bytes": {
+        "min": 4608,
+        "median": 4608.0,
+        "max": 4608
+      },
+      "live_bytes": {
+        "min": 19712,
+        "median": 19712.0,
+        "max": 19712
+      },
+      "peak_bytes": {
+        "min": 19712,
+        "median": 19712.0,
+        "max": 19712
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 19712,
+        "median": 19712.0,
+        "max": 19712
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 19712,
+        "median": 19712.0,
+        "max": 19712
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 125,
+        "median": 208.0,
+        "max": 292
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3083,
+        "median": 3229.5,
+        "max": 5083
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 6208,
+        "median": 7978.5,
+        "max": 13042
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2125,
+        "median": 2458.5,
+        "max": 3042
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 125,
+        "median": 167.0,
+        "max": 208
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1625,
+        "median": 3374.5,
+        "max": 3792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 8166,
+        "median": 9083.0,
+        "max": 10459
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2292,
+        "median": 2437.0,
+        "max": 2542
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "peak_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "peak_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "peak_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 5376,
+        "median": 5376.0,
+        "max": 5376
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "peak_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "peak_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "peak_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 4352,
+        "median": 4352.0,
+        "max": 4352
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 166,
+        "median": 167.0,
+        "max": 292
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2834,
+        "median": 3312.5,
+        "max": 3625
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 750,
+        "median": 812.5,
+        "max": 959
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1833,
+        "median": 2437.5,
+        "max": 2584
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 166,
+        "median": 208.0,
+        "max": 209
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1500,
+        "median": 3604.5,
+        "max": 3875
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 625,
+        "median": 749.5,
+        "max": 792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 750,
+        "median": 854.5,
+        "max": 917
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4088,
+        "median": 4088.0,
+        "max": 4088
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      },
+      "peak_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "peak_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "peak_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4104,
+        "median": 4104.0,
+        "max": 4104
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      },
+      "peak_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "peak_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "peak_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3250,
+        "median": 3354.0,
+        "max": 4541
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 141459,
+        "median": 161625.0,
+        "max": 170542
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 42,
+        "median": 83.0,
+        "max": 83
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 18333,
+        "median": 20271.0,
+        "max": 28167
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3125,
+        "median": 3187.0,
+        "max": 3292
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 131458,
+        "median": 141770.5,
+        "max": 179792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 42,
+        "median": 62.5,
+        "max": 84
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 17459,
+        "median": 19688.0,
+        "max": 27375
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4088,
+        "median": 4088.0,
+        "max": 4088
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      },
+      "peak_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "peak_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 2359296,
+        "median": 2359296.0,
+        "max": 2359296
+      },
+      "freed_bytes": {
+        "min": 1179648,
+        "median": 1179648.0,
+        "max": 1179648
+      },
+      "live_bytes": {
+        "min": 2360064,
+        "median": 2360064.0,
+        "max": 2360064
+      },
+      "peak_bytes": {
+        "min": 2360064,
+        "median": 2360064.0,
+        "max": 2360064
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 2360064,
+        "median": 2360064.0,
+        "max": 2360064
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 2360064,
+        "median": 2360064.0,
+        "max": 2360064
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4104,
+        "median": 4104.0,
+        "max": 4104
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      },
+      "peak_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "peak_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 2426112,
+        "median": 2426112.0,
+        "max": 2426112
+      },
+      "freed_bytes": {
+        "min": 1179648,
+        "median": 1179648.0,
+        "max": 1179648
+      },
+      "live_bytes": {
+        "min": 2360576,
+        "median": 2360576.0,
+        "max": 2360576
+      },
+      "peak_bytes": {
+        "min": 2360576,
+        "median": 2360576.0,
+        "max": 2360576
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 2360576,
+        "median": 2360576.0,
+        "max": 2360576
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 2360576,
+        "median": 2360576.0,
+        "max": 2360576
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3000,
+        "median": 3167.0,
+        "max": 3459
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 144917,
+        "median": 152208.0,
+        "max": 156042
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 145500,
+        "median": 158271.0,
+        "max": 179125
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 20459,
+        "median": 21000.0,
+        "max": 22125
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3041,
+        "median": 3166.5,
+        "max": 3291
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 139417,
+        "median": 141916.5,
+        "max": 150584
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 148416,
+        "median": 169166.5,
+        "max": 174125
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 20583,
+        "median": 22312.5,
+        "max": 27458
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4088,
+        "median": 4088.0,
+        "max": 4088
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      },
+      "peak_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "peak_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "peak_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1180416,
+        "median": 1180416.0,
+        "max": 1180416
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4104,
+        "median": 4104.0,
+        "max": 4104
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      },
+      "peak_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "peak_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "peak_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1114112,
+        "median": 1114112.0,
+        "max": 1114112
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3208,
+        "median": 3270.5,
+        "max": 3500
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 135458,
+        "median": 141479.5,
+        "max": 159292
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 134750,
+        "median": 135166.5,
+        "max": 142459
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 18791,
+        "median": 20021.0,
+        "max": 21250
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3000,
+        "median": 3104.5,
+        "max": 3459
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 129959,
+        "median": 134624.5,
+        "max": 137709
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 87291,
+        "median": 87646.0,
+        "max": 95416
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 17375,
+        "median": 20020.5,
+        "max": 22625
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65528,
+        "median": 65528.0,
+        "max": 65528
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      },
+      "peak_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "peak_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "peak_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65544,
+        "median": 65544.0,
+        "max": 65544
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      },
+      "peak_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "peak_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "peak_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 33208,
+        "median": 33687.5,
+        "max": 40500
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2058875,
+        "median": 2077583.5,
+        "max": 2100917
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 83,
+        "median": 83.5,
+        "max": 125
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 832042,
+        "median": 1302916.5,
+        "max": 1402250
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 31667,
+        "median": 32312.5,
+        "max": 34000
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1980917,
+        "median": 2023104.0,
+        "max": 2038750
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 42,
+        "median": 83.0,
+        "max": 209
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 776958,
+        "median": 794062.0,
+        "max": 817042
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65528,
+        "median": 65528.0,
+        "max": 65528
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      },
+      "peak_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "peak_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 37748736,
+        "median": 37748736.0,
+        "max": 37748736
+      },
+      "freed_bytes": {
+        "min": 18874368,
+        "median": 18874368.0,
+        "max": 18874368
+      },
+      "live_bytes": {
+        "min": 37749504,
+        "median": 37749504.0,
+        "max": 37749504
+      },
+      "peak_bytes": {
+        "min": 37749504,
+        "median": 37749504.0,
+        "max": 37749504
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 37749504,
+        "median": 37749504.0,
+        "max": 37749504
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 37749504,
+        "median": 37749504.0,
+        "max": 37749504
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65544,
+        "median": 65544.0,
+        "max": 65544
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      },
+      "peak_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "peak_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 38798592,
+        "median": 38798592.0,
+        "max": 38798592
+      },
+      "freed_bytes": {
+        "min": 18874368,
+        "median": 18874368.0,
+        "max": 18874368
+      },
+      "live_bytes": {
+        "min": 37750016,
+        "median": 37750016.0,
+        "max": 37750016
+      },
+      "peak_bytes": {
+        "min": 37750016,
+        "median": 37750016.0,
+        "max": 37750016
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 37750016,
+        "median": 37750016.0,
+        "max": 37750016
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 37750016,
+        "median": 37750016.0,
+        "max": 37750016
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 33416,
+        "median": 33979.0,
+        "max": 41625
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2025667,
+        "median": 2100458.0,
+        "max": 2323833
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1282167,
+        "median": 1501333.5,
+        "max": 1838667
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 810375,
+        "median": 1183229.0,
+        "max": 1434125
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 31625,
+        "median": 33104.0,
+        "max": 39084
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1941584,
+        "median": 1969750.0,
+        "max": 2101292
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1308500,
+        "median": 1386833.5,
+        "max": 1635792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 782000,
+        "median": 1071416.5,
+        "max": 1212250
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65528,
+        "median": 65528.0,
+        "max": 65528
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      },
+      "peak_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "peak_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "peak_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 18875136,
+        "median": 18875136.0,
+        "max": 18875136
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65544,
+        "median": 65544.0,
+        "max": 65544
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      },
+      "peak_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "peak_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "peak_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 17825792,
+        "median": 17825792.0,
+        "max": 17825792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 33000,
+        "median": 34979.5,
+        "max": 43333
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1986875,
+        "median": 2008833.5,
+        "max": 2127500
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2200333,
+        "median": 2223709.0,
+        "max": 2434541
+      }
+    },
+    {
+      "variant": "before",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 740750,
+        "median": 747666.5,
+        "max": 768166
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 31458,
+        "median": 33708.0,
+        "max": 34667
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1902541,
+        "median": 1951021.0,
+        "max": 2002667
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1460375,
+        "median": 1476667.0,
+        "max": 1493583
+      }
+    },
+    {
+      "variant": "after",
+      "n": 0,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 735084,
+        "median": 744500.0,
+        "max": 777125
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "peak_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "peak_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "peak_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "peak_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "peak_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "peak_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 167,
+        "median": 208.5,
+        "max": 250
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 10542,
+        "median": 11895.5,
+        "max": 16833
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 41,
+        "median": 83.0,
+        "max": 166
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2792,
+        "median": 3125.0,
+        "max": 3583
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 166,
+        "median": 208.0,
+        "max": 292
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 9834,
+        "median": 10625.5,
+        "max": 11917
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 42,
+        "median": 84.0,
+        "max": 84
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2416,
+        "median": 2583.5,
+        "max": 2667
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "peak_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "peak_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 148992,
+        "median": 148992.0,
+        "max": 148992
+      },
+      "freed_bytes": {
+        "min": 74240,
+        "median": 74240.0,
+        "max": 74240
+      },
+      "live_bytes": {
+        "min": 149760,
+        "median": 149760.0,
+        "max": 149760
+      },
+      "peak_bytes": {
+        "min": 149760,
+        "median": 149760.0,
+        "max": 149760
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 149760,
+        "median": 149760.0,
+        "max": 149760
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 149760,
+        "median": 149760.0,
+        "max": 149760
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "peak_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "peak_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 150528,
+        "median": 150528.0,
+        "max": 150528
+      },
+      "freed_bytes": {
+        "min": 74240,
+        "median": 74240.0,
+        "max": 74240
+      },
+      "live_bytes": {
+        "min": 150272,
+        "median": 150272.0,
+        "max": 150272
+      },
+      "peak_bytes": {
+        "min": 150272,
+        "median": 150272.0,
+        "max": 150272
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 150272,
+        "median": 150272.0,
+        "max": 150272
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 150272,
+        "median": 150272.0,
+        "max": 150272
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 125,
+        "median": 167.0,
+        "max": 208
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 9875,
+        "median": 12313.0,
+        "max": 13417
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 14500,
+        "median": 15791.5,
+        "max": 16209
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3209,
+        "median": 3437.5,
+        "max": 3708
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 166,
+        "median": 167.0,
+        "max": 208
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 8708,
+        "median": 9999.5,
+        "max": 11667
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 16958,
+        "median": 17875.0,
+        "max": 22584
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3334,
+        "median": 3646.0,
+        "max": 4209
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      },
+      "peak_bytes": {
+        "min": 56,
+        "median": 56.0,
+        "max": 56
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "peak_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "peak_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 75008,
+        "median": 75008.0,
+        "max": 75008
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      },
+      "peak_bytes": {
+        "min": 72,
+        "median": 72.0,
+        "max": 72
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "peak_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "peak_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 73984,
+        "median": 73984.0,
+        "max": 73984
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 84,
+        "median": 166.5,
+        "max": 209
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 10709,
+        "median": 11187.5,
+        "max": 14458
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 708,
+        "median": 750.0,
+        "max": 875
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2458,
+        "median": 2708.5,
+        "max": 3084
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 125,
+        "median": 166.5,
+        "max": 167
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 8167,
+        "median": 9520.5,
+        "max": 10459
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 583,
+        "median": 708.0,
+        "max": 1083
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 1,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2167,
+        "median": 2375.0,
+        "max": 2459
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4088,
+        "median": 4088.0,
+        "max": 4088
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      },
+      "peak_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "peak_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "peak_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4104,
+        "median": 4104.0,
+        "max": 4104
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      },
+      "peak_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "peak_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "peak_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3166,
+        "median": 3416.5,
+        "max": 3458
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 147375,
+        "median": 149874.5,
+        "max": 151833
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 42,
+        "median": 83.0,
+        "max": 125
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 20000,
+        "median": 21083.5,
+        "max": 24542
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3125,
+        "median": 3271.0,
+        "max": 3500
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 136166,
+        "median": 137812.5,
+        "max": 144459
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 42,
+        "median": 83.5,
+        "max": 167
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 18542,
+        "median": 19166.5,
+        "max": 20375
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4088,
+        "median": 4088.0,
+        "max": 4088
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      },
+      "peak_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "peak_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 2498560,
+        "median": 2498560.0,
+        "max": 2498560
+      },
+      "freed_bytes": {
+        "min": 1249280,
+        "median": 1249280.0,
+        "max": 1249280
+      },
+      "live_bytes": {
+        "min": 2499328,
+        "median": 2499328.0,
+        "max": 2499328
+      },
+      "peak_bytes": {
+        "min": 2499328,
+        "median": 2499328.0,
+        "max": 2499328
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 2499328,
+        "median": 2499328.0,
+        "max": 2499328
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 2499328,
+        "median": 2499328.0,
+        "max": 2499328
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4104,
+        "median": 4104.0,
+        "max": 4104
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      },
+      "peak_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "peak_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 2565376,
+        "median": 2565376.0,
+        "max": 2565376
+      },
+      "freed_bytes": {
+        "min": 1249280,
+        "median": 1249280.0,
+        "max": 1249280
+      },
+      "live_bytes": {
+        "min": 2499840,
+        "median": 2499840.0,
+        "max": 2499840
+      },
+      "peak_bytes": {
+        "min": 2499840,
+        "median": 2499840.0,
+        "max": 2499840
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 2499840,
+        "median": 2499840.0,
+        "max": 2499840
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 2499840,
+        "median": 2499840.0,
+        "max": 2499840
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3208,
+        "median": 3333.5,
+        "max": 3458
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 151750,
+        "median": 157312.5,
+        "max": 168333
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 140042,
+        "median": 150479.5,
+        "max": 164917
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 21500,
+        "median": 22146.0,
+        "max": 31834
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 3041,
+        "median": 3229.0,
+        "max": 3625
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 142583,
+        "median": 146541.5,
+        "max": 155958
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 142667,
+        "median": 158583.5,
+        "max": 172250
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 22209,
+        "median": 23062.5,
+        "max": 23583
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4088,
+        "median": 4088.0,
+        "max": 4088
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      },
+      "peak_bytes": {
+        "min": 2072,
+        "median": 2072.0,
+        "max": 2072
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "peak_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "peak_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1250048,
+        "median": 1250048.0,
+        "max": 1250048
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 6,
+        "median": 6.0,
+        "max": 6
+      },
+      "requested_bytes": {
+        "min": 4104,
+        "median": 4104.0,
+        "max": 4104
+      },
+      "freed_bytes": {
+        "min": 2016,
+        "median": 2016.0,
+        "max": 2016
+      },
+      "live_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      },
+      "peak_bytes": {
+        "min": 2088,
+        "median": 2088.0,
+        "max": 2088
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "peak_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "peak_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 1183744,
+        "median": 1183744.0,
+        "max": 1183744
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2958,
+        "median": 3146.0,
+        "max": 3291
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 141666,
+        "median": 143999.5,
+        "max": 145917
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 134708,
+        "median": 135354.5,
+        "max": 142708
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 19375,
+        "median": 20291.5,
+        "max": 22166
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2875,
+        "median": 3020.5,
+        "max": 3125
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 131084,
+        "median": 142312.5,
+        "max": 152125
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 86667,
+        "median": 87166.5,
+        "max": 90500
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 256,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 18125,
+        "median": 19625.5,
+        "max": 21417
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65528,
+        "median": 65528.0,
+        "max": 65528
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      },
+      "peak_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "peak_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "peak_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65544,
+        "median": 65544.0,
+        "max": 65544
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      },
+      "peak_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "peak_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "peak_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 33291,
+        "median": 33853.5,
+        "max": 34791
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2077666,
+        "median": 2100770.5,
+        "max": 2140000
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 41,
+        "median": 42.0,
+        "max": 125
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 818458,
+        "median": 838396.0,
+        "max": 1053084
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 31708,
+        "median": 32000.0,
+        "max": 35333
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1958959,
+        "median": 2023521.0,
+        "max": 2131542
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 42,
+        "median": 83.0,
+        "max": 208
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "none",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 800875,
+        "median": 816666.5,
+        "max": 890542
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65528,
+        "median": 65528.0,
+        "max": 65528
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      },
+      "peak_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "peak_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 37888000,
+        "median": 37888000.0,
+        "max": 37888000
+      },
+      "freed_bytes": {
+        "min": 18944000,
+        "median": 18944000.0,
+        "max": 18944000
+      },
+      "live_bytes": {
+        "min": 37888768,
+        "median": 37888768.0,
+        "max": 37888768
+      },
+      "peak_bytes": {
+        "min": 37888768,
+        "median": 37888768.0,
+        "max": 37888768
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 37888768,
+        "median": 37888768.0,
+        "max": 37888768
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 37888768,
+        "median": 37888768.0,
+        "max": 37888768
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65544,
+        "median": 65544.0,
+        "max": 65544
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      },
+      "peak_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "peak_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "realloc_calls": {
+        "min": 64,
+        "median": 64.0,
+        "max": 64
+      },
+      "requested_bytes": {
+        "min": 38937856,
+        "median": 38937856.0,
+        "max": 38937856
+      },
+      "freed_bytes": {
+        "min": 18944000,
+        "median": 18944000.0,
+        "max": 18944000
+      },
+      "live_bytes": {
+        "min": 37889280,
+        "median": 37889280.0,
+        "max": 37889280
+      },
+      "peak_bytes": {
+        "min": 37889280,
+        "median": 37889280.0,
+        "max": 37889280
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 37889280,
+        "median": 37889280.0,
+        "max": 37889280
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 37889280,
+        "median": 37889280.0,
+        "max": 37889280
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 33417,
+        "median": 33749.5,
+        "max": 37375
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2038584,
+        "median": 2090083.5,
+        "max": 2222000
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1232083,
+        "median": 1257104.5,
+        "max": 1365792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 752125,
+        "median": 804645.5,
+        "max": 928125
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 32000,
+        "median": 33437.5,
+        "max": 34375
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1944834,
+        "median": 1984437.5,
+        "max": 2138500
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1239250,
+        "median": 1312937.5,
+        "max": 1402667
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "append",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 767750,
+        "median": 796646.0,
+        "max": 887750
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65528,
+        "median": 65528.0,
+        "max": 65528
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      },
+      "peak_bytes": {
+        "min": 32792,
+        "median": 32792.0,
+        "max": 32792
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 96,
+        "median": 96.0,
+        "max": 96
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "peak_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "peak_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 18944768,
+        "median": 18944768.0,
+        "max": 18944768
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "construct",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 2,
+        "median": 2.0,
+        "max": 2
+      },
+      "realloc_calls": {
+        "min": 10,
+        "median": 10.0,
+        "max": 10
+      },
+      "requested_bytes": {
+        "min": 65544,
+        "median": 65544.0,
+        "max": 65544
+      },
+      "freed_bytes": {
+        "min": 32736,
+        "median": 32736.0,
+        "max": 32736
+      },
+      "live_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      },
+      "peak_bytes": {
+        "min": 32808,
+        "median": 32808.0,
+        "max": 32808
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "clone",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 32,
+        "median": 32.0,
+        "max": 32
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "peak_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "mutate",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "live_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "peak_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "allocation",
+      "phase": "drop",
+      "samples": 6,
+      "alloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "realloc_calls": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "requested_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "freed_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      },
+      "live_bytes": {
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "peak_bytes": {
+        "min": 17895424,
+        "median": 17895424.0,
+        "max": 17895424
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 33291,
+        "median": 33396.0,
+        "max": 33709
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2063792,
+        "median": 2087562.5,
+        "max": 2129208
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 2242625,
+        "median": 2244979.5,
+        "max": 2297666
+      }
+    },
+    {
+      "variant": "before",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 745625,
+        "median": 755521.0,
+        "max": 838625
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "construct",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 31625,
+        "median": 32604.0,
+        "max": 35625
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "clone",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1955166,
+        "median": 1965250.0,
+        "max": 2043333
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "mutate",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 1460917,
+        "median": 1488874.5,
+        "max": 1640750
+      }
+    },
+    {
+      "variant": "after",
+      "n": 16,
+      "pending": 4096,
+      "operation": "resolve",
+      "mode": "time",
+      "phase": "drop",
+      "samples": 6,
+      "elapsed_ns": {
+        "min": 734833,
+        "median": 747896.0,
+        "max": 779541
+      }
+    }
+  ]
+}

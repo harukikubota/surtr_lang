@@ -1,0 +1,326 @@
+[
+  {
+    "n": 0,
+    "pending": 1,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 1,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 1,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 1,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 1,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 1,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 256,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 256,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 256,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 256,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 256,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 256,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 4096,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 4096,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 4096,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 4096,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 0,
+    "pending": 4096,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 0,
+    "pending": 4096,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 1,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 1,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 1,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 1,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 1,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 1,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 256,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 256,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 256,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 256,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 256,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 256,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 4096,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 4096,
+    "count": 32,
+    "operation": "none",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 4096,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 4096,
+    "count": 32,
+    "operation": "append",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  },
+  {
+    "n": 16,
+    "pending": 4096,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "before"
+  },
+  {
+    "n": 16,
+    "pending": 4096,
+    "count": 32,
+    "operation": "resolve",
+    "mode": "verify",
+    "verified": true,
+    "variant": "after"
+  }
+]

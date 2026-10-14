@@ -36,3 +36,23 @@ fresh processes are used for each case/mode. Binary hashes are checked before
 and after the series. Runners refuse existing raw files.
 
 See [scope and results](../../../doc/optimize/runtime/value/future_stack_empty_clone_2026_10_14.md).
+
+
+For owned-to-shared nonempty metadata, run with `--before-metadata owned
+--after-metadata shared`. The default legacy/owned modes preserve the earlier
+empty-metadata comparison. Storage modes describe source states, not product
+configuration switches.
+
+`resume.rs` adds separate metadata construction, clone, first operation and drop
+intervals. Build it with `build.py --probe tests/profile/future_stack_clone/resume.rs`.
+`resume.py --builds /absolute/resume/builds.json --output /absolute/results` uses
+0/16 ordinary values, 1/256/4096 pending positions, 32 clones and none/append/resolve
+operations. It uses separate allocation/time processes and separate content
+verification. The original owner stays alive during each branch mutation.
+
+Value storage and clone root storage are preallocated outside all intervals.
+Construction counts only position metadata and position-vector growth; its live
+storage stays with the original and is excluded from clone/mutation/drop live
+counters. Do not combine phase peaks. Clone and mutation allocations must all be
+freed in the drop interval. Sum request totals to assess shifted copy costs.
+See [sharing and resume results](../../../doc/optimize/runtime/value/future_stack_position_sharing_2026_10_14.md).

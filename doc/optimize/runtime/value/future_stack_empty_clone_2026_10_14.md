@@ -79,3 +79,5 @@ standalone buildの初回はdependency directoryをrelease直下にしてしま�
 ## 残件
 
 元の使用済み位置bufferの保持、値Vecのclone、未解決位置のコピー、pointer幅metadata、Future表・cleanup検索は残る。今回の24 bytesはcloneごとの要求削減であり、VM全体の保持量やRSSの改善とは扱わない。通常CLIのFutureなしの小さい時間差についても新しい解消結果を主張しない。
+
+その後、[非空位置表の共有](future_stack_position_sharing_2026_10_14.md)を追加した。上記のBox版の挙動と原本は測定時点の記録として保持する。

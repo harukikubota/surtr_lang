@@ -1,0 +1,80 @@
+--- a/crates/eldr/src/vm/operand_stack.rs
++++ b/crates/eldr/src/vm/operand_stack.rs
+@@ -303,4 +303,76 @@
+             count(&original);
+         }
+     }
+-}
++
++    #[test]
++    fn pending_positions_are_shared_until_an_actual_partial_mutation() {
++        let mut original: OperandStack = vec![
++            Value::PendingFuture(1),
++            Value::PendingFuture(1),
++            Value::PendingFuture(2),
++        ]
++        .into();
++        let saved = original.clone();
++        let shared = &**saved.pending_slots.as_ref().unwrap() as *const Vec<usize>;
++        assert_eq!(
++            &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
++            shared
++        );
++        original.push(Value::Unit);
++        original.pop();
++        original.truncate(3);
++        original.replace_ready_futures(&HashMap::new());
++        original.replace_ready_futures(&[(99, Value::Unit)].into());
++        original.replace_ready_futures(&[(1, Value::PendingFuture(4))].into());
++        assert_eq!(
++            &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
++            shared
++        );
++        assert_eq!(
++            saved.values,
++            vec![
++                Value::PendingFuture(1),
++                Value::PendingFuture(1),
++                Value::PendingFuture(2)
++            ]
++        );
++        original.replace_ready_futures(&[(2, Value::Unit)].into());
++        assert_ne!(
++            &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
++            shared
++        );
++        assert_eq!(original.pending_positions(), &[0, 1]);
++        assert_eq!(saved.pending_positions(), &[0, 1, 2]);
++        count(&original);
++        count(&saved);
++        let mut appended = saved.clone();
++        appended.push(Value::PendingFuture(3));
++        assert_eq!(saved.pending_positions(), &[0, 1, 2]);
++        assert_eq!(appended.pending_positions(), &[0, 1, 2, 3]);
++    }
++
++    #[test]
++    fn retiring_all_shared_positions_discards_the_view_without_copying() {
++        for operation in ["pop", "truncate", "clear", "resolve"] {
++            let mut original: OperandStack = vec![Value::Unit, Value::PendingFuture(1)].into();
++            let saved = original.clone();
++            match operation {
++                "pop" => {
++                    original.pop();
++                }
++                "truncate" => original.truncate(1),
++                "clear" => original.clear(),
++                "resolve" => original.replace_ready_futures(&[(1, Value::Unit)].into()),
++                _ => unreachable!(),
++            }
++            assert!(
++                original.pending_slots.is_none(),
++                "{operation}: do not copy a shared table only to empty it"
++            );
++            assert_eq!(saved.pending_positions(), &[1]);
++            assert_eq!(saved.values, vec![Value::Unit, Value::PendingFuture(1)]);
++            count(&original);
++            count(&saved);
++        }
++    }
++}
