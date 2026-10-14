@@ -85,3 +85,15 @@ python3 tests/profile/future_stack_scan/ready_value_clones.py --before /absolute
 1 / 256 / 4,096回の確認、0 / 64要素Tuple、raw検査・Task終了判定・cleanup待ち・配送可能のReady / CancelledとRunning / unknownの10条件を、前後2 sample・AB / BAの240 fresh processで検証する。全値の一致、元の表の値の維持、cleanup前の配送不可と完了後の配送も確認する。counterはFuture表内の元のValueを複製する呼出しだけを数え、入れ子のclone、各slotへの配送clone、検証用の値準備は含まない。
 
 これは操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIは測らない。[仕様と結果](../../../doc/optimize/runtime/value/future_ready_clone_deferral_2026_10_14.md)の基準patchを`922c457d`へ適用すると、counterとmanual testを持つ変更前sourceを再現できる。受入テスト2件は変更前に失敗するため、操作数の比較ではmanual testだけを指定する。
+
+## 待機Taskの判定と配送
+
+`waiting_readiness.py`は製品の`start_await_task`が登録した待機Taskで、`has_runnable_detached_tasks`による判定だけのcloneと、driverが実配送するときのcloneを分ける。`lookup_build.py`で前後のCargo test executableを保存して比較する。
+
+```sh
+python3 tests/profile/future_stack_scan/waiting_readiness.py --before /absolute/before/builds.json --after /absolute/after/builds.json --output /absolute/new_waiting_run
+```
+
+1 / 256 / 4,096回の確認、0 / 64要素Tuple、Ready / Cancelled / Running / unknownを前後2 sample、AB / BAの96 fresh processで検証する。Ready / Cancelledでは判定のsource cloneが確認数→0、driver内のcloneが2→1になる。元の値と完了Futureの結果、Task recordの除去、完了が繰り返されないことも確認する。Running / unknownは待機のままとする。
+
+操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIは測らない。producer cleanup待ちの選択・通知・次のdriverでの配送はcrate-local受入テストで確認する。[仕様と結果](../../../doc/optimize/runtime/value/future_readiness_borrow_2026_10_14.md)の基準patchを`53354bdf`へ適用すると変更前sourceを再現できる。受入テスト2件は変更前に失敗するため、操作数の比較ではmanual testだけを指定する。

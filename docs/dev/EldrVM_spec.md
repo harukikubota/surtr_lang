@@ -187,7 +187,7 @@ VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk
 - `StepOutcome::Pending` は future id と resume 用 `ExecutionContext` を保持する。
 - operand stackはtop-level PendingFutureのslot位置を昇順のprivate Vecに保持し、buffer metadataは必要になったときだけRcで確保する。stack内の追加metadataは1 pointer幅以内とする。push / pop / truncate / clear / ready置換が値と位置を一緒に更新し、任意の可変Valueアクセスは公開しない。context切替え・Clone・checkpoint / rollbackでも一緒に移動・保存する。追跡slotが0件ならFuture表を参照せずに戻る。slotがある場合だけ表の空判定を行い、空なら走査を行わない。それ以外は追跡slotだけを読み、cleanup完了条件を含むready判定で解決値を収集する。追跡順で連続する同じIDは一回の収集中に一度だけ確認し、普通値を挟んでも同じ連続区間として扱う。別IDを挟む場合や次の収集では再確認する。Future表・cleanup表は収集中に変更せず、追加の永続状態を持たない。その収集結果を固定して追跡slotだけを書き換え、同じFutureを持つ全slotを置換する。解決値がPendingFutureなら位置を保持し、それ以外なら位置を削除する。解決値がない場合は書込みを行わない。nested Value内のFutureは追跡・解決に含めない。位置不一致を全走査へのfallbackで隠さない。Futureを一度も持たないstackは位置bufferもそのRcも確保しない。Cloneは値Vecを複製し、非空の位置表を共有する。位置が空なら複製先の位置bufferを確保しない。実際に位置を追加・一部削除する場合だけ位置表を分離する。通常値の操作と位置が変わらない解決では分離しない。独占した使用済み位置Vecはclear後も再利用し、共有表の全削除は参照を外してコピーを省く。private OperandStackの等値は値と論理位置で判定し、予約bufferの有無を含めない。
 
-- Futureのraw結果検査は表内のReady / Cancelled値を不変参照として借用し、結果の有無を調べるTask終了判定では複製しない。配送用の`ready_future_value`はdetached Taskのcleanup完了を確認してから値を複製する。cleanup待ち・Running・unknownでは配送候補の値を複製しない。配送した値は独立して所有し、Future表内の元の値と他contextへの配送を維持する。
+- Futureのraw結果検査は表内のReady / Cancelled値を不変参照として借用し、結果の有無を調べるTask終了判定では複製しない。`ready_future_value_ref`はdetached Taskのcleanup完了を確認して配送可能な値を借用し、待機・起動境界・cleanup通知・singleton解放で有無だけを調べる場合は複製しない。配送用の`ready_future_value`もこの共通判定を使い、値がある場合だけ複製する。cleanup待ち・Running・unknownでは配送候補の値を複製しない。配送した値は独立して所有し、Future表内の元の値と他contextへの配送を維持する。
 
 ### 3.9 Builtin / callback の継続実行
 

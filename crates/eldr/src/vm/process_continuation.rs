@@ -908,7 +908,7 @@ impl VM {
                 || match &task.state {
                     DetachedTaskState::Runnable(_) => true,
                     DetachedTaskState::Waiting { future_id, .. } => {
-                        self.ready_future_value(*future_id).is_some()
+                        self.ready_future_value_ref(*future_id).is_some()
                     }
                 }
         })
@@ -926,7 +926,7 @@ impl VM {
                     || match &task.state {
                         DetachedTaskState::Runnable(_) => true,
                         DetachedTaskState::Waiting { future_id, .. } => {
-                            self.ready_future_value(*future_id).is_some()
+                            self.ready_future_value_ref(*future_id).is_some()
                         }
                     };
                 ready.then_some(*id)
@@ -964,7 +964,7 @@ impl VM {
                         future_id,
                         context: Some(context),
                     } => {
-                        if !task.cancelling && self.ready_future_value(future_id).is_none() {
+                        if !task.cancelling && self.ready_future_value_ref(future_id).is_none() {
                             return Err(RuntimeError::new(
                                 "scheduled waiting task has no ready future",
                             ));
@@ -1156,7 +1156,7 @@ impl VM {
             DetachedCompletion::Future(Some(id)) | DetachedCompletion::ErrorFuture(id) => *id,
             DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => return,
         };
-        if self.ready_future_value(id).is_some() {
+        if self.ready_future_value_ref(id).is_some() {
             self.process_runtime.wake_future_waiters(id);
         }
     }
@@ -1181,7 +1181,7 @@ impl VM {
     }
 
     fn future_reached_startup_boundary(&self, future_id: FutureId) -> bool {
-        if self.ready_future_value(future_id).is_some() {
+        if self.ready_future_value_ref(future_id).is_some() {
             return false;
         }
         self.future_producer(future_id)
@@ -1206,7 +1206,7 @@ impl VM {
             match task.state {
                 DetachedTaskState::Runnable(_) => return false,
                 DetachedTaskState::Waiting { future_id, .. } => {
-                    if self.ready_future_value(future_id).is_some() {
+                    if self.ready_future_value_ref(future_id).is_some() {
                         return false;
                     }
                     match self.future_producer(future_id) {
@@ -1219,6 +1219,14 @@ impl VM {
     }
 
     pub(super) fn ready_future_value(&self, future_id: FutureId) -> Option<Value> {
+        self.ready_future_value_ref(future_id).map(|value| {
+            #[cfg(test)]
+            super::future_stack_tests::record_ready_value_clone();
+            value.clone()
+        })
+    }
+
+    pub(super) fn ready_future_value_ref(&self, future_id: FutureId) -> Option<&Value> {
         let value = self.raw_ready_future_value(future_id)?;
         let cleanup_pending =
             self.process_runtime
@@ -1230,11 +1238,7 @@ impl VM {
                     }
                     DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => false,
                 });
-        (!cleanup_pending).then(|| {
-            #[cfg(test)]
-            super::future_stack_tests::record_ready_value_clone();
-            value.clone()
-        })
+        (!cleanup_pending).then_some(value)
     }
 
     pub(super) fn remove_process_detached_tasks(&mut self, pid: u64) {
@@ -1466,7 +1470,7 @@ impl VM {
             RuntimeError::new(format!("singleton init waiter count underflow: {name}"))
         })?;
         let id = flight.future_id;
-        if flight.waiters == 0 && self.ready_future_value(id).is_some() {
+        if flight.waiters == 0 && self.ready_future_value_ref(id).is_some() {
             self.process_runtime.singleton_inits.remove(name);
             self.forget_internal_future(id);
         }

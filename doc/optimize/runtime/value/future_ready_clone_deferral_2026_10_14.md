@@ -65,3 +65,5 @@ counterはFuture表内の元のValueを複製する呼出しだけを数える�
 ## 残件
 
 Future表とcleanup表の検索、配送可能な値のclone、各slotへの配送clone、値Vecと位置表の保持費用は残る。Taskの待機Futureを配送用関数の`is_some`で調べる箇所も、配送可能な場合のcloneが残る。今回のraw借用は終了判定の検査に適用するが、一般の待機・配送APIは分割しない。実時間・allocator・RSSとOI-037は未測定・未解決のままとする。
+
+その後、[配送可能かの共通借用判定](future_readiness_borrow_2026_10_14.md)を実装し、待機の判定だけのcloneも省いた。上記の操作数は配送前clone削減時点の原本として保持する。

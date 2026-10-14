@@ -4562,7 +4562,7 @@ impl VM {
             self.drive_ready_runtime_quantum()?;
             if future_ids
                 .iter()
-                .any(|future_id| self.ready_future_value(*future_id).is_some())
+                .any(|future_id| self.ready_future_value_ref(*future_id).is_some())
             {
                 return Ok(());
             }

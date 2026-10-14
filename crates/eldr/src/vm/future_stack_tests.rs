@@ -447,6 +447,171 @@ fn raw_future_inspection_and_task_completion_do_not_clone_results() {
     }
 }
 
+fn waiting_task_completion(vm: &mut VM, waited: FutureId) -> FutureId {
+    vm.frames[0].call_site = Some((0, 1));
+    let BuiltinOutcome::Wait { future_id, .. } = vm
+        .start_await_task(&Value::TaskHandle(waited), None)
+        .unwrap()
+    else {
+        panic!("await registers a waiting task");
+    };
+    future_id
+}
+
+#[test]
+fn waiting_task_readiness_does_not_clone_and_delivery_clones_once() {
+    for cancelled in [false, true] {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let waited = vm.process_runtime.allocate_future(None, None, false);
+        let value = Value::Tuple(vec![Value::Unit; 64]);
+        vm.process_runtime.futures.get_mut(&waited).unwrap().state = if cancelled {
+            FutureState::Cancelled(value.clone())
+        } else {
+            FutureState::Ready(value.clone())
+        };
+        let completion = waiting_task_completion(&mut vm, waited);
+        reset_scans();
+        assert!(vm.has_runnable_detached_tasks());
+        assert_eq!(
+            ready_value_clones(),
+            0,
+            "readiness does not consume a result"
+        );
+        reset_scans();
+        vm.drive_ready_detached_tasks().unwrap();
+        assert_eq!(
+            ready_value_clones(),
+            1,
+            "clone once to complete the waiting task"
+        );
+        assert!(vm.process_runtime.detached_tasks.is_empty());
+        assert_eq!(vm.raw_ready_future_value(completion), Some(&value));
+        assert_eq!(vm.raw_ready_future_value(waited), Some(&value));
+        reset_scans();
+        vm.drive_ready_detached_tasks().unwrap();
+        assert_eq!(ready_value_clones(), 0, "completion is not repeated");
+    }
+}
+
+#[test]
+fn waiting_task_remains_blocked_until_producer_cleanup_finishes() {
+    for cancelled in [false, true] {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let (producer, waited) = future_with_cleanup_record(&mut vm);
+        let blocker = vm.process_runtime.allocate_future(None, None, false);
+        vm.process_runtime
+            .detached_tasks
+            .get_mut(&producer)
+            .unwrap()
+            .state = super::process_continuation::DetachedTaskState::Waiting {
+            future_id: blocker,
+            context: None,
+        };
+        let value = Value::Tuple(vec![Value::Unit; 64]);
+        vm.process_runtime.futures.get_mut(&waited).unwrap().state = if cancelled {
+            FutureState::Cancelled(value.clone())
+        } else {
+            FutureState::Ready(value.clone())
+        };
+        let completion = waiting_task_completion(&mut vm, waited);
+        reset_scans();
+        vm.drive_ready_detached_tasks().unwrap();
+        assert!(!vm.process_runtime.detached_tasks.contains_key(&producer));
+        assert!(
+            matches!(
+                vm.process_runtime.futures[&completion].state,
+                FutureState::Running
+            ),
+            "the waiting task was not selected before producer cleanup"
+        );
+        assert_eq!(
+            ready_value_clones(),
+            0,
+            "publishing cleanup only checks readiness"
+        );
+        assert!(vm.has_runnable_detached_tasks());
+        assert_eq!(ready_value_clones(), 0);
+        reset_scans();
+        vm.drive_ready_detached_tasks().unwrap();
+        assert_eq!(ready_value_clones(), 1);
+        assert_eq!(vm.raw_ready_future_value(completion), Some(&value));
+        assert!(vm.process_runtime.detached_tasks.is_empty());
+    }
+}
+
+// Actual waiting-task queries and one delivery; no timing/allocator claims.
+#[test]
+fn waiting_future_readiness_profile() {
+    let profile = std::env::var("OI036_WAITING_PROFILE").as_deref() == Ok("1");
+    let queries: usize = if profile {
+        std::env::var("OI036_QUERIES").unwrap().parse().unwrap()
+    } else {
+        16
+    };
+    let width: usize = if profile {
+        std::env::var("OI036_WIDTH").unwrap().parse().unwrap()
+    } else {
+        64
+    };
+    let case = std::env::var("OI036_CASE").unwrap_or_else(|_| "ready".into());
+    assert!(queries > 0);
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let allocated = vm.process_runtime.allocate_future(None, None, false);
+    let waited = if case == "unknown" {
+        u64::MAX
+    } else {
+        allocated
+    };
+    let value = Value::Tuple(vec![Value::Unit; width]);
+    let ready = matches!(case.as_str(), "ready" | "cancelled");
+    match case.as_str() {
+        "ready" => {
+            vm.process_runtime.resolve_future(waited, value.clone());
+        }
+        "cancelled" => {
+            vm.process_runtime.futures.get_mut(&waited).unwrap().state =
+                FutureState::Cancelled(value.clone());
+        }
+        "running" | "unknown" => {}
+        _ => panic!("unknown OI036_CASE"),
+    }
+    let completion = waiting_task_completion(&mut vm, waited);
+    reset_scans();
+    for _ in 0..queries {
+        assert_eq!(vm.has_runnable_detached_tasks(), ready);
+    }
+    let query_clones = ready_value_clones();
+    reset_scans();
+    vm.drive_ready_detached_tasks().unwrap();
+    let delivery_clones = ready_value_clones();
+    if ready {
+        assert_eq!(vm.raw_ready_future_value(completion), Some(&value));
+        assert_eq!(vm.raw_ready_future_value(waited), Some(&value));
+        assert!(vm.process_runtime.detached_tasks.is_empty());
+        reset_scans();
+        vm.drive_ready_detached_tasks().unwrap();
+        assert_eq!(ready_value_clones(), 0);
+    } else {
+        assert!(matches!(
+            vm.process_runtime.futures[&completion].state,
+            FutureState::Running
+        ));
+        assert_eq!(vm.process_runtime.detached_tasks.len(), 1);
+    }
+    if profile {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "profile":"oi036_waiting_readiness", "case":case, "queries":queries,
+                "width":width, "query_source_clones":query_clones,
+                "delivery_source_clones":delivery_clones, "verified":true,
+                "context_bytes":std::mem::size_of::<ExecutionContext>(),
+                "vm_bytes":std::mem::size_of::<VM>(),
+            })
+        );
+    }
+}
+
 // Count source-value clones in the real VM; no elapsed time or allocator claims.
 #[test]
 fn future_ready_value_clone_profile() {
