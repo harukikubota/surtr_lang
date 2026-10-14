@@ -792,7 +792,7 @@ fn repeated_future_ids_share_one_ready_check_even_across_ordinary_values() {
 }
 
 #[test]
-fn lookup_runs_reset_at_other_ids_and_each_collection_without_cascading() {
+fn ready_snapshot_reuses_ids_and_resets_each_collection_without_cascading() {
     let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
     let first = vm.process_runtime.allocate_future(None, None, false);
     let second = vm.process_runtime.allocate_future(None, None, false);
@@ -805,7 +805,7 @@ fn lookup_runs_reset_at_other_ids_and_each_collection_without_cascading() {
         .collect();
     reset_scans();
     vm.resolve_ready_pending_stack_values();
-    assert_eq!(ready_lookups(), 3);
+    assert_eq!((ready_lookups(), ready_value_clones()), (2, 2));
     assert_eq!(
         vm.stack,
         vec![
@@ -835,6 +835,66 @@ fn lookup_runs_reset_at_other_ids_and_each_collection_without_cascading() {
     assert_eq!(vm.stack.last(), Some(&Value::Unit));
 }
 
+#[test]
+fn ready_snapshot_keeps_missing_results_uncached_and_slot_copies_independent() {
+    for case in ["running", "unknown", "cleanup"] {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let first = vm.process_runtime.allocate_future(None, None, false);
+        let second = match case {
+            "running" => vm.process_runtime.allocate_future(None, None, false),
+            "unknown" => u64::MAX,
+            "cleanup" => {
+                let (_, id) = future_with_cleanup_record(&mut vm);
+                vm.process_runtime.resolve_future(id, Value::Unit);
+                id
+            }
+            _ => unreachable!(),
+        };
+        let value = Value::Tuple(vec![Value::Unit; 64]);
+        vm.process_runtime.resolve_future(first, value.clone());
+        vm.stack = [first, second, first, second, first]
+            .into_iter()
+            .map(Value::PendingFuture)
+            .collect();
+        let saved = vm.stack.clone();
+        reset_scans();
+        vm.resolve_ready_pending_stack_values();
+        assert_eq!(
+            (ready_lookups(), ready_value_clones()),
+            (3, 1),
+            "{case}: ready once, missing result twice"
+        );
+        assert_eq!(scans(), (5, 5));
+        assert_eq!(
+            vm.stack,
+            vec![
+                value.clone(),
+                Value::PendingFuture(second),
+                value.clone(),
+                Value::PendingFuture(second),
+                value.clone()
+            ]
+        );
+        assert_eq!(
+            saved,
+            vec![
+                Value::PendingFuture(first),
+                Value::PendingFuture(second),
+                Value::PendingFuture(first),
+                Value::PendingFuture(second),
+                Value::PendingFuture(first)
+            ]
+        );
+        let Some(Value::Tuple(mut delivered)) = vm.stack.pop() else {
+            panic!("expected independent Tuple result");
+        };
+        delivered.push(Value::Unit);
+        assert_eq!(vm.stack[0], value);
+        assert_eq!(vm.raw_ready_future_value(first), Some(&value));
+        assert_eq!(vm.stack.pending_slot_count(), 2);
+    }
+}
+
 // Operation counts only: deliberately omit elapsed time, allocator and RSS.
 #[test]
 fn repeated_future_lookup_profile() {
@@ -847,23 +907,37 @@ fn repeated_future_lookup_profile() {
     assert!(n > 0);
     let case = std::env::var("OI036_CASE").unwrap_or_else(|_| "ready".into());
     let alternating = std::env::var("OI036_ALTERNATING").as_deref() == Ok("1");
+    let pattern = std::env::var("OI036_PATTERN").unwrap_or_else(|_| {
+        if alternating {
+            "alternating".into()
+        } else {
+            "repeated".into()
+        }
+    });
+    assert!(matches!(
+        pattern.as_str(),
+        "repeated" | "alternating" | "distinct"
+    ));
     let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
-    let first = vm.process_runtime.allocate_future(None, None, false);
-    let second = vm.process_runtime.allocate_future(None, None, false);
-    let ids = if case == "unknown" {
-        [u64::MAX, u64::MAX - 1]
+    let allocated: Vec<_> = (0..if pattern == "distinct" { n.max(2) } else { 2 })
+        .map(|_| vm.process_runtime.allocate_future(None, None, false))
+        .collect();
+    let first = allocated[0];
+    let second = allocated[1];
+    let ids: Vec<_> = if case == "unknown" {
+        (0..allocated.len()).map(|i| u64::MAX - i as u64).collect()
     } else {
-        [first, second]
+        allocated
     };
     match case.as_str() {
         "running" | "unknown" | "empty_slots" => {}
         "ready" => {
-            for id in ids {
+            for &id in &ids {
                 vm.process_runtime.resolve_future(id, Value::Unit);
             }
         }
         "cancelled" => {
-            for id in ids {
+            for &id in &ids {
                 vm.process_runtime.futures.get_mut(&id).unwrap().state =
                     FutureState::Cancelled(Value::Unit);
             }
@@ -871,7 +945,9 @@ fn repeated_future_lookup_profile() {
         "future_result" => {
             vm.process_runtime
                 .resolve_future(first, Value::PendingFuture(second));
-            vm.process_runtime.resolve_future(second, Value::Unit);
+            for &id in &ids[1..] {
+                vm.process_runtime.resolve_future(id, Value::Unit);
+            }
         }
         _ => panic!("unknown OI036_CASE"),
     }
@@ -881,7 +957,14 @@ fn repeated_future_lookup_profile() {
                 if case == "empty_slots" {
                     Value::Unit
                 } else {
-                    Value::PendingFuture(ids[usize::from(alternating) * (i % 2)])
+                    Value::PendingFuture(
+                        ids[match pattern.as_str() {
+                            "repeated" => 0,
+                            "alternating" => i % 2,
+                            "distinct" => i,
+                            _ => unreachable!(),
+                        }],
+                    )
                 },
                 Value::Unit,
             ]
@@ -891,9 +974,15 @@ fn repeated_future_lookup_profile() {
     vm.resolve_ready_pending_stack_values();
     let (read, write) = scans();
     let lookups = ready_lookups();
+    let source_clones = ready_value_clones();
     let empty_checks = table_empty_checks();
     for (i, pair) in vm.stack.chunks_exact(2).enumerate() {
-        let id = ids[usize::from(alternating) * (i % 2)];
+        let id = ids[match pattern.as_str() {
+            "repeated" => 0,
+            "alternating" => i % 2,
+            "distinct" => i,
+            _ => unreachable!(),
+        }];
         let expected = match case.as_str() {
             "running" | "unknown" => Value::PendingFuture(id),
             "future_result" if id == first => Value::PendingFuture(second),
@@ -922,6 +1011,7 @@ fn repeated_future_lookup_profile() {
             serde_json::json!({
                 "profile":"oi036_lookup_runs", "case":case, "n":n,
                 "alternating":alternating, "ready_lookups":lookups,
+                "pattern":pattern, "source_value_clones":source_clones,
                 "read_visits":read, "write_visits":write, "table_empty_checks":empty_checks,
                 "context_bytes":std::mem::size_of::<ExecutionContext>(),
                 "vm_bytes":std::mem::size_of::<VM>(), "verified":true,

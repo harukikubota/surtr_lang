@@ -281,7 +281,7 @@
 
 ### OI-036 Future表が非空のoperand stack走査
 
-- 状態: 未解決Futureの位置追跡・通常経路の費用削減・PendingFutureなしの表参照削減をmainへコミット済み。通常値の全走査は除き、同一IDの連続区間はready確認を一回にした。raw検査・cleanup待ち・有無だけを調べる待機判定の結果cloneも除いた。各連続区間のready / cleanup検索と、通常経路の小さい差は残る。
+- 状態: 未解決Futureの位置追跡・通常経路の費用削減・PendingFutureなしの表参照削減をmainへコミット済み。通常値の全走査は除き、ready IDは一回の収集中に一度、未解決IDは連続区間ごとに一度確認する。raw検査・cleanup待ち・有無だけを調べる待機判定の結果cloneも除いた。distinct ready IDと未解決区間のready / cleanup検索、ready map検査と通常経路の小さい差は残る。
 - 背景:
   - [従来のRT-3改善](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)はFuture表が空なら走査を省く。[件数追跡](optimize/runtime/value/future_stack_nonempty_optimization_2026_10_13.md)で非空表でもPendingFutureなしの走査を除いたが、未解決Futureが一つ残る条件は全走査だった。
   - [位置追跡](optimize/runtime/value/future_stack_index_optimization_2026_10_13.md)と[通常経路の費用削減](optimize/runtime/value/future_stack_metadata_optimization_2026_10_13.md)では、top-level PendingFutureの昇順slot位置を追跡し、そのslotだけを読む。当時は必要時だけBoxへ位置bufferを確保し、stack内の追加metadataを1 pointer幅以内に抑えた。
@@ -292,15 +292,16 @@
   - [連続する同一IDのready確認](optimize/runtime/value/future_stack_lookup_runs_2026_10_14.md)をまとめ、同一IDの4,096位置では判定呼出しを4,096→1回にした。普通値を挟む同一IDも対象にし、別IDを挟む場合は再確認する。実時間・allocator要求・RSSは未測定。
   - [配送前cloneの削減](optimize/runtime/value/future_ready_clone_deferral_2026_10_14.md)でraw結果を借用し、cleanup完了後だけ配送候補をcloneする。raw検査・Task終了判定・cleanup待ちの4,096回確認は元のValueのclone 4,096→0回。配送可能な結果のcloneは維持し、実時間・allocator要求・RSSは未測定。
   - [待機判定の借用](optimize/runtime/value/future_readiness_borrow_2026_10_14.md)でcleanup条件を共通化し、有無だけを調べる製品8箇所をcloneなしにした。Ready / Cancelledの4,096回のTask実行可能判定はclone 4,096→0回、待機Taskのdriver内は選択＋配送の2→1回。cleanup前に待機Taskを選ばず、次のdriverで一度だけ配送する。
+  - [収集済みready IDの再利用](optimize/runtime/value/future_ready_snapshot_dedup_2026_10_14.md)で、別IDを挟むready IDの確認・収集用cloneを省く。2 ID交互の4,096 slotではReady / Cancelled / Future結果の確認・source cloneがそれぞれ4,096→2回。未解決結果はmapへ入れず、全ID別とRunning / unknownの回数は維持する。
 - 維持した受入条件:
   - 同一Futureを持つ全slot、Futureを返すFuture、context切替え、待機・取消・cleanup完了・checkpoint / rollbackを保つ。入れ子Value内のFutureは対象に含めない。
   - 値と位置を一緒に移動・保存し、任意の可変Value参照と位置不一致時の全走査fallbackを設けない。速度閾値はcorrectness testに加えない。
 - 残件:
-  - 各ID連続区間のFuture表とdetached Task cleanup検索、異なるIDを挟んだ再確認、非重複入力へ加わるID比較、owned配送と各slotへのclone、共通借用判定の呼出しの実時間寄与、固定幅metadata、実Future slotのRc / 位置buffer確保、保存後の部分変更の位置コピー、独占した使用済みbuffer保持。
+  - distinct ready IDと未解決IDの連続区間のFuture表・detached Task cleanup検索、別IDを挟む未解決IDの再確認、ID比較とready map検査、distinct ready IDの収集用cloneと各slotへのclone、共通借用判定の呼出しの実時間寄与、固定幅metadata、実Future slotのRc / 位置buffer確保、保存後の部分変更の位置コピー、独占した使用済みbuffer保持。
   - Futureなしの通常入口で前回の件数版・追跡前のVec版との小さい時間差が残る。入力やbinary配置の寄与を一般化しない。
 - 検証:
-  - Future・Task継続・process停止のcrate-local 55件、workspace CI 2,570件、標準Surtr 1,124件が成功。[最新の検証記録](optimize/runtime/value/future_readiness_borrow_2026_10_14_validation.json)。
-  - [10月13日の内部VM原本](optimize/runtime/value/future_stack_fast_2026_10_13.jsonl)・[通常入口原本](optimize/runtime/value/future_stack_count_fast_batch_2026_10_13.jsonl)。AB/BA同数で測り、内部VMの全内容検証は別processにした。最新の位置表共有は[独立owner原本](optimize/runtime/value/future_stack_position_sharing_2026_10_14.jsonl)と[再開原本](optimize/runtime/value/future_stack_position_resume_2026_10_14.jsonl)に記録し、通常CLIは再測定していない。同一IDの確認削減は[操作数原本](optimize/runtime/value/future_stack_lookup_runs_2026_10_14.jsonl)の144 processで全値を確認した。 配送前clone削減は[原本](optimize/runtime/value/future_ready_clone_deferral_2026_10_14.jsonl)の240 processでclone回数とcleanup・配送結果を確認した。 待機判定の借用は[原本](optimize/runtime/value/future_readiness_borrow_2026_10_14.jsonl)の96 processで判定とdriver配送を分けて確認した。
+  - Future・Task継続・process停止のcrate-local 56件、workspace CI 2,571件、標準Surtr 1,124件が成功。[最新の検証記録](optimize/runtime/value/future_ready_snapshot_dedup_2026_10_14_validation.json)。
+  - [10月13日の内部VM原本](optimize/runtime/value/future_stack_fast_2026_10_13.jsonl)・[通常入口原本](optimize/runtime/value/future_stack_count_fast_batch_2026_10_13.jsonl)。AB/BA同数で測り、内部VMの全内容検証は別processにした。最新の位置表共有は[独立owner原本](optimize/runtime/value/future_stack_position_sharing_2026_10_14.jsonl)と[再開原本](optimize/runtime/value/future_stack_position_resume_2026_10_14.jsonl)に記録し、通常CLIは再測定していない。同一IDの確認削減は[操作数原本](optimize/runtime/value/future_stack_lookup_runs_2026_10_14.jsonl)の144 processで全値を確認した。 配送前clone削減は[原本](optimize/runtime/value/future_ready_clone_deferral_2026_10_14.jsonl)の240 processでclone回数とcleanup・配送結果を確認した。 待機判定の借用は[原本](optimize/runtime/value/future_readiness_borrow_2026_10_14.jsonl)の96 processで判定とdriver配送を分けて確認した。 収集済みready IDの再利用は[原本](optimize/runtime/value/future_ready_snapshot_dedup_2026_10_14.jsonl)の216 processで反復・交互・全ID別と全slotの値を確認した。
 
 ### OI-037 RT-3のHashMap測定におけるprocess RSS差
 

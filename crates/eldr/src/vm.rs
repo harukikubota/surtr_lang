@@ -4297,22 +4297,19 @@ impl VM {
         #[cfg(test)]
         future_stack_tests::record_read_scan(self.stack.pending_slot_count());
         // The Future and cleanup tables do not change during collection.
-        // Check each run of the same ID once, including unresolved results.
+        // Reuse ready IDs in this snapshot; unresolved IDs only share a run.
         let mut previous = None;
-        let ready = self
-            .stack
-            .pending_future_ids()
-            .filter(|&id| {
-                let distinct = previous != Some(id);
-                previous = Some(id);
-                distinct
-            })
-            .filter_map(|id| {
-                #[cfg(test)]
-                future_stack_tests::record_ready_lookup();
-                self.ready_future_value(id).map(|value| (id, value))
-            })
-            .collect::<HashMap<_, _>>();
+        let mut ready = HashMap::new();
+        for id in self.stack.pending_future_ids() {
+            if previous.replace(id) == Some(id) || ready.contains_key(&id) {
+                continue;
+            }
+            #[cfg(test)]
+            future_stack_tests::record_ready_lookup();
+            if let Some(value) = self.ready_future_value(id) {
+                ready.insert(id, value);
+            }
+        }
         if ready.is_empty() {
             return;
         }

@@ -65,3 +65,5 @@ counterはFuture表から配送候補を取得するsource Value cloneを数え�
 ## 残件
 
 Future表とcleanup表の検索、owned配送のclone、各slotへの配送clone、値Vecと位置表の保持費用は残る。共通借用判定の呼出しの実時間寄与、通常CLI・allocator・RSSとOI-037は未測定・未解決のままとする。
+
+その後、[収集済みready IDの再利用](future_ready_snapshot_dedup_2026_10_14.md)により、別IDを挟んで再出現するready IDの検索・収集用cloneを省いた。上記の操作数は待機判定の借用時点の原本として保持する。

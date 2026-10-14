@@ -97,3 +97,15 @@ python3 tests/profile/future_stack_scan/waiting_readiness.py --before /absolute/
 1 / 256 / 4,096回の確認、0 / 64要素Tuple、Ready / Cancelled / Running / unknownを前後2 sample、AB / BAの96 fresh processで検証する。Ready / Cancelledでは判定のsource cloneが確認数→0、driver内のcloneが2→1になる。元の値と完了Futureの結果、Task recordの除去、完了が繰り返されないことも確認する。Running / unknownは待機のままとする。
 
 操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIは測らない。producer cleanup待ちの選択・通知・次のdriverでの配送はcrate-local受入テストで確認する。[仕様と結果](../../../doc/optimize/runtime/value/future_readiness_borrow_2026_10_14.md)の基準patchを`53354bdf`へ適用すると変更前sourceを再現できる。受入テスト2件は変更前に失敗するため、操作数の比較ではmanual testだけを指定する。
+
+## 収集済みready IDの再利用
+
+`ready_snapshot.py`は既存のstack解決manual testを使い、反復 / 2 ID交互 / 全ID別の配置でready確認と収集用source cloneを数える。`lookup_build.py`で前後のCargo test executableを保存して比較する。
+
+```sh
+python3 tests/profile/future_stack_scan/ready_snapshot.py --before /absolute/before/builds.json --after /absolute/after/builds.json --output /absolute/new_snapshot_run
+```
+
+1 / 256 / 4,096追跡位置、6条件、3配置、前後2 sampleをAB / BAの216 fresh processで検証する。2 ID交互のReady / Cancelled / Future結果では確認とsource cloneを位置数→distinct ID数に減らす。反復・全ID別・Running / unknown / PendingFutureなしの対照と、全slotの値、一段ずつのFuture結果、read / write visitsを固定する。
+
+操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIは測らない。cleanup待ちの再確認、Tupleの配送と保存枝の独立性はcrate-local受入テストで確認する。[仕様と結果](../../../doc/optimize/runtime/value/future_ready_snapshot_dedup_2026_10_14.md)の基準patchを`cabbcf9e`へ適用すると変更前sourceを再現できる。受入テスト2件は変更前に失敗するため、操作数の比較ではmanual testだけを指定する。
