@@ -994,7 +994,7 @@ fn timed_caller_deadline_before_dispatch_does_not_start_process_handler() {
             .kind,
         "Global::FutureDeadlineExceeded"
     );
-    assert_eq!(vm.raw_ready_future_value(completion), Some(value));
+    assert_eq!(vm.raw_ready_future_value(completion), Some(&value));
     assert_eq!(
         vm.process_runtime
             .processes
@@ -1163,7 +1163,7 @@ fn started_reply_later_survives_broadcast_timeout_without_overwriting_result() {
             .kind,
         "Global::FutureDeadlineExceeded"
     );
-    assert_eq!(vm.raw_ready_future_value(completion), Some(timeout.clone()));
+    assert_eq!(vm.raw_ready_future_value(completion), Some(&timeout));
     assert!(vm.process_runtime.executions.contains_key(&execution_id));
     assert!(vm.ready_future_value(sleep_future).is_none());
     assert_eq!(
@@ -1174,7 +1174,7 @@ fn started_reply_later_survives_broadcast_timeout_without_overwriting_result() {
     vm.process_runtime
         .resolve_future(sleep_future, ok_vm_result(Value::Unit));
     vm.drive_ready_detached_tasks().unwrap();
-    assert_eq!(vm.raw_ready_future_value(completion), Some(timeout));
+    assert_eq!(vm.raw_ready_future_value(completion), Some(&timeout));
     assert_eq!(
         vm.process_runtime.processes[&pid.id].state_value,
         Some(Value::Int(int(2)))
@@ -1234,7 +1234,7 @@ fn started_normal_handler_saves_once_after_timed_caller_cancellation() {
             .kind,
         "Global::FutureDeadlineExceeded"
     );
-    assert_eq!(vm.raw_ready_future_value(completion), Some(timeout.clone()));
+    assert_eq!(vm.raw_ready_future_value(completion), Some(&timeout));
     assert!(vm.process_runtime.executions.get(&execution_id).is_some());
     assert!(
         vm.process_runtime.futures.get(&managed_result).is_none(),
@@ -1267,7 +1267,7 @@ fn started_normal_handler_saves_once_after_timed_caller_cancellation() {
         vm.output.as_deref(),
         Some(["handler completed once".to_owned()].as_slice())
     );
-    assert_eq!(vm.raw_ready_future_value(completion), Some(timeout.clone()));
+    assert_eq!(vm.raw_ready_future_value(completion), Some(&timeout));
     assert!(vm.process_runtime.executions.is_empty());
     assert!(vm.process_runtime.detached_tasks.is_empty());
     assert!(vm.process_runtime.waiting_table.is_empty());
@@ -1283,5 +1283,5 @@ fn started_normal_handler_saves_once_after_timed_caller_cancellation() {
         vm.output.as_deref(),
         Some(["handler completed once".to_owned()].as_slice())
     );
-    assert_eq!(vm.raw_ready_future_value(completion), Some(timeout));
+    assert_eq!(vm.raw_ready_future_value(completion), Some(&timeout));
 }

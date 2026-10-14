@@ -4840,12 +4840,12 @@ impl VM {
         self.open_files.len()
     }
 
-    fn raw_ready_future_value(&self, future_id: FutureId) -> Option<Value> {
+    fn raw_ready_future_value(&self, future_id: FutureId) -> Option<&Value> {
         self.process_runtime
             .futures
             .get(&future_id)
             .and_then(|future| match &future.state {
-                FutureState::Ready(value) | FutureState::Cancelled(value) => Some(value.clone()),
+                FutureState::Ready(value) | FutureState::Cancelled(value) => Some(value),
                 FutureState::Running => None,
             })
     }

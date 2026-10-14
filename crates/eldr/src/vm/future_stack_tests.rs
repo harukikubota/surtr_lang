@@ -6,6 +6,15 @@ thread_local! {
     static TABLE_EMPTY_CHECKS: Cell<usize> = const { Cell::new(0) };
     static SCANNED_VALUES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
     static READY_LOOKUPS: Cell<usize> = const { Cell::new(0) };
+    static READY_VALUE_CLONES: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(super) fn record_ready_value_clone() {
+    READY_VALUE_CLONES.with(|count| count.set(count.get() + 1));
+}
+
+fn ready_value_clones() -> usize {
+    READY_VALUE_CLONES.with(Cell::get)
 }
 
 pub(super) fn record_ready_lookup() {
@@ -42,6 +51,7 @@ fn reset_scans() {
     TABLE_EMPTY_CHECKS.with(|count| count.set(0));
     SCANNED_VALUES.with(|counts| counts.set((0, 0)));
     READY_LOOKUPS.with(|count| count.set(0));
+    READY_VALUE_CLONES.with(|count| count.set(0));
 }
 
 fn scans() -> (usize, usize) {
@@ -329,10 +339,8 @@ fn nonempty_future_stack_profile() {
     }
 }
 
-#[test]
-fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
+fn future_with_cleanup_record(vm: &mut VM) -> (u64, FutureId) {
     use super::process_continuation::DetachedCompletion;
-    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
     vm.frames[0].call_site = Some((0, 1));
     let callable = Callable {
         target: CallableTarget::Builtin(
@@ -355,6 +363,13 @@ fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
     else {
         panic!("expected async completion")
     };
+    (task_id, id)
+}
+
+#[test]
+fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let (task_id, id) = future_with_cleanup_record(&mut vm);
     vm.process_runtime.resolve_future(id, Value::Int(int(13)));
     vm.stack = vec![Value::PendingFuture(id); 256].into();
     reset_scans();
@@ -362,6 +377,11 @@ fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
     assert_eq!(vm.stack.last(), Some(&Value::PendingFuture(id)));
     assert_eq!(scans(), (256, 0));
     assert_eq!(ready_lookups(), 1);
+    assert_eq!(
+        ready_value_clones(),
+        0,
+        "cleanup blocks delivery without cloning its result"
+    );
     vm.process_runtime.detached_tasks.take(&task_id).unwrap();
     reset_scans();
     vm.resolve_ready_pending_stack_values();
@@ -369,9 +389,149 @@ fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
     assert_eq!(vm.stack, vec![Value::Int(int(13)); 256]);
     assert_eq!(scans(), (256, 256));
     assert_eq!(ready_lookups(), 1);
+    assert_eq!(
+        ready_value_clones(),
+        1,
+        "clone one source value only after cleanup"
+    );
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(scans(), (0, 0));
+}
+
+#[test]
+fn raw_future_inspection_and_task_completion_do_not_clone_results() {
+    for cancelled in [false, true] {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let (task, id) = future_with_cleanup_record(&mut vm);
+        let value = Value::Tuple(vec![Value::Unit; 64]);
+        vm.process_runtime.futures.get_mut(&id).unwrap().state = if cancelled {
+            FutureState::Cancelled(value)
+        } else {
+            FutureState::Ready(value)
+        };
+        reset_scans();
+        assert!(vm.raw_ready_future_value(id).is_some());
+        assert!(
+            vm.has_runnable_detached_tasks(),
+            "completion schedules cleanup"
+        );
+        assert_eq!(
+            ready_value_clones(),
+            0,
+            "inspect completion without copying its result"
+        );
+        assert!(
+            vm.ready_future_value(id).is_none(),
+            "raw readiness does not bypass cleanup"
+        );
+        assert_eq!(ready_value_clones(), 0);
+        vm.process_runtime.detached_tasks.take(&task).unwrap();
+        let Value::Tuple(mut delivered) = vm.ready_future_value(id).unwrap() else {
+            panic!("expected Tuple result");
+        };
+        delivered.push(Value::Unit);
+        let Some(Value::Tuple(stored)) = vm.raw_ready_future_value(id) else {
+            panic!("stored result remains available");
+        };
+        assert_eq!(
+            stored.len(),
+            64,
+            "the delivered Tuple owns an independent buffer"
+        );
+        assert_eq!(
+            ready_value_clones(),
+            1,
+            "clone only the delivered source result"
+        );
+    }
+}
+
+// Count source-value clones in the real VM; no elapsed time or allocator claims.
+#[test]
+fn future_ready_value_clone_profile() {
+    let profile = std::env::var("OI036_VALUE_CLONE_PROFILE").as_deref() == Ok("1");
+    let queries: usize = if profile {
+        std::env::var("OI036_QUERIES").unwrap().parse().unwrap()
+    } else {
+        16
+    };
+    let width: usize = if profile {
+        std::env::var("OI036_WIDTH").unwrap().parse().unwrap()
+    } else {
+        64
+    };
+    let case = std::env::var("OI036_CASE").unwrap_or_else(|_| "blocked_ready".into());
+    assert!(queries > 0);
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let with_cleanup = case.starts_with("blocked_") || case.starts_with("task_");
+    let cleanup = with_cleanup.then(|| future_with_cleanup_record(&mut vm));
+    let allocated = cleanup.map_or_else(
+        || vm.process_runtime.allocate_future(None, None, false),
+        |(_, id)| id,
+    );
+    let id = if case == "unknown" {
+        u64::MAX
+    } else {
+        allocated
+    };
+    let value = Value::Tuple(vec![Value::Unit; width]);
+    if case.ends_with("cancelled") {
+        vm.process_runtime.futures.get_mut(&id).unwrap().state =
+            FutureState::Cancelled(value.clone());
+    } else if case.ends_with("ready") {
+        vm.process_runtime.resolve_future(id, value.clone());
+    } else {
+        assert!(
+            matches!(case.as_str(), "running" | "unknown"),
+            "unknown OI036_CASE"
+        );
+    }
+    reset_scans();
+    for _ in 0..queries {
+        if case.starts_with("raw_") {
+            assert!(vm.raw_ready_future_value(id).is_some());
+        } else if case.starts_with("task_") {
+            assert!(vm.has_runnable_detached_tasks());
+        } else if case.starts_with("deliverable_") {
+            let delivered = vm.ready_future_value(id);
+            assert_eq!(delivered.as_ref(), Some(&value));
+        } else {
+            assert!(vm.ready_future_value(id).is_none());
+        }
+    }
+    let clones = ready_value_clones();
+    if matches!(case.as_str(), "running" | "unknown") {
+        assert!(matches!(
+            vm.process_runtime.futures[&allocated].state,
+            FutureState::Running
+        ));
+    } else {
+        let stored = match &vm.process_runtime.futures[&allocated].state {
+            FutureState::Ready(stored) | FutureState::Cancelled(stored) => stored,
+            FutureState::Running => panic!("result state changed"),
+        };
+        assert_eq!(
+            stored, &value,
+            "inspection and delivery leave the source value intact"
+        );
+    }
+    if let Some((task, future)) = cleanup {
+        assert!(vm.ready_future_value(future).is_none());
+        vm.process_runtime.detached_tasks.take(&task).unwrap();
+        assert_eq!(vm.ready_future_value(future), Some(value));
+    }
+    if profile {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "profile":"oi036_ready_value_clones", "case":case, "queries":queries,
+                "width":width, "source_value_clones":clones, "verified":true,
+                "context_bytes":std::mem::size_of::<ExecutionContext>(),
+                "vm_bytes":std::mem::size_of::<VM>(),
+            })
+        );
+    }
 }
 
 #[test]

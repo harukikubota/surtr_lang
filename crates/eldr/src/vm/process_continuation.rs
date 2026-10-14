@@ -1230,7 +1230,11 @@ impl VM {
                     }
                     DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => false,
                 });
-        (!cleanup_pending).then_some(value)
+        (!cleanup_pending).then(|| {
+            #[cfg(test)]
+            super::future_stack_tests::record_ready_value_clone();
+            value.clone()
+        })
     }
 
     pub(super) fn remove_process_detached_tasks(&mut self, pid: u64) {

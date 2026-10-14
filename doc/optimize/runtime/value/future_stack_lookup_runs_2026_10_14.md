@@ -64,3 +64,5 @@ PendingFutureなしは表の空判定も0回、ありは前後とも1回だっ�
 ## 残件
 
 異なるIDを挟んだ同一IDの確認、各opcodeでの未解決Futureの再確認、各連続区間のFuture表・cleanup検索、値の配送clone、位置表と値Vecの保持費用は残る。非重複入力へ加わる比較の実時間寄与も未測定である。通常CLI・RSSとOI-037は今回の対象外とする。
+
+その後、[配送前の結果cloneを省く改善](future_ready_clone_deferral_2026_10_14.md)を行った。上記の操作数は連続IDの確認削減時点の原本として保持する。

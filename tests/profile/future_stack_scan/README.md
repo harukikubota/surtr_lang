@@ -73,3 +73,15 @@ python3 tests/profile/future_stack_scan/lookup_runs.py --before /absolute/before
 操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIを測らない。反復IDのready確認は位置数→1、交互IDは位置数のままである。read / write visitsは前後同じとし、counterとbinary hashが想定どおりでなければ停止する。既存の時間系列とは集計しない。
 
 [仕様と結果](../../../doc/optimize/runtime/value/future_stack_lookup_runs_2026_10_14.md)の基準patchを`0288964c`へ適用すると、counterとmanual testを持つ変更前sourceを再現できる。受入テスト3件は変更前に期待どおり失敗するため、操作数の検証ではmanual testだけを指定する。
+
+## cleanup前の結果clone
+
+`ready_value_clones.py`はFuture表から配送候補を取得するValue cloneを数える。`lookup_build.py`で前後のCargo test executableを保存して比較する。
+
+```sh
+python3 tests/profile/future_stack_scan/ready_value_clones.py --before /absolute/before/builds.json --after /absolute/after/builds.json --output /absolute/new_clone_run
+```
+
+1 / 256 / 4,096回の確認、0 / 64要素Tuple、raw検査・Task終了判定・cleanup待ち・配送可能のReady / CancelledとRunning / unknownの10条件を、前後2 sample・AB / BAの240 fresh processで検証する。全値の一致、元の表の値の維持、cleanup前の配送不可と完了後の配送も確認する。counterはFuture表内の元のValueを複製する呼出しだけを数え、入れ子のclone、各slotへの配送clone、検証用の値準備は含まない。
+
+これは操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIは測らない。[仕様と結果](../../../doc/optimize/runtime/value/future_ready_clone_deferral_2026_10_14.md)の基準patchを`922c457d`へ適用すると、counterとmanual testを持つ変更前sourceを再現できる。受入テスト2件は変更前に失敗するため、操作数の比較ではmanual testだけを指定する。
