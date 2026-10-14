@@ -1,3 +1,5 @@
+> 2026-10-15: [残り6分野の実施計画](../remaining_implementation_2026_10_14.md)の4群の具体案をユーザーが承認した。現行の確定契約はProcessRuntimeのFileOutHandler節を参照する。本書の「候補」「未決」は10月13日時点の検討記録であり、実装保留の現行条件ではない。実装と検証は段階ごとに別記録へ追記する。
+
 > 取り込み元: `/Users/haruca/.codex/worktrees/list-runtime-remaining/surtr`（detached、HEAD `72154707`）。資料の集約。記載された製品変更・harnessはmain未統合。作成時点の実装・検証記録を保存し、現在の整理一覧は [runtime README](../README.md) を参照。実行コマンドは取り込み元のソースを基準にする。
 
 # FileOutHandler の資源寿命を修復する仕様案

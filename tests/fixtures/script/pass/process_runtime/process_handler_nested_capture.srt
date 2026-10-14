@@ -1,0 +1,36 @@
+defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+    handlers { out: OutHandler = StdOut }
+  }
+  @init def init() -> Result<Int> { Ok(0) }
+  defp make(out: PID<OutHandler>, _item: $Item) -> (String -> Result<Unit>) {
+    {|message: String| OutHandler::write(out, message) }
+  }
+  @call
+  def templated(state: Int) -> Result<CallResult<(String -> Result<Unit>), Int>> {
+    Ok(CallResult::Reply(make(ctx.out, state), state))
+  }
+  @call
+  def captured(state: Int) -> Result<CallResult<(String -> Result<Unit>), Int>> {
+    writer = &OutHandler::write(ctx.out, &1)
+    Ok(CallResult::Reply(writer, state))
+  }
+  @call
+  def writer(state: Int) -> Result<CallResult<(Unit -> (String -> Result<Unit>)), Int>> {
+    outer = {|_unit: Unit| {|message: String| OutHandler::write(ctx.out, message) }}
+    Ok(CallResult::Reply(outer, state))
+  }
+}
+
+supervisor_init { Logger {} }
+outer =? Logger::writer()
+inner = outer(())
+print(inspect(inner("nested\n")))
+print(inspect(Task::call({|| inner("task\n") })))
+captured =? Logger::captured()
+print(inspect(captured("capture\n")))
+templated =? Logger::templated()
+print(inspect(templated("template\n")))

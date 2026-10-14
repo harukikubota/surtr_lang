@@ -28,6 +28,7 @@ mod captures;
 mod carriers;
 mod definitions;
 mod expr;
+mod handler_captures;
 mod lazy_diagnostics;
 mod matching;
 use lazy_diagnostics::{ActiveLazyCapture, LazyCaptureDiagnostic};

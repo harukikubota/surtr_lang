@@ -1083,9 +1083,9 @@ handler override の検査:
 | file missing | create |
 | file exists | append |
 | truncate | しない |
-| open timing | handler init 時 |
-| lifecycle | handler lifecycle 中は open したまま保持 |
-| shutdown | flush / close |
+| open timing | processのuser init前に全dependencyを取得 |
+| lifecycle | init・process・独立Task・未完了writeのactive ownerが保持 |
+| shutdown | 最後のactive ownerで受付終了・flush・live lease解放。保存leaseが残る間はdescriptorを保持 |
 | open failure | `Err(FileOutHandlerOpenFailed(path, detail))` |
 | write failure | `OutHandler::write` の `Err(FileOutHandlerWriteFailed(path, detail))` |
 
@@ -1098,7 +1098,17 @@ FileOutHandler identity:
   mode = Append
 ```
 
-同一 file sink に到着した write message は、その file sink の mailbox order で書き込む。異なる producer 間の wall-clock 順序までは保証しない。
+同一 file sink に登録したwrite要求はFIFOで書き込む。通常再開では登録・write・結果配送を一度ずつ行う。未開始取消を取り除き、開始済みwriteはcall timeoutでも取り消さない。open・一回のwrite_all・flushのOS待機は同期であり、実時間上限は保証しない。
+
+canonical pathはVM cwdを基に絶対化する。既存fileはcanonicalize、新規fileは存在する親をcanonicalizeしてleafを接続する。hardlinkは統合しない。同じcanonical keyのactive sinkを共有し、path差替え後も取得済みdescriptorを使う。閉じたlifecycleの後の新取得は新sinkとなり、保存leaseだけの旧sinkへ暗黙接続しない。表示文字列の逆parseやwrite時の再openで不正bindingを救済しない。
+
+全dependencyをuser init前に取得し、Standby retryでは同じbindingを保持する。初期化成功でprocessへ移し、部分失敗では取得したleaseだけを解放する。singletonの失敗はProcessInitFailedの初期化contextへ、Workerは既存のResult経路へ原因を保持して配送する。Workers・refillも同じ取得経路を使う。
+
+ctxを参照するclosureは生成時に取得済みhandler PIDを通常のlexical captureへ保持する。nested closureも同じPIDを捕捉し、外部で呼ばれてもprocess名から設定を引き直さない。plain PIDや普通のclosureの保持だけではactive owner数を増やさない。独立Taskは起動元bindingと捕捉handler PIDを検証し、自身の終了まで保持する。Future待機中でExecutionContextを持たないTaskも保持を失わない。Stopは開始済み実行のcleanupが終わった時点でprocess所有を解放する。
+
+checkpointはbinding・queue・進行とfutureの論理対応を保存し、保存leaseだけではactive ownerを増やさない。rollbackは保存した同じdescriptorへ復帰し、外部bytesを巻き戻さない。rollbackを跨ぐexactly-onceやreceipt registryは設けない。VM cloneは別のactive ownerとしてdescriptorを共有し、片側の終了で他方を閉じない。
+
+通常write失敗は既存FileOutHandlerWriteFailedで返す。終了時のflush失敗はProcessLifecycleFailedへ接続し、元の失敗がある場合は元を優先して副次原因を保持する。stderrへ出すだけで成功扱いにしない。未登録・不正identityのbindingはRuntimeErrorとする。
 
 `/dev/null` を直接 path として扱うのではなく、OS 非依存の handler として `NullOutHandler` を使う。
 

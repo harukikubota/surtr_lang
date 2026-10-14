@@ -1748,9 +1748,10 @@ impl Checker {
             }
         }
 
-        let typed_body = *self
+        let mut typed_body = *self
             .concretize_pending_trait_calls(typed_body)
             .map_err(|error| *error)?;
+        Self::normalize_handler_captures(&mut typed_body);
         let signature_inputs = local_bindings
             .iter()
             .map(|(_, ty)| ty.clone())

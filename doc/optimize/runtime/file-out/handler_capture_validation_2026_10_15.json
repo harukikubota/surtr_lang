@@ -1,0 +1,111 @@
+{
+  "level": 4,
+  "scope": "FileOut first stage only: lexical ctx handler capture; descriptor/queue pending",
+  "base": "474c4bc2",
+  "checks": {
+    "ci": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--profile",
+        "ci",
+        "--workspace"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 101.75490758399974
+    },
+    "stdlib": {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "run",
+        "--locked",
+        "--",
+        "test",
+        "--quiet",
+        "--all",
+        "--format=json"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 22.644590249999965
+    }
+  },
+  "ci_passed": 2588,
+  "stdlib": {
+    "discovered": 1124,
+    "executed": 1124,
+    "failed": 0,
+    "filtered": 0,
+    "passed": 1124,
+    "pending": 0,
+    "policy_errors": 0,
+    "runnable": 0,
+    "scope_failures": 0,
+    "script_errors": 0,
+    "selected": 1124,
+    "skipped": 0
+  },
+  "focused_scar_before_second_case": 395,
+  "focused_capture_cases": 2,
+  "focused_fixture_bucket": {
+    "passed": 1,
+    "filtered": 175
+  },
+  "source_sha256": {
+    "crates/scar/src/checker/handler_captures.rs": "af8cba80efebe0027523f9b03b4e407bd86653e2bd55307bed46bb280102f892",
+    "crates/scar/src/checker/definitions.rs": "274cd6b80c2f5baccacd4c295a9697435a76b90a1929b7f5c6de278028809493",
+    "crates/scar/src/checker/mod.rs": "e29d40fb93e0aa56f95b70ca9b251aff2bb85c02837fd287aa86f874219b1d32",
+    "crates/scar/tests/process_handler_capture.rs": "647f85f86d7f07979fc2186820189b8aa0468c1b3ca029b3c943af75fb6290a8",
+    "tests/fixtures/script/pass/process_runtime/process_handler_nested_capture.srt": "0db9683fe1afeb19230a382a27953e797c2340d1df790580fc33477611bcfc23",
+    "tests/fixtures/script/pass/process_runtime/process_handler_nested_capture.expected": "cb83d7d8164568a3ff2e94a7e241ffdb3aaed290a243baf2c389a1008f3c5c2d",
+    "docs/dev/ProcessRuntime_spec.md": "8d87c82c47ea9955c9e0c7282239005b8163e7f96363d8a295e4becaf1603286"
+  },
+  "red": "Unit-returning nested closure: captured handler count 0 vs expected 2 (exit 100)",
+  "setup_corrections": [
+    "PID-returning closure rejected by existing dependency-return rule (not intended Red)",
+    "duplicate return/value type argument in generic helper fixture corrected to current input syntax",
+    "ctx is unavailable in defp helper; handler now passes acquired PID explicitly"
+  ],
+  "interrupted_ci": {
+    "command": [
+      "rtk",
+      "cargo",
+      "nextest",
+      "run",
+      "--locked",
+      "--profile",
+      "ci",
+      "--workspace"
+    ],
+    "exit_code": 130,
+    "wall_seconds": 38.124744292001196
+  },
+  "ci_with_fixture_expected_error": {
+    "command": [
+      "rtk",
+      "cargo",
+      "nextest",
+      "run",
+      "--locked",
+      "--profile",
+      "ci",
+      "--workspace"
+    ],
+    "exit_code": 100,
+    "wall_seconds": 123.36812150000151
+  },
+  "fixture_expected_correction": "captured stdout events are joined by newline; write text already contains newline. Expected blank lines added, product unchanged.",
+  "review": "fileout_review read-only; no required findings; Pattern/Facet/MonadFail source audit only",
+  "unimplemented": [
+    "FileOut canonical registry",
+    "init/Task/write ownership",
+    "FIFO driver",
+    "descriptor checkpoint/rollback/VM clone",
+    "shutdown failure routing",
+    "OI-037/038/039 cause investigation"
+  ]
+}
