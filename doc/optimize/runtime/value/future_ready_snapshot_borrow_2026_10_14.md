@@ -55,3 +55,5 @@ standalone owner probeのfixtureも参照mapへ合わせ、現行sourceだけの
 ## 残件
 
 表の検索、IDとmap検査、map確保、slot clone、値Vecと位置表の保持費用は残る。共通判定の委譲と借用mapの実時間寄与、通常CLI・allocator・RSSとOI-037は未測定・未解決のままとする。
+
+[後続の費用測定](future_ready_snapshot_cost_2026_10_14.md)で、Ready / Running / Futureなし、反復 / 全ID別、0 / 64要素Tupleの内部一回の実時間と要求layout bytesを確認した。通常CLI・RSS・cleanup Taskを含む費用は未測定である。

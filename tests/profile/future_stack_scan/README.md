@@ -119,3 +119,17 @@ python3 tests/profile/future_stack_scan/ready_snapshot.py --before /absolute/bef
 ```
 
 [仕様と結果](../../../doc/optimize/runtime/value/future_ready_snapshot_borrow_2026_10_14.md)の基準patchを`c76a0980`へ適用すると同じ観測を持つowned版を再現できる。受入テスト2件はowned版で失敗するため、比較ではmanual testだけを指定する。過去の重複削減比較はこのflagなしで実行する。
+
+## ready収集の確保要求と時間
+
+`snapshot_cost.py`は実際のstack解決一回を測る。`lookup_build.py --release`で独立targetへ前後のtest executableを構築し、Cargo artifact・source / binary hashを保存する。Git archiveを使う場合は`--root`と元の完全な`--revision`を指定し、[測定記録](../../../doc/optimize/runtime/value/future_ready_snapshot_cost_2026_10_14.md)の基準patchを適用してsource hashを照合する。
+
+```sh
+python3 tests/profile/future_stack_scan/lookup_build.py --root /absolute/baseline --revision c76a0980e736d71d80663717aa8cc5031b4a197f --release --target-dir /absolute/before-target --output-dir /absolute/before
+python3 tests/profile/future_stack_scan/lookup_build.py --release --target-dir /absolute/after-target --output-dir /absolute/after
+python3 tests/profile/future_stack_scan/snapshot_cost.py --before /absolute/before/builds.json --after /absolute/after/builds.json --output /absolute/new_cost_run --samples 6
+```
+
+256 / 4,096位置、0 / 64要素Tuple、反復 / 全ID別、Ready / Running / Futureなしを使う。両版とも同じtest専用System wrapperを通し、確保系列では測定threadの明示scope内の要求layout bytes・解放bytes・回数を記録する。reallocは新しい要求全量を数える。時間系列は確保の記録を無効にし、Instant区間を測る。両系列とも準備を含まず、時間には既存の論理counterとwrapperの判定が残る。両版に同じslot clone / map型サイズのcounter hookを加える。
+
+全内容を別の48 verify processで確認し、確保・時間を前後6 sampleずつAB / BA同数の576 processで測る。計624 process。要求と解放の差が配送先Tupleの要素bufferと一致することも照合する。この差はscope内の要求layoutの純増であり、VM全体のlive / peak保持量ではない。RSS・allocator usable size・通常CLI・cleanup Taskの費用を測らず、速度閾値をCIへ追加しない。測定中はbuild・他のtestを実行しない。runnerは既存の原本への上書きを拒否する。

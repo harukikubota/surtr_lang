@@ -1035,3 +1035,107 @@ fn repeated_future_lookup_profile() {
         );
     }
 }
+
+// Preparation and full verification are outside the measured resolve interval.
+// Allocator traffic and time use separate fresh processes in the manual runner.
+#[test]
+fn ready_snapshot_cost_profile() {
+    let profile = std::env::var("OI036_COST_PROFILE").as_deref() == Ok("1");
+    let n: usize = std::env::var("OI036_N")
+        .map(|value| value.parse().unwrap())
+        .unwrap_or(16);
+    let width: usize = std::env::var("OI036_WIDTH")
+        .map(|value| value.parse().unwrap())
+        .unwrap_or(64);
+    let case = std::env::var("OI036_CASE").unwrap_or_else(|_| "ready".into());
+    let pattern = std::env::var("OI036_PATTERN").unwrap_or_else(|_| "distinct".into());
+    let mode = std::env::var("OI036_MODE").unwrap_or_else(|_| "verify".into());
+    assert!(n > 0);
+    assert!(matches!(case.as_str(), "ready" | "running" | "ordinary"));
+    assert!(matches!(pattern.as_str(), "repeated" | "distinct"));
+    assert!(matches!(mode.as_str(), "allocation" | "time" | "verify"));
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let value = Value::Tuple(vec![Value::Unit; width]);
+    let ids: Vec<_> = (0..if pattern == "distinct" { n } else { 1 })
+        .map(|_| {
+            let id = vm.process_runtime.allocate_future(None, None, false);
+            if case != "running" {
+                vm.process_runtime.resolve_future(id, value.clone());
+            }
+            id
+        })
+        .collect();
+    vm.stack = (0..n)
+        .flat_map(|i| {
+            [
+                if case == "ordinary" {
+                    Value::Unit
+                } else {
+                    Value::PendingFuture(ids[if pattern == "distinct" { i } else { 0 }])
+                },
+                Value::Unit,
+            ]
+        })
+        .collect();
+    reset_scans();
+    let mut traffic = None;
+    let mut elapsed_ns = None;
+    match mode.as_str() {
+        "allocation" => {
+            let scope = super::profile_allocator::Scope::start();
+            vm.resolve_ready_pending_stack_values();
+            traffic = Some(scope.finish());
+        }
+        "time" => {
+            let start = std::time::Instant::now();
+            vm.resolve_ready_pending_stack_values();
+            elapsed_ns = Some(start.elapsed().as_nanos());
+        }
+        "verify" => vm.resolve_ready_pending_stack_values(),
+        _ => unreachable!(),
+    }
+    let (read, write) = scans();
+    assert_eq!(read, if case == "ordinary" { 0 } else { n });
+    assert_eq!(write, if case == "ready" { n } else { 0 });
+    assert_eq!(vm.stack.len(), 2 * n);
+    assert_eq!(
+        vm.stack.pending_slot_count(),
+        if case == "running" { n } else { 0 }
+    );
+    if mode == "verify" {
+        for (i, pair) in vm.stack.chunks_exact(2).enumerate() {
+            let id = ids[if pattern == "distinct" { i } else { 0 }];
+            match case.as_str() {
+                "ready" => {
+                    assert_eq!(&pair[0], &value);
+                    assert_eq!(vm.raw_ready_future_value(id), Some(&value));
+                }
+                "running" => assert_eq!(pair[0], Value::PendingFuture(id)),
+                "ordinary" => assert_eq!(pair[0], Value::Unit),
+                _ => unreachable!(),
+            }
+            assert_eq!(pair[1], Value::Unit);
+        }
+    }
+    if profile {
+        let mut row = serde_json::json!({
+            "profile":"oi036_snapshot_cost", "n":n, "width":width,
+            "case":case, "pattern":pattern, "mode":mode,
+            "read_visits":read, "write_visits":write,
+            "ready_lookups":ready_lookups(), "source_value_clones":ready_value_clones(),
+            "value_bytes":std::mem::size_of::<Value>(),
+            "contents_verified":mode == "verify",
+        });
+        if let Some(traffic) = traffic {
+            row["requested_bytes"] = traffic.requested_bytes.into();
+            row["freed_bytes"] = traffic.freed_bytes.into();
+            row["alloc_calls"] = traffic.alloc_calls.into();
+            row["realloc_calls"] = traffic.realloc_calls.into();
+            row["dealloc_calls"] = traffic.dealloc_calls.into();
+        }
+        if let Some(elapsed_ns) = elapsed_ns {
+            row["elapsed_ns"] = u64::try_from(elapsed_ns).unwrap().into();
+        }
+        eprintln!("{row}");
+    }
+}

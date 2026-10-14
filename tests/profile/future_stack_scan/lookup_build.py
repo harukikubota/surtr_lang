@@ -16,8 +16,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target-dir', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--root', type=Path, help='source root, including an archived Git revision')
+    parser.add_argument('--revision', help='explicit archived revision; verified by the reproduction patch/source hashes')
+    parser.add_argument('--release', action='store_true')
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[3]
+    root = (args.root or Path(__file__).resolve().parents[3]).resolve()
     args.output_dir.mkdir(parents=True, exist_ok=False)
     paths = [root / 'Cargo.toml', root / 'Cargo.lock']
     for crate in ['eldr', 'sindr', 'diagnostics']:
@@ -30,6 +33,8 @@ def main():
         shutil.copyfile(path, saved)
     command = ['cargo', 'test', '--locked', '-p', 'eldr', '--lib', '--no-run',
                '--message-format=json', '--target-dir', str(args.target_dir.resolve())]
+    if args.release:
+        command.append('--release')
     result = subprocess.run(command, cwd=root, capture_output=True, text=True)
     (args.output_dir / 'cargo.jsonl').write_text(result.stdout)
     (args.output_dir / 'compiler.log').write_text(result.stderr)
@@ -43,11 +48,12 @@ def main():
     binary = (args.output_dir / 'eldr-test').resolve()
     shutil.copy2(artifact['executable'], binary)
     metadata = {
-        'scope': 'Eldr internal VM operation counts; debug test executable',
+        'scope': 'Eldr internal VM test executable; ' + ('release' if args.release else 'debug'),
+        'source_root': str(root),
         'command': command, 'artifact': artifact,
         'binary': str(binary), 'binary_sha256': sha(binary),
         'source_sha256': hashes,
-        'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
+        'head': args.revision or subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         'builder_sha256': sha(Path(__file__)),
         'rustc_version': subprocess.check_output(['rustc', '-Vv'], text=True),
     }
