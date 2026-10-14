@@ -6,6 +6,7 @@ mod list_builder;
 mod list_finish;
 mod list_flat_map;
 mod map_values;
+mod regex_collection;
 #[cfg(test)]
 pub(crate) use list_builder::{list_builder_metrics, reset_list_builder_metrics};
 use list_flat_map::{builtin_list_flat_map, FlatMapContinuation};
@@ -62,6 +63,7 @@ pub(crate) enum BuiltinContinuation {
     SortedMap(map_values::SortedMapContinuation),
     MapList(map_values::MapListContinuation),
     MapFromEntries(map_values::MapFromEntriesContinuation),
+    RegexCollection(regex_collection::RegexCollectionContinuation),
     Generator(generator::GeneratorContinuation),
     Runtime(crate::vm::RuntimeContinuation),
     Identity,
@@ -88,6 +90,7 @@ impl BuiltinContinuation {
             Self::SortedMap(continuation) => return continuation.resume(result),
             Self::MapList(continuation) => return continuation.resume(result),
             Self::MapFromEntries(continuation) => return continuation.resume(result),
+            Self::RegexCollection(continuation) => return continuation.resume(result),
             Self::Generator(continuation) => return continuation.resume(vm, result),
             Self::Runtime(continuation) => return continuation.resume(vm, result),
             Self::Identity => result?,
@@ -399,11 +402,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "find_all",
-        func: |vm, args| builtin_regex_find_all(vm, args).map(BuiltinOutcome::Complete),
+        func: regex_collection::builtin_regex_find_all,
     },
     BuiltinImpl {
         name: "split",
-        func: |vm, args| builtin_regex_split(vm, args).map(BuiltinOutcome::Complete),
+        func: regex_collection::builtin_regex_split,
     },
     BuiltinImpl {
         name: "__regex_replace",
@@ -411,7 +414,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "replace_all",
-        func: |vm, args| builtin_regex_replace_all(vm, args).map(BuiltinOutcome::Complete),
+        func: regex_collection::builtin_regex_replace_all,
     },
     BuiltinImpl {
         name: "escape",
@@ -2932,41 +2935,6 @@ fn builtin_regex_find(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, R
     })))
 }
 
-fn builtin_regex_find_all(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let mut args = args.into_iter();
-    let regex = args.next().expect("builtin arity checked");
-    let pattern = decode_regex_arg(&regex, "find_all", "re")?;
-    let Value::Str(input) = args.next().expect("builtin arity checked") else {
-        return Err(RuntimeError::new("find_all expects String as input"));
-    };
-    let re = compile_cached_regex(pattern, "find_all")?;
-    let input = Rc::new(input);
-    let items = re
-        .find_iter(&input)
-        .map(|matched| {
-            Value::RegexMatch(RegexMatchHandle {
-                input: Rc::clone(&input),
-                start: matched.start(),
-                end: matched.end(),
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok(Value::List(ListHandle::from_items(items)))
-}
-
-fn builtin_regex_split(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let pattern = decode_regex_arg(&args[0], "split", "re")?;
-    let Value::Str(input) = &args[1] else {
-        return Err(RuntimeError::new("split expects String as input"));
-    };
-    let re = compile_cached_regex(pattern, "split")?;
-    let items = re
-        .split(input)
-        .map(|part| Value::Str(part.to_string()))
-        .collect::<Vec<_>>();
-    Ok(Value::List(ListHandle::from_items(items)))
-}
-
 fn builtin_regex_replace(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let pattern = decode_regex_arg(&args[0], "replace", "re")?;
     let Value::Str(input) = &args[1] else {
@@ -2978,22 +2946,6 @@ fn builtin_regex_replace(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let re = compile_cached_regex(pattern, "replace")?;
     Ok(Value::Str(
         re.replace(input, replacement.as_str()).into_owned(),
-    ))
-}
-
-fn builtin_regex_replace_all(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let pattern = decode_regex_arg(&args[0], "replace_all", "re")?;
-    let Value::Str(input) = &args[1] else {
-        return Err(RuntimeError::new("replace_all expects String as input"));
-    };
-    let Value::Str(replacement) = &args[2] else {
-        return Err(RuntimeError::new(
-            "replace_all expects String as replacement",
-        ));
-    };
-    let re = compile_cached_regex(pattern, "replace_all")?;
-    Ok(Value::Str(
-        re.replace_all(input, replacement.as_str()).into_owned(),
     ))
 }
 

@@ -1,0 +1,81 @@
+{
+  "level": 3,
+  "baseline": "412c2514",
+  "checks": {
+    "ci": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--profile",
+        "ci",
+        "--workspace"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 149.08793991700077
+    },
+    "stdlib": {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "run",
+        "--locked",
+        "--",
+        "test",
+        "--quiet",
+        "--all",
+        "--format=json"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 25.961819000000105
+    }
+  },
+  "ci_passed": 2584,
+  "stdlib": {
+    "discovered": 1124,
+    "executed": 1124,
+    "failed": 0,
+    "filtered": 0,
+    "passed": 1124,
+    "pending": 0,
+    "policy_errors": 0,
+    "runnable": 0,
+    "scope_failures": 0,
+    "script_errors": 0,
+    "selected": 1124,
+    "skipped": 0
+  },
+  "focused_eldr_passed": 401,
+  "red": "collection must yield before searching; old synchronous outcome Complete fails (exit 100)",
+  "differential": {
+    "patterns": 16,
+    "inputs": 85,
+    "operations": [
+      "find_all",
+      "split",
+      "replace_all (5 replacement forms)"
+    ]
+  },
+  "ordinary_task_fixture": "3 operations print start before completion; expected contents pass",
+  "corrected_fixture_setup_error": "undefined Generator::map / List::join replaced with existing String::repeat; not intended Red",
+  "quality": [
+    "cargo fmt --all --check",
+    "git diff --check",
+    "Python py_compile"
+  ],
+  "source_binary_hashes_verified": true,
+  "performance": {
+    "manual_verification_processes": 40,
+    "manual_measurement_processes": 240,
+    "cached_batch_measurement_processes": 72
+  },
+  "unmeasured": [
+    "single regex search wall-time bound",
+    "split/replace_all performance attribution",
+    "cold CLI time",
+    "allocator RSS cause"
+  ]
+}

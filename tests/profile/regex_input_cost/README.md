@@ -79,3 +79,16 @@ construction/run/background drain/output reporting, but precedes final VM destru
 `process_wall_ns` includes process startup/final drop and `/usr/bin/time` overhead. RSS is
 the whole-process high-water mark. Allocation is unmeasured. Keep warmups separate from
 measured raw samples. Use a new prefix for every run to preserve previous data.
+
+## Budgeted collection adoption (2026-10-15)
+
+`build.py` records exact native probe inputs, Cargo manifests/artifacts and saved
+binary hashes. Use independent before/after and count/time targets.
+`adoption.py --help` accepts the four build metadata files and a new output prefix.
+It verifies every span/input after VM destruction in 40 processes, then invokes
+`run.py` with balanced AB/BA order (six samples by default). The report compares
+412c2514 with the collection continuation; both already share input and use Packed
+chunks. This is not the earlier ownership baseline. `batch.py` measures the
+ordinary cached CLI entry separately. Stop builds/tests before either series.
+See [the report](../../../doc/optimize/runtime/regex/regex_collection_split_2026_10_15.md)
+for the single-search limit, matched output, costs and unmeasured cases.

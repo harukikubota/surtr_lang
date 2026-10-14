@@ -55,6 +55,8 @@ mod process_identity_tests;
 mod process_stop_tests;
 #[cfg(test)]
 mod profile_allocator;
+#[cfg(test)]
+mod regex_tests;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
 use continuation::{ContinuationFrame, Invocation};

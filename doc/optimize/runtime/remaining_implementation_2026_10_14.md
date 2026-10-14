@@ -48,4 +48,5 @@ crate-localの直接テストから始め、通常入口の成功・拒否とfai
 - Packed: [製品採用と検証](list/packed_chunk_adoption_2026_10_15.md)を完了。独立レビューの指摘を修正し、CI 2,576件・標準1,124件成功。保持量・構築・RSSの交換条件を採用記録へ残した。
 - Builder: 有界segmentと完成処理をPackedに接続し、実VMの前後測定を完了。通常CLI・旧Vec基準への時間差・allocator / OS原因は継続。
 - HashMap: [前処理と構築の分割](hashmap/hashmap_preparation_split_2026_10_15.md)を実装し、所有entryの全cloneを削減。全内容と時間・確保系列を確認し、CI 2,581件成功。OI-038のRSS原因は継続。
-- Future / Regex / FileOut: 未実装の残件を継続。FileOutの仕様段階レビューで、escaping closureのctx captureとTask bindingの所有接続を確認した。普通のPIDやclosureの保持だけでactive owner数を増やさず、process / init / Task / 未完了writeの所有と保存leaseを分ける。
+- Regex: [探索・収集の分割](regex/regex_collection_split_2026_10_15.md)と全検証を完了。通常CLIの速度改善は未確認、RSS小幅増を記録。
+- Future / FileOut: 未実装の残件を継続。FileOutの仕様段階レビューで、escaping closureのctx captureとTask bindingの所有接続を確認した。普通のPIDやclosureの保持だけでactive owner数を増やさず、process / init / Task / 未完了writeの所有と保存leaseを分ける。

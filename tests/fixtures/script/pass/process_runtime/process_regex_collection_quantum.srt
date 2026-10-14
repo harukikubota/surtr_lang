@@ -1,0 +1,26 @@
+re =? Regex::compile("a")
+input =? String::repeat("a", 1000)
+
+find_task = Task::async({||
+  result = Regex::find_all(re, input)
+  print("found")
+  Ok(List::len(result))
+})
+print("started find")
+print(inspect(Task::await(find_task)))
+
+split_task = Task::async({||
+  result = Regex::split(re, input)
+  print("split")
+  Ok(List::len(result))
+})
+print("started split")
+print(inspect(Task::await(split_task)))
+
+replace_task = Task::async({||
+  result = Regex::replace_all(re, input, "b")
+  print("replaced")
+  Ok(result == input)
+})
+print("started replace")
+print(inspect(Task::await(replace_task)))

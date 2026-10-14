@@ -19,6 +19,7 @@ impl ExecutionContext {
                         | BuiltinContinuation::SortedMap(_)
                         | BuiltinContinuation::MapList(_)
                         | BuiltinContinuation::MapFromEntries(_)
+                        | BuiltinContinuation::RegexCollection(_)
                 ))))
             )
         {
@@ -34,6 +35,7 @@ impl ExecutionContext {
             BuiltinContinuation::SortedMap(next) => next.resume_steps(budget.remaining()),
             BuiltinContinuation::MapList(next) => next.resume_steps(budget.remaining()),
             BuiltinContinuation::MapFromEntries(next) => next.resume_steps(budget.remaining()),
+            BuiltinContinuation::RegexCollection(next) => next.resume_steps(budget.remaining()),
             _ => unreachable!("checked pure builtin continuation"),
         };
         budget.consume(used);

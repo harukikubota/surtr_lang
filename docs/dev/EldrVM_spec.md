@@ -506,6 +506,8 @@ compiler-only builtin `__pattern_contract_violation` は全域と判定された
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
 - `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>` と、不変の入力全文 `input: Rc<String>` を保持する。`RegexMatch` も入力全文と byte offset の `start` / `end` を保持する
 - `Regex::find_all` の同じ呼出しから得た一致は一つの入力全文を共有する。handle / `Value` の clone は入力文字列を複製せず、元の引数や結果 List の破棄後も利用できる。`find` / `captures` も所有した入力を保持する。`find_all` が返す空 List は入力を保持しない。`find` / `captures` の無一致エラーは従来どおり入力全文を保持する
+- `Regex::find_all` / `split` / `replace_all` は既存の継続へ接続し、一reductionで最大一回の全文位置指定探索を行う。直前の一致末尾に重なる空一致は配送せず、開始位置を一byte進めて次の探索を次遷移へ残す。UTF-8境界の判定とanchorはregex crateの全文探索に従う。結果の追加・capture展開後も再開可能で、途中保存は独立した出力を持ち、取消では部分結果を返さない。純粋な遷移は残予算内でまとめて課金してよい。compile・一回の探索・String操作の物理費用は同期であり、実時間上限は保証しない。
+
 - 入力全文と span による内容比較、UTF-8 の文字境界、空一致の列挙を維持する。`text` / capture 抽出は範囲外・逆順・文字の途中の span を RuntimeError として拒否する。`start` / `end` は従来どおり保存した byte offset を返す
 - この共有は同一 VM 内の不変値の所有表現であり、bytecode の Constant / schema を変更しない。正規表現の compile・探索・結果収集は同期処理のままである
 - random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す
